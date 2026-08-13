@@ -2,7 +2,8 @@
  * Qdrant vector-store client wrapper for the Travel CRM RAG knowledge base.
  *
  * Abstractions over @qdrant/js-client-rest with:
- *   - fail-soft init (returns no-op API when QDRANT_URL is unset)
+ *   - fail-soft init (returns no-op API when QDRANT_URL is unset or the
+ *     client library is unavailable)
  *   - collection auto-creation (cosine, 1536-dim — matches OpenAI text-embedding-3-small)
  *   - typed helpers for upsert, search, delete, and count
  *
@@ -11,15 +12,37 @@
  * visasure) share one collection without cross-leakage.
  */
 
-const { QdrantClient } = require("@qdrant/js-client-rest");
+let QdrantClient = null;
+let qdrantClientLoadError = null;
+
+try {
+  ({ QdrantClient } = require("@qdrant/js-client-rest"));
+} catch (err) {
+  qdrantClientLoadError = err;
+}
 
 const VECTOR_SIZE = 1536;
 const VECTOR_DISTANCE = "Cosine";
+let missingClientWarningEmitted = false;
+
+function warnClientUnavailable() {
+  if (missingClientWarningEmitted) return;
+  missingClientWarningEmitted = true;
+  const reason = qdrantClientLoadError
+    ? (qdrantClientLoadError.code === "MODULE_NOT_FOUND"
+      ? "@qdrant/js-client-rest is not installed"
+      : `failed to load @qdrant/js-client-rest: ${qdrantClientLoadError.message}`)
+    : "Qdrant client library is unavailable";
+  console.warn(`[qdrantClient] ${reason}; Qdrant features disabled`);
+}
 
 function getClient() {
   const url = process.env.QDRANT_URL;
   const apiKey = process.env.QDRANT_API_KEY;
-  if (!url) {
+  if (!url || !QdrantClient) {
+    if (url && !QdrantClient) {
+      warnClientUnavailable();
+    }
     return null;
   }
   try {
@@ -41,7 +64,12 @@ function collectionName() {
 }
 
 function isEnabled() {
-  return Boolean(process.env.QDRANT_URL);
+  const hasUrl = Boolean(process.env.QDRANT_URL);
+  if (hasUrl && !QdrantClient) {
+    warnClientUnavailable();
+    return false;
+  }
+  return hasUrl;
 }
 
 async function ensureCollection(client = getClient()) {

@@ -49,6 +49,7 @@ export default function CsvImportExportToolbar({
   label = null,
   onImported = null,
   forceSync = false,
+  compact = false,
   // Patient-list opt-in: when caller passes ['csv','xlsx'] the export button
   // becomes a dropdown and the Import modal offers both template formats.
   // Other entities keep the default single-CSV UX.
@@ -66,6 +67,7 @@ export default function CsvImportExportToolbar({
   const exportMenuRef = useRef(null);
   const displayLabel = label || ENTITY_LABELS[entity] || entity;
   const safeEndpoints = endpoints || {};
+  const toolbarButtonStyle = compact ? compactSecondaryBtnStyle : secondaryBtnStyle;
 
   const exportUrl = safeEndpoints.export || `/api/wellness/csv/${entity}/export`;
   const templateUrl = safeEndpoints.template || `/api/wellness/csv/${entity}/template`;
@@ -139,7 +141,14 @@ export default function CsvImportExportToolbar({
 
   return (
     <>
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: compact ? "0.35rem" : "0.5rem",
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
         {multiFormat ? (
           <div ref={exportMenuRef} style={{ position: "relative" }}>
             <button
@@ -149,7 +158,7 @@ export default function CsvImportExportToolbar({
               aria-haspopup="menu"
               aria-expanded={exportMenuOpen}
               aria-label={`Export ${displayLabel}`}
-              style={secondaryBtnStyle}
+              style={toolbarButtonStyle}
             >
               <Download size={14} /> {exporting ? "Exporting..." : "Export"}
               <ChevronDown size={12} style={{ marginLeft: "0.15rem" }} />
@@ -180,7 +189,7 @@ export default function CsvImportExportToolbar({
             onClick={() => doExport("csv")}
             disabled={exporting}
             aria-label={`Export ${displayLabel} as CSV`}
-            style={secondaryBtnStyle}
+            style={toolbarButtonStyle}
           >
             <Download size={14} /> {exporting ? "Exporting..." : "Export CSV"}
           </button>
@@ -189,7 +198,7 @@ export default function CsvImportExportToolbar({
           type="button"
           onClick={() => setShowImport(true)}
           aria-label={`Import ${displayLabel}`}
-          style={secondaryBtnStyle}
+          style={toolbarButtonStyle}
         >
           <Upload size={14} /> {multiFormat ? "Import" : "Import CSV"}
         </button>
@@ -595,7 +604,7 @@ function ImportModal({
 
         {jobId && !result && (
           <div role="status" style={getAlertStyle("info")}>
-            Background job <code style={codePillStyle}>{jobId}</code> queued. You'll be emailed when it finishes; this dialog will update too.
+            Background job <code style={codePillStyle}>{jobId}</code> queued. You will be emailed when it finishes; this dialog will update too.
           </div>
         )}
 
@@ -693,6 +702,13 @@ const secondaryBtnStyle = {
   cursor: "pointer",
   fontSize: "0.85rem",
   fontWeight: 600,
+};
+
+const compactSecondaryBtnStyle = {
+  ...secondaryBtnStyle,
+  gap: "0.25rem",
+  padding: "0.4rem 0.75rem",
+  fontSize: "0.8rem",
 };
 
 const primaryBtnStyle = {

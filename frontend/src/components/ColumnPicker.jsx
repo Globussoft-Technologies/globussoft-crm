@@ -71,6 +71,24 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
   }, [tableKey]);
 
   useEffect(() => {
+    if (!open) return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useEffect(() => {
+    const onOpenColumnPicker = (event) => {
+      const targetTableKey = event?.detail?.tableKey;
+      if (targetTableKey && targetTableKey !== tableKey) return;
+      setOpen(true);
+    };
+    window.addEventListener("globuscrm:open-table-column-picker", onOpenColumnPicker);
+    return () => {
+      window.removeEventListener("globuscrm:open-table-column-picker", onOpenColumnPicker);
+    };
+  }, [tableKey]);
+
+  useEffect(() => {
     if (!open) {
       setDraggedKey(null);
       setDropKey(null);

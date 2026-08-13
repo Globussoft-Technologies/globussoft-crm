@@ -1325,14 +1325,30 @@ table.leads-table--scrollable td:first-child {
   padding: 0 0.85rem 0.75rem;
 }
 
+.lead-tags-draft-list {
+  align-content: flex-start;
+  max-height: 96px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .lead-tag-chip--selected {
   gap: 0.25rem;
   background: rgba(16, 185, 129, 0.12);
   border-color: rgba(16, 185, 129, 0.25);
   color: var(--success-color);
+  overflow: visible;
 }
 
-.lead-tag-chip--selected button {
+.lead-tag-chip__label {
+  min-width: 0;
+  max-width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lead-tag-chip-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1341,6 +1357,50 @@ table.leads-table--scrollable td:first-child {
   background: transparent;
   color: inherit;
   cursor: pointer;
+  flex-shrink: 0;
+}
+
+.lead-tag-chip-action:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.lead-tags-option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.lead-tags-option-row .lead-tags-option {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lead-tags-option-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+}
+
+.lead-tags-option-delete:hover {
+  border-color: var(--danger-color);
+  color: var(--danger-color);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.lead-tags-option-delete:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 .lead-tags-option {
@@ -1355,7 +1415,7 @@ table.leads-table--scrollable td:first-child {
   font-size: 0.8rem;
   padding: 0.45rem 0.6rem;
   text-align: left;
-  width: 100%;
+  width: auto;
 }
 
 .lead-tags-option:hover {

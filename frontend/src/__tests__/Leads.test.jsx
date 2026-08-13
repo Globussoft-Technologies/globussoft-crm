@@ -485,6 +485,46 @@ describe('Leads Freshsales-style list UI affordances', () => {
       expect(aliceTags.getByText('Enterprise')).toBeInTheDocument();
       expect(aliceTags.queryByText('+2')).toBeNull();
     });
+
+    fireEvent.click(screen.getByLabelText('Edit Tags for Alice Lead'));
+    const reopenedDialog = await screen.findByRole('dialog', { name: 'Edit Tags for Alice Lead' });
+    fireEvent.click(within(reopenedDialog).getByRole('button', { name: 'Search existing' }));
+    expect(within(reopenedDialog).getByRole('button', { name: 'Enterprise' })).toBeInTheDocument();
+    expect(within(reopenedDialog).getByRole('button', { name: 'Warm' })).toBeInTheDocument();
+  });
+
+  it('deletes a saved tag from the catalog without disturbing the lead tag editor', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const tagCell = screen.getByText('Warm').closest('.lead-tags-cell');
+    fireEvent.mouseEnter(tagCell);
+    fireEvent.click(screen.getByLabelText('Edit Tags for Alice Lead'));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Tags for Alice Lead' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Search existing' }));
+
+    const searchInput = within(dialog).getByPlaceholderText('Search saved tags');
+    fireEvent.change(searchInput, { target: { value: 'strat' } });
+
+    const deleteButton = await within(dialog).findByRole('button', {
+      name: /Delete saved tag Strategic/i,
+    });
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => {
+      const deleteCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/tags' && opts?.method === 'DELETE',
+      );
+      expect(deleteCall).toBeDefined();
+      expect(JSON.parse(deleteCall[1].body)).toEqual({ tag: 'Strategic', status: 'Lead' });
+    });
+
+    await waitFor(() => {
+      expect(within(dialog).queryByRole('button', { name: 'Strategic' })).toBeNull();
+    });
+
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Deleted "Strategic"/i));
   });
 
   it('opens an in-place lead preview drawer from the list actions', async () => {
@@ -587,6 +627,36 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
+  it('keeps the Name column within a readable width range when resized', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const nameResizeHandle = screen.getByRole('separator', { name: 'Resize Name column' });
+
+    fireEvent.mouseDown(nameResizeHandle, {
+      clientX: 200,
+    });
+    fireEvent.mouseMove(window, { clientX: 1200 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
+      expect(saved.widths.name).toBeLessThanOrEqual(380);
+      expect(saved.widths.name).toBeGreaterThanOrEqual(220);
+    });
+
+    fireEvent.mouseDown(nameResizeHandle, {
+      clientX: 200,
+    });
+    fireEvent.mouseMove(window, { clientX: -200 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
+      expect(saved.widths.name).toBe(220);
+    });
+  });
+
   it.each([
     [
       'wellness',
@@ -659,7 +729,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('synchronizes only the generic header row height', async () => {
+  it('synchronizes the generic split-table header and row heights', async () => {
     const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       const makeRect = (height, width) => ({
         x: 0,
@@ -694,14 +764,14 @@ describe('Leads Freshsales-style list UI affordances', () => {
         this.closest?.('tbody') &&
         this.closest?.('.leads-table-frozen-pane')
       ) {
-        return makeRect(30, 240);
+        return makeRect(42, 240);
       }
       if (
         this?.tagName === 'TR' &&
         this.closest?.('tbody') &&
         this.closest?.('.leads-table-scroll-pane')
       ) {
-        return makeRect(30, 920);
+        return makeRect(66, 920);
       }
       return makeRect(0, 0);
     });
@@ -721,8 +791,8 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
         const frozenBody = container.querySelector('.leads-table-frozen-pane tbody tr');
         const scrollBody = container.querySelector('.leads-table-scroll-pane tbody tr');
-        expect(frozenBody.style.height).toBe('');
-        expect(scrollBody.style.height).toBe('');
+        expect(frozenBody.style.height).toBe('66px');
+        expect(scrollBody.style.height).toBe('66px');
       });
     } finally {
       rectMock.mockRestore();
@@ -923,6 +993,9 @@ function leadsFetchMock(url, opts) {
         { value: 'junk', label: 'Junk' },
       ],
     });
+  }
+  if (typeof url === 'string' && url === '/api/contacts/tags' && opts?.method === 'DELETE') {
+    return Promise.resolve({ deletedTag: 'Strategic', updatedContacts: 1 });
   }
   // PUT /api/contacts/:id (convert), PUT /api/contacts/:id/assign, PUT bulk-assign,
   // POST /api/contacts  all return a benign stub. The component re-fetches
@@ -1544,6 +1617,11 @@ const CALLIFIED_LEADS = [
 const CALLIFIED_CAMPAIGNS = [
   { id: 101, name: 'Globussoft outbound', product_name: 'AI calling', leadCount: 1 },
   { id: 102, name: 'RFU Umrah follow-up', product_name: null, leadCount: 0 },
+  { id: 103, name: 'Panoraexport', product_name: 'Panora export', leadCount: 0 },
+  { id: 104, name: 'RealEstates', product_name: 'Globussoft AI', leadCount: 0 },
+  { id: 105, name: 'AlproductTesting', product_name: 'Globussoft AI', leadCount: 0 },
+  { id: 106, name: 'ADSGPT', product_name: 'AdsGPT', leadCount: 0 },
+  { id: 107, name: 'Supersale', product_name: 'AdsGPT', leadCount: 0 },
 ];
 
 const CALLIFIED_SUMMARIES = {
@@ -1596,14 +1674,27 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     // Column header rendered.
     expect(screen.getByText('Callified Campaign')).toBeInTheDocument();
 
-    // Per-row selects rendered with aria-label containing the lead name.
+    // Per-row dropdowns render as capped popovers with the selected value.
     const aliceSelect = screen.getByLabelText(/Assign Callified campaign for Alice Smith/i);
     expect(aliceSelect).toBeInTheDocument();
-    expect(aliceSelect.value).toBe('101');
+    expect(aliceSelect).toHaveTextContent('Globussoft outbound');
 
     const bobSelect = screen.getByLabelText(/Assign Callified campaign for Bob Jones/i);
     expect(bobSelect).toBeInTheDocument();
-    expect(bobSelect.value).toBe('');
+    expect(bobSelect).toHaveTextContent('—');
+
+    fireEvent.click(bobSelect);
+
+    const listbox = await screen.findByRole('listbox', {
+      name: /Assign Callified campaign for Bob Jones/i,
+    });
+    expect(listbox).toHaveStyle({
+      maxHeight: '170px',
+      overflowY: 'auto',
+    });
+    expect(within(listbox).getAllByRole('option').length).toBeGreaterThan(5);
+
+    fireEvent.click(within(listbox).getByRole('option', { name: /RFU Umrah follow-up/i }));
   });
 
   it('changing a lead campaign fires PUT /api/contacts/:id and refreshes campaign counts', async () => {
@@ -1612,7 +1703,12 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fetchApiMock.mockClear();
 
     const bobSelect = screen.getByLabelText(/Assign Callified campaign for Bob Jones/i);
-    fireEvent.change(bobSelect, { target: { value: '102' } });
+    fireEvent.click(bobSelect);
+
+    const listbox = await screen.findByRole('listbox', {
+      name: /Assign Callified campaign for Bob Jones/i,
+    });
+    fireEvent.click(within(listbox).getByRole('option', { name: /RFU Umrah follow-up/i }));
 
     await waitFor(() => {
       const putCall = fetchApiMock.mock.calls.find(

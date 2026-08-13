@@ -426,9 +426,10 @@ router.post(
 router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const destinationName = String(req.query.destinationName || "").trim();
 
-    if (req.query.destinationName) {
-      where.destinationName = String(req.query.destinationName);
+    if (destinationName) {
+      where.destinationName = { contains: destinationName };
     }
     if (req.query.category) {
       where.category = String(req.query.category);

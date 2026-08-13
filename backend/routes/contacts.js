@@ -58,6 +58,10 @@ function serializeContactTagsBatch(contacts) {
   return contacts.map(serializeContactTags);
 }
 
+function normalizeContactTagValue(raw) {
+  return sanitizeText(String(raw || "")).trim();
+}
+
 function normalizeContactTagsInput(raw) {
   if (raw === undefined) return { hasValue: false, tags: [] };
   if (raw === null || raw === "") return { hasValue: true, tags: [] };
@@ -1275,6 +1279,52 @@ router.get('/filter-values/:field', async (req, res) => {
     res.json({ values });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch filter values' });
+  }
+});
+
+router.delete('/tags', async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const tag = normalizeContactTagValue(req.body?.tag);
+    if (!tag) {
+      return res.status(400).json({ error: 'Tag is required', code: 'TAG_REQUIRED' });
+    }
+    if (CONTACT_TAG_CONTROL_RE.test(tag)) {
+      return res.status(400).json({ error: 'Tag contains invalid control characters', code: 'INVALID_TAG' });
+    }
+    if (tag.length > CONTACT_TAG_MAX_LENGTH) {
+      return res.status(400).json({
+        error: `Each tag must be ${CONTACT_TAG_MAX_LENGTH} characters or less`,
+        code: 'TAG_TOO_LONG',
+      });
+    }
+    const statusScope = typeof req.body?.status === 'string' && req.body.status.trim()
+      ? req.body.status.trim()
+      : 'Lead';
+    const tagKey = tag.toLowerCase();
+    const rows = await prisma.contact.findMany({
+      where: {
+        tenantId,
+        deletedAt: null,
+        status: statusScope,
+        tagsJson: { not: null },
+      },
+      select: { id: true, tagsJson: true },
+    });
+    let updatedContacts = 0;
+    for (const row of rows) {
+      const currentTags = parseContactTags(row.tagsJson);
+      const nextTags = currentTags.filter((current) => current.toLowerCase() !== tagKey);
+      if (nextTags.length === currentTags.length) continue;
+      await prisma.contact.update({
+        where: { id: row.id },
+        data: { tagsJson: nextTags.length > 0 ? JSON.stringify(nextTags) : null },
+      });
+      updatedContacts += 1;
+    }
+    return res.json({ deletedTag: tag, status: statusScope, updatedContacts });
+  } catch (_err) {
+    return res.status(500).json({ error: 'Failed to delete tag' });
   }
 });
 

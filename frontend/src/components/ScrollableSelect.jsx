@@ -16,7 +16,16 @@ import { ChevronDown } from "lucide-react";
 // as the default option and is NOT count against maxVisibleRows scrolling
 // (it renders like any other row; callers wanting an "All X" default just
 // include it as the first option, same as they would with <option value="">).
-export default function ScrollableSelect({ value, onChange, options, placeholder, maxVisibleRows = 5, width = 170, ariaLabel }) {
+export default function ScrollableSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+  maxVisibleRows = 5,
+  width = 170,
+  ariaLabel,
+  disabled = false,
+}) {
   const [open, setOpen] = useState(false);
   const [popoverPos, setPopoverPos] = useState(null);
   const wrapRef = useRef(null);
@@ -77,14 +86,16 @@ export default function ScrollableSelect({ value, onChange, options, placeholder
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
+        disabled={disabled}
         style={{
           width,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: "0.4rem",
-          cursor: "pointer",
           textAlign: "left",
+          opacity: disabled ? 0.7 : 1,
+          cursor: disabled ? "not-allowed" : "pointer",
         }}
       >
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

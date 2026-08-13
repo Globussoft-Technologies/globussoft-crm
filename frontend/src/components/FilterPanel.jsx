@@ -261,7 +261,11 @@ export default function FilterPanel({ fieldsUrl, valuesUrl, filters, onChange })
                   )}
                   {(() => {
                     const term = fieldSearch.trim().toLowerCase();
-                    const visibleFields = term ? fields.filter((f) => f.label.toLowerCase().includes(term)) : fields;
+                    const visibleFields = term
+                      ? fields.filter((f) =>
+                          `${f.label || ""} ${f.field || ""}`.toLowerCase().includes(term),
+                        )
+                      : fields;
                     if (!fieldsLoading && fields.length > 0 && visibleFields.length === 0) {
                       return <div style={{ padding: "0.6rem 0.9rem", fontSize: "0.85rem", color: "var(--text-secondary)" }}>No matching fields.</div>;
                     }

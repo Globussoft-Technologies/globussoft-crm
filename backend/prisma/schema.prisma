@@ -704,6 +704,10 @@ model Contact {
   title                 String?
   status                String    @default("Lead") // Lead, Prospect, Customer, Churned
   source                String?   @default("Organic")
+  /// JSON-encoded array of free-text tags for lead/contact segmentation.
+  /// Route layer exposes this as `tags: string[]`, sanitizes each value, and
+  /// stores null when no tags are selected.
+  tagsJson              String?   @db.Text
   // Travel vertical sub-brand tag ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â nullable so generic + wellness Contacts
   // ignore it. Set to "tmc" | "rfu" | "travelstall" | "visasure" when the
   // Contact entered through a travel-vertical funnel. Drives analytics

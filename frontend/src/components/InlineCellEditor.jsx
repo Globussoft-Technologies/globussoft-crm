@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { Pencil } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 
@@ -29,6 +30,7 @@ export default function InlineCellEditor({ contactId, field, value, onSaved }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
   const [saving, setSaving] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -82,6 +84,8 @@ export default function InlineCellEditor({ contactId, field, value, onSaved }) {
     return (
       <div
         onClick={startEdit}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         title={field.tooltip || `Click to edit ${field.label}`}
         style={{
           cursor: "pointer",
@@ -96,13 +100,45 @@ export default function InlineCellEditor({ contactId, field, value, onSaved }) {
         className="inline-cell-editor-display"
       >
         <span>{display}</span>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            startEdit();
+          }}
+          title={`Edit ${field.label}`}
+          aria-label={`Edit ${field.label}`}
+          style={{
+            background: "none",
+            border: "none",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            padding: "0 0.2rem",
+            opacity: hovered ? 0.75 : 0,
+            pointerEvents: hovered ? "auto" : "none",
+            flexShrink: 0,
+            transition: "opacity 0.15s ease",
+          }}
+        >
+          <Pencil size={12} />
+        </button>
         {!isEmpty && (
           <button
             type="button"
             onClick={handleClear}
             title={`Clear ${field.label}`}
             aria-label={`Clear ${field.label}`}
-            style={{ background: "none", border: "none", color: "var(--text-secondary)", cursor: "pointer", fontSize: "0.85rem", padding: "0 0.2rem", opacity: 0.6 }}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+              padding: "0 0.2rem",
+              opacity: hovered ? 0.6 : 0,
+              pointerEvents: hovered ? "auto" : "none",
+              transition: "opacity 0.15s ease",
+            }}
           >
             ×
           </button>

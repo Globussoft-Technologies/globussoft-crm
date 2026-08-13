@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { SlidersHorizontal, Search } from "lucide-react";
+import { SlidersHorizontal, Search, GripVertical } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 
@@ -29,6 +29,8 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
   const [available, setAvailable] = useState([]); // [{key, label}]
   const [draftVisible, setDraftVisible] = useState([]); // working set while the popover is open
   const [popoverPos, setPopoverPos] = useState(null);
+  const [draggedKey, setDraggedKey] = useState(null);
+  const [dropKey, setDropKey] = useState(null);
   const wrapRef = useRef(null);
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
@@ -67,6 +69,13 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tableKey]);
+
+  useEffect(() => {
+    if (!open) {
+      setDraggedKey(null);
+      setDropKey(null);
+    }
+  }, [open]);
 
   const computePos = () => {
     const trigger = triggerRef.current;
@@ -108,6 +117,65 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
     setDraftVisible((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   };
 
+  const moveVisibleColumn = (fromKey, toKey = null) => {
+    setDraftVisible((prev) => {
+      const fromIndex = prev.indexOf(fromKey);
+      if (fromIndex < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      if (!toKey) {
+        next.push(moved);
+        return next;
+      }
+      const toIndex = next.indexOf(toKey);
+      if (toIndex < 0) {
+        next.push(moved);
+        return next;
+      }
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const handleDragStart = (key) => (event) => {
+    if (!draftVisible.includes(key)) return;
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      try {
+        event.dataTransfer.setData("text/plain", key);
+      } catch (_err) {
+        // jsdom and some browsers may not allow writing arbitrary payloads;
+        // the component keeps the dragged key in React state as the source of truth.
+      }
+    }
+    setDraggedKey(key);
+    setDropKey(key);
+  };
+
+  const handleDragOver = (key = null) => (event) => {
+    if (!draggedKey) return;
+    if (key === null && event.target !== event.currentTarget) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    setDropKey(key);
+  };
+
+  const handleDrop = (key = null) => (event) => {
+    if (key === null && event.target !== event.currentTarget) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (draggedKey) {
+      moveVisibleColumn(draggedKey, key);
+    }
+    setDraggedKey(null);
+    setDropKey(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedKey(null);
+    setDropKey(null);
+  };
+
   const handleApply = async () => {
     setSaving(true);
     try {
@@ -138,7 +206,14 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
     ? available.filter((c) => c.label.toLowerCase().includes(search.trim().toLowerCase()))
     : available;
 
-  const shown = filtered.filter((c) => draftVisible.includes(c.key));
+  const availableByKey = new Map(available.map((c) => [c.key, c]));
+  const searchTerm = search.trim().toLowerCase();
+  const matchesSearch = (column) =>
+    !searchTerm || column.label.toLowerCase().includes(searchTerm);
+  const shown = draftVisible
+    .map((key) => availableByKey.get(key))
+    .filter(Boolean)
+    .filter(matchesSearch);
   const hidden = filtered.filter((c) => !draftVisible.includes(c.key));
 
   return (
@@ -191,18 +266,76 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
                 <div style={{ padding: "0.3rem 0.75rem", fontSize: "0.72rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
                   Shown in table
                 </div>
+                <div
+                  onDragOver={handleDragOver(null)}
+                  onDrop={handleDrop(null)}
+                  style={{ display: "flex", flexDirection: "column", gap: "0.1rem" }}
+                >
                 {shown.map((c) => {
                   const isLocked = c.key === "name";
+                  const isDropTarget = dropKey === c.key && draggedKey !== c.key;
                   return (
-                    <label
+                    <div
                       key={c.key}
-                      style={{ display: "flex", alignItems: "center", gap: "0.55rem", padding: "0.4rem 0.75rem", fontSize: "0.88rem", cursor: isLocked ? "default" : "pointer", opacity: isLocked ? 0.7 : 1 }}
+                      data-column-row={c.key}
+                      onDragOver={handleDragOver(c.key)}
+                      onDrop={handleDrop(c.key)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.55rem",
+                        padding: "0.35rem 0.5rem 0.35rem 0.6rem",
+                        margin: "0 0.35rem",
+                        borderRadius: 8,
+                        fontSize: "0.88rem",
+                        cursor: isLocked ? "default" : "grab",
+                        opacity: isLocked ? 0.7 : 1,
+                        background: isDropTarget ? "rgba(99, 102, 241, 0.08)" : "transparent",
+                        outline: isDropTarget ? "1px solid var(--accent-color)" : "1px solid transparent",
+                        transition: "background 120ms ease, outline-color 120ms ease",
+                      }}
                     >
-                      <input type="checkbox" checked disabled={isLocked} onChange={() => toggleColumn(c.key)} />
-                      {c.label}
-                    </label>
+                      <button
+                        type="button"
+                        draggable={!isLocked}
+                        onDragStart={handleDragStart(c.key)}
+                        onDragEnd={handleDragEnd}
+                        disabled={isLocked}
+                        aria-label={`Drag ${c.label} column`}
+                        title={isLocked ? `${c.label} is fixed` : `Drag to reorder ${c.label}`}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "var(--text-secondary)",
+                          padding: 0,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          cursor: isLocked ? "not-allowed" : "grab",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <GripVertical size={15} />
+                      </button>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.55rem",
+                          minWidth: 0,
+                          flex: 1,
+                          cursor: isLocked ? "default" : "pointer",
+                        }}
+                      >
+                        <input type="checkbox" checked disabled={isLocked} onChange={() => toggleColumn(c.key)} />
+                        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {c.label}
+                        </span>
+                      </label>
+                    </div>
                   );
                 })}
+                </div>
               </>
             )}
             {hidden.length > 0 && (

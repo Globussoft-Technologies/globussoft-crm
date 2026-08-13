@@ -37,6 +37,7 @@ import { AuthContext } from "../App";
 import ColumnPicker from "../components/ColumnPicker";
 import FilterPanel from "../components/FilterPanel";
 import InlineCellEditor from "../components/InlineCellEditor";
+import ScrollableSelect from "../components/ScrollableSelect";
 import TopScrollSync from "../components/TopScrollSync";
 import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
 import CallifiedLeadCallDialog from "../components/CallifiedLeadCallDialog";
@@ -106,6 +107,8 @@ const LEADS_AUTO_REFRESH_MS = 15000;
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
 const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
+const LEADS_NAME_COLUMN_MIN_WIDTH = 220;
+const LEADS_NAME_COLUMN_MAX_WIDTH = 380;
 const LEADS_ACTIONS_COLUMN_WIDTH = 176;
 const LEADS_HEADER_MENU_WIDTH = 300;
 const LEADS_HEADER_MENU_SUBMENU_WIDTH = 320;
@@ -123,7 +126,7 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
 ];
 const LEADS_COLUMN_DEFAULT_WIDTHS = {
   select: 48,
-  name: 190,
+  name: 240,
   email: 220,
   company: 190,
   phone: 150,
@@ -238,7 +241,15 @@ function cleanLeadTagInput(raw) {
   return stripDangerousTags(text).value.slice(0, LEAD_TAG_MAX_LENGTH);
 }
 
-function LeadTagsCell({ lead, options, onSave }) {
+function removeLeadTagFromList(rawTags, tagKey) {
+  const currentTags = normalizeLeadTags(rawTags);
+  const nextTags = currentTags.filter(
+    (tag) => tag.toLowerCase() !== tagKey,
+  );
+  return nextTags.length === currentTags.length ? null : nextTags;
+}
+
+function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
   const tags = normalizeLeadTags(lead.tags);
   const [open, setOpen] = useState(false);
   const [draftTags, setDraftTags] = useState(tags);
@@ -246,13 +257,15 @@ function LeadTagsCell({ lead, options, onSave }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [newTagInput, setNewTagInput] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deletingTag, setDeletingTag] = useState("");
   const [hovered, setHovered] = useState(false);
-  const [popoverStyle, setPopoverStyle] = useState({
-    top: 0,
-    left: 0,
-    width: 360,
-  });
+  const [popoverStyle, setPopoverStyle] = useState(null);
+  const [popoverReady, setPopoverReady] = useState(false);
   const triggerRef = useRef(null);
+  const optionKeySet = useMemo(
+    () => new Set(options.map((tag) => tag.toLowerCase())),
+    [options],
+  );
 
   useEffect(() => {
     if (!open) {
@@ -260,10 +273,13 @@ function LeadTagsCell({ lead, options, onSave }) {
       setPanel(options.length > 0 ? "search" : "create");
       setSearchQuery("");
       setNewTagInput("");
+      setDeletingTag("");
+      setPopoverReady(false);
+      setPopoverStyle(null);
     }
   }, [open, lead.tags, options.length]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return undefined;
     const place = () => {
       const rect = triggerRef.current?.getBoundingClientRect();
@@ -275,7 +291,9 @@ function LeadTagsCell({ lead, options, onSave }) {
         left: Math.min(Math.max(8, rect.left), maxLeft),
         width,
       });
+      setPopoverReady(true);
     };
+    setPopoverReady(false);
     place();
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
@@ -312,6 +330,25 @@ function LeadTagsCell({ lead, options, onSave }) {
     setNewTagInput("");
   };
 
+  const deleteSavedTag = async (tag) => {
+    const normalizedTag = cleanLeadTagInput(tag);
+    if (!normalizedTag || !onDeleteTag) return false;
+    const tagKey = normalizedTag.toLowerCase();
+    if (deletingTag === tagKey) return false;
+    setDeletingTag(tagKey);
+    try {
+      const deleted = await onDeleteTag(lead, normalizedTag);
+      if (deleted) {
+        setDraftTags((prev) =>
+          prev.filter((current) => current.toLowerCase() !== tagKey),
+        );
+      }
+      return deleted;
+    } finally {
+      setDeletingTag("");
+    }
+  };
+
   const save = async () => {
     setSaving(true);
     try {
@@ -330,10 +367,9 @@ function LeadTagsCell({ lead, options, onSave }) {
     setOpen(false);
   };
 
-  const selectedKeys = new Set(draftTags.map((tag) => tag.toLowerCase()));
   const trimmedSearch = searchQuery.trim();
   const optionRows = options.filter((tag) => {
-    if (!tag || selectedKeys.has(tag.toLowerCase())) return false;
+    if (!tag) return false;
     if (!trimmedSearch) return true;
     return tag.toLowerCase().includes(trimmedSearch.toLowerCase());
   });
@@ -401,10 +437,14 @@ function LeadTagsCell({ lead, options, onSave }) {
               className="card lead-tags-popover"
               style={{
                 position: "fixed",
-                top: popoverStyle.top,
-                left: popoverStyle.left,
-                width: popoverStyle.width,
+                top: popoverStyle?.top || 0,
+                left: popoverStyle?.left || 0,
+                width: popoverStyle?.width || 360,
                 zIndex: 81,
+                visibility: popoverReady ? "visible" : "hidden",
+                transition: "none",
+                transform: "none",
+                animation: "none",
               }}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
@@ -439,18 +479,31 @@ function LeadTagsCell({ lead, options, onSave }) {
                   aria-label="Selected tags"
                 >
                   {draftTags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="lead-tag-chip lead-tag-chip--selected"
-                    >
-                      {tag}
+                    <span key={tag} className="lead-tag-chip lead-tag-chip--selected">
+                      <span className="lead-tag-chip__label">{tag}</span>
                       <button
                         type="button"
                         onClick={() => removeDraftTag(tag)}
-                        aria-label={`Remove ${tag}`}
+                        aria-label={`Remove ${tag} from this lead`}
+                        className="lead-tag-chip-action lead-tag-chip-action--remove"
                       >
                         <X size={12} />
                       </button>
+                      {optionKeySet.has(tag.toLowerCase()) && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteSavedTag(tag);
+                          }}
+                          aria-label={`Delete saved tag ${tag}`}
+                          title={`Delete saved tag ${tag}`}
+                          className="lead-tag-chip-action lead-tag-chip-action--delete"
+                          disabled={saving || deletingTag === tag.toLowerCase()}
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      )}
                     </span>
                   ))}
                 </div>
@@ -509,16 +562,35 @@ function LeadTagsCell({ lead, options, onSave }) {
                         </span>
                       )
                     ) : (
-                      optionRows.map((tag) => (
-                        <button
-                          key={tag}
-                          type="button"
-                          className="lead-tags-option"
-                          onClick={() => applyExistingTag(tag)}
-                        >
-                          {tag}
-                        </button>
-                      ))
+                      optionRows.map((tag) => {
+                        const tagKey = tag.toLowerCase();
+                        const deletingThisTag = deletingTag === tagKey;
+                        return (
+                          <div key={tag} className="lead-tags-option-row">
+                            <button
+                              type="button"
+                              className="lead-tags-option"
+                              onClick={() => applyExistingTag(tag)}
+                            >
+                              {tag}
+                            </button>
+                            <button
+                              type="button"
+                              className="lead-tags-option-delete"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                deleteSavedTag(tag);
+                              }}
+                              aria-label={`Delete saved tag ${tag}`}
+                              title={`Delete saved tag ${tag}`}
+                              disabled={saving || deletingThisTag}
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                   <div className="lead-tags-create-tip">
@@ -1092,11 +1164,24 @@ const Leads = () => {
             Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key),
             LEADS_ACTIONS_COLUMN_WIDTH,
           )
-        : Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
+        : key === "name"
+          ? Math.max(
+              LEADS_NAME_COLUMN_MIN_WIDTH,
+              Math.min(
+                Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key),
+                LEADS_NAME_COLUMN_MAX_WIDTH,
+              ),
+            )
+          : Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
   const setColumnWidth = (key, width) => {
     const minWidth =
-      key === "actions" ? LEADS_ACTIONS_COLUMN_WIDTH : LEADS_COLUMN_MIN_WIDTH;
-    const nextWidth = Math.max(minWidth, Math.round(width));
+      key === "actions"
+        ? LEADS_ACTIONS_COLUMN_WIDTH
+        : key === "name"
+          ? LEADS_NAME_COLUMN_MIN_WIDTH
+          : LEADS_COLUMN_MIN_WIDTH;
+    const maxWidth = key === "name" ? LEADS_NAME_COLUMN_MAX_WIDTH : Number.POSITIVE_INFINITY;
+    const nextWidth = Math.max(minWidth, Math.min(Math.round(width), maxWidth));
     setColumnLayout((prev) => ({
       widths: { ...(prev.widths || {}), [key]: nextWidth },
       collapsed: { ...(prev.collapsed || {}), [key]: false },
@@ -3184,6 +3269,49 @@ const Leads = () => {
     notify.success("Lead updated");
   };
 
+  const handleDeleteLeadTag = async (lead, rawTag) => {
+    const tag = cleanLeadTagInput(rawTag);
+    if (!tag) return false;
+    const ok = await notify.confirm({
+      title: "Delete saved tag?",
+      message: `Delete "${tag}" from every lead in this pipeline? This removes the saved tag from all matching leads and cannot be undone.`,
+      confirmText: "Delete",
+      cancelText: "Cancel",
+      destructive: true,
+    });
+    if (!ok) return false;
+
+    try {
+      const result = await fetchApi("/api/contacts/tags", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag, status: "Lead" }),
+      });
+      const tagKey = tag.toLowerCase();
+      setLeadTagCatalog((prev) =>
+        prev.filter((current) => current.toLowerCase() !== tagKey),
+      );
+      setLeads((prev) =>
+        prev.map((row) => {
+          const nextTags = removeLeadTagFromList(row.tags, tagKey);
+          return nextTags ? { ...row, tags: nextTags } : row;
+        }),
+      );
+      setPreviewLead((current) => {
+        if (!current) return current;
+        const nextTags = removeLeadTagFromList(current.tags, tagKey);
+        return nextTags ? { ...current, tags: nextTags } : current;
+      });
+      notify.success(
+        `Deleted "${tag}" from ${result?.updatedContacts ?? 0} lead${(result?.updatedContacts ?? 0) === 1 ? "" : "s"}`,
+      );
+      return true;
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to delete tag");
+      return false;
+    }
+  };
+
   const filteredLeads = leads.filter((lead) => {
     if (!matchesSource(lead.source, sourceFilter)) return false;
     if (isTravel && subBrandFilter && lead.subBrand !== subBrandFilter)
@@ -3827,6 +3955,7 @@ const Leads = () => {
               lead={lead}
               options={leadTagOptions}
               onSave={updateLeadInlineValue}
+              onDeleteTag={handleDeleteLeadTag}
             />
           </td>
         );
@@ -6141,32 +6270,28 @@ const Leads = () => {
                             style={getBodyCellStyle("campaign")}
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <select
-                              className="input-field"
+                            <ScrollableSelect
                               value={
                                 lead.callifiedCampaignId
                                   ? String(lead.callifiedCampaignId)
                                   : ""
                               }
-                              onChange={(e) =>
-                                handleCampaignChange(lead, e.target.value)
+                              onChange={(campaignId) =>
+                                handleCampaignChange(lead, campaignId)
                               }
                               disabled={!callifiedConfigured}
-                              style={{
-                                minWidth: "160px",
-                                padding: "0.4rem 0.6rem",
-                                fontSize: "0.8125rem",
-                              }}
-                              aria-label={`Assign Callified campaign for ${lead.name || "lead"}`}
-                            >
-                              <option value="">—</option>
-                              {callifiedCampaigns.map((c) => (
-                                <option key={c.id} value={String(c.id)}>
-                                  {c.name || `Campaign ${c.id}`}
-                                  {c.product_name ? ` — ${c.product_name}` : ""}
-                                </option>
-                              ))}
-                            </select>
+                              width={160}
+                              maxVisibleRows={5}
+                              ariaLabel={`Assign Callified campaign for ${lead.name || "lead"}`}
+                              placeholder="—"
+                              options={[
+                                { value: "", label: "—" },
+                                ...callifiedCampaigns.map((c) => ({
+                                  value: String(c.id),
+                                  label: `${c.name || `Campaign ${c.id}`}${c.product_name ? ` — ${c.product_name}` : ""}`,
+                                })),
+                              ]}
+                            />
                           </td>
                         )}
                         {isGeneric && (

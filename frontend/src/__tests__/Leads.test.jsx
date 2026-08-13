@@ -524,8 +524,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
       const headers = Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
         th.textContent.replace(/\s+/g, ' ').trim(),
       );
-      expect(headers.slice(0, 9)).toEqual([
-        '',
+      expect(headers.slice(0, 13)).toEqual([
         'Name',
         'Phone',
         'Company',
@@ -534,6 +533,11 @@ describe('Leads Freshsales-style list UI affordances', () => {
         'Created',
         'Source',
         'Lead Score',
+        'Callified Campaign',
+        'Call Status',
+        'Callified AI call',
+        'Callified Score',
+        'Actions',
       ]);
     });
 
@@ -1048,7 +1052,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     await waitFor(() => {
       const filterFieldsCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === '/api/contacts/filter-fields?status=Lead' && !opts,
+        ([url, opts]) => url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true,
       );
       expect(filterFieldsCall).toBeDefined();
     });

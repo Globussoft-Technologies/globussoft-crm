@@ -214,7 +214,7 @@ describe('GET /api/travel/itinerary-templates — list', () => {
 
     expect(res.status).toBe(200);
     const call = prisma.itineraryTemplate.findMany.mock.calls[0][0];
-    expect(call.where.destinationName).toBe('Paris');
+    expect(call.where.destinationName).toEqual({ contains: 'Paris' });
     expect(call.where.category).toBe('City Break');
     expect(call.where.isActive).toBe(true);
   });

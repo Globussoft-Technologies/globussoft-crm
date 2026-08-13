@@ -5,8 +5,10 @@ import {
   Fragment,
   useState,
   useEffect,
+  useLayoutEffect,
   useContext,
   useCallback,
+  useMemo,
   useRef,
 } from "react";
 import { createPortal } from "react-dom";
@@ -103,6 +105,11 @@ const LEADS_PAGE_SIZE_OPTIONS = [25, 50, 100];
 const LEADS_AUTO_REFRESH_MS = 15000;
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
+const LEADS_COLUMN_COLLAPSED_WIDTH = 52;
+const LEADS_ACTIONS_COLUMN_WIDTH = 176;
+const LEADS_HEADER_MENU_WIDTH = 300;
+const LEADS_HEADER_MENU_SUBMENU_WIDTH = 320;
+const LEADS_HEADER_MENU_GAP = 6;
 const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "name",
   "email",
@@ -131,7 +138,7 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   amount: 130,
   assignedTo: 170,
   createdAt: 145,
-  actions: 132,
+  actions: LEADS_ACTIONS_COLUMN_WIDTH,
 };
 
 const inlineBuiltinCellStyle = {
@@ -162,6 +169,40 @@ const sourceBadgeStyle = {
   backgroundColor: "var(--source-badge-bg, rgba(139, 92, 246, 0.16))",
   color: "var(--source-badge-text, var(--text-primary))",
   border: "1px solid var(--border-color)",
+};
+
+const compactToolbarButtonStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "0.3rem",
+  fontSize: "0.8rem",
+  lineHeight: 1.1,
+  whiteSpace: "nowrap",
+};
+
+const compactToolbarSurfaceStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "0.4rem",
+  flexWrap: "wrap",
+  rowGap: "0.45rem",
+  flex: "1 1 1020px",
+  minWidth: 0,
+  width: "100%",
+  padding: "0.6rem 0.75rem",
+  borderRadius: 16,
+  border: "1px solid var(--border-color)",
+  background: "var(--bg-color)",
+  boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
+};
+
+const compactToolbarDividerStyle = {
+  width: 1,
+  alignSelf: "stretch",
+  background: "var(--border-color)",
+  opacity: 0.8,
+  margin: "0 0.1rem",
+  flexShrink: 0,
 };
 
 const LEAD_TAG_LIMIT = 50;
@@ -201,26 +242,33 @@ function LeadTagsCell({ lead, options, onSave }) {
   const tags = normalizeLeadTags(lead.tags);
   const [open, setOpen] = useState(false);
   const [draftTags, setDraftTags] = useState(tags);
-  const [input, setInput] = useState("");
+  const [panel, setPanel] = useState(options.length > 0 ? "search" : "create");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [newTagInput, setNewTagInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [popoverStyle, setPopoverStyle] = useState({
     top: 0,
     left: 0,
-    width: 320,
+    width: 360,
   });
   const triggerRef = useRef(null);
 
   useEffect(() => {
-    if (!open) setDraftTags(normalizeLeadTags(lead.tags));
-  }, [open, lead.tags]);
+    if (!open) {
+      setDraftTags(normalizeLeadTags(lead.tags));
+      setPanel(options.length > 0 ? "search" : "create");
+      setSearchQuery("");
+      setNewTagInput("");
+    }
+  }, [open, lead.tags, options.length]);
 
   useEffect(() => {
     if (!open) return undefined;
     const place = () => {
       const rect = triggerRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const width = 320;
+      const width = 360;
       const maxLeft = Math.max(8, window.innerWidth - width - 8);
       setPopoverStyle({
         top: Math.max(8, rect.bottom + 6),
@@ -245,27 +293,23 @@ function LeadTagsCell({ lead, options, onSave }) {
       const exists = prev.some(
         (current) => current.toLowerCase() === tag.toLowerCase(),
       );
-      return exists ? prev : [...prev, tag];
+      if (exists) return prev;
+      return [...prev, tag];
     });
-    setInput("");
   };
 
   const removeDraftTag = (tag) => {
     setDraftTags((prev) => prev.filter((current) => current !== tag));
   };
 
-  const toggleOption = (tag) => {
-    const clean = cleanLeadTagInput(tag);
-    if (!clean) return;
-    setDraftTags((prev) =>
-      prev.some((current) => current.toLowerCase() === clean.toLowerCase())
-        ? prev.filter(
-            (current) => current.toLowerCase() !== clean.toLowerCase(),
-          )
-        : prev.length >= LEAD_TAG_LIMIT
-          ? prev
-          : [...prev, clean],
-    );
+  const applyExistingTag = (tag) => {
+    addDraftTag(tag);
+    setSearchQuery("");
+  };
+
+  const createNewTag = () => {
+    addDraftTag(newTagInput);
+    setNewTagInput("");
   };
 
   const save = async () => {
@@ -280,14 +324,23 @@ function LeadTagsCell({ lead, options, onSave }) {
 
   const cancel = () => {
     setDraftTags(tags);
-    setInput("");
+    setSearchQuery("");
+    setNewTagInput("");
+    setPanel(options.length > 0 ? "search" : "create");
     setOpen(false);
   };
 
   const selectedKeys = new Set(draftTags.map((tag) => tag.toLowerCase()));
-  const optionRows = options.filter(
-    (tag) => tag && !selectedKeys.has(tag.toLowerCase()),
-  );
+  const trimmedSearch = searchQuery.trim();
+  const optionRows = options.filter((tag) => {
+    if (!tag || selectedKeys.has(tag.toLowerCase())) return false;
+    if (!trimmedSearch) return true;
+    return tag.toLowerCase().includes(trimmedSearch.toLowerCase());
+  });
+  const trimmedNewTag = newTagInput.trim();
+  const exactNewTagMatch =
+    trimmedNewTag &&
+    options.some((tag) => tag.toLowerCase() === trimmedNewTag.toLowerCase());
 
   return (
     <div
@@ -305,14 +358,11 @@ function LeadTagsCell({ lead, options, onSave }) {
           <span style={inlineBuiltinEmptyStyle}>+ Click to add</span>
         ) : (
           <>
-            {tags.slice(0, 2).map((tag) => (
+            {tags.map((tag) => (
               <span key={tag} className="lead-tag-chip">
                 {tag}
               </span>
             ))}
-            {tags.length > 2 && (
-              <span className="lead-tag-overflow">+{tags.length - 2}</span>
-            )}
           </>
         )}
       </div>
@@ -359,36 +409,30 @@ function LeadTagsCell({ lead, options, onSave }) {
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
             >
-              <label
-                className="lead-tags-label"
-                htmlFor={`lead-tags-input-${lead.id}`}
+              <div
+                className="lead-tags-mode-switch"
+                role="group"
+                aria-label="Tag options"
               >
-                Tags
-              </label>
-              <form
-                className="lead-tags-input-row"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  addDraftTag(input);
-                }}
-              >
-                <input
-                  id={`lead-tags-input-${lead.id}`}
-                  className="input-field"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="Click to select"
-                  maxLength={LEAD_TAG_MAX_LENGTH}
-                  autoFocus
-                />
                 <button
-                  type="submit"
-                  className="lead-tags-add-button"
-                  aria-label="Add tag"
+                  type="button"
+                  className={`lead-tags-mode-button${panel === "search" ? " lead-tags-mode-button--active" : ""}`}
+                  aria-pressed={panel === "search"}
+                  onClick={() => setPanel("search")}
                 >
-                  <Plus size={14} />
+                  <Search size={13} />
+                  Search existing
                 </button>
-              </form>
+                <button
+                  type="button"
+                  className={`lead-tags-mode-button${panel === "create" ? " lead-tags-mode-button--active" : ""}`}
+                  aria-pressed={panel === "create"}
+                  onClick={() => setPanel("create")}
+                >
+                  <Plus size={13} />
+                  Add new
+                </button>
+              </div>
               {draftTags.length > 0 && (
                 <div
                   className="lead-tags-draft-list"
@@ -411,25 +455,118 @@ function LeadTagsCell({ lead, options, onSave }) {
                   ))}
                 </div>
               )}
-              <div
-                className="lead-tags-option-list"
-                aria-label="Available tags"
-              >
-                {optionRows.length === 0 ? (
-                  <span className="lead-tags-empty">No saved tags yet</span>
-                ) : (
-                  optionRows.map((tag) => (
+              {panel === "search" ? (
+                <>
+                  <label
+                    className="lead-tags-label"
+                    htmlFor={`lead-tags-search-${lead.id}`}
+                  >
+                    Search saved tags
+                  </label>
+                  <div className="lead-tags-search-row">
+                    <input
+                      id={`lead-tags-search-${lead.id}`}
+                      className="input-field"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search saved tags"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter") return;
+                        e.preventDefault();
+                        if (optionRows.length > 0) {
+                          applyExistingTag(optionRows[0]);
+                        }
+                      }}
+                    />
+                  </div>
+                  <div
+                    className="lead-tags-search-list"
+                    aria-label="Available tags"
+                  >
+                    {options.length === 0 ? (
+                      <span className="lead-tags-search-empty">
+                        No saved tags yet. Switch to Add new to create the first one.
+                      </span>
+                    ) : optionRows.length === 0 ? (
+                      trimmedSearch ? (
+                        <div className="lead-tags-search-empty">
+                          <span>No matching saved tags.</span>
+                          <button
+                            type="button"
+                            className="lead-tags-inline-link"
+                            onClick={() => {
+                              setPanel("create");
+                              setNewTagInput(trimmedSearch);
+                            }}
+                          >
+                            Create &quot;{trimmedSearch}&quot;
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="lead-tags-search-empty">
+                          All saved tags on this lead are already selected.
+                        </span>
+                      )
+                    ) : (
+                      optionRows.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="lead-tags-option"
+                          onClick={() => applyExistingTag(tag)}
+                        >
+                          {tag}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <div className="lead-tags-create-tip">
+                    Search saved tags and click one to apply it.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <label
+                    className="lead-tags-label"
+                    htmlFor={`lead-tags-new-${lead.id}`}
+                  >
+                    Add a new tag
+                  </label>
+                  <form
+                    className="lead-tags-input-row"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      createNewTag();
+                    }}
+                  >
+                    <input
+                      id={`lead-tags-new-${lead.id}`}
+                      className="input-field"
+                      value={newTagInput}
+                      onChange={(e) => setNewTagInput(e.target.value)}
+                      placeholder="Type a new tag"
+                      maxLength={LEAD_TAG_MAX_LENGTH}
+                      autoFocus
+                    />
                     <button
-                      key={tag}
-                      type="button"
-                      className="lead-tags-option"
-                      onClick={() => toggleOption(tag)}
+                      type="submit"
+                      className="lead-tags-add-button"
+                      aria-label="Add new tag"
                     >
-                      {tag}
+                      <Plus size={14} />
                     </button>
-                  ))
-                )}
-              </div>
+                  </form>
+                  <div className="lead-tags-create-tip">
+                    Add a new tag here, then click Save to apply it to this lead.
+                  </div>
+                  {trimmedNewTag && exactNewTagMatch && (
+                    <div className="lead-tags-search-empty">
+                      That tag already exists in saved tags. Use Search existing if you want to apply it from the catalog.
+                    </div>
+                  )}
+                </>
+              )}
               <div className="lead-tags-popover-actions">
                 <button
                   type="button"
@@ -763,6 +900,7 @@ const Leads = () => {
   // assignee name as plain text and have no checkbox / bulk-assign surface.
   const isAdmin = auth?.user?.role === "ADMIN";
   const [leads, setLeads] = useState([]);
+  const [leadTagCatalog, setLeadTagCatalog] = useState([]);
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -793,11 +931,14 @@ const Leads = () => {
     }
   });
   const resizeStateRef = useRef(null);
+  const leadsFrozenTableRef = useRef(null);
+  const leadsScrollableTableRef = useRef(null);
   const [bulkAgent, setBulkAgent] = useState("");
   const [, setBulkCampaignId] = useState("");
   const [bulkCampaignDropdownOpen, setBulkCampaignDropdownOpen] =
     useState(false);
   const [bulkCampaignSaving, setBulkCampaignSaving] = useState(false);
+  const [leadBulkActionsOpen, setLeadBulkActionsOpen] = useState(false);
   // Callified AI calling state
   const [callifiedCallLead, setCallifiedCallLead] = useState(null);
   const [callifiedDetailsLead, setCallifiedDetailsLead] = useState(null);
@@ -894,6 +1035,13 @@ const Leads = () => {
   // null = "not loaded yet, show every builtin column" so the table never
   // flashes empty while the preference GET is in flight.
   const [visibleColumns, setVisibleColumns] = useState(null);
+  const [leadColumnCatalog, setLeadColumnCatalog] = useState([]);
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
+  const [headerMenuState, setHeaderMenuState] = useState(null);
+  const [headerMenuSubmenu, setHeaderMenuSubmenu] = useState(null);
+  const [headerMenuSearch, setHeaderMenuSearch] = useState("");
+  const [headerFilterRequest, setHeaderFilterRequest] = useState(null);
+  const [renameFieldState, setRenameFieldState] = useState(null);
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -904,6 +1052,28 @@ const Leads = () => {
       // Layout persistence is a convenience; table interaction should still work.
     }
   }, [columnLayout]);
+  useEffect(() => {
+    if (!isGeneric) {
+      setLeadColumnCatalog([]);
+      return undefined;
+    }
+    let cancelled = false;
+    fetchApi("/api/table-column-prefs/leads", { silent: true })
+      .then((data) => {
+        if (cancelled) return;
+        setLeadColumnCatalog(Array.isArray(data?.availableColumns) ? data.availableColumns : []);
+        if (Array.isArray(data?.visible)) {
+          setVisibleColumns(data.visible);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLeadColumnCatalog([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isGeneric]);
   useEffect(
     () => () => {
       if (!resizeStateRef.current) return;
@@ -915,9 +1085,18 @@ const Leads = () => {
   const getColumnDefaultWidth = (key) =>
     LEADS_COLUMN_DEFAULT_WIDTHS[key] || (key.startsWith("cf_") ? 150 : 140);
   const getColumnWidth = (key) =>
-    Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
+    columnLayout.collapsed?.[key]
+      ? LEADS_COLUMN_COLLAPSED_WIDTH
+      : key === "actions"
+        ? Math.max(
+            Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key),
+            LEADS_ACTIONS_COLUMN_WIDTH,
+          )
+        : Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
   const setColumnWidth = (key, width) => {
-    const nextWidth = Math.max(LEADS_COLUMN_MIN_WIDTH, Math.round(width));
+    const minWidth =
+      key === "actions" ? LEADS_ACTIONS_COLUMN_WIDTH : LEADS_COLUMN_MIN_WIDTH;
+    const nextWidth = Math.max(minWidth, Math.round(width));
     setColumnLayout((prev) => ({
       widths: { ...(prev.widths || {}), [key]: nextWidth },
       collapsed: { ...(prev.collapsed || {}), [key]: false },
@@ -995,6 +1174,31 @@ const Leads = () => {
       if (!background) setLoading(false);
     }
   };
+
+  const loadLeadTagCatalog = useCallback(async () => {
+    try {
+      const data = await fetchApi("/api/contacts/filter-values/tags?status=Lead");
+      const rows = Array.isArray(data?.values)
+        ? data.values
+        : Array.isArray(data)
+          ? data
+          : [];
+      const seen = new Set();
+      const tags = [];
+      for (const row of rows) {
+        const tag = cleanLeadTagInput(row?.label || row?.value || row);
+        if (!tag) continue;
+        const key = tag.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tags.push(tag);
+      }
+      tags.sort((a, b) => a.localeCompare(b));
+      setLeadTagCatalog(tags);
+    } catch {
+      setLeadTagCatalog([]);
+    }
+  }, []);
 
   const fetchStaff = async () => {
     try {
@@ -1242,6 +1446,7 @@ const Leads = () => {
         ensureQualifiedLeadsAssigned(rows);
       }
     });
+    loadLeadTagCatalog();
     fetchStaff();
     loadAutoCampaignRules();
     if (isTravel) {
@@ -2334,6 +2539,16 @@ const Leads = () => {
     setAdvancedFilters([]);
     setLeadsPage(0);
   };
+  const hasActiveLeadFilters = Boolean(
+    searchTerm.trim() ||
+    sourceFilter ||
+    subBrandFilter ||
+    stageFilter ||
+    campaignFilter ||
+    leadStatusFilter ||
+    assigneeFilter ||
+    advancedFilters.length > 0,
+  );
 
   const toggleSelect = (id) => {
     setSelectedLeads((prev) =>
@@ -2347,6 +2562,15 @@ const Leads = () => {
     } else {
       setSelectedLeads(filteredLeads.map((l) => l.id));
     }
+  };
+
+  const handleLeadBulkActionsToggle = () => {
+    if (leadBulkActionsOpen) {
+      setLeadBulkActionsOpen(false);
+      return;
+    }
+    setSelectedLeads(filteredLeads.map((lead) => lead.id));
+    setLeadBulkActionsOpen(true);
   };
 
   const handleChange = (field, value) => {
@@ -2366,13 +2590,6 @@ const Leads = () => {
       String(filterValue).toLowerCase()
     );
   };
-
-  const sourceCounts = sourceFilterOptions.reduce((acc, opt) => {
-    acc[opt.value] = leads.filter((lead) =>
-      matchesSource(lead.source, opt.value),
-    ).length;
-    return acc;
-  }, {});
 
   const travelSubBrandOptions = SUB_BRAND_IDS.map((id) => ({
     value: id,
@@ -2396,15 +2613,24 @@ const Leads = () => {
       ].some((value) => String(value ?? "") === stageFilter),
     );
   };
-  const customFieldByKey = new Map(
-    customFieldDefs.map((field) => [`cf_${field.fieldKey}`, field]),
+  const customFieldByKey = useMemo(
+    () => new Map(customFieldDefs.map((field) => [`cf_${field.fieldKey}`, field])),
+    [customFieldDefs],
   );
-  const preferredVisibleColumns = Array.isArray(visibleColumns)
-    ? visibleColumns
-    : [
-        ...LEADS_DEFAULT_VISIBLE_COLUMNS,
-        ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
-      ];
+  const leadColumnKeySet = useMemo(
+    () => new Set(leadColumnCatalog.map((column) => column.key)),
+    [leadColumnCatalog],
+  );
+  const preferredVisibleColumns = useMemo(
+    () =>
+      Array.isArray(visibleColumns)
+        ? visibleColumns
+        : [
+            ...LEADS_DEFAULT_VISIBLE_COLUMNS,
+            ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
+          ],
+    [customFieldDefs, visibleColumns],
+  );
   const leadUserColumnDefs = preferredVisibleColumns
     .filter((key) => key !== "name")
     .filter(
@@ -2450,21 +2676,340 @@ const Leads = () => {
       ? [
           { key: "subBrand", label: "Sub-brand" },
           { key: "amount", label: "Amount" },
-        ]
+      ]
       : []),
   ];
+  const getCustomFieldFilterKind = (fieldType) => {
+    if (fieldType === "date") return "date";
+    if (fieldType === "number") return "number";
+    if (fieldType === "checkbox") return "boolean";
+    return "text";
+  };
+  const getHeaderFilterConfig = (column) => {
+    if (!column) return null;
+    if (column.customField && column.field) {
+      return {
+        fieldKey: `custom_${column.field.id}`,
+        label: column.label,
+        kind: getCustomFieldFilterKind(column.field.fieldType),
+      };
+    }
+    switch (column.key) {
+      case "name":
+        return { fieldKey: "name", label: "Name", kind: "text" };
+      case "email":
+        return { fieldKey: "email", label: "Email", kind: "text" };
+      case "company":
+        return { fieldKey: "company", label: isTravel ? "Category" : "Company", kind: "text" };
+      case "phone":
+        return { fieldKey: "phone", label: "Phone", kind: "text" };
+      case "source":
+        return { fieldKey: "source", label: "Source", kind: "text" };
+      case "campaign":
+        return { fieldKey: "callifiedCampaignId", label: "Callified Campaign", kind: "id" };
+      case "callStatus":
+        return { fieldKey: "callifiedLeadStatus", label: "Call Status", kind: "text" };
+      case "tags":
+        return { fieldKey: "tags", label: "Tags", kind: "text" };
+      case "aiScore":
+        return { fieldKey: "aiScore", label: "Lead Score", kind: "number" };
+      case "assignedTo":
+        return { fieldKey: "assignedToId", label: "Assigned To", kind: "id" };
+      case "createdAt":
+        return { fieldKey: "createdAt", label: "Created", kind: "date" };
+      case "subBrand":
+        return { fieldKey: "subBrand", label: "Sub-brand", kind: "text" };
+      default:
+        return null;
+    }
+  };
+  const closeHeaderMenu = useCallback(() => {
+    setHeaderMenuState(null);
+    setHeaderMenuSubmenu(null);
+    setHeaderMenuSearch("");
+  }, []);
+  useEffect(() => {
+    if (!headerMenuState) return undefined;
+    const dismiss = () => closeHeaderMenu();
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        closeHeaderMenu();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", dismiss);
+    window.addEventListener("scroll", dismiss);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", dismiss);
+      window.removeEventListener("scroll", dismiss);
+    };
+  }, [closeHeaderMenu, headerMenuState]);
+  const openHeaderMenu = (column, event) => {
+    if (!column || column.key === "select" || column.key === "actions") return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    setHeaderMenuState({
+      key: column.key,
+      label: column.label,
+      customField: Boolean(column.customField),
+      field: column.field || null,
+      fixedExtra: leadFixedExtraColumnDefs.some((item) => item.key === column.key),
+      locked: column.key === "name",
+      rect: {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      },
+    });
+    setHeaderMenuSubmenu(null);
+    setHeaderMenuSearch("");
+  };
+  const openHeaderFilter = (column) => {
+    const config = getHeaderFilterConfig(column);
+    if (!config) return;
+    setHeaderFilterRequest(config);
+    closeHeaderMenu();
+  };
+  const openColumnPickerFromMenu = () => {
+    window.dispatchEvent(
+      new CustomEvent("globuscrm:open-table-column-picker", {
+        detail: { tableKey: "leads" },
+      }),
+    );
+    closeHeaderMenu();
+  };
+  const currentVisibleLeadColumns = useMemo(
+    () => preferredVisibleColumns.filter((key) => key !== "name"),
+    [preferredVisibleColumns],
+  );
+  const resolveAllowedVisibleColumns = useCallback(
+    (nextVisible) => {
+      const allowedKeys = leadColumnKeySet.size
+        ? leadColumnKeySet
+        : new Set(["name", ...preferredVisibleColumns]);
+      const cleanVisible = [];
+      const seen = new Set();
+      for (const rawKey of Array.isArray(nextVisible) ? nextVisible : []) {
+        const key = String(rawKey);
+        if (seen.has(key) || !allowedKeys.has(key)) continue;
+        seen.add(key);
+        cleanVisible.push(key);
+      }
+      if (!cleanVisible.includes("name")) {
+        cleanVisible.unshift("name");
+      }
+      return cleanVisible;
+    },
+    [leadColumnKeySet, preferredVisibleColumns],
+  );
+  const persistVisibleColumns = useCallback(
+    async (nextVisible) => {
+      if (!isGeneric) return nextVisible;
+      const cleanVisible = resolveAllowedVisibleColumns(nextVisible);
+      const data = await fetchApi("/api/table-column-prefs/leads", {
+        method: "PUT",
+        body: JSON.stringify({ visible: cleanVisible }),
+      });
+      const saved = Array.isArray(data?.visible) ? data.visible : cleanVisible;
+      setVisibleColumns(saved);
+      return saved;
+    },
+    [isGeneric, resolveAllowedVisibleColumns],
+  );
+  const collapseColumn = (columnKey) => {
+    setColumnLayout((prev) => ({
+      widths: { ...(prev.widths || {}) },
+      collapsed: {
+        ...(prev.collapsed || {}),
+        [columnKey]: !prev.collapsed?.[columnKey],
+      },
+    }));
+  };
+  const addColumnAdjacent = async (targetKey, side, selectedKey) => {
+    if (!isGeneric || !targetKey || !selectedKey || selectedKey === "name") return;
+    const base =
+      targetKey === "name"
+        ? ["name", ...currentVisibleLeadColumns]
+        : [...currentVisibleLeadColumns];
+    const targetIndex = base.indexOf(targetKey);
+    if (targetIndex < 0) return;
+    const next = base.filter((key) => key !== selectedKey);
+    const insertAt = side === "left" ? targetIndex : targetIndex + 1;
+    next.splice(Math.max(0, Math.min(next.length, insertAt)), 0, selectedKey);
+    try {
+      await persistVisibleColumns(next);
+      closeHeaderMenu();
+      setHeaderMenuSubmenu(null);
+    } catch (err) {
+      notify.error(err?.message || "Failed to update column order");
+    }
+  };
+  const removeColumnFromTable = async (columnKey) => {
+    if (!isGeneric || columnKey === "name") return;
+    const next = currentVisibleLeadColumns.filter((key) => key !== columnKey);
+    try {
+      await persistVisibleColumns(next);
+      if (sortConfig.key === columnKey) {
+        setSortConfig({ key: null, direction: null });
+      }
+      closeHeaderMenu();
+      setHeaderMenuSubmenu(null);
+    } catch (err) {
+      notify.error(err?.message || "Failed to update column order");
+    }
+  };
+  const renameCustomField = async () => {
+    if (!renameFieldState?.id || !renameFieldState?.fieldKey) return;
+    const trimmed = String(renameFieldState?.label || "").trim();
+    if (!trimmed) {
+      notify.error("Label is required");
+      return;
+    }
+    try {
+      await fetchApi(`/api/lead-custom-fields/${renameFieldState.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ label: trimmed }),
+      });
+      setCustomFieldDefs((prev) =>
+        prev.map((field) =>
+          field.id === renameFieldState.id
+            ? { ...field, label: trimmed }
+            : field,
+        ),
+      );
+      setLeadColumnCatalog((prev) =>
+        prev.map((column) =>
+          column.key === `cf_${renameFieldState.fieldKey}`
+            ? { ...column, label: trimmed }
+            : column,
+        ),
+      );
+      setRenameFieldState(null);
+      closeHeaderMenu();
+      await fetchLeads({ background: true });
+    } catch (err) {
+      notify.error(err?.message || "Failed to rename field");
+    }
+  };
+  const getLeadSortValue = useCallback(
+    (lead, key) => {
+      if (!lead) return "";
+      if (key && key.startsWith("cf_")) {
+        const customField = customFieldByKey.get(key);
+        return customField ? lead.customFields?.[customField.fieldKey] ?? "" : "";
+      }
+      switch (key) {
+        case "name":
+          return lead.name || "";
+        case "email":
+          return lead.email || "";
+        case "company":
+          return lead.company || "";
+        case "phone":
+          return lead.phone || "";
+        case "aiScore":
+          return Number(lead.aiScore ?? 0);
+        case "source":
+          return lead.source || "";
+        case "tags":
+          return normalizeLeadTags(lead.tags).join(", ");
+        case "assignedTo":
+          return lead.assignedTo?.name || lead.assignedTo?.email || "";
+        case "createdAt":
+          return lead.createdAt ? new Date(lead.createdAt).getTime() : 0;
+        case "campaign": {
+          const campaign = callifiedCampaigns.find(
+            (c) => String(c.id) === String(lead.callifiedCampaignId),
+          );
+          return campaign?.name || "";
+        }
+        case "callStatus":
+          return getCallStatusMeta(normalizeCallStatus(lead.callifiedLeadStatus)).label || "";
+        case "callifiedAi":
+          return Number(callifiedSummaries[lead.id]?.callCount || 0);
+        case "callifiedScore":
+          return Number(callifiedSummaries[lead.id]?.lastScore ?? -1);
+        case "subBrand":
+          return lead.subBrand || "";
+        case "amount": {
+          const bv = bookingValueByContact[lead.id];
+          if (bv && Number(bv.value) > 0) return Number(bv.value);
+          const tmcEntry = tmcPaidByEmail[lead.email];
+          if (tmcEntry && Number(tmcEntry.paidTotal) > 0) {
+            return Number(tmcEntry.paidTotal);
+          }
+          const deals = dealsByContact[lead.id] || [];
+          return deals.reduce((sum, deal) => sum + (Number(deal.amount) || 0), 0);
+        }
+        default:
+          return lead[key] ?? "";
+      }
+    },
+    [
+      bookingValueByContact,
+      callifiedCampaigns,
+      callifiedSummaries,
+      customFieldByKey,
+      dealsByContact,
+      tmcPaidByEmail,
+    ],
+  );
+  const openRenameField = () => {
+    if (!headerMenuState?.customField || !headerMenuState.field) return;
+    const field = headerMenuState.field;
+    setRenameFieldState({
+      id: field.id,
+      fieldKey: field.fieldKey,
+      label: headerMenuState.label || field.label || "",
+    });
+  };
+  const renderHeaderMenuTrigger = (column) => {
+    if (!column || column.key === "select" || column.key === "actions") return null;
+    const isActive = headerMenuState?.key === column.key;
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          openHeaderMenu(column, event);
+        }}
+        aria-haspopup="menu"
+        aria-expanded={isActive}
+        aria-label={`Open ${column.label} column menu`}
+        title={`Open ${column.label} column menu`}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 24,
+          height: 24,
+          flexShrink: 0,
+          padding: 0,
+          borderRadius: 6,
+          border: "1px solid var(--border-color)",
+          background: isActive ? "var(--surface-hover)" : "var(--surface-color)",
+          color: "var(--text-secondary)",
+          cursor: "pointer",
+        }}
+      >
+        <ChevronDown size={12} />
+      </button>
+    );
+  };
   const tableColumnDefs = [
-    ...(isAdmin ? [{ key: "select", label: "Select", locked: true }] : []),
     { key: "name", label: "Name" },
     ...leadUserColumnDefs,
     ...leadFixedExtraColumnDefs,
     { key: "actions", label: "Actions", locked: true },
   ];
   const leadsFrozenColumnDefs = tableColumnDefs.filter(
-    (column) => column.key === "select" || column.key === "name",
+    (column) => column.key === "name",
   );
   const leadsScrollableColumnDefs = tableColumnDefs.filter(
-    (column) => column.key !== "select" && column.key !== "name",
+    (column) => column.key !== "name",
   );
   const leadsFrozenTableWidth = leadsFrozenColumnDefs.reduce(
     (sum, column) => sum + getColumnWidth(column.key),
@@ -2492,6 +3037,61 @@ const Leads = () => {
     : isGeneric
       ? "leads-table leads-table--compact"
       : "leads-table";
+  const leadsRowSyncEnabled = isWellness || isTravel;
+  const syncTablePairHeight = useCallback((leftRow, rightRow) => {
+    if (!leftRow || !rightRow) return;
+    const height = Math.max(
+      Math.ceil(leftRow.getBoundingClientRect().height),
+      Math.ceil(rightRow.getBoundingClientRect().height),
+    );
+    const nextHeight = `${height}px`;
+    if (leftRow.style.height !== nextHeight) {
+      leftRow.style.height = nextHeight;
+    }
+    if (rightRow.style.height !== nextHeight) {
+      rightRow.style.height = nextHeight;
+    }
+  }, []);
+  const syncSplitTableRowHeights = useCallback(() => {
+    if (!leadsRowSyncEnabled) return;
+    const frozenTable = leadsFrozenTableRef.current;
+    const scrollableTable = leadsScrollableTableRef.current;
+    if (!frozenTable || !scrollableTable) return;
+
+    const frozenHeaderRow = frozenTable.querySelector("thead tr");
+    const scrollHeaderRow = scrollableTable.querySelector("thead tr");
+    const frozenRows = Array.from(frozenTable.querySelectorAll("tbody tr"));
+    const scrollRows = Array.from(scrollableTable.querySelectorAll("tbody tr"));
+    if (
+      frozenRows.length === 0 ||
+      frozenRows.length !== scrollRows.length ||
+      !frozenHeaderRow ||
+      !scrollHeaderRow
+    ) {
+      return;
+    }
+
+    syncTablePairHeight(frozenHeaderRow, scrollHeaderRow);
+    frozenRows.forEach((frozenRow, index) => {
+      const scrollRow = scrollRows[index];
+      if (!scrollRow) return;
+      syncTablePairHeight(frozenRow, scrollRow);
+    });
+  }, [leadsRowSyncEnabled, syncTablePairHeight]);
+  const genericHeaderSyncEnabled = isGeneric;
+  const genericHeaderSyncSignature = genericHeaderSyncEnabled
+    ? tableColumnDefs.map((column) => `${column.key}:${column.label}`).join("::")
+    : "";
+  const syncGenericHeaderHeight = useCallback(() => {
+    if (!genericHeaderSyncEnabled) return;
+    const frozenTable = leadsFrozenTableRef.current;
+    const scrollableTable = leadsScrollableTableRef.current;
+    if (!frozenTable || !scrollableTable) return;
+
+    const frozenHeaderRow = frozenTable.querySelector("thead tr");
+    const scrollHeaderRow = scrollableTable.querySelector("thead tr");
+    syncTablePairHeight(frozenHeaderRow, scrollHeaderRow);
+  }, [genericHeaderSyncEnabled, syncTablePairHeight]);
 
   const leadDetailPath = (lead) => {
     if (isTravel) return `/travel/leads/${lead.id}`;
@@ -2499,7 +3099,10 @@ const Leads = () => {
   };
 
   const leadTagOptions = Array.from(
-    new Set(leads.flatMap((lead) => normalizeLeadTags(lead.tags))),
+    new Set([
+      ...leadTagCatalog,
+      ...leads.flatMap((lead) => normalizeLeadTags(lead.tags)),
+    ]),
   ).sort((a, b) => a.localeCompare(b));
 
   const updateLeadInlineValue = async (lead, field, rawValue) => {
@@ -2565,6 +3168,19 @@ const Leads = () => {
     setPreviewLead((current) =>
       current?.id === lead.id ? { ...current, [field]: value } : current,
     );
+    if (field === "tags" && Array.isArray(value)) {
+      setLeadTagCatalog((prev) => {
+        const seen = new Set(prev.map((tag) => tag.toLowerCase()));
+        const next = [...prev];
+        for (const tag of value) {
+          if (seen.has(tag.toLowerCase())) continue;
+          seen.add(tag.toLowerCase());
+          next.push(tag);
+        }
+        next.sort((a, b) => a.localeCompare(b));
+        return next;
+      });
+    }
     notify.success("Lead updated");
   };
 
@@ -2614,6 +3230,32 @@ const Leads = () => {
         .includes(term),
     );
   });
+  const sortedLeads = useMemo(() => {
+    if (!sortConfig.key || !sortConfig.direction) return filteredLeads;
+    const direction = sortConfig.direction === "desc" ? -1 : 1;
+    const collator = new Intl.Collator(undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+    return [...filteredLeads].sort((a, b) => {
+      const aValue = getLeadSortValue(a, sortConfig.key);
+      const bValue = getLeadSortValue(b, sortConfig.key);
+      const aNull = aValue === null || aValue === undefined || aValue === "";
+      const bNull = bValue === null || bValue === undefined || bValue === "";
+      if (aNull && bNull) return 0;
+      if (aNull) return 1;
+      if (bNull) return -1;
+      if (typeof aValue === "number" && typeof bValue === "number") {
+        return (aValue - bValue) * direction;
+      }
+      return collator.compare(String(aValue), String(bValue)) * direction;
+    });
+  }, [
+    filteredLeads,
+    getLeadSortValue,
+    sortConfig.direction,
+    sortConfig.key,
+  ]);
 
   /* eslint-disable react-hooks/exhaustive-deps */
   // Batch-load Callified call summaries for visible leads (counts + last score).
@@ -2712,22 +3354,82 @@ const Leads = () => {
 
   const leadsPageCount = Math.max(
     1,
-    Math.ceil(filteredLeads.length / leadsPageSize),
+    Math.ceil(sortedLeads.length / leadsPageSize),
   );
   const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
   const pageStart =
-    filteredLeads.length === 0 ? 0 : currentLeadsPage * leadsPageSize + 1;
+    sortedLeads.length === 0 ? 0 : currentLeadsPage * leadsPageSize + 1;
   const pageEnd =
-    filteredLeads.length === 0
+    sortedLeads.length === 0
       ? 0
       : Math.min(
-          filteredLeads.length,
+          sortedLeads.length,
           currentLeadsPage * leadsPageSize + leadsPageSize,
         );
-  const paginatedLeads = filteredLeads.slice(
+  const paginatedLeads = sortedLeads.slice(
     currentLeadsPage * leadsPageSize,
     currentLeadsPage * leadsPageSize + leadsPageSize,
   );
+  const leadsRowSyncSignature = leadsRowSyncEnabled
+    ? paginatedLeads
+        .map((lead) =>
+          [
+            lead.id,
+            lead.name,
+            lead.email,
+            lead.company,
+            lead.phone,
+            lead.source,
+            Array.isArray(lead.tags) ? lead.tags.join(",") : String(lead.tags || ""),
+            lead.assignedToId ?? "",
+            lead.createdAt ?? "",
+            lead.subBrand ?? "",
+            lead.aiScore ?? "",
+            lead.status ?? "",
+            lead.callifiedLeadStatus ?? "",
+            lead.callifiedCampaignId ?? "",
+          ].join("|"),
+        )
+        .join("::")
+    : "";
+
+  useLayoutEffect(() => {
+    if (!leadsRowSyncEnabled) return undefined;
+    const frozenTable = leadsFrozenTableRef.current;
+    const scrollableTable = leadsScrollableTableRef.current;
+    if (!frozenTable || !scrollableTable) return undefined;
+    syncSplitTableRowHeights();
+    return () => {
+      frozenTable?.querySelectorAll("thead tr, tbody tr").forEach((row) => {
+        row.style.height = "";
+      });
+      scrollableTable
+        ?.querySelectorAll("thead tr, tbody tr")
+        .forEach((row) => {
+          row.style.height = "";
+      });
+    };
+  }, [leadsRowSyncEnabled, leadsRowSyncSignature, syncSplitTableRowHeights]);
+
+  useLayoutEffect(() => {
+    if (!genericHeaderSyncEnabled) return undefined;
+    const frozenTable = leadsFrozenTableRef.current;
+    const scrollableTable = leadsScrollableTableRef.current;
+    if (!frozenTable || !scrollableTable) return undefined;
+    syncGenericHeaderHeight();
+    return () => {
+      frozenTable?.querySelectorAll("thead tr").forEach((row) => {
+        row.style.height = "";
+      });
+      scrollableTable?.querySelectorAll("thead tr").forEach((row) => {
+        row.style.height = "";
+      });
+    };
+  }, [
+    genericHeaderSyncEnabled,
+    genericHeaderSyncSignature,
+    syncGenericHeaderHeight,
+  ]);
 
   const goToLeadsPage = () => {
     const nextPage = Number(pageInput);
@@ -2901,7 +3603,14 @@ const Leads = () => {
     padding: "1rem",
     ...extra,
   });
-  const renderColumnHeaderCell = (key, label, extra = {}, cellProps = {}) => {
+  const renderColumnHeaderCell = (
+    key,
+    label,
+    extra = {},
+    cellProps = {},
+    controls = null,
+    leadingControls = null,
+  ) => {
     const locked = key === "select" || key === "actions";
     const { key: headerKey, ...restCellProps } = cellProps;
     return (
@@ -2915,22 +3624,27 @@ const Leads = () => {
           style={{
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
+            justifyContent: "flex-start",
             gap: "0.4rem",
             minWidth: 0,
           }}
         >
+          {leadingControls}
           <span
             style={{
+              flex: 1,
               minWidth: 0,
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "normal",
-              lineHeight: 1.2,
-            }}
+            lineHeight: 1.2,
+          }}
           >
             {label}
           </span>
+          {controls && (
+            <span style={{ display: "inline-flex", flexShrink: 0 }}>{controls}</span>
+          )}
         </div>
         {!locked && (
           <span
@@ -2978,45 +3692,24 @@ const Leads = () => {
         options={options}
         onSave={updateLeadInlineValue}
         renderValue={renderValue}
-        required={required}
-      />
-    </td>
+      required={required}
+    />
+  </td>
   );
   const renderLeadUserHeaderCell = (column) => {
-    if (column.customField) {
-      return renderColumnHeaderCell(
-        column.key,
-        column.label,
-        {},
-        {
-          key: column.field?.id || column.key,
-          className: "leads-custom-field-col",
-        },
-      );
-    }
-    switch (column.key) {
-      case "email":
-        return renderColumnHeaderCell("email", "Email");
-      case "company":
-        return renderColumnHeaderCell(
-          "company",
-          isTravel ? "Category" : "Company",
-        );
-      case "phone":
-        return renderColumnHeaderCell("phone", "Phone");
-      case "aiScore":
-        return renderColumnHeaderCell("aiScore", "Lead Score");
-      case "source":
-        return renderColumnHeaderCell("source", "Source");
-      case "tags":
-        return renderColumnHeaderCell("tags", "Tags");
-      case "assignedTo":
-        return renderColumnHeaderCell("assignedTo", "Assigned To");
-      case "createdAt":
-        return renderColumnHeaderCell("createdAt", "Created");
-      default:
-        return null;
-    }
+    if (!column) return null;
+    return renderColumnHeaderCell(
+      column.key,
+      column.label,
+      { paddingRight: "2rem" },
+      column.customField
+        ? {
+            key: column.field?.id || column.key,
+            className: "leads-custom-field-col",
+          }
+        : {},
+      renderHeaderMenuTrigger(column),
+    );
   };
   const renderLeadUserBodyCell = (lead, column) => {
     if (column.customField) {
@@ -3206,17 +3899,70 @@ const Leads = () => {
   const previewStatus = previewLeadCurrent
     ? getCallStatusMeta(previewLeadCurrent.callifiedLeadStatus)
     : null;
+  const headerMenuRect = headerMenuState?.rect || null;
+  const headerMenuOpenUp = Boolean(
+    headerMenuRect &&
+      window.innerHeight - headerMenuRect.bottom - 12 < 260 &&
+      headerMenuRect.top > 260,
+  );
+  const headerMenuTop = headerMenuRect
+    ? Math.max(12, headerMenuRect.bottom + LEADS_HEADER_MENU_GAP)
+    : 0;
+  const headerMenuBottom = headerMenuRect
+    ? Math.max(12, window.innerHeight - headerMenuRect.top + LEADS_HEADER_MENU_GAP)
+    : 0;
+  const headerMenuLeft = headerMenuRect
+    ? Math.max(
+        12,
+        Math.min(
+          window.innerWidth - LEADS_HEADER_MENU_WIDTH - 12,
+          headerMenuRect.left,
+        ),
+      )
+    : 0;
+  const headerMenuMaxHeight = headerMenuRect
+    ? Math.max(
+        220,
+        Math.min(
+          headerMenuOpenUp
+            ? headerMenuRect.top - 12
+            : window.innerHeight - headerMenuRect.bottom - 12,
+          420,
+        ),
+      )
+    : 0;
+  const headerSubmenuLeft = headerMenuRect
+    ? Math.max(
+        12,
+        Math.min(
+          window.innerWidth - LEADS_HEADER_MENU_SUBMENU_WIDTH - 12,
+          headerMenuLeft + LEADS_HEADER_MENU_WIDTH + LEADS_HEADER_MENU_GAP,
+        ),
+      )
+    : 0;
+  const headerSubmenuOpenLeft =
+    headerMenuRect &&
+    headerMenuLeft +
+      LEADS_HEADER_MENU_WIDTH +
+      LEADS_HEADER_MENU_SUBMENU_WIDTH +
+      (LEADS_HEADER_MENU_GAP * 2) >
+      window.innerWidth;
+  const headerSubmenuFallbackLeft = headerMenuRect
+    ? Math.max(
+        12,
+        headerMenuLeft - LEADS_HEADER_MENU_SUBMENU_WIDTH - LEADS_HEADER_MENU_GAP,
+      )
+    : 0;
+  const headerSubmenuActualLeft = headerSubmenuOpenLeft
+    ? headerSubmenuFallbackLeft
+    : headerSubmenuLeft;
+  const headerSubmenuMaxHeight = headerMenuRect ? headerMenuMaxHeight : 0;
 
   return (
     <div style={{ padding: "2rem", animation: "fadeIn 0.3s ease" }}>
       <header
         style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "1.5rem",
-          flexWrap: "wrap",
-          gap: "1rem",
+          marginBottom: "1rem",
         }}
       >
         <div
@@ -3250,26 +3996,23 @@ const Leads = () => {
             </p>
           </div>
         </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "0.6rem",
-            flexWrap: "wrap",
-            justifyContent: "flex-end",
-          }}
-        >
+      </header>
+      <div
+        style={{
+          ...compactToolbarSurfaceStyle,
+          marginBottom: "1rem",
+          justifyContent: "flex-start",
+        }}
+      >
           <button
             type="button"
             className="btn-secondary"
             onClick={refreshAll}
             style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.45rem",
+              ...compactToolbarButtonStyle,
             }}
           >
-            <RefreshCw size={15} /> Refresh
+            <RefreshCw size={14} /> Refresh
           </button>
 
           {isGeneric && (
@@ -3277,6 +4020,7 @@ const Leads = () => {
               entity="contacts"
               label="Leads"
               formats={["csv", "xlsx"]}
+              compact
               endpoints={{
                 export: "/api/csv/contacts/export.csv",
                 template: "/api/csv/contacts/template.csv",
@@ -3285,6 +4029,8 @@ const Leads = () => {
               }}
             />
           )}
+
+          <span aria-hidden="true" style={compactToolbarDividerStyle} />
 
           {isGeneric && callifiedConfigured && (
             <>
@@ -3296,12 +4042,12 @@ const Leads = () => {
                   className="input-field"
                   onClick={() => setAutoCampaignRulesOpen((o) => !o)}
                   disabled={autoCampaignRulesLoading || autoCampaignRulesSaving}
+                  aria-haspopup="menu"
+                  aria-expanded={autoCampaignRulesOpen}
                   style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "0.4rem",
-                    minWidth: "200px",
-                    fontSize: "0.85rem",
+                    ...compactToolbarButtonStyle,
+                    minWidth: "160px",
+                    padding: "0.42rem 0.7rem",
                     cursor: "pointer",
                     position: "relative",
                   }}
@@ -3309,7 +4055,10 @@ const Leads = () => {
                   title="Configure rules to automatically assign Callified campaigns to new leads"
                 >
                   <Settings size={14} />
-                  Auto-assign Callified Campaigns
+                  <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.05 }}>
+                    <span>Auto-assign</span>
+                    <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>Callified Campaigns</span>
+                  </span>
                   {autoCampaignRulesEnabled && (
                     <span
                       style={{
@@ -3720,12 +4469,12 @@ const Leads = () => {
                   className="input-field"
                   onClick={() => setCampaignDropdownOpen((o) => !o)}
                   disabled={callQueueActive}
+                  aria-haspopup="menu"
+                  aria-expanded={campaignDropdownOpen}
                   style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "0.4rem",
-                    minWidth: "200px",
-                    fontSize: "0.85rem",
+                    ...compactToolbarButtonStyle,
+                    minWidth: "175px",
+                    padding: "0.42rem 0.7rem",
                     cursor: "pointer",
                   }}
                 >
@@ -3733,6 +4482,7 @@ const Leads = () => {
                   {selectedCampaignIds.length === 0
                     ? "Select campaigns to dial"
                     : `${selectedCampaignIds.length} campaign${selectedCampaignIds.length === 1 ? "" : "s"} selected`}
+                  {campaignDropdownOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
                 {campaignDropdownOpen && (
                   <>
@@ -3827,10 +4577,8 @@ const Leads = () => {
                 onClick={handleDialSelectedCampaigns}
                 disabled={callQueueActive || selectedCampaignIds.length === 0}
                 style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  fontSize: "0.85rem",
+                  ...compactToolbarButtonStyle,
+                  padding: "0.42rem 0.7rem",
                 }}
               >
                 {callQueueActive ? (
@@ -3839,7 +4587,7 @@ const Leads = () => {
                       size={14}
                       style={{ animation: "spin 1s linear infinite" }}
                     />{" "}
-                    Dialling…
+                    Dialling...
                   </>
                 ) : (
                   <>
@@ -3853,16 +4601,233 @@ const Leads = () => {
                 className="btn-secondary"
                 onClick={() => setCallStatusDrawerOpen(true)}
                 style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  fontSize: "0.85rem",
+                  ...compactToolbarButtonStyle,
+                  padding: "0.42rem 0.7rem",
                 }}
               >
                 <Phone size={14} /> Call Status
               </button>
             </>
           )}
+
+          <span aria-hidden="true" style={compactToolbarDividerStyle} />
+
+          <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleLeadBulkActionsToggle}
+                aria-haspopup="menu"
+                aria-expanded={leadBulkActionsOpen}
+                style={{
+                  ...compactToolbarButtonStyle,
+                  padding: "0.42rem 0.7rem",
+                }}
+              >
+              <SlidersHorizontal size={14} />
+              Bulk actions
+              {leadBulkActionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              {selectedLeads.length > 0 && (
+                <span
+                  style={{
+                    minWidth: 18,
+                    height: 18,
+                    padding: "0 5px",
+                    borderRadius: 999,
+                    background: "var(--accent-color)",
+                    color: "#fff",
+                    fontSize: "0.7rem",
+                    fontWeight: 600,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  {selectedLeads.length}
+                </span>
+              )}
+            </button>
+            {leadBulkActionsOpen && (
+              <>
+                <div
+                  style={{
+                    position: "fixed",
+                    inset: 0,
+                    zIndex: 1088,
+                    background: "transparent",
+                  }}
+                  onClick={() => setLeadBulkActionsOpen(false)}
+                />
+                <div
+                  role="menu"
+                  aria-label="Bulk actions"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 4px)",
+                    right: 0,
+                    zIndex: 1089,
+                    width: "min(420px, 92vw)",
+                    padding: "0.85rem",
+                    background: "var(--bg-color)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 12,
+                    boxShadow: "0 12px 32px rgba(0,0,0,0.2)",
+                    display: "grid",
+                    gap: "0.75rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <strong
+                      style={{
+                        fontSize: "0.9rem",
+                        color: "var(--text-primary)",
+                      }}
+                    >
+                      Bulk actions
+                    </strong>
+                    <span
+                      style={{
+                        fontSize: "0.78rem",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      {selectedLeads.length} selected
+                    </span>
+                  </div>
+                  {selectedLeads.length === 0 ? (
+                    <div
+                      style={{
+                        fontSize: "0.85rem",
+                        color: "var(--text-secondary)",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Select one or more leads to use bulk actions.
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: "0.65rem",
+                      }}
+                    >
+                      {isGeneric && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setLeadBulkActionsOpen(false);
+                            handleDialSelectedLeads();
+                          }}
+                          disabled={callQueueActive}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "0.35rem",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          <Phone size={14} /> Dial selected
+                        </button>
+                      )}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <select
+                          className="input-field"
+                          value={bulkAgent}
+                          onChange={(e) => setBulkAgent(e.target.value)}
+                          style={{
+                            flex: 1,
+                            minWidth: 180,
+                            padding: "0.5rem",
+                          }}
+                          aria-label="Bulk assign staff"
+                        >
+                          <option value="">Unassign</option>
+                          {staff.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name || s.email}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setLeadBulkActionsOpen(false);
+                            handleBulkAssign();
+                          }}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "0.35rem",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          Assign to staff
+                        </button>
+                      </div>
+                      {isGeneric && callifiedConfigured && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setLeadBulkActionsOpen(false);
+                            setBulkCampaignDropdownOpen(true);
+                          }}
+                          disabled={bulkCampaignSaving}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "0.35rem",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          <Filter size={14} /> Assign campaign
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          setSelectedLeads([]);
+                          setBulkAgent("");
+                          setBulkCampaignDropdownOpen(false);
+                          setLeadBulkActionsOpen(false);
+                        }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "0.35rem",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        Clear selection
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
 
           {isGeneric && selectedLeads.length > 0 && (
             <button
@@ -3875,6 +4840,7 @@ const Leads = () => {
                 alignItems: "center",
                 gap: "0.35rem",
                 fontSize: "0.85rem",
+                padding: "0.42rem 0.7rem",
               }}
             >
               {callQueueActive ? (
@@ -3883,7 +4849,7 @@ const Leads = () => {
                     size={14}
                     style={{ animation: "spin 1s linear infinite" }}
                   />{" "}
-                  Dialling…
+                  Dialling...
                 </>
               ) : (
                 <>
@@ -3905,6 +4871,7 @@ const Leads = () => {
                   alignItems: "center",
                   gap: "0.35rem",
                   fontSize: "0.85rem",
+                  padding: "0.42rem 0.7rem",
                 }}
               >
                 <Filter size={14} />
@@ -3995,155 +4962,12 @@ const Leads = () => {
               display: "inline-flex",
               alignItems: "center",
               gap: "0.45rem",
+              marginLeft: "auto",
             }}
           >
             <Plus size={16} /> Create Lead
           </button>
         </div>
-      </header>
-
-      {/* Source chips row. */}
-      <div
-        className="card"
-        style={{
-          padding: "0.6rem 0.75rem",
-          display: "flex",
-          alignItems: "center",
-          gap: "0.4rem",
-          flexWrap: "wrap",
-          marginBottom: "0.75rem",
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => {
-            setSourceFilter("");
-            setLeadsPage(0);
-          }}
-          style={!sourceFilter ? chipActiveStyle : chipStyle}
-        >
-          All <span style={chipCountStyle}>{leads.length}</span>
-        </button>
-        {sourceFilterOptions.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => {
-              setSourceFilter(opt.value);
-              setLeadsPage(0);
-            }}
-            style={sourceFilter === opt.value ? chipActiveStyle : chipStyle}
-          >
-            {opt.label}{" "}
-            <span style={chipCountStyle}>{sourceCounts[opt.value] || 0}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* Filters panel for generic CRM. */}
-      {isGeneric && (
-        <div
-          className="card"
-          style={{
-            padding: "0.75rem 1rem",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.6rem",
-            flexWrap: "wrap",
-            marginBottom: "0.75rem",
-          }}
-        >
-          <SlidersHorizontal
-            size={16}
-            style={{ color: "var(--text-secondary)" }}
-          />
-          <select
-            className="input-field"
-            value={campaignFilter}
-            onChange={(e) => {
-              setCampaignFilter(e.target.value);
-              setLeadsPage(0);
-            }}
-            style={{ width: "auto", minWidth: 160, fontSize: "0.85rem" }}
-            aria-label="Filter by campaign"
-          >
-            <option value="">All campaigns</option>
-            {callifiedCampaigns.map((c) => (
-              <option key={c.id} value={String(c.id)}>
-                {c.name || `Campaign ${c.id}`}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input-field"
-            value={leadStatusFilter}
-            onChange={(e) => {
-              setLeadStatusFilter(e.target.value);
-              setLeadsPage(0);
-            }}
-            style={{ width: "auto", minWidth: 140, fontSize: "0.85rem" }}
-            aria-label="Filter by call status"
-          >
-            <option value="">All statuses</option>
-            {CALL_STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input-field"
-            value={assigneeFilter}
-            onChange={(e) => {
-              setAssigneeFilter(e.target.value);
-              setLeadsPage(0);
-            }}
-            style={{ width: "auto", minWidth: 150, fontSize: "0.85rem" }}
-            aria-label="Filter by assignee"
-          >
-            <option value="">Staff</option>
-            <option value="unassigned">Unassigned</option>
-            {staff.map((s) => (
-              <option key={s.id} value={String(s.id)}>
-                {s.name || s.email}
-              </option>
-            ))}
-          </select>
-          <FilterPanel
-            fieldsUrl="/api/contacts/filter-fields?status=Lead"
-            valuesUrl={(field) =>
-              `/api/contacts/filter-values/${field}?status=Lead`
-            }
-            filters={advancedFilters}
-            onChange={setAdvancedFilters}
-          />
-          <button
-            type="button"
-            onClick={resetFilters}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--accent-color)",
-              cursor: "pointer",
-              fontSize: "0.85rem",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.25rem",
-            }}
-          >
-            <RefreshCw size={13} /> Reset filters
-          </button>
-          <span
-            style={{
-              marginLeft: "auto",
-              color: "var(--text-secondary)",
-              fontSize: "0.8125rem",
-            }}
-          >
-            {filteredLeads.length} leads
-          </span>
-        </div>
-      )}
 
       {isTravel && (
         <div
@@ -4310,39 +5134,72 @@ const Leads = () => {
         style={{ overflow: "hidden", maxHeight: "unset", minHeight: "auto" }}
       >
         <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "0.75rem",
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "0.75rem",
             flexWrap: "wrap",
             padding: "1rem",
             borderBottom: "1px solid var(--border-color)",
           }}
         >
-          <div style={{ position: "relative", width: "min(100%, 300px)" }}>
-            <Search
-              size={18}
-              style={{
-                position: "absolute",
-                left: "1rem",
-                top: "50%",
-                transform: "translateY(-50%)",
-                color: "var(--text-secondary)",
-              }}
-            />
-            <input
-              type="search"
-              className="input-field"
-              placeholder="Search leads..."
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setLeadsPage(0);
-              }}
-              style={{
-                paddingLeft: "2.5rem",
-                backgroundColor: "var(--surface-hover)",
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.65rem",
+              flexWrap: "wrap",
+              minWidth: 0,
+              flex: "1 1 520px",
+            }}
+          >
+            <div style={{ position: "relative", width: "min(100%, 300px)" }}>
+              <Search
+                size={18}
+                style={{
+                  position: "absolute",
+                  left: "1rem",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "var(--text-secondary)",
+                }}
+              />
+              <input
+                type="search"
+                className="input-field"
+                placeholder="Search leads..."
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setLeadsPage(0);
+                }}
+                style={{
+                  paddingLeft: "2.5rem",
+                  backgroundColor: "var(--surface-hover)",
+                }}
+              />
+            </div>
+
+            <FilterPanel
+              fieldsUrl="/api/contacts/filter-fields?status=Lead"
+              valuesUrl={(field) => `/api/contacts/filter-values/${field}?status=Lead`}
+              filters={advancedFilters}
+              onChange={setAdvancedFilters}
+              triggerLabel="Filter by"
+              triggerIcon={
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "0.15rem" }}>
+                  <Filter size={14} />
+                  <ChevronDown size={12} />
+                </span>
+              }
+              showSelectedFilters={false}
+              showCountBadge
+              compactTrigger
+              buttonTitle="Filter leads"
+              buttonAriaLabel="Filter by"
+              buttonStyle={{
+                ...compactToolbarButtonStyle,
               }}
             />
           </div>
@@ -4354,6 +5211,20 @@ const Leads = () => {
               flexWrap: "wrap",
             }}
           >
+            {hasActiveLeadFilters && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={resetFilters}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.35rem",
+                }}
+              >
+                <RefreshCw size={13} /> Reset filters
+              </button>
+            )}
             {isGeneric && (
               <>
                 <button
@@ -5004,6 +5875,7 @@ const Leads = () => {
           >
             <div className="leads-table-frozen-spacer" />
             <table
+              ref={leadsFrozenTableRef}
               className={`${leadsTableClassName} leads-table--frozen`}
               style={{
                 width: leadsFrozenTableWidthPx,
@@ -5028,8 +5900,13 @@ const Leads = () => {
                     backgroundColor: "var(--table-header-bg)",
                   }}
                 >
-                  {isAdmin && (
-                    <th style={getHeaderCellStyle("select", { width: "48px" })}>
+                  {renderColumnHeaderCell(
+                    "name",
+                    "Name",
+                    { paddingRight: "2rem" },
+                    {},
+                    renderHeaderMenuTrigger({ key: "name", label: "Name" }),
+                    isAdmin ? (
                       <input
                         type="checkbox"
                         checked={
@@ -5037,17 +5914,21 @@ const Leads = () => {
                           filteredLeads.length > 0
                         }
                         onChange={toggleSelectAll}
-                        style={{ cursor: "pointer" }}
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label="Select all leads"
+                        style={{
+                          cursor: "pointer",
+                          flexShrink: 0,
+                          margin: 0,
+                        }}
                       />
-                    </th>
+                    ) : null,
                   )}
-                  {renderColumnHeaderCell("name", "Name")}
                 </tr>
               </thead>
               <tbody>
                 {loading || filteredLeads.length === 0 ? (
                   <tr>
-                    {isAdmin && <td style={getBodyCellStyle("select")} />}
                     <td
                       style={getBodyCellStyle("name", { fontWeight: "500" })}
                     />
@@ -5063,31 +5944,43 @@ const Leads = () => {
                       onClick={() => navigate(leadDetailPath(lead))}
                       title="Open lead detail"
                     >
-                      {isAdmin && (
-                        <td
-                          style={getBodyCellStyle("select")}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedLeads.includes(lead.id)}
-                            onChange={() => toggleSelect(lead.id)}
-                            style={{ cursor: "pointer" }}
-                          />
-                        </td>
-                      )}
                       <td
                         style={getBodyCellStyle("name", { fontWeight: "500" })}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <BuiltInInlineCellEditor
-                          lead={lead}
-                          field="name"
-                          label="Name"
-                          value={lead.name}
-                          onSave={updateLeadInlineValue}
-                          required
-                        />
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
+                            minWidth: 0,
+                          }}
+                        >
+                          {isAdmin && (
+                            <input
+                              type="checkbox"
+                              checked={selectedLeads.includes(lead.id)}
+                              onChange={() => toggleSelect(lead.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              aria-label={`Select ${lead.name || "lead"}`}
+                              style={{
+                                cursor: "pointer",
+                                flexShrink: 0,
+                                margin: 0,
+                              }}
+                            />
+                          )}
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <BuiltInInlineCellEditor
+                              lead={lead}
+                              field="name"
+                              label="Name"
+                              value={lead.name}
+                              onSave={updateLeadInlineValue}
+                              required
+                            />
+                          </div>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -5101,6 +5994,7 @@ const Leads = () => {
               scrollWidth={leadsScrollableTableMinWidth}
             >
               <table
+                ref={leadsScrollableTableRef}
                 className={`${leadsTableClassName} leads-table--scrollable`}
                 style={{
                   width: "100%",
@@ -5131,22 +6025,68 @@ const Leads = () => {
                       </Fragment>
                     ))}
                     {isGeneric &&
-                      renderColumnHeaderCell("campaign", "Callified Campaign")}
+                      renderColumnHeaderCell(
+                        "campaign",
+                        "Callified Campaign",
+                        { paddingRight: "2rem" },
+                        {},
+                        renderHeaderMenuTrigger({
+                          key: "campaign",
+                          label: "Callified Campaign",
+                        }),
+                      )}
                     {isGeneric &&
-                      renderColumnHeaderCell("callStatus", "Call Status")}
+                      renderColumnHeaderCell(
+                        "callStatus",
+                        "Call Status",
+                        { paddingRight: "2rem" },
+                        {},
+                        renderHeaderMenuTrigger({
+                          key: "callStatus",
+                          label: "Call Status",
+                        }),
+                      )}
                     {isGeneric &&
                       renderColumnHeaderCell(
                         "callifiedAi",
                         "Callified AI call",
+                        { paddingRight: "2rem" },
+                        {},
+                        renderHeaderMenuTrigger({
+                          key: "callifiedAi",
+                          label: "Callified AI call",
+                        }),
                       )}
                     {isGeneric &&
                       renderColumnHeaderCell(
                         "callifiedScore",
                         "Callified Score",
+                        { paddingRight: "2rem" },
+                        {},
+                        renderHeaderMenuTrigger({
+                          key: "callifiedScore",
+                          label: "Callified Score",
+                        }),
                       )}
                     {isTravel &&
-                      renderColumnHeaderCell("subBrand", "Sub-brand")}
-                    {isTravel && renderColumnHeaderCell("amount", "Amount")}
+                      renderColumnHeaderCell(
+                        "subBrand",
+                        "Sub-brand",
+                        { paddingRight: "2rem" },
+                        {},
+                        renderHeaderMenuTrigger({
+                          key: "subBrand",
+                          label: "Sub-brand",
+                        }),
+                      )}
+                    {isTravel &&
+                      renderColumnHeaderCell(
+                        "amount",
+                        "Amount",
+                        { paddingRight: "2rem" },
+                        {},
+                        renderHeaderMenuTrigger({ key: "amount", label: "Amount" }),
+                      )}
                     {renderColumnHeaderCell("actions", "Actions", {
                       padding: "1rem 0.5rem",
                       whiteSpace: "nowrap",
@@ -5592,7 +6532,9 @@ const Leads = () => {
                         <td
                           style={getBodyCellStyle("actions", {
                             padding: "0.75rem 0.5rem",
-                            minWidth: "132px",
+                            minWidth: `${LEADS_ACTIONS_COLUMN_WIDTH}px`,
+                            overflow: "visible",
+                            textOverflow: "clip",
                           })}
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -5613,6 +6555,7 @@ const Leads = () => {
                           <button
                             onClick={() => handleConvert(lead.id)}
                             title="Convert to Prospect"
+                            aria-label={`Convert ${lead.name || "lead"} to Prospect`}
                             style={{
                               ...actionIconBtn,
                               color: "var(--success-color)",
@@ -5641,6 +6584,628 @@ const Leads = () => {
             </TopScrollSync>
           </div>
         </div>
+        {headerMenuState &&
+          headerMenuRect &&
+          createPortal(
+            <>
+              <div
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 1094,
+                  background: "transparent",
+                }}
+                onMouseDown={closeHeaderMenu}
+              />
+              <div
+                role="menu"
+                aria-label={`${headerMenuState.label} column menu`}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                  position: "fixed",
+                  left: headerMenuLeft,
+                  top: headerMenuOpenUp ? undefined : headerMenuTop,
+                  bottom: headerMenuOpenUp ? headerMenuBottom : undefined,
+                  width: LEADS_HEADER_MENU_WIDTH,
+                  maxHeight: headerMenuMaxHeight,
+                  overflowY: "auto",
+                  zIndex: 1095,
+                  background: "var(--bg-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 12,
+                  boxShadow: "0 12px 32px rgba(0,0,0,0.25)",
+                  padding: "0.35rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "0.5rem",
+                    padding: "0.25rem 0.4rem 0.45rem",
+                    borderBottom: "1px solid var(--border-color)",
+                    marginBottom: "0.25rem",
+                  }}
+                >
+                  <strong
+                    style={{
+                      fontSize: "0.85rem",
+                      color: "var(--text-primary)",
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {headerMenuState.label}
+                  </strong>
+                  <button
+                    type="button"
+                    onClick={closeHeaderMenu}
+                    aria-label="Close column menu"
+                    style={{
+                      ...actionIconBtn,
+                      width: 26,
+                      height: 26,
+                      padding: 0,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSortConfig({ key: headerMenuState.key, direction: "asc" });
+                    closeHeaderMenu();
+                  }}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.55rem",
+                    padding: "0.55rem 0.45rem",
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    borderRadius: 8,
+                    fontSize: "0.88rem",
+                    textAlign: "left",
+                  }}
+                  className="table-row-hover"
+                >
+                  <ChevronUp size={15} />
+                  <span>Sort ascending A to Z</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSortConfig({ key: headerMenuState.key, direction: "desc" });
+                    closeHeaderMenu();
+                  }}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.55rem",
+                    padding: "0.55rem 0.45rem",
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                    borderRadius: 8,
+                    fontSize: "0.88rem",
+                    textAlign: "left",
+                  }}
+                  className="table-row-hover"
+                >
+                  <ChevronDown size={15} />
+                  <span>Sort descending Z to A</span>
+                </button>
+                {isGeneric && !headerMenuState.fixedExtra && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setHeaderMenuSubmenu({ side: "right" })}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "0.55rem",
+                        padding: "0.55rem 0.45rem",
+                        border: "none",
+                        background: "transparent",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                        borderRadius: 8,
+                        fontSize: "0.88rem",
+                        textAlign: "left",
+                      }}
+                      className="table-row-hover"
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.55rem" }}>
+                        <Plus size={15} />
+                        <span>Add column to the right</span>
+                      </span>
+                      <ChevronRight size={14} />
+                    </button>
+                    {headerMenuState.key !== "name" && (
+                      <button
+                        type="button"
+                        onClick={() => setHeaderMenuSubmenu({ side: "left" })}
+                        style={{
+                          width: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "0.55rem",
+                          padding: "0.55rem 0.45rem",
+                          border: "none",
+                          background: "transparent",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          borderRadius: 8,
+                          fontSize: "0.88rem",
+                          textAlign: "left",
+                        }}
+                        className="table-row-hover"
+                      >
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.55rem" }}>
+                          <Plus size={15} />
+                          <span>Add column to the left</span>
+                        </span>
+                        <ChevronLeft size={14} />
+                      </button>
+                    )}
+                    {headerMenuState.key !== "name" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          collapseColumn(headerMenuState.key);
+                          closeHeaderMenu();
+                        }}
+                        style={{
+                          width: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.55rem",
+                          padding: "0.55rem 0.45rem",
+                          border: "none",
+                          background: "transparent",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          borderRadius: 8,
+                          fontSize: "0.88rem",
+                          textAlign: "left",
+                        }}
+                        className="table-row-hover"
+                      >
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.55rem" }}>
+                          <ChevronLeft size={15} />
+                          <span>
+                            {columnLayout.collapsed?.[headerMenuState.key]
+                              ? "Expand column"
+                              : "Collapse column"}
+                          </span>
+                        </span>
+                      </button>
+                    )}
+                    {headerMenuState.key !== "name" && (
+                      <button
+                        type="button"
+                        onClick={() => removeColumnFromTable(headerMenuState.key)}
+                        style={{
+                          width: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.55rem",
+                          padding: "0.55rem 0.45rem",
+                          border: "none",
+                          background: "transparent",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          borderRadius: 8,
+                          fontSize: "0.88rem",
+                          textAlign: "left",
+                        }}
+                        className="table-row-hover"
+                      >
+                        <X size={15} />
+                        <span>Remove column</span>
+                      </button>
+                    )}
+                  </>
+                )}
+                {isGeneric && (
+                  <button
+                    type="button"
+                    onClick={openColumnPickerFromMenu}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.55rem",
+                      padding: "0.55rem 0.45rem",
+                      border: "none",
+                      background: "transparent",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                      borderRadius: 8,
+                      fontSize: "0.88rem",
+                      textAlign: "left",
+                    }}
+                    className="table-row-hover"
+                  >
+                    <SlidersHorizontal size={15} />
+                    <span>Edit all columns</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!headerMenuState.customField) return;
+                    openRenameField();
+                    closeHeaderMenu();
+                  }}
+                  disabled={!headerMenuState.customField}
+                  title={
+                    headerMenuState.customField
+                      ? "Rename field"
+                      : "Available for custom fields only"
+                  }
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.55rem",
+                    padding: "0.55rem 0.45rem",
+                    border: "none",
+                    background: "transparent",
+                    color: "var(--text-primary)",
+                    cursor: headerMenuState.customField ? "pointer" : "not-allowed",
+                    borderRadius: 8,
+                    fontSize: "0.88rem",
+                    textAlign: "left",
+                    opacity: headerMenuState.customField ? 1 : 0.45,
+                  }}
+                  className="table-row-hover"
+                >
+                  <Pencil size={15} />
+                  <span>Rename field</span>
+                </button>
+                {getHeaderFilterConfig(headerMenuState) && (
+                  <button
+                    type="button"
+                    onClick={() => openHeaderFilter(headerMenuState)}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.55rem",
+                      padding: "0.55rem 0.45rem",
+                      border: "none",
+                      background: "transparent",
+                      color: "var(--text-primary)",
+                      cursor: "pointer",
+                      borderRadius: 8,
+                      fontSize: "0.88rem",
+                      textAlign: "left",
+                    }}
+                    className="table-row-hover"
+                  >
+                    <Filter size={15} />
+                    <span>Add as filter</span>
+                  </button>
+                )}
+                {headerMenuSubmenu && isGeneric && !headerMenuState.fixedExtra && (
+                  <div
+                    role="menu"
+                    aria-label={`${headerMenuState.label} add column submenu`}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    style={{
+                      position: "fixed",
+                      left: headerSubmenuActualLeft,
+                      top: headerMenuOpenUp ? undefined : headerMenuTop,
+                      bottom: headerMenuOpenUp ? headerMenuBottom : undefined,
+                      width: LEADS_HEADER_MENU_SUBMENU_WIDTH,
+                      maxHeight: headerSubmenuMaxHeight,
+                      overflowY: "auto",
+                      zIndex: 1096,
+                      background: "var(--bg-color)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 12,
+                      boxShadow: "0 12px 32px rgba(0,0,0,0.25)",
+                      padding: "0.35rem",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "0.5rem",
+                        padding: "0.25rem 0.4rem 0.45rem",
+                        borderBottom: "1px solid var(--border-color)",
+                        marginBottom: "0.25rem",
+                      }}
+                    >
+                      <strong
+                        style={{
+                          fontSize: "0.85rem",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        Select field
+                      </strong>
+                      <button
+                        type="button"
+                        onClick={openColumnPickerFromMenu}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "var(--accent-color)",
+                          cursor: "pointer",
+                          fontSize: "0.8rem",
+                          fontWeight: 600,
+                        }}
+                      >
+                        Edit all columns
+                      </button>
+                    </div>
+                    <div style={{ padding: "0.4rem 0.45rem 0.35rem" }}>
+                      <div style={{ position: "relative" }}>
+                        <Search
+                          size={14}
+                          style={{
+                            position: "absolute",
+                            left: "0.6rem",
+                            top: "50%",
+                            transform: "translateY(-50%)",
+                            color: "var(--text-secondary)",
+                          }}
+                        />
+                        <input
+                          value={headerMenuSearch}
+                          onChange={(e) => setHeaderMenuSearch(e.target.value)}
+                          placeholder="Search fields..."
+                          aria-label="Search column fields"
+                          className="input-field"
+                          style={{
+                            padding: "0.4rem 0.6rem 0.4rem 1.9rem",
+                            fontSize: "0.85rem",
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div style={{ overflowY: "auto", maxHeight: "280px" }}>
+                      {(leadColumnCatalog.length === 0 ? [] : leadColumnCatalog)
+                        .filter((column) => column.key !== "name")
+                        .filter((column) => column.key !== headerMenuState.key)
+                        .filter((column) => {
+                          const term = headerMenuSearch.trim().toLowerCase();
+                          if (!term) return true;
+                          return (
+                            column.label.toLowerCase().includes(term) ||
+                            column.key.toLowerCase().includes(term)
+                          );
+                        })
+                        .map((column) => (
+                          <button
+                            type="button"
+                            key={column.key}
+                            onClick={() =>
+                              addColumnAdjacent(
+                                headerMenuState.key,
+                                headerMenuSubmenu.side,
+                                column.key,
+                              )
+                            }
+                            style={{
+                              width: "100%",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: "0.5rem",
+                              padding: "0.5rem 0.45rem",
+                              border: "none",
+                              background: "transparent",
+                              color: "var(--text-primary)",
+                              cursor: "pointer",
+                              borderRadius: 8,
+                              fontSize: "0.88rem",
+                              textAlign: "left",
+                            }}
+                            className="table-row-hover"
+                          >
+                            <span
+                              style={{
+                                minWidth: 0,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {column.label}
+                            </span>
+                            {currentVisibleLeadColumns.includes(column.key) && (
+                              <span
+                                style={{
+                                  fontSize: "0.72rem",
+                                  color: "var(--text-secondary)",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                Visible
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      {leadColumnCatalog.length === 0 && (
+                        <div
+                          style={{
+                            padding: "0.75rem 0.45rem",
+                            color: "var(--text-secondary)",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          Loading fields...
+                        </div>
+                      )}
+                      {leadColumnCatalog.length > 0 &&
+                        leadColumnCatalog
+                          .filter((column) => column.key !== "name")
+                          .filter((column) => column.key !== headerMenuState.key)
+                          .filter((column) => {
+                            const term = headerMenuSearch.trim().toLowerCase();
+                            if (!term) return true;
+                            return (
+                              column.label.toLowerCase().includes(term) ||
+                              column.key.toLowerCase().includes(term)
+                            );
+                          }).length === 0 && (
+                          <div
+                            style={{
+                              padding: "0.75rem 0.45rem",
+                              color: "var(--text-secondary)",
+                              fontSize: "0.85rem",
+                            }}
+                          >
+                            No matching fields.
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>,
+            document.body,
+          )}
+        {headerFilterRequest && (
+          <FilterPanel
+            fieldsUrl="/api/contacts/filter-fields?status=Lead"
+            valuesUrl={(field) => `/api/contacts/filter-values/${field}?status=Lead`}
+            filters={advancedFilters}
+            onChange={setAdvancedFilters}
+            fieldKey={headerFilterRequest.fieldKey}
+            fieldLabel={headerFilterRequest.label}
+            fieldKind={headerFilterRequest.kind}
+            autoOpen
+            hideTrigger
+            showSelectedFilters={false}
+            showCountBadge={false}
+            onClose={() => setHeaderFilterRequest(null)}
+          />
+        )}
+        {renameFieldState && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Rename ${renameFieldState.label || "field"}`}
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) {
+                setRenameFieldState(null);
+              }
+            }}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1097,
+              background: "rgba(0,0,0,0.25)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "1rem",
+            }}
+          >
+            <div
+              className="card"
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                width: "min(420px, 100%)",
+                background: "var(--bg-color)",
+                borderRadius: 12,
+                boxShadow: "0 16px 36px rgba(0,0,0,0.3)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "0.75rem",
+                  padding: "1rem 1rem 0.75rem",
+                  borderBottom: "1px solid var(--border-color)",
+                }}
+              >
+                <strong style={{ fontSize: "0.95rem" }}>Rename field</strong>
+                <button
+                  type="button"
+                  onClick={() => setRenameFieldState(null)}
+                  aria-label="Close rename dialog"
+                  style={actionIconBtn}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div style={{ padding: "1rem" }}>
+                <label
+                  htmlFor="rename-field-label"
+                  style={{
+                    display: "block",
+                    marginBottom: "0.4rem",
+                    color: "var(--text-secondary)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  Field label
+                </label>
+                <input
+                  id="rename-field-label"
+                  className="input-field"
+                  value={renameFieldState.label}
+                  onChange={(e) =>
+                    setRenameFieldState((prev) => ({
+                      ...(prev || {}),
+                      label: e.target.value,
+                    }))
+                  }
+                  style={{ width: "100%" }}
+                />
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: "0.5rem",
+                  padding: "0 1rem 1rem",
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setRenameFieldState(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={renameCustomField}
+                  disabled={!renameFieldState.label.trim()}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {!loading && filteredLeads.length > 0 && (
           <div
             style={{
@@ -6569,31 +8134,6 @@ const actionIconBtn = {
   color: "var(--text-secondary)",
   display: "inline-flex",
   alignItems: "center",
-};
-const chipStyle = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-  padding: "4px 10px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 500,
-  background: "var(--surface-color)",
-  color: "var(--text-secondary)",
-  border: "1px solid var(--border-color)",
-  cursor: "pointer",
-};
-const chipActiveStyle = {
-  ...chipStyle,
-  background: "var(--primary-color, var(--accent-color))",
-  color: "var(--accent-text, #fff)",
-  border: "1px solid var(--primary-color, var(--accent-color))",
-};
-const chipCountStyle = {
-  fontSize: 11,
-  fontWeight: 600,
-  opacity: 0.8,
-  marginLeft: 2,
 };
 
 export default Leads;

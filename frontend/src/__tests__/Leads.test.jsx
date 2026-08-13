@@ -384,6 +384,14 @@ describe('Leads Freshsales-style list UI affordances', () => {
       if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
         return Promise.resolve(leadRows);
       }
+      if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/tags')) {
+        return Promise.resolve({
+          values: [
+            { value: 'Strategic', label: 'Strategic' },
+            { value: 'Returning', label: 'Returning' },
+          ],
+        });
+      }
       if (url === '/api/staff' && !opts) {
         return Promise.resolve([{ id: 7, name: 'Maya Rao', email: 'maya@example.com', role: 'USER' }]);
       }
@@ -437,9 +445,11 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     await screen.findByText('Alice Lead');
     expect(screen.getByText('Tags')).toBeInTheDocument();
-    expect(screen.getByText('Warm')).toBeInTheDocument();
 
     const tagCell = screen.getByText('Warm').closest('.lead-tags-cell');
+    const aliceTags = within(tagCell);
+    expect(aliceTags.getByText('Warm')).toBeInTheDocument();
+    expect(aliceTags.getByText('VIP')).toBeInTheDocument();
     const editButton = screen.getByLabelText('Edit Tags for Alice Lead');
     expect(editButton).toHaveStyle({ opacity: '0' });
     fireEvent.mouseEnter(tagCell);
@@ -449,17 +459,31 @@ describe('Leads Freshsales-style list UI affordances', () => {
     fireEvent.click(editButton);
 
     const dialog = await screen.findByRole('dialog', { name: 'Edit Tags for Alice Lead' });
-    const tagInput = within(dialog).getByPlaceholderText('Click to select');
-    fireEvent.change(tagInput, { target: { value: 'Enterprise' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Add tag' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Returning' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Search existing' }));
+
+    const searchInput = within(dialog).getByPlaceholderText('Search saved tags');
+    fireEvent.change(searchInput, { target: { value: 'strat' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Strategic' }));
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add new' }));
+    const newTagInput = within(dialog).getByPlaceholderText('Type a new tag');
+    fireEvent.change(newTagInput, { target: { value: 'Enterprise' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add new tag' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/101', expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ tags: ['Warm', 'VIP', 'Enterprise', 'Returning'] }),
+        body: JSON.stringify({ tags: ['Warm', 'VIP', 'Strategic', 'Enterprise'] }),
       }));
+    });
+
+    await waitFor(() => {
+      expect(aliceTags.getByText('Warm')).toBeInTheDocument();
+      expect(aliceTags.getByText('VIP')).toBeInTheDocument();
+      expect(aliceTags.getByText('Strategic')).toBeInTheDocument();
+      expect(aliceTags.getByText('Enterprise')).toBeInTheDocument();
+      expect(aliceTags.queryByText('+2')).toBeNull();
     });
   });
 
@@ -500,8 +524,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
       const headers = Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
         th.textContent.replace(/\s+/g, ' ').trim(),
       );
-      expect(headers.slice(0, 9)).toEqual([
-        '',
+      expect(headers.slice(0, 13)).toEqual([
         'Name',
         'Phone',
         'Company',
@@ -510,6 +533,11 @@ describe('Leads Freshsales-style list UI affordances', () => {
         'Created',
         'Source',
         'Lead Score',
+        'Callified Campaign',
+        'Call Status',
+        'Callified AI call',
+        'Callified Score',
+        'Actions',
       ]);
     });
 
@@ -557,6 +585,148 @@ describe('Leads Freshsales-style list UI affordances', () => {
     await waitFor(() => {
       expect(Number.parseFloat(table.style.minWidth)).toBeGreaterThanOrEqual(initialMinWidth);
     });
+  });
+
+  it.each([
+    [
+      'wellness',
+      {
+        tenant: { id: 2, vertical: 'wellness', name: 'Enhanced Wellness' },
+        user: { id: 1, role: 'ADMIN' },
+      },
+    ],
+    [
+      'travel',
+      {
+        tenant: { id: 3, vertical: 'travel', name: 'Travel Co' },
+        user: { id: 1, role: 'ADMIN' },
+      },
+    ],
+  ])('synchronizes split-table row heights for %s tenants', async (_label, verticalAuth) => {
+    const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      const makeRect = (height, width) => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: width,
+        bottom: height,
+        width,
+        height,
+        toJSON() {
+          return this;
+        },
+      });
+
+      if (this?.tagName === 'TR' && this.closest?.('.leads-table-frozen-pane')) {
+        return makeRect(42, 240);
+      }
+      if (this?.tagName === 'TR' && this.closest?.('.leads-table-scroll-pane')) {
+        return makeRect(66, 920);
+      }
+      return makeRect(0, 0);
+    });
+
+    try {
+      const { container } = renderLeads(verticalAuth);
+      await screen.findByText('Alice Lead');
+
+      await waitFor(() => {
+        const frozenHeader = container.querySelector('.leads-table-frozen-pane thead tr');
+        const scrollHeader = container.querySelector('.leads-table-scroll-pane thead tr');
+        const frozenRows = Array.from(
+          container.querySelectorAll('.leads-table-frozen-pane tbody tr'),
+        );
+        const scrollRows = Array.from(
+          container.querySelectorAll('.leads-table-scroll-pane tbody tr'),
+        );
+
+        expect(frozenHeader).toBeTruthy();
+        expect(scrollHeader).toBeTruthy();
+        expect(frozenHeader.style.height).toBe('66px');
+        expect(scrollHeader.style.height).toBe('66px');
+        expect(frozenRows.length).toBeGreaterThan(0);
+        expect(frozenRows.length).toBe(scrollRows.length);
+        frozenRows.forEach((row) => {
+          expect(row.style.height).toBe('66px');
+        });
+        scrollRows.forEach((row) => {
+          expect(row.style.height).toBe('66px');
+        });
+      });
+    } finally {
+      rectMock.mockRestore();
+    }
+  });
+
+  it('synchronizes only the generic header row height', async () => {
+    const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      const makeRect = (height, width) => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: width,
+        bottom: height,
+        width,
+        height,
+        toJSON() {
+          return this;
+        },
+      });
+
+      if (
+        this?.tagName === 'TR' &&
+        this.closest?.('thead') &&
+        this.closest?.('.leads-table-frozen-pane')
+      ) {
+        return makeRect(42, 240);
+      }
+      if (
+        this?.tagName === 'TR' &&
+        this.closest?.('thead') &&
+        this.closest?.('.leads-table-scroll-pane')
+      ) {
+        return makeRect(66, 920);
+      }
+      if (
+        this?.tagName === 'TR' &&
+        this.closest?.('tbody') &&
+        this.closest?.('.leads-table-frozen-pane')
+      ) {
+        return makeRect(30, 240);
+      }
+      if (
+        this?.tagName === 'TR' &&
+        this.closest?.('tbody') &&
+        this.closest?.('.leads-table-scroll-pane')
+      ) {
+        return makeRect(30, 920);
+      }
+      return makeRect(0, 0);
+    });
+
+    try {
+      const { container } = renderLeads(authValue);
+      await screen.findByText('Alice Lead');
+
+      await waitFor(() => {
+        const frozenHeader = container.querySelector('.leads-table-frozen-pane thead tr');
+        const scrollHeader = container.querySelector('.leads-table-scroll-pane thead tr');
+
+        expect(frozenHeader).toBeTruthy();
+        expect(scrollHeader).toBeTruthy();
+        expect(frozenHeader.style.height).toBe('66px');
+        expect(scrollHeader.style.height).toBe('66px');
+
+        const frozenBody = container.querySelector('.leads-table-frozen-pane tbody tr');
+        const scrollBody = container.querySelector('.leads-table-scroll-pane tbody tr');
+        expect(frozenBody.style.height).toBe('');
+        expect(scrollBody.style.height).toBe('');
+      });
+    } finally {
+      rectMock.mockRestore();
+    }
   });
 });
 
@@ -711,8 +881,48 @@ function leadsFetchMock(url, opts) {
   if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
     return Promise.resolve(SAMPLE_LEADS);
   }
+  if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+    return Promise.resolve({
+      visible: ['name', 'email', 'company', 'phone', 'aiScore', 'source', 'tags', 'assignedTo', 'createdAt'],
+      availableColumns: [
+        { key: 'name', label: 'Name' },
+        { key: 'email', label: 'Email' },
+        { key: 'company', label: 'Company' },
+        { key: 'phone', label: 'Phone' },
+        { key: 'aiScore', label: 'Lead Score' },
+        { key: 'source', label: 'Source' },
+        { key: 'tags', label: 'Tags' },
+        { key: 'assignedTo', label: 'Assigned To' },
+        { key: 'createdAt', label: 'Created' },
+      ],
+    });
+  }
   if (url === '/api/staff' && !opts) {
     return Promise.resolve(SAMPLE_STAFF);
+  }
+  if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/source')) {
+    return Promise.resolve({
+      values: [
+        { value: 'Organic', label: 'Organic' },
+        { value: 'Referral', label: 'Referral' },
+      ],
+    });
+  }
+  if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/callifiedCampaignId')) {
+    return Promise.resolve({
+      values: [
+        { value: '101', label: 'Outbound Growth' },
+        { value: '102', label: 'Inbound Care' },
+      ],
+    });
+  }
+  if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/callifiedLeadStatus')) {
+    return Promise.resolve({
+      values: [
+        { value: 'qualified', label: 'Qualified' },
+        { value: 'junk', label: 'Junk' },
+      ],
+    });
   }
   // PUT /api/contacts/:id (convert), PUT /api/contacts/:id/assign, PUT bulk-assign,
   // POST /api/contacts  all return a benign stub. The component re-fetches
@@ -775,6 +985,97 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(sourceBadge.style.color).toBe('var(--source-badge-text, var(--text-primary))');
     expect(sourceBadge.style.border).toBe('1px solid var(--border-color)');
   });
+
+  it('opens the Source column menu and applies a source-only filter query', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Open Source column menu/i }));
+    expect(await screen.findByRole('menu', { name: /Source column menu/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Add as filter/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Source filter/i });
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Organic' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Apply/i }));
+
+    await waitFor(() => {
+      const filteredCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/contacts?status=Lead&limit=500') &&
+          !opts &&
+          url.includes('filters='),
+      );
+      expect(filteredCall).toBeDefined();
+      const filtersParam = new URL(filteredCall[0], 'http://localhost').searchParams.get('filters');
+      expect(JSON.parse(filtersParam)).toEqual([
+        { field: 'source', operator: 'contains', values: ['Organic'] },
+      ]);
+    });
+  });
+
+  it('opens the Callified Campaign column menu and applies a campaign-only filter query', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Open Callified Campaign column menu/i }));
+    expect(await screen.findByRole('menu', { name: /Callified Campaign column menu/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Add as filter/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Callified Campaign filter/i });
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Outbound Growth' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Apply/i }));
+
+    await waitFor(() => {
+      const filteredCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/contacts?status=Lead&limit=500') &&
+          !opts &&
+          url.includes('filters='),
+      );
+      expect(filteredCall).toBeDefined();
+      const filtersParam = new URL(filteredCall[0], 'http://localhost').searchParams.get('filters');
+      expect(JSON.parse(filtersParam)).toEqual([
+        { field: 'callifiedCampaignId', operator: 'contains', values: ['101'] },
+      ]);
+    });
+  });
+
+  it('opens the new header Filter by drawer without changing the existing column filter flows', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    expect(await screen.findByRole('dialog', { name: /Filters/i })).toBeInTheDocument();
+
+    await waitFor(() => {
+      const filterFieldsCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true,
+      );
+      expect(filterFieldsCall).toBeDefined();
+    });
+  });
+
+  it('opens the new header Bulk actions menu, auto-selects all visible leads, and exposes the existing staff assignment action', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Bulk actions$/i }));
+    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    await waitFor(() => {
+      expect(screen.getByText(/3 leads selected/i)).toBeInTheDocument();
+    });
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(4);
+    checkboxes.forEach((checkbox) => {
+      expect(checkbox).toBeChecked();
+    });
+    expect(within(menu).getByRole('button', { name: /Assign to staff/i })).toBeInTheDocument();
+    expect(within(menu).getByLabelText(/Bulk assign staff/i)).toBeInTheDocument();
+  });
+
   it('filters the row list by search term against name / email / company', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());

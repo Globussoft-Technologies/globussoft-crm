@@ -3122,7 +3122,9 @@ const Leads = () => {
     : isGeneric
       ? "leads-table leads-table--compact"
       : "leads-table";
-  const leadsRowSyncEnabled = isWellness || isTravel;
+  // Every vertical uses the split-table layout. Row-height sync is required
+  // so the frozen Name pane stays aligned with the scrollable columns.
+  const leadsRowSyncEnabled = true;
   const syncTablePairHeight = useCallback((leftRow, rightRow) => {
     if (!leftRow || !rightRow) return;
     const height = Math.max(
@@ -3518,7 +3520,11 @@ const Leads = () => {
             lead.callifiedCampaignId ?? "",
           ].join("|"),
         )
-        .join("::")
+        .concat(
+          isGeneric
+            ? `::${genericHeaderSyncSignature}::${JSON.stringify(columnLayout)}`
+            : "",
+        )
     : "";
 
   useLayoutEffect(() => {

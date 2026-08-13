@@ -729,7 +729,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('synchronizes only the generic header row height', async () => {
+  it('synchronizes the generic split-table header and row heights', async () => {
     const rectMock = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       const makeRect = (height, width) => ({
         x: 0,
@@ -764,14 +764,14 @@ describe('Leads Freshsales-style list UI affordances', () => {
         this.closest?.('tbody') &&
         this.closest?.('.leads-table-frozen-pane')
       ) {
-        return makeRect(30, 240);
+        return makeRect(42, 240);
       }
       if (
         this?.tagName === 'TR' &&
         this.closest?.('tbody') &&
         this.closest?.('.leads-table-scroll-pane')
       ) {
-        return makeRect(30, 920);
+        return makeRect(66, 920);
       }
       return makeRect(0, 0);
     });
@@ -791,8 +791,8 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
         const frozenBody = container.querySelector('.leads-table-frozen-pane tbody tr');
         const scrollBody = container.querySelector('.leads-table-scroll-pane tbody tr');
-        expect(frozenBody.style.height).toBe('');
-        expect(scrollBody.style.height).toBe('');
+        expect(frozenBody.style.height).toBe('66px');
+        expect(scrollBody.style.height).toBe('66px');
       });
     } finally {
       rectMock.mockRestore();

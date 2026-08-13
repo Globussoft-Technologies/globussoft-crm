@@ -123,7 +123,6 @@ describe("GET /api/contacts/filter-fields", () => {
       "company",
       "status",
       "source",
-      "tags",
       "callifiedCampaignId",
       "callifiedLeadStatus",
       "tags",

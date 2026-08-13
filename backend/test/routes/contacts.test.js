@@ -1073,3 +1073,43 @@ describe('Auth gate — verifyToken (CLAUDE.md standing rule)', () => {
     expect(jwt).toBeDefined();
   });
 });
+
+describe('DELETE /api/contacts/tags', () => {
+  test('removes a saved tag across tenant Lead contacts and keeps unrelated tags intact', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([
+      { id: 101, tagsJson: JSON.stringify(['Warm', 'Strategic']) },
+      { id: 102, tagsJson: JSON.stringify(['strategic']) },
+      { id: 103, tagsJson: JSON.stringify(['VIP']) },
+    ]);
+    prisma.contact.update.mockResolvedValue({});
+
+    const res = await request(makeApp())
+      .delete('/api/contacts/tags')
+      .send({ tag: 'Strategic' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      deletedTag: 'Strategic',
+      status: 'Lead',
+      updatedContacts: 2,
+    });
+    expect(prisma.contact.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        tenantId: TENANT_ID,
+        deletedAt: null,
+        status: 'Lead',
+        tagsJson: { not: null },
+      },
+      select: { id: true, tagsJson: true },
+    }));
+    expect(prisma.contact.update).toHaveBeenCalledTimes(2);
+    expect(prisma.contact.update.mock.calls[0][0]).toMatchObject({
+      where: { id: 101 },
+      data: { tagsJson: JSON.stringify(['Warm']) },
+    });
+    expect(prisma.contact.update.mock.calls[1][0]).toMatchObject({
+      where: { id: 102 },
+      data: { tagsJson: null },
+    });
+  });
+});

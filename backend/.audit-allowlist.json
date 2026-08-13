@@ -398,6 +398,42 @@
       "reason": "Same transitive nanoid path as GHSA-28wg-ghj8-5hjv. Our runtime callsites use nanoid only for non-security-sensitive identifiers and rely on default options; upgrade when parent dependencies refresh.",
       "addedOn": "2026-08-10",
       "sunsetBy": "2026-11-10"
+    },
+    {
+      "ghsa": "GHSA-jmr9-qjv8-65gv",
+      "package": "extract-zip",
+      "severity": "high",
+      "title": "extract-zip unvalidated symlink path traversal",
+      "reason": "Transitive via @puppeteer/browsers → puppeteer → puppeteer-core, which is pulled in by whatsapp-web.js. The vulnerable path-traversal surface is inside the Puppeteer browser download/extraction flow used at install-time or when launching a browser; our production runtime does not use Puppeteer to extract attacker-supplied zip files. Long-term: upgrade whatsapp-web.js to a release that pins a clean puppeteer chain.",
+      "addedOn": "2026-08-13",
+      "sunsetBy": "2026-11-13"
+    },
+    {
+      "ghsa": null,
+      "package": "@puppeteer/browsers",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable extract-zip",
+      "reason": "Part of the puppeteer chain under whatsapp-web.js. Same mitigation as extract-zip above; runtime exposure is zero because we do not use Puppeteer to extract untrusted archives.",
+      "addedOn": "2026-08-13",
+      "sunsetBy": "2026-11-13"
+    },
+    {
+      "ghsa": null,
+      "package": "puppeteer-core",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable @puppeteer/browsers → extract-zip",
+      "reason": "Part of the puppeteer chain under whatsapp-web.js. Same mitigation as extract-zip above; runtime exposure is zero.",
+      "addedOn": "2026-08-13",
+      "sunsetBy": "2026-11-13"
+    },
+    {
+      "ghsa": null,
+      "package": "puppeteer",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable puppeteer-core → @puppeteer/browsers → extract-zip",
+      "reason": "Transitive dependency of whatsapp-web.js used for WhatsApp Web integration. The vulnerable extract-zip path is not exposed to attacker-controlled input in our runtime. Long-term: upgrade whatsapp-web.js to a release without the vulnerable puppeteer chain.",
+      "addedOn": "2026-08-13",
+      "sunsetBy": "2026-11-13"
     }
   ]
 }

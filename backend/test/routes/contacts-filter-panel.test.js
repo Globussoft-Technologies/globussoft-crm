@@ -110,7 +110,7 @@ describe('GET /api/contacts/filter-fields', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.fields.map((f) => f.field)).toEqual([
-      'name', 'email', 'phone', 'company', 'status', 'source', 'aiScore', 'createdAt', 'assignedToId',
+      'name', 'email', 'phone', 'company', 'status', 'source', 'tags', 'aiScore', 'createdAt', 'assignedToId',
     ]);
   });
 

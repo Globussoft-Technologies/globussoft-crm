@@ -65,6 +65,10 @@ vi.mock('react-router-dom', async () => {
   return { ...real, useNavigate: () => navigateMock };
 });
 
+beforeEach(() => {
+  window.localStorage.clear();
+});
+
 function renderLeads(authValue = null) {
   return render(
     <MemoryRouter>
@@ -323,6 +327,236 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(screen.getByPlaceholderText('Email Address')).toBeInTheDocument();
     // Close button is rendered inside the drawer.
     expect(screen.getByRole('button', { name: /Close/i })).toBeInTheDocument();
+  });
+});
+
+describe('Leads Freshsales-style list UI affordances', () => {
+  const authValue = {
+    user: { userId: 1, name: 'Admin', email: 'admin@example.com', role: 'ADMIN' },
+    token: 'fake-token',
+    tenant: { id: 1, vertical: 'generic', name: 'Generic CRM' },
+    loading: false,
+  };
+
+  const leadRows = [
+    {
+      id: 101,
+      name: 'Alice Lead',
+      email: 'alice@example.com',
+      phone: '+1 5551112222',
+      company: 'Acme',
+      title: 'Buyer',
+      source: 'Website',
+      status: 'Lead',
+      aiScore: 61,
+      tags: ['Warm', 'VIP'],
+      assignedToId: 7,
+      assignedTo: { id: 7, name: 'Maya Rao', email: 'maya@example.com' },
+      createdAt: '2026-08-10T09:00:00.000Z',
+      customFields: {},
+    },
+    {
+      id: 102,
+      name: 'Bob Lead',
+      email: 'bob@example.com',
+      phone: '+1 5553334444',
+      company: 'Beta',
+      title: 'Founder',
+      source: 'Referral',
+      status: 'Lead',
+      aiScore: 28,
+      tags: ['Returning'],
+      assignedToId: null,
+      assignedTo: null,
+      createdAt: '2026-08-11T09:00:00.000Z',
+      customFields: {},
+    },
+  ];
+
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifyInfo.mockReset();
+    notifySuccess.mockReset();
+    navigateMock.mockReset();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (opts?.method === 'PUT') return Promise.resolve({ ok: true });
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve(leadRows);
+      }
+      if (url === '/api/staff' && !opts) {
+        return Promise.resolve([{ id: 7, name: 'Maya Rao', email: 'maya@example.com', role: 'USER' }]);
+      }
+      if (url === '/api/integrations/callified/config' && !opts) return Promise.resolve({ isActive: false });
+      if (url === '/api/callified/campaigns/with-lead-counts' && !opts) return Promise.resolve({ campaigns: [] });
+      if (typeof url === 'string' && url.startsWith('/api/callified/leads/call-summary') && !opts) {
+        return Promise.resolve({ summaries: {} });
+      }
+      return Promise.resolve([]);
+    });
+  });
+
+  it('renders only the main header row and no inline filter row', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    expect(screen.queryByLabelText('Filter Email')).toBeNull();
+    expect(screen.queryByPlaceholderText('Filter Email')).toBeNull();
+    document.querySelectorAll('.leads-split-table thead').forEach((thead) => {
+      expect(thead.querySelectorAll('tr')).toHaveLength(1);
+    });
+  });
+
+  it('saves built-in column edits inline without opening the full edit drawer', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Acme');
+    const companyDisplay = screen.getByText('Acme').closest('.inline-cell-editor-display');
+    const editButton = screen.getByLabelText('Edit Company for Alice Lead');
+    expect(editButton).toHaveStyle({ opacity: '0' });
+    fireEvent.mouseEnter(companyDisplay);
+    await waitFor(() => {
+      expect(editButton).toHaveStyle({ opacity: '0.85' });
+    });
+    fireEvent.click(editButton);
+    const companyInput = screen.getByLabelText('Edit Company for Alice Lead');
+    fireEvent.change(companyInput, { target: { value: 'Acme Labs' } });
+    fireEvent.blur(companyInput);
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/101', expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ company: 'Acme Labs' }),
+      }));
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Lead updated');
+  });
+
+  it('renders Tags as a default column and saves multiple selected tags', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    expect(screen.getByText('Tags')).toBeInTheDocument();
+    expect(screen.getByText('Warm')).toBeInTheDocument();
+
+    const tagCell = screen.getByText('Warm').closest('.lead-tags-cell');
+    const editButton = screen.getByLabelText('Edit Tags for Alice Lead');
+    expect(editButton).toHaveStyle({ opacity: '0' });
+    fireEvent.mouseEnter(tagCell);
+    await waitFor(() => {
+      expect(editButton).toHaveStyle({ opacity: '0.85' });
+    });
+    fireEvent.click(editButton);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Tags for Alice Lead' });
+    const tagInput = within(dialog).getByPlaceholderText('Click to select');
+    fireEvent.change(tagInput, { target: { value: 'Enterprise' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add tag' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Returning' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/101', expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ tags: ['Warm', 'VIP', 'Enterprise', 'Returning'] }),
+      }));
+    });
+  });
+
+  it('opens an in-place lead preview drawer from the list actions', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+
+    expect(screen.getByRole('dialog', { name: 'Lead preview' })).toBeInTheDocument();
+    expect(screen.getByText('Contact information')).toBeInTheDocument();
+    expect(screen.getByText('Open full detail')).toBeInTheDocument();
+  });
+
+  it('keeps the Name column fixed and renders saved visible columns in order', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['phone', 'company', 'email', 'assignedTo', 'createdAt', 'source', 'aiScore'],
+          availableColumns: [
+            { key: 'phone', label: 'Phone' },
+            { key: 'company', label: 'Company' },
+            { key: 'email', label: 'Email' },
+            { key: 'assignedTo', label: 'Assigned To' },
+            { key: 'createdAt', label: 'Created' },
+            { key: 'source', label: 'Source' },
+            { key: 'aiScore', label: 'Lead Score' },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    const { container } = renderLeads(authValue);
+
+    await screen.findByText('Alice Smith');
+    await waitFor(() => {
+      const headers = Array.from(container.querySelectorAll('.leads-split-table thead th')).map((th) =>
+        th.textContent.replace(/\s+/g, ' ').trim(),
+      );
+      expect(headers.slice(0, 9)).toEqual([
+        '',
+        'Name',
+        'Phone',
+        'Company',
+        'Email',
+        'Assigned To',
+        'Created',
+        'Source',
+        'Lead Score',
+      ]);
+    });
+
+    const nameHeader = screen.getByText('Name').closest('th');
+    expect(nameHeader.closest('.leads-table-frozen-pane')).toBeTruthy();
+
+    const aliceNameCell = screen.getByText('Alice Smith').closest('td');
+    expect(aliceNameCell.closest('.leads-table-frozen-pane')).toBeTruthy();
+
+    const phoneHeader = screen.getByText('Phone').closest('th');
+    expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
+  });
+
+  it('persists dragged column widths for the Leads table layout', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    fireEvent.mouseDown(screen.getByRole('separator', { name: 'Resize Email column' }), {
+      clientX: 200,
+    });
+    fireEvent.mouseMove(window, { clientX: 280 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem('globuscrm.leads.columnLayout.v1'));
+      expect(saved.widths.email).toBe(300);
+      expect(saved.collapsed.email).toBe(false);
+    });
+  });
+
+  it('keeps the table width from shrinking when a column is resized narrower', async () => {
+    const { container } = renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    const table = container.querySelector('table.leads-table--scrollable');
+    expect(table).toBeTruthy();
+    const initialMinWidth = Number.parseFloat(table.style.minWidth);
+
+    fireEvent.mouseDown(screen.getByRole('separator', { name: 'Resize Email column' }), {
+      clientX: 200,
+    });
+    fireEvent.mouseMove(window, { clientX: 120 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      expect(Number.parseFloat(table.style.minWidth)).toBeGreaterThanOrEqual(initialMinWidth);
+    });
   });
 });
 
@@ -670,12 +904,11 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     expect(screen.getByText('Priority')).toBeInTheDocument();
-    const addCell = screen.getByText('+ Click to add');
-    fireEvent.click(addCell);
+    const editButton = screen.getByRole('button', { name: 'Edit Priority' });
+    fireEvent.click(editButton);
     expect(navigateMock).not.toHaveBeenCalled();
 
-    const row = screen.getByText('Alice Smith').closest('tr');
-    const editor = within(row).getByRole('textbox');
+    const editor = screen.getByPlaceholderText('Priority level');
     fireEvent.change(editor, { target: { value: 'High' } });
     fireEvent.blur(editor);
 

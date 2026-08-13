@@ -11,11 +11,17 @@ const { notify } = require('../lib/notificationService');
 const { notifyAdminsOfNewLead } = require('../lib/leadNotifications');
 const { getSetting, KEYS } = require('../lib/tenantSettings');
 const { evaluateAutoCampaignRules } = require('../lib/callifiedAutoCampaignRules');
+const { sanitizeText } = require("../lib/sanitizeJson");
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
 // FieldPermissions UI had zero effect on read/write payloads. Default
 // (no rule in DB) is full access.
 const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
+
+const CONTACT_TAG_LIMIT = 50;
+const CONTACT_TAG_MAX_LENGTH = 80;
+// eslint-disable-next-line no-control-regex
+const CONTACT_TAG_CONTROL_RE = /[\x00-\x1F\x7F]/;
 
 // #167: soft-delete helper. Aggregations / reports / merge / internal joins
 // (e.g. activities, deals, sequenceEnrollments) are NOT yet filtered by
@@ -24,6 +30,92 @@ function applyDeletedAtFilter(where, includeDeleted) {
   if (includeDeleted) return where;
   where.deletedAt = null;
   return where;
+}
+
+function parseContactTags(tagsJson) {
+  if (!tagsJson) return [];
+  try {
+    const parsed = typeof tagsJson === "string" ? JSON.parse(tagsJson) : tagsJson;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+      .filter(Boolean);
+  } catch (_e) {
+    return [];
+  }
+}
+
+function serializeContactTags(contact) {
+  if (!contact || typeof contact !== "object") return contact;
+  const { tagsJson, ...rest } = contact;
+  return { ...rest, tags: parseContactTags(tagsJson) };
+}
+
+function serializeContactTagsBatch(contacts) {
+  if (!Array.isArray(contacts)) return contacts;
+  return contacts.map(serializeContactTags);
+}
+
+function normalizeContactTagsInput(raw) {
+  if (raw === undefined) return { hasValue: false, tags: [] };
+  if (raw === null || raw === "") return { hasValue: true, tags: [] };
+
+  let values = raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return { hasValue: true, tags: [] };
+    try {
+      values = JSON.parse(trimmed);
+    } catch (_e) {
+      values = trimmed.split(",");
+    }
+  }
+
+  if (!Array.isArray(values)) {
+    return {
+      error: { status: 400, error: "tags must be an array of strings", code: "INVALID_TAGS" },
+    };
+  }
+  if (values.length > CONTACT_TAG_LIMIT) {
+    return {
+      error: {
+        status: 400,
+        error: `A contact can have at most ${CONTACT_TAG_LIMIT} tags`,
+        code: "TOO_MANY_TAGS",
+      },
+    };
+  }
+
+  const seen = new Set();
+  const tags = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      return {
+        error: { status: 400, error: "tags must be an array of strings", code: "INVALID_TAGS" },
+      };
+    }
+    const tag = sanitizeText(value);
+    if (!tag) continue;
+    if (CONTACT_TAG_CONTROL_RE.test(tag)) {
+      return {
+        error: { status: 400, error: "tags contain invalid control characters", code: "INVALID_TAGS" },
+      };
+    }
+    if (tag.length > CONTACT_TAG_MAX_LENGTH) {
+      return {
+        error: {
+          status: 400,
+          error: `Each tag must be ${CONTACT_TAG_MAX_LENGTH} characters or less`,
+          code: "TAG_TOO_LONG",
+        },
+      };
+    }
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+  }
+  return { hasValue: true, tags };
 }
 
 // #160 #166 #168: shared validator for create + update payloads on Contact.
@@ -189,6 +281,7 @@ const FILTERABLE_FIELDS = {
   company: { column: 'company', kind: 'text', label: 'Company' },
   status: { column: 'status', kind: 'text', label: 'Status', required: true },
   source: { column: 'source', kind: 'text', label: 'Source' },
+  tags: { column: 'tagsJson', kind: 'text', label: 'Tags' },
   kycStatus: { column: 'kycStatus', kind: 'text', label: 'KYC Status', verticals: ['travel'] },
   subBrand: { column: 'subBrand', kind: 'text', label: 'Sub-brand', verticals: ['travel'] },
   aiScore: {
@@ -884,7 +977,8 @@ router.get('/', async (req, res) => {
     // (no-op elsewhere — see attachLeadCustomFieldsBatch). Skipped for the
     // ?fields=summary slim shape, which is an explicit "give me the minimal
     // projection" opt-in.
-    const withCustomFields = isSummary ? filtered : await attachLeadCustomFieldsBatch(filtered, req.user.tenantId);
+    const withTags = serializeContactTagsBatch(filtered);
+    const withCustomFields = isSummary ? withTags : await attachLeadCustomFieldsBatch(withTags, req.user.tenantId);
     res.json(withCustomFields);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
@@ -1034,6 +1128,29 @@ router.get('/filter-values/:field', async (req, res) => {
       });
       return res.json({ values: territories.map((t) => ({ value: String(t.id), label: t.name })) });
     }
+    if (req.params.field === 'tags') {
+      const rows = await prisma.contact.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          AND: [scopeWhere, { tagsJson: { not: null } }, { tagsJson: { not: '' } }],
+        },
+        select: { tagsJson: true },
+        take: 1000,
+      });
+      const seen = new Set();
+      const values = [];
+      for (const row of rows) {
+        for (const tag of parseContactTags(row.tagsJson)) {
+          const key = tag.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          values.push({ value: tag, label: tag });
+        }
+      }
+      values.sort((a, b) => a.label.localeCompare(b.label));
+      return res.json({ values });
+    }
     // range-kind fields offer their fixed buckets, not a DISTINCT scan of
     // every individual value present (see the "range" note above
     // FILTERABLE_FIELDS — Lead Score would otherwise list 5, 36, 49, 64…).
@@ -1115,7 +1232,7 @@ router.get('/:id', async (req, res) => {
     // Generic-vertical-only: attach { fieldKey: value } from this tenant's
     // Lead custom field definitions/values (no-op elsewhere — see helper).
     const withCustomFields = await attachLeadCustomFields(withTimeline, req.user.tenantId);
-    res.json(withCustomFields);
+    res.json(serializeContactTags(withCustomFields));
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contact' });
   }
@@ -1137,6 +1254,13 @@ router.post('/', async (req, res) => {
     // LeadCustomFieldValue AFTER the contact create succeeds (see below).
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    const tagsInput = Object.prototype.hasOwnProperty.call(req.body, "tags")
+      ? req.body.tags
+      : undefined;
+    delete req.body.tags;
+    delete req.body.tagsJson;
+    const tagsResult = normalizeContactTagsInput(tagsInput);
+    if (tagsResult.error) return res.status(tagsResult.error.status).json(tagsResult.error);
     const skipInitialAssignee = req.body.skipInitialAssignee === true;
     delete req.body.skipInitialAssignee;
     // #600 / #557 follow-up: the Leads form sends wellness-only optional fields
@@ -1155,6 +1279,9 @@ router.post('/', async (req, res) => {
     // leading/trailing whitespace into search indexes, exports, etc. The
     // validator already verified there's at least one non-whitespace char.
     const normalised = { ...req.body, name: typeof req.body.name === "string" ? req.body.name.trim() : req.body.name };
+    if (tagsResult.hasValue) {
+      normalised.tagsJson = tagsResult.tags.length ? JSON.stringify(tagsResult.tags) : null;
+    }
     // PRD Gap §1.1a/§1.1d — date fields come in as ISO strings; Prisma
     // rejects strings on DateTime columns with PrismaClientValidationError.
     // Coerce to Date objects after validation.
@@ -1304,7 +1431,13 @@ router.post('/', async (req, res) => {
       }
     }
 
-    res.status(restoredSoftDeletedContact ? 200 : 201).json(restoredSoftDeletedContact ? { ...contact, restored: true } : contact);
+    res
+      .status(restoredSoftDeletedContact ? 200 : 201)
+      .json(
+        restoredSoftDeletedContact
+          ? { ...serializeContactTags(contact), restored: true }
+          : serializeContactTags(contact),
+      );
   } catch (err) {
     // #178: duplicate email should be 409 Conflict, not 500.
     // #165: validation-class Prisma errors (string-too-long, FK miss, …) are
@@ -1504,6 +1637,13 @@ router.put('/:id', async (req, res) => {
     // for why this must be stripped before the Prisma spread.
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    const tagsInput = Object.prototype.hasOwnProperty.call(req.body, "tags")
+      ? req.body.tags
+      : undefined;
+    delete req.body.tags;
+    delete req.body.tagsJson;
+    const tagsResult = normalizeContactTagsInput(tagsInput);
+    if (tagsResult.error) return res.status(tagsResult.error.status).json(tagsResult.error);
     // Normalize empty-string optional ids to null (mirrors POST handler).
     if (req.body.callifiedCampaignId === "") req.body.callifiedCampaignId = null;
     // #168: same input checks as create so PUT can't bypass POST validation.
@@ -1511,6 +1651,9 @@ router.put('/:id', async (req, res) => {
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // PRD Gap §1.1a/§1.1d — coerce date strings to Date objects (mirrors POST handler).
     const updateData = { ...req.body };
+    if (tagsResult.hasValue) {
+      updateData.tagsJson = tagsResult.tags.length ? JSON.stringify(tagsResult.tags) : null;
+    }
     if (typeof updateData.anniversary === "string" && updateData.anniversary !== "") {
       updateData.anniversary = new Date(updateData.anniversary);
     }
@@ -1660,7 +1803,7 @@ router.put('/:id', async (req, res) => {
       console.error("[contacts PUT] wellness Patient backfill failed:", e && e.message);
     }
 
-    res.json(contact);
+    res.json(serializeContactTags(contact));
   } catch (err) {
     // #168 #165: PUT used to leak 500s on bad email / out-of-range values
     // because the Prisma validation error fell through unhandled. Map the

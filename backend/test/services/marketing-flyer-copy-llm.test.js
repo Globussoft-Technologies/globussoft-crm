@@ -122,6 +122,13 @@ afterEach(() => {
 // resolveProviderConfig()/realModeEnabled() authorize a real call without
 // BYOK — the standard "tenant bought AI credits" fixture for this suite.
 function seedFundedSubscription(tenantId = 1) {
+  // resolveProviderConfig needs at least one platform AI key available so
+  // it can build an internal candidate for the crm-managed path. CI does not
+  // expose real keys to unit tests, so provide a fake key for the scope of
+  // this fixture; afterEach restores the original value.
+  if (!process.env.GEMINI_API_KEY) {
+    process.env.GEMINI_API_KEY = 'fake-test-key-for-real-mode-fixture';
+  }
   prismaMock.aiTenantSubscription.findFirst.mockResolvedValue({
     id: 1, tenantId, planId: 1, planNameSnapshot: 'Test Plan', status: 'ACTIVE', startDate: new Date(), endDate: null,
   });

@@ -65,6 +65,8 @@ import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
+const s3Service = requireCJS('../../services/s3Service');
+
 const templatesRouter = requireCJS('../../routes/travel_itinerary_templates');
 
 function makeApp() {
@@ -137,6 +139,8 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({
     role: 'ADMIN', subBrandAccess: null,
   });
+  s3Service.uploadImage = vi.fn().mockResolvedValue('https://cdn.example.com/mock-uploaded-image.jpg');
+  s3Service.uploadFile = vi.fn().mockResolvedValue('https://cdn.example.com/mock-uploaded-file.pdf');
 });
 
 describe('GET /api/travel/itinerary-templates — list', () => {
@@ -1299,5 +1303,236 @@ describe('G058 — GET /api/travel/itinerary-templates/analytics.csv', () => {
     const lines = res.text.trim().split('\n');
     expect(lines.length).toBe(1);
     expect(prisma.itineraryTemplate.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G115 — PDF-based itinerary template underprint.
+// Pins per PRD_TRAVEL_ITINERARY_UPGRADES.md "upload reference PDF to convert
+// into template":
+//   - POST /upload-pdf accepts multipart file, uploads via s3Service.uploadFile,
+//     returns { success, url, filename }
+//   - Multer filter rejects non-PDF mimetypes
+//   - POST / create with pdfTemplateUrl sets isPdfTemplate=true and seeds
+//     defaultPdfTemplateRegions when caller doesn't supply custom regions
+//   - PATCH /:id with pdfTemplateUrl carries the PDF fields to the new version
+//   - PATCH /:id clearing pdfTemplateUrl clears isPdfTemplate + regions
+//   - GET / and GET /:id surfaces the new pdfTemplateUrl/pdfTemplateRegions/
+//     isPdfTemplate fields
+// ---------------------------------------------------------------------------
+describe('G115 — PDF underprint upload + template fields', () => {
+  test('POST /upload-pdf ADMIN happy path → 201 + uploadFile called with PDF subfolder', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/upload-pdf')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from('%PDF-1.4 mock pdf'), 'brand-template.pdf');
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.url).toBe('https://cdn.example.com/mock-uploaded-file.pdf');
+    expect(res.body.filename).toBe('brand-template.pdf');
+    expect(s3Service.uploadFile).toHaveBeenCalledTimes(1);
+    const call = s3Service.uploadFile.mock.calls[0];
+    expect(call[0]).toBeInstanceOf(Buffer);
+    expect(call[1]).toBe('brand-template.pdf');
+    expect(call[2]).toBe('application/pdf');
+    expect(call[3]).toBe('travel-itinerary-pdf-templates');
+  });
+
+  test('POST /upload-pdf USER role → 403', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/upload-pdf')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .attach('file', Buffer.from('%PDF-1.4 mock pdf'), 'brand-template.pdf');
+
+    expect(res.status).toBe(403);
+    expect(s3Service.uploadFile).not.toHaveBeenCalled();
+  });
+
+  test('POST /upload-pdf missing file → 400', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/upload-pdf')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/file is required/);
+    expect(s3Service.uploadFile).not.toHaveBeenCalled();
+  });
+
+  test('POST /upload-pdf non-PDF mimetype → 400', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/upload-pdf')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from('not a pdf'), 'brand-template.jpg');
+
+    expect(res.status).toBe(400);
+    expect(s3Service.uploadFile).not.toHaveBeenCalled();
+  });
+
+  test('POST / create with pdfTemplateUrl → isPdfTemplate=true + default regions seeded', async () => {
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 777,
+      ...data,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Umrah PDF Template',
+        destinationName: 'Makkah + Madinah',
+        durationDays: 10,
+        pdfTemplateUrl: 'https://cdn.example.com/umrah-template.pdf',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.isPdfTemplate).toBe(true);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(data.pdfTemplateUrl).toBe('https://cdn.example.com/umrah-template.pdf');
+    expect(data.isPdfTemplate).toBe(true);
+    const regions = JSON.parse(data.pdfTemplateRegions);
+    expect(regions.pageSize).toEqual({ width: 595.28, height: 841.89 });
+    expect(regions.header).toBeTruthy();
+    expect(regions.customer).toBeTruthy();
+    expect(regions.items).toBeTruthy();
+    expect(regions.totals).toBeTruthy();
+    expect(regions.footer).toBeTruthy();
+  });
+
+  test('POST / create without pdfTemplateUrl → isPdfTemplate=false + regions null', async () => {
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 778,
+      ...data,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Standard Template',
+        destinationName: 'Paris',
+        durationDays: 5,
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(data.pdfTemplateUrl).toBeNull();
+    expect(data.pdfTemplateRegions).toBeNull();
+    expect(data.isPdfTemplate).toBe(false);
+  });
+
+  test('POST / create with custom pdfTemplateRegions preserves caller shape', async () => {
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 779,
+      ...data,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+
+    const customRegions = { header: { x: 30, y: 800, width: 535, height: 30 } };
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Custom Region Template',
+        destinationName: 'Rome',
+        durationDays: 7,
+        pdfTemplateUrl: 'https://cdn.example.com/rome.pdf',
+        pdfTemplateRegions: customRegions,
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(JSON.parse(data.pdfTemplateRegions).header).toEqual(customRegions.header);
+    expect(data.isPdfTemplate).toBe(true);
+  });
+
+  test('PATCH /:id with pdfTemplateUrl → new version carries PDF fields + default regions', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      version: 1,
+      isLatest: true,
+      pdfTemplateUrl: null,
+      pdfTemplateRegions: null,
+      isPdfTemplate: false,
+    });
+    prisma.itineraryTemplate.update.mockResolvedValue({ ...sampleRows[0], isLatest: false });
+    const newRow = { ...sampleRows[0], id: 8001, version: 2, isLatest: true, pdfTemplateUrl: 'https://cdn.example.com/paris.pdf', isPdfTemplate: true };
+    prisma.itineraryTemplate.create.mockResolvedValue(newRow);
+    prisma.$transaction = vi.fn(async (ops) => {
+      if (Array.isArray(ops)) {
+        const r = [];
+        for (const op of ops) r.push(await op);
+        return r;
+      }
+      return ops;
+    });
+
+    const res = await request(makeApp())
+      .patch('/api/travel/itinerary-templates/201')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ pdfTemplateUrl: 'https://cdn.example.com/paris.pdf' });
+
+    expect(res.status).toBe(200);
+    const createData = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(createData.pdfTemplateUrl).toBe('https://cdn.example.com/paris.pdf');
+    expect(createData.isPdfTemplate).toBe(true);
+    expect(JSON.parse(createData.pdfTemplateRegions).pageSize).toBeTruthy();
+  });
+
+  test('PATCH /:id clearing pdfTemplateUrl → isPdfTemplate=false + regions null', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      version: 1,
+      isLatest: true,
+      pdfTemplateUrl: 'https://cdn.example.com/old.pdf',
+      pdfTemplateRegions: JSON.stringify({ header: { x: 0, y: 0, width: 1, height: 1 } }),
+      isPdfTemplate: true,
+    });
+    prisma.itineraryTemplate.update.mockResolvedValue({ ...sampleRows[0], isLatest: false });
+    prisma.itineraryTemplate.create.mockResolvedValue({ ...sampleRows[0], id: 8002, version: 2, isLatest: true });
+    prisma.$transaction = vi.fn(async (ops) => {
+      if (Array.isArray(ops)) {
+        const r = [];
+        for (const op of ops) r.push(await op);
+        return r;
+      }
+      return ops;
+    });
+
+    const res = await request(makeApp())
+      .patch('/api/travel/itinerary-templates/201')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ pdfTemplateUrl: '' });
+
+    expect(res.status).toBe(200);
+    const createData = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(createData.pdfTemplateUrl).toBe('');
+    expect(createData.pdfTemplateRegions).toBeNull();
+    expect(createData.isPdfTemplate).toBe(false);
+  });
+
+  test('GET / surfaces pdfTemplateUrl, pdfTemplateRegions, isPdfTemplate fields', async () => {
+    prisma.itineraryTemplate.findMany.mockResolvedValue([
+      {
+        ...sampleRows[0],
+        pdfTemplateUrl: 'https://cdn.example.com/paris.pdf',
+        pdfTemplateRegions: JSON.stringify({ pageSize: { width: 595, height: 842 } }),
+        isPdfTemplate: true,
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].pdfTemplateUrl).toBe('https://cdn.example.com/paris.pdf');
+    expect(res.body.items[0].isPdfTemplate).toBe(true);
+    expect(JSON.parse(res.body.items[0].pdfTemplateRegions).pageSize).toBeTruthy();
   });
 });

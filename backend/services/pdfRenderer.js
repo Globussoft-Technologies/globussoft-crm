@@ -15,6 +15,8 @@
 
 const PDFDocument = require("pdfkit");
 const nodePath = require("path");
+const { PDFDocument: PdfLibDocument, rgb, StandardFonts } = require("pdf-lib");
+const fontkit = require("fontkit");
 
 // Embedded Unicode fonts for the travel quote PDF. PDFKit's built-in Helvetica
 // is WinAnsi-encoded and has NO glyph for the Indian rupee sign (₹ U+20B9 →
@@ -2880,12 +2882,26 @@ function applyViewerWatermark(doc, viewer = {}) {
 // legacy SUB_BRAND_ACCENT constant; that constant is retained for any
 // non-travel call site but no longer consulted here.
 async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
+  // G115 — template underprint path. If the caller passed a PDF template
+  // buffer, delegate to the pdf-lib renderer that preserves the uploaded
+  // brand background and overlays dynamic data on top.
+  if (opts.pdfTemplateBuffer) {
+    return renderTravelItineraryPdfWithTemplate(itinerary, contact, opts);
+  }
+
   const sub = itinerary.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
   const { branding } = resolveTravelHeaderBrandKit(sub, opts);
   const accent = "#0B5345";
   const currency = itinerary.currency || "INR";
   const items = Array.isArray(itinerary.items) ? itinerary.items : [];
+  const skipHeader = opts.skipHeader === true;
+  const skipFooter = opts.skipFooter === true;
+
+  const pageSize = opts.pageSize && typeof opts.pageSize === "object" && typeof opts.pageSize.width === "number"
+    ? [opts.pageSize.width, opts.pageSize.height]
+    : "A4";
+  const margin = typeof opts.margin === "number" ? opts.margin : 50;
 
   // S65 — fetch the per-sub-brand logo (if any) BEFORE we start drawing.
   // pdfkit's doc.image() needs the buffer synchronously, so we resolve the
@@ -2893,13 +2909,25 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   // unit tests can vi.spyOn(...) the seam without reaching into axios.
   // Fail-soft: on any error, the helper returns null and we render a
   // logo-less header band (back-compat with pre-S65 output).
-  const logoBuffer = branding.thumbnailUrl
+  const logoBuffer = !skipHeader && branding.thumbnailUrl
     ? await module.exports.fetchLogoBuffer(branding.thumbnailUrl)
     : null;
 
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const doc = new PDFDocument({ size: pageSize, margin });
   applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica renders ₹ as "¹"
   const bufPromise = streamToBuffer(doc);
+
+  // Layout tunables: callers can override the default margins / top padding.
+  // The PDF-template overlay uses a tight inset so the content sits inside the
+  // blank content box rather than floating 90 pt below the template header.
+  const topOffset = typeof opts.topOffset === "number" ? opts.topOffset : 90;
+  const leftOffset = typeof opts.leftOffset === "number" ? opts.leftOffset : 50;
+  const rightOffset = typeof opts.rightOffset === "number" ? opts.rightOffset : 50;
+  const bottomReserve = typeof opts.bottomReserve === "number" ? opts.bottomReserve : 60;
+  const leftX = leftOffset;
+  const rightX = Math.max(leftX + 100, doc.page.width - rightOffset);
+  const contentWidth = Math.max(100, rightX - leftX);
+  doc.x = leftX;
 
   // PRD §4.7 (gap A3) — per-viewer watermark, opt-in via
   // opts.viewerWatermark ({ viewerName, viewerEmail, timestamp }).
@@ -2910,38 +2938,40 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     doc.on("pageAdded", () => module.exports.applyViewerWatermark(doc, opts.viewerWatermark));
   }
 
-  // Brand header band
-  doc.rect(0, 0, doc.page.width, 60).fill(accent);
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
-    .text(brandLabel, 50, 22, { align: "left" });
-  doc.fillColor("#fff").fontSize(10).text(
-    `Itinerary v${itinerary.version || 1}`,
-    50, 42, { align: "left" },
-  );
+  if (!skipHeader) {
+    // Brand header band
+    doc.rect(0, 0, doc.page.width, 60).fill(accent);
+    doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
+      .text(brandLabel, 50, 22, { align: "left" });
+    doc.fillColor("#fff").fontSize(10).text(
+      `Itinerary v${itinerary.version || 1}`,
+      50, 42, { align: "left" },
+    );
 
-  // S65 — embed brand logo into the header band's top-right (80×40 fit box
-  // at right edge). doc.image() throws on invalid buffers; wrap in try/catch
-  // so a malformed logo can't 500 the download. The brand color band still
-  // renders behind the logo regardless.
-  if (logoBuffer) {
-    try {
-      const LOGO_W = 80;
-      const LOGO_H = 40;
-      const LOGO_X = doc.page.width - LOGO_W - 50;
-      const LOGO_Y = 10;
-      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[pdfRenderer/S65] doc.image() rejected logo buffer (itinerary): ${err && err.message ? err.message : err}`,
-      );
+    // S65 — embed brand logo into the header band's top-right (80×40 fit box
+    // at right edge). doc.image() throws on invalid buffers; wrap in try/catch
+    // so a malformed logo can't 500 the download. The brand color band still
+    // renders behind the logo regardless.
+    if (logoBuffer) {
+      try {
+        const LOGO_W = 80;
+        const LOGO_H = 40;
+        const LOGO_X = doc.page.width - LOGO_W - 50;
+        const LOGO_Y = 10;
+        doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[pdfRenderer/S65] doc.image() rejected logo buffer (itinerary): ${err && err.message ? err.message : err}`,
+        );
+      }
     }
+
+    doc.fillColor("#111").moveDown(2);
   }
 
-  doc.fillColor("#111").moveDown(2);
-
   // Customer block
-  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text(contact?.name || "Customer", 50, 90);
+  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text(contact?.name || "Customer", leftX, topOffset);
   const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  •  ");
   if (metaLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(metaLine);
   doc.moveDown(0.5);
@@ -2962,10 +2992,10 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   // buffer, so wrap it — a bad photo must never 500 the download.
   if (opts.heroBuffer) {
     try {
-      const BANNER_W = doc.page.width - 100;
+      const BANNER_W = contentWidth;
       const BANNER_H = 150;
       const by = doc.y;
-      doc.image(opts.heroBuffer, 50, by, { fit: [BANNER_W, BANNER_H], align: "center", valign: "center" });
+      doc.image(opts.heroBuffer, leftX, by, { fit: [BANNER_W, BANNER_H], align: "center", valign: "center" });
       doc.y = by + BANNER_H + 12;
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -2977,24 +3007,37 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   if (items.length === 0) {
     doc.font("Helvetica").fontSize(10).fillColor("#777").text("(No items on this itinerary yet — quote pending.)");
   } else {
-    // Table header
-    const colX = { type: 50, desc: 115, qty: 360, unit: 410, total: 480 };
-    const colW = { type: 60, desc: 240, qty: 50, unit: 65, total: 60 };
+    // Table header — column widths are relative to the available content width
+    // so the overlay works when the template leaves a narrower blank area.
+    const colW = {
+      type: contentWidth * 0.12,
+      desc: contentWidth * 0.46,
+      markup: contentWidth * 0.12,
+      unit: contentWidth * 0.15,
+      total: contentWidth * 0.15,
+    };
+    const colX = {
+      type: leftX,
+      desc: leftX + colW.type,
+      markup: leftX + colW.type + colW.desc,
+      unit: leftX + colW.type + colW.desc + colW.markup,
+      total: leftX + colW.type + colW.desc + colW.markup + colW.unit,
+    };
     const tableTop = doc.y;
     doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
-    doc.text("Type", colX.type, tableTop);
-    doc.text("Description", colX.desc, tableTop);
-    doc.text("Markup", colX.qty, tableTop);
-    doc.text("Unit cost", colX.unit, tableTop);
-    doc.text("Total", colX.total, tableTop);
-    doc.moveTo(50, tableTop + 14)
-      .lineTo(doc.page.width - 50, tableTop + 14)
+    doc.text("Type", colX.type, tableTop, { width: colW.type });
+    doc.text("Description", colX.desc, tableTop, { width: colW.desc });
+    doc.text("Markup", colX.markup, tableTop, { width: colW.markup, align: "right" });
+    doc.text("Unit cost", colX.unit, tableTop, { width: colW.unit, align: "right" });
+    doc.text("Total", colX.total, tableTop, { width: colW.total, align: "right" });
+    doc.moveTo(leftX, tableTop + 14)
+      .lineTo(rightX, tableTop + 14)
       .lineWidth(0.5).strokeColor(accent).stroke();
     doc.font("Helvetica").fontSize(10).fillColor("#111");
 
     let y = tableTop + 22;
     const rowGap = 4;
-    const pageBreakBottom = doc.page.height - doc.page.margins.bottom - 60;
+    const pageBreakBottom = doc.page.height - doc.page.margins.bottom - bottomReserve;
     const sorted = [...items].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     for (const it of sorted) {
       const typeStr = String(it.itemType || "—");
@@ -3020,7 +3063,7 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
       }
       doc.text(typeStr, colX.type, y, { width: colW.type });
       doc.text(descStr, colX.desc, y, { width: colW.desc });
-      doc.text(markupStr, colX.qty, y, { width: colW.qty, align: "right" });
+      doc.text(markupStr, colX.markup, y, { width: colW.markup, align: "right" });
       doc.text(unitStr, colX.unit, y, { width: colW.unit, align: "right" });
       doc.text(totalStr, colX.total, y, { width: colW.total, align: "right" });
       y += rowH + rowGap;
@@ -3032,41 +3075,146 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   if (itinerary.totalAmount != null) {
     doc.moveDown(0.8);
     const totalY = doc.y;
-    doc.rect(50, totalY, doc.page.width - 100, 40).fillAndStroke("#f4f6f8", accent);
+    doc.rect(leftX, totalY, contentWidth, 40).fillAndStroke("#f4f6f8", accent);
     doc.font("Helvetica-Bold").fontSize(11).fillColor("#555")
-      .text("Grand total", 60, totalY + 10);
+      .text("Grand Total", leftX + 10, totalY + 10);
     doc.font("Helvetica-Bold").fontSize(16).fillColor(accent)
-      .text(formatMoney(Number(itinerary.totalAmount), currency), 60, totalY + 8, {
-        width: doc.page.width - 120, align: "right",
+      .text(formatMoney(Number(itinerary.totalAmount), currency), leftX + 10, totalY + 8, {
+        width: contentWidth - 20, align: "right",
       });
     doc.fillColor("#111").y = totalY + 50;
   }
 
-  // Footer
-  // G091 — when the caller passes `opts.branding.footerText` (per-render
-  // override, precedence layer 1), append it on a second line BELOW the
-  // standard "Itinerary #N — Pricing subject to availability …" line so
-  // each sub-brand can carry its own legal disclaimer / hotline note
-  // without rewriting the itinerary's chrome. Empty / null `footerText`
-  // leaves the byte-shape pre-G091 (single-line footer preserved).
-  const footerY = doc.page.height - doc.page.margins.bottom - 32;
-  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
-  doc.font("Helvetica").fontSize(8).fillColor("#777")
-    .text(
-      `${brandLabel} — Itinerary #${itinerary.id || "?"} v${itinerary.version || 1}. ` +
-        `Pricing subject to availability at the time of booking.`,
-      50, footerY + 8, { width: doc.page.width - 100, align: "center" },
-    );
-  const brandFooterText = (opts && opts.branding && typeof opts.branding.footerText === "string")
-    ? opts.branding.footerText.trim()
-    : "";
-  if (brandFooterText) {
-    doc.font("Helvetica").fontSize(8).fillColor("#999")
-      .text(brandFooterText, 50, footerY + 20, { width: doc.page.width - 100, align: "center" });
+  if (!skipFooter) {
+    // Footer
+    // G091 — when the caller passes `opts.branding.footerText` (per-render
+    // override, precedence layer 1), append it on a second line BELOW the
+    // standard "Itinerary #N — Pricing subject to availability …" line so
+    // each sub-brand can carry its own legal disclaimer / hotline note
+    // without rewriting the itinerary's chrome. Empty / null `footerText`
+    // leaves the byte-shape pre-G091 (single-line footer preserved).
+    const footerY = doc.page.height - doc.page.margins.bottom - 32;
+    doc.moveTo(leftX, footerY).lineTo(rightX, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
+    doc.font("Helvetica").fontSize(8).fillColor("#777")
+      .text(
+        `${brandLabel} — Itinerary #${itinerary.id || "?"} v${itinerary.version || 1}. ` +
+          `Pricing subject to availability at the time of booking.`,
+        leftX, footerY + 8, { width: contentWidth, align: "center" },
+      );
+    const brandFooterText = (opts && opts.branding && typeof opts.branding.footerText === "string")
+      ? opts.branding.footerText.trim()
+      : "";
+    if (brandFooterText) {
+      doc.font("Helvetica").fontSize(8).fillColor("#999")
+        .text(brandFooterText, leftX, footerY + 20, { width: contentWidth, align: "center" });
+    }
   }
 
   doc.end();
   return bufPromise;
+}
+
+// G115 — Render an itinerary PDF using a designer-uploaded PDF as the underprint.
+// The uploaded PDF is converted into a blank brand template by
+// `analyzePdfTemplate()` so the header / footer / side chrome survives and the
+// variable content area is white. This renderer then generates the same itinerary
+// content layout the standard renderer uses, but without the synthetic header or
+// footer, and stamps that content page onto the blanked content box of the
+// template. The result has the uploaded template's branding and the same data
+// layout as a regular itinerary PDF.
+//
+// Multi-page support: if the generated content needs more pages than the
+// template has, the last template page is duplicated for overflow pages. Only
+// pages that actually contain content are kept; unused template pages are dropped.
+async function renderTravelItineraryPdfWithTemplate(itinerary, contact, opts = {}) {
+  const templateBuf = Buffer.isBuffer(opts.pdfTemplateBuffer)
+    ? opts.pdfTemplateBuffer
+    : Buffer.from(opts.pdfTemplateBuffer || []);
+  if (!templateBuf || !templateBuf.length) {
+    throw new Error("pdfTemplateBuffer is required for template-based itinerary PDF");
+  }
+
+  const srcPdf = await PdfLibDocument.load(templateBuf);
+  srcPdf.registerFontkit(fontkit);
+  const srcPages = srcPdf.getPages();
+  if (srcPages.length === 0) {
+    throw new Error("Uploaded PDF template has no pages");
+  }
+
+  const { width: pageW, height: pageH } = srcPages[0].getSize();
+
+  // Resolve the blanked content box. The stored regions were produced by
+  // `analyzePdfTemplate()` and may have been captured at a different page size,
+  // so scale the box to the actual rendered page size.
+  const storedRegions = opts.regions && typeof opts.regions === "object" && !Array.isArray(opts.regions)
+    ? opts.regions
+    : null;
+  const storedPageSize = storedRegions && storedRegions.pageSize
+    ? storedRegions.pageSize
+    : { width: pageW, height: pageH };
+  const rawContentBox = storedRegions && storedRegions.contentBox
+    ? { ...storedRegions.contentBox }
+    : { x: 30, y: 80, width: pageW - 30, height: pageH - 160 };
+  const scaleX = storedPageSize.width ? pageW / storedPageSize.width : 1;
+  const scaleY = storedPageSize.height ? pageH / storedPageSize.height : 1;
+  const contentBox = {
+    x: rawContentBox.x * scaleX,
+    y: rawContentBox.y * scaleY,
+    width: rawContentBox.width * scaleX,
+    height: rawContentBox.height * scaleY,
+  };
+  // Clamp inside the page and keep it large enough to be usable.
+  contentBox.x = Math.max(0, Math.min(contentBox.x, pageW - 10));
+  contentBox.y = Math.max(0, Math.min(contentBox.y, pageH - 10));
+  contentBox.width = Math.max(50, Math.min(contentBox.width, pageW - contentBox.x));
+  contentBox.height = Math.max(50, Math.min(contentBox.height, pageH - contentBox.y));
+
+  // Generate the itinerary content using the standard renderer, but with the
+  // synthetic header and footer stripped, sized to the blanked content box so it
+  // can be laid on top of the template without distortion. Small offsets keep the
+  // dynamic text from touching the template's header / footer / side chrome.
+  const contentOpts = {
+    ...opts,
+    pdfTemplateBuffer: null,
+    skipHeader: true,
+    skipFooter: true,
+    pageSize: { width: contentBox.width, height: contentBox.height },
+    margin: 0,
+    topOffset: 10,
+    leftOffset: 10,
+    rightOffset: 10,
+    bottomReserve: 60,
+  };
+  const contentBuf = await renderTravelItineraryPdf(itinerary, contact, contentOpts);
+  const contentPdf = await PdfLibDocument.load(contentBuf);
+  const contentPages = contentPdf.getPages();
+  if (contentPages.length === 0) {
+    throw new Error("Template content PDF has no pages");
+  }
+
+  const outputPdf = await PdfLibDocument.create();
+  for (let i = 0; i < contentPages.length; i++) {
+    const srcIdx = Math.min(i, srcPages.length - 1);
+    const [copied] = await outputPdf.copyPages(srcPdf, [srcIdx]);
+    outputPdf.addPage(copied);
+  }
+  const outPages = outputPdf.getPages();
+
+  const embeddedContentPages = await outputPdf.embedPdf(
+    contentPdf,
+    contentPages.map((_, i) => i),
+  );
+
+  for (let i = 0; i < contentPages.length; i++) {
+    outPages[i].drawPage(embeddedContentPages[i], {
+      x: contentBox.x,
+      y: contentBox.y,
+      width: contentBox.width,
+      height: contentBox.height,
+    });
+  }
+
+  return Buffer.from(await outputPdf.save());
 }
 
 // ── Travel CRM — Travel Stall personalised 3-5 destination PDF (PRD §4.5)

@@ -53,7 +53,31 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const axios = require("axios");
 const router = express.Router();
+
+// G115 — Fetch a PDF template buffer from its S3 URL. Best-effort: on any
+// failure (network, 404, oversized) we return null and the render falls back
+// to the standard PDFKit path so the download still works.
+async function fetchPdfTemplateBuffer(url, opts = {}) {
+  if (!url || typeof url !== "string") return null;
+  const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : 15 * 1024 * 1024;
+  try {
+    const resp = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: typeof opts.timeout === "number" ? opts.timeout : 15000,
+      maxContentLength: maxBytes,
+      validateStatus: (s) => s >= 200 && s < 300,
+    });
+    if (!resp || !resp.data) return null;
+    const buf = Buffer.isBuffer(resp.data) ? resp.data : Buffer.from(resp.data);
+    if (buf.length === 0 || buf.length > maxBytes) return null;
+    return buf;
+  } catch (err) {
+    console.warn(`[travel-itin] PDF template fetch failed for ${url}: ${err && err.message ? err.message : err}`);
+    return null;
+  }
+}
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
@@ -4759,8 +4783,39 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
     // the PDF top. Best-effort — null on an offline/restricted server, in
     // which case the PDF renders without the banner. Never blocks the download.
     const heroBuffer = await fetchDestinationImageBuffer(full.destination);
+
+    // G115 — If this itinerary was cloned from a PDF-based template, fetch the
+    // stored underprint and overlay the dynamic data on top of it.
+    let pdfTemplateBuffer = null;
+    let pdfTemplateRegions = null;
+    if (full.clonedFromTemplateId) {
+      try {
+        const tpl = await prisma.itineraryTemplate.findFirst({
+          where: { id: full.clonedFromTemplateId, tenantId: req.travelTenant.id },
+          select: { pdfTemplateUrl: true, pdfTemplateRegions: true },
+        });
+        if (tpl && tpl.pdfTemplateUrl) {
+          pdfTemplateBuffer = await fetchPdfTemplateBuffer(tpl.pdfTemplateUrl);
+          pdfTemplateRegions = tpl.pdfTemplateRegions
+            ? (() => {
+                try {
+                  const parsed = JSON.parse(tpl.pdfTemplateRegions);
+                  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+                } catch (_e) {
+                  return null;
+                }
+              })()
+            : null;
+        }
+      } catch (tplErr) {
+        console.warn("[travel-itin] PDF template lookup failed:", tplErr.message);
+      }
+    }
+
     const pdfBuf = await renderTravelItineraryPdf(full, contact, {
       heroBuffer,
+      pdfTemplateBuffer,
+      regions: pdfTemplateRegions,
       viewerWatermark: {
         viewerName,
         viewerEmail,

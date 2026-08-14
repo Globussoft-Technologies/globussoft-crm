@@ -48,6 +48,25 @@ const s3Service = require("../services/s3Service");
 const axios = require("axios");
 const { analyzePdfTemplate } = require("../lib/travelPdfTemplate");
 
+// G115 — Only accept PDF template URLs that were uploaded to this tenant's
+// configured S3 bucket. This closes an authenticated SSRF vector where a
+// caller passes an arbitrary URL in pdfTemplateUrl and the server fetches it.
+function isTrustedPdfTemplateUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  const base = s3Service.S3_BASE_URL;
+  if (!base) return false;
+  try {
+    const normalizedBase = base.replace(/\/$/, "");
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      (url === normalizedBase || url.startsWith(`${normalizedBase}/`))
+    );
+  } catch (_e) {
+    return false;
+  }
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
@@ -427,7 +446,22 @@ function wrapMulter(middleware) {
 // and the blanked PDF is uploaded back to S3. Returns the blanked URL and the
 // detected overlay regions. On failure, returns the original URL and fallback
 // regions so the feature degrades gracefully.
-async function processUploadedTemplatePdf(originalUrl, filename) {
+async function processUploadedTemplatePdf(originalUrl) {
+  if (!isTrustedPdfTemplateUrl(originalUrl)) {
+    const err = new Error("pdfTemplateUrl must be a trusted S3 URL");
+    err.status = 400;
+    err.code = "INVALID_PDF_TEMPLATE_URL";
+    throw err;
+  }
+
+  let filename;
+  try {
+    const parsed = new URL(originalUrl);
+    filename = decodeURIComponent(parsed.pathname.split("/").pop()) || "";
+  } catch (_e) {
+    filename = "";
+  }
+
   try {
     const resp = await axios.get(originalUrl, {
       responseType: "arraybuffer",
@@ -688,9 +722,13 @@ router.post(
       // regions so the template remains usable. Any caller-supplied overlay regions
       // are merged on top so custom zones (e.g., header) are preserved.
       if (createData.pdfTemplateUrl) {
-        const parsed = new URL(createData.pdfTemplateUrl);
-        const filename = decodeURIComponent(parsed.pathname.split("/").pop());
-        const processed = await processUploadedTemplatePdf(createData.pdfTemplateUrl, filename);
+        if (!isTrustedPdfTemplateUrl(createData.pdfTemplateUrl)) {
+          return res.status(400).json({
+            error: "pdfTemplateUrl must be a trusted S3 URL",
+            code: "INVALID_PDF_TEMPLATE_URL",
+          });
+        }
+        const processed = await processUploadedTemplatePdf(createData.pdfTemplateUrl);
         const processedRegions = normalizePdfTemplateRegions(processed.pdfTemplateRegions) || {};
         const callerRegions = normalizePdfTemplateRegions(body.pdfTemplateRegions) || {};
         createData.pdfTemplateUrl = processed.pdfTemplateUrl;
@@ -1859,11 +1897,15 @@ router.patch(
       // clear pdfTemplateUrl, clear the flag and regions too.
       if (data.pdfTemplateUrl !== undefined) {
         if (data.pdfTemplateUrl) {
+          if (!isTrustedPdfTemplateUrl(data.pdfTemplateUrl)) {
+            const err = new Error("pdfTemplateUrl must be a trusted S3 URL");
+            err.status = 400;
+            err.code = "INVALID_PDF_TEMPLATE_URL";
+            throw err;
+          }
           data.isPdfTemplate = true;
           if (data.pdfTemplateUrl !== existing.pdfTemplateUrl) {
-            const parsed = new URL(data.pdfTemplateUrl);
-            const filename = decodeURIComponent(parsed.pathname.split("/").pop());
-            const processed = await processUploadedTemplatePdf(data.pdfTemplateUrl, filename);
+            const processed = await processUploadedTemplatePdf(data.pdfTemplateUrl);
             const processedRegions = normalizePdfTemplateRegions(processed.pdfTemplateRegions) || {};
             const callerRegions = normalizePdfTemplateRegions(data.pdfTemplateRegions) || {};
             data.pdfTemplateUrl = processed.pdfTemplateUrl;
@@ -1873,6 +1915,7 @@ router.patch(
         } else {
           data.isPdfTemplate = false;
           data.pdfTemplateRegions = null;
+          data.pdfTemplateUrl = null;
         }
       }
       if (data.pdfTemplateRegions !== undefined && data.pdfTemplateRegions !== null && data.pdfTemplateUrl === existing.pdfTemplateUrl) {

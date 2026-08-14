@@ -55,12 +55,17 @@ const express = require("express");
 const crypto = require("crypto");
 const axios = require("axios");
 const router = express.Router();
+const s3Service = require("../services/s3Service");
 
 // G115 — Fetch a PDF template buffer from its S3 URL. Best-effort: on any
 // failure (network, 404, oversized) we return null and the render falls back
 // to the standard PDFKit path so the download still works.
 async function fetchPdfTemplateBuffer(url, opts = {}) {
   if (!url || typeof url !== "string") return null;
+  // Only fetch URLs that belong to the configured S3 bucket — the template
+  // table should only ever hold S3 URLs, but this prevents SSRF if a row is
+  // somehow poisoned.
+  if (!s3Service.extractKeyFromUrl(url)) return null;
   const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : 15 * 1024 * 1024;
   try {
     const resp = await axios.get(url, {

@@ -15,7 +15,7 @@
 
 const PDFDocument = require("pdfkit");
 const nodePath = require("path");
-const { PDFDocument: PdfLibDocument, rgb, StandardFonts } = require("pdf-lib");
+const { PDFDocument: PdfLibDocument } = require("pdf-lib");
 const fontkit = require("fontkit");
 
 // Embedded Unicode fonts for the travel quote PDF. PDFKit's built-in Helvetica

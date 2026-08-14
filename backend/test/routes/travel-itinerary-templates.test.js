@@ -65,7 +65,11 @@ import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
+// G115 — s3Service.S3_BASE_URL is captured at module load; seed it so the
+// route's pdfTemplateUrl allowlist check treats the test URLs as trusted.
+process.env.AWS_S3_URL = 'https://cdn.example.com';
 const s3Service = requireCJS('../../services/s3Service');
+const axios = requireCJS('axios');
 
 const templatesRouter = requireCJS('../../routes/travel_itinerary_templates');
 
@@ -141,6 +145,11 @@ beforeEach(() => {
   });
   s3Service.uploadImage = vi.fn().mockResolvedValue('https://cdn.example.com/mock-uploaded-image.jpg');
   s3Service.uploadFile = vi.fn().mockResolvedValue('https://cdn.example.com/mock-uploaded-file.pdf');
+  s3Service.S3_BASE_URL = 'https://cdn.example.com';
+  // G115 — the route fetches the uploaded reference PDF to blank it. Keep
+  // unit tests off the network by making axios.get reject; the route falls
+  // back to the original URL + default regions.
+  axios.get = vi.fn().mockRejectedValue(new Error('mock: no external PDF fetch in unit tests'));
 });
 
 describe('GET /api/travel/itinerary-templates — list', () => {
@@ -670,7 +679,7 @@ describe('PATCH /api/travel/itinerary-templates/:id', () => {
   // isLatest=false then creates NEW row at version=N+1. Both ops run inside
   // prisma.$transaction. Tests below mock $transaction to drain the op
   // promises so the route can read back the create's return value.
-  function mockPatchTransaction(newRow) {
+  function mockPatchTransaction(_newRow) {
     prisma.$transaction = vi.fn(async (ops) => {
       // ops is an array of prepared prisma promises; we resolve them in
       // order so the route receives `[updateResult, createResult]`.
@@ -1511,7 +1520,7 @@ describe('G115 — PDF underprint upload + template fields', () => {
 
     expect(res.status).toBe(200);
     const createData = prisma.itineraryTemplate.create.mock.calls[0][0].data;
-    expect(createData.pdfTemplateUrl).toBe('');
+    expect(createData.pdfTemplateUrl).toBeNull();
     expect(createData.pdfTemplateRegions).toBeNull();
     expect(createData.isPdfTemplate).toBe(false);
   });

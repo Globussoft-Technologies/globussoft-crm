@@ -124,6 +124,25 @@ prisma.dealInsight.delete = vi.fn();
 prisma.deal = prisma.deal || {};
 prisma.deal.findFirst = vi.fn();
 prisma.deal.findMany = vi.fn();
+// POST /generate/:dealId now routes its optional AI insight through
+// lib/aiGateway (BYOK or a funded CRM-managed subscription). Default: no
+// BYOK, no subscription → the AI attempt throws a "friendly" blocked
+// error and the route falls back to heuristic-only insights, same
+// observable 200 the pre-migration "no GEMINI_API_KEY" branch produced.
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findUnique = vi.fn().mockResolvedValue(null);
+prisma.aiTenantSubscription = prisma.aiTenantSubscription || {};
+prisma.aiTenantSubscription.findFirst = vi.fn().mockResolvedValue(null);
+prisma.aiCreditWallet = prisma.aiCreditWallet || {};
+prisma.aiCreditWallet.findUnique = vi.fn().mockResolvedValue(null);
+prisma.aiCreditWallet.create = vi.fn().mockResolvedValue({ id: 1, tenantId: 1, balanceTokens: 0, totalPurchasedTokens: 0, totalUsedTokens: 0 });
+prisma.aiCreditWallet.update = vi.fn().mockResolvedValue({ id: 1, tenantId: 1, balanceTokens: 0, totalPurchasedTokens: 0, totalUsedTokens: 0 });
+prisma.aiCreditTransaction = prisma.aiCreditTransaction || {};
+prisma.aiCreditTransaction.findUnique = vi.fn().mockResolvedValue(null);
+prisma.aiCreditTransaction.create = vi.fn().mockResolvedValue({ id: 1 });
+prisma.llmCallLog = prisma.llmCallLog || {};
+prisma.llmCallLog.create = vi.fn().mockResolvedValue({ id: 1 });
+prisma.$transaction = vi.fn(async (arg) => (Array.isArray(arg) ? Promise.all(arg) : arg(prisma)));
 
 import express from 'express';
 import request from 'supertest';
@@ -152,6 +171,9 @@ beforeEach(() => {
   prisma.dealInsight.delete.mockReset();
   prisma.deal.findFirst.mockReset();
   prisma.deal.findMany.mockReset();
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.aiTenantSubscription.findFirst.mockReset().mockResolvedValue(null);
+  prisma.aiCreditWallet.findUnique.mockReset().mockResolvedValue(null);
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -304,7 +326,7 @@ describe('GET /deal/:dealId — per-deal insight listing', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('POST /generate/:dealId — heuristic insights + Gemini graceful fallback', () => {
-  test('Gemini-down graceful fallback: heuristic rules run + persist + 200 (no aiModel because GEMINI_API_KEY unset at load)', async () => {
+  test('AI blocked (no BYOK, no funded CRM subscription) graceful fallback: heuristic rules run + persist + 200', async () => {
     // Deal with cold contact (no activity, no emails, no calls) — runHeuristicRules
     // should fire two RISKs: "No activity recorded" + "Low engagement: no emails or calls".
     prisma.deal.findFirst.mockResolvedValue({
@@ -321,7 +343,9 @@ describe('POST /generate/:dealId — heuristic insights + Gemini graceful fallba
     const res = await request(makeApp()).post('/api/deal-insights/generate/50');
 
     expect(res.status).toBe(200);
-    // 2 heuristic candidates persisted (no AI candidate because aiModel === null).
+    // 2 heuristic candidates persisted (no AI candidate — tenant has no
+    // BYOK and no funded CRM-managed subscription, so aiGateway throws a
+    // friendly blocked error that the route silently swallows).
     expect(res.body.generated).toBe(2);
     expect(res.body.evaluated).toBe(2);
     expect(res.body.insights).toHaveLength(2);
@@ -330,6 +354,45 @@ describe('POST /generate/:dealId — heuristic insights + Gemini graceful fallba
       expect(call[0].data.tenantId).toBe(1);
       expect(call[0].data.dealId).toBe(50);
     }
+  });
+
+  test('AI succeeds via BYOK: heuristic candidates PLUS one [AI]-prefixed NEXT_BEST_ACTION insight', async () => {
+    // BYOK configured for this tenant — readByokConfig's TenantSetting
+    // lookup returns a valid providerId+apiKey blob.
+    const { encrypt } = requireCJS('../../lib/fieldEncryption');
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ providerId: 'gemini', apiKey: encrypt('test-key'), model: 'gemini-2.5-flash-lite' }),
+    });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: '"Follow up within 48 hours to keep momentum."' }] } }],
+        usageMetadata: { promptTokenCount: 40, candidatesTokenCount: 12 },
+      }),
+    });
+
+    prisma.deal.findFirst.mockResolvedValue({
+      id: 51, tenantId: 1, title: 'Warm deal', amount: 9000, currency: 'USD',
+      stage: 'proposal', probability: 50, expectedClose: null,
+      contact: { name: 'Sam Warm', company: 'HeatCo', status: 'lead',
+        activities: [], emails: [], callLogs: [] },
+    });
+    prisma.dealInsight.findFirst.mockResolvedValue(null);
+    prisma.dealInsight.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: Math.floor(Math.random() * 1000), ...data }));
+
+    const res = await request(makeApp()).post('/api/deal-insights/generate/51');
+
+    expect(res.status).toBe(200);
+    // 2 heuristic + 1 AI candidate.
+    expect(res.body.evaluated).toBe(3);
+    expect(res.body.generated).toBe(3);
+    const aiInsight = res.body.insights.find((i) => i.insight.startsWith('[AI]'));
+    expect(aiInsight).toBeTruthy();
+    expect(aiInsight.insight).toContain('Follow up within 48 hours');
+    expect(aiInsight.type).toBe('NEXT_BEST_ACTION');
+
+    delete global.fetch;
   });
 
   test('404 when deal belongs to a different tenant', async () => {

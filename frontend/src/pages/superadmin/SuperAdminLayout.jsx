@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet, useNavigate, NavLink } from "react-router-dom";
-import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor } from "lucide-react";
+import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, TrendingUp } from "lucide-react";
 import {
   getSuperAdminToken,
   getSuperAdminUsername,
@@ -14,6 +14,10 @@ const MODULES = [
   { path: "/super-admin/cron", label: "Cron Maintenance", icon: Clock },
   { path: "/super-admin/cron-analytics", label: "Cron Analytics", icon: BarChart3 },
   { path: "/super-admin/api-analytics", label: "API Analytics", icon: Activity },
+  { path: "/super-admin/ai-management", label: "AI Management", icon: Bot },
+  { path: "/super-admin/ai-management/plans", label: "AI Subscription Plans", icon: CreditCard },
+  { path: "/super-admin/tenant-management", label: "Tenant Management", icon: Building2 },
+  { path: "/super-admin/revenue", label: "Revenue Analytics", icon: TrendingUp },
 ];
 
 function getThemeIcon(theme) {
@@ -151,3 +155,4 @@ export default function SuperAdminLayout() {
     </div>
   );
 }
+

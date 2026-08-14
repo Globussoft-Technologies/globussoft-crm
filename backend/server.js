@@ -602,6 +602,7 @@ const superAdminAuthRoutes = require("./routes/super_admin_auth");
 const superAdminCronRoutes = require("./routes/super_admin_cron");
 const superAdminCronAnalyticsRoutes = require("./routes/super_admin_cron_analytics");
 const superAdminApiAnalyticsRoutes = require("./routes/super_admin_api_analytics");
+const superAdminTenantManagementRoutes = require("./routes/super_admin_tenant_management");
 const { requireSuperAdmin } = require("./middleware/superAdminAuth");
 const rolesRoutes = require("./routes/roles");
 const widgetsRoutes = require("./routes/widgets");
@@ -648,6 +649,9 @@ const reportSchedulesRoutes = require("./routes/report_schedules");
 const pipelineStagesRoutes = require("./routes/pipeline_stages");
 const notificationsRoutes = require("./routes/notifications");
 const subscriptionsRoutes = require("./routes/subscriptions");
+const aiProviderManagementRoutes = require("./routes/ai_provider_management");
+const aiSubscriptionsRoutes = require("./routes/ai_subscriptions");
+const superAdminAiProviderManagementRoutes = require("./routes/super_admin_ai_provider_management");
 const emailTemplatesRoutes = require("./routes/email_templates");
 const emailRoutes = require("./routes/email");
 const auditRoutes = require("./routes/audit");
@@ -1140,6 +1144,8 @@ app.use("/api/super-admin/auth", superAdminAuthRoutes);
 app.use("/api/super-admin/cron", requireSuperAdmin, superAdminCronRoutes);
 app.use("/api/super-admin/cron-analytics", requireSuperAdmin, superAdminCronAnalyticsRoutes);
 app.use("/api/super-admin/api-analytics", requireSuperAdmin, superAdminApiAnalyticsRoutes);
+app.use("/api/super-admin/ai-management", requireSuperAdmin, superAdminAiProviderManagementRoutes);
+app.use("/api/super-admin/tenant-management", requireSuperAdmin, superAdminTenantManagementRoutes);
 app.use("/api/roles", rolesRoutes);
 // SPEC §C3 — unified /api/me + /api/permissions endpoints. Both come
 // from the same module so the SPEC-named endpoint surface is contiguous.
@@ -1190,6 +1196,8 @@ app.use("/api/tasks", tasksRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/expenses", expensesRoutes);
 app.use("/api/subscriptions", subscriptionsRoutes);
+app.use("/api/ai-provider-management", aiProviderManagementRoutes);
+app.use("/api/ai-subscriptions", aiSubscriptionsRoutes);
 app.use("/api/contracts", contractsRoutes);
 app.use("/api/estimates", estimatesRoutes);
 app.use("/api/projects", projectsRoutes);
@@ -2420,6 +2428,12 @@ if (process.env.DISABLE_CRONS === "1") {
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require("./cron/lowStockEngine");
   initLowStockCron();
+
+  // AI Subscription & Credit Management — low-balance alert sweep
+  // (25%/10%/5% remaining thresholds, every 30 min, all tenants with a
+  // CRM-managed AI credit wallet).
+  const { initAiCreditLowBalanceCron } = require("./cron/aiCreditLowBalanceEngine");
+  initAiCreditLowBalanceCron();
 
   // Wave 11 Agent HH — Auto-consumption listener. Subscribes to 'visit.completed'
   // events and applies all active AutoConsumptionRule rows for the visit's

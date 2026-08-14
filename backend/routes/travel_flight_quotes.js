@@ -90,7 +90,7 @@ router.post("/extract-prices", verifyToken, requireTravelTenant, uploadHotelScre
   try {
     const files = Array.isArray(req.files) ? req.files : [];
     const tripType = typeof req.body?.tripType === "string" ? req.body.tripType.trim().toLowerCase() : null;
-    const result = await flightOfferImageExtraction.extractFlightOfferPricing({ files, tripType });
+    const result = await flightOfferImageExtraction.extractFlightOfferPricing({ tenantId: req.user.tenantId, files, tripType });
     return res.status(200).json(result);
   } catch (e) {
     console.error("[flight-plugin] flight extract error:", e.message);
@@ -101,7 +101,7 @@ router.post("/extract-prices", verifyToken, requireTravelTenant, uploadHotelScre
 router.post("/extract-hotel-prices", verifyToken, requireTravelTenant, uploadHotelScreenshotsOrReject, validateImages, async (req, res) => {
   try {
     const files = Array.isArray(req.files) ? req.files : [];
-    const result = await hotelOfferImageExtraction.extractHotelOfferPricing({ files });
+    const result = await hotelOfferImageExtraction.extractHotelOfferPricing({ tenantId: req.user.tenantId, files });
     return res.status(200).json(result);
   } catch (e) {
     console.error("[flight-plugin] hotel extract error:", e.message);

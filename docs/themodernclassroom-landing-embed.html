@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The Modern Classroom Landing Page</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      min-height: 100%;
+      background: #ffffff;
+      overflow: hidden;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+    }
+
+    #landing-frame {
+      border: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      background: #ffffff;
+    }
+
+    #status {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      text-align: center;
+      background: #ffffff;
+      color: #0f172a;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    #status.hidden {
+      display: none;
+    }
+
+    #status.error {
+      color: #b91c1c;
+      max-width: 760px;
+      margin: 0 auto;
+      white-space: pre-line;
+    }
+  </style>
+</head>
+<body>
+  <div id="status">Loading landing page...</div>
+  <iframe id="landing-frame" title="Landing page"></iframe>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const apiBase = (params.get('apiBase') || 'https://crm.globusdemos.com').replace(/\/+$/, '');
+    const subBrand = (params.get('subBrand') || 'tmc').trim();
+    const slugOverride = (params.get('slug') || '').trim();
+
+    const statusEl = document.getElementById('status');
+    const frame = document.getElementById('landing-frame');
+
+    function showError(message) {
+      statusEl.className = 'error';
+      statusEl.textContent = message;
+    }
+
+    async function fetchLandingPayload() {
+      const endpoint = slugOverride
+        ? `${apiBase}/api/landing-pages/public/by-slug/${encodeURIComponent(slugOverride)}`
+        : `${apiBase}/api/landing-pages/public/featured-full?subBrand=${encodeURIComponent(subBrand)}`;
+
+      const response = await fetch(endpoint, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Landing page payload lookup failed with status ${response.status}.`);
+      }
+
+      return response.json();
+    }
+
+    async function boot() {
+      try {
+        if (window.location.protocol === 'file:') {
+          throw new Error(
+            'This HTML cannot be tested by opening it directly as file://.\n\n' +
+            'Run it through a local web server instead, for example:\n' +
+            '1. cd docs\n' +
+            '2. python -m http.server 8000\n' +
+            '3. Open http://localhost:8000/themodernclassroom-landing-embed.html?apiBase=https://crm.globusdemos.com&subBrand=tmc'
+          );
+        }
+
+        const page = await fetchLandingPayload();
+        if (!page || !page.slug) {
+          throw new Error('Landing page payload did not include a slug.');
+        }
+
+        window.__landingPagePayload = page;
+        document.title = page.metaTitle || page.title || 'Landing Page';
+        frame.src = `${apiBase}${page.publicUrl || `/p/${encodeURIComponent(page.slug)}`}`;
+        statusEl.classList.add('hidden');
+      } catch (error) {
+        showError(String(error.message || error));
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>

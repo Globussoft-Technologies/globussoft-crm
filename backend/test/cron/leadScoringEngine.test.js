@@ -79,68 +79,52 @@
  *   - initLeadScoringCron — schedules a real node-cron job; invoking
  *     it would register a live cron. The function is a thin shim
  *     around tickLeadScoringEngine which is exhaustively covered.
- *   - The Gemini-AI failure-tolerance branch (per the task brief) does
- *     NOT EXIST in this engine — it's a pure-formula scorer, no LLM
- *     call. AI scoring elsewhere lives in routes/ai_scoring.js, not
- *     the cron engine.
+ *   - The AI scoring branch (scoreWithGemini) goes through
+ *     lib/aiGateway.runAiRequest — the mandatory resolve/gate/log/deduct
+ *     entry point every AI feature in the CRM shares (BYOK first, then a
+ *     funded CRM-managed subscription). This suite mocks
+ *     aiGateway.runAiRequest directly rather than the Gemini SDK — the
+ *     engine no longer touches the SDK or captures a module-load-time
+ *     singleton; access is resolved per-call, per-contact.tenantId.
  *
  * Mocking strategy:
  *   Mirror backend/test/cron/wellnessOpsEngine.test.js — import the
  *   prisma singleton, monkey-patch model accessors. The cron module is
  *   inlined via vitest.config.js → server.deps.inline so its
  *   `require('../lib/prisma')` resolves to the same singleton.
+ *   AI calls are mocked via vi.mock('../../lib/aiGateway', ...) + a CJS
+ *   Module._cache injection (pattern mirrors
+ *   backend/test/cron/sentimentEngine.test.js), since the engine requires
+ *   aiGateway via CJS and vitest's ESM-level vi.mock doesn't otherwise
+ *   intercept that require() chain.
  */
 
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 
-// CRITICAL: backend/cron/leadScoringEngine.js calls dotenv.config({override:true})
-// at module top against the repo root .env, which carries a real GEMINI_API_KEY
-// in dev/CI (post-PR #644 the engine attempts a Gemini fallback in
-// tickLeadScoringEngine). Without intercepting the @google/generative-ai SDK
-// BEFORE the engine's require() chain executes, every "tick" test would issue
-// a live, billed Gemini API call (responses are non-deterministic and the
-// upstream is slow → tests time out at the 5s vitest budget).
-//
-// Pattern mirrors backend/test/cron/sentimentEngine.test.js (commit 76bf2a4).
-// vi.mock('@google/generative-ai') with an ESM factory does NOT intercept
-// CJS require() chains under this vitest setup — workaround: load the real
-// CJS module via createRequire INSIDE a vi.hoisted() block, monkey-patch
-// the GoogleGenerativeAI constructor on its exports object BEFORE any ESM
-// import statement evaluates. The engine's
-// `const { GoogleGenerativeAI } = require("@google/generative-ai")` resolves
-// to our stub class because the require cache is shared.
-const { mockGenerateContent } = vi.hoisted(() => {
-  // Set GEMINI_API_KEY BEFORE the engine import so the engine's
-  // `if (GEMINI_KEY)` init branch fires and captures our stubbed model.
-  // CI's unit_tests job has no real key set; without this line the engine
-  // skips init entirely and aiModel stays null (which is fine for the
-  // rules-only tests but not what we want for the orchestration tests
-  // — they need a stubbed Gemini that resolves fast or rejects fast,
-  // not real network I/O).
-  process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-fake-key';
+const { mockRunAiRequest } = vi.hoisted(() => ({ mockRunAiRequest: vi.fn() }));
+vi.mock('../../lib/aiGateway', () => ({
+  default: { runAiRequest: mockRunAiRequest },
+  runAiRequest: mockRunAiRequest,
+}));
 
-  const { createRequire } = require('node:module');
-  const requireCJS = createRequire(__filename || process.cwd() + '/');
-  const genAIModule = requireCJS('@google/generative-ai');
+import { createRequire } from 'node:module';
+const requireCJS = createRequire(import.meta.url);
+const aiGatewayPath = requireCJS.resolve('../../lib/aiGateway');
+require('node:module')._cache[aiGatewayPath] = {
+  id: aiGatewayPath,
+  filename: aiGatewayPath,
+  loaded: true,
+  exports: { runAiRequest: mockRunAiRequest },
+  children: [],
+  paths: [],
+};
 
-  const fn = vi.fn();
-  // Must be a regular function (NOT an arrow) — engine calls
-  // `new GoogleGenerativeAI(key)` and arrow functions are not constructors.
-  function MockGoogleGenerativeAI() {
-    this.getGenerativeModel = function () {
-      return { generateContent: fn };
-    };
-  }
-  genAIModule.GoogleGenerativeAI = MockGoogleGenerativeAI;
-  return { mockGenerateContent: fn };
-});
-
-import {
+const {
   computeScore,
   tickLeadScoringEngine,
   scoreContactsByIds,
-} from '../../cron/leadScoringEngine.js';
+} = requireCJS('../../cron/leadScoringEngine.js');
 
 beforeAll(() => {
   prisma.contact = {
@@ -165,13 +149,13 @@ beforeEach(() => {
   prisma.contact.findMany.mockResolvedValue([]);
   prisma.contact.update.mockResolvedValue({});
 
-  // DEFAULT: Gemini "fails" so tickLeadScoringEngine falls through to
+  // DEFAULT: AI "fails" so tickLeadScoringEngine falls through to
   // computeScore (the rules-based path). The engine's scoreWithGemini()
   // catches the rejection and returns null → engine then calls computeScore.
-  // Tests that want to exercise the Gemini happy path can queue a
+  // Tests that want to exercise the AI happy path can queue a
   // mockResolvedValueOnce, which takes precedence over this default reject.
-  mockGenerateContent.mockReset();
-  mockGenerateContent.mockRejectedValue(new Error('test-default-no-gemini'));
+  mockRunAiRequest.mockReset();
+  mockRunAiRequest.mockRejectedValue(new Error('test-default-no-ai'));
 });
 
 // Helper — minimal contact shape with sensible defaults so each test
@@ -179,6 +163,7 @@ beforeEach(() => {
 function contactWith(overrides = {}) {
   return {
     id: 1,
+    tenantId: 1,
     status: 'Lead',
     deals: [],
     activities: [],
@@ -771,6 +756,141 @@ describe('computeScore — tenure + sla', () => {
     const baseline = computeScore(contactWith({ slaBreached: false }));
     const breached = computeScore(contactWith({ slaBreached: true }));
     expect(breached - baseline).toBe(-3);
+  });
+});
+
+// ─── scoreWithGemini (via aiGateway) — AI-on path ───────────────────────────
+//
+// scoreWithGemini self-gates on contact.tenantId: no tenantId means AI is
+// never attempted (aiGateway.runAiRequest requires a tenantId to resolve
+// BYOK/CRM-managed access). Every test below passes a tenantId (via
+// contactWith's default) so the AI attempt actually fires; mockRunAiRequest's
+// resolved/rejected value controls the provider response. tickLeadScoringEngine
+// and scoreContactsByIds always attempt AI first and fall back to
+// computeScore() when it returns null.
+
+describe('tickLeadScoringEngine — AI-on path (scoreWithGemini via aiGateway)', () => {
+  test('AI happy path: parsed integer score is used verbatim, computeScore is not the source', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: '87',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 120, completionTokens: 3, totalTokens: 123 },
+    });
+    prisma.contact.findMany.mockResolvedValue([contactWith({ id: 1 })]);
+
+    await tickLeadScoringEngine(null);
+
+    expect(mockRunAiRequest).toHaveBeenCalledTimes(1);
+    expect(mockRunAiRequest.mock.calls[0][0].tenantId).toBe(1);
+    expect(mockRunAiRequest.mock.calls[0][0].task).toBe('lead-scoring');
+    const arg = prisma.contact.update.mock.calls[0][0];
+    expect(arg.data.aiScore).toBe(87);
+  });
+
+  test('AI returns an out-of-range integer → falls back to computeScore', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: '150',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+    });
+    const contact = contactWith({ id: 1, status: 'Customer' });
+    prisma.contact.findMany.mockResolvedValue([contact]);
+
+    await tickLeadScoringEngine(null);
+
+    const expected = computeScore(contact);
+    const arg = prisma.contact.update.mock.calls[0][0];
+    expect(arg.data.aiScore).toBe(expected);
+  });
+
+  test('AI returns unparseable text → falls back to computeScore', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: 'not a number',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+    });
+    const contact = contactWith({ id: 1, status: 'Lead' });
+    prisma.contact.findMany.mockResolvedValue([contact]);
+
+    await tickLeadScoringEngine(null);
+
+    const expected = computeScore(contact);
+    const arg = prisma.contact.update.mock.calls[0][0];
+    expect(arg.data.aiScore).toBe(expected);
+  });
+
+  test('AI throws a non-friendly error → falls back to computeScore, no throw upstream', async () => {
+    mockRunAiRequest.mockRejectedValueOnce(new Error('quota exceeded'));
+    const contact = contactWith({ id: 1, status: 'Prospect' });
+    prisma.contact.findMany.mockResolvedValue([contact]);
+
+    const result = await tickLeadScoringEngine(null);
+
+    expect(result).toEqual({ scored: 1 });
+    const expected = computeScore(contact);
+    const arg = prisma.contact.update.mock.calls[0][0];
+    expect(arg.data.aiScore).toBe(expected);
+  });
+
+  test('blocked access (no BYOK, no funded subscription) → silent fallback, no throw', async () => {
+    const err = new Error('Your organization has not configured an AI provider yet.');
+    err.friendly = true;
+    mockRunAiRequest.mockRejectedValueOnce(err);
+    const contact = contactWith({ id: 1 });
+    prisma.contact.findMany.mockResolvedValue([contact]);
+
+    const result = await tickLeadScoringEngine(null);
+
+    expect(result).toEqual({ scored: 1 });
+    const expected = computeScore(contact);
+    const arg = prisma.contact.update.mock.calls[0][0];
+    expect(arg.data.aiScore).toBe(expected);
+  });
+
+  test('scoreContactsByIds threads each request through aiGateway with the caller-supplied tenantId', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: '42',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'crm-managed',
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+    });
+    prisma.contact.findMany.mockResolvedValue([
+      contactWith({ id: 11, tenantId: 5 }),
+    ]);
+
+    await scoreContactsByIds(5, [11], null);
+
+    expect(mockRunAiRequest).toHaveBeenCalledTimes(1);
+    expect(mockRunAiRequest.mock.calls[0][0].tenantId).toBe(5);
+    const arg = prisma.contact.update.mock.calls[0][0];
+    expect(arg.data.aiScore).toBe(42);
+  });
+
+  test('multi-tenant tick: each contact\'s AI call carries its own tenantId', async () => {
+    prisma.tenant.findMany.mockResolvedValue([{ id: 7 }, { id: 11 }]);
+    prisma.contact.findMany
+      .mockResolvedValueOnce([contactWith({ id: 100, tenantId: 7 })])
+      .mockResolvedValueOnce([contactWith({ id: 200, tenantId: 11 })]);
+    mockRunAiRequest.mockResolvedValue({
+      text: '55',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+    });
+
+    await tickLeadScoringEngine(null);
+
+    expect(mockRunAiRequest).toHaveBeenCalledTimes(2);
+    const tenantIds = mockRunAiRequest.mock.calls.map((c) => c[0].tenantId).sort((a, b) => a - b);
+    expect(tenantIds).toEqual([7, 11]);
   });
 });
 

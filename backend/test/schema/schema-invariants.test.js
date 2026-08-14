@@ -241,6 +241,15 @@ const NON_TENANT_MODELS = new Set([
   // between user.tenantId and bookmark.tenantId) without strengthening
   // isolation, because every query path joins through User.
   'UserLocation',
+  // AI Subscription & Credit Management — the platform's own price list of
+  // AI credit packs, sold BY the platform TO tenants (name, price,
+  // creditTokens, fair-usage policy). Same rationale as SubscriptionPlan /
+  // the other global catalogs above: one catalog serves every tenant, and
+  // the tenant-scoped side of the feature already carries tenantId
+  // (AiTenantSubscription, AiCreditWallet, AiCreditTransaction). Rows are
+  // written only by super-admin plan management; tenant queries read the
+  // catalog through their own AiTenantSubscription.planId join.
+  'AiSubscriptionPlan',
 ]);
 
 // ── Expected AuditLog shape ──────────────────────────────────────────

@@ -44,7 +44,7 @@ const {
 } = require("../lib/gmailMessage");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const aiGateway = require("../lib/aiGateway");
 
 // Memory-based upload — files stay as Buffers, never touch disk.
 // 25 MB per file (Gmail's attachment limit); 10 files max per send.
@@ -80,16 +80,6 @@ const SCOPES = [
 ];
 
 const PROVIDER = "google";
-
-// Gemini client for the Travel-vertical “email → web check-in” extraction.
-// Reuses the root .env loaded at the top of this file.
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-let genAI = null;
-let geminiModel = null;
-if (GEMINI_API_KEY) {
-  genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  geminiModel = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-2.5-flash" });
-}
 
 function buildOAuthClient() {
   return new google.auth.OAuth2(
@@ -452,13 +442,6 @@ router.post(
   requireTravelTenant,
   async (req, res) => {
     try {
-      if (!geminiModel) {
-        return res.status(400).json({
-          error: "Gemini is not configured on the server. Add GEMINI_API_KEY.",
-          code: "GEMINI_NOT_CONFIGURED",
-        });
-      }
-
       const userId = req.user.userId;
       const tenantId = req.user.tenantId;
       const { messageId } = req.params;
@@ -533,36 +516,54 @@ Rules:
 - flightNumber should include the airline prefix (e.g. "EK-571").
 - If multiple passengers are listed, use the first named adult passenger for passengerName.`;
 
-      const parts = [{ text: promptText }];
+      // aiGateway's multimodal content shape ({type:"image", mimeType, data})
+      // maps to Gemini inlineData parts either way — PDFs and images both
+      // travel the same "image" part type since Gemini treats both as
+      // inline_data. OpenAI/Anthropic vision APIs only accept true image
+      // mimetypes, so a PDF attachment effectively requires the resolved
+      // provider to be Gemini; the requestedModelLabel hint below biases
+      // toward that (matching this feature's Gemini-only origin), and a
+      // non-Gemini BYOK tenant with a PDF attachment gets a clear provider
+      // error rather than a silently-dropped attachment.
+      const contentParts = [{ type: "text", text: promptText }];
       for (const att of attachmentBuffers) {
         const mime = att.mimeType || "application/octet-stream";
         if (mime.startsWith("image/") || mime === "application/pdf") {
-          parts.push({
-            inlineData: {
-              mimeType: mime,
-              data: att.data.toString("base64"),
-            },
+          contentParts.push({
+            type: "image",
+            mimeType: mime,
+            data: att.data.toString("base64"),
           });
         }
       }
 
-      let geminiResult;
+      let aiResult;
       try {
-        geminiResult = await geminiModel.generateContent({ contents: [{ role: "user", parts }] });
-      } catch (genErr) {
-        console.error("[gmail/webcheckin] Gemini error:", genErr.message || genErr);
+        aiResult = await aiGateway.runAiRequest({
+          tenantId,
+          userId,
+          task: "webcheckin-extraction",
+          surface: "gmail/webcheckin",
+          requestedModelLabel: "gemini-flash",
+          messages: [{ role: "user", content: contentParts }],
+        });
+      } catch (aiErr) {
+        if (aiErr.friendly) {
+          return res.status(402).json({ error: aiErr.message, code: aiErr.code });
+        }
+        console.error("[gmail/webcheckin] AI error:", aiErr.message || aiErr);
         return res.status(502).json({
-          error: "Failed to analyse the email with Gemini. Please try again.",
-          code: "GEMINI_ERROR",
+          error: "Failed to analyse the email with AI. Please try again.",
+          code: "AI_ERROR",
         });
       }
 
-      const rawText = geminiResult?.response?.text?.() || "";
+      const rawText = aiResult.text || "";
       const extracted = safeJsonParse(rawText);
       if (!extracted || typeof extracted !== "object") {
         return res.status(502).json({
-          error: "Gemini returned an unparseable response.",
-          code: "GEMINI_MALFORMED",
+          error: "AI returned an unparseable response.",
+          code: "AI_MALFORMED",
         });
       }
 

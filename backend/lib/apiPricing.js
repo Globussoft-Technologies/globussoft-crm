@@ -60,7 +60,36 @@ const FLAT_RATE_PER_REQUEST = {
   tripgo: null,
   zoom: null,
   razorpay: null,
+  // OpenAI Whisper — billed per minute of audio, not per token. $/minute,
+  // consumed via estimateAudioCost(durationSeconds) below.
+  'whisper-1': 0.006,
+  // Image generation — billed per image, not per token. $/image at the
+  // standard/1024x1024 tier (list price as of authoring, 2026-07).
+  'dall-e-3': 0.04,
+  'gpt-image-1': 0.04,
 };
+
+/**
+ * Whisper-style per-minute audio transcription cost. Returns a plain number
+ * (USD), never throws; unknown provider → 0 ("unpriced", same convention as
+ * estimateLlmCost).
+ */
+function estimateAudioCost(provider, durationSeconds) {
+  const ratePerMinute = FLAT_RATE_PER_REQUEST[String(provider || '').toLowerCase()];
+  if (typeof ratePerMinute !== 'number') return 0;
+  const minutes = Math.max(0, Number(durationSeconds || 0)) / 60;
+  return Math.round(minutes * ratePerMinute * 1e6) / 1e6;
+}
+
+/**
+ * Per-image generation cost (DALL-E, gpt-image-1, etc.). Returns a plain
+ * number (USD), never throws; unknown provider → 0.
+ */
+function estimateImageCost(provider, imageCount = 1) {
+  const ratePerImage = FLAT_RATE_PER_REQUEST[String(provider || '').toLowerCase()];
+  if (typeof ratePerImage !== 'number') return 0;
+  return Math.round(ratePerImage * Math.max(1, Number(imageCount || 1)) * 1e6) / 1e6;
+}
 
 // provider inference from a model-name string — mirrors llmRouter.js's own
 // providerForModel() so this module has zero import-cycle risk (llmRouter.js
@@ -106,4 +135,6 @@ module.exports = {
   inferProvider,
   estimateLlmCost,
   estimateFlatCost,
+  estimateAudioCost,
+  estimateImageCost,
 };

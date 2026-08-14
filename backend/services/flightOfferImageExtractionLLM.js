@@ -2,12 +2,10 @@
 
 const sharp = require("sharp");
 const passportOcrClient = require("./passportOcrClient");
+const aiGateway = require("../lib/aiGateway");
 
 const MAX_ROWS = 4;
 const DEFAULT_CURRENCY = "INR";
-const GEMINI_MODEL = process.env.LLM_MODEL_GEMINI || process.env.GEMINI_MODEL || "gemini-2.5-flash";
-const OPENAI_MODEL = process.env.LLM_MODEL_GPT || "gpt-4o";
-const GROQ_MODEL = process.env.LLM_MODEL_GROQ || "llama-3.3-70b-versatile";
 
 function toText(value) {
   return String(value == null ? "" : value).trim();
@@ -130,101 +128,37 @@ function buildStubRows(imageCount) {
   }));
 }
 
-async function callGeminiVision({ files, tripType }) {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY not set");
-  }
-  const { GoogleGenerativeAI } = require("@google/generative-ai");
-  const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = ai.getGenerativeModel({
-    model: GEMINI_MODEL,
-    generationConfig: {
-      responseMimeType: "application/json",
-      maxOutputTokens: 4096,
-      temperature: 0.1,
-    },
-  });
+// Single multimodal call through aiGateway (BYOK or a funded CRM-managed
+// subscription) — resolves to whatever vision-capable provider the tenant
+// has, rather than looping through raw env keys. requestedModelLabel hints
+// toward Gemini for CRM-managed access since that's the family this feature
+// originated on; BYOK ignores the hint and uses the tenant's fixed provider.
+async function callVisionExtraction({ tenantId, files, tripType }) {
   const prompt = buildPrompt({ tripType, fileCount: files.length });
-  const parts = [
-    { text: prompt },
+  const content = [
+    { type: "text", text: prompt },
     ...files.map((file) => ({
-      inlineData: {
-        mimeType: file.mimeType,
-        data: file.buffer.toString("base64"),
-      },
+      type: "image",
+      mimeType: file.mimeType,
+      data: file.buffer.toString("base64"),
     })),
   ];
-  const result = await model.generateContent(parts);
-  const rawText = result?.response?.text?.() || "";
-  const parsed = parseJsonLoose(rawText);
-  const rows = normalizeRows(parsed);
-  if (!rows.length) {
-    throw new Error("Gemini did not return any fare rows");
-  }
-  return {
-    provider: "gemini",
-    model: GEMINI_MODEL,
-    stub: false,
-    currency: toText(parsed?.currency || DEFAULT_CURRENCY).toUpperCase() || DEFAULT_CURRENCY,
-    tripType: parsed?.tripType || tripType || null,
-    routeLabel: toText(parsed?.routeLabel) || null,
-    rows,
-    rawText,
-  };
-}
-
-async function callOpenAIVision({ files, tripType }) {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY not set");
-  }
-
-  const prompt = buildPrompt({ tripType, fileCount: files.length });
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      temperature: 0.1,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: "You extract flight prices from screenshots and return JSON only.",
-        },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: prompt },
-            ...files.map((file) => ({
-              type: "image_url",
-              image_url: {
-                url: `data:${file.mimeType};base64,${file.buffer.toString("base64")}`,
-              },
-            })),
-          ],
-        },
-      ],
-    }),
+  const resp = await aiGateway.runAiRequest({
+    tenantId,
+    task: "flight-offer-extraction",
+    surface: "flightOfferImageExtractionLLM",
+    requestedModelLabel: "gemini-flash",
+    messages: [{ role: "user", content }],
   });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`OpenAI vision failed with status ${response.status}${text ? `: ${text}` : ""}`);
-  }
-
-  const data = await response.json();
-  const rawText = data?.choices?.[0]?.message?.content || "";
+  const rawText = resp.text || "";
   const parsed = parseJsonLoose(rawText);
   const rows = normalizeRows(parsed);
   if (!rows.length) {
-    throw new Error("OpenAI did not return any fare rows");
+    throw new Error(`${resp.provider} did not return any fare rows`);
   }
   return {
-    provider: "openai",
-    model: OPENAI_MODEL,
+    provider: resp.provider,
+    model: resp.model,
     stub: false,
     currency: toText(parsed?.currency || DEFAULT_CURRENCY).toUpperCase() || DEFAULT_CURRENCY,
     tripType: parsed?.tripType || tripType || null,
@@ -234,11 +168,12 @@ async function callOpenAIVision({ files, tripType }) {
   };
 }
 
-async function callGroqTextFallback({ files, tripType }) {
-  if (!process.env.GROQ_API_KEY) {
-    throw new Error("GROQ_API_KEY not set");
-  }
-
+// Last-resort fallback: OCR the images to text first, then a plain-text
+// aiGateway call. Used only when the vision call above fails (including a
+// resolved provider that can't do vision) but AI access is still available —
+// gives low-vision-capability deployments a chance at partial extraction
+// before falling back to the stub.
+async function callOcrTextFallback({ tenantId, files, tripType }) {
   const ocrChunks = [];
   for (let i = 0; i < files.length; i += 1) {
     const ocr = await passportOcrClient.runOcr(files[i].buffer, {});
@@ -256,43 +191,21 @@ async function callGroqTextFallback({ files, tripType }) {
     ocrChunks.join("\n\n"),
   ].join("\n");
 
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      temperature: 0.1,
-      messages: [
-        {
-          role: "system",
-          content: "You extract flight prices from OCR text and return JSON only.",
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-    }),
+  const resp = await aiGateway.runAiRequest({
+    tenantId,
+    task: "flight-offer-extraction-ocr-fallback",
+    surface: "flightOfferImageExtractionLLM",
+    messages: [{ role: "user", content: prompt }],
   });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`Groq fallback failed with status ${response.status}${text ? `: ${text}` : ""}`);
-  }
-
-  const data = await response.json();
-  const rawText = data?.choices?.[0]?.message?.content || "";
+  const rawText = resp.text || "";
   const parsed = parseJsonLoose(rawText);
   const rows = normalizeRows(parsed);
   if (!rows.length) {
-    throw new Error("Groq did not return any fare rows");
+    throw new Error(`${resp.provider} (OCR fallback) did not return any fare rows`);
   }
   return {
-    provider: "groq",
-    model: GROQ_MODEL,
+    provider: resp.provider,
+    model: resp.model,
     stub: false,
     currency: toText(parsed?.currency || DEFAULT_CURRENCY).toUpperCase() || DEFAULT_CURRENCY,
     tripType: parsed?.tripType || tripType || null,
@@ -302,23 +215,39 @@ async function callGroqTextFallback({ files, tripType }) {
   };
 }
 
-async function extractFlightOfferPricing({ files = [], tripType = null } = {}) {
+async function extractFlightOfferPricing({ tenantId = null, files = [], tripType = null } = {}) {
   const prepared = await prepareImages(files);
-  const attemptPlan = [
-    { key: process.env.GEMINI_API_KEY, run: () => module.exports.callGeminiVision({ files: prepared, tripType }) },
-    { key: process.env.OPENAI_API_KEY, run: () => module.exports.callOpenAIVision({ files: prepared, tripType }) },
-    { key: process.env.GROQ_API_KEY, run: () => module.exports.callGroqTextFallback({ files: prepared, tripType }) },
-  ];
 
-  let lastError = null;
-  for (const attempt of attemptPlan) {
-    if (!attempt.key) continue;
+  if (tenantId) {
     try {
-      const result = await attempt.run();
-      if (result?.rows?.length) return result;
-      lastError = new Error("No fare rows returned");
-    } catch (error) {
-      lastError = error;
+      return await module.exports.callVisionExtraction({ tenantId, files: prepared, tripType });
+    } catch (visionErr) {
+      if (visionErr.friendly) {
+        return {
+          provider: "stub",
+          model: null,
+          stub: true,
+          currency: DEFAULT_CURRENCY,
+          tripType: tripType || null,
+          routeLabel: null,
+          rows: buildStubRows(prepared.length || 1),
+          note: visionErr.message,
+        };
+      }
+      try {
+        return await module.exports.callOcrTextFallback({ tenantId, files: prepared, tripType });
+      } catch (ocrErr) {
+        return {
+          provider: "stub",
+          model: null,
+          stub: true,
+          currency: DEFAULT_CURRENCY,
+          tripType: tripType || null,
+          routeLabel: null,
+          rows: buildStubRows(prepared.length || 1),
+          note: ocrErr.message,
+        };
+      }
     }
   }
 
@@ -330,7 +259,7 @@ async function extractFlightOfferPricing({ files = [], tripType = null } = {}) {
     tripType: tripType || null,
     routeLabel: null,
     rows: buildStubRows(prepared.length || 1),
-    note: lastError ? lastError.message : "No LLM keys were available for extraction.",
+    note: "No tenant context available for extraction.",
   };
 }
 
@@ -343,7 +272,6 @@ module.exports = {
   parsePrice,
   buildPrompt,
   buildStubRows,
-  callGeminiVision,
-  callOpenAIVision,
-  callGroqTextFallback,
+  callVisionExtraction,
+  callOcrTextFallback,
 };

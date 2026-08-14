@@ -72,6 +72,18 @@ const SuperAdminCronAnalytics = lazy(
 const SuperAdminApiAnalytics = lazy(
   () => import("./pages/superadmin/SuperAdminApiAnalytics"),
 );
+const SuperAdminAiManagement = lazy(
+  () => import("./pages/superadmin/SuperAdminAiManagement"),
+);
+const SuperAdminAiPlans = lazy(
+  () => import("./pages/superadmin/SuperAdminAiPlans"),
+);
+const SuperAdminTenantManagement = lazy(
+  () => import("./pages/superadmin/SuperAdminTenantManagement"),
+);
+const SuperAdminRevenue = lazy(
+  () => import("./pages/superadmin/SuperAdminRevenue"),
+);
 const TravelCustomerPortal = lazy(
   () => import("./pages/travel/TravelCustomerPortal"),
 );
@@ -142,6 +154,8 @@ const Projects = lazy(() => import("./pages/Projects"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Pricing = lazy(() => import("./pages/Pricing"));
 const ManagePlans = lazy(() => import("./pages/ManagePlans"));
+const AiSubscription = lazy(() => import("./pages/AiSubscription"));
+const AiUsageDashboard = lazy(() => import("./pages/AiUsageDashboard"));
 const Channels = lazy(() => import("./pages/Channels"));
 const LandingPages = lazy(() => import("./pages/LandingPages"));
 const LandingSites = lazy(() => import("./pages/LandingSites"));
@@ -1322,6 +1336,15 @@ export default function App() {
                     <Route path="cron" element={<SuperAdminCronMaintenance />} />
                     <Route path="cron-analytics" element={<SuperAdminCronAnalytics />} />
                     <Route path="api-analytics" element={<SuperAdminApiAnalytics />} />
+                    {/* AI Subscription & Credit Management  plans catalog must
+                      be mounted BEFORE the /:tenantId detail route so Express/
+                      React Router doesn't treat "plans" as a tenantId param. */}
+                    <Route path="ai-management/plans" element={<SuperAdminAiPlans />} />
+                    <Route path="ai-management" element={<SuperAdminAiManagement />} />
+                    <Route path="ai-management/:tenantId" element={<SuperAdminAiManagement />} />
+                    <Route path="tenant-management" element={<SuperAdminTenantManagement />} />
+                    <Route path="tenant-management/:tenantId" element={<SuperAdminTenantManagement />} />
+                    <Route path="revenue" element={<SuperAdminRevenue />} />
                   </Route>
                   {/* Travel customer portal — end-user (Contact) login + dashboard
                       + DigiLocker / Aadhaar verification (PRD §4.5 extended).
@@ -2286,6 +2309,32 @@ export default function App() {
                         so no RoleGuard wrap (RoleGuard reads user.role which is
                         ADMIN/MANAGER/USER; OWNER lives on the isOwner flag). */}
                       <Route path="manage-plans" element={<ManagePlans />} />
+                      {/* AI Subscription & Credit Management  tenant purchase
+                        page + usage dashboard for CRM-managed AI. ADMIN-only,
+                        mirroring settings/manage-plans (billing is an admin
+                        concern). Backend routes are ADMIN-gated independently. */}
+                      <Route
+                        path="ai-subscription"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="AI subscription management requires admin access."
+                          >
+                            <AiSubscription />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route
+                        path="settings/ai-usage"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="AI usage dashboard requires admin access."
+                          >
+                            <AiUsageDashboard />
+                          </RoleGuard>
+                        }
+                      />
                       <Route
                         path="data-import-export"
                         element={

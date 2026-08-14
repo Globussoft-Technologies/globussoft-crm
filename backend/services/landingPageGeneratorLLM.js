@@ -44,6 +44,7 @@ const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
 const { formatGeminiLimitMessage } = require('../lib/geminiErrors');
 const { buildDestinationLandingPagePrompt } = require('./landingPagePrompts');
 const { guardLandingPageOutput, buildDeterministicFallback } = require('../lib/landingPageGuard');
+const { estimateLlmCost } = require('../lib/apiPricing');
 const aiGateway = require('../lib/aiGateway');
 
 void KEYS;

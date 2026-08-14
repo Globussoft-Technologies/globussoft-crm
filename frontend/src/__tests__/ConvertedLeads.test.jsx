@@ -49,10 +49,13 @@
  *     badges; tests use getAllByText / scoped queries where ambiguity
  *     exists.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import path from 'path';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+
+const REPO_ROOT = path.resolve(__dirname, '../..');
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -124,6 +127,20 @@ const sampleStaff = [
   { id: 2, name: 'Vikram Joshi', email: 'vikram@globussoft.example' },
 ];
 
+function buildProspects(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: 100 + index,
+    name: `Prospect ${String(index + 1).padStart(2, '0')}`,
+    email: `prospect${index + 1}@northstar.example`,
+    company: `Company ${index + 1}`,
+    aiScore: 60 + (index % 3) * 10,
+    source: 'Referral',
+    assignedToId: null,
+    createdAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+    status: 'Prospect',
+  }));
+}
+
 // Default fetch handler: respond to all the endpoints the page hits at
 // mount + on chip clicks. The chip-count burst calls /by-status for each
 // of the 5 lifecycle statuses; default to non-empty Prospect, empty others.
@@ -168,10 +185,14 @@ describe('<ConvertedLeads /> — multi-status contact lifecycle page', () => {
     notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
   });
 
-  it('renders the heading, status filter, and search input', async () => {
+  it('renders the heading, overview button, status filter, and search toolbar', async () => {
     renderPage();
     expect(screen.getByRole('heading', { name: /Converted Leads/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Customize overview/i })).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Search leads/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Lifecycle stage/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/All sources/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Filters$/i })).toBeInTheDocument();
     // "Status" filter header is rendered as <h3>; use heading role to scope.
     expect(screen.getByRole('heading', { name: /^Status$/i })).toBeInTheDocument();
     // Wait for fetch settle so the post-load counter populates.
@@ -286,10 +307,11 @@ describe('<ConvertedLeads /> — multi-status contact lifecycle page', () => {
 
     // Source pills — Rohan has 'LinkedIn', Arjun has null → defaults to "Organic".
     // "LinkedIn" appears in the row source pill only (not the status chip set).
-    expect(screen.getByText('LinkedIn')).toBeInTheDocument();
-    expect(screen.getByText('Referral')).toBeInTheDocument();
+    const table = screen.getByRole('table');
+    expect(within(table).getByText('LinkedIn')).toBeInTheDocument();
+    expect(within(table).getByText('Referral')).toBeInTheDocument();
     // Default fallback when source is null.
-    expect(screen.getByText('Organic')).toBeInTheDocument();
+    expect(within(table).getByText('Organic')).toBeInTheDocument();
 
     // Date rendered through the mocked formatDateMedium.
     expect(screen.getByText('2026-01-12')).toBeInTheDocument();
@@ -340,6 +362,21 @@ describe('<ConvertedLeads /> — multi-status contact lifecycle page', () => {
     // No-match → "No leads found" appears.
     fireEvent.change(search, { target: { value: 'no-such-contact-zzz' } });
     expect(screen.getByText(/No leads found/i)).toBeInTheDocument();
+  });
+
+  it('filters rows by source from the top toolbar', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Rohan Kapoor')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/All sources/i), {
+      target: { value: 'LinkedIn' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Rohan Kapoor')).toBeInTheDocument();
+      expect(screen.queryByText('Meera Pillai')).not.toBeInTheDocument();
+      expect(screen.queryByText('Arjun Nair')).not.toBeInTheDocument();
+    });
   });
 
   it('per-row Revert button triggers notify.confirm; cancelling does NOT issue the PATCH', async () => {
@@ -413,5 +450,157 @@ describe('<ConvertedLeads /> — multi-status contact lifecycle page', () => {
     await waitFor(() => {
       expect(screen.queryByText(/leads selected/i)).not.toBeInTheDocument();
     });
+  });
+
+  it('keeps status controls out of the table and only exposes the top status strip', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Rohan Kapoor')).toBeInTheDocument());
+
+    expect(screen.queryByLabelText(/Status for /i)).not.toBeInTheDocument();
+
+    const table = screen.getByRole('table');
+    expect(within(table).queryByRole('columnheader', { name: /^Status$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('toolbar', { name: /Converted lead status filter/i })).toBeInTheDocument();
+  });
+
+  it('updates selected leads from the top status bar and refreshes the filtered status view', async () => {
+    const statusStore = buildProspects(3);
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string') {
+        if (url.startsWith('/api/contacts/by-status?status=')) {
+          const status = decodeURIComponent(url.split('status=')[1] || '');
+          const rows = statusStore.filter((row) => row.status === status);
+          return Promise.resolve({
+            success: true,
+            count: rows.length,
+            data: rows.map((row) => ({ ...row })),
+          });
+        }
+        if (url === '/api/staff') {
+          return Promise.resolve(sampleStaff);
+        }
+        if (url.startsWith('/api/contacts/') && opts?.method === 'PATCH') {
+          const id = Number(url.split('/').pop());
+          const body = JSON.parse(opts.body);
+          const row = statusStore.find((item) => item.id === id);
+          if (row) {
+            row.status = body.status;
+          }
+          return Promise.resolve({ id, status: body.status });
+        }
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Prospect 01')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(checkboxes[2]);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Customer \(0\)$/ }));
+
+    await waitFor(() => {
+      const patchCalls = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => typeof url === 'string'
+          && url.startsWith('/api/contacts/')
+          && opts?.method === 'PATCH',
+      );
+      expect(patchCalls).toHaveLength(2);
+    });
+
+    expect(await screen.findByRole('button', { name: /^Customer \(2\)$/ })).toBeInTheDocument();
+    expect(await screen.findByText(/2 leads in Customer/i)).toBeInTheDocument();
+  });
+
+  it('paginates the visible leads list and lets the user change page size', async () => {
+    const pagedProspects = buildProspects(12);
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string') {
+        if (url.startsWith('/api/contacts/by-status?status=Prospect')) {
+          return Promise.resolve({ success: true, count: pagedProspects.length, data: pagedProspects });
+        }
+        if (url.startsWith('/api/contacts/by-status?status=')) {
+          return Promise.resolve({ success: true, count: 0, data: [] });
+        }
+        if (url === '/api/staff') {
+          return Promise.resolve(sampleStaff);
+        }
+        if (url.startsWith('/api/contacts/') && opts?.method === 'PATCH') {
+          return Promise.resolve({ id: 101, status: 'Lead' });
+        }
+        if (url.includes('/assign') && opts?.method === 'PUT') {
+          return Promise.resolve({ ok: true });
+        }
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    expect(await screen.findByText('Prospect 01')).toBeInTheDocument();
+    expect(await screen.findByText(/Showing 1-10 of 12/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Converted leads per page/i), {
+      target: { value: 'custom' },
+    });
+
+    const customPageSizeInput = screen.getByLabelText(/Custom converted leads per page/i);
+    expect(customPageSizeInput).toBeInTheDocument();
+    fireEvent.change(customPageSizeInput, { target: { value: '7' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Prospect 07')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Prospect 08')).not.toBeInTheDocument();
+    expect(screen.getByText(/Showing 1-7 of 12/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Prospect 08')).toBeInTheDocument();
+      expect(screen.getByText('Prospect 12')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Prospect 01')).not.toBeInTheDocument();
+    expect(screen.getByText(/Showing 8-12 of 12/i)).toBeInTheDocument();
+  });
+
+  it('keeps the top and bottom table scrollbars in sync', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Rohan Kapoor')).toBeInTheDocument());
+
+    const topScroll = document.querySelector('.top-scroll-sync__top');
+    const bottomScroll = document.querySelector('.top-scroll-sync__bottom');
+    expect(topScroll).toBeTruthy();
+    expect(bottomScroll).toBeTruthy();
+
+    topScroll.scrollLeft = 160;
+    fireEvent.scroll(topScroll);
+    expect(bottomScroll.scrollLeft).toBe(160);
+
+    bottomScroll.scrollLeft = 320;
+    fireEvent.scroll(bottomScroll);
+    expect(topScroll.scrollLeft).toBe(320);
+  });
+
+  it('uses a narrower lifecycle-stage column with a top-aligned overview grid', () => {
+    const src = readFileSync(path.join(REPO_ROOT, 'src/pages/ConvertedLeads.jsx'), 'utf8');
+    expect(src).toMatch(/converted-leads-page/);
+    expect(src).toMatch(/converted-leads__overview-grid/);
+    expect(src).toMatch(/converted-leads__lifecycle-panel/);
+    expect(src).toMatch(/converted-leads__status-panel/);
+    expect(src).toMatch(/converted-leads__controls-row/);
+  });
+
+  it('CSS pins the overview grid to a compact lifecycle column like the reference', () => {
+    const css = readFileSync(path.join(REPO_ROOT, 'src/index.css'), 'utf8');
+    expect(css).toMatch(/\.converted-leads-page\s*\{/);
+    expect(css).toMatch(/\.converted-leads__overview-grid\s*\{/);
+    expect(css).toMatch(/grid-template-columns:\s*minmax\(240px,\s*284px\)\s+minmax\(0,\s*1fr\)/);
+    expect(css).toMatch(/align-items:\s*stretch/);
+    expect(css).toMatch(/\.converted-leads__controls-row\s*\{/);
+    expect(css).toMatch(/\.converted-leads__status-grid\s*\{[\s\S]*?display:\s*flex;/);
+    expect(css).toMatch(/clip-path:\s*polygon\(10px 0,\s*calc\(100% - 10px\) 0,\s*100% 50%/);
   });
 });

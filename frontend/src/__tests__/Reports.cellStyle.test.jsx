@@ -18,7 +18,6 @@
  *   - CustomReports.jsx (3 instances: bar, line, pie)
  *   - AgentReports.jsx (1 instance: leaderboard horizontal bar)
  */
-import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
 import { Tooltip, BarChart, Bar, ResponsiveContainer } from 'recharts';
@@ -139,5 +138,23 @@ describe('#609 — Recharts Tooltip wrapperStyle.zIndex >= 9999', () => {
     for (const m of tooltipMatches) {
       expect(m).toMatch(/wrapperStyle=\{\{\s*zIndex:\s*9999/);
     }
+  });
+
+  it('Reports.jsx uses stable-table + page-scoped shells for both report tables', () => {
+    const src = readFileSync(path.join(REPO_ROOT, 'src/pages/Reports.jsx'), 'utf8');
+    expect(src).toMatch(/className="reports-page"/);
+    expect(src).toMatch(/reports-page__overview/);
+    expect(src).toMatch(/reports-page__table-shell/);
+    expect(src).toMatch(/reports-page__schedule-table/);
+    const stableTableMatches = src.match(/className="[^"]*stable-table[^"]*"/g) || [];
+    expect(stableTableMatches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('Reports.css shrink-wraps the scheduled reports table to its content width', () => {
+    const css = readFileSync(path.join(REPO_ROOT, 'src/index.css'), 'utf8');
+    expect(css).toMatch(/\.reports-page__schedule-table\s*\{/);
+    expect(css).toMatch(/width:\s*max-content/);
+    expect(css).toMatch(/min-width:\s*100%/);
+    expect(css).toMatch(/table-layout:\s*auto/);
   });
 });

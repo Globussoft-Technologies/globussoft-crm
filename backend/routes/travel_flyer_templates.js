@@ -313,6 +313,7 @@ router.post(
       const svc = require("../services/marketingFlyerCopyLLM");
       const result = await svc.generateFlyerCopy({
         tenantId: req.travelTenant.id,
+        userId: req.user.userId,
         destination: dest,
         subBrand: resolvedSubBrand,
         themeJson: themeJson || null,

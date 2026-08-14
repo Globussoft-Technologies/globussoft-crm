@@ -93,6 +93,8 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
+const aiGateway = require('../lib/aiGateway');
+const { estimateImageCost } = require('../lib/apiPricing');
 
 const INTEGRATION = 'image-llm'; // S73: separate envelope from text-LLM (DALL-E HD $0.12/image)
 const TASK_NAME = 'marketing-flyer-image'; // PRD FR-3.6.3
@@ -101,7 +103,7 @@ const MODEL_PRIMARY = 'dall-e-3'; // OpenAI DALL-E 3 — spec / PRD primary
 // longer have dall-e-3 access — gpt-image-1 is the live successor).
 // Env-overridable: `LLM_MODEL_OPENAI_IMAGE=...` in backend/.env wins.
 const MODEL_PRIMARY_FALLBACK = 'gpt-image-1';
-const MODEL_FALLBACK = 'stability-xl'; // Stability AI XL
+const MODEL_FALLBACK = 'stability-xl'; // Stability AI XL — never implemented (see callImageProvider); kept as a named constant for the stub envelope + llmRouter registration only.
 const OPENAI_KEY_ENV = 'OPENAI_API_KEY'; // DALL-E provider
 const STABILITY_KEY_ENV = 'STABILITY_API_KEY'; // Stability fallback provider
 
@@ -209,31 +211,30 @@ function buildStubImageUrl({ destination, themeJson, aspectRatio }) {
 }
 
 /**
- * Resolve which provider has a key available. Returns one of:
- *   - { provider: 'dalle',     model: 'dall-e-3',     keySource: 'env' | 'tenant' }
- *   - { provider: 'stability', model: 'stability-xl', keySource: 'env' | 'tenant' }
- *   - null   (no key for either provider)
+ * Resolve whether this tenant has AI access that can generate images.
+ * Goes through aiGateway (BYOK or a funded CRM-managed subscription) rather
+ * than a bare env-key check — resolves to ONE fixed provider per tenant
+ * (BYOK ignores which "attempt" is running, same as every other aiGateway
+ * call site). Only the OpenAI-compatible family can do DALL-E/gpt-image-1
+ * image generation here; Stability AI was never wired (see callImageProvider)
+ * and is not reachable via any resolved provider.
  *
- * Priority: DALL-E 3 first (primary per PRD §9.1 routing extension),
- * Stability second (fallback). Per-tenant SupplierCredential resolution
- * is sketched for the post-S45 follow-up — for v1, ENV only.
+ * Returns one of:
+ *   - { provider: 'dalle', model: 'dall-e-3' }   — resolved access is openai-family
+ *   - null                                        — no access, or resolved provider can't generate images
  *
- * Async to match S15's contract (lets the future SupplierCredential
- * lookup land without an additional contract flip).
+ * Async — matches the original contract (lets a future per-tenant credential
+ * lookup land without a signature change).
  */
-async function resolveProvider(_tenantId) {
-  // Real-mode TODO (post-Q-MF-2 + S45-style follow-up): per-tenant
-  // SupplierCredential lookup via lib/llmRouter.getLlmKey or a sibling
-  // `getImageKey()`. For now: ENV only.
-  const openaiKey = process.env[OPENAI_KEY_ENV];
-  if (openaiKey) {
-    return { provider: 'dalle', model: MODEL_PRIMARY, keySource: 'env' };
+async function resolveProvider(tenantId) {
+  if (!tenantId) return null;
+  try {
+    const config = await aiGateway.assertAccessOrThrow(tenantId, MODEL_PRIMARY);
+    if (config.family !== 'openai-compatible') return null;
+    return { provider: 'dalle', model: MODEL_PRIMARY };
+  } catch (_e) {
+    return null;
   }
-  const stabilityKey = process.env[STABILITY_KEY_ENV];
-  if (stabilityKey) {
-    return { provider: 'stability', model: MODEL_FALLBACK, keySource: 'env' };
-  }
-  return null;
 }
 
 /**
@@ -252,14 +253,12 @@ async function realModeEnabled(tenantId) {
 }
 
 /**
- * Attempt a real image-gen call. STUB: real-mode wire-in is gated on
- * Q-MF-2 (image API key) arriving — until then, this function is
- * unreachable in practice (realModeEnabled() resolves false absent a
- * key). The scaffold is present so the swap-in is a single-file edit
- * when keys land.
+ * Attempt a real image-gen call through aiGateway.runNonTokenAiRequest —
+ * gates access, persists an LlmCallLog row, and deducts credits (crm-managed
+ * only) off the actual $ cost, same as every other AI feature in the CRM.
  *
- * Contract: returns `{ imageUrl, provider, model }` matching the
- * envelope's source/model fields (caller injects `source` and `stub`).
+ * Contract: returns `{ imageUrl, provider, model }` matching the envelope's
+ * source/model fields (caller injects `source` and `stub`).
  *
  * Throws on any error — caller falls through to the stub via try/catch.
  */
@@ -267,12 +266,6 @@ async function callImageProvider({ destination, subBrand, themeJson, aspectRatio
   if (provider !== 'dalle') {
     throw new Error(`marketingFlyerImageLLM: provider '${provider}' not implemented (only 'dalle' wired)`);
   }
-  const apiKey = process.env[OPENAI_KEY_ENV];
-  if (!apiKey) {
-    throw new Error(`marketingFlyerImageLLM: ${OPENAI_KEY_ENV} not set`);
-  }
-  // Resolve actual model: env override > caller-supplied > module default.
-  const firstModel = process.env.LLM_MODEL_OPENAI_IMAGE || model || MODEL_PRIMARY;
   const ratio = ALLOWED_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : DEFAULT_ASPECT_RATIO;
   const themeStr = themeJson && typeof themeJson === 'object'
     ? Object.values(themeJson).filter(Boolean).join(', ')
@@ -284,15 +277,46 @@ async function callImageProvider({ destination, subBrand, themeJson, aspectRatio
     'Vibrant, professional, on-brand travel photography style. No text overlays.',
   ].filter(Boolean).join(' ');
 
-  // Single attempt against OpenAI for a given model. Returns the parsed
-  // body envelope on success; throws on HTTP failure. The aspect-ratio
-  // size map differs per model:
-  //   - dall-e-3:    1024x1024 / 1024x1792 / 1792x1024
-  //   - gpt-image-1: 1024x1024 / 1024x1536 / 1536x1024
-  // NOTE: `response_format` is NOT sent — OpenAI deprecated it on
-  // /images/generations when gpt-image-1 launched. DALL-E 3 returns
-  // data[0].url by default; gpt-image-1 returns data[0].b64_json. Both
-  // shapes are handled by the caller below.
+  const gatewayResult = await aiGateway.runNonTokenAiRequest({
+    tenantId,
+    task: 'marketing-flyer-image',
+    surface: 'marketingFlyerImageLLM',
+    requestedModelLabel: model || MODEL_PRIMARY,
+    runFn: async (config) => {
+      if (config.family !== 'openai-compatible') {
+        const err = new Error("Your organization's configured AI provider does not support image generation.");
+        err.friendly = true;
+        err.code = 'AI_PROVIDER_NO_IMAGE_SUPPORT';
+        throw err;
+      }
+      const imageResult = await module.exports.callOpenAIImageGeneration({ apiKey: config.apiKey, prompt, ratio, tenantId, model });
+      return {
+        result: imageResult,
+        costUsd: estimateImageCost(imageResult.model),
+        model: imageResult.model,
+        provider: 'dalle',
+      };
+    },
+  });
+
+  return { imageUrl: gatewayResult.result.imageUrl, provider: 'dalle', model: gatewayResult.model };
+}
+
+/**
+ * Single attempt against OpenAI's image-generation endpoint for a given
+ * model, with the "model does not exist" auto-fallback (dall-e-3 → the live
+ * gpt-image-1 successor on project keys created after OpenAI's image-model
+ * migration). The aspect-ratio size map differs per model:
+ *   - dall-e-3:    1024x1024 / 1024x1792 / 1792x1024
+ *   - gpt-image-1: 1024x1024 / 1024x1536 / 1536x1024
+ * NOTE: `response_format` is NOT sent — OpenAI deprecated it on
+ * /images/generations when gpt-image-1 launched. DALL-E 3 returns
+ * data[0].url by default; gpt-image-1 returns data[0].b64_json. Both shapes
+ * are handled below.
+ */
+async function callOpenAIImageGeneration({ apiKey, prompt, ratio, tenantId, model }) {
+  const firstModel = process.env.LLM_MODEL_OPENAI_IMAGE || model || MODEL_PRIMARY;
+
   const tryOpenAI = async (modelName) => {
     const isGptImage1 = /gpt-image/i.test(modelName);
     const sizeMap = isGptImage1
@@ -369,7 +393,7 @@ async function callImageProvider({ destination, subBrand, themeJson, aspectRatio
     throw new Error('marketingFlyerImageLLM: OpenAI response missing both url and b64_json');
   }
   // Report back the model that actually answered (after any auto-fallback).
-  return { imageUrl, provider: 'dalle', model: body.model || firstModel };
+  return { imageUrl, model: body.model || firstModel };
 }
 
 /**
@@ -501,6 +525,7 @@ module.exports = {
   realModeEnabled,
   resolveProvider,
   callImageProvider,
+  callOpenAIImageGeneration,
   // Stub builder exported for test-side determinism pins
   buildStubImageUrl,
   // Utility exported for test pins

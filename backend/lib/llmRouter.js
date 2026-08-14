@@ -62,6 +62,9 @@ const {
   buildGeminiLimitError,
 } = require("./geminiErrors");
 
+const {
+  resolveProviderConfig: resolveManagedProviderConfig,
+} = require("./aiProviderManagement");
 // PRD §9.1 routing table. Each entry: { primary, fallback }.
 // Primary is what we call first; fallback is the real-mode degraded
 // path when the primary provider errors or rate-limits. The scaffold
@@ -270,10 +273,21 @@ async function getLlmKey(tenantId, model) {
   const envVar = ENV_FOR_MODEL[model];
   const envValue = envVar ? process.env[envVar] : null;
 
-  // No tenant scope (e.g. sync probes from /api/health legacy callers
-  // wrapped via .then()) → ENV only. Matches the pre-S45 contract.
   if (!tenantId) {
     return envValue || null;
+  }
+
+  try {
+    const managedConfig = await resolveManagedProviderConfig(tenantId, {
+      requestedModelLabel: model,
+    });
+    if (managedConfig && managedConfig.apiKey) {
+      return managedConfig.apiKey;
+    }
+  } catch (e) {
+    console.error(
+      `[llm-router] getLlmKey shared AI resolver lookup failed (non-fatal, falling back to legacy stores): ${e.message}`,
+    );
   }
 
   try {
@@ -284,10 +298,6 @@ async function getLlmKey(tenantId, model) {
     ) {
       return envValue || null;
     }
-    // Accept either the model name OR the env-var name as supplierName.
-    // PRD §9.1 doesn't pin the naming convention; we accept both so the
-    // operator seeding the row doesn't need to know which one our code
-    // looks up. The 'in' filter is one Prisma round-trip vs. two.
     const candidates = [model];
     if (envVar) candidates.push(envVar);
     const row = await prisma.supplierCredential.findFirst({
@@ -299,8 +309,6 @@ async function getLlmKey(tenantId, model) {
       select: { passwordEncrypted: true },
     });
     if (row && row.passwordEncrypted) {
-      // Lazy require to avoid a circular bomb in test harnesses that
-      // hand-roll the crypto layer.
       const { decrypt } = require("./fieldEncryption");
       const plaintext = decrypt(row.passwordEncrypted);
       if (plaintext) return plaintext;
@@ -437,12 +445,51 @@ async function routeRequest({ task, payload, tenantId } = {}) {
   // the model's key was absent → talking-points/etc. 500'd instead of stubbing).
   // Passing tenantId also lets the per-tenant SupplierCredential key resolve.
   if (process.env.NODE_ENV !== "test") {
-    // Build the ordered model chain: the task's primary, then its configured
-    // fallback (typically a DIFFERENT provider, e.g. Gemini → OpenAI). Keep only
-    // candidates whose API key is actually available (per-tenant or env). When
-    // the primary errors (Gemini 503 overload / 429 quota), we transparently try
-    // the fallback so the operator still gets a real AI result rather than the
-    // deterministic stub. Empty chain (no keys) falls through to the stub below.
+    if (tenantId) {
+      // Tenant-scoped call: authorization is decided ONE way, by the shared
+      // AI Subscription & Credit gate (BYOK → funded CRM subscription →
+      // blocked), never by "does some env var happen to be set". Previously
+      // this branch built a model chain from getLlmKey(), which falls back
+      // to the bare platform process.env.*_API_KEY for ANY tenant with no
+      // BYOK and no subscription — silently giving every tenant free,
+      // unmetered access to the platform's shared key. aiGateway's
+      // assertAccessOrThrow is the only thing allowed to say yes here.
+      try {
+        return await realProviderCall({ task, model, payload, tenantId });
+      } catch (e) {
+        if (e.friendly) {
+          // Blocked (no BYOK, no funded subscription) — surface the Step 9
+          // friendly message; do NOT fall through to the stub, which would
+          // silently hand the tenant a fake-but-plausible AI response
+          // instead of telling them to configure a key or buy credits.
+          throw e;
+        }
+        // A configured, authorized provider actually failed mid-call
+        // (503/429/network) — try the task's fallback model once, same
+        // resolver, same gate, before giving up.
+        const route = TASK_ROUTING[task] || {};
+        if (route.fallback && route.fallback !== model) {
+          console.error(`[llm-router] provider failed (task=${task} model=${model}): ${e.message}`);
+          console.warn(`[llm-router] task=${task}: falling back from ${model} to ${route.fallback}`);
+          try {
+            return await realProviderCall({ task, model: route.fallback, payload, tenantId });
+          } catch (e2) {
+            if (e2.friendly) throw e2;
+            const err = new Error(`LLM provider call failed: ${e2.message}`);
+            err.code = "LLM_PROVIDER_ERROR";
+            throw err;
+          }
+        }
+        const err = new Error(`LLM provider call failed: ${e.message}`);
+        err.code = "LLM_PROVIDER_ERROR";
+        throw err;
+      }
+    }
+
+    // No tenantId (system/cron-internal call with no tenant context — e.g.
+    // a platform-wide maintenance job). These predate per-tenant billing
+    // and aren't gated by the credit system; keep the legacy bare-env
+    // lookup + stub-on-no-key behavior exactly as before.
     const route = TASK_ROUTING[task] || {};
     const chain = [];
     for (const cand of [model, route.fallback]) {
@@ -956,7 +1003,7 @@ const JSON_OUTPUT_TASKS = new Set([
 ]);
 
 async function realProviderCall({ task, model, payload, tenantId }) {
-  const provider = providerForModel(model);
+  let provider = providerForModel(model);
   const { estimateLlmCost } = require("./apiPricing");
   const baseLogFields = {
     tenantId: tenantId || 1,
@@ -968,13 +1015,55 @@ async function realProviderCall({ task, model, payload, tenantId }) {
     surface: (payload && payload.__surface) || null,
   };
 
-  let apiKey, modelId, system, user;
+  let modelId = resolveRealModelId(model);
+  let system;
+  let user;
+  try {
+    ({ system, user } = buildPrompt(task, payload));
+  } catch (e) {
+    persistLlmCallLog({
+      ...baseLogFields,
+      reason: "real",
+      costEstimate: 0,
+      status: "failed",
+      errorMessage: e.message,
+    });
+    throw e;
+  }
+
+  if (tenantId) {
+    // Tenant-scoped: go through aiGateway, the ONE mandatory entry point
+    // that resolves BYOK/crm-managed access, logs LlmCallLog, and deducts
+    // credits — all in one place, so this call site can't drift from any
+    // other feature's gating/metering behavior. Throws a "friendly" error
+    // (no BYOK, no funded subscription) that the caller (routeRequest) is
+    // responsible for surfacing rather than silently falling back.
+    const aiGateway = require("./aiGateway");
+    const resp = await aiGateway.runAiRequest({
+      tenantId,
+      task,
+      surface: baseLogFields.surface,
+      userId: baseLogFields.userId,
+      requestedModelLabel: model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    return {
+      text: resp.text || "",
+      finishReason: "stop",
+      usage: resp.usage,
+      model: resp.model || modelId,
+      stub: false,
+    };
+  }
+
+  let apiKey;
   try {
     const envVar = ENV_FOR_MODEL[model];
     apiKey = envVar && process.env[envVar];
     if (!apiKey) throw new Error(`no API key for ${model}`);
-    modelId = resolveRealModelId(model);
-    ({ system, user } = buildPrompt(task, payload));
   } catch (e) {
     persistLlmCallLog({
       ...baseLogFields,
@@ -991,8 +1080,6 @@ async function realProviderCall({ task, model, payload, tenantId }) {
   try {
     if (provider === "anthropic") out = await callAnthropic(modelId, system, user, apiKey, maxTokens);
     else if (provider === "openai") {
-      // gpt-4o-search-preview browses the live web when web_search_options is set;
-      // regular gpt-4o has no web access, so only enable it for the search model.
       const extra = /search/.test(modelId) ? { web_search_options: {} } : {};
       out = await callOpenAICompatible("https://api.openai.com/v1", modelId, system, user, apiKey, maxTokens, extra);
     }
@@ -1012,11 +1099,10 @@ async function realProviderCall({ task, model, payload, tenantId }) {
     else if (provider === "groq") out = await callOpenAICompatible("https://api.groq.com/openai/v1", modelId, system, user, apiKey, maxTokens);
     else throw new Error(`unknown provider for ${model}`);
   } catch (e) {
-    // Failure path — log WHY (errorMessage), no tokens/cost since no
-    // successful response came back. Powers the API Analytics "failures"
-    // view: every failed external call is visible with its real error text.
     persistLlmCallLog({
       ...baseLogFields,
+      model: modelId,
+      provider,
       reason: "real",
       costEstimate: 0,
       status: "failed",
@@ -1025,21 +1111,19 @@ async function realProviderCall({ task, model, payload, tenantId }) {
     throw e;
   }
 
-  const tokensIn =
-    out.tokensIn || estimateTokens(JSON.stringify(payload || {}));
+  const tokensIn = out.tokensIn || estimateTokens(JSON.stringify(payload || {}));
   const tokensOut = out.tokensOut || estimateTokens(out.text);
-  const costEstimate = estimateLlmCost(model, tokensIn, tokensOut);
+  const costEstimate = estimateLlmCost(modelId, tokensIn, tokensOut);
 
-  // Token-only telemetry — NEVER log payload content (PII discipline).
   console.log(
     `[llm-router] task=${task} model=${model} (${modelId}) tenant=${tenantId || "?"} ` +
     `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$${costEstimate.toFixed(6)} stub=false reason=real`,
   );
 
-  // Persist one LlmCallLog row (best-effort, fire-and-forget) — mirrors the
-  // stub path so the admin spend dashboard counts real calls too.
   persistLlmCallLog({
     ...baseLogFields,
+    model: modelId,
+    provider,
     reason: "real",
     promptTokens: tokensIn,
     completionTokens: tokensOut,
@@ -1056,7 +1140,7 @@ async function realProviderCall({ task, model, payload, tenantId }) {
       completionTokens: tokensOut,
       totalTokens: tokensIn + tokensOut,
     },
-    model,
+    model: modelId,
     stub: false,
   };
 }

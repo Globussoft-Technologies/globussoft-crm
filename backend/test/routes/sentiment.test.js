@@ -168,7 +168,7 @@ describe('POST /analyze — stateless analysis', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ sentiment: 'positive', sentimentScore: 0.85 });
-    expect(sentimentEngine.analyzeMessage).toHaveBeenCalledWith('I love the product!');
+    expect(sentimentEngine.analyzeMessage).toHaveBeenCalledWith('I love the product!', 1);
   });
 
   test('500 when engine throws', async () => {
@@ -230,7 +230,7 @@ describe('POST /analyze-message/:emailId — analyze stored email', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ id: 50, sentiment: 'negative', sentimentScore: -0.6 });
-    expect(sentimentEngine.analyzeMessage).toHaveBeenCalledWith('Order delayed again.');
+    expect(sentimentEngine.analyzeMessage).toHaveBeenCalledWith('Order delayed again.', 1);
     expect(prisma.emailMessage.update).toHaveBeenCalledWith({
       where: { id: 50 },
       data: { sentiment: 'negative', sentimentScore: -0.6 },

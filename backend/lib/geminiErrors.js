@@ -11,6 +11,14 @@ function normaliseErrorMessage(err) {
 }
 
 function isGeminiLimitError(err) {
+  // aiGateway.js centrally detects a provider quota/rate-limit failure and
+  // rewrites it into a friendly AI_PROVIDER_RATE_LIMITED error with a
+  // clear, BYOK-vs-CRM-managed-aware message (see lib/aiGateway.js's
+  // friendlyProviderErrorOrNull). That rewritten message no longer matches
+  // the raw-provider-text patterns below, so check the code first —
+  // every aiGateway-routed call site's existing isGeminiLimitError check
+  // keeps working without per-call-site changes.
+  if (err && err.code === "AI_PROVIDER_RATE_LIMITED") return true;
   const msg = normaliseErrorMessage(err).toLowerCase();
   if (!msg) return false;
   return (
@@ -26,7 +34,13 @@ function isGeminiLimitError(err) {
 }
 
 function buildGeminiLimitError(cause) {
-  const err = new Error(GEMINI_LIMIT_EXHAUSTED_MESSAGE);
+  // Preserve aiGateway.js's BYOK-vs-CRM-managed-specific wording when the
+  // cause already carries one (AI_PROVIDER_RATE_LIMITED); fall back to the
+  // generic message for raw provider errors from non-gateway call sites.
+  const message = cause && cause.code === "AI_PROVIDER_RATE_LIMITED" && cause.message
+    ? cause.message
+    : GEMINI_LIMIT_EXHAUSTED_MESSAGE;
+  const err = new Error(message);
   err.code = GEMINI_LIMIT_EXHAUSTED_CODE;
   err.status = 429;
   if (cause !== undefined) err.cause = cause;

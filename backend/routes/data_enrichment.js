@@ -4,9 +4,9 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
+const aiProviderManagement = require("../lib/aiProviderManagement");
 
 const router = express.Router();
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
 
 router.use(verifyToken);
 
@@ -97,13 +97,19 @@ async function persistEnrichment(contactId, fields) {
 }
 
 // ── GET /providers ───────────────────────────────────────────────
-router.get("/providers", (req, res) => {
-  res.json({
-    gemini: !!GEMINI_KEY,
-    clearbit: false,
-    apollo: false,
-    heuristic: true,
-  });
+router.get("/providers", async (req, res) => {
+  try {
+    const state = await aiProviderManagement.getTenantAiState(req.user.tenantId);
+    res.json({
+      gemini: state.resolverAccess !== "none",
+      clearbit: false,
+      apollo: false,
+      heuristic: true,
+    });
+  } catch (err) {
+    console.error("[DataEnrichment] /providers error:", err);
+    res.status(500).json({ error: "Failed to resolve provider availability" });
+  }
 });
 
 // ── POST /contact/:id ─────────────────────────────────────────────

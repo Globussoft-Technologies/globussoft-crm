@@ -1,31 +1,22 @@
 /**
  * supportChatbot — orchestrator for the Wellness Admin Support Chatbot.
  *
- * Public surface (consumed by routes/support_chat.js +
- * routes/wellness_ai_config.js):
+ * Public surface (consumed by routes/support_chat.js):
  *
  *   handleChatMessage({ tenantId, userId, message, history, pageContext })
- *     → runs the LLM tool loop (search_help_docs / get_page_info), logs
- *       every LLM call to LlmCallLog (task='support-chat'), returns
+ *     → runs the LLM tool loop (search_help_docs / get_page_info) through
+ *       lib/aiGateway.runAiRequest (the mandatory resolve/gate/log/deduct
+ *       entry point — BYOK first, then a funded CRM-managed subscription,
+ *       else a friendly blocked error), returns
  *       { reply, links, toolsUsed, provider }.
  *
  *   getAnalytics(tenantId)
  *     → aggregates LlmCallLog rows where task='support-chat' for the
  *       tenant (calls, tokens, cost, failures, per-provider split).
- *
- * Provider resolution lives in providerAdapters.resolveProviderConfig():
- * tenant BYOK first, internal Gemini proxy as a NON-PRODUCTION fallback,
- * null in production-without-BYOK (routes translate that into the
- * friendly AI_PROVIDER_NOT_CONFIGURED envelope).
  */
 
 const prisma = require("../../lib/prisma");
-const { estimateLlmCost } = require("../../lib/apiPricing");
-const {
-  generateChatCompletion,
-  resolveProviderConfig,
-  providerFamilyFor,
-} = require("./providerAdapters");
+const aiGateway = require("../../lib/aiGateway");
 const { searchHelpDocs } = require("./rag");
 const { TOOL_DEFINITIONS, buildSystemPrompt, findPageInfo } = require("./prompts");
 
@@ -35,17 +26,6 @@ const MAX_TOOL_ROUNDS = 3;
 // History is capped so a long-lived widget session can't blow the prompt
 // budget; the oldest turns drop off first.
 const MAX_HISTORY_TURNS = 20;
-
-// ─── LlmCallLog persistence (non-fatal, mirrors llmRouter posture) ────
-function persistLog(data) {
-  try {
-    prisma.llmCallLog.create({ data }).catch((e) =>
-      console.error(`[support-chatbot] LlmCallLog persist failed (non-fatal): ${e.message}`),
-    );
-  } catch (e) {
-    console.error(`[support-chatbot] LlmCallLog persist failed (non-fatal): ${e.message}`);
-  }
-}
 
 // ─── Tool execution ───────────────────────────────────────────────────
 /**
@@ -116,15 +96,6 @@ async function handleChatMessage({
   pageContext = null,
   fetchImpl = null,
 }) {
-  const config = await resolveProviderConfig(tenantId);
-  if (!config) {
-    const err = new Error(
-      "AI provider not configured. An administrator can add one under Settings → AI Provider (Support Chatbot).",
-    );
-    err.code = "AI_PROVIDER_NOT_CONFIGURED";
-    throw err;
-  }
-
   const cleanMessage = String(message || "").trim();
   if (!cleanMessage) {
     const err = new Error("message is required");
@@ -140,54 +111,38 @@ async function handleChatMessage({
     { role: "user", content: cleanMessage },
   ];
 
-  const providerFamily = providerFamilyFor(config);
   const links = [];
   const toolsUsed = [];
   let reply = "";
+  let lastResp = null;
 
+  // Every round goes through aiGateway.runAiRequest — the mandatory
+  // resolve/gate/log/deduct entry point. A round that hits a blocked
+  // tenant (no BYOK, no funded CRM subscription) throws the friendly
+  // AI_NOT_CONFIGURED/AI_CREDITS_EXHAUSTED error from aiGateway; this
+  // function re-tags it AI_PROVIDER_NOT_CONFIGURED so the existing route
+  // contract (routes/support_chat.js, 503) keeps working unchanged.
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     let resp;
     try {
-      resp = await generateChatCompletion(
-        config,
-        { messages, tools: TOOL_DEFINITIONS },
-        fetchImpl,
-      );
-    } catch (callErr) {
-      persistLog({
-        tenantId: Number(tenantId),
+      resp = await aiGateway.runAiRequest({
+        tenantId,
         task: TASK_NAME,
-        model: config.model || "unknown",
-        provider: providerFamily,
-        reason: "primary",
-        stub: false,
-        userId: Number(userId),
         surface: SURFACE,
-        status: "failed",
-        errorMessage: String(callErr.message || "LLM call failed").slice(0, 500),
+        userId,
+        messages,
+        tools: TOOL_DEFINITIONS,
+        fetchImpl,
       });
+    } catch (callErr) {
+      if (callErr.friendly) {
+        const err = new Error(callErr.message);
+        err.code = "AI_PROVIDER_NOT_CONFIGURED";
+        throw err;
+      }
       throw callErr;
     }
-
-    persistLog({
-      tenantId: Number(tenantId),
-      task: TASK_NAME,
-      model: resp.model || config.model || "unknown",
-      provider: providerFamily,
-      reason: "primary",
-      promptTokens: resp.usage.promptTokens,
-      completionTokens: resp.usage.completionTokens,
-      totalTokens: resp.usage.totalTokens,
-      costEstimate: estimateLlmCost(
-        resp.model || config.model,
-        resp.usage.promptTokens,
-        resp.usage.completionTokens,
-      ),
-      stub: false,
-      userId: Number(userId),
-      surface: SURFACE,
-      status: "success",
-    });
+    lastResp = resp;
 
     if (!resp.toolCalls || resp.toolCalls.length === 0) {
       reply = resp.text || "";
@@ -214,28 +169,29 @@ async function handleChatMessage({
   }
 
   // Tool budget exhausted without a prose answer — one final tools-off
-  // call so the model is forced to summarise what it learned.
+  // call so the model is forced to summarise what it learned. Same gateway
+  // call, same idempotent logging/deduction (distinct requestId per round
+  // since aiGateway auto-generates one when omitted).
   if (!reply) {
-    const resp = await generateChatCompletion(config, { messages }, fetchImpl);
-    persistLog({
-      tenantId: Number(tenantId),
-      task: TASK_NAME,
-      model: resp.model || config.model || "unknown",
-      provider: providerFamily,
-      reason: "tool-summary",
-      promptTokens: resp.usage.promptTokens,
-      completionTokens: resp.usage.completionTokens,
-      totalTokens: resp.usage.totalTokens,
-      costEstimate: estimateLlmCost(
-        resp.model || config.model,
-        resp.usage.promptTokens,
-        resp.usage.completionTokens,
-      ),
-      stub: false,
-      userId: Number(userId),
-      surface: SURFACE,
-      status: "success",
-    });
+    let resp;
+    try {
+      resp = await aiGateway.runAiRequest({
+        tenantId,
+        task: TASK_NAME,
+        surface: SURFACE,
+        userId,
+        messages,
+        fetchImpl,
+      });
+    } catch (callErr) {
+      if (callErr.friendly) {
+        const err = new Error(callErr.message);
+        err.code = "AI_PROVIDER_NOT_CONFIGURED";
+        throw err;
+      }
+      throw callErr;
+    }
+    lastResp = resp;
     reply = resp.text || "I wasn't able to put together an answer — please try rephrasing your question.";
   }
 
@@ -251,7 +207,7 @@ async function handleChatMessage({
     reply,
     links: dedupedLinks,
     toolsUsed,
-    provider: { source: config.source, family: providerFamily, model: config.model },
+    provider: { source: lastResp.accessType, family: lastResp.provider, model: lastResp.model },
   };
 }
 
@@ -324,7 +280,4 @@ module.exports = {
   TASK_NAME,
   handleChatMessage,
   getAnalytics,
-  // Re-exported so routes/tests can reach adapter helpers through one
-  // service entry point.
-  resolveProviderConfig,
 };

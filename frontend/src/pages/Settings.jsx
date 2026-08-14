@@ -36,6 +36,7 @@ import { ThemeContext, AuthContext } from "../App";
 import PasswordInput from "../components/PasswordInput";
 import LeadSourceAllowlistCard from "../components/LeadSourceAllowlistCard";
 import WebhookSigningCredential from "../components/WebhookSigningCredential";
+import OrganizationAiSettingsCard from "../components/OrganizationAiSettingsCard";
 import RoleHistoryDialog from "../components/RoleHistoryDialog";
 import { SUB_BRAND_IDS, subBrandShortLabel, subBrandBackground } from "../utils/travelSubBrand";
 import { useActiveSubBrand } from "../utils/subBrand";
@@ -2216,17 +2217,11 @@ export default function Settings() {
             </div>
           )}
 
-          {/* AI Provider (Support Chatbot) — wellness-vertical BYOK card.
-              Mounted only for wellness tenants whose user holds
-              settings.manage (the catalog-backed gate for the wellness
-              settings surface; there is no separate wellness_settings
-              module in the permission catalog). The backend route
-              (/api/wellness/ai-provider-config) enforces the same gate
-              authoritatively. */}
-          {ctxTenant?.vertical === "wellness" &&
-            hasPermission("settings", "manage") && (
-              <AiProviderConfigCard notify={notify} />
-            )}
+          {/* Organization-wide AI settings. The card writes to the shared
+              AI provider resolver state so every tenant can either configure
+              BYOK or request CRM-managed AI access from one place. */}
+          {hasPermission("settings", "manage") && <OrganizationAiSettingsCard />}
+
 
           {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
               webhooks (GlobusPhone lead-sync). Self-contained admin component;

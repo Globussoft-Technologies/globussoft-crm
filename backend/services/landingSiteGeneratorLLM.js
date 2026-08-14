@@ -6,6 +6,7 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 const llmRouter = require('../lib/llmRouter');
+const aiGateway = require('../lib/aiGateway');
 const destinationImageProvider = require('./destinationImageProvider');
 const { formatGeminiLimitMessage } = require('../lib/geminiErrors');
 const { getBudgetCap, evaluateCap } = require('../lib/tenantSettings');
@@ -21,11 +22,7 @@ const {
 
 const INTEGRATION = 'llm';
 const MODEL_PRIMARY = 'gemini-2.5-flash';
-const MODEL_FALLBACK = 'gemini-2.0-flash';
-const MODEL_OPENAI_FALLBACK = 'gpt-4o-mini';
-const MODEL_GROQ_PRIMARY = 'llama-3.3-70b-versatile';
-const OPENAI_KEY_ENV = 'OPENAI_API_KEY';
-const GROQ_KEY_ENV = 'GROQ_API_KEY';
+const TASK_NAME = 'landing-site-generate';
 
 async function computeMonthlySpendCents(tenantId) {
   return llmRouter.computeMonthlySpendCents(tenantId);
@@ -58,111 +55,6 @@ function parseJson(raw) {
     if (start >= 0 && end > start) cleaned = cleaned.slice(start, end + 1);
   }
   return JSON.parse(cleaned);
-}
-
-async function callGeminiAttempt({ apiKey, modelName, prompt }, usageOut) {
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  const ai = new GoogleGenerativeAI(apiKey);
-  const model = ai.getGenerativeModel({
-    model: modelName,
-    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 },
-  });
-  const fullPrompt = `${prompt.system}
-
-${prompt.user}`;
-  const res = await model.generateContent(fullPrompt);
-  const text = res?.response?.text?.();
-  if (usageOut && typeof usageOut === 'object') {
-    const usage = (res && res.response && res.response.usageMetadata) || {};
-    usageOut.promptTokens = usage.promptTokenCount || 0;
-    usageOut.completionTokens = usage.candidatesTokenCount || 0;
-  }
-  if (!text) throw new Error('LLM returned an empty response');
-  return text;
-}
-
-async function callGeminiProvider({ apiKey, prompt }, usageOut) {
-  const cascade = [
-    process.env.LLM_MODEL_GEMINI || MODEL_PRIMARY,
-    process.env.LLM_MODEL_GEMINI_FALLBACK || MODEL_FALLBACK,
-    'gemini-2.0-flash-lite',
-  ].filter(Boolean);
-  let lastError = null;
-  for (const modelName of cascade) {
-    try {
-      const text = await callGeminiAttempt({ apiKey, modelName, prompt }, usageOut);
-      return { text, modelUsed: modelName };
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  throw lastError || new Error('Gemini returned an empty response');
-}
-
-async function httpJson(url, opts) {
-  const res = await fetch(url, opts);
-  let body = {};
-  try {
-    body = await res.json();
-  } catch (_err) {
-    body = {};
-  }
-  if (!res.ok) {
-    const message = (body && (body.error?.message || body.error)) || res.statusText || `HTTP ${res.status}`;
-    throw new Error(`${res.status} ${message}`);
-  }
-  return body;
-}
-
-async function callOpenAICompatibleAttempt({ baseUrl, apiKey, modelName, prompt, maxTokens = 4096 }, usageOut) {
-  if (!apiKey) throw new Error('OpenAI-compatible key missing');
-  const body = await httpJson(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: modelName,
-      response_format: { type: 'json_object' },
-      max_tokens: maxTokens,
-      messages: [
-        { role: 'system', content: prompt.system },
-        { role: 'user', content: prompt.user },
-      ],
-    }),
-  });
-  const raw = body?.choices?.[0]?.message?.content;
-  if (!raw) throw new Error('LLM returned an empty response');
-  if (usageOut && typeof usageOut === 'object') {
-    const usage = body.usage || {};
-    usageOut.promptTokens = usage.prompt_tokens || 0;
-    usageOut.completionTokens = usage.completion_tokens || 0;
-  }
-  return raw;
-}
-
-async function callOpenAIAttempt({ apiKey, prompt }, usageOut) {
-  const modelName = process.env.LLM_MODEL_OPENAI_LANDING || MODEL_OPENAI_FALLBACK;
-  const text = await callOpenAICompatibleAttempt({
-    baseUrl: 'https://api.openai.com/v1',
-    apiKey,
-    modelName,
-    prompt,
-  }, usageOut);
-  return { text, modelUsed: modelName };
-}
-
-async function callGroqAttempt({ apiKey, prompt }, usageOut) {
-  const modelName = process.env.GROQ_MODEL || MODEL_GROQ_PRIMARY;
-  const text = await callOpenAICompatibleAttempt({
-    baseUrl: 'https://api.groq.com/openai/v1',
-    apiKey,
-    modelName,
-    prompt,
-    maxTokens: 4096,
-  }, usageOut);
-  return { text, modelUsed: modelName };
 }
 
 function ensureBlockArray(blocks) {
@@ -247,45 +139,43 @@ async function generateLandingSiteContent(input = {}, options = {}) {
     : buildGenericLandingSitePrompt({ ...input, sectorKey });
   await checkBudgetCap(tenantId);
 
-  const providers = [
-    {
-      source: 'gemini',
-      modelLabel: 'gemini-flash',
-      attempt: (apiKey, usageOut) => callGeminiProvider({ apiKey, prompt }, usageOut),
-    },
-    {
-      source: 'openai',
-      modelLabel: 'gpt-4',
-      attempt: (apiKey, usageOut) => callOpenAIAttempt({ apiKey, prompt }, usageOut),
-    },
-    {
-      source: 'groq',
-      modelLabel: 'groq-llama',
-      attempt: (apiKey, usageOut) => callGroqAttempt({ apiKey, prompt }, usageOut),
-    },
-  ];
+  const userId = input.userId || options.userId || null;
 
-  const usageOut = {};
   let rawJson = null;
   let modelUsed = null;
   let source = 'stub';
   let stub = true;
   let realModeError = null;
 
-  for (const provider of providers) {
-    const apiKey = tenantId ? await llmRouter.getLlmKey(tenantId, provider.modelLabel) : process.env[
-      provider.modelLabel === 'gpt-4' ? OPENAI_KEY_ENV : provider.modelLabel === 'groq-llama' ? GROQ_KEY_ENV : 'GEMINI_API_KEY'
-    ];
-    if (!apiKey) continue;
-    try {
-      const result = await provider.attempt(apiKey, usageOut);
-      rawJson = result.text;
-      modelUsed = result.modelUsed;
-      source = provider.source;
-      stub = false;
-      realModeError = null;
-      break;
-    } catch (err) {
+  // ONE call through aiGateway — it resolves BYOK (the tenant's single
+  // fixed provider, if configured — a per-attempt "try Gemini then OpenAI
+  // then Groq" loop doesn't apply to BYOK since resolveProviderConfig
+  // returns the same BYOK config regardless of the requested-model hint)
+  // or a funded CRM-managed subscription, whose own model-family cascade
+  // (Gemini → OpenAI-compatible → Anthropic, see
+  // lib/aiProviderManagement.resolveProviderConfig's `fallbacks`) is
+  // walked automatically inside generateChatCompletion on failure. A
+  // "friendly" blocked-access error (no BYOK, no funded subscription)
+  // falls through to the deterministic stub, same as before.
+  try {
+    const resp = await aiGateway.runAiRequest({
+      tenantId,
+      userId,
+      task: TASK_NAME,
+      surface: 'landingSiteGeneratorLLM',
+      requestedModelLabel: 'gemini-flash',
+      messages: [
+        { role: 'system', content: prompt.system },
+        { role: 'user', content: prompt.user },
+      ],
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 },
+    });
+    rawJson = resp.text;
+    modelUsed = resp.model;
+    source = resp.provider || 'gemini';
+    stub = false;
+  } catch (err) {
+    if (!err.friendly) {
       realModeError = formatGeminiLimitMessage(err) || err.message || String(err);
     }
   }
@@ -348,9 +238,4 @@ module.exports = {
   checkBudgetCap,
   parseJson,
   ensureBlockArray,
-  callGeminiAttempt,
-  callGeminiProvider,
-  callOpenAICompatibleAttempt,
-  callOpenAIAttempt,
-  callGroqAttempt,
 };

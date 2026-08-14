@@ -301,6 +301,40 @@
 
           if (!res.ok) throw new Error(json.error || 'Submit failed');
 
+          // Tell the embedding page the submission succeeded, so a host site can
+          // record a conversion. A cross-origin iframe is invisible to its
+          // parent: the parent can neither observe our fetch nor read our fields,
+          // so without this it cannot know a lead happened at all.
+          //
+          // Sent BEFORE the redirect branch on purpose — a redirect navigates
+          // this frame away and would otherwise drop the signal entirely.
+          //
+          // Reuses the existing `gbs-web-form` channel with a new type, matching
+          // postSize(). Consumers must check BOTH source and type, and should
+          // verify event.source against their iframe's contentWindow before
+          // trusting any of it.
+          //
+          // Values come from the captured FormData, never the DOM: by the time
+          // setMessage() runs below, the form has been replaced and every
+          // querySelector would return null.
+          try {
+            parent.postMessage({
+              source: 'gbs-web-form',
+              type: 'submit',
+              slug: slug,
+              submissionId: json.submissionId || null,
+              contactId: json.contactId || null,
+              // Only what a conversions API needs for matching. Deliberately not
+              // the whole payload — this crosses an origin boundary onto a page
+              // we do not control.
+              fields: {
+                name: fd.get('name') || '',
+                email: fd.get('email') || '',
+                phone: fd.get('phone') || ''
+              }
+            }, '*');
+          } catch (e) {}
+
           if (json.redirectUrl || (formData.settings && formData.settings.afterSubmitAction === 'redirect' && formData.settings.redirectUrl)) {
 
             window.location.href = json.redirectUrl || formData.settings.redirectUrl;

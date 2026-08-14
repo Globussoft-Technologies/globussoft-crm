@@ -61,6 +61,7 @@ describe("<App /> — auth-sync on mount", () => {
   it("validates a travel token against /api/auth/me and lands on /travel", async () => {
     const token = "travel-token";
     sessionStorage.setItem("token", token);
+    window.history.pushState({}, "travel", "/travel");
     const fetchMock = setupFetch((url) => {
       if (url === "/api/auth/me") {
         return Promise.resolve({
@@ -181,6 +182,7 @@ describe("<App /> — auth-sync on mount", () => {
   it("overwrites stale localStorage user/tenant with the server identity", async () => {
     const token = "travel-token";
     sessionStorage.setItem("token", token);
+    window.history.pushState({}, "travel", "/travel");
     // Simulate the exact stale state that caused the WRONG_VERTICAL symptom:
     // localStorage still holds a wellness user/tenant, but the in-memory token
     // belongs to the travel account.

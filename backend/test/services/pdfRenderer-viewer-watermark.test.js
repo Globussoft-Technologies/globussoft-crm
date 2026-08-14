@@ -180,7 +180,7 @@ describe('renderTravelItineraryPdf — viewer watermark (opt-in)', () => {
     expect(text).toContain('Asha Mehta');
     expect(text).toContain('Mussoorie');
     expect(text).toContain('Hotel x 3 nights');
-    expect(text).toContain('Grand total');
+    expect(text).toContain('Grand Total');
   });
 
   test('multi-page: pageAdded hook re-applies the watermark on every page', async () => {

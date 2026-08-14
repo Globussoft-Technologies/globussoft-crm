@@ -145,6 +145,9 @@ const EMPTY_FORM = {
   currency: 'INR',
   llmGeneratedBy: '',
   isActive: true,
+  // G115 — PDF underprint template upload.
+  pdfTemplateUrl: '',
+  pdfTemplateFileName: '',
 };
 
 export default function ItineraryTemplates() {
@@ -201,6 +204,37 @@ export default function ItineraryTemplates() {
     } finally {
       setUploadingThumb(false);
     }
+  };
+
+  // G115 — PDF underprint upload.
+  const pdfInputRef = useRef(null);
+  const [uploadingPdf, setUploadingPdf] = useState(false);
+
+  const pickPdfFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.type !== 'application/pdf') {
+      notify.error('Only PDF files are allowed');
+      return;
+    }
+    setUploadingPdf(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const data = await fetchApi('/api/travel/itinerary-templates/upload-pdf', { method: 'POST', body: fd });
+      setForm((prev) => ({ ...prev, pdfTemplateUrl: data.url, pdfTemplateFileName: file.name }));
+      notify.success('PDF template uploaded');
+    } catch (err) {
+      notify.error(err?.body?.error || 'PDF upload failed');
+    } finally {
+      setUploadingPdf(false);
+    }
+  };
+
+  const removePdfTemplate = () => {
+    setForm((prev) => ({ ...prev, pdfTemplateUrl: '', pdfTemplateFileName: '' }));
+    if (pdfInputRef.current) pdfInputRef.current.value = '';
   };
 
   // G061 — Detail / preview modal (PRD FR-3.1.d). Shows the template's
@@ -275,6 +309,9 @@ export default function ItineraryTemplates() {
       currency: item.currency || 'INR',
       llmGeneratedBy: item.llmGeneratedBy || '',
       isActive: item.isActive !== false,
+      // G115 — PDF underprint template.
+      pdfTemplateUrl: item.pdfTemplateUrl || '',
+      pdfTemplateFileName: item.pdfTemplateUrl ? (item.pdfTemplateUrl.split('/').pop() || 'template.pdf') : '',
     });
     setEditingId(item.id);
     setShowForm(true);
@@ -310,6 +347,8 @@ export default function ItineraryTemplates() {
       currency: form.currency.trim() || null,
       llmGeneratedBy: form.llmGeneratedBy.trim() || null,
       isActive: form.isActive !== false,
+      // G115 — PDF underprint template. Empty string clears it on edit.
+      pdfTemplateUrl: form.pdfTemplateUrl.trim() || null,
     };
 
     try {
@@ -881,6 +920,69 @@ export default function ItineraryTemplates() {
                 )}
               </div>
             </Field>
+
+            {/* G115 — PDF underprint template upload */}
+            <Field label="Reference PDF (optional)">
+              <input
+                ref={pdfInputRef}
+                type="file"
+                accept="application/pdf"
+                onChange={pickPdfFile}
+                style={{ display: 'none' }}
+                aria-label="Upload reference PDF template"
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                {form.pdfTemplateUrl ? (
+                  <>
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '0.35rem 0.7rem',
+                        borderRadius: 6,
+                        background: 'rgba(59,130,246,0.12)',
+                        color: '#60a5fa',
+                        fontSize: '0.8rem',
+                        border: '1px solid rgba(59,130,246,0.25)',
+                      }}
+                    >
+                      <FileText size={14} />
+                      {form.pdfTemplateFileName || 'PDF template'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => pdfInputRef.current?.click()}
+                      disabled={uploadingPdf}
+                      style={{ ...secondaryBtn, padding: '0.4rem 0.7rem', fontSize: '0.8rem' }}
+                    >
+                      <Upload size={13} /> {uploadingPdf ? 'Uploading…' : 'Replace'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={removePdfTemplate}
+                      title="Remove PDF template"
+                      style={{ ...secondaryBtn, padding: '0.4rem 0.7rem', fontSize: '0.8rem', color: 'var(--danger-color, #ef4444)' }}
+                    >
+                      <X size={13} /> Remove
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => pdfInputRef.current?.click()}
+                    disabled={uploadingPdf}
+                    style={{ ...secondaryBtn, border: '1px dashed var(--border-color)', color: 'var(--text-secondary)' }}
+                  >
+                    <Upload size={14} /> {uploadingPdf ? 'Uploading…' : 'Upload reference PDF'}
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                Upload a branded PDF. When this template is used, the itinerary data will be overlaid on top.
+              </div>
+            </Field>
+
             <Field label="LLM source (if AI-drafted)">
               <input
                 value={form.llmGeneratedBy}
@@ -1006,6 +1108,23 @@ export default function ItineraryTemplates() {
                         }}
                       >
                         archived
+                      </span>
+                    )}
+                    {item.pdfTemplateUrl && (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          padding: '2px 6px',
+                          borderRadius: 999,
+                          background: 'rgba(59, 130, 246, 0.18)',
+                          color: 'rgb(29, 78, 216)',
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: 0.5,
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        PDF
                       </span>
                     )}
                     {item.description && (

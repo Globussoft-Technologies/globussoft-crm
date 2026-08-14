@@ -1541,6 +1541,9 @@ export default function Itineraries() {
                                     {t.usageCount > 0 && (
                                       <span>Used {t.usageCount}×</span>
                                     )}
+                                    {t.pdfTemplateUrl && (
+                                      <span style={{ color: "var(--accent-color, #C89A4E)" }}>PDF template</span>
+                                    )}
                                   </div>
                                 </div>
                                 {isSelected && (

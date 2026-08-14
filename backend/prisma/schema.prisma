@@ -6549,6 +6549,13 @@ model ItineraryTemplate {
   version              Int       @default(1)
   isLatest             Boolean   @default(true)
   archivedAt           DateTime?
+  // G115 — PDF-based itinerary template underprint. Stores an uploaded
+  // reference PDF used as the rendered itinerary background, plus overlay
+  // regions for blanking/re-filling dynamic content. isPdfTemplate lets the
+  // UI badge templates that carry a stored underprint.
+  pdfTemplateUrl       String?   @db.Text
+  pdfTemplateRegions   String?   @db.LongText
+  isPdfTemplate        Boolean   @default(false)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 

@@ -15,9 +15,11 @@
  *
  * What this file pins (13 cases across 5 describe blocks)
  * ───────────────────────────────────────────────────────
- *   1. GET /providers — always advertises heuristic=true; gemini flag is
- *      true iff GEMINI_API_KEY env was set at module-load; clearbit/apollo
- *      pinned false (the route has no real provider keys wired today).
+ *   1. GET /providers — always advertises heuristic=true; gemini flag
+ *      reflects the requesting tenant's actual AI access (BYOK or a funded
+ *      CRM-managed subscription) via aiProviderManagement.getTenantAiState,
+ *      not raw env-var presence; clearbit/apollo pinned false (the route
+ *      has no real provider keys wired today).
  *   2. POST /contact/:id — happy path: corporate email (acme.com) derives
  *      domain + isCorporate=true + guessed company + website + linkedin
  *      slug + lastEnrichedAt; persists via prisma.contact.update.
@@ -51,9 +53,8 @@
  * patched BEFORE requiring the router (vi.mock does not reliably intercept
  * CJS require in this repo's vitest config), env set pre-import, supertest
  * with a fake auth middleware that sets req.user. No external provider
- * calls — the route is heuristic-only today, so the SDK self-mocking seam
- * isn't needed; the credential surface we exercise is GEMINI_API_KEY's
- * effect on /providers.
+ * calls — the route is heuristic-only today; /providers' gemini flag is
+ * driven by a mocked lib/aiProviderManagement.getTenantAiState.
  *
  * Bug exposure: source bugs found → it.skip + GH issue (none found).
  */
@@ -61,12 +62,8 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
 
-// ── env MUST be set before importing the route ─────────────────────────
-// The route reads GEMINI_API_KEY at module-load to compute the
-// /providers `gemini` flag (line 9). Set it so we exercise the truthy
-// branch. JWT_SECRET likewise must be set BEFORE the auth middleware is
-// loaded (config/secrets.js binds JWT_SECRET at module-load).
-process.env.GEMINI_API_KEY = 'gem_test_data_enrichment_fixture';
+// JWT_SECRET must be set BEFORE the auth middleware is loaded
+// (config/secrets.js binds JWT_SECRET at module-load).
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 
 // ── prisma singleton patching ──────────────────────────────────────────
@@ -78,11 +75,31 @@ prisma.contact.findMany = vi.fn();
 prisma.contact.findUnique = vi.fn();
 prisma.contact.update = vi.fn();
 
+// verifyToken's live-session-state check reads prisma.user on every
+// authenticated request.
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue({ deactivatedAt: null, sessionVersion: null });
+
+// GET /providers resolves the gemini flag through
+// aiProviderManagement.getTenantAiState — mocked directly rather than a
+// bare env var (the route no longer reads GEMINI_API_KEY at all).
+const { mockGetTenantAiState } = vi.hoisted(() => ({ mockGetTenantAiState: vi.fn() }));
+vi.mock('../../lib/aiProviderManagement', () => ({
+  default: { getTenantAiState: mockGetTenantAiState },
+  getTenantAiState: mockGetTenantAiState,
+}));
+
 import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const aiProviderManagementPath = requireCJS.resolve('../../lib/aiProviderManagement');
+require('node:module')._cache[aiProviderManagementPath] = {
+  id: aiProviderManagementPath, filename: aiProviderManagementPath, loaded: true,
+  exports: { getTenantAiState: mockGetTenantAiState },
+  children: [], paths: [],
+};
 const enrichmentRouter = requireCJS('../../routes/data_enrichment');
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -120,6 +137,9 @@ beforeEach(() => {
     tenantId: 1,
     ...data,
   }));
+
+  mockGetTenantAiState.mockReset();
+  mockGetTenantAiState.mockResolvedValue({ resolverAccess: 'byok', byok: { providerId: 'gemini' } });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -127,14 +147,43 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET /providers — provider flag advertisement', () => {
-  test('advertises heuristic=true always; gemini reflects GEMINI_API_KEY presence; clearbit/apollo pinned false', async () => {
+  test('advertises heuristic=true always; gemini reflects tenant AI access (BYOK); clearbit/apollo pinned false', async () => {
+    mockGetTenantAiState.mockResolvedValue({ resolverAccess: 'byok', byok: { providerId: 'gemini' } });
+
     const res = await request(makeApp())
       .get('/api/data-enrichment/providers')
       .set('Authorization', bearerFor());
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      gemini: true, // env set above
+      gemini: true,
+      clearbit: false,
+      apollo: false,
+      heuristic: true,
+    });
+  });
+
+  test('gemini reflects a funded CRM-managed subscription too, not just BYOK', async () => {
+    mockGetTenantAiState.mockResolvedValue({ resolverAccess: 'crm-managed', byok: null });
+
+    const res = await request(makeApp())
+      .get('/api/data-enrichment/providers')
+      .set('Authorization', bearerFor());
+
+    expect(res.status).toBe(200);
+    expect(res.body.gemini).toBe(true);
+  });
+
+  test('gemini is false when the tenant has no AI access configured', async () => {
+    mockGetTenantAiState.mockResolvedValue({ resolverAccess: 'none', byok: null });
+
+    const res = await request(makeApp())
+      .get('/api/data-enrichment/providers')
+      .set('Authorization', bearerFor());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      gemini: false,
       clearbit: false,
       apollo: false,
       heuristic: true,

@@ -127,7 +127,12 @@ const KEYS = {
   // { provider, apiKey(encrypted via lib/fieldEncryption), model, baseUrl }
   // written exclusively by routes/wellness_ai_config.js — never set this
   // key with a plaintext apiKey through /api/tenant-settings.
+
   WELLNESS_AI_PROVIDER_CONFIG:           "wellness.aiProviderConfig",
+  // Central AI provider management: one tenant-wide BYOK record plus one
+  // CRM-managed access workflow state consumed by the shared resolver.
+  AI_PROVIDER_BYOK_CONFIG:              "ai.provider.byok",
+  AI_CRM_ACCESS_STATE:                  "ai.crmAccess.state",
   SLA_TERMINAL_STATUSES:                 "sla.terminalStatuses",
   EMAIL_FROM_ADDRESS:                    "email.fromAddress",
   INVENTORY_ALERT_ROLES:                 "inventory.alertRoles",
@@ -194,7 +199,10 @@ const DEFAULTS = {
   // provider config has been saved yet. The actual value is a JSON blob written
   // by routes/wellness_ai_config.js; this default only prevents `getSetting`
   // from returning null for new tenants.
+
   [KEYS.WELLNESS_AI_PROVIDER_CONFIG]: process.env.WELLNESS_AI_PROVIDER_CONFIG || "{}",
+  [KEYS.AI_PROVIDER_BYOK_CONFIG]: process.env.AI_PROVIDER_BYOK_CONFIG || "{}",
+  [KEYS.AI_CRM_ACCESS_STATE]: process.env.AI_CRM_ACCESS_STATE || "{}",
 };
 
 /**
@@ -306,5 +314,6 @@ module.exports = {
   getBudgetCap,
   evaluateCap,
 };
+
 
 

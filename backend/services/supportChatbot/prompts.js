@@ -333,8 +333,8 @@ const PAGE_INFO = [
 ];
 
 /**
- * Tool definitions in provider-neutral JSON Schema form. providerAdapters
- * translates these into Gemini functionDeclarations / OpenAI tools.
+ * Tool definitions in provider-neutral JSON Schema form. lib/aiProviderManagement.js
+ * (via lib/aiGateway.js) translates these into Gemini functionDeclarations / OpenAI tools.
  */
 const TOOL_DEFINITIONS = [
   {

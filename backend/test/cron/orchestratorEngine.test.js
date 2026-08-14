@@ -34,9 +34,12 @@
  *     revert (e.g. only one branch reverted) is caught.
  *
  * NOT covered (out of scope for this carry-over):
- *   - runForTenant / generateProposals / readContext — separate concern
- *     (Gemini integration, dedup hashing) and not where the case-drift
- *     bug lives.
+ *   - generateProposals / readContext — separate concern (dedup hashing)
+ *     and not where the case-drift bug lives. generateProposals goes
+ *     through lib/aiGateway.runAiRequest, mocked below only so the two
+ *     runForTenant early-return tests (tenant not wellness / not found)
+ *     don't risk a live call if that gate is ever relaxed — neither test
+ *     actually reaches generateProposals today.
  *   - cleanupExistingDupes — touches existing rows; case is a write
  *     concern, not a cleanup concern.
  *
@@ -50,7 +53,27 @@
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 
-import { executeApproved, ruleBasedProposals, runForTenant, cleanupExistingDupes } from '../../cron/orchestratorEngine.js';
+const { mockRunAiRequest } = vi.hoisted(() => ({ mockRunAiRequest: vi.fn() }));
+vi.mock('../../lib/aiGateway', () => ({
+  default: { runAiRequest: mockRunAiRequest },
+  runAiRequest: mockRunAiRequest,
+}));
+
+import { createRequire } from 'node:module';
+const requireCJS = createRequire(import.meta.url);
+const aiGatewayPath = requireCJS.resolve('../../lib/aiGateway');
+require('node:module')._cache[aiGatewayPath] = {
+  id: aiGatewayPath,
+  filename: aiGatewayPath,
+  loaded: true,
+  exports: { runAiRequest: mockRunAiRequest },
+  children: [],
+  paths: [],
+};
+
+const {
+  executeApproved, ruleBasedProposals, runForTenant, cleanupExistingDupes,
+} = requireCJS('../../cron/orchestratorEngine.js');
 
 beforeAll(() => {
   prisma.task = {
@@ -97,6 +120,8 @@ beforeEach(() => {
   prisma.agentRecommendation?.findMany?.mockReset?.();
   prisma.agentRecommendation?.create?.mockReset?.();
   prisma.agentRecommendation?.deleteMany?.mockReset?.();
+  mockRunAiRequest.mockReset();
+  mockRunAiRequest.mockRejectedValue(new Error('test-default-no-ai'));
 
   // No pre-existing task → findOrCreateTask falls through to .create().
   prisma.task.findFirst.mockResolvedValue(null);

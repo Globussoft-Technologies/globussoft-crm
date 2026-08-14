@@ -6,16 +6,33 @@ import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { createRequire } from "node:module";
 import prisma from "../../lib/prisma.js";
 
-// Patch the shared prisma singleton so the budget-cap check in
-// landingSiteGeneratorLLM.js does not trip the prisma-surface guard.
+// Patch the shared prisma singleton so the budget-cap check AND the AI
+// Subscription & Credit Management resolver (lib/aiProviderManagement,
+// consulted via lib/aiGateway on every provider attempt) don't trip the
+// prisma-surface guard. generateLandingSiteContent now routes every
+// provider call through aiGateway.runAiRequest — BYOK first (TenantSetting),
+// then a funded CRM-managed subscription (AiTenantSubscription +
+// AiCreditWallet), else a friendly blocked error.
 prisma.tenantSetting = {
   findUnique: vi.fn().mockResolvedValue(null),
   upsert: vi.fn().mockResolvedValue(null),
 };
+prisma.llmCallLog = { create: vi.fn().mockResolvedValue({ id: 1 }) };
+prisma.aiTenantSubscription = { findFirst: vi.fn().mockResolvedValue(null) };
+prisma.aiCreditWallet = {
+  findUnique: vi.fn().mockResolvedValue(null),
+  create: vi.fn().mockResolvedValue({ id: 1, tenantId: 1, balanceTokens: 0, totalPurchasedTokens: 0, totalUsedTokens: 0 }),
+  update: vi.fn().mockResolvedValue({ id: 1, tenantId: 1, balanceTokens: 0, totalPurchasedTokens: 0, totalUsedTokens: 0 }),
+};
+prisma.aiCreditTransaction = {
+  findUnique: vi.fn().mockResolvedValue(null),
+  create: vi.fn().mockResolvedValue({ id: 1 }),
+};
+prisma.$transaction = vi.fn(async (arg) => (Array.isArray(arg) ? Promise.all(arg) : arg(prisma)));
 
 const requireCjs = createRequire(import.meta.url);
 const MODULE_PATH = "../../services/landingSiteGeneratorLLM.js";
-const llmRouter = requireCjs("../../lib/llmRouter");
+const { encrypt } = requireCjs("../../lib/fieldEncryption");
 const destinationImageProvider = requireCjs(
   "../../services/destinationImageProvider",
 );
@@ -26,10 +43,21 @@ function loadClient() {
   return requireCjs(MODULE_PATH);
 }
 
-function mockProviderKeys(map) {
-  vi.spyOn(llmRouter, "getLlmKey").mockImplementation(
-    async (_tenantId, model) => map[model] || null,
-  );
+// Seeds BYOK for a single provider family via TenantSetting — the shape
+// lib/aiProviderManagement.readByokConfig() expects (providerId + apiKey).
+// Keyed on the lookup `key` arg so this doesn't clobber the UNRELATED
+// budget-cap TenantSetting row (budgetCap_llm_monthly_usd_cents) that
+// checkBudgetCap's getBudgetCap() reads via the SAME prisma.tenantSetting
+// .findUnique mock — a key-blind mockResolvedValue would make getSetting's
+// default `coerce: Number` parse the BYOK JSON blob as NaN and trip the
+// monthly-cap check.
+function seedByok({ providerId, apiKey = "test-key", model }) {
+  prisma.tenantSetting.findUnique.mockImplementation(async ({ where }) => {
+    if (where?.tenantId_key?.key === "ai.provider.byok") {
+      return { value: JSON.stringify({ providerId, apiKey: encrypt(apiKey), model }) };
+    }
+    return null;
+  });
 }
 
 function mockFetchJson(payload) {
@@ -52,6 +80,8 @@ beforeEach(() => {
   vi.restoreAllMocks();
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.tenantSetting.upsert.mockReset().mockResolvedValue(null);
+  prisma.aiTenantSubscription.findFirst.mockReset().mockResolvedValue(null);
+  prisma.aiCreditWallet.findUnique.mockReset().mockResolvedValue(null);
   vi.spyOn(destinationImageProvider, "fetchOne").mockResolvedValue({
     url: "https://example.com/landing-stock.jpg",
     attribution: { photographer: "Test", providerId: "test" },
@@ -68,11 +98,11 @@ afterEach(() => {
 describe("generateLandingSiteContent", () => {
   test("builds a wellness scaffold from OpenAI content fields", async () => {
     process.env.LLM_MODEL_OPENAI_LANDING = "gpt-4o-mini";
-    mockProviderKeys({
-      "gemini-flash": null,
-      "gpt-4": "openai-key",
-      "groq-llama": null,
-    });
+    // BYOK is a single fixed provider per tenant — resolveProviderConfig
+    // returns this OpenAI config regardless of the "gemini-flash" hint
+    // generateLandingSiteContent passes, so seeding OpenAI BYOK here
+    // resolves in exactly one call, not a Gemini-then-OpenAI fallback.
+    seedByok({ providerId: "openai", apiKey: "openai-key", model: "gpt-4o-mini" });
 
     const modelPayload = {
       suggestedTitle: "Hair Treatment Consultation",
@@ -146,11 +176,7 @@ describe("generateLandingSiteContent", () => {
 
   test("builds a wellness scaffold from Groq content fields when other keys are unavailable", async () => {
     process.env.GROQ_MODEL = "llama-3.3-70b-versatile";
-    mockProviderKeys({
-      "gemini-flash": null,
-      "gpt-4": null,
-      "groq-llama": "groq-key",
-    });
+    seedByok({ providerId: "groq", apiKey: "groq-key", model: "llama-3.3-70b-versatile" });
 
     const modelPayload = {
       suggestedTitle: "Wellness Follow-Up Day",

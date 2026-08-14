@@ -22,26 +22,7 @@ const cronRegistry = require("../lib/cronRegistry");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
-const { estimateLlmCost } = require("../lib/apiPricing");
-
-let GoogleGenerativeAI;
-try { ({ GoogleGenerativeAI } = require("@google/generative-ai")); } catch (_) { /* optional */ }
-
-// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
-// persistLlmCallLog helper so this direct Gemini call is visible to the
-// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
-// the orchestrator's recommendation generation, hence the nested try/catch
-// and the un-awaited .catch() on the create.
-function persistLlmCallLog(data) {
-  try {
-    const prismaClient = require("../lib/prisma");
-    prismaClient.llmCallLog.create({ data }).catch((e) =>
-      console.error(`[Orchestrator] LlmCallLog persist failed (non-fatal): ${e.message}`),
-    );
-  } catch (e) {
-    console.error(`[Orchestrator] LlmCallLog require failed (non-fatal): ${e.message}`);
-  }
-}
+const aiGateway = require("../lib/aiGateway");
 
 // ── Dedup helpers (issues #261, #285) ──────────────────────────────
 // Cron used to spam the same "Today's occupancy only 1%" card on every
@@ -420,12 +401,8 @@ async function readContext(tenantId) {
 // ── Proposal generators ────────────────────────────────────────────
 
 async function generateProposals(ctx) {
-  if (!GoogleGenerativeAI || !process.env.GEMINI_API_KEY) return null;
-  const modelId = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-  try {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: modelId });
-    const prompt = `You are an AI orchestrator for a hair/skin/aesthetics clinic. Today's reality:
+  if (!ctx || !ctx.tenantId) return null;
+  const prompt = `You are an AI orchestrator for a hair/skin/aesthetics clinic. Today's reality:
 ${ctx.summary}
 Top performing services this week: ${ctx.topServices.map((s) => s.name).join(", ") || "none"}
 High-ticket services with NO visits this week: ${ctx.highTickerCold.map((s) => s.name).join(", ") || "none"}
@@ -442,46 +419,22 @@ Output a JSON array of 1-3 recommendation cards. Each card MUST have:
  "payload": {<action-specific JSON>}}
 
 Return ONLY the JSON array, no commentary.`;
-    const r = await model.generateContent(prompt);
-    const txt = r.response.text().replace(/```json|```/g, "").trim();
-    const usage = r.response.usageMetadata || {};
-    const promptTokens = usage.promptTokenCount || 0;
-    const completionTokens = usage.candidatesTokenCount || 0;
-    persistLlmCallLog({
-      tenantId: (ctx && ctx.tenantId) || 1,
+
+  try {
+    const resp = await aiGateway.runAiRequest({
+      tenantId: ctx.tenantId,
       task: "orchestrator-recommendation",
-      model: modelId,
-      provider: "gemini",
-      reason: null,
-      promptTokens,
-      completionTokens,
-      totalTokens: promptTokens + completionTokens,
-      costEstimate: estimateLlmCost(modelId, promptTokens, completionTokens),
-      stub: false,
-      userId: null,
       surface: "orchestratorEngine",
-      status: "success",
+      requestedModelLabel: "gemini-flash",
+      messages: [{ role: "user", content: prompt }],
     });
+    const txt = (resp.text || "").replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(txt);
     return Array.isArray(parsed) ? parsed : null;
   } catch (e) {
-    persistLlmCallLog({
-      tenantId: (ctx && ctx.tenantId) || 1,
-      task: "orchestrator-recommendation",
-      model: modelId,
-      provider: "gemini",
-      reason: null,
-      promptTokens: 0,
-      completionTokens: 0,
-      totalTokens: 0,
-      costEstimate: 0,
-      stub: false,
-      userId: null,
-      surface: "orchestratorEngine",
-      status: "failed",
-      errorMessage: e.message,
-    });
-    console.warn("[Orchestrator] Gemini failed, using fallback rules:", e.message);
+    if (!e.friendly) {
+      console.warn("[Orchestrator] AI failed, using fallback rules:", e.message);
+    }
     return null;
   }
 }

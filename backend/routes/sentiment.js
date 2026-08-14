@@ -29,7 +29,7 @@ router.post("/analyze", verifyToken, llmLimiter, async (req, res) => {
     if (!text || typeof text !== "string") {
       return res.status(400).json({ error: "Field 'text' (string) is required." });
     }
-    const result = await analyzeMessage(text);
+    const result = await analyzeMessage(text, req.user.tenantId);
     res.json(result);
   } catch (err) {
     console.error("[Sentiment][/analyze] Error:", err);
@@ -55,7 +55,7 @@ router.post("/analyze-message/:emailId", verifyToken, llmLimiter, async (req, re
       return res.status(404).json({ error: "Email not found." });
     }
 
-    const { sentiment, sentimentScore } = await analyzeMessage(message.body);
+    const { sentiment, sentimentScore } = await analyzeMessage(message.body, req.user.tenantId);
     const updated = await prisma.emailMessage.update({
       where: { id: emailId },
       data: { sentiment, sentimentScore },
@@ -95,7 +95,7 @@ router.post("/analyze-batch", verifyToken, llmLimiter, async (req, res) => {
     const errors = [];
     for (const msg of messages) {
       try {
-        const { sentiment, sentimentScore } = await analyzeMessage(msg.body);
+        const { sentiment, sentimentScore } = await analyzeMessage(msg.body, req.user.tenantId);
         await prisma.emailMessage.update({
           where: { id: msg.id },
           data: { sentiment, sentimentScore },

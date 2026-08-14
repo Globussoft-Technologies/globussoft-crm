@@ -164,6 +164,7 @@ router.post('/generate', verifyToken, async (req, res) => {
     const normalizedSector = normalizeSectorKey(sectorKey);
     const result = await generateLandingSiteContent({
       tenantId: req.user.tenantId,
+      userId: req.user.userId,
       sectorKey: normalizedSector,
       sectorLabel: sectorLabel || (SECTORS[normalizedSector] && SECTORS[normalizedSector].label) || 'General',
       campaignName,

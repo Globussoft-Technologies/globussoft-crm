@@ -75,34 +75,15 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
-const { estimateLlmCost } = require('../lib/apiPricing');
 const { formatGeminiLimitMessage } = require('../lib/geminiErrors');
-
-// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
-// persistLlmCallLog helper so this direct Gemini call is visible to the
-// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
-// flyer-copy generation, hence the nested try/catch and the un-awaited
-// .catch() on the create.
-function persistLlmCallLog(data) {
-  try {
-    const prisma = require('../lib/prisma');
-    prisma.llmCallLog.create({ data }).catch((e) =>
-      console.error(`[marketingFlyerCopyLLM] LlmCallLog persist failed (non-fatal): ${e.message}`),
-    );
-  } catch (e) {
-    console.error(`[marketingFlyerCopyLLM] LlmCallLog require failed (non-fatal): ${e.message}`);
-  }
-}
+const aiGateway = require('../lib/aiGateway');
 
 const INTEGRATION = 'llm'; // share the LLM monthly cap envelope
 const TASK_NAME = 'marketing-flyer-copy'; // PRD §9.1 + FR-3.6.1
 const MODEL_PRIMARY = 'gemini-2.5-flash'; // PRD FR-3.6.1 + AI_SURFACES §3
-// Auto-fallback when MODEL_PRIMARY returns 429 (free-tier quota: only
-// 20 RPD on 2.5-flash). 2.0-flash has 1500 RPD on a separate quota
-// pool, so a single retry typically lands clean. Env-overridable via
-// `LLM_MODEL_GEMINI_FALLBACK=...` in backend/.env.
-const MODEL_PRIMARY_FALLBACK = 'gemini-2.0-flash';
-const GEMINI_KEY_ENV = 'GEMINI_API_KEY'; // matches lib/llmRouter ENV_FOR_MODEL
+// Model fallback cascade + API key resolution both live in
+// lib/aiProviderManagement.js / lib/aiGateway.js now (the shared AI
+// Subscription & Credit Management path) — no longer duplicated here.
 
 // Touch KEYS so the imported binding isn't flagged unused — also makes
 // the canonical-keys dependency explicit for future readers grep-tracing
@@ -201,47 +182,40 @@ function buildStubCopy({ destination, subBrand, themeJson, targetAudience }) {
 }
 
 /**
- * Whether the real Gemini call should fire. Wraps the key probe so
+ * Whether the real Gemini call should fire. Wraps the resolver probe so
  * tests can `vi.spyOn(client, 'realModeEnabled').mockResolvedValue(true)`
  * without setting the env directly.
  *
- * Async since 2026-06-10 (S15) — resolves the API key via
- * lib/llmRouter.getLlmKey() which checks SupplierCredential category
- * 'llm-key' first then falls back to process.env[GEMINI_KEY_ENV]. The
- * single caller (generateFlyerCopy below) was updated to `await
- * module.exports.realModeEnabled(tenantId)` in the same slice.
+ * Delegates to lib/aiProviderManagement.resolveProviderConfig — the SAME
+ * AI Subscription & Credit Management gate every other AI feature uses
+ * (BYOK first, then a funded CRM-managed subscription). This replaced a
+ * narrower llmRouter.getLlmKey() probe that only checked whether *a* key
+ * existed anywhere (including the bare platform env var, with no
+ * per-tenant authorization) — that let any tenant trigger real,
+ * unmetered Gemini spend regardless of subscription state.
  *
- * @param {number} [tenantId] — optional. Omit for ENV-only behaviour
- *                              (matches the pre-S45 contract).
+ * @param {number} [tenantId] — required for a real gate decision; omitted
+ *                              tenantId always resolves false (no bare-env
+ *                              fallback for a tenant-facing feature).
  * @returns {Promise<boolean>}
  */
 async function realModeEnabled(tenantId) {
-  // Per PRD §9.1 / S45: per-tenant LLM keys live in SupplierCredential
-  // category 'llm-key'. Delegate to lib/llmRouter.getLlmKey so the
-  // SupplierCredential→ENV cascade lives in one place.
-  const llmRouter = require('../lib/llmRouter');
-  const key = await llmRouter.getLlmKey(tenantId, 'gemini-flash');
-  return Boolean(key);
+  if (!tenantId) return false;
+  const { resolveProviderConfig } = require('../lib/aiProviderManagement');
+  const config = await resolveProviderConfig(tenantId, { requestedModelLabel: 'gemini-flash' });
+  return Boolean(config);
 }
 
 /**
- * Attempt a real Gemini call. STUB: real-mode wire-in is gated on
- * Q-AI-3 (Gemini API key) arriving — until then, this function is
- * unreachable in practice (realModeEnabled() resolves false). The
- * scaffold is present so the swap-in is a single-file edit when keys
- * land.
+ * Attempt a real Gemini call via the mandatory aiGateway entry point —
+ * resolves BYOK vs CRM-managed access, logs LlmCallLog, and deducts
+ * credits (crm-managed only) using the ACTUAL usage Gemini reports.
  *
  * Contract: returns a structured copyJson object matching the stub
  * shape (so consumers don't branch). Throws on any error — caller
  * falls through to the stub via try/catch.
  */
-async function callGemini({ destination, subBrand, themeJson, targetAudience, tenantId }) {
-  const apiKey = process.env[GEMINI_KEY_ENV];
-  if (!apiKey) {
-    throw new Error(`marketingFlyerCopyLLM: ${GEMINI_KEY_ENV} not set`);
-  }
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  const ai = new GoogleGenerativeAI(apiKey);
+async function callGemini({ destination, subBrand, themeJson, targetAudience, tenantId, userId }) {
   const themeStr = themeJson && typeof themeJson === 'object'
     ? JSON.stringify(themeJson)
     : (themeJson || '');
@@ -257,123 +231,16 @@ async function callGemini({ destination, subBrand, themeJson, targetAudience, te
     'Do not include placeholders, brackets, or quotes inside the values.',
   ].join('\n');
 
-  // Single attempt against a specific Gemini model. Pure — caller wraps
-  // in retry logic.
-  const tryGemini = async (modelName) => {
-    const model = ai.getGenerativeModel({
-      model: modelName,
-      generationConfig: {
-        responseMimeType: 'application/json',
-        maxOutputTokens: 1024,
-      },
-    });
-    const res = await model.generateContent(prompt);
-    const usage = res.response.usageMetadata || {};
-    return {
-      text: res.response.text(),
-      promptTokens: usage.promptTokenCount || 0,
-      completionTokens: usage.candidatesTokenCount || 0,
-    };
-  };
-
-  // Multi-model cascade on 429 (each Gemini model on the free tier has
-  // its OWN per-day / per-minute quota pool). When the primary hits a
-  // limit, walk down the chain. Order chosen so the highest-quality
-  // model is tried first; later entries are cheaper but lower-RPM/RPD.
-  //   - gemini-2.5-flash:      10 RPM / 20 RPD  (primary, often exhausted)
-  //   - gemini-2.0-flash:      15 RPM / 1500 RPD
-  //   - gemini-2.0-flash-lite: 30 RPM / 1500 RPD
-  //   - gemini-2.5-flash-lite: 15 RPM / 1000 RPD
-  // gemini-1.5-flash was removed Sept 2025 — drop it; v1beta returns 404.
-  // Dedup so an env override doesn't double-up an attempt.
-  const cascade = Array.from(new Set([
-    process.env.LLM_MODEL_GEMINI || MODEL_PRIMARY,
-    process.env.LLM_MODEL_GEMINI_FALLBACK || MODEL_PRIMARY_FALLBACK,
-    'gemini-2.0-flash-lite',
-    'gemini-2.5-flash-lite',
-  ]));
-  let raw;
-  let modelUsed;
-  let usageResult;
-  let lastError;
-  for (const m of cascade) {
-    try {
-      const attempt = await tryGemini(m);
-      raw = attempt.text;
-      usageResult = attempt;
-      modelUsed = m;
-      lastError = null;
-      break;
-    } catch (e) {
-      lastError = e;
-      const msg = e.message || '';
-      const isQuota = /429|Too Many Requests|exceeded.*quota|Quota exceeded/i.test(msg);
-      // Treat "model not found / not supported" 404s the same as quota —
-      // a Gemini model deprecation should let the cascade walk to the next
-      // entry, not hard-abort. Without this, a single removed model in
-      // the chain (like gemini-1.5-flash Sept 2025) blows the whole call.
-      const isModelGone = /404.*Not Found|is not found for API version|is not supported for generateContent/i.test(msg);
-      if (!isQuota && !isModelGone) {
-        persistLlmCallLog({
-          tenantId: tenantId || 1,
-          task: 'flyer-copy',
-          model: m,
-          provider: 'gemini',
-          reason: null,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-          costEstimate: 0,
-          stub: false,
-          userId: null,
-          surface: 'marketingFlyerCopyLLM',
-          status: 'failed',
-          errorMessage: e.message,
-        });
-        throw e;
-      }
-      console.warn(
-        `[marketingFlyerCopyLLM] '${m}' ${isQuota ? 'hit quota' : 'model unavailable'} — falling through cascade`,
-      );
-    }
-  }
-  if (raw === undefined) {
-    persistLlmCallLog({
-      tenantId: tenantId || 1,
-      task: 'flyer-copy',
-      model: cascade[cascade.length - 1],
-      provider: 'gemini',
-      reason: null,
-      promptTokens: 0,
-      completionTokens: 0,
-      totalTokens: 0,
-      costEstimate: 0,
-      stub: false,
-      userId: null,
-      surface: 'marketingFlyerCopyLLM',
-      status: 'failed',
-      errorMessage: (lastError && lastError.message) || 'gemini cascade exhausted',
-    });
-    throw lastError;
-  }
-
-  persistLlmCallLog({
-    tenantId: tenantId || 1,
+  const resp = await aiGateway.runAiRequest({
+    tenantId,
+    userId,
     task: 'flyer-copy',
-    model: modelUsed,
-    provider: 'gemini',
-    reason: null,
-    promptTokens: usageResult.promptTokens,
-    completionTokens: usageResult.completionTokens,
-    totalTokens: usageResult.promptTokens + usageResult.completionTokens,
-    costEstimate: estimateLlmCost(modelUsed, usageResult.promptTokens, usageResult.completionTokens),
-    stub: false,
-    userId: null,
     surface: 'marketingFlyerCopyLLM',
-    status: 'success',
+    requestedModelLabel: 'gemini-flash',
+    messages: [{ role: 'user', content: prompt }],
   });
 
-  const parsed = parseGeminiJson(raw);
+  const parsed = parseGeminiJson(resp.text);
   return { ...parsed, _source: 'gemini' };
 }
 
@@ -425,7 +292,7 @@ function parseGeminiJson(raw) {
  * }>}
  */
 async function generateFlyerCopy(args = {}, _ctx = {}) {
-  const { tenantId, destination, subBrand, themeJson, targetAudience } = args;
+  const { tenantId, destination, subBrand, themeJson, targetAudience, userId } = args;
 
   if (!tenantId) {
     // Same shape as adsGptClient — fail fast before the cap query so a
@@ -439,16 +306,14 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
   // Pre-call cap check via the self-mocking seam.
   await module.exports.checkBudgetCap(tenantId);
 
-  // STUB observability log (matches adsGptClient format). Token counts
-  // not yet measured in stub mode — would land with real-mode swap
-  // alongside the LlmCallLog persist.
   console.log(
-    `[marketingFlyerCopyLLM STUB] generateFlyerCopy called: tenantId=${tenantId} destination=${destination || '?'} subBrand=${subBrand || '?'} audience=${targetAudience || '?'}`,
+    `[marketingFlyerCopyLLM] generateFlyerCopy called: tenantId=${tenantId} destination=${destination || '?'} subBrand=${subBrand || '?'} audience=${targetAudience || '?'}`,
   );
 
-  // Real-mode dispatch — try the Gemini call; fall through to stub on
-  // any error or when key is absent. Pass tenantId so the resolver picks
-  // up a per-tenant SupplierCredential row before the ENV fallback.
+  // Real-mode dispatch — try the Gemini call through aiGateway (BYOK or
+  // funded CRM-managed subscription only — no bare-env fallback); fall
+  // through to the stub on ANY failure, including a blocked-access error,
+  // so the operator's flyer-copy UX never hard-breaks (AC-6.8).
   let realModeError = null;
   if (await module.exports.realModeEnabled(tenantId)) {
     try {
@@ -458,6 +323,7 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
         themeJson,
         targetAudience,
         tenantId,
+        userId,
       });
       return {
         copyJson: { ...realJson, _source: 'gemini' },
@@ -509,5 +375,4 @@ module.exports = {
   INTEGRATION,
   TASK_NAME,
   MODEL_PRIMARY,
-  GEMINI_KEY_ENV,
 };

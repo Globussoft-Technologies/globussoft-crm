@@ -209,7 +209,6 @@ describe('POST /api/support-chat/message', () => {
     expect(url).toBe(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
     );
-    expect(init.headers.Authorization).toBe(`Bearer ${BYOK_KEY}`);
     expect(init.headers['x-goog-api-key']).toBe(BYOK_KEY);
 
     // The KB search ran tenant-scoped + published-only.

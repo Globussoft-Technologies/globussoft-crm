@@ -109,7 +109,11 @@ const CRM_STATUS = {
 
 function configuredProviderHosts() {
   return new Set(
-    String(process.env.AI_PROVIDER_ALLOWED_HOSTS || process.env.WELLNESS_AI_ALLOWED_HOSTS || "")
+    String(
+      process.env.AI_PROVIDER_ALLOWED_HOSTS ||
+        process.env.WELLNESS_AI_ALLOWED_HOSTS ||
+        "",
+    )
       .split(",")
       .map((host) => host.trim().toLowerCase().replace(/\.$/, ""))
       .filter(Boolean),
@@ -131,7 +135,13 @@ function maskApiKey(key) {
 }
 
 function getProviderMeta(providerId) {
-  return PROVIDER_CATALOG[String(providerId || "").trim().toLowerCase()] || null;
+  return (
+    PROVIDER_CATALOG[
+      String(providerId || "")
+        .trim()
+        .toLowerCase()
+    ] || null
+  );
 }
 
 function normalizeProviderId(providerId) {
@@ -139,7 +149,11 @@ function normalizeProviderId(providerId) {
   return meta ? meta.id : null;
 }
 
-function validateProviderBaseUrl(providerId, baseUrl, { source = "byok" } = {}) {
+function validateProviderBaseUrl(
+  providerId,
+  baseUrl,
+  { source = "byok" } = {},
+) {
   const meta = getProviderMeta(providerId);
   if (!meta) {
     const err = new Error("Unsupported AI provider.");
@@ -165,14 +179,17 @@ function validateProviderBaseUrl(providerId, baseUrl, { source = "byok" } = {}) 
       Object.values(PROVIDER_CATALOG)
         .map((entry) => {
           try {
-            return entry.defaultBaseUrl ? new URL(entry.defaultBaseUrl).hostname.toLowerCase() : null;
+            return entry.defaultBaseUrl
+              ? new URL(entry.defaultBaseUrl).hostname.toLowerCase()
+              : null;
           } catch (_e) {
             return null;
           }
         })
         .filter(Boolean),
     );
-    const allowed = builtinHosts.has(hostname) || configuredProviderHosts().has(hostname);
+    const allowed =
+      builtinHosts.has(hostname) || configuredProviderHosts().has(hostname);
     const isAzure = /^[a-z0-9-]+\.openai\.azure\.com$/i.test(hostname);
     if (
       parsed.protocol !== "https:" ||
@@ -204,7 +221,11 @@ function normalizeOpenAIResponse(data) {
       } catch (_e) {
         args = {};
       }
-      return { id: tc.id || `openai-${i + 1}-${Date.now()}`, name: tc.function.name, args };
+      return {
+        id: tc.id || `openai-${i + 1}-${Date.now()}`,
+        name: tc.function.name,
+        args,
+      };
     });
   const u = data?.usage || {};
   return {
@@ -248,7 +269,10 @@ function normalizeGeminiResponse(data) {
 function normalizeAnthropicResponse(data) {
   const blocks = Array.isArray(data?.content) ? data.content : [];
   const text = blocks
-    .filter((block) => block && block.type === "text" && typeof block.text === "string")
+    .filter(
+      (block) =>
+        block && block.type === "text" && typeof block.text === "string",
+    )
     .map((block) => block.text)
     .join("");
   const toolCalls = blocks
@@ -277,8 +301,11 @@ function normalizeAnthropicResponse(data) {
 // without disturbing the string path — string-content messages produce the
 // exact same output they always did.
 function isMultimodalContent(content) {
-  return Array.isArray(content) && content.length > 0 &&
-    content.every((p) => p && (p.type === "text" || p.type === "image"));
+  return (
+    Array.isArray(content) &&
+    content.length > 0 &&
+    content.every((p) => p && (p.type === "text" || p.type === "image"))
+  );
 }
 
 function isValidContent(content) {
@@ -303,7 +330,10 @@ function toOpenAIMessages(messages) {
       // https://platform.openai.com/docs/guides/vision
       const parts = m.content.map((p) => {
         if (p.type === "image") {
-          return { type: "image_url", image_url: { url: `data:${p.mimeType};base64,${p.data}` } };
+          return {
+            type: "image_url",
+            image_url: { url: `data:${p.mimeType};base64,${p.data}` },
+          };
         }
         return { type: "text", text: p.text || "" };
       });
@@ -351,7 +381,10 @@ function toAnthropicMessages(messages) {
       }
       return { type: "text", text: p.text || "" };
     });
-    out.push({ role: m.role === "assistant" ? "assistant" : "user", content: blocks });
+    out.push({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: blocks,
+    });
   }
   return { system: systemParts.join("\n\n"), messages: out };
 }
@@ -362,7 +395,8 @@ function toGeminiContents(messages) {
   for (const m of messages || []) {
     if (!m || !isValidContent(m.content)) continue;
     if (m.role === "system") {
-      if (typeof m.content === "string") systemInstruction = { parts: [{ text: m.content }] };
+      if (typeof m.content === "string")
+        systemInstruction = { parts: [{ text: m.content }] };
       continue;
     }
     if (m.role === "tool") {
@@ -372,7 +406,9 @@ function toGeminiContents(messages) {
           {
             functionResponse: {
               name: m.name || "tool",
-              response: { result: typeof m.content === "string" ? m.content : "" },
+              response: {
+                result: typeof m.content === "string" ? m.content : "",
+              },
             },
           },
         ],
@@ -400,7 +436,11 @@ function toOpenAITools(tools) {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
   return tools.map((t) => ({
     type: "function",
-    function: { name: t.name, description: t.description, parameters: t.parameters },
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    },
   }));
 }
 
@@ -426,11 +466,19 @@ function toAnthropicTools(tools) {
   }));
 }
 
-async function callGemini(config, { messages, tools, generationConfig }, fetchImpl) {
+async function callGemini(
+  config,
+  { messages, tools, generationConfig },
+  fetchImpl,
+) {
   const fetchFn = resolveFetch(fetchImpl);
-  const base = validateProviderBaseUrl(config.providerId || "gemini", config.baseUrl, {
-    source: config.source,
-  });
+  const base = validateProviderBaseUrl(
+    config.providerId || "gemini",
+    config.baseUrl,
+    {
+      source: config.source,
+    },
+  );
   const model = config.model || DEFAULT_GEMINI_MODEL;
   const url = `${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const { systemInstruction, contents } = toGeminiContents(messages);
@@ -438,19 +486,22 @@ async function callGemini(config, { messages, tools, generationConfig }, fetchIm
   if (systemInstruction) body.systemInstruction = systemInstruction;
   const geminiTools = toGeminiTools(tools);
   if (geminiTools) body.tools = geminiTools;
-  body.generationConfig = generationConfig || { thinkingConfig: { thinkingBudget: 512 } };
+  body.generationConfig = generationConfig || {
+    thinkingConfig: { thinkingBudget: 512 },
+  };
 
   const res = await fetchFn(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
       "x-goog-api-key": config.apiKey,
     },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = new Error(`gemini generateContent failed with status ${res.status}`);
+    const err = new Error(
+      `gemini generateContent failed with status ${res.status}`,
+    );
     err.status = res.status;
     err.provider = "gemini";
     throw err;
@@ -461,9 +512,13 @@ async function callGemini(config, { messages, tools, generationConfig }, fetchIm
 
 async function callOpenAICompatible(config, { messages, tools }, fetchImpl) {
   const fetchFn = resolveFetch(fetchImpl);
-  const base = validateProviderBaseUrl(config.providerId || "openai", config.baseUrl, {
-    source: config.source,
-  });
+  const base = validateProviderBaseUrl(
+    config.providerId || "openai",
+    config.baseUrl,
+    {
+      source: config.source,
+    },
+  );
   const url = `${base}/chat/completions`;
   const body = {
     model: config.model || DEFAULT_OPENAI_MODEL,
@@ -481,20 +536,30 @@ async function callOpenAICompatible(config, { messages, tools }, fetchImpl) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = new Error(`openai-compatible chat completions failed with status ${res.status}`);
+    const err = new Error(
+      `openai-compatible chat completions failed with status ${res.status}`,
+    );
     err.status = res.status;
     err.provider = "openai-compatible";
     throw err;
   }
   const data = await res.json();
-  return { ...normalizeOpenAIResponse(data), model: body.model, provider: "openai-compatible" };
+  return {
+    ...normalizeOpenAIResponse(data),
+    model: body.model,
+    provider: "openai-compatible",
+  };
 }
 
 async function callAnthropic(config, { messages, tools }, fetchImpl) {
   const fetchFn = resolveFetch(fetchImpl);
-  const base = validateProviderBaseUrl(config.providerId || "claude", config.baseUrl, {
-    source: config.source,
-  });
+  const base = validateProviderBaseUrl(
+    config.providerId || "claude",
+    config.baseUrl,
+    {
+      source: config.source,
+    },
+  );
   const { system, messages: anthropicMessages } = toAnthropicMessages(messages);
   const body = {
     model: config.model || DEFAULT_ANTHROPIC_MODEL,
@@ -515,13 +580,19 @@ async function callAnthropic(config, { messages, tools }, fetchImpl) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = new Error(`anthropic messages failed with status ${res.status}`);
+    const err = new Error(
+      `anthropic messages failed with status ${res.status}`,
+    );
     err.status = res.status;
     err.provider = "anthropic";
     throw err;
   }
   const data = await res.json();
-  return { ...normalizeAnthropicResponse(data), model: body.model, provider: "anthropic" };
+  return {
+    ...normalizeAnthropicResponse(data),
+    model: body.model,
+    provider: "anthropic",
+  };
 }
 
 async function generateChatCompletion(config, payload, fetchImpl) {
@@ -531,19 +602,24 @@ async function generateChatCompletion(config, payload, fetchImpl) {
     throw err;
   }
 
-  const attempts = Array.isArray(config.fallbacks) && config.fallbacks.length
-    ? [config, ...config.fallbacks]
-    : [config];
+  const attempts =
+    Array.isArray(config.fallbacks) && config.fallbacks.length
+      ? [config, ...config.fallbacks]
+      : [config];
   let lastErr = null;
 
   for (const attempt of attempts) {
     try {
-      if (attempt.family === "gemini") return await callGemini(attempt, payload, fetchImpl);
+      if (attempt.family === "gemini")
+        return await callGemini(attempt, payload, fetchImpl);
       if (attempt.family === "openai-compatible") {
         return await callOpenAICompatible(attempt, payload, fetchImpl);
       }
-      if (attempt.family === "anthropic") return await callAnthropic(attempt, payload, fetchImpl);
-      const err = new Error(`Unsupported AI provider family: ${attempt.family}`);
+      if (attempt.family === "anthropic")
+        return await callAnthropic(attempt, payload, fetchImpl);
+      const err = new Error(
+        `Unsupported AI provider family: ${attempt.family}`,
+      );
       err.code = "AI_PROVIDER_UNSUPPORTED";
       throw err;
     } catch (err) {
@@ -595,8 +671,13 @@ function internalCandidatesForFamily(family) {
       providerLabel: "Google Gemini",
       family: "gemini",
       apiKey: process.env.GEMINI_API_KEY,
-      model: process.env.AI_CRM_GEMINI_MODEL || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
-      baseUrl: process.env.AI_CRM_GEMINI_BASE_URL || "https://generativelanguage.googleapis.com",
+      model:
+        process.env.AI_CRM_GEMINI_MODEL ||
+        process.env.GEMINI_MODEL ||
+        DEFAULT_GEMINI_MODEL,
+      baseUrl:
+        process.env.AI_CRM_GEMINI_BASE_URL ||
+        "https://generativelanguage.googleapis.com",
       source: "internal",
     });
   }
@@ -607,7 +688,8 @@ function internalCandidatesForFamily(family) {
       family: "openai-compatible",
       apiKey: process.env.OPENAI_API_KEY,
       model: process.env.AI_CRM_OPENAI_MODEL || DEFAULT_OPENAI_MODEL,
-      baseUrl: process.env.AI_CRM_OPENAI_BASE_URL || "https://api.openai.com/v1",
+      baseUrl:
+        process.env.AI_CRM_OPENAI_BASE_URL || "https://api.openai.com/v1",
       source: "internal",
     });
   }
@@ -618,7 +700,8 @@ function internalCandidatesForFamily(family) {
       family: "anthropic",
       apiKey: process.env.ANTHROPIC_API_KEY,
       model: process.env.AI_CRM_ANTHROPIC_MODEL || DEFAULT_ANTHROPIC_MODEL,
-      baseUrl: process.env.AI_CRM_ANTHROPIC_BASE_URL || "https://api.anthropic.com",
+      baseUrl:
+        process.env.AI_CRM_ANTHROPIC_BASE_URL || "https://api.anthropic.com",
       source: "internal",
     });
   }
@@ -629,7 +712,8 @@ function internalCandidatesForFamily(family) {
       family: "openai-compatible",
       apiKey: process.env.GROQ_API_KEY,
       model: process.env.AI_CRM_GROQ_MODEL || "llama-3.3-70b-versatile",
-      baseUrl: process.env.AI_CRM_GROQ_BASE_URL || "https://api.groq.com/openai/v1",
+      baseUrl:
+        process.env.AI_CRM_GROQ_BASE_URL || "https://api.groq.com/openai/v1",
       source: "internal",
     });
   }
@@ -640,7 +724,8 @@ function requestedFamilyForLabel(modelLabel) {
   const inferred = inferProvider(modelLabel);
   if (inferred === "gemini") return "gemini";
   if (inferred === "anthropic") return "anthropic";
-  if (["openai", "groq", "perplexity"].includes(inferred)) return "openai-compatible";
+  if (["openai", "groq", "perplexity"].includes(inferred))
+    return "openai-compatible";
   return "openai-compatible";
 }
 
@@ -648,17 +733,27 @@ function publicStatusMessage({ byok, walletState }) {
   if (byok) {
     return "Your organization is using its own AI provider credentials.";
   }
-  if (walletState.hasActiveSubscription && walletState.wallet.balanceTokens > 0) {
+  if (
+    walletState.hasActiveSubscription &&
+    walletState.wallet.balanceTokens > 0
+  ) {
     return "CRM-managed AI access is active for your organization.";
   }
-  if (walletState.hasActiveSubscription && walletState.wallet.balanceTokens <= 0) {
+  if (
+    walletState.hasActiveSubscription &&
+    walletState.wallet.balanceTokens <= 0
+  ) {
     return "Your AI credits have been exhausted. Purchase a new AI subscription or add your own AI provider API key to continue using AI-powered features.";
   }
   return "Your organization has not configured an AI provider yet.";
 }
 
 function publicUnavailableReason(walletState) {
-  if (walletState.hasActiveSubscription && walletState.wallet.balanceTokens <= 0) return "CREDITS_EXHAUSTED";
+  if (
+    walletState.hasActiveSubscription &&
+    walletState.wallet.balanceTokens <= 0
+  )
+    return "CREDITS_EXHAUSTED";
   return "NO_CONFIGURATION";
 }
 
@@ -669,7 +764,10 @@ function publicUnavailableReason(walletState) {
 //      AFTER the caller's provider call succeeds (see aiCreditLedger.deductUsage);
 //      this function only decides whether to attempt the call at all.
 //   3. Neither — return null; callers show the friendly upgrade message.
-async function resolveProviderConfig(tenantId, { requestedModelLabel = null } = {}) {
+async function resolveProviderConfig(
+  tenantId,
+  { requestedModelLabel = null } = {},
+) {
   const byok = await readByokConfig(tenantId);
   if (byok && byok.apiKey) {
     const providerMeta = getProviderMeta(byok.providerId);
@@ -679,7 +777,9 @@ async function resolveProviderConfig(tenantId, { requestedModelLabel = null } = 
       family: providerMeta.family,
       apiKey: byok.apiKey,
       model: byok.model || defaultModelForProvider(providerMeta.id),
-      baseUrl: validateProviderBaseUrl(providerMeta.id, byok.baseUrl, { source: "byok" }),
+      baseUrl: validateProviderBaseUrl(providerMeta.id, byok.baseUrl, {
+        source: "byok",
+      }),
       source: "byok",
       accessType: "byok",
     };
@@ -705,7 +805,11 @@ async function resolveProviderConfig(tenantId, { requestedModelLabel = null } = 
     source: "internal",
     accessType: "crm-managed",
     fallbacks: fallbacks
-      .filter((candidate) => candidate.providerId !== config.providerId || candidate.model !== config.model)
+      .filter(
+        (candidate) =>
+          candidate.providerId !== config.providerId ||
+          candidate.model !== config.model,
+      )
       .map((candidate) => ({ ...candidate, accessType: "crm-managed" })),
   };
 }
@@ -718,7 +822,7 @@ async function getTenantAiState(tenantId) {
 
   const resolverAccess = byok
     ? "byok"
-    : (walletState.hasActiveSubscription && walletState.wallet.balanceTokens > 0)
+    : walletState.hasActiveSubscription && walletState.wallet.balanceTokens > 0
       ? "crm-managed"
       : "none";
 
@@ -727,7 +831,8 @@ async function getTenantAiState(tenantId) {
     byok: byok
       ? {
           providerId: byok.providerId,
-          providerLabel: getProviderMeta(byok.providerId)?.label || byok.providerId,
+          providerLabel:
+            getProviderMeta(byok.providerId)?.label || byok.providerId,
           model: byok.model || defaultModelForProvider(byok.providerId),
           baseUrl: byok.baseUrl || null,
           maskedApiKey: maskApiKey(byok.apiKey),
@@ -753,7 +858,8 @@ async function getTenantAiState(tenantId) {
     resolverAccess,
     canPurchaseSubscription: !byok,
     friendlyMessage: publicStatusMessage({ byok, walletState }),
-    unavailableReason: resolverAccess === "none" ? publicUnavailableReason(walletState) : null,
+    unavailableReason:
+      resolverAccess === "none" ? publicUnavailableReason(walletState) : null,
   };
 }
 
@@ -772,7 +878,9 @@ async function testProviderConnection(input, fetchImpl) {
     family: meta.family,
     apiKey: String(input.apiKey || "").trim(),
     model: String(input.model || "").trim() || meta.defaultModel,
-    baseUrl: validateProviderBaseUrl(providerId, input.baseUrl, { source: "ad-hoc" }),
+    baseUrl: validateProviderBaseUrl(providerId, input.baseUrl, {
+      source: "ad-hoc",
+    }),
     source: "ad-hoc",
   };
   const started = Date.now();
@@ -807,12 +915,13 @@ async function discoverModels(input, fetchImpl) {
     err.code = "MISSING_API_KEY";
     throw err;
   }
-  const baseUrl = validateProviderBaseUrl(providerId, input.baseUrl, { source: "ad-hoc" });
+  const baseUrl = validateProviderBaseUrl(providerId, input.baseUrl, {
+    source: "ad-hoc",
+  });
 
   if (meta.family === "gemini") {
     const res = await fetchFn(`${baseUrl}/v1beta/models`, {
       headers: {
-        Authorization: `Bearer ${apiKey}`,
         "x-goog-api-key": apiKey,
       },
     });
@@ -879,14 +988,21 @@ async function saveByokConfig({
   }
 
   const stored = await readByokConfig(tenantId);
-  const finalKey = String(apiKey).trim().includes("...") && stored ? stored.apiKey : String(apiKey).trim();
-  const finalBaseUrl = validateProviderBaseUrl(normalizedProviderId, baseUrl, { source: "byok" });
+  const finalKey =
+    String(apiKey).trim().includes("...") && stored
+      ? stored.apiKey
+      : String(apiKey).trim();
+  const finalBaseUrl = validateProviderBaseUrl(normalizedProviderId, baseUrl, {
+    source: "byok",
+  });
   const payload = {
     providerId: normalizedProviderId,
     providerName: providerName || meta.label,
     family: meta.family,
     apiKey: encrypt(finalKey),
-    model: String(model || "").trim() || defaultModelForProvider(normalizedProviderId),
+    model:
+      String(model || "").trim() ||
+      defaultModelForProvider(normalizedProviderId),
     baseUrl: finalBaseUrl,
     updatedAt: new Date().toISOString(),
   };
@@ -932,7 +1048,12 @@ async function removeByokConfig({ tenantId, actorUserId }) {
   });
 }
 
-async function notifyTenantAdmins(tenantId, title, message, link = "/settings") {
+async function notifyTenantAdmins(
+  tenantId,
+  title,
+  message,
+  link = "/settings",
+) {
   const admins = await prisma.user.findMany({
     where: { tenantId, role: "ADMIN" },
     select: { id: true },
@@ -972,9 +1093,16 @@ async function cancelTenantSubscription({ tenantId, actorUserId }) {
     where: { id: subscription.id },
     data: { status: "CANCELLED" },
   });
-  await writeAudit("AiTenantSubscription", "CANCEL", subscription.id, actorUserId, tenantId, {
-    planId: subscription.planId,
-  });
+  await writeAudit(
+    "AiTenantSubscription",
+    "CANCEL",
+    subscription.id,
+    actorUserId,
+    tenantId,
+    {
+      planId: subscription.planId,
+    },
+  );
   await notifyTenantAdmins(
     tenantId,
     "CRM AI subscription cancelled",
@@ -986,23 +1114,48 @@ async function cancelTenantSubscription({ tenantId, actorUserId }) {
 // Super Admin manual credit grant/correction — audited, never touches
 // provider usage metadata (that's only recorded by aiCreditLedger.deductUsage
 // off real AI request usage).
-async function superAdminAdjustCredits({ tenantId, superAdminUsername, tokens, direction, reason = "" }) {
+async function superAdminAdjustCredits({
+  tenantId,
+  superAdminUsername,
+  tokens,
+  direction,
+  reason = "",
+}) {
   const amount = Number(tokens);
   if (!Number.isFinite(amount) || amount <= 0) {
     const err = new Error("tokens must be a positive number.");
     err.code = "INVALID_ADJUSTMENT";
     throw err;
   }
-  const result = direction === "debit"
-    ? await aiCreditLedger.debitAdjustment({ tenantId, tokens: amount, performedBySuperAdmin: superAdminUsername, reason })
-    : await aiCreditLedger.creditTokens({ tenantId, tokens: amount, type: "ADJUSTMENT", performedBySuperAdmin: superAdminUsername, reason });
-  await writeAudit("AiCreditWallet", "SUPER_ADMIN_ADJUSTMENT", result.wallet.id, null, tenantId, {
-    direction: direction === "debit" ? "debit" : "credit",
-    tokens: amount,
-    reason,
-    performedBySuperAdmin: superAdminUsername,
-    newBalance: result.wallet.balanceTokens,
-  });
+  const result =
+    direction === "debit"
+      ? await aiCreditLedger.debitAdjustment({
+          tenantId,
+          tokens: amount,
+          performedBySuperAdmin: superAdminUsername,
+          reason,
+        })
+      : await aiCreditLedger.creditTokens({
+          tenantId,
+          tokens: amount,
+          type: "ADJUSTMENT",
+          performedBySuperAdmin: superAdminUsername,
+          reason,
+        });
+  await writeAudit(
+    "AiCreditWallet",
+    "SUPER_ADMIN_ADJUSTMENT",
+    result.wallet.id,
+    null,
+    tenantId,
+    {
+      direction: direction === "debit" ? "debit" : "credit",
+      tokens: amount,
+      reason,
+      performedBySuperAdmin: superAdminUsername,
+      newBalance: result.wallet.balanceTokens,
+    },
+  );
   return result;
 }
 
@@ -1011,7 +1164,11 @@ async function superAdminAdjustCredits({ tenantId, superAdminUsername, tokens, d
 // modeled as flipping the active subscription to CANCELLED (resolver then
 // naturally falls through to "no active subscription"); resume re-activates
 // the most recent CANCELLED subscription that hasn't expired.
-async function superAdminSetSubscriptionStatus({ tenantId, superAdminUsername, action }) {
+async function superAdminSetSubscriptionStatus({
+  tenantId,
+  superAdminUsername,
+  action,
+}) {
   if (action === "suspend") {
     const active = await prisma.aiTenantSubscription.findFirst({
       where: { tenantId, status: "ACTIVE" },
@@ -1026,18 +1183,35 @@ async function superAdminSetSubscriptionStatus({ tenantId, superAdminUsername, a
       where: { id: active.id },
       data: { status: "CANCELLED" },
     });
-    await writeAudit("AiTenantSubscription", "SUPER_ADMIN_SUSPEND", active.id, null, tenantId, { superAdminUsername });
-    await notifyTenantAdmins(tenantId, "CRM AI access suspended", "Your CRM-managed AI access has been suspended by the platform administrator.");
+    await writeAudit(
+      "AiTenantSubscription",
+      "SUPER_ADMIN_SUSPEND",
+      active.id,
+      null,
+      tenantId,
+      { superAdminUsername },
+    );
+    await notifyTenantAdmins(
+      tenantId,
+      "CRM AI access suspended",
+      "Your CRM-managed AI access has been suspended by the platform administrator.",
+    );
     return updated;
   }
 
   if (action === "resume") {
     const latestCancelled = await prisma.aiTenantSubscription.findFirst({
-      where: { tenantId, status: "CANCELLED", OR: [{ endDate: null }, { endDate: { gt: new Date() } }] },
+      where: {
+        tenantId,
+        status: "CANCELLED",
+        OR: [{ endDate: null }, { endDate: { gt: new Date() } }],
+      },
       orderBy: { startDate: "desc" },
     });
     if (!latestCancelled) {
-      const err = new Error("Tenant has no eligible AI subscription to resume.");
+      const err = new Error(
+        "Tenant has no eligible AI subscription to resume.",
+      );
       err.code = "NO_ELIGIBLE_SUBSCRIPTION";
       throw err;
     }
@@ -1045,8 +1219,19 @@ async function superAdminSetSubscriptionStatus({ tenantId, superAdminUsername, a
       where: { id: latestCancelled.id },
       data: { status: "ACTIVE" },
     });
-    await writeAudit("AiTenantSubscription", "SUPER_ADMIN_RESUME", latestCancelled.id, null, tenantId, { superAdminUsername });
-    await notifyTenantAdmins(tenantId, "CRM AI access resumed", "Your CRM-managed AI access has been resumed by the platform administrator.");
+    await writeAudit(
+      "AiTenantSubscription",
+      "SUPER_ADMIN_RESUME",
+      latestCancelled.id,
+      null,
+      tenantId,
+      { superAdminUsername },
+    );
+    await notifyTenantAdmins(
+      tenantId,
+      "CRM AI access resumed",
+      "Your CRM-managed AI access has been resumed by the platform administrator.",
+    );
     return updated;
   }
 
@@ -1066,7 +1251,15 @@ function normalizeAnalyticsDate(value, boundary = "start") {
     const [, year, month, day] = plainDate;
     parsed = new Date(
       boundary === "end"
-        ? Date.UTC(Number(year), Number(month) - 1, Number(day), 23, 59, 59, 999)
+        ? Date.UTC(
+            Number(year),
+            Number(month) - 1,
+            Number(day),
+            23,
+            59,
+            59,
+            999,
+          )
         : Date.UTC(Number(year), Number(month) - 1, Number(day), 0, 0, 0, 0),
     );
   } else {
@@ -1107,9 +1300,15 @@ function buildLlmUsageSummary(rows) {
     const promptTokens = Number(row.promptTokens || 0);
     const completionTokens = Number(row.completionTokens || 0);
     const rawTotalTokens = Number(row.totalTokens || 0);
-    const effectiveTotalTokens = Math.max(rawTotalTokens, promptTokens + completionTokens);
-    const createdAt = row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
-    const dayKey = Number.isFinite(createdAt.getTime()) ? createdAt.toISOString().slice(0, 10) : "unknown";
+    const effectiveTotalTokens = Math.max(
+      rawTotalTokens,
+      promptTokens + completionTokens,
+    );
+    const createdAt =
+      row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
+    const dayKey = Number.isFinite(createdAt.getTime())
+      ? createdAt.toISOString().slice(0, 10)
+      : "unknown";
     const monthKey = dayKey !== "unknown" ? dayKey.slice(0, 7) : "unknown";
 
     summary.totalRequests += 1;
@@ -1124,19 +1323,31 @@ function buildLlmUsageSummary(rows) {
     if (monthKey !== "unknown") activeMonthSet.add(monthKey);
 
     const providerKey = row.provider || "unknown";
-    const providerBucket = providerMap.get(providerKey) || { provider: providerKey, requests: 0, totalTokens: 0 };
+    const providerBucket = providerMap.get(providerKey) || {
+      provider: providerKey,
+      requests: 0,
+      totalTokens: 0,
+    };
     providerBucket.requests += 1;
     providerBucket.totalTokens += effectiveTotalTokens;
     providerMap.set(providerKey, providerBucket);
 
     const taskKey = row.task || "unknown";
-    const taskBucket = taskMap.get(taskKey) || { task: taskKey, requests: 0, totalTokens: 0 };
+    const taskBucket = taskMap.get(taskKey) || {
+      task: taskKey,
+      requests: 0,
+      totalTokens: 0,
+    };
     taskBucket.requests += 1;
     taskBucket.totalTokens += effectiveTotalTokens;
     taskMap.set(taskKey, taskBucket);
 
     const modelKey = row.model || "unknown";
-    const modelBucket = modelMap.get(modelKey) || { model: modelKey, requests: 0, totalTokens: 0 };
+    const modelBucket = modelMap.get(modelKey) || {
+      model: modelKey,
+      requests: 0,
+      totalTokens: 0,
+    };
     modelBucket.requests += 1;
     modelBucket.totalTokens += effectiveTotalTokens;
     modelMap.set(modelKey, modelBucket);
@@ -1155,25 +1366,41 @@ function buildLlmUsageSummary(rows) {
     dailyMap.set(dayKey, dailyBucket);
   }
 
-  summary.averageTokens = summary.totalRequests ? Math.round(summary.totalTokens / summary.totalRequests) : 0;
+  summary.averageTokens = summary.totalRequests
+    ? Math.round(summary.totalTokens / summary.totalRequests)
+    : 0;
   summary.activeDays = activeDaySet.size;
   summary.activeMonths = activeMonthSet.size;
-  summary.dailyAverageHits = summary.activeDays ? Number((summary.totalRequests / summary.activeDays).toFixed(2)) : 0;
-  summary.monthlyAverageHits = summary.activeMonths ? Number((summary.totalRequests / summary.activeMonths).toFixed(2)) : 0;
-  summary.providerBreakdown = Array.from(providerMap.values()).sort((a, b) => b.requests - a.requests);
-  summary.taskBreakdown = Array.from(taskMap.values()).sort((a, b) => b.requests - a.requests);
+  summary.dailyAverageHits = summary.activeDays
+    ? Number((summary.totalRequests / summary.activeDays).toFixed(2))
+    : 0;
+  summary.monthlyAverageHits = summary.activeMonths
+    ? Number((summary.totalRequests / summary.activeMonths).toFixed(2))
+    : 0;
+  summary.providerBreakdown = Array.from(providerMap.values()).sort(
+    (a, b) => b.requests - a.requests,
+  );
+  summary.taskBreakdown = Array.from(taskMap.values()).sort(
+    (a, b) => b.requests - a.requests,
+  );
   summary.modelBreakdown = Array.from(modelMap.values())
     .sort((a, b) => b.requests - a.requests)
     .slice(0, 10);
-  summary.daily = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+  summary.daily = Array.from(dailyMap.values()).sort((a, b) =>
+    a.date.localeCompare(b.date),
+  );
   return summary;
 }
 
 async function getSuperAdminTenantOverview(options = {}) {
   const from = normalizeAnalyticsDate(options.from, "start");
   const to = normalizeAnalyticsDate(options.to, "end");
-  const search = String(options.search || "").trim().toLowerCase();
-  const requestStatusFilter = String(options.requestStatus || "all").trim().toLowerCase();
+  const search = String(options.search || "")
+    .trim()
+    .toLowerCase();
+  const requestStatusFilter = String(options.requestStatus || "all")
+    .trim()
+    .toLowerCase();
 
   const where = {};
   if (from || to) {
@@ -1223,7 +1450,10 @@ async function getSuperAdminTenantOverview(options = {}) {
     const promptTokens = Number(row.promptTokens || 0);
     const completionTokens = Number(row.completionTokens || 0);
     const rawTotalTokens = Number(row.totalTokens || 0);
-    const effectiveTotalTokens = Math.max(rawTotalTokens, promptTokens + completionTokens);
+    const effectiveTotalTokens = Math.max(
+      rawTotalTokens,
+      promptTokens + completionTokens,
+    );
     bucket.totalRequests += 1;
     bucket.totalTokens += effectiveTotalTokens;
     bucket.promptTokens += promptTokens;
@@ -1256,7 +1486,9 @@ async function getSuperAdminTenantOverview(options = {}) {
       activeMonths: new Set(),
       lastActivityAt: null,
     };
-    const requestStatus = walletState.hasActiveSubscription ? CRM_STATUS.ACTIVE : CRM_STATUS.NONE;
+    const requestStatus = walletState.hasActiveSubscription
+      ? CRM_STATUS.ACTIVE
+      : CRM_STATUS.NONE;
     const row = {
       tenantId: tenant.id,
       organization: tenant.name,
@@ -1279,21 +1511,36 @@ async function getSuperAdminTenantOverview(options = {}) {
         percentRemaining: walletState.percentRemaining,
       },
       monthlyUsage: usage.totalRequests,
-      averageTokens: usage.totalRequests ? Math.round(usage.totalTokens / usage.totalRequests) : 0,
+      averageTokens: usage.totalRequests
+        ? Math.round(usage.totalTokens / usage.totalRequests)
+        : 0,
       maxTokens: usage.maxTokens,
       activeDays: usage.activeDays.size,
       activeMonths: usage.activeMonths.size,
-      dailyAverageHits: usage.activeDays.size ? Number((usage.totalRequests / usage.activeDays.size).toFixed(2)) : 0,
-      monthlyAverageHits: usage.activeMonths.size ? Number((usage.totalRequests / usage.activeMonths.size).toFixed(2)) : 0,
+      dailyAverageHits: usage.activeDays.size
+        ? Number((usage.totalRequests / usage.activeDays.size).toFixed(2))
+        : 0,
+      monthlyAverageHits: usage.activeMonths.size
+        ? Number((usage.totalRequests / usage.activeMonths.size).toFixed(2))
+        : 0,
       lastActivityAt: usage.lastActivityAt,
       totalTokens: usage.totalTokens,
       ownerEmail: tenant.ownerEmail || null,
       createdAt: tenant.createdAt,
     };
 
-    if (requestStatusFilter !== "all" && row.requestStatus !== requestStatusFilter) continue;
+    if (
+      requestStatusFilter !== "all" &&
+      row.requestStatus !== requestStatusFilter
+    )
+      continue;
     if (search) {
-      const haystack = [row.organization, row.slug, row.ownerEmail, String(row.tenantId)]
+      const haystack = [
+        row.organization,
+        row.slug,
+        row.ownerEmail,
+        String(row.tenantId),
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -1306,7 +1553,10 @@ async function getSuperAdminTenantOverview(options = {}) {
     tenants: results,
     summary: {
       totalTenants: results.length,
-      activeRequestCount: results.filter((tenant) => tenant.requestStatus && tenant.requestStatus !== CRM_STATUS.NONE).length,
+      activeRequestCount: results.filter(
+        (tenant) =>
+          tenant.requestStatus && tenant.requestStatus !== CRM_STATUS.NONE,
+      ).length,
       crmEnabledCount: results.filter((tenant) => tenant.crmAiEnabled).length,
       byokCount: results.filter((tenant) => tenant.ownApiKey).length,
     },
@@ -1364,7 +1614,7 @@ async function getSuperAdminTenantDetail(tenantId, options = {}) {
         stub: true,
         createdAt: true,
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: "asc" },
       take: 10000,
     }),
     prisma.aiCreditTransaction.findMany({
@@ -1384,7 +1634,9 @@ async function getSuperAdminTenantDetail(tenantId, options = {}) {
     createdAt: tenant.createdAt,
     ownApiKey: Boolean(byok && byok.apiKey),
     crmAiEnabled: walletState.hasActiveSubscription,
-    requestStatus: walletState.hasActiveSubscription ? CRM_STATUS.ACTIVE : CRM_STATUS.NONE,
+    requestStatus: walletState.hasActiveSubscription
+      ? CRM_STATUS.ACTIVE
+      : CRM_STATUS.NONE,
     subscription: walletState.activeSubscription
       ? {
           id: walletState.activeSubscription.id,
@@ -1442,4 +1694,3 @@ module.exports = {
   discoverModels,
   requestedFamilyForLabel,
 };
-

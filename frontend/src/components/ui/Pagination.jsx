@@ -4,11 +4,11 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 /**
  * frontend/src/components/ui/Pagination.jsx
  *
- * Issue #694 — pagination controls mix infinite-scroll + page-numbers +
+ * Issue #694 - pagination controls mix infinite-scroll + page-numbers +
  * load-more across lists.
  *
  * Canonical pagination control. Renders:
- *   - "Showing 1–50 of 253" range label (left)
+ *   - Optional "Showing 1-50 of 253" range label (left)
  *   - Prev / page-numbers / Next controls (right)
  *
  * Convention (issue #694 canonical pattern):
@@ -26,7 +26,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
  *   />
  *
  * Pages are 1-indexed (so the URL `?page=1` shows the first page). The
- * caller is responsible for URL-syncing — this component just emits the
+ * caller is responsible for URL-syncing - this component just emits the
  * new page number via `onChange`.
  */
 export default function Pagination({
@@ -35,6 +35,7 @@ export default function Pagination({
   total = 0,
   onChange,
   maxNumbers = 7,
+  showRangeLabel = true,
   style,
   className,
 }) {
@@ -49,7 +50,7 @@ export default function Pagination({
     if (typeof onChange === 'function') onChange(p);
   };
 
-  // Build the visible page-number window — always show first + last,
+  // Build the visible page-number window - always show first + last,
   // ellipses in the middle when totalPages > maxNumbers.
   const pageNumbers = buildPageWindow(page, totalPages, maxNumbers);
 
@@ -60,17 +61,19 @@ export default function Pagination({
       style={{
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        justifyContent: showRangeLabel ? 'space-between' : 'flex-end',
         gap: '1rem',
         padding: '0.75rem 0',
         flexWrap: 'wrap',
-        margin: "0 1rem ",
+        margin: '0 1rem',
         ...style,
       }}
     >
-      <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-        Showing {from}–{to} of {total}
-      </span>
+      {showRangeLabel ? (
+        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          Showing {from}-{to} of {total}
+        </span>
+      ) : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
         <button
           type="button"
@@ -82,13 +85,13 @@ export default function Pagination({
           <ChevronLeft size={16} />
         </button>
         {pageNumbers.map((p, i) =>
-          p === '…' ? (
+          p === '...' ? (
             <span
               key={`ellipsis-${i}`}
               aria-hidden="true"
               style={{ padding: '0 0.25rem', color: 'var(--text-secondary)' }}
             >
-              …
+              ...
             </span>
           ) : (
             <button
@@ -101,7 +104,7 @@ export default function Pagination({
             >
               {p}
             </button>
-          )
+          ),
         )}
         <button
           type="button"
@@ -133,7 +136,7 @@ function buildPageWindow(current, total, max) {
     .sort((a, b) => a - b);
   const out = [];
   for (let k = 0; k < sorted.length; k++) {
-    if (k > 0 && sorted[k] !== sorted[k - 1] + 1) out.push('…');
+    if (k > 0 && sorted[k] !== sorted[k - 1] + 1) out.push('...');
     out.push(sorted[k]);
   }
   return out;

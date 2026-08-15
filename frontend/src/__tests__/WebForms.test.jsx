@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { buildWebFormEmbedCode, buildWebFormPreviewUrl, slugifyWebFormName, textOrBlank } from '../utils/webForms';
 
@@ -36,5 +38,13 @@ describe('buildWebFormEmbedCode', () => {
     const code = buildWebFormEmbedCode({ name: 'Lead <Form>', slug: 'lead-form' }, 'https://crm.example.com');
 
     expect(code).toContain('title="Lead &lt;Form&gt;"');
+  });
+});
+
+describe('public web form embed footer', () => {
+  test('links the powered-by footer to the home page', () => {
+    const html = readFileSync(join(process.cwd(), 'public/embed/web-form.html'), 'utf8');
+
+    expect(html).toContain('<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>');
   });
 });

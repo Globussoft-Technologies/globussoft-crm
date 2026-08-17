@@ -71,15 +71,22 @@ async function renderPageToPng(pdfDocument, pageNumber, scale = OCR_DPI / 72) {
 }
 
 async function runOcr(pdfDocument, pageNumber) {
-  if (!getCanvasModule()) return "";
+  if (!getCanvasModule()) return { text: "", textItems: [] };
   const tmpFile = await renderPageToPng(pdfDocument, pageNumber);
   try {
     const {
-      data: { text: ocrText },
+      data: { text: ocrText, words = [] },
     } = await Tesseract.recognize(tmpFile, "eng", { logger: () => {} });
-    return String(ocrText || "")
-      .replace(/\s+/g, " ")
-      .trim();
+    return {
+      text: String(ocrText || "").replace(/\s+/g, " ").trim(),
+      textItems: words.map((word) => ({
+        str: word.text || "",
+        x: Number(word.bbox?.x0 || 0),
+        y: Number(word.bbox?.y0 || 0),
+        width: Number((word.bbox?.x1 || 0) - (word.bbox?.x0 || 0)),
+        height: Number((word.bbox?.y1 || 0) - (word.bbox?.y0 || 0)),
+      })).filter((item) => item.str.trim()),
+    };
   } finally {
     try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
   }
@@ -88,9 +95,17 @@ async function runOcr(pdfDocument, pageNumber) {
 async function extractPageText(pdfDocument, pageNumber) {
   let text = "";
   let viaOcr = false;
+  let textItems = [];
   try {
     const page = await pdfDocument.getPage(pageNumber);
     const textContent = await page.getTextContent();
+    textItems = textContent.items.map((item) => ({
+      str: item.str || "",
+      x: Number(item.transform?.[4] || 0),
+      y: Number(item.transform?.[5] || 0),
+      width: Number(item.width || 0),
+      height: Number(item.height || 0),
+    })).filter((item) => item.str.trim());
     text = textContent.items
       .map((item) => (item.str || ""))
       .join(" ")
@@ -100,7 +115,9 @@ async function extractPageText(pdfDocument, pageNumber) {
     if (text.length < OCR_TEXT_THRESHOLD) {
       viaOcr = true;
       try {
-        text = await runOcr(pdfDocument, pageNumber);
+        const ocrResult = await runOcr(pdfDocument, pageNumber);
+        text = ocrResult.text;
+        textItems = ocrResult.textItems;
       } catch (ocrErr) {
         console.warn(`[pdfTextExtractor] OCR failed page ${pageNumber}:`, ocrErr.message);
       }
@@ -108,7 +125,7 @@ async function extractPageText(pdfDocument, pageNumber) {
   } catch (pageErr) {
     console.warn(`[pdfTextExtractor] extract page ${pageNumber} failed:`, pageErr.message);
   }
-  return { pageNumber, text, viaOcr };
+  return { pageNumber, text, textItems, viaOcr };
 }
 
 /**

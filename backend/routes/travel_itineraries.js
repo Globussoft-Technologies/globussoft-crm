@@ -470,6 +470,21 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
       const cid = parseInt(req.query.contactId, 10);
       if (Number.isFinite(cid)) where.contactId = cid;
     }
+    if (req.query.from || req.query.to) {
+      const from = req.query.from
+        ? new Date(`${String(req.query.from)}T00:00:00.000`)
+        : null;
+      const to = req.query.to
+        ? new Date(`${String(req.query.to)}T23:59:59.999`)
+        : null;
+      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime()))) {
+        return res.status(400).json({ error: "invalid date range", code: "INVALID_DATE_RANGE" });
+      }
+      where.createdAt = {
+        ...(from ? { gte: from } : {}),
+        ...(to ? { lte: to } : {}),
+      };
+    }
 
     const allowed = await getSubBrandAccessSet(req.user.userId);
     if (allowed) {

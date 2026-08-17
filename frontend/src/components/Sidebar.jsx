@@ -2319,6 +2319,9 @@ function renderGenericNav({
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
       <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly />
       <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly />
+      {/* Generic CRM workflow automation. Kept in the generic navigation only;
+          travel and wellness render their own vertical navigation branches. */}
+      <Link to="/workflows" icon={GitBranch} label="Workflows" />
 
       {/* Admin section. Opens for the legacy `ADMIN` role-string AND for any
           custom role granted `roles.read` via RBAC  without the latter,

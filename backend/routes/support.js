@@ -120,6 +120,18 @@ router.put('/:id', verifyToken, async (req, res) => {
 
     const ticket = await prisma.ticket.update({ where: { id: existing.id }, data });
     if (req.io) req.io.emit('ticket_updated', ticket);
+    require('../lib/eventBus').safeEmitEvent(
+      'ticket.updated',
+      {
+        ticketId: ticket.id,
+        subject: ticket.subject,
+        priority: ticket.priority,
+        status: ticket.status,
+        assigneeId: ticket.assigneeId,
+      },
+      req.user.tenantId,
+      'support/put'
+    );
     res.json(ticket);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to update ticket' });

@@ -2222,7 +2222,14 @@ export default function App() {
                           </GenericOnly>
                         }
                       />
-                      <Route path="workflows" element={<Workflows />} />
+                      <Route
+                        path="workflows"
+                        element={
+                          <GenericOnly>
+                            <Workflows />
+                          </GenericOnly>
+                        }
+                      />
                       <Route path="developer" element={<Developer />} />
                       <Route
                         path="billing"

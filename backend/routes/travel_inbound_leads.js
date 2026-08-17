@@ -80,6 +80,7 @@ const {
   normalizePhoneForDedup,
   checkAntiSpam,
   classifyInboundJunk,
+  normalizeFacebookLeadAdsPayload,
   normalizeMetaLeadPayload,
   normalizeIndiamartLeadPayload,
   normalizeJustdialLeadPayload,
@@ -274,6 +275,7 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     // no-ops when the vendor-shape markers are absent, so pre-normalized
     // callers keep working.
     if (channelCanonical === "meta_ad") {
+      req.body = normalizeFacebookLeadAdsPayload(req.body);
       req.body = normalizeMetaLeadPayload(req.body);
     } else if (channelCanonical === "indiamart") {
       req.body = normalizeIndiamartLeadPayload(req.body);
@@ -295,7 +297,7 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       tenantSlug,
       metaJson: _metaJson,
       // G002 — caller-supplied dedupe key
-      idempotencyKey,
+      idempotencyKey: suppliedIdempotencyKey,
       // G005 — UTM + producer attribution (passed to Touchpoint write)
       utmCampaign,
       utmTerm,
@@ -311,6 +313,10 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       // G003 — marketplace short-circuit
       externalLeadId,
     } = req.body || {};
+    // Meta's leadgen_id is the durable upstream identity. Use it as the
+    // channel-scoped idempotency key when the producer did not provide one.
+    const metaLeadgenId = req.body?.leadgen_id || req.body?.metaJson?.leadgen_id;
+    const idempotencyKey = suppliedIdempotencyKey || (metaLeadgenId ? `meta:${String(metaLeadgenId)}` : null);
 
     if (!tenantSlug) {
       return res.status(400).json({
@@ -866,6 +872,28 @@ router.post("/inbound/leads/:channel", async (req, res) => {
             : null,
       },
     });
+
+    // Feed the workflow engine the same classified lead immediately after it
+    // is persisted, so Contact.created rules can send the Junk signal.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      await emitEvent("contact.created", {
+        contactId: created.id,
+        name: created.name,
+        email: created.email,
+        phone: created.phone,
+        status: created.status,
+        source: created.source,
+        metaLeadgenId: metaLeadgenId || null,
+        idempotencyKey: created.idempotencyKey || null,
+        metaSignal: created.status === "Junk" ? "junk" : null,
+        metaIsJunk: created.status === "Junk",
+        metaIsQualified: false,
+        tenantId: tenant.id,
+      }, tenant.id, req.io);
+    } catch (workflowError) {
+      console.error("[inbound] lead workflow event failed:", workflowError.message);
+    }
 
     // G001 — write the Touchpoint row AFTER the Contact lands.
     const touchpointId = await writeTouchpoint(created.id);

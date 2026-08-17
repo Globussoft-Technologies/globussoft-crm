@@ -82,6 +82,7 @@ prisma.automationRule.delete = vi.fn();
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.findMany = vi.fn();
 prisma.auditLog.count = vi.fn();
+prisma.auditLog.groupBy = vi.fn();
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 
@@ -91,6 +92,7 @@ prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 // destructure captures our mock.
 const eventBus = requireCJS('../../lib/eventBus');
 eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
+eventBus.testRule = vi.fn().mockResolvedValue({ conditionsMatched: true, attempted: 1, succeeded: 1, failed: 0 });
 if (eventBus.safeEmitEvent) {
   eventBus.safeEmitEvent = vi.fn().mockResolvedValue(undefined);
 }
@@ -125,7 +127,9 @@ beforeEach(() => {
   prisma.automationRule.delete.mockReset();
   prisma.auditLog.findMany.mockReset();
   prisma.auditLog.count.mockReset();
+  prisma.auditLog.groupBy.mockReset();
   eventBus.emitEvent.mockReset();
+  eventBus.testRule.mockReset();
 
   // Sensible defaults — individual tests override.
   prisma.automationRule.findMany.mockResolvedValue([]);
@@ -135,7 +139,9 @@ beforeEach(() => {
   prisma.automationRule.delete.mockResolvedValue({ id: 1 });
   prisma.auditLog.findMany.mockResolvedValue([]);
   prisma.auditLog.count.mockResolvedValue(0);
+  prisma.auditLog.groupBy.mockResolvedValue([]);
   eventBus.emitEvent.mockResolvedValue(undefined);
+  eventBus.testRule.mockResolvedValue({ conditionsMatched: true, attempted: 1, succeeded: 1, failed: 0 });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -208,13 +214,13 @@ describe('GET /history — workflow execution history', () => {
     expect(res.body).toMatchObject({ total: 1, limit: 50, offset: 0 });
     expect(res.body.logs).toHaveLength(1);
     expect(prisma.auditLog.findMany).toHaveBeenCalledWith({
-      where: { tenantId: 42, entity: 'AutomationRule', action: 'WORKFLOW' },
+      where: { tenantId: 42, entity: 'AutomationRule', action: { in: ['WORKFLOW', 'WORKFLOW_FAILED'] } },
       orderBy: { createdAt: 'desc' },
       take: 50,
       skip: 0,
     });
     expect(prisma.auditLog.count).toHaveBeenCalledWith({
-      where: { tenantId: 42, entity: 'AutomationRule', action: 'WORKFLOW' },
+      where: { tenantId: 42, entity: 'AutomationRule', action: { in: ['WORKFLOW', 'WORKFLOW_FAILED'] } },
     });
   });
 
@@ -234,6 +240,25 @@ describe('GET /history — workflow execution history', () => {
 // ─────────────────────────────────────────────────────────────────────────
 // GET / — list automation rules
 // ─────────────────────────────────────────────────────────────────────────
+
+describe('GET /stats/actions - seven-day successful action counts', () => {
+  test('groups successful audit entries by workflow within the tenant', async () => {
+    prisma.auditLog.groupBy.mockResolvedValue([
+      { entityId: 12, _count: { _all: 4 } },
+      { entityId: 15, _count: { _all: 1 } },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/workflows/stats/actions');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ 12: 4, 15: 1 });
+    expect(prisma.auditLog.groupBy).toHaveBeenCalledWith(expect.objectContaining({
+      by: ['entityId'],
+      where: expect.objectContaining({ tenantId: 42, entity: 'AutomationRule', action: 'WORKFLOW' }),
+      _count: { _all: true },
+    }));
+  });
+});
 
 describe('GET / — list automation rules', () => {
   test('200 with tenant-scoped findMany', async () => {
@@ -578,10 +603,10 @@ describe('POST /:id/test — manually fire rule', () => {
       .send({});
 
     expect(res.status).toBe(404);
-    expect(eventBus.emitEvent).not.toHaveBeenCalled();
+    expect(eventBus.testRule).not.toHaveBeenCalled();
   });
 
-  test('200 delegates to emitEvent with mock payload + req.user.tenantId', async () => {
+  test('200 tests only the selected rule with a mock payload + req.user.tenantId', async () => {
     prisma.automationRule.findFirst.mockResolvedValue({
       id: 50,
       tenantId: 1,
@@ -591,15 +616,14 @@ describe('POST /:id/test — manually fire rule', () => {
 
     const res = await request(makeApp({ tenantId: 1, userId: 7, email: 'admin@example.com' }))
       .post('/api/workflows/50/test')
-      .send({ contactId: 999 });
+      .send({ payload: { contactId: 999 } });
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ success: true });
     expect(res.body.message).toMatch(/Welcome email/);
-    expect(res.body.message).toMatch(/contact\.created/);
-    expect(eventBus.emitEvent).toHaveBeenCalledTimes(1);
-    const [trigger, payload, tenantId] = eventBus.emitEvent.mock.calls[0];
-    expect(trigger).toBe('contact.created');
+    expect(eventBus.testRule).toHaveBeenCalledTimes(1);
+    const [rule, payload, tenantId] = eventBus.testRule.mock.calls[0];
+    expect(rule.id).toBe(50);
     expect(tenantId).toBe(1);
     expect(payload).toMatchObject({
       userId: 7,

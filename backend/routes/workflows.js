@@ -583,8 +583,8 @@ router.post("/:id/test", async (req, res) => {
       success: result.failed === 0,
       result,
       message: result.conditionsMatched
-        ? `Test completed for workflow "${existing.name}"`
-        : `Test payload did not match the conditions for workflow "${existing.name}"`,
+        ? `Test fired for rule "${existing.name}" with trigger ${existing.triggerType}`
+        : `Test payload did not match the conditions for rule "${existing.name}" with trigger ${existing.triggerType}`,
     });
   } catch (error) {
     console.error("[Workflows] Test error:", error.message);

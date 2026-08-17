@@ -4,6 +4,7 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: false });
 require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true });
 const prisma = require("./prisma");
+const { sendSms, resolveProviderConfig } = require("../services/smsProvider");
 
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
@@ -180,13 +181,18 @@ function evaluateCondition(conditionJson, payload) {
     console.warn(`[WorkflowEngine] Bad condition JSON, skipping rule: ${e.message}`);
     return false;
   }
-  if (!Array.isArray(clauses)) {
-    console.warn("[WorkflowEngine] Condition must be a JSON array of clauses");
+  const groups = Array.isArray(clauses)
+    ? [{ match: "all", clauses }]
+    : clauses && Array.isArray(clauses.groups)
+      ? clauses.groups
+      : null;
+  if (!groups) {
+    console.warn("[WorkflowEngine] Condition must be a JSON array or grouped conditions");
     return false;
   }
-  if (clauses.length === 0) return true;
+  if (groups.length === 0) return true;
 
-  for (const clause of clauses) {
+  const evaluateClause = (clause) => {
     if (!clause || typeof clause !== "object") return false;
     const { field, op, value } = clause;
     if (!field || !op) return false;
@@ -228,8 +234,16 @@ function evaluateCondition(conditionJson, payload) {
         console.warn(`[WorkflowEngine] Unknown condition op: ${op}`);
         return false;
     }
-  }
-  return true;
+    return true;
+  };
+
+  return groups.every((group) => {
+    if (!group || !Array.isArray(group.clauses)) return false;
+    if (group.clauses.length === 0) return true;
+    return group.match === "any"
+      ? group.clauses.some(evaluateClause)
+      : group.clauses.every(evaluateClause);
+  });
 }
 
 /**
@@ -243,6 +257,113 @@ function renderTemplate(template, payload) {
   return String(template).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (match, path) => {
     const v = lookupField(path.trim(), payload);
     return v === undefined || v === null ? match : String(v);
+  });
+}
+
+function workflowRecordKey(payload) {
+  const idFields = ["contactId", "dealId", "ticketId", "taskId", "meetingId", "callId", "invoiceId", "paymentId", "approvalId", "membershipId", "shiftId"];
+  const field = idFields.find((key) => payload[key] !== undefined && payload[key] !== null);
+  return field ? `${field}:${payload[field]}` : null;
+}
+
+function runsOncePerRecord(rule) {
+  try {
+    const targetState = rule.targetState ? JSON.parse(rule.targetState) : {};
+    return targetState.execution === "once";
+  } catch (_error) {
+    return false;
+  }
+}
+
+function ruleExecutionOrder(rule) {
+  try {
+    const targetState = rule.targetState ? JSON.parse(rule.targetState) : {};
+    const order = Number(targetState.order);
+    return Number.isFinite(order) ? order : Number.MAX_SAFE_INTEGER;
+  } catch (_error) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+const WORKFLOW_ENTITIES = {
+  contact: {
+    model: "contact",
+    idKey: "contactId",
+    assigneeField: "assignedToId",
+    mutableFields: new Set(["name", "email", "phone", "company", "title", "status", "source", "assignedToId"]),
+  },
+  deal: {
+    model: "deal",
+    idKey: "dealId",
+    assigneeField: "ownerId",
+    mutableFields: new Set(["title", "amount", "currency", "probability", "stage", "expectedClose", "lostReason", "ownerId"]),
+  },
+  task: {
+    model: "task",
+    idKey: "taskId",
+    assigneeField: "userId",
+    mutableFields: new Set(["title", "dueDate", "status", "priority", "notes", "userId"]),
+  },
+  ticket: {
+    model: "ticket",
+    idKey: "ticketId",
+    assigneeField: "assigneeId",
+    mutableFields: new Set(["subject", "description", "status", "priority", "assigneeId"]),
+  },
+};
+
+function resolveActionValue(value, payload) {
+  if (value == null || value === "") return value;
+  if (typeof value === "string" && payload[value] != null) return payload[value];
+  return renderTemplate(value, payload);
+}
+
+function coerceEntityValue(entity, field, value) {
+  const numericFields = new Set(["assignedToId", "ownerId", "userId", "assigneeId", "amount", "probability"]);
+  const dateFields = new Set(["expectedClose", "dueDate"]);
+  if (numericFields.has(field)) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) throw new Error(`${field} must be a number`);
+    return numeric;
+  }
+  if (dateFields.has(field)) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) throw new Error(`${field} must be a valid date`);
+    return date;
+  }
+  return value;
+}
+
+async function writeWorkflowLog(rule, payload, tenantId, action, error, executionDetails) {
+  await prisma.auditLog.create({
+    data: {
+      action,
+      entity: "AutomationRule",
+      entityId: rule.id,
+      details: JSON.stringify({
+        trigger: rule.triggerType,
+        action: rule.actionType,
+        recordKey: workflowRecordKey(payload),
+        error: error ? String(error.message || error) : undefined,
+        webhook: executionDetails?.webhook || error?.webhookResult || undefined,
+        payload: { ...payload, body: undefined },
+      }),
+      tenantId,
+    },
+  });
+}
+
+async function hasWorkflowRun(rule, tenantId, recordKey) {
+  if (!recordKey) return false;
+  const logs = await prisma.auditLog.findMany({
+    where: { tenantId, entity: "AutomationRule", action: "WORKFLOW", entityId: rule.id },
+    orderBy: { createdAt: "desc" },
+    take: 500,
+    select: { details: true },
+  });
+  return logs.some((log) => {
+    try { return JSON.parse(log.details || "{}").recordKey === recordKey; }
+    catch (_error) { return false; }
   });
 }
 
@@ -269,15 +390,20 @@ async function emitEvent(eventName, payload, tenantId, io, depth = 0) {
     where: { tenantId, triggerType: eventName, isActive: true },
   });
 
-  for (const rule of rules) {
+  const orderedRules = [...rules].sort((a, b) => ruleExecutionOrder(a) - ruleExecutionOrder(b) || a.id - b.id);
+  for (const rule of orderedRules) {
     try {
       // #20 — gate on the rule's condition before firing the action.
       if (!evaluateCondition(rule.condition, payload)) {
         continue;
       }
+      if (runsOncePerRecord(rule) && await hasWorkflowRun(rule, tenantId, workflowRecordKey(payload))) {
+        continue;
+      }
       await executeAction(rule, payload, tenantId, io, depth);
     } catch (e) {
       console.error(`[WorkflowEngine] Rule ${rule.id} failed:`, e.message);
+      await writeWorkflowLog(rule, payload, tenantId, "WORKFLOW_FAILED", e);
     }
   }
 
@@ -300,21 +426,50 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
     }
   }
 
+  // The workflow builder stores each configured action in targetState.actions.
+  // Keep the legacy single-action shape working while executing every action
+  // configured through the new UI in the order the user selected.
+  if (Array.isArray(config.actions)) {
+    const result = { attempted: 0, succeeded: 0, failed: 0 };
+    for (const action of config.actions) {
+      if (!action || !action.type) continue;
+      result.attempted += 1;
+      try {
+        await executeAction({
+          ...rule,
+          actionType: action.type,
+          targetState: JSON.stringify(action.config || {}),
+        }, payload, tenantId, io, depth);
+        result.succeeded += 1;
+      } catch (error) {
+        result.failed += 1;
+        console.error(`[WorkflowEngine] Rule ${rule.id} action ${action.type} failed:`, error.message);
+        await writeWorkflowLog({ ...rule, actionType: action.type }, payload, tenantId, "WORKFLOW_FAILED", error);
+      }
+    }
+    return result;
+  }
+
+  let executionDetails;
   switch (rule.actionType) {
     case "send_email": {
       const to = config.to || payload.email;
       const subject = config.subject || `Notification: ${rule.name}`;
-      const body = config.body || `Workflow "${rule.name}" was triggered.`;
+      const body = renderTemplate(config.body || `Workflow "${rule.name}" was triggered.`, payload);
       if (to) {
-        await sendSendGrid(to, subject, body);
+        const sent = await sendSendGrid(resolveActionValue(to, payload), renderTemplate(subject, payload), body);
+        if (!sent.sent) throw new Error(`Email was not sent: ${sent.reason || "provider error"}`);
       } else {
-        console.warn(`[WorkflowEngine] send_email rule ${rule.id}: no recipient address`);
+        throw new Error("No email recipient was resolved");
       }
       break;
     }
 
     case "send_notification": {
-      const userId = config.userId || payload.userId;
+      const configuredUserId = Number(config.userId);
+      const userId = Number.isInteger(configuredUserId) && configuredUserId > 0
+        ? configuredUserId
+        : payload.userId;
       if (userId) {
         await prisma.notification.create({
           data: {
@@ -332,12 +487,18 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
 
     case "create_task": {
       const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + (config.dueInDays || 3));
+      const configuredDueDays = Number(config.dueInDays);
+      const dueInDays = Number.isFinite(configuredDueDays) && configuredDueDays >= 0 ? configuredDueDays : 3;
+      const configuredAssigneeId = Number(config.assignToId);
+      const userId = Number.isInteger(configuredAssigneeId) && configuredAssigneeId > 0
+        ? configuredAssigneeId
+        : payload.userId || null;
+      dueDate.setDate(dueDate.getDate() + dueInDays);
       await prisma.task.create({
         data: {
           title: config.title || `Follow up: ${rule.name}`,
           dueDate,
-          userId: config.assignToId || payload.userId,
+          userId,
           contactId: payload.contactId || null,
           tenantId,
         },
@@ -346,40 +507,64 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
     }
 
     case "update_field": {
-      const entity = config.entity; // e.g. "contact", "deal"
-      const entityId = config.entityId || payload.contactId || payload.dealId;
+      const entity = String(config.entity || "").toLowerCase();
+      const entityConfig = WORKFLOW_ENTITIES[entity];
+      if (!entityConfig) throw new Error(`Unsupported workflow entity: ${entity || "missing"}`);
+      const entityId = Number(config.entityId || payload[entityConfig.idKey]);
       const field = config.field;
-      const value = config.value;
-      if (entity && entityId && field) {
-        const model = prisma[entity];
-        if (model) {
-          await model.update({
-            where: { id: entityId },
-            data: { [field]: value },
-          });
-        }
-      }
+      if (!Number.isInteger(entityId) || entityId < 1) throw new Error(`Missing ${entityConfig.idKey} for update_field`);
+      if (!entityConfig.mutableFields.has(field)) throw new Error(`Field ${field || "missing"} cannot be updated on ${entity}`);
+      const model = prisma[entityConfig.model];
+      const record = await model.findFirst({ where: { id: entityId, tenantId }, select: { id: true } });
+      if (!record) throw new Error(`${entity} record not found in this tenant`);
+      const resolvedValue = resolveActionValue(config.value, payload);
+      await model.update({ where: { id: record.id }, data: { [field]: coerceEntityValue(entity, field, resolvedValue) } });
       break;
     }
 
     case "assign_agent": {
-      if (payload.contactId && config.userId) {
-        await prisma.contact.update({
-          where: { id: payload.contactId },
-          data: { assignedToId: config.userId },
-        });
-      }
+      const userId = Number(config.userId);
+      if (!Number.isInteger(userId) || userId < 1) throw new Error("A valid assignee user ID is required");
+      const entity = String(config.entity || Object.keys(WORKFLOW_ENTITIES).find((key) => payload[WORKFLOW_ENTITIES[key].idKey]) || "").toLowerCase();
+      const entityConfig = WORKFLOW_ENTITIES[entity];
+      if (!entityConfig) throw new Error(`Unsupported workflow entity: ${entity || "missing"}`);
+      const entityId = Number(config.entityId || payload[entityConfig.idKey]);
+      if (!Number.isInteger(entityId) || entityId < 1) throw new Error(`Missing ${entityConfig.idKey} for assign_agent`);
+      const user = await prisma.user.findFirst({ where: { id: userId, tenantId }, select: { id: true } });
+      if (!user) throw new Error("Assignee not found in this tenant");
+      const model = prisma[entityConfig.model];
+      const record = await model.findFirst({ where: { id: entityId, tenantId }, select: { id: true } });
+      if (!record) throw new Error(`${entity} record not found in this tenant`);
+      await model.update({ where: { id: record.id }, data: { [entityConfig.assigneeField]: user.id } });
       break;
     }
 
     case "send_sms": {
-      // Placeholder: would integrate with SMS provider
-      console.log(`[WorkflowEngine] SMS action: to=${config.to || payload.phone}, msg=${config.message || rule.name}`);
+      const to = resolveActionValue(config.to, payload) || payload.phone;
+      if (!to) throw new Error("No SMS recipient was resolved");
+      const provider = await resolveProviderConfig(prisma, tenantId);
+      if (!provider) throw new Error("No active SMS provider is configured for this tenant");
+      const body = renderTemplate(config.message || rule.name, payload);
+      const message = await prisma.smsMessage.create({
+        data: {
+          to: String(to), from: provider.senderId || null, body,
+          direction: "OUTBOUND", status: "QUEUED", provider: provider.provider,
+          contactId: payload.contactId || null, userId: payload.userId || null, tenantId,
+        },
+      });
+      const sent = await sendSms({ ...provider, to, body });
+      await prisma.smsMessage.update({
+        where: { id: message.id },
+        data: sent.success
+          ? { status: "SENT", providerMsgId: sent.providerMsgId || null }
+          : { status: "FAILED", errorMessage: sent.error || "SMS provider rejected the message" },
+      });
+      if (!sent.success) throw new Error(sent.error || "SMS provider rejected the message");
       break;
     }
 
     case "send_webhook": {
-      const { deliverSingle } = require("./webhookDelivery");
+      const { deliverConfiguredWebhook } = require("./webhookDelivery");
       // Sign with the tenant's per-tenant secret (same as deliverWebhooks) so
       // every outbound webhook from this tenant carries one consistent
       // signature a partner can verify. Not subscription-gated here — this is
@@ -387,7 +572,14 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
       // lead-sync stream which IS gated in deliverWebhooks().
       const { resolveTenantWebhookSecret } = require("./webhookEntitlement");
       const { secret } = await resolveTenantWebhookSecret(tenantId);
-      await deliverSingle(config.url, rule.triggerType, payload, tenantId, secret);
+      const result = await deliverConfiguredWebhook(config, rule.triggerType, payload, tenantId, secret);
+      executionDetails = {
+        webhook: {
+          status: result.status,
+          statusText: result.statusText,
+          response: result.response,
+        },
+      };
       break;
     }
 
@@ -464,19 +656,22 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
   }
 
   // Log execution in audit log
-  await prisma.auditLog.create({
-    data: {
-      action: "WORKFLOW",
-      entity: "AutomationRule",
-      entityId: rule.id,
-      details: JSON.stringify({
-        trigger: rule.triggerType,
-        action: rule.actionType,
-        payload: { ...payload, body: undefined },
-      }),
-      tenantId,
-    },
-  });
+  await writeWorkflowLog(rule, payload, tenantId, "WORKFLOW", undefined, executionDetails);
+  return { attempted: 1, succeeded: 1, failed: 0 };
+}
+
+async function testRule(rule, payload, tenantId, io) {
+  if (!evaluateCondition(rule.condition, payload)) {
+    return { conditionsMatched: false, attempted: 0, succeeded: 0, failed: 0 };
+  }
+  const testPayload = { ...payload, _test: true };
+  try {
+    const result = await executeAction(rule, testPayload, tenantId, io);
+    return { conditionsMatched: true, ...(result || { attempted: 1, succeeded: 1, failed: 0 }) };
+  } catch (error) {
+    await writeWorkflowLog(rule, testPayload, tenantId, "WORKFLOW_FAILED", error);
+    return { conditionsMatched: true, attempted: 1, succeeded: 0, failed: 1, error: error.message };
+  }
 }
 
 /**
@@ -521,7 +716,11 @@ module.exports = {
   executeAction,
   evaluateCondition,
   renderTemplate,
+  workflowRecordKey,
+  runsOncePerRecord,
   lookupField,
+  ruleExecutionOrder,
+  testRule,
   setIO,
   getIO,
 };

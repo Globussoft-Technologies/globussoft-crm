@@ -47,6 +47,38 @@ function parseContactTags(tagsJson) {
   }
 }
 
+function workflowContactPayload(contact, userId, changedFields = []) {
+  const callifiedStatus = String(contact.callifiedLeadStatus || "").toLowerCase();
+  const isJunk = contact.status === "Junk" || callifiedStatus === "junk";
+  const isQualified = ["Prospect", "Customer"].includes(contact.status) || callifiedStatus === "qualified";
+  const externalId = contact.externalId || null;
+  return {
+    contactId: contact.id,
+    name: contact.name,
+    email: contact.email,
+    phone: contact.phone,
+    company: contact.company,
+    title: contact.title,
+    status: contact.status,
+    source: contact.source,
+    tags: parseContactTags(contact.tagsJson),
+    aiScore: contact.aiScore,
+    assignedToId: contact.assignedToId,
+    firstTouchSource: contact.firstTouchSource,
+    lastTouchSource: contact.lastTouchSource,
+    callifiedLeadStatus: contact.callifiedLeadStatus,
+    callifiedLeadStatusReason: contact.callifiedLeadStatusReason,
+    externalId,
+    metaLeadgenId: typeof externalId === "string" && externalId.startsWith("meta:") ? externalId.slice(5) : null,
+    metaSignal: isJunk ? "junk" : isQualified ? "qualified" : null,
+    metaIsJunk: isJunk,
+    metaIsQualified: isQualified,
+    changedFields,
+    userId,
+    tenantId: contact.tenantId,
+  };
+}
+
 function serializeContactTags(contact) {
   if (!contact || typeof contact !== "object") return contact;
   const { tagsJson, ...rest } = contact;
@@ -1506,7 +1538,10 @@ router.post('/', async (req, res) => {
     // Generic-vertical-only Lead custom fields — best-effort, after the
     // primary create/restore already succeeded (see writeLeadCustomFieldValues).
     await writeLeadCustomFieldValues(contact.id, req.user.tenantId, customFields);
-    try { const { emitEvent } = require('../lib/eventBus'); await emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
+    try {
+      const { emitEvent } = require('../lib/eventBus');
+      await emitEvent('contact.created', workflowContactPayload(contact, req.user.userId), req.user.tenantId, req.io);
+    } catch (_e) { /* event bus optional */ }
     // [GP-CRM integration] Fire lead.new to registered webhooks (e.g. GlobusPhone)
     // when a Lead contact is created. Carries the id/name/phone/email shape the
     // partner expects (the emitEvent above uses a workflow-rule payload keyed on
@@ -1796,16 +1831,10 @@ router.put('/:id', async (req, res) => {
     try {
       require("../lib/eventBus").emitEvent(
         "contact.updated",
-        {
-          contactId: contact.id,
-          changedFields: Object.keys(req.body || {}),
-          status: contact.status,
-          assignedToId: contact.assignedToId,
-          tenantId: req.user.tenantId,
-        },
+        workflowContactPayload(contact, req.user.userId, Object.keys(req.body || {})),
         req.user.tenantId,
         req.io
-      );
+      ).catch((error) => console.error("[contacts] contact.updated workflow failed:", error.message));
     } catch (_e) {}
 
     // [GP-CRM integration] Push a partner-shaped contact.updated (and, when the

@@ -1,5 +1,139 @@
 const crypto = require("crypto");
 const prisma = require("./prisma");
+const { decryptCredential } = require("./credentialMasking");
+
+const CONFIGURED_METHODS = new Set(["POST", "PUT", "PATCH"]);
+const FORBIDDEN_HEADERS = new Set(["host", "content-length", "connection", "transfer-encoding"]);
+
+function validateWebhookUrl(value) {
+  let parsed;
+  try { parsed = new URL(value); } catch (_error) { throw new Error("Webhook callback URL is invalid"); }
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Webhook callback URL must use HTTP or HTTPS");
+  const hostname = parsed.hostname.toLowerCase();
+  const isLocalHost = hostname === "localhost" || hostname.endsWith(".local") || hostname === "0.0.0.0" || hostname === "::1";
+  const allowLocal = process.env.WEBHOOK_ALLOW_LOCAL === "1" && process.env.NODE_ENV !== "production";
+  if (isLocalHost && !allowLocal) {
+    throw new Error("Webhook callback URL cannot target a local address");
+  }
+  if (/^10\.|^127\.|^169\.254\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(hostname) && !allowLocal) {
+    throw new Error("Webhook callback URL cannot target a private network address");
+  }
+  return parsed.toString();
+}
+
+function resolveConfiguredWebhookUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) throw new Error("Webhook callback URL is invalid");
+  if (/^https?:\/\//i.test(raw)) return validateWebhookUrl(raw);
+  if (!raw.startsWith("/")) throw new Error("Webhook callback URL must be absolute or start with /");
+  const baseUrl = process.env.WEBHOOK_BASE_URL || process.env.PUBLIC_APP_URL;
+  if (!baseUrl) throw new Error("Relative webhook callback URL requires WEBHOOK_BASE_URL or PUBLIC_APP_URL");
+  return validateWebhookUrl(new URL(raw, baseUrl).toString());
+}
+
+function renderWebhookValue(value, payload) {
+  if (Array.isArray(value)) return value.map((item) => renderWebhookValue(item, payload));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, renderWebhookValue(item, payload)]));
+  }
+  if (typeof value !== "string") return value;
+  const exact = value.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+  if (exact) {
+    const resolved = exact[1].split(".").reduce((current, key) => current?.[key], payload);
+    return resolved ?? value;
+  }
+  return value.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (match, path) => {
+    const resolved = path.split(".").reduce((current, key) => current?.[key], payload);
+    return resolved == null ? match : String(resolved);
+  });
+}
+
+function xmlEscape(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+function objectToXml(value, root = "webhook") {
+  const render = (item, key) => {
+    if (Array.isArray(item)) return item.map((entry) => render(entry, key)).join("");
+    if (item && typeof item === "object") return `<${key}>${Object.entries(item).map(([childKey, child]) => render(child, childKey)).join("")}</${key}>`;
+    return `<${key}>${xmlEscape(item)}</${key}>`;
+  };
+  return `<?xml version="1.0" encoding="UTF-8"?>${render(value, root)}`;
+}
+
+function buildConfiguredBody(config, event, payload, tenantId) {
+  if (config.bodyMode === "advanced" && config.bodyTemplate) {
+    let template = config.bodyTemplate;
+    if (typeof template === "string") {
+      try { template = JSON.parse(template); } catch (_error) { throw new Error("Advanced webhook body must be valid JSON"); }
+    }
+    return renderWebhookValue(template, { ...payload, event, tenantId });
+  }
+  const selected = Array.isArray(config.selectedFields) ? config.selectedFields : [];
+  if (selected.length) {
+    return Object.fromEntries(selected.filter((field) => Object.prototype.hasOwnProperty.call(payload, field)).map((field) => [field, payload[field]]));
+  }
+  return { event, timestamp: new Date().toISOString(), data: payload };
+}
+
+function configuredHeaders(config) {
+  const headers = {};
+  const entries = Array.isArray(config.headers)
+    ? config.headers
+    : Object.entries(config.headers || {}).map(([key, value]) => ({ key, value }));
+  if (entries.length > 20) throw new Error("A webhook can have at most 20 custom headers");
+  for (const entry of entries) {
+    const key = String(entry?.key || "").trim();
+    if (!key) continue;
+    if (!/^[A-Za-z0-9-]+$/.test(key)) throw new Error(`Invalid webhook header name: ${key}`);
+    if (FORBIDDEN_HEADERS.has(key.toLowerCase())) throw new Error(`Webhook header ${key} is managed by the CRM`);
+    const rawValue = entry.secret ? decryptCredential(entry.value) : entry.value;
+    const value = String(rawValue ?? "");
+    if (/\r|\n/.test(value)) throw new Error(`Webhook header ${key} contains invalid characters`);
+    headers[key] = value;
+  }
+  return headers;
+}
+
+async function deliverConfiguredWebhook(config, event, payload, tenantId, secret) {
+  const url = resolveConfiguredWebhookUrl(config?.url);
+  const method = String(config?.method || "POST").toUpperCase();
+  if (!CONFIGURED_METHODS.has(method)) throw new Error("Webhook method must be POST, PUT, or PATCH");
+  const encoding = String(config?.encoding || "json").toLowerCase();
+  if (!["json", "form", "xml"].includes(encoding)) throw new Error("Webhook encoding must be JSON, form, or XML");
+  const bodyObject = buildConfiguredBody(config || {}, event, payload, tenantId);
+  let body;
+  let contentType;
+  if (encoding === "form") {
+    body = new URLSearchParams(Object.entries(bodyObject).map(([key, value]) => [key, typeof value === "object" ? JSON.stringify(value) : String(value ?? "")])).toString();
+    contentType = "application/x-www-form-urlencoded";
+  } else if (encoding === "xml") {
+    body = objectToXml(bodyObject);
+    contentType = "application/xml";
+  } else {
+    body = JSON.stringify(bodyObject);
+    contentType = "application/json";
+  }
+  if (Buffer.byteLength(body) > 256 * 1024) throw new Error("Webhook request body exceeds 256 KB");
+
+  const headers = { "Content-Type": contentType, "X-CRM-Event": event, "X-CRM-Tenant": String(tenantId), ...configuredHeaders(config || {}) };
+  const hmacSecret = (secret != null ? secret : process.env.WEBHOOK_HMAC_SECRET) || "";
+  if (hmacSecret) {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = crypto.createHmac("sha256", hmacSecret).update(`${timestamp}.${body}`).digest("hex");
+    headers["X-Globussoft-Signature"] = `t=${timestamp},v1=${signature}`;
+  }
+
+  const response = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(10000) });
+  const responseText = (await response.text()).slice(0, 2000);
+  const result = { ok: response.ok, status: response.status, statusText: response.statusText, response: responseText };
+  if (!response.ok) {
+    const error = new Error(`Webhook returned HTTP ${response.status}${responseText ? `: ${responseText}` : ""}`);
+    error.webhookResult = result;
+    throw error;
+  }
+  return result;
+}
 
 /**
  * Deliver outbound HTTP POST to all registered Webhooks matching an event.
@@ -157,4 +291,4 @@ async function deliverSingle(url, event, payload, tenantId, secret) {
   }
 }
 
-module.exports = { deliverWebhooks, deliverSingle };
+module.exports = { deliverWebhooks, deliverSingle, deliverConfiguredWebhook, validateWebhookUrl, resolveConfiguredWebhookUrl, buildConfiguredBody };

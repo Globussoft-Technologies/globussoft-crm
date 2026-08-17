@@ -7,8 +7,8 @@
 const path = require('path');
 const dotenv = require('dotenv');
 
-// Load .env file (it's in the project root, 2 levels up from backend/prisma/)
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// Load the backend .env file (one level up from backend/prisma/)
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');

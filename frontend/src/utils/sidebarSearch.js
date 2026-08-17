@@ -35,6 +35,7 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/calendar-sync', label: 'Calendar' },
   { path: '/gmail', label: 'Gmail' },
   { path: '/travel/invoices-admin', label: 'Invoices' },
+  { path: '/travel/tally', label: 'Tally accounting', description: 'Tally XML and CA exports' },
   { path: '/travel/milestones', label: 'Milestones' },
   { path: '/travel/payables', label: 'Payables' },
   { path: '/payments', label: 'Payments received' },

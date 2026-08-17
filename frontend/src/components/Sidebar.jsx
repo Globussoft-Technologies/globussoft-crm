@@ -1104,6 +1104,7 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/pos": Calculator,
   "/invoices": Receipt,
   "/wellness/invoices": Receipt,
+  "/travel/tally": Calculator,
   "/estimates": FileSpreadsheet,
   "/expenses": IndianRupee,
   "/payments": CreditCard,
@@ -2119,6 +2120,7 @@ function renderTravelNav({
 
       <Section label="Financial">
         <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
+        <Link to="/travel/tally" icon={Calculator} label="Tally" requiredPermission={{ module: "invoices", action: "export" }} />
         <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} />
         <Link to="/travel/payables" icon={CreditCard} label="Payables" requiredPermission={{ module: "payables", action: "read" }} />
         <Link to="/payments" icon={IndianRupee} label="Payments received" requiredPermission={{ module: "payments", action: "read" }} />

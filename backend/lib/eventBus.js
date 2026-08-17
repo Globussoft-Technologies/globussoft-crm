@@ -542,6 +542,11 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
     case "send_sms": {
       const to = resolveActionValue(config.to, payload) || payload.phone;
       if (!to) throw new Error("No SMS recipient was resolved");
+      // Dry-run from POST /:id/test should not require a live SMS provider.
+      if (payload._test) {
+        console.log(`[WorkflowEngine] SMS test dry-run: to=${to}`);
+        break;
+      }
       const provider = await resolveProviderConfig(prisma, tenantId);
       if (!provider) throw new Error("No active SMS provider is configured for this tenant");
       const body = renderTemplate(config.message || rule.name, payload);

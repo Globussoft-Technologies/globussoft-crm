@@ -378,6 +378,7 @@ const TravelFlightOfferImageGenerator = lazy(
   () => import("./pages/travel/FlightOfferImageGenerator"),
 );
 const TravelInvoicesAdmin = lazy(() => import("./pages/travel/InvoicesAdmin"));
+const TravelTally = lazy(() => import("./pages/travel/Tally"));
 // Arc 2 #901 slice 7 frontend consumer  cross-invoice payment-milestone
 // dashboard. Consumes /api/travel/payment-schedules/upcoming (backend commit
 // e4832fee). Operator surface for upcoming/overdue milestones across all
@@ -3131,6 +3132,7 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
+                      <Route path="travel/tally" element={<TravelOnly><TravelTally /></TravelOnly>} />
                       {/* PRD_TRAVEL_BILLING G022 (FR-3.5.e)  supplier-payable batch
                   ops surface. Lists / approves / sends / settles batches +
                   bank-friendly CSV export. */}

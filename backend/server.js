@@ -1360,6 +1360,8 @@ app.use("/api/fx", travelFxRoutes);
 // See G030 spec failure (run 27463877000) for the original collision report.
 app.use("/api/travel", require("./routes/travel_invoice_ledgers"));
 app.use("/api/travel", travelInvoicesRoutes);
+app.use("/api/travel", require("./routes/travel_tally"));
+app.use("/api/travel", require("./routes/travel_reconciliation"));
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
 // S78 (Marketing Flyer #908) — mount the mixed-auth flyer share + public render
 // router. POST /:id/share is auth-gated inside the router (verifyToken +

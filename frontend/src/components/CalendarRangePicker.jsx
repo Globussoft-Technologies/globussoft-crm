@@ -161,13 +161,21 @@ export default function CalendarRangePicker({ value, onChange, label = 'Date ran
         className="input-field"
         onClick={() => setOpen((o) => !o)}
         aria-label={label}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         style={{
           display: 'flex', alignItems: 'center', gap: 6,
-          width: 'auto',
-          minWidth: 150,
+          width: 182,
+          minWidth: 182,
+          flex: '0 0 182px',
+          height: 46,
+          boxSizing: 'border-box',
           justifyContent: 'flex-start',
           cursor: 'pointer',
-          fontSize: 'inherit',
+          fontSize: '0.9rem',
+          fontWeight: 600,
+          borderRadius: 10,
+          background: 'var(--input-bg, var(--surface-color, #101321))',
         }}
       >
         <Calendar size={14} style={{ flexShrink: 0, color: 'var(--text-secondary, #9aa0ab)' }} />

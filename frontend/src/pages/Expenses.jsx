@@ -31,6 +31,12 @@ const CATEGORY_OPTIONS = [
 ];
 
 const PAYMENT_METHODS = ['cash', 'card', 'online', 'upi'];
+const SUB_BRANDS = [
+  { value: 'travelstall', label: 'Travel Stall' },
+  { value: 'rfu', label: 'RFU' },
+  { value: 'tmc', label: 'TMC' },
+  { value: 'visasure', label: 'Visa Sure' },
+];
 
 const STATUS_CONFIG = {
   Draft:      { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' },
@@ -79,6 +85,20 @@ function encodePayment(payment) {
   return JSON.stringify({ payment: filtered });
 }
 
+function encodeExpenseNotes(payment, itinerary, subBrand) {
+  const paymentNotes = encodePayment(payment);
+  if (!itinerary && !subBrand) return paymentNotes;
+
+  const metadata = paymentNotes ? JSON.parse(paymentNotes) : {};
+  if (itinerary) {
+    metadata.itineraryId = Number(itinerary.id);
+    if (itinerary.subBrand) metadata.subBrand = itinerary.subBrand;
+  } else if (subBrand) {
+    metadata.subBrand = subBrand;
+  }
+  return JSON.stringify(metadata);
+}
+
 function StatusBadge({ status }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.Pending;
   return (
@@ -110,8 +130,10 @@ const EMPTY_FORM = {
   recipientName: '',
   description: '',
   category: CATEGORY_OPTIONS[0],
+  subBrand: '',
   amount: '',
   expenseDate: '',
+  itineraryId: '',
   payment: { cash: '', card: '', online: '', upi: '' },
 };
 
@@ -127,6 +149,9 @@ export default function Expenses() {
     pendingAmount: null,
   });
   const [form, setForm] = useState(EMPTY_FORM);
+  const [itineraries, setItineraries] = useState([]);
+  const [itinerarySearch, setItinerarySearch] = useState('');
+  const [isItineraryPickerOpen, setIsItineraryPickerOpen] = useState(false);
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
@@ -219,6 +244,25 @@ export default function Expenses() {
   }, [loadStats, loadExpenses, reloadTick]);
 
   useEffect(() => {
+    if (!isCreateFormOpen) return undefined;
+    let cancelled = false;
+
+    fetchApi('/api/travel/itineraries?fields=summary&limit=200')
+      .then((data) => {
+        if (!cancelled) {
+          setItineraries(Array.isArray(data?.itineraries) ? data.itineraries : []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setItineraries([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateFormOpen]);
+
+  useEffect(() => {
     if (!tableScrollRef.current || loading || loadingMore || !hasMore) return;
     const el = tableScrollRef.current;
     if (el.scrollHeight <= el.clientHeight + 24) {
@@ -257,8 +301,12 @@ export default function Expenses() {
   const createExpense = async (e, status = 'Pending') => {
     e.preventDefault();
     if (!form.recipientName.trim()) return notify.error('Recipient name is required');
+    if (!form.subBrand) return notify.error('Sub-brand is required');
     if (!form.amount || parseFloat(form.amount) <= 0) return notify.error('Amount is required');
     if (!form.expenseDate) return notify.error('Transaction date is required');
+    if (form.category === 'Travel' && !form.itineraryId) {
+      return notify.error('Trip / Itinerary is required for travel expenses');
+    }
 
     // Validate that payment-method total roughly matches Amount when any
     // breakdown is entered. Mismatch within ±0.01 is treated as fine.
@@ -268,6 +316,9 @@ export default function Expenses() {
     }
 
     try {
+      const selectedItinerary = itineraries.find(
+        (itinerary) => String(itinerary.id) === String(form.itineraryId),
+      );
       await fetchApi('/api/expenses', {
         method: 'POST',
         body: JSON.stringify({
@@ -276,11 +327,13 @@ export default function Expenses() {
           amount: parseFloat(form.amount),
           category: form.category,
           expenseDate: form.expenseDate,
-          notes: encodePayment(form.payment),
+          notes: encodeExpenseNotes(form.payment, selectedItinerary, form.subBrand),
           status,
         }),
       });
       setForm(EMPTY_FORM);
+      setItinerarySearch('');
+      setIsItineraryPickerOpen(false);
       notify.success(`Expense created as ${status}`);
       refreshExpenses();
     } catch (err) {
@@ -497,11 +550,125 @@ export default function Expenses() {
                   Category <span style={{ color: '#ef4444' }}>*</span>
                 </label>
                 <select className="input-field" value={form.category}
-                  onChange={e => setForm({ ...form, category: e.target.value })}
+                  onChange={e => setForm({
+                    ...form,
+                    category: e.target.value,
+                    itineraryId: e.target.value === 'Travel' ? form.itineraryId : '',
+                  })}
                   style={{ background: 'var(--input-bg)' }}>
                   {CATEGORY_OPTIONS.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                 </select>
               </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  Sub-brand <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <select
+                  className="input-field"
+                  value={form.subBrand}
+                  onChange={e => setForm({ ...form, subBrand: e.target.value })}
+                  required
+                  style={{ background: 'var(--input-bg)' }}
+                >
+                  <option value="">Select sub-brand</option>
+                  {SUB_BRANDS.map(brand => (
+                    <option key={brand.value} value={brand.value}>
+                      {brand.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {form.category === 'Travel' && <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  Trip / Itinerary <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="search"
+                    className="input-field"
+                    required
+                    aria-required="true"
+                    placeholder="Select or search a trip"
+                    value={isItineraryPickerOpen
+                      ? itinerarySearch
+                      : (itineraries.find(itinerary => String(itinerary.id) === String(form.itineraryId))
+                        ? `${itineraries.find(itinerary => String(itinerary.id) === String(form.itineraryId)).destination || `Trip ${form.itineraryId}`}${itineraries.find(itinerary => String(itinerary.id) === String(form.itineraryId)).subBrand ? ` - ${itineraries.find(itinerary => String(itinerary.id) === String(form.itineraryId)).subBrand}` : ''}`
+                        : '')}
+                    onFocus={() => {
+                      setIsItineraryPickerOpen(true);
+                      setItinerarySearch('');
+                    }}
+                    onChange={e => {
+                      setIsItineraryPickerOpen(true);
+                      setItinerarySearch(e.target.value);
+                      setForm({ ...form, itineraryId: '' });
+                    }}
+                    onBlur={() => setTimeout(() => setIsItineraryPickerOpen(false), 150)}
+                    style={{ background: 'var(--input-bg)' }}
+                  />
+                  {isItineraryPickerOpen && (
+                    <div
+                      role="listbox"
+                      style={{
+                        position: 'absolute',
+                        zIndex: 20,
+                        top: 'calc(100% + 4px)',
+                        left: 0,
+                        right: 0,
+                        maxHeight: 220,
+                        overflowY: 'auto',
+                        background: 'var(--modal-bg, var(--bg-color))',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 8,
+                        boxShadow: '0 12px 24px rgba(0,0,0,.2)',
+                      }}
+                    >
+                      {itineraries
+                        .filter(itinerary => {
+                          const query = itinerarySearch.trim().toLowerCase();
+                          return !query || `${itinerary.destination || ''} ${itinerary.subBrand || ''}`
+                            .toLowerCase()
+                            .includes(query);
+                        })
+                        .map(itinerary => (
+                          <button
+                            key={itinerary.id}
+                            type="button"
+                            role="option"
+                            onMouseDown={event => event.preventDefault()}
+                            onClick={() => {
+                              setForm({
+                                ...form,
+                                itineraryId: String(itinerary.id),
+                                subBrand: itinerary.subBrand || form.subBrand,
+                              });
+                              setItinerarySearch('');
+                              setIsItineraryPickerOpen(false);
+                            }}
+                            style={{
+                              display: 'block',
+                              width: '100%',
+                              padding: '9px 11px',
+                              border: 0,
+                              background: 'transparent',
+                              color: 'var(--text-primary)',
+                              textAlign: 'left',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {itinerary.destination || `Trip ${itinerary.id}`}
+                            {itinerary.subBrand ? ` - ${itinerary.subBrand}` : ''}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </div>
+                <small style={{ display: 'block', marginTop: '0.35rem', color: 'var(--text-secondary)' }}>
+                  Choose a trip to include this expense in its Tally spending total.
+                </small>
+              </div>}
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>

@@ -137,6 +137,9 @@ function getDateInput() {
 async function openCreateExpenseForm() {
   fireEvent.click(screen.getByRole('button', { name: /New Expense/i }));
   await screen.findByRole('heading', { name: /New Expense/i });
+  fireEvent.change(screen.getByDisplayValue('Select sub-brand'), {
+    target: { value: 'travelstall' },
+  });
 }
 
 describe('<Expenses /> — page surface', () => {
@@ -303,8 +306,8 @@ describe('<Expenses /> — page surface', () => {
       expect(body.category).toBe('Building Rent');       // CATEGORY_OPTIONS[0]
       expect(body.expenseDate).toBe('2026-05-01');
       expect(body.status).toBe('Pending');
-      // No payment breakdown entered → notes encodes to null.
-      expect(body.notes).toBeNull();
+      // No payment breakdown entered → notes still stores the selected sub-brand.
+      expect(JSON.parse(body.notes)).toEqual({ subBrand: 'travelstall' });
       // Description is empty → null (component normalizes blank to null).
       expect(body.description).toBeNull();
     });

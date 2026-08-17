@@ -746,6 +746,7 @@ test.describe('Workflows API — POST /:id/test', () => {
     const created = await createRule(request, 'generic', {
       name: `${RUN_TAG} test-payload-${Date.now()}`,
       actionType: 'send_sms',
+      targetState: { to: '+0000000000', message: 'noop' },
     });
     const res = await post(request, token, `/api/workflows/${created.id}/test`, {
       payload: { foo: 'bar', _test: true },

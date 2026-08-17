@@ -35,6 +35,17 @@ const parseJson = (value, fallback) => {
   }
 };
 
+// Customer A/c uses cash received, not the invoice face value. Paid legacy
+// invoices without schedule rows fall back to their total amount.
+const receivedAmount = (invoice) => {
+  const scheduled = (invoice.schedule || []).reduce(
+    (sum, payment) => sum + Number(payment.receivedAmount || 0),
+    0,
+  );
+  if (scheduled > 0) return scheduled;
+  return invoice.status === "Paid" ? Number(invoice.totalAmount || 0) : 0;
+};
+
 // Identify overseas trips for the automatic TCS preview. The destination is
 // supplied by the existing itinerary record; this route does not create trips.
 const isInternationalDestination = (destination) =>
@@ -101,7 +112,7 @@ router.get(
           prisma.travelInvoice.findMany({
             where: {
               tenantId: req.travelTenant.id,
-              status: { not: "Voided" },
+              status: { in: ["Partial", "Paid"] },
               ...(subBrand ? { subBrand } : {}),
               ...(itineraryId ? { itineraryId } : {}),
               ...dateWhere,
@@ -109,6 +120,8 @@ router.get(
             select: {
               id: true,
               invoiceNum: true,
+              status: true,
+              createdAt: true,
               itineraryId: true,
               totalAmount: true,
               currency: true,
@@ -122,16 +135,24 @@ router.get(
               cgstPercent: true,
               sgstPercent: true,
               igstPercent: true,
+              schedule: { select: { receivedAmount: true } },
             },
           }),
           prisma.expense.findMany({
-            where: { tenantId: req.travelTenant.id, ...dateWhere },
+            where: {
+              tenantId: req.travelTenant.id,
+              status: "Approved",
+              ...dateWhere,
+            },
             select: {
               id: true,
               title: true,
               amount: true,
+              expenseDate: true,
+              createdAt: true,
               notes: true,
               category: true,
+              status: true,
             },
           }),
           prisma.travelInvoice.findMany({
@@ -215,7 +236,7 @@ router.get(
       // Calculate the Sales A/c, Purchase A/c, and persisted TCS totals.
       const calculated = {
         sales: invoices.reduce(
-          (sum, invoice) => sum + Number(invoice.totalAmount || 0),
+          (sum, invoice) => sum + receivedAmount(invoice),
           0,
         ),
         purchase: matchingExpenses.reduce(
@@ -326,11 +347,17 @@ router.get(
             ? Number(invoice.igstPercent)
             : Number(invoice.cgstPercent || 0) +
               Number(invoice.sgstPercent || 0);
+        const invoiceTotal = Number(invoice.totalAmount || 0);
+        const received = receivedAmount(invoice);
         return {
           reference: invoice.invoiceNum,
           name: contactMap[invoice.contactId]?.name || "Customer",
           email: contactMap[invoice.contactId]?.email || null,
-          amount: Number(invoice.totalAmount || 0),
+          amount: received,
+          transactionDate: invoice.createdAt,
+          invoiceTotal,
+          outstandingAmount: Math.max(0, invoiceTotal - received),
+          status: invoice.status,
           gstAmount,
           gstRate,
           gstRetrieved: hasPersistedGst,
@@ -355,6 +382,7 @@ router.get(
           name: expense.title,
           category: expense.category,
           amount: Number(expense.amount || 0),
+          transactionDate: expense.expenseDate || expense.createdAt,
           itineraryId:
             Number.isInteger(expenseTripId) && expenseTripId > 0
               ? expenseTripId

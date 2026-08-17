@@ -57,6 +57,9 @@ const label = {
   fontSize: 13,
   color: "var(--text-secondary)",
 };
+const isBankStatementRow = (row) =>
+  String(row?.reference || "").startsWith("STATEMENT-DEBIT-") ||
+  /bank statement debit/i.test(String(row?.category || ""));
 let activeTcsUpdater = null;
 let activeGstUpdater = null;
 let activeSupplierGstUpdater = null;
@@ -100,11 +103,13 @@ function DetailCard({
   const showGst = false;
   const showTcs = false;
   const columns =
-    showGst && showTcs
-      ? "minmax(0, 1fr) 96px 86px 86px"
-      : showGst
-        ? "minmax(0, 1fr) 96px 86px"
-        : "minmax(0, 1fr) 96px";
+    customer
+      ? "minmax(0, 1fr) 96px 96px"
+      : showGst && showTcs
+        ? "minmax(0, 1fr) 96px 86px 86px"
+        : showGst
+          ? "minmax(0, 1fr) 96px 86px"
+          : "minmax(0, 1fr) 96px";
   return (
     <div style={{ ...card, padding: 14 }}>
       <h3 style={{ margin: "0 0 4px", fontSize: "0.98rem" }}>{title}</h3>
@@ -146,7 +151,8 @@ function DetailCard({
                   }}
                 >
                   <span>Contact</span>
-                  <span>Amount</span>
+                  <span>{customer ? "Received" : "Amount"}</span>
+                  {customer && <span>Remaining</span>}
                   {showGst && <span>GST</span>}
                   {showTcs && <span>TCS</span>}
                 </div>
@@ -179,10 +185,21 @@ function DetailCard({
                     </small>
                   </span>
                   <strong style={{ whiteSpace: "nowrap" }}>
-                    {formatMoney(row.amount, {
-                      currency: customer ? row.currency || "INR" : "INR",
-                    })}
+                    {Number(row.amount || 0) !== 0
+                      ? formatMoney(row.amount, {
+                          currency: customer ? row.currency || "INR" : "INR",
+                        })
+                      : "-"}
                   </strong>
+                  {customer && (
+                    <strong style={{ whiteSpace: "nowrap", color: row.outstandingAmount > 0 ? "#f59e0b" : "#34d399" }}>
+                      {Number(row.outstandingAmount || 0) !== 0
+                        ? formatMoney(row.outstandingAmount, {
+                            currency: row.currency || "INR",
+                          })
+                        : "-"}
+                    </strong>
+                  )}
                   {showGst && (
                     <input
                       aria-label={`GST for ${row.name}`}
@@ -451,6 +468,20 @@ export default function Tally() {
   activeGstUpdater = step === 1 ? updateCustomerGst : null;
   activeSupplierGstUpdater = step === 1 ? updateSupplierGst : null;
 
+  const tripFilterOptions = master.tripId
+    ? trips
+    : trips.filter((trip) => {
+        const id = String(trip.id);
+        const earnings = customers
+          .filter((row) => String(row.itineraryId) === id)
+          .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        const spent = suppliers
+          .filter((row) => !isBankStatementRow(row))
+          .filter((row) => String(row.itineraryId) === id)
+          .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        return earnings > 0 || spent > 0;
+      });
+
   // Manage optional report fields added by the user.
   const addCustomField = () =>
     setCustomFields((current) => [
@@ -480,7 +511,18 @@ export default function Tally() {
     const applicableTrips = master.tripId
       ? trips.filter((trip) => String(trip.id) === String(master.tripId))
       : trips;
-    const missingTax = applicableTrips.some((trip) => {
+    const activeTrips = applicableTrips.filter((trip) => {
+      const id = String(trip.id);
+      const earnings = customers
+        .filter((row) => String(row.itineraryId) === id)
+        .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      const spent = suppliers
+        .filter((row) => !isBankStatementRow(row))
+        .filter((row) => String(row.itineraryId) === id)
+        .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      return earnings > 0 || spent > 0;
+    });
+    const missingTax = activeTrips.some((trip) => {
       const id = String(trip.id);
       const tax = tripTaxes[id] || {};
       const international = Boolean(
@@ -668,10 +710,10 @@ export default function Tally() {
               onChange={(event) => updateMaster("tripId")(event.target.value)}
               style={input}
             >
-              {trips.length ? (
+              {tripFilterOptions.length ? (
                 <>
                   <option value="">All trips</option>
-                  {trips.map((trip) => (
+                  {tripFilterOptions.map((trip) => (
                     <option key={trip.id} value={trip.id}>
                       {trip.destination || `Trip ${trip.id}`} -{" "}
                       {trip.status || "Booking"}
@@ -680,7 +722,9 @@ export default function Tally() {
                 </>
               ) : (
                 <option value="" disabled>
-                  No trips found for the selected filters
+                  {trips.length
+                    ? "No trips with earnings or spending"
+                    : "No trips found for the selected filters"}
                 </option>
               )}
             </select>
@@ -930,7 +974,7 @@ export default function Tally() {
               <DetailCard
                 title="Supplier A/c"
                 description="Purchase and expense details."
-                rows={suppliers}
+                rows={suppliers.filter((row) => !isBankStatementRow(row))}
                 empty="No supplier purchases found for these filters."
               />
             </div>
@@ -948,6 +992,7 @@ export default function Tally() {
             customers={customers}
             suppliers={suppliers}
             tripTaxes={tripTaxes}
+            selectedTripId={master.tripId}
             onChange={updateTripTax}
           />
         )}
@@ -1110,6 +1155,7 @@ function TripProfitLossWithTrips({
   customers,
   suppliers,
   trips,
+  selectedTripId = "",
   tripTaxes = {},
   statementItems = [],
 }) {
@@ -1123,6 +1169,7 @@ function TripProfitLossWithTrips({
         expenses: 0,
         gst: 0,
         tcs: 0,
+        dates: new Set(),
       },
     ]),
   );
@@ -1130,21 +1177,45 @@ function TripProfitLossWithTrips({
     const current = row.itineraryId
       ? grouped.get(String(row.itineraryId))
       : null;
-    if (current) current.sales += Number(row.amount || 0);
+    if (current) {
+      current.sales += Number(row.amount || 0);
+      if (row.transactionDate) {
+        current.dates.add(String(row.transactionDate).slice(0, 10));
+      }
+    }
   });
-  suppliers.forEach((row) => {
+  suppliers.filter((row) => !isBankStatementRow(row)).forEach((row) => {
     const current = row.itineraryId
       ? grouped.get(String(row.itineraryId))
       : null;
-    if (current) current.expenses += Number(row.amount || 0);
+    if (current) {
+      current.expenses += Number(row.amount || 0);
+      if (row.transactionDate) {
+        current.dates.add(String(row.transactionDate).slice(0, 10));
+      }
+    }
   });
   const tripRows = [...grouped.values()].map((row) => {
     const gstRate = Number(tripTaxes[row.key]?.gstRate || 0);
     const tcsRate = Number(tripTaxes[row.key]?.tcsRate || 0);
     const gst = (row.sales * gstRate) / 100;
     const tcs = (row.sales * tcsRate) / 100;
-    return { ...row, gst, tcs, profit: row.sales - row.expenses - gst - tcs };
+    const dates = [...row.dates].sort();
+    return {
+      ...row,
+      dates,
+      dateLabel: dates.length > 1 ? `${dates[0]} to ${dates.at(-1)}` : dates[0] || "-",
+      gst,
+      tcs,
+      profit: row.sales - row.expenses - gst - tcs,
+    };
   });
+  const displayedTripRows = selectedTripId
+    ? tripRows
+    : tripRows.filter((row) => row.sales > 0 || row.expenses > 0);
+  const selectedTrip = selectedTripId
+    ? tripRows.find((row) => row.key === String(selectedTripId))
+    : null;
   const credits = statementItems
     .filter((item) => item.direction !== "DEBIT")
     .reduce((sum, item) => sum + Number(item.amount || 0), 0);
@@ -1219,12 +1290,16 @@ function TripProfitLossWithTrips({
                     <td style={cell}>{item.sourceRef || "—"}</td>
                     <td style={{ ...right, color: "#34d399" }}>
                       {item.direction !== "DEBIT"
-                        ? formatMoney(item.amount)
+                        ? Number(item.amount || 0) !== 0
+                          ? formatMoney(item.amount)
+                          : "-"
                         : "—"}
                     </td>
                     <td style={{ ...right, color: "#fbbf24" }}>
                       {item.direction === "DEBIT"
-                        ? formatMoney(item.amount)
+                        ? Number(item.amount || 0) !== 0
+                          ? formatMoney(item.amount)
+                          : "-"
                         : "—"}
                     </td>
                   </tr>
@@ -1256,6 +1331,33 @@ function TripProfitLossWithTrips({
       )}
       <div style={{ ...card, padding: 16 }}>
         <h3>Trip Details / Profit & Loss</h3>
+        {selectedTrip && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 16,
+              margin: "12px 0 14px",
+              padding: "14px 16px",
+              borderRadius: 10,
+              background: "rgba(91, 124, 250, 0.12)",
+              border: "1px solid rgba(91, 124, 250, 0.35)",
+            }}
+          >
+            <div>
+              <strong style={{ display: "block" }}>
+                Total spent for {selectedTrip.tripName}
+              </strong>
+              <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+                Supplier expenses linked to this trip
+              </span>
+            </div>
+            <strong style={{ fontSize: 18, whiteSpace: "nowrap" }}>
+              {formatMoney(selectedTrip.expenses)}
+            </strong>
+          </div>
+        )}
         <div style={{ overflowX: "auto" }}>
           <table
             style={{ width: "100%", minWidth: 760, borderCollapse: "collapse" }}
@@ -1264,6 +1366,7 @@ function TripProfitLossWithTrips({
               <tr>
                 {[
                   "Trip / Place",
+                  "Ledger dates",
                   "Earnings",
                   "Spent",
                   "GST",
@@ -1274,7 +1377,9 @@ function TripProfitLossWithTrips({
                     key={label}
                     style={{
                       padding: 8,
-                      textAlign: label === "Trip / Place" ? "left" : "right",
+                      textAlign: ["Trip / Place", "Ledger dates"].includes(label)
+                        ? "left"
+                        : "right",
                     }}
                   >
                     {label}
@@ -1283,9 +1388,10 @@ function TripProfitLossWithTrips({
               </tr>
             </thead>
             <tbody>
-              {tripRows.map((row) => (
+              {displayedTripRows.map((row) => (
                 <tr key={row.key}>
                   <td style={{ ...cell, fontWeight: 700 }}>{row.tripName}</td>
+                  <td style={cell}>{row.dateLabel}</td>
                   <td style={right}>{formatMoney(row.sales)}</td>
                   <td style={right}>{formatMoney(row.expenses)}</td>
                   <td style={right}>{formatMoney(row.gst)}</td>
@@ -1305,7 +1411,7 @@ function TripProfitLossWithTrips({
             </tbody>
             <tfoot>
               <tr>
-                <td style={{ padding: 10, fontWeight: 800 }}>
+                <td colSpan="2" style={{ padding: 10, fontWeight: 800 }}>
                   Cumulative total Profit / Loss
                 </td>
                 <td style={{ ...right, fontWeight: 800 }}>
@@ -1340,14 +1446,71 @@ function TripProfitLossWithTrips({
 }
 
 // Show the cumulative totals card from the filtered ledger and trip taxes.
-function CumulativeReportCard({ accounts, trips, tripTaxes, customers }) {
-  const sales = Number(
-    accounts.find((account) => account.id === "sales")?.amount || 0,
+function CumulativeReportCard({
+  trips,
+  tripTaxes,
+  customers,
+  suppliers = [],
+  statementItems = [],
+  selectedTripId = "",
+}) {
+  const activeTrips = trips.filter((trip) => {
+    const id = String(trip.id);
+    const earnings = customers
+      .filter((row) => String(row.itineraryId) === id)
+      .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const spent = suppliers
+      .filter(
+        (row) =>
+          !isBankStatementRow(row) && String(row.itineraryId) === id,
+      )
+      .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    return selectedTripId || earnings > 0 || spent > 0;
+  });
+  const allTripsReport = !selectedTripId;
+  const activeTripIds = new Set(activeTrips.map((trip) => String(trip.id)));
+  const reportCustomers = allTripsReport
+    ? customers
+    : customers.filter((row) => activeTripIds.has(String(row.itineraryId)));
+  const reportSuppliers = allTripsReport
+    ? suppliers.filter((row) => !isBankStatementRow(row))
+    : suppliers.filter(
+        (row) =>
+          !isBankStatementRow(row) &&
+          activeTripIds.has(String(row.itineraryId)),
+      );
+  const sales = reportCustomers.reduce(
+    (sum, row) => sum + Number(row.amount || 0),
+    0,
   );
-  const expenses = Number(
-    accounts.find((account) => account.id === "purchase")?.amount || 0,
+  const supplierExpenses = reportSuppliers.reduce(
+    (sum, row) => sum + Number(row.amount || 0),
+    0,
   );
-  const gst = trips.reduce((sum, trip) => {
+  const statementDebits = statementItems
+    .filter((item) => item.direction === "DEBIT")
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const expenses = supplierExpenses + statementDebits;
+  const expenseBreakdown = reportSuppliers
+    .filter(
+      (row) =>
+        String(row.category || "").toLowerCase() !== "travel" &&
+        !row.itineraryId,
+    )
+    .reduce((categories, row) => {
+      const category = row.category || "Uncategorized";
+      categories[category] = (categories[category] || 0) + Number(row.amount || 0);
+      return categories;
+    }, {});
+  const expenseRows = Object.entries(expenseBreakdown).sort(
+    ([, amountA], [, amountB]) => amountB - amountA,
+  );
+  const reportTableCell = {
+    padding: "10px 8px",
+    borderBottom: "1px solid var(--border-color, rgba(148,163,184,.1))",
+  };
+  const reportTrips = allTripsReport ? trips : activeTrips;
+  const gst = reportTrips.reduce((sum, trip) => {
     const amount = customers
       .filter((row) => String(row.itineraryId) === String(trip.id))
       .reduce((total, row) => total + Number(row.amount || 0), 0);
@@ -1355,7 +1518,7 @@ function CumulativeReportCard({ accounts, trips, tripTaxes, customers }) {
       sum + (amount * Number(tripTaxes[String(trip.id)]?.gstRate || 0)) / 100
     );
   }, 0);
-  const tcs = trips.reduce((sum, trip) => {
+  const tcs = reportTrips.reduce((sum, trip) => {
     const amount = customers
       .filter((row) => String(row.itineraryId) === String(trip.id))
       .reduce((total, row) => total + Number(row.amount || 0), 0);
@@ -1365,27 +1528,65 @@ function CumulativeReportCard({ accounts, trips, tripTaxes, customers }) {
   }, 0);
   const profit = sales - expenses - gst - tcs;
   return (
-    <div style={{ ...card, padding: 16, marginTop: 14 }}>
-      <h3 style={{ margin: 0 }}>Cumulative Profit / Loss</h3>
+      <div style={{ ...card, padding: 16, marginTop: 14 }}>
+        <h3 style={{ margin: 0 }}>Cumulative Profit / Loss</h3>
+      <div style={{ ...card, padding: 16, marginTop: 14 }}>
+        <h3 style={{ margin: 0 }}>Expense Breakdown</h3>
+        <p style={{ color: "var(--text-secondary)", margin: "6px 0 12px" }}>
+          {selectedTripId
+            ? "Additional expenses not already included in trip spending."
+            : "Additional non-Travel expenses not already included in the trip details."}
+        </p>
+        {expenseRows.length ? (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...reportTableCell, textAlign: "left" }}>
+                    Category
+                  </th>
+                  <th style={{ ...reportTableCell, textAlign: "right" }}>
+                    Amount
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {expenseRows.map(([category, amount]) => (
+                  <tr key={category}>
+                    <td style={reportTableCell}>{category}</td>
+                    <td style={{ ...reportTableCell, textAlign: "right" }}>
+                      {formatMoney(amount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p style={{ color: "var(--text-secondary)", margin: 0 }}>
+            No expenses found for these filters.
+          </p>
+        )}
+      </div>
       <div style={{ display: "grid", gap: 0, marginTop: 10 }}>
         <ReportRow label="Total earnings" value={formatMoney(sales)} />
         <ReportRow label="Total spent" value={formatMoney(expenses)} />
         <ReportRow label="Total GST" value={formatMoney(gst)} />
         <ReportRow label="Total TCS" value={formatMoney(tcs)} />
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            padding: "12px 0",
-            color: profit >= 0 ? "#34d399" : "#f87171",
-            fontWeight: 800,
-          }}
-        >
-          <strong>
-            {profit >= 0 ? "Cumulative Profit" : "Cumulative Loss"}
-          </strong>
-          <span>{formatMoney(Math.abs(profit))}</span>
-        </div>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          padding: "16px 0 4px",
+          color: profit >= 0 ? "#34d399" : "#f87171",
+          fontWeight: 800,
+        }}
+      >
+        <strong>
+          {profit >= 0 ? "Cumulative Profit" : "Cumulative Loss"}
+        </strong>
+        <span>{formatMoney(Math.abs(profit))}</span>
       </div>
     </div>
   );
@@ -1432,24 +1633,36 @@ function LedgerPreview({
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
     const tripRows = trips.map((trip) => {
       const key = String(trip.id);
-      const earnings = customers
-        .filter((row) => String(row.itineraryId) === key)
-        .reduce((sum, row) => sum + Number(row.amount || 0), 0);
-      const spent = suppliers
-        .filter((row) => String(row.itineraryId) === key)
-        .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      const customerRows = customers.filter((row) => String(row.itineraryId) === key);
+      const supplierRows = suppliers
+        .filter((row) => !isBankStatementRow(row))
+        .filter((row) => String(row.itineraryId) === key);
+      const earnings = customerRows.reduce(
+        (sum, row) => sum + Number(row.amount || 0),
+        0,
+      );
+      const spent = supplierRows.reduce(
+        (sum, row) => sum + Number(row.amount || 0),
+        0,
+      );
+      const dates = [...new Set(
+        [...customerRows, ...supplierRows]
+          .map((row) => row.transactionDate && String(row.transactionDate).slice(0, 10))
+          .filter(Boolean),
+      )].sort();
       const tax = tripTaxes[key] || {};
       const gstAmount = (earnings * Number(tax.gstRate || 0)) / 100;
       const tcsAmount = (earnings * Number(tax.tcsRate || 0)) / 100;
       return {
         name: trip.destination || `Trip ${key}`,
+        dateLabel: dates.length > 1 ? `${dates[0]} to ${dates.at(-1)}` : dates[0] || "-",
         earnings,
         spent,
         gstAmount,
         tcsAmount,
         profit: earnings - spent - gstAmount - tcsAmount,
       };
-    });
+    }).filter((row) => row.earnings > 0 || row.spent > 0);
     const totalGst = tripRows.reduce((sum, row) => sum + row.gstAmount, 0);
     const totalTcs = tripRows.reduce((sum, row) => sum + row.tcsAmount, 0);
     const cumulativeProfit = sales - expenses - totalGst - totalTcs;
@@ -1462,7 +1675,7 @@ function LedgerPreview({
     const tripRowsHtml = tripRows
       .map(
         (row) =>
-          `<tr><td>${escapeHtml(row.name)}</td><td class="num">${escapeHtml(formatMoney(row.earnings))}</td><td class="num">${escapeHtml(formatMoney(row.spent))}</td><td class="num">${escapeHtml(formatMoney(row.gstAmount))}</td><td class="num">${escapeHtml(formatMoney(row.tcsAmount))}</td><td class="num ${row.profit >= 0 ? "positive" : "negative"}">${row.profit >= 0 ? "Profit " : "Loss "}${escapeHtml(formatMoney(Math.abs(row.profit)))}</td></tr>`,
+          `<tr><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.dateLabel)}</td><td class="num">${escapeHtml(formatMoney(row.earnings))}</td><td class="num">${escapeHtml(formatMoney(row.spent))}</td><td class="num">${escapeHtml(formatMoney(row.gstAmount))}</td><td class="num">${escapeHtml(formatMoney(row.tcsAmount))}</td><td class="num ${row.profit >= 0 ? "positive" : "negative"}">${row.profit >= 0 ? "Profit " : "Loss "}${escapeHtml(formatMoney(Math.abs(row.profit)))}</td></tr>`,
       )
       .join("");
     // Open from the current application URL so Chrome does not print `about:blank`
@@ -1474,7 +1687,7 @@ function LedgerPreview({
     );
     if (!popup) return;
     popup.document.write(
-      `<!doctype html><html><head><meta charset="utf-8"><title>Travel Tally Report</title><style>@page{size:A4;margin:16mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;background:#fff;margin:0;font-size:10px;line-height:1.35}header{border-bottom:3px solid #2563eb;padding-bottom:12px;margin-bottom:18px}h1{font-size:22px;margin:0 0 5px;color:#0f172a}h2{font-size:14px;margin:0 0 9px;color:#0f172a}p{margin:0;color:#64748b}.section{margin:0 0 20px;break-inside:avoid}table{width:100%;border-collapse:collapse;table-layout:fixed}th{background:#eaf1ff;color:#1e3a8a;font-size:9px;text-transform:uppercase;letter-spacing:.03em;text-align:left}th,td{border:1px solid #d7deea;padding:7px 8px;vertical-align:top;overflow-wrap:anywhere}tbody tr:nth-child(even){background:#f8fafc}.num{text-align:right;white-space:nowrap}.positive{color:#047857;font-weight:700}.negative{color:#b91c1c;font-weight:700}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.metric{border:1px solid #d7deea;border-radius:7px;padding:9px 10px;background:#f8fafc}.metric label{display:block;color:#64748b;font-size:9px;margin-bottom:3px}.metric strong{font-size:13px}.total-row td{background:#eefcf7;font-weight:700}.muted{color:#64748b;font-size:9px}thead{display:table-header-group}tr{break-inside:avoid}</style></head><body><header><h1>Travel Tally Report</h1><p>${escapeHtml(master.companyName || "Travel accounting")} · ${escapeHtml(master.subBrand || "All sub-brands")} · ${escapeHtml(master.from || "Any date")} to ${escapeHtml(master.to || "Any date")}</p></header><section class="section"><h2>Bank Statement Transactions</h2>${statementItems.length ? `<table><thead><tr><th style="width:13%">Date</th><th style="width:34%">Description</th><th style="width:25%">Reference</th><th style="width:14%" class="num">Credit</th><th style="width:14%" class="num">Debit / Withdrawal</th></tr></thead><tbody>${statementRows}</tbody><tfoot><tr class="total-row"><td colspan="3">Bank statement total Profit / Loss</td><td class="num positive">${escapeHtml(formatMoney(credits))}</td><td class="num ${credits - debits >= 0 ? "positive" : "negative"}">${credits - debits >= 0 ? "Profit " : "Loss "}${escapeHtml(formatMoney(Math.abs(credits - debits)))}</td></tr></tfoot></table>` : `<p class="muted">No bank statement transactions were added.</p>`}</section><section class="section"><h2>Trip Details / Profit &amp; Loss</h2>${tripRows.length ? `<table><thead><tr><th style="width:25%">Trip / Place</th><th class="num">Earnings</th><th class="num">Spent</th><th class="num">GST</th><th class="num">TCS</th><th class="num">Profit / Loss</th></tr></thead><tbody>${tripRowsHtml}</tbody></table>` : `<p class="muted">No trip details were found for the selected filters.</p>`}</section><section class="section"><h2>Cumulative Profit / Loss</h2><div class="summary"><div class="metric"><label>Total earnings</label><strong>${escapeHtml(formatMoney(sales))}</strong></div><div class="metric"><label>Total spent</label><strong>${escapeHtml(formatMoney(expenses))}</strong></div><div class="metric"><label>Total GST</label><strong>${escapeHtml(formatMoney(totalGst))}</strong></div><div class="metric"><label>Total TCS</label><strong>${escapeHtml(formatMoney(totalTcs))}</strong></div></div><table><tbody><tr class="total-row"><td>Cumulative ${cumulativeProfit >= 0 ? "Profit" : "Loss"}</td><td class="num ${cumulativeProfit >= 0 ? "positive" : "negative"}">${escapeHtml(formatMoney(Math.abs(cumulativeProfit)))}</td></tr></tbody></table></section></body></html>`,
+      `<!doctype html><html><head><meta charset="utf-8"><title>Travel Tally Report</title><style>@page{size:A4;margin:16mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;background:#fff;margin:0;font-size:10px;line-height:1.35}header{border-bottom:3px solid #2563eb;padding-bottom:12px;margin-bottom:18px}h1{font-size:22px;margin:0 0 5px;color:#0f172a}h2{font-size:14px;margin:0 0 9px;color:#0f172a}p{margin:0;color:#64748b}.section{margin:0 0 20px;break-inside:avoid}table{width:100%;border-collapse:collapse;table-layout:fixed}th{background:#eaf1ff;color:#1e3a8a;font-size:9px;text-transform:uppercase;letter-spacing:.03em;text-align:left}th,td{border:1px solid #d7deea;padding:7px 8px;vertical-align:top;overflow-wrap:anywhere}tbody tr:nth-child(even){background:#f8fafc}.num{text-align:right;white-space:nowrap}.positive{color:#047857;font-weight:700}.negative{color:#b91c1c;font-weight:700}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.metric{border:1px solid #d7deea;border-radius:7px;padding:9px 10px;background:#f8fafc}.metric label{display:block;color:#64748b;font-size:9px;margin-bottom:3px}.metric strong{font-size:13px}.total-row td{background:#eefcf7;font-weight:700}.muted{color:#64748b;font-size:9px}thead{display:table-header-group}tr{break-inside:avoid}</style></head><body><header><h1>Travel Tally Report</h1><p>${escapeHtml(master.companyName || "Travel accounting")} · ${escapeHtml(master.subBrand || "All sub-brands")} · ${escapeHtml(master.from || "Any date")} to ${escapeHtml(master.to || "Any date")}</p></header><section class="section"><h2>Bank Statement Transactions</h2>${statementItems.length ? `<table><thead><tr><th style="width:13%">Date</th><th style="width:34%">Description</th><th style="width:25%">Reference</th><th style="width:14%" class="num">Credit</th><th style="width:14%" class="num">Debit / Withdrawal</th></tr></thead><tbody>${statementRows}</tbody><tfoot><tr class="total-row"><td colspan="3">Bank statement total Profit / Loss</td><td class="num positive">${escapeHtml(formatMoney(credits))}</td><td class="num ${credits - debits >= 0 ? "positive" : "negative"}">${credits - debits >= 0 ? "Profit " : "Loss "}${escapeHtml(formatMoney(Math.abs(credits - debits)))}</td></tr></tfoot></table>` : `<p class="muted">No bank statement transactions were added.</p>`}</section><section class="section"><h2>Trip Details / Profit &amp; Loss</h2>${tripRows.length ? `<table><thead><tr><th style="width:22%">Trip / Place</th><th style="width:16%">Ledger dates</th><th class="num">Earnings</th><th class="num">Spent</th><th class="num">GST</th><th class="num">TCS</th><th class="num">Profit / Loss</th></tr></thead><tbody>${tripRowsHtml}</tbody></table>` : `<p class="muted">No trip details were found for the selected filters.</p>`}</section><section class="section"><h2>Cumulative Profit / Loss</h2><div class="summary"><div class="metric"><label>Total earnings</label><strong>${escapeHtml(formatMoney(sales))}</strong></div><div class="metric"><label>Total spent</label><strong>${escapeHtml(formatMoney(expenses))}</strong></div><div class="metric"><label>Total GST</label><strong>${escapeHtml(formatMoney(totalGst))}</strong></div><div class="metric"><label>Total TCS</label><strong>${escapeHtml(formatMoney(totalTcs))}</strong></div></div><table><tbody><tr class="total-row"><td>Cumulative ${cumulativeProfit >= 0 ? "Profit" : "Loss"}</td><td class="num ${cumulativeProfit >= 0 ? "positive" : "negative"}">${escapeHtml(formatMoney(Math.abs(cumulativeProfit)))}</td></tr></tbody></table></section></body></html>`,
     );
     popup.document.close();
     popup.focus();
@@ -1540,14 +1753,17 @@ function LedgerPreview({
         customers={customers}
         suppliers={suppliers}
         trips={trips}
+        selectedTripId={master.tripId}
         tripTaxes={tripTaxes}
         statementItems={statementItems}
       />
       <CumulativeReportCard
-        accounts={accounts}
         trips={trips}
         tripTaxes={tripTaxes}
         customers={customers}
+        suppliers={suppliers}
+        statementItems={statementItems}
+        selectedTripId={master.tripId}
       />
       <div
         style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}

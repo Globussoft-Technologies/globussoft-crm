@@ -107,6 +107,7 @@ prisma.travelDiagnostic = {
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  deleteMany: vi.fn(),
   count: vi.fn(),
 };
 // FR-5 curriculum-fit lookup delegate.
@@ -118,9 +119,11 @@ prisma.travelCurriculumMapping = {
 prisma.travelDiagnosticRagResult = {
   ...(prisma.travelDiagnosticRagResult || {}),
   findUnique: vi.fn(),
+  findMany: vi.fn(),
 };
 prisma.contact = {
   ...(prisma.contact || {}),
+  findMany: vi.fn(),
   findUnique: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
@@ -210,9 +213,12 @@ beforeEach(() => {
     reportPdfUrl: null, talkingPointsJson: null, formVsCallJson: null,
   });
   prisma.travelDiagnostic.update.mockReset().mockResolvedValue({ id: 500 });
+  prisma.travelDiagnostic.deleteMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.travelDiagnostic.count.mockReset().mockResolvedValue(0);
   prisma.travelCurriculumMapping.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnosticRagResult.findUnique.mockReset().mockResolvedValue(null);
+  prisma.travelDiagnosticRagResult.findMany.mockReset().mockResolvedValue([]);
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset().mockResolvedValue({ id: 900, tenantId: 1 });
@@ -598,6 +604,31 @@ describe('GET /diagnostics (list)', () => {
     });
   });
 
+  test('accepts fromDate + toDate and narrows createdAt inclusively', async () => {
+    prisma.travelDiagnostic.findMany.mockResolvedValue([{ id: 500, createdAt: '2026-06-23T15:37:15.000Z' }]);
+    prisma.travelDiagnostic.count.mockResolvedValue(1);
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics?fromDate=2026-06-20&toDate=2026-06-23')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(prisma.travelDiagnostic.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: 1,
+      createdAt: {
+        gte: new Date('2026-06-20T00:00:00.000Z'),
+        lte: new Date('2026-06-23T23:59:59.999Z'),
+      },
+    });
+  });
+
+  test('invalid fromDate yields 400 INVALID_DATE', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics?fromDate=not-a-date')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_DATE' });
+    expect(prisma.travelDiagnostic.findMany).not.toHaveBeenCalled();
+  });
+
   test('non-numeric :id on GET /diagnostics/:id → 400 INVALID_ID', async () => {
     const res = await request(makeApp())
       .get('/api/travel/diagnostics/abc')
@@ -608,6 +639,61 @@ describe('GET /diagnostics (list)', () => {
 });
 
 // ─── POST /diagnostics/:id/talking-points/regen ───────────────────────
+
+describe('DELETE /diagnostics/bulk', () => {
+  test('USER role rejected by diagnostics.delete gate', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .delete('/api/travel/diagnostics/bulk')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ ids: [500, 501] });
+    expect(res.status).toBe(403);
+    expect(prisma.travelDiagnostic.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('missing ids yields 400 MISSING_IDS', async () => {
+    const res = await request(makeApp())
+      .delete('/api/travel/diagnostics/bulk')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [] });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_IDS' });
+    expect(prisma.travelDiagnostic.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('happy: deletes matching tenant-scoped diagnostics and returns deleted ids', async () => {
+    prisma.travelDiagnostic.findMany.mockResolvedValue([
+      { id: 500, subBrand: 'tmc' },
+      { id: 501, subBrand: 'rfu' },
+    ]);
+    prisma.travelDiagnostic.deleteMany.mockResolvedValue({ count: 2 });
+
+    const res = await request(makeApp())
+      .delete('/api/travel/diagnostics/bulk')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ids: [500, 501, 501] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      deletedCount: 2,
+      deletedIds: [500, 501],
+    });
+    expect(prisma.travelDiagnostic.findMany.mock.calls[0][0]).toMatchObject({
+      where: {
+        tenantId: 1,
+        id: { in: [500, 501] },
+      },
+      select: { id: true, subBrand: true },
+    });
+    expect(prisma.travelDiagnostic.deleteMany.mock.calls[0][0]).toMatchObject({
+      where: {
+        tenantId: 1,
+        id: { in: [500, 501] },
+      },
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('POST /diagnostics/:id/talking-points/regen', () => {
   test('USER role rejected (ADMIN/MANAGER only)', async () => {

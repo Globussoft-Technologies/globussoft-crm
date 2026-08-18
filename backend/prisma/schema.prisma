@@ -6467,6 +6467,8 @@ model TravelSightseeing {
   name                String // POI name e.g. "Eiffel Tower"
   description         String?  @db.Text // 1-2 paragraphs
   imageUrl            String?  @db.Text // thumbnail / hero image
+  latitude            Float? // optional manual/master place pin for itinerary maps
+  longitude           Float? // optional manual/master place pin for itinerary maps
   durationMinutes     Int? // typical visit time
   priceReferenceMinor Int? // INR minor units, indicative entry/ticket
   currency            String?  @db.VarChar(3) // ISO 4217; nullable, defaults to tenant default at call site

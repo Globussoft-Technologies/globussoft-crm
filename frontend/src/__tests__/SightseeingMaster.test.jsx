@@ -216,7 +216,7 @@ describe('<SightseeingMaster /> â€” create flow', () => {
     fireEvent.change(destInput, { target: { value: 'Jeddah' } });
     fireEvent.change(nameInput, { target: { value: 'Al-Balad' } });
     fireEvent.change(screen.getByLabelText('durationMinutes'), { target: { value: '90' } });
-    fireEvent.change(screen.getByLabelText('priceReferenceMinor'), { target: { value: '25000' } });
+    fireEvent.change(screen.getByLabelText('priceReferenceMinor'), { target: { value: '250' } });
 
     fetchApiMock.mockClear();
     installFetchMock();

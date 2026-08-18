@@ -61,6 +61,25 @@ const {
   sanitizeJsonForStringColumn,
 } = require("../lib/sanitizeJson");
 
+function parseDateRangeBoundary(input, kind) {
+  if (!input) return null;
+  const raw = String(input).trim();
+  if (!raw) return null;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? `${raw}${kind === "end" ? "T23:59:59.999Z" : "T00:00:00.000Z"}`
+    : raw;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    const err = new Error(
+      `${kind === "end" ? "toDate" : "fromDate"} must be a valid date`,
+    );
+    err.status = 400;
+    err.code = "INVALID_DATE";
+    throw err;
+  }
+  return parsed;
+}
+
 //  Question banks
 
 // GET /api/travel/diagnostic-banks?subBrand=tmc&active=true
@@ -807,6 +826,13 @@ router.get(
         const cid = parseInt(req.query.contactId, 10);
         if (Number.isFinite(cid)) where.contactId = cid;
       }
+      const fromDate = parseDateRangeBoundary(req.query.fromDate, "start");
+      const toDate = parseDateRangeBoundary(req.query.toDate, "end");
+      if (fromDate || toDate) {
+        where.createdAt = {};
+        if (fromDate) where.createdAt.gte = fromDate;
+        if (toDate) where.createdAt.lte = toDate;
+      }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (allowed) {
@@ -881,6 +907,76 @@ router.get(
       res.status(500).json({ error: "Failed to list diagnostics" });
     }
   });
+
+router.delete(
+  "/diagnostics/bulk",
+  verifyToken,
+  requirePermission("diagnostics", "delete"),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const ids = Array.isArray(req.body?.ids)
+        ? [...new Set(req.body.ids.map((id) => parseInt(id, 10)).filter(Number.isFinite))]
+        : [];
+      if (!ids.length) {
+        return res.status(400).json({
+          error: "ids must be a non-empty array of numeric ids",
+          code: "MISSING_IDS",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const where = {
+        tenantId: req.travelTenant.id,
+        id: { in: ids },
+      };
+      if (allowed) where.subBrand = { in: [...allowed] };
+
+      const rows = await prisma.travelDiagnostic.findMany({
+        where,
+        select: { id: true, subBrand: true },
+      });
+      if (!rows.length) {
+        return res.status(404).json({
+          error: "No matching diagnostics found",
+          code: "NOT_FOUND",
+        });
+      }
+
+      const deletedIds = rows.map((row) => row.id);
+      const result = await prisma.travelDiagnostic.deleteMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          id: { in: deletedIds },
+        },
+      });
+
+      await Promise.all(
+        deletedIds.map((id) =>
+          writeAudit(
+            "TravelDiagnostic",
+            "DELETE",
+            id,
+            req.user.userId,
+            req.travelTenant.id,
+            { deletedByBulk: true },
+          ),
+        ),
+      );
+
+      return res.json({
+        deletedCount: Number(result?.count) || deletedIds.length,
+        deletedIds,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-diag] bulk delete diagnostics error:", e.message);
+      return res.status(500).json({ error: "Failed to bulk delete diagnostics" });
+    }
+  },
+);
 
 // ============================================================================
 // GET /api/travel/diagnostics/stats  tenant-wide Diagnostic submissions rollup

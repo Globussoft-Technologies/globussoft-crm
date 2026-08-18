@@ -122,6 +122,84 @@ const { findNearbyPoi } = require("../lib/poiDedup");
 const EXTERNAL_SOURCE_OPERATOR = "operator";
 const POI_DEDUP_RADIUS_METERS = 50;
 
+function slugifyDestination(raw) {
+  return String(raw || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "");
+}
+
+function destinationLabelFromSlug(raw) {
+  const slug = slugifyDestination(raw);
+  if (!slug) return "";
+  return slug
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function comparablePlaceKey(destination, name) {
+  return `${slugifyDestination(destination)}::${String(name || "").trim().toLowerCase()}`;
+}
+
+function normalizeSubBrandId(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return null;
+  const compact = value.toLowerCase().replace(/[\s_-]+/g, "");
+  if (compact === "travelstall") return "travelstall";
+  if (compact === "visasure") return "visasure";
+  if (compact === "tmc") return "tmc";
+  if (compact === "rfu") return "rfu";
+  return value.toLowerCase();
+}
+
+async function syncApprovedPoiToSightseeing(prismaClient, poi) {
+  const destinationName = destinationLabelFromSlug(poi.destinationSlug);
+  if (!poi?.tenantId || !destinationName || !poi?.name) return null;
+
+  const existing = await prismaClient.travelSightseeing.findFirst({
+    where: {
+      tenantId: poi.tenantId,
+      destinationName,
+      name: poi.name,
+    },
+  });
+
+  const data = {
+    category: poi.category || null,
+    imageUrl: poi.imageUrl || null,
+    description: poi.descriptionShort || null,
+    isActive: true,
+  };
+
+  if (existing) {
+    return prismaClient.travelSightseeing.update({
+      where: { id: existing.id },
+      data: {
+        category: existing.category || data.category,
+        imageUrl: existing.imageUrl || data.imageUrl,
+        description: existing.description || data.description,
+        isActive: existing.isActive === false ? true : existing.isActive,
+      },
+    });
+  }
+
+  return prismaClient.travelSightseeing.create({
+    data: {
+      tenantId: poi.tenantId,
+      destinationName,
+      name: poi.name,
+      description: data.description,
+      imageUrl: data.imageUrl,
+      category: data.category,
+      notes: "Auto-created from approved POI catalog entry.",
+      isActive: true,
+    },
+  });
+}
+
 // ───────────────────────────────────────────────────────────────────
 // Validation helpers
 // ───────────────────────────────────────────────────────────────────
@@ -187,19 +265,17 @@ router.get("/", verifyToken, async (req, res) => {
       Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : 50;
     const rawOffset = parseInt(req.query.offset, 10);
     const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+    const subBrand = normalizeSubBrandId(req.query.subBrand);
+    const destinationLabel = destinationLabelFromSlug(destinationSlug);
 
-    // Catalog rows: own tenant's approved rows + catalog-wide null-tenant
-    // rows. Hide pendingApproval=true.
-    const where = {
+    const poiWhere = {
       destinationSlug,
       pendingApproval: false,
       OR: [{ tenantId: req.user.tenantId }, { tenantId: null }],
     };
-    if (category) where.category = category;
+    if (category) poiWhere.category = category;
     if (q) {
-      // MySQL collation is case-insensitive by default (utf8mb4_unicode_ci).
-      // Prisma's `contains` translates to LIKE '%q%'.
-      where.AND = [
+      poiWhere.AND = [
         {
           OR: [
             { name: { contains: q } },
@@ -209,17 +285,112 @@ router.get("/", verifyToken, async (req, res) => {
       ];
     }
 
-    const [rows, total] = await Promise.all([
+    const sightseeingWhere = {
+      tenantId: req.user.tenantId,
+      isActive: true,
+      destinationName: destinationLabel
+        ? { contains: destinationLabel }
+        : undefined,
+      ...(category ? { category } : {}),
+      ...(subBrand
+        ? { OR: [{ subBrand: null }, { subBrand }] }
+        : {}),
+    };
+    if (q) {
+      sightseeingWhere.AND = [
+        {
+          OR: [
+            { name: { contains: q } },
+            { description: { contains: q } },
+            { notes: { contains: q } },
+          ],
+        },
+      ];
+    }
+
+    const [poiRows, sightseeingRows, poiTotal] = await Promise.all([
       prisma.travelPoi.findMany({
-        where,
+        where: poiWhere,
         orderBy: { name: "asc" },
-        take: limit,
-        skip: offset,
+        take: Math.max(limit + offset + 50, 100),
       }),
-      prisma.travelPoi.count({ where }),
+      prisma.travelSightseeing.findMany({
+        where: sightseeingWhere,
+        orderBy: [{ destinationName: "asc" }, { name: "asc" }],
+        take: Math.max(limit + offset + 50, 100),
+      }),
+      prisma.travelPoi.count({ where: poiWhere }),
     ]);
 
-    res.json({ pois: rows, total, limit, offset });
+    const merged = new Map();
+
+    for (const row of sightseeingRows) {
+      merged.set(comparablePlaceKey(row.destinationName, row.name), {
+        id: `s-${row.id}`,
+        sightseeingId: row.id,
+        poiId: null,
+        sourceType: "sightseeing",
+        name: row.name,
+        nameLocal: null,
+        category: row.category || null,
+        latitude: null,
+        longitude: null,
+        country: null,
+        destinationSlug,
+        destinationName: row.destinationName,
+        imageUrl: row.imageUrl || null,
+        descriptionShort: row.description || null,
+        notes: row.notes || null,
+      });
+    }
+
+    for (const row of poiRows) {
+      const key = comparablePlaceKey(row.destinationSlug || destinationSlug, row.name);
+      const existing = merged.get(key);
+      if (existing) {
+        merged.set(key, {
+          ...existing,
+          poiId: row.id,
+          sourceType: "sightseeing",
+          latitude: existing.latitude ?? row.latitude ?? null,
+          longitude: existing.longitude ?? row.longitude ?? null,
+          country: existing.country ?? row.country ?? null,
+          imageUrl: existing.imageUrl || row.imageUrl || null,
+          descriptionShort:
+            existing.descriptionShort || row.descriptionShort || null,
+        });
+        continue;
+      }
+      merged.set(key, {
+        id: `p-${row.id}`,
+        sightseeingId: null,
+        poiId: row.id,
+        sourceType: "poi",
+        name: row.name,
+        nameLocal: row.nameLocal || null,
+        category: row.category || null,
+        latitude: row.latitude ?? null,
+        longitude: row.longitude ?? null,
+        country: row.country || null,
+        destinationSlug: row.destinationSlug || destinationSlug,
+        destinationName: destinationLabel || null,
+        imageUrl: row.imageUrl || null,
+        descriptionShort: row.descriptionShort || null,
+        notes: null,
+      });
+    }
+
+    const allRows = [...merged.values()].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""))
+    );
+    const page = allRows.slice(offset, offset + limit);
+
+    res.json({
+      pois: page,
+      total: Math.max(allRows.length, poiTotal),
+      limit,
+      offset,
+    });
   } catch (e) {
     console.error("[travel-pois] list error:", e.message);
     res.status(500).json({ error: "Failed to load POI catalog" });
@@ -476,6 +647,10 @@ router.post(
       const updated = await prisma.travelPoi.update({
         where: { id },
         data: { pendingApproval: false },
+      });
+      await syncApprovedPoiToSightseeing(prisma, {
+        ...existing,
+        ...updated,
       });
 
       writeAudit(

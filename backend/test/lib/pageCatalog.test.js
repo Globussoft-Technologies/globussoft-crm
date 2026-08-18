@@ -253,6 +253,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     const paths = pages.map((p) => p.path);
     expect(paths).toContain('/travel/commission-profiles');
     expect(paths).not.toContain('/commission-profiles');
+    expect(paths).not.toContain('/travel/whatsapp');
   });
 
   it('wellness vertical excludes every /travel/* path', () => {
@@ -280,6 +281,16 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     }
     expect(paths).toContain('/landing-sites');
     expect(paths).not.toContain('/landing-pages');
+  });
+
+  it('Channels stays generic-only and is excluded from wellness + travel catalogs', () => {
+    const generic = getCatalogForVertical('generic').map((p) => p.path);
+    const wellness = getCatalogForVertical('wellness').map((p) => p.path);
+    const travel = getCatalogForVertical('travel').map((p) => p.path);
+
+    expect(generic).toContain('/channels');
+    expect(wellness).not.toContain('/channels');
+    expect(travel).not.toContain('/channels');
   });
 
   it('every vertical includes the cross-vertical core (/home, /contacts, /tasks, /notification-settings)', () => {

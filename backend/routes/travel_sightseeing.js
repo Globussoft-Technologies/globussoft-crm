@@ -67,6 +67,8 @@ const TEMPLATE_HEADERS = [
   "name",
   "category",
   "subBrand",
+  "latitude",
+  "longitude",
   "durationMinutes",
   "priceReferenceMinor",
   "currency",
@@ -81,6 +83,8 @@ const TEMPLATE_ROWS = [
     name: "# Required",
     category: "Optional: monument, religious, museum, nature, adventure, food, shopping",
     subBrand: "Optional: tmc, rfu, travelstall, visasure",
+    latitude: "Optional decimal, e.g. 21.422500",
+    longitude: "Optional decimal, e.g. 39.826200",
     durationMinutes: "Optional integer, e.g. 90",
     priceReferenceMinor: "Optional integer, e.g. 50000 for INR 500.00",
     currency: "Optional 3-letter ISO, e.g. INR",
@@ -94,6 +98,8 @@ const TEMPLATE_ROWS = [
     name: "Masjid al-Haram",
     category: "religious",
     subBrand: "rfu",
+    latitude: "21.422500",
+    longitude: "39.826200",
     durationMinutes: "120",
     priceReferenceMinor: "0",
     currency: "SAR",
@@ -136,6 +142,15 @@ function parseOptionalInteger(value, fieldName) {
     throw new Error(`${fieldName} must be a non-negative integer`);
   }
   return num;
+}
+
+function parseOptionalCoordinate(value, fieldName, min, max) {
+  if (value == null || value === "") return null;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < min || num > max) {
+    throw new Error(`${fieldName} must be between ${min} and ${max}`);
+  }
+  return Math.round(num * 1e6) / 1e6;
 }
 
 function parseOptionalBoolean(value) {
@@ -182,6 +197,8 @@ const MUTABLE_FIELDS = [
   "name",
   "description",
   "imageUrl",
+  "latitude",
+  "longitude",
   "durationMinutes",
   "priceReferenceMinor",
   "currency",
@@ -317,6 +334,8 @@ router.post(
             name,
             category: normalizeOptionalString(row.category),
             subBrand,
+            latitude: parseOptionalCoordinate(row.latitude, "latitude", -90, 90),
+            longitude: parseOptionalCoordinate(row.longitude, "longitude", -180, 180),
             durationMinutes: parseOptionalInteger(
               row.durationMinutes,
               "durationMinutes",
@@ -427,6 +446,7 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
     const destinationName = String(req.query.destinationName || "").trim();
+    const q = String(req.query.q || "").trim();
 
     if (destinationName) {
       where.destinationName = { contains: destinationName };
@@ -436,6 +456,17 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
     }
     if (req.query.isActive !== undefined) {
       where.isActive = String(req.query.isActive) === "true";
+    }
+    if (q) {
+      where.AND = [
+        {
+          OR: [
+            { name: { contains: q } },
+            { description: { contains: q } },
+            { notes: { contains: q } },
+          ],
+        },
+      ];
     }
 
     // Clamp pagination: limit ∈ [1, 200]; offset ≥ 0.
@@ -451,6 +482,7 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
     if (allowed instanceof Set && allowed.size === 0) {
       return res.json({ items: [], total: 0, limit, offset });
     }
+    const includeTenantWide = String(req.query.includeTenantWide || "") === "true";
     if (allowed instanceof Set) {
       if (req.query.subBrand) {
         if (!canAccessSubBrand(allowed, String(req.query.subBrand))) {
@@ -459,7 +491,14 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
             code: "FORBIDDEN_SUB_BRAND",
           });
         }
-        where.subBrand = String(req.query.subBrand);
+        if (includeTenantWide) {
+          where.OR = [
+            { subBrand: null },
+            { subBrand: String(req.query.subBrand) },
+          ];
+        } else {
+          where.subBrand = String(req.query.subBrand);
+        }
       } else {
         where.OR = [
           { subBrand: null },
@@ -467,13 +506,22 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
         ];
       }
     } else if (req.query.subBrand) {
-      where.subBrand = String(req.query.subBrand);
+      if (includeTenantWide) {
+        where.OR = [
+          { subBrand: null },
+          { subBrand: String(req.query.subBrand) },
+        ];
+      } else {
+        where.subBrand = String(req.query.subBrand);
+      }
     }
 
     const [items, total] = await Promise.all([
       prisma.travelSightseeing.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy: q
+          ? [{ name: "asc" }]
+          : [{ createdAt: "desc" }],
         take: limit,
         skip: offset,
       }),
@@ -534,6 +582,14 @@ router.post(
           name: body.name,
           description: body.description ?? null,
           imageUrl: body.imageUrl ?? null,
+          latitude:
+            body.latitude != null
+              ? parseOptionalCoordinate(body.latitude, "latitude", -90, 90)
+              : null,
+          longitude:
+            body.longitude != null
+              ? parseOptionalCoordinate(body.longitude, "longitude", -180, 180)
+              : null,
           durationMinutes:
             body.durationMinutes != null ? Number(body.durationMinutes) : null,
           priceReferenceMinor:
@@ -1372,6 +1428,18 @@ router.patch(
 
       // Coerce numeric fields when they're present.
       const data = { ...body };
+      if (data.latitude !== undefined) {
+        data.latitude =
+          data.latitude == null || data.latitude === ""
+            ? null
+            : parseOptionalCoordinate(data.latitude, "latitude", -90, 90);
+      }
+      if (data.longitude !== undefined) {
+        data.longitude =
+          data.longitude == null || data.longitude === ""
+            ? null
+            : parseOptionalCoordinate(data.longitude, "longitude", -180, 180);
+      }
       if (data.durationMinutes !== undefined && data.durationMinutes !== null) {
         data.durationMinutes = Number(data.durationMinutes);
       }

@@ -100,6 +100,10 @@ async function authPost(request, path, body, who = 'admin') {
   const headers = { ...(await authHdr(request, who)), 'Content-Type': 'application/json' };
   return request.post(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
 }
+async function authPut(request, path, body, who = 'admin') {
+  const headers = { ...(await authHdr(request, who)), 'Content-Type': 'application/json' };
+  return request.put(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
+}
 
 // ── Mask-format predicates ─────────────────────────────────────────
 // These mirror the canonical regexes in backend/lib/piiMask.js. Centralised
@@ -342,4 +346,12 @@ test('mask predicate self-check: known mask shapes match the regexes', () => {
   expect('R. Sharma').toMatch(NAME_MASK_RE);
   expect('****-04-12').toMatch(DOB_MASK_RE);
   expect('#345').toMatch(USERID_MASK_RE);
+});
+
+// Rename created patients so the demo scrub script (test-data-patterns.js)
+// deletes them when the global teardown is skipped (E2E_SKIP_SCRUB=1).
+test.afterAll(async ({ request }) => {
+  for (const id of createdPatientIds) {
+    await authPut(request, `/api/wellness/patients/${id}`, { name: `_teardown_pii_${id}` }).catch(() => {});
+  }
 });

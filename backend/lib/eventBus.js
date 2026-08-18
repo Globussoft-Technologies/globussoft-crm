@@ -227,6 +227,12 @@ function evaluateCondition(conditionJson, payload) {
       case "contains":
         if (actual == null || !String(actual).includes(String(value))) return false;
         break;
+      case "exists":
+        if (actual == null || actual === "") return false;
+        break;
+      case "icontains":
+        if (actual == null || !String(actual).toLowerCase().includes(String(value).toLowerCase())) return false;
+        break;
       case "startsWith":
         if (actual == null || !String(actual).startsWith(String(value))) return false;
         break;
@@ -386,8 +392,16 @@ async function emitEvent(eventName, payload, tenantId, io, depth = 0) {
   bus.emit(eventName, { payload, tenantId, io: ioInstance });
 
   // 1. Find matching automation rules
+  const triggerTypes = [eventName];
+  if (eventName === "contact.created" || eventName === "contact.updated") {
+    triggerTypes.push("contact.created_or_updated");
+  }
   const rules = await prisma.automationRule.findMany({
-    where: { tenantId, triggerType: eventName, isActive: true },
+    where: {
+      tenantId,
+      isActive: true,
+      triggerType: triggerTypes.length === 1 ? eventName : { in: triggerTypes },
+    },
   });
 
   const orderedRules = [...rules].sort((a, b) => ruleExecutionOrder(a) - ruleExecutionOrder(b) || a.id - b.id);

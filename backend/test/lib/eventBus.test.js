@@ -381,7 +381,7 @@ describe('emitEvent — prisma async tail (rule fan-out + webhook delivery)', ()
   test('queries automationRule scoped to tenant + eventName + isActive=true', async () => {
     await emitEvent('contact.created', { contactId: 1 }, 42);
     expect(prisma.automationRule.findMany).toHaveBeenCalledWith({
-      where: { tenantId: 42, triggerType: 'contact.created', isActive: true },
+      where: { tenantId: 42, triggerType: { in: ['contact.created', 'contact.created_or_updated'] }, isActive: true },
     });
   });
 

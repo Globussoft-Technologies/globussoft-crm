@@ -124,15 +124,27 @@ async function deliverConfiguredWebhook(config, event, payload, tenantId, secret
     headers["X-Globussoft-Signature"] = `t=${timestamp},v1=${signature}`;
   }
 
-  const response = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(10000) });
-  const responseText = (await response.text()).slice(0, 2000);
-  const result = { ok: response.ok, status: response.status, statusText: response.statusText, response: responseText };
-  if (!response.ok) {
-    const error = new Error(`Webhook returned HTTP ${response.status}${responseText ? `: ${responseText}` : ""}`);
-    error.webhookResult = result;
-    throw error;
+  const maxAttempts = 3;
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(10000) });
+      const responseText = (await response.text()).slice(0, 2000);
+      const result = { ok: response.ok, status: response.status, statusText: response.statusText, response: responseText, attempts: attempt };
+      if (response.ok) return result;
+      const error = new Error(`Webhook returned HTTP ${response.status}${responseText ? `: ${responseText}` : ""}`);
+      error.webhookResult = result;
+      lastError = error;
+      if (response.status < 500 || attempt === maxAttempts) throw error;
+    } catch (error) {
+      lastError = error;
+      const status = error.webhookResult?.status;
+      const retryable = !status || status >= 500;
+      if (!retryable || attempt === maxAttempts) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** (attempt - 1))));
   }
-  return result;
+  throw lastError || new Error("Webhook delivery failed");
 }
 
 /**

@@ -3,8 +3,10 @@ import {
   Activity,
   ArrowLeft,
   Check,
+  CreditCard,
   ChevronDown,
   Copy,
+  FileText,
   GripVertical,
   Mail,
   MoreVertical,
@@ -13,6 +15,8 @@ import {
   Plus,
   Search,
   Send,
+  ShieldCheck,
+  UserCheck,
   Trash2,
   Users,
   Webhook,
@@ -26,6 +30,10 @@ const MODULES = [
   { value: "deal", label: "Deals", icon: Activity },
   { value: "task", label: "Tasks", icon: Check },
   { value: "ticket", label: "Tickets", icon: Activity },
+  { value: "invoice", label: "Invoices", icon: FileText },
+  { value: "payment", label: "Payments", icon: CreditCard },
+  { value: "lead", label: "Leads", icon: UserCheck },
+  { value: "approval", label: "Approvals", icon: ShieldCheck },
 ];
 
 const TEMPLATE_CATEGORIES = [
@@ -37,6 +45,54 @@ const TEMPLATE_CATEGORIES = [
 ];
 
 const TEMPLATES = [
+  {
+    name: "Junk Lead Suppression to Meta",
+    category: "qualify_leads",
+    module: "contact",
+    triggerType: "contact.created_or_updated",
+    execution: "once",
+    description: "Notify Meta when a lead is identified as junk so future campaign data can be improved.",
+    groups: [
+      {
+        name: "Identify junk leads",
+        match: "any",
+        clauses: [
+          { entity: "contact", field: "tags", op: "icontains", value: "junk" },
+          { entity: "contact", field: "status", op: "eq", value: "Junk" },
+          { entity: "contact", field: "callifiedLeadStatus", op: "eq", value: "junk" },
+        ],
+      },
+      {
+        name: "Require Meta lead ID",
+        match: "all",
+        clauses: [{ entity: "contact", field: "metaLeadgenId", op: "exists", value: true }],
+      },
+    ],
+    actions: [{
+      type: "send_webhook",
+      config: {
+        url: "https://globussoft.ai/wp-json/junk-suppression/v1/webhook",
+        method: "POST",
+        encoding: "json",
+        bodyMode: "advanced",
+        bodyTemplate: JSON.stringify({
+          event: "junk_lead",
+          contact_id: "{{contactId}}",
+          meta_leadgen_id: "{{metaLeadgenId}}",
+          external_id: "{{externalId}}",
+          name: "{{name}}",
+          email: "{{email}}",
+          phone: "{{phone}}",
+          source: "{{source}}",
+          tags: "{{tags}}",
+          status: "{{status}}",
+          callified_lead_status: "{{callifiedLeadStatus}}",
+          callified_lead_status_reason: "{{callifiedLeadStatusReason}}",
+          meta_signal: "{{metaSignal}}",
+        }, null, 2),
+      },
+    }],
+  },
   { name: "Send welcome email to new leads", category: "get_started", module: "contact", action: "send_email" },
   { name: "Set reminder to call new website leads", category: "get_started", module: "contact", action: "create_task" },
   { name: "Add deal for qualified leads", category: "get_started", module: "deal", action: "create_task" },
@@ -55,8 +111,9 @@ const TEMPLATES = [
 ];
 
 const TRIGGERS = [
+  { module: "contact", value: "contact.created_or_updated", label: "When contact is created or updated" },
   { module: "contact", value: "contact.created", label: "When contact is created" },
-  { module: "contact", value: "contact.updated", label: "When contact is created or updated" },
+  { module: "contact", value: "contact.updated", label: "When contact is updated" },
   { module: "contact", value: "lead.converted", label: "When a lead is converted" },
   { module: "deal", value: "deal.created", label: "When deal is created" },
   { module: "deal", value: "deal.updated", label: "When deal is created or updated" },
@@ -67,6 +124,18 @@ const TRIGGERS = [
   { module: "task", value: "task.completed", label: "When task is completed" },
   { module: "ticket", value: "ticket.created", label: "When ticket is created" },
   { module: "ticket", value: "ticket.updated", label: "When ticket is created or updated" },
+  { module: "ticket", value: "sla.breached", label: "When a ticket SLA is breached" },
+  { module: "invoice", value: "invoice.created", label: "When invoice is created" },
+  { module: "invoice", value: "invoice.paid", label: "When invoice is paid" },
+  { module: "invoice", value: "invoice.completed", label: "When invoice is completed" },
+  { module: "invoice", value: "invoice.voided", label: "When invoice is voided" },
+  { module: "invoice", value: "invoice.refunded", label: "When invoice is refunded" },
+  { module: "invoice", value: "invoice.overdue", label: "When invoice is overdue" },
+  { module: "payment", value: "payment.collected", label: "When payment is collected" },
+  { module: "lead", value: "lead.converted", label: "When a lead is converted" },
+  { module: "approval", value: "approval.created", label: "When approval is created" },
+  { module: "approval", value: "approval.approved", label: "When approval is approved" },
+  { module: "approval", value: "approval.rejected", label: "When approval is rejected" },
 ];
 
 const ACTIONS = [
@@ -77,19 +146,24 @@ const ACTIONS = [
   { value: "update_field", label: "Update field", icon: Pencil },
   { value: "assign_agent", label: "Assign agent", icon: Users },
   { value: "send_webhook", label: "Trigger webhook", icon: Webhook },
+  { value: "create_approval", label: "Create approval request", icon: ShieldCheck },
 ];
 
 const OPERATORS = [
-  ["eq", "is"], ["neq", "is not"], ["contains", "contains"],
+  ["eq", "is"], ["neq", "is not"], ["contains", "contains"], ["icontains", "contains (case-insensitive)"],
   ["startsWith", "starts with"], ["gt", "greater than"], ["gte", "at least"],
   ["lt", "less than"], ["lte", "at most"], ["in", "is in"],
 ];
 
 const FIELD_OPTIONS = {
-  contact: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason"],
+  contact: ["contactId", "name", "email", "phone", "company", "title", "status", "source", "tags", "aiScore", "assignedToId", "firstTouchSource", "lastTouchSource", "callifiedLeadStatus", "callifiedLeadStatusReason", "externalId", "metaLeadgenId", "metaSignal", "metaIsJunk", "metaIsQualified", "changedFields"],
   deal: ["dealId", "title", "amount", "stage", "contactId", "userId"],
   task: ["taskId", "title", "contactId", "assignedToId", "status"],
   ticket: ["ticketId", "subject", "priority", "status", "contactId", "userId"],
+  invoice: ["invoiceId", "contactId", "dealId", "status", "amount", "dueDate", "currency"],
+  payment: ["paymentId", "invoiceId", "contactId", "amount", "status", "method"],
+  lead: ["contactId", "name", "email", "company", "source", "status", "assignedToId"],
+  approval: ["approvalId", "entity", "entityId", "status", "requesterId"],
 };
 
 const defaultWebhookConfig = (module) => ({
@@ -116,6 +190,7 @@ const MUTABLE_FIELD_OPTIONS = {
 
 const defaultTriggerForModule = (module) => TRIGGERS.find((trigger) => trigger.module === module)?.value || "contact.created";
 const triggersForModule = (module) => TRIGGERS.filter((trigger) => trigger.module === module);
+const actionsForModule = (module) => ACTIONS.filter((action) => !["update_field", "assign_agent"].includes(action.value) || ["contact", "deal", "task", "ticket"].includes(module));
 const defaultCondition = (module = "contact") => ({ entity: module, field: "", op: "eq", value: "" });
 const defaultGroup = (module = "contact") => ({ name: "", match: "all", clauses: [defaultCondition(module)] });
 
@@ -140,12 +215,12 @@ function emptyRule(template) {
   return {
     id: null,
     name: selected.name || "Untitled workflow",
-    description: "",
+    description: selected.description || "",
     module: selected.module || "contact",
-    triggerType: defaultTriggerForModule(selected.module || "contact"),
-    execution: "once",
-    groups: [defaultGroup(selected.module || "contact")],
-    actions: [{ type: selected.action || "send_email", config: {} }],
+    triggerType: selected.triggerType || defaultTriggerForModule(selected.module || "contact"),
+    execution: selected.execution || "once",
+    groups: selected.groups || [defaultGroup(selected.module || "contact")],
+    actions: selected.actions || [{ type: selected.action || "send_email", config: selected.actionConfig || {} }],
     order: null,
     isActive: false,
   };
@@ -166,7 +241,7 @@ function fromRule(rule) {
     module: target.module || "contact",
     triggerType: rule.triggerType,
     execution: target.execution || "once",
-    groups: groups.length ? groups : [defaultGroup()],
+    groups: groups.length ? groups : [defaultGroup(target.module || "contact")],
     actions: target.actions?.length ? target.actions : [{ type: rule.actionType, config: target }],
     order: Number.isFinite(Number(target.order)) ? Number(target.order) : null,
     isActive: !!rule.isActive,
@@ -273,7 +348,7 @@ function ActionCard({ action, index, module, workflowId, updateAction, removeAct
         <div className="workflow-action-content">
           <div className="workflow-action-title">Action for: {MODULES.find((item) => item.value === module)?.label || "Contacts"} <ChevronDown size={14} /></div>
           <Select aria-label={`Action ${index + 1}`} value={action.type} onChange={(type) => updateAction(index, { type, config: type === "update_field" ? { entity: module } : {} })}>
-            {ACTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            {actionsForModule(module).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </Select>
           {(action.type === "send_email" || action.type === "send_sms") && <input aria-label={`Action ${index + 1} recipient`} value={config.to || ""} onChange={(event) => updateConfig("to", event.target.value)} placeholder={action.type === "send_email" ? "Recipient email or record field" : "Recipient phone or record field"} />}
           {action.type === "send_notification" && <input aria-label={`Action ${index + 1} recipient user`} value={config.userId || ""} onChange={(event) => updateConfig("userId", event.target.value)} placeholder="Recipient user ID (optional)" inputMode="numeric" />}
@@ -285,6 +360,8 @@ function ActionCard({ action, index, module, workflowId, updateAction, removeAct
           {action.type === "update_field" && <Select aria-label={`Action ${index + 1} field name`} value={config.field || ""} onChange={(field) => updateConfig("field", field)}><option value="">Select field</option>{(MUTABLE_FIELD_OPTIONS[module] || []).map((field) => <option key={field} value={field}>{field}</option>)}</Select>}
           {action.type === "update_field" && <input aria-label={`Action ${index + 1} field value`} value={config.value || ""} onChange={(event) => updateConfig("value", event.target.value)} placeholder="Field value" />}
           {action.type === "assign_agent" && <input aria-label={`Action ${index + 1} assignee`} inputMode="numeric" value={config.userId || ""} onChange={(event) => updateConfig("userId", event.target.value === "" ? "" : Number(event.target.value))} placeholder="Assignee user ID" />}
+          {action.type === "create_approval" && <Select aria-label={`Action ${index + 1} approval entity`} value={config.entity || "Deal"} onChange={(entity) => updateConfig("entity", entity)}><option>Deal</option><option>Contact</option><option>Invoice</option><option>Ticket</option></Select>}
+          {action.type === "create_approval" && <input aria-label={`Action ${index + 1} approval reason`} value={config.reasonTemplate || ""} onChange={(event) => updateConfig("reasonTemplate", event.target.value)} placeholder="Reason, e.g. Discount review for {{title}}" />}
           {action.type === "send_webhook" && <input aria-label={`Action ${index + 1} webhook URL`} value={config.url || ""} onChange={(event) => updateConfig("url", event.target.value)} placeholder="https://example.com/webhook" />}
           {action.type === "send_webhook" && <button type="button" className="workflow-link-button" onClick={() => setShowWebhookSettings(true)}><Pencil size={14} /> Edit webhook settings</button>}
         </div>
@@ -345,7 +422,9 @@ export default function Workflows() {
   useEffect(() => { loadWorkflows(); }, []);
 
   const filteredWorkflows = useMemo(() => workflows.filter((workflow) => view === "all" || (view === "active" ? workflow.isActive : !workflow.isActive)), [workflows, view]);
-  const filteredTemplates = TEMPLATES.filter((template) => (templateCategory === "all" || template.category === templateCategory) && template.name.toLowerCase().includes(templateSearch.toLowerCase()));
+  const filteredTemplates = TEMPLATES
+    .filter((template) => (templateCategory === "all" || template.category === templateCategory) && template.name.toLowerCase().includes(templateSearch.toLowerCase()))
+    .sort((a, b) => Number(a.name === "Junk Lead Suppression to Meta") - Number(b.name === "Junk Lead Suppression to Meta"));
 
   const save = async (activate, options = {}) => {
     if (!editor.name.trim()) { notify.error("Workflow name is required"); return null; }
@@ -448,7 +527,7 @@ function WorkflowList({ workflows, actionStats, loading, onEdit, onToggle, onDel
     setDragIndex(null);
   };
   return <>
-    <div className="workflow-usage"><Activity size={16} /> Your team has used <b>{workflows.filter((workflow) => workflow.isActive).length}</b> active workflows available in your plan.</div>
+    <div className="workflow-usage"><Activity size={16} /> <b>{workflows.filter((workflow) => workflow.isActive).length}</b> active workflows.</div>
     <div className="workflow-heading"><div><h1>{view === "active" ? "Active workflows" : view === "inactive" ? "Inactive workflows" : "All workflows"}</h1><p>{view === "inactive" ? "Use the toggle to enable a workflow." : "All your workflows are executed in the order below. Feel free to reorder them."}</p></div></div>
     {loading ? <div className="workflow-empty">Loading workflows...</div> : workflows.length === 0 ? <div className="workflow-empty"><Activity size={42} /><h3>No workflows found</h3><button className="workflow-primary" onClick={onCreate}>Create workflow</button></div> : <div className="workflow-list"><div className="workflow-list-header"><span>ORDER OF EXECUTION</span><span>NAME</span><span>TYPE</span><span>ACTIONS EXECUTED</span></div>{workflows.map((workflow, index) => <div className={`workflow-list-row ${dragIndex === index ? "is-dragging" : ""}`} key={workflow.id} draggable={canReorder} onDragStart={() => canReorder && setDragIndex(index)} onDragOver={(event) => canReorder && event.preventDefault()} onDrop={() => canReorder && drop(index)} onDragEnd={() => setDragIndex(null)}><div className="workflow-order"><GripVertical size={16} /><b>{index + 1}</b><button type="button" className={`workflow-toggle ${workflow.isActive ? "on" : ""}`} onClick={() => onToggle(workflow)} aria-label={`${workflow.isActive ? "Disable" : "Enable"} ${workflow.name}`}><span /></button></div><div className="workflow-name"><button onClick={() => onEdit(workflow)}>{workflow.name}</button><p>{workflow.isActive ? "Runs when its trigger conditions are met" : "Inactive workflow"}</p><small>Last updated {formatDate(workflow.updatedAt || workflow.createdAt)}</small></div><div className="workflow-type">{workflow.triggerType?.split(".")[0] || "CRM"}</div><div className="workflow-actions-summary"><b>{actionStats[String(workflow.id)] || 0} successful actions</b><span>in the last 7 days.</span><button onClick={() => onHistory(workflow)}>View history <ArrowLeft size={13} /></button></div><div className="workflow-menu-wrap"><button className="workflow-icon-button" onClick={() => setOpenMenu(openMenu === workflow.id ? null : workflow.id)} aria-label={`Actions for ${workflow.name}`}><MoreVertical size={18} /></button>{openMenu === workflow.id && <div className={`workflow-menu ${index >= workflows.length - 2 ? "menu-up" : ""}`}><button onClick={() => onEdit(workflow)}><Pencil size={14} /> Edit</button><button onClick={() => onTest(workflow)}><Play size={14} /> Test workflow</button><button onClick={() => onEdit({ ...workflow, id: null, name: `${workflow.name} copy` })}><Copy size={14} /> Clone</button><button onClick={() => onDelete(workflow)}><Trash2 size={14} /> Delete</button></div>}</div></div>)}</div>}
   </>;

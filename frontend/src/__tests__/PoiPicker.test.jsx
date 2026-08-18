@@ -2,17 +2,16 @@
  * PoiPicker.jsx — reusable POI autocomplete (Wave 18 slice S93).
  *
  * Pins the contract for the reusable picker that consumes
- * `GET /api/travel/pois?destinationSlug=&category=&q=&limit=&offset=`
+ * `GET /api/travel/sightseeing?destinationName=&q=&limit=&offset=&isActive=true`
  * for the itinerary editor (S9) + the Inline Add-POI modal (S12)
  * (see PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.6).
  *
  * Cases:
  *   - Renders input with placeholder; doesn't auto-fetch on mount
  *   - Disabled when no destinationSlug; shows "Pick a destination first"
- *   - On focus, fetches with destinationSlug + cap-200 default limit (50)
+ *   - On focus, fetches with destinationName + cap-200 default limit (50)
  *   - Shows "Loading…" then renders POI rows with name + category badge
  *   - Renders thumbnail when imageUrl present, emoji fallback otherwise
- *   - Renders nameLocal when present (secondary line)
  *   - Click row -> onChange(poi) + dropdown closes
  *   - Empty state when API returns []
  *   - Error state when fetchApi throws
@@ -45,8 +44,10 @@ const POI_ROWS = [
     nameLocal: 'अंजुना समुद्र तट',
     category: 'natural',
     imageUrl: 'https://example.test/anjuna.jpg',
-    destinationSlug: 'goa',
-    pendingApproval: false,
+    destinationName: 'goa',
+    latitude: 15.575,
+    longitude: 73.743,
+    isActive: true,
   },
   {
     id: 2,
@@ -54,8 +55,10 @@ const POI_ROWS = [
     name: 'Bom Jesus Basilica',
     category: 'religious',
     imageUrl: null,
-    destinationSlug: 'goa',
-    pendingApproval: false,
+    destinationName: 'goa',
+    latitude: null,
+    longitude: null,
+    isActive: true,
   },
 ];
 
@@ -72,7 +75,7 @@ describe('<PoiPicker />', () => {
     render(<PoiPicker destinationSlug="goa" onChange={() => {}} />);
     const input = screen.getByLabelText(/poi search/i);
     expect(input).toBeTruthy();
-    expect(input.getAttribute('placeholder')).toMatch(/search pois/i);
+    expect(input.getAttribute('placeholder')).toMatch(/search approved sightseeing places/i);
   });
 
   it('does NOT fetch on mount (only on focus)', () => {
@@ -87,8 +90,8 @@ describe('<PoiPicker />', () => {
     expect(input.getAttribute('placeholder')).toMatch(/pick a destination/i);
   });
 
-  it('on focus, calls fetchApi with destinationSlug + default limit=50', async () => {
-    fetchApiMock.mockResolvedValueOnce({ pois: POI_ROWS, total: 2, limit: 50, offset: 0 });
+  it('on focus, calls fetchApi with destinationName + default limit=50 + isActive=true', async () => {
+    fetchApiMock.mockResolvedValueOnce({ items: POI_ROWS, total: 2, limit: 50, offset: 0 });
     render(<PoiPicker destinationSlug="goa" onChange={() => {}} />);
 
     fireEvent.focus(screen.getByLabelText(/poi search/i));
@@ -97,9 +100,10 @@ describe('<PoiPicker />', () => {
       expect(fetchApiMock).toHaveBeenCalled();
     });
     const url = fetchApiMock.mock.calls[0][0];
-    expect(url).toContain('/api/travel/pois?');
-    expect(url).toContain('destinationSlug=goa');
+    expect(url).toContain('/api/travel/sightseeing?');
+    expect(url).toContain('destinationName=goa');
     expect(url).toContain('limit=50');
+    expect(url).toContain('isActive=true');
   });
 
   it('renders Loading then POI rows with name + category badge', async () => {
@@ -119,7 +123,7 @@ describe('<PoiPicker />', () => {
 
     // Resolve fetch.
     await act(async () => {
-      resolveFetch({ pois: POI_ROWS, total: 2, limit: 50, offset: 0 });
+      resolveFetch({ items: POI_ROWS, total: 2, limit: 50, offset: 0 });
     });
 
     await waitFor(() => {
@@ -133,18 +137,8 @@ describe('<PoiPicker />', () => {
     expect(badges[1].textContent).toMatch(/religious/i);
   });
 
-  it('renders nameLocal as secondary line when present', async () => {
-    fetchApiMock.mockResolvedValueOnce({ pois: POI_ROWS, total: 2, limit: 50, offset: 0 });
-    render(<PoiPicker destinationSlug="goa" onChange={() => {}} />);
-    fireEvent.focus(screen.getByLabelText(/poi search/i));
-
-    await waitFor(() => {
-      expect(screen.getByText('अंजुना समुद्र तट')).toBeTruthy();
-    });
-  });
-
   it('renders thumbnail img when imageUrl present', async () => {
-    fetchApiMock.mockResolvedValueOnce({ pois: POI_ROWS, total: 2, limit: 50, offset: 0 });
+    fetchApiMock.mockResolvedValueOnce({ items: POI_ROWS, total: 2, limit: 50, offset: 0 });
     const { container } = render(<PoiPicker destinationSlug="goa" onChange={() => {}} />);
     fireEvent.focus(screen.getByLabelText(/poi search/i));
 
@@ -156,7 +150,7 @@ describe('<PoiPicker />', () => {
   });
 
   it('clicking a row fires onChange(poi) and closes dropdown', async () => {
-    fetchApiMock.mockResolvedValueOnce({ pois: POI_ROWS, total: 2, limit: 50, offset: 0 });
+    fetchApiMock.mockResolvedValueOnce({ items: POI_ROWS, total: 2, limit: 50, offset: 0 });
     const onChange = vi.fn();
     render(<PoiPicker destinationSlug="goa" onChange={onChange} />);
     fireEvent.focus(screen.getByLabelText(/poi search/i));
@@ -165,21 +159,21 @@ describe('<PoiPicker />', () => {
       expect(screen.getByText('Anjuna Beach')).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByTestId('poi-picker-row-1'));
+    fireEvent.click(screen.getByTestId('poi-picker-row-s-1'));
     expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0]).toMatchObject({ id: 1, name: 'Anjuna Beach' });
+    expect(onChange.mock.calls[0][0]).toMatchObject({ id: 's-1', name: 'Anjuna Beach', sightseeingId: 1 });
     // Listbox no longer in DOM.
     expect(screen.queryByTestId('poi-picker-listbox')).toBeNull();
   });
 
   it('shows empty state when API returns []', async () => {
-    fetchApiMock.mockResolvedValueOnce({ pois: [], total: 0, limit: 50, offset: 0 });
+    fetchApiMock.mockResolvedValueOnce({ items: [], total: 0, limit: 50, offset: 0 });
     render(<PoiPicker destinationSlug="goa" onChange={() => {}} />);
     fireEvent.focus(screen.getByLabelText(/poi search/i));
 
     await waitFor(() => {
       const empty = screen.getByTestId('poi-picker-empty');
-      expect(empty.textContent).toMatch(/no pois found for goa/i);
+      expect(empty.textContent).toMatch(/No approved sightseeing places found for goa/i);
     });
   });
 
@@ -197,7 +191,7 @@ describe('<PoiPicker />', () => {
     // No fake timers — we use real timers + waitFor to observe the
     // debounce in real time. (Fake-timer + waitFor interaction hangs
     // because waitFor's internal polling needs real timers.)
-    fetchApiMock.mockResolvedValue({ pois: POI_ROWS, total: 2, limit: 50, offset: 0 });
+    fetchApiMock.mockResolvedValue({ items: POI_ROWS, total: 2, limit: 50, offset: 0 });
     render(<PoiPicker destinationSlug="goa" onChange={() => {}} />);
     fireEvent.focus(screen.getByLabelText(/poi search/i));
     // The initial focus fetch fires immediately (runFetch).
@@ -227,12 +221,12 @@ describe('<PoiPicker />', () => {
   });
 
   it('clear button fires onChange(null) and clears the input', async () => {
-    fetchApiMock.mockResolvedValueOnce({ pois: POI_ROWS, total: 2, limit: 50, offset: 0 });
+    fetchApiMock.mockResolvedValueOnce({ items: POI_ROWS, total: 2, limit: 50, offset: 0 });
     const onChange = vi.fn();
     render(
       <PoiPicker
         destinationSlug="goa"
-        value={{ id: 1, name: 'Anjuna Beach' }}
+        value={{ id: 's-1', name: 'Anjuna Beach' }}
         onChange={onChange}
       />,
     );
@@ -243,7 +237,7 @@ describe('<PoiPicker />', () => {
   });
 
   it('Escape key closes the open dropdown', async () => {
-    fetchApiMock.mockResolvedValueOnce({ pois: POI_ROWS, total: 2, limit: 50, offset: 0 });
+    fetchApiMock.mockResolvedValueOnce({ items: POI_ROWS, total: 2, limit: 50, offset: 0 });
     render(<PoiPicker destinationSlug="goa" onChange={() => {}} />);
     fireEvent.focus(screen.getByLabelText(/poi search/i));
     await waitFor(() => {

@@ -87,6 +87,7 @@ function maskWorkflowSecrets(rule) {
 const TRIGGER_TYPES = [
   { value: "contact.created", label: "Contact Created", description: "Fires when a new contact is added" },
   { value: "contact.updated", label: "Contact Updated", description: "Fires when a contact is modified" },
+  { value: "contact.created_or_updated", label: "Contact Created or Updated", description: "Fires when a contact is added or modified" },
   { value: "deal.created", label: "Deal Created", description: "Fires when a new deal is created" },
   { value: "deal.updated", label: "Deal Updated", description: "Fires whenever a deal is updated via PUT /api/deals/:id" },
   { value: "deal.stage_changed", label: "Deal Stage Changed", description: "Fires when a deal moves pipeline stages" },
@@ -360,7 +361,7 @@ function validateTriggerAction({ triggerType, actionType }) {
 // Returns {ok:true,value:<canonical-string-or-null>} or
 //         {ok:false,status,error,code:"INVALID_CONDITION"}.
 const VALID_CONDITION_OPS = new Set([
-  "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith",
+  "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "icontains", "startsWith", "exists",
 ]);
 
 function validateCondition(raw) {

@@ -509,6 +509,7 @@ jobs:
             tests/wellness-role-types-api.spec.js \
             tests/subscriptions-api.spec.js \
             tests/funnel-api.spec.js \
+            tests/lead-reports-api.spec.js \
             tests/win-loss-api.spec.js \
             tests/marketplace-leads-api.spec.js \
             tests/approvals-api.spec.js \

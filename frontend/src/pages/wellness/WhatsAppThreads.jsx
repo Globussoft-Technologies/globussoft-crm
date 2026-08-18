@@ -18,21 +18,39 @@ import { io as socketIO } from 'socket.io-client';
 import { AuthContext } from '../../App';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
-// -- WhatsApp transport swap ----------------------------------------------
-// The Meta Cloud API EmbeddedSignup connection panel is COMMENTED OUT (kept on
-// disk, not removed) — wellness now uses the SAME WhatsApp Web (QR-scan)
-// connect/send engine as the travel vertical, via WhatsAppWebConnect +
-// /api/whatsapp-web/*. To revert to Meta, restore the import + the panel below.
-// import WhatsAppEmbeddedSignup from '../../components/WhatsAppEmbeddedSignup';
+// -- WhatsApp transport ----------------------------------------------------
+// This inbox serves BOTH transports; the caller picks via the `transport` prop:
+//
+//   transport="web"  (default) — WhatsApp Web (QR-scan) over /api/whatsapp-web/*.
+//                    What the wellness route (/wellness/whatsapp) uses; the
+//                    travel vertical runs the same engine.
+//   transport="meta"           — Meta Cloud API over /api/whatsapp/*, connected
+//                    per tenant in Settings → WhatsApp / Meta Configuration.
+//                    Used by the generic route (/whatsapp).
+//
+// Only the SEND side differs. Threads, messages, opt-outs, assignment and
+// templates are shared storage (WhatsAppThread / WhatsAppMessage rows), read
+// through /api/whatsapp/* for both transports.
+//
+// The legacy Meta panel here was WhatsAppEmbeddedSignup, which needs Meta App
+// Review + VITE_META_APP_ID/VITE_META_ES_CONFIG_ID; WhatsAppMetaConnectBar
+// replaces it with status + a deep link to the manual-credential card, which
+// works without App Review.
 import WhatsAppWebConnect from './whatsapp/WhatsAppWebConnect';
+import WhatsAppMetaConnectBar from './whatsapp/WhatsAppMetaConnectBar';
 import { WhatsAppThreadsContext } from './whatsapp/WhatsAppThreadsContext';
 import ThreadDetail from './whatsapp/ThreadDetail';
 import MessageContextMenu from './whatsapp/MessageContextMenu';
 import UnblockModal from './whatsapp/UnblockModal';
 import NewMessageModal from './whatsapp/NewMessageModal';
 
-export default function WhatsAppThreads() {
+export default function WhatsAppThreads({ transport = 'web' }) {
   const notify = useNotify();
+  // Transport routing for the SEND side only (see the import block above).
+  // Both routers expose /send and /send-media with the same request shape, so
+  // one base swap covers them; history backfill is WhatsApp-Web-only.
+  const isMeta = transport === 'meta';
+  const sendBase = isMeta ? '/api/whatsapp' : '/api/whatsapp-web';
   // Tenant ADMIN can: edit the assign dropdown, see Manage / Disconnect
   // buttons in the status bar, see the "+ New" composer button, and access
   // the Templates page. MANAGER + below see read-only state. Backend RBAC
@@ -573,6 +591,10 @@ export default function WhatsAppThreads() {
     // second open already in flight) — this is a best-effort enhancement,
     // not required for the thread to be usable.
     (async () => {
+      // Meta Cloud has no equivalent: Meta only delivers messages via webhook
+      // from the moment the number is connected, so there is no older history
+      // on their side to pull. Skip rather than 404 on every thread open.
+      if (isMeta) return;
       try {
         const result = await fetchApi(`/api/whatsapp-web/threads/${selectedId}/backfill-history`, {
           method: 'POST',
@@ -651,7 +673,7 @@ export default function WhatsAppThreads() {
         outBody = `${quote}\n${outBody}`;
       }
       // Errors bubble to the outer catch below (CONTACT_OPTED_OUT handling).
-      await fetchApi('/api/whatsapp-web/send', {
+      await fetchApi(`${sendBase}/send`, {
         method: 'POST',
         body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
       });
@@ -713,7 +735,7 @@ export default function WhatsAppThreads() {
 
     setNewSending(true);
     try {
-      const resp = await fetchApi('/api/whatsapp-web/send', {
+      const resp = await fetchApi(`${sendBase}/send`, {
         method: 'POST',
         body: JSON.stringify(payload),
       });
@@ -969,7 +991,7 @@ export default function WhatsAppThreads() {
       // need to use plain fetch here so the browser sets the multipart
       // boundary automatically.
       const token = localStorage.getItem('token');
-      const resp = await fetch('/api/whatsapp-web/send-media', {
+      const resp = await fetch(`${sendBase}/send-media`, {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
@@ -1162,19 +1184,21 @@ export default function WhatsAppThreads() {
         height: '100%', minHeight: 0,
         animation: 'fadeIn 0.4s ease-out',
       }}>
-        {/* WhatsApp Web (QR-scan) connection bar — replaces the Meta Cloud API
-            EmbeddedSignup panel (commented out above). Scan the QR from your
-            phone to link a number; sends/receives then flow over WhatsApp Web.
-            Legacy Meta panel preserved for reference:
-            <div style={{ padding: '0.75rem 1rem 0' }}>
-              <WhatsAppEmbeddedSignup compact />
-            </div> */}
-        <WhatsAppWebConnect
-          apiBase="/api/whatsapp-web"
-          tenantId={currentUser?.tenantId}
-          isAdmin={isAdmin}
-          onChanged={loadList}
-        />
+        {/* Connection bar, per transport:
+            • meta — read-only status + deep link to Settings → WhatsApp / Meta
+              Configuration. Meta numbers are connected by validating the
+              tenant's own credentials, so there is nothing to scan here.
+            • web  — QR-scan bar; scan from your phone to link a number. */}
+        {isMeta ? (
+          <WhatsAppMetaConnectBar isAdmin={isAdmin} />
+        ) : (
+          <WhatsAppWebConnect
+            apiBase="/api/whatsapp-web"
+            tenantId={currentUser?.tenantId}
+            isAdmin={isAdmin}
+            onChanged={loadList}
+          />
+        )}
 
         <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}>
           <ThreadDetail />

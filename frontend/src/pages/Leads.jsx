@@ -12,7 +12,8 @@ import {
   useRef,
 } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import ReturnToBanner from "../components/ReturnToBanner";
 import {
   UserPlus,
   Search,
@@ -1114,6 +1115,25 @@ const Leads = () => {
   const [headerMenuSearch, setHeaderMenuSearch] = useState("");
   const [headerFilterRequest, setHeaderFilterRequest] = useState(null);
   const [renameFieldState, setRenameFieldState] = useState(null);
+
+  // Drill-down entry from the Lead Reports cluster: a report row links here
+  // with the filter it represents, e.g.
+  //   /leads?callStatus=qualified&returnTo=%2Flead-reports&returnLabel=Lead+Funnel
+  // Seeding the existing filter state (rather than adding a parallel filter
+  // path) means the dropdowns visibly reflect what's applied and the user can
+  // widen or clear it from the normal controls.
+  const [drillParams] = useSearchParams();
+  useEffect(() => {
+    const callStatus = drillParams.get("callStatus");
+    const source = drillParams.get("source");
+    const assignee = drillParams.get("assignee");
+    if (callStatus) setLeadStatusFilter(normalizeCallStatus(callStatus));
+    if (source) setSourceFilter(source);
+    if (assignee) setAssigneeFilter(assignee);
+    // Read once per URL — re-running on every render would fight the user's
+    // own changes to the dropdowns.
+  }, [drillParams]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -4095,6 +4115,8 @@ const Leads = () => {
 
   return (
     <div style={{ padding: "2rem", animation: "fadeIn 0.3s ease" }}>
+      {/* Renders only when this page was opened as a drill-down from a report. */}
+      <ReturnToBanner />
       <header
         style={{
           marginBottom: "1rem",

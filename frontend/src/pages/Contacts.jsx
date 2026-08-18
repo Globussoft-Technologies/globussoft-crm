@@ -3,7 +3,8 @@ import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import { Search, Plus, Trash2, Pencil, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, Users, GitMerge, EyeOff } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
+import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
 import ColumnPicker from '../components/ColumnPicker';
 import FilterPanel from '../components/FilterPanel';
@@ -186,6 +187,15 @@ const Contacts = () => {
   // (mirrors the existing Leads.jsx pattern). Status === 'All' = show all.
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
+
+  // Drill-down entry from the Lead Reports cluster — e.g. the funnel's
+  // "Converted" stage links to /contacts?status=Customer. Seeds the existing
+  // status dropdown so the applied filter is visible and clearable.
+  const [drillParams] = useSearchParams();
+  useEffect(() => {
+    const status = drillParams.get('status');
+    if (status) setStatusFilter(status);
+  }, [drillParams]);
   // Assigned-To + Lead Score range filters, same client-side pattern as
   // search/status above. assignedToFilter: '' = all, 'unassigned' = no
   // assignee, else a staff id (string, matches <option value>). scoreFilter:
@@ -499,6 +509,8 @@ const Contacts = () => {
 
   return (
     <div style={{ padding: '2rem' }}>
+      {/* Renders only when this page was opened as a drill-down from a report. */}
+      <ReturnToBanner />
       {/* #488: flex-wrap + gap so the action group wraps cleanly below the title
           on narrow viewports instead of stacking awkwardly over the description. */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>

@@ -1772,6 +1772,17 @@ model Task {
   // #167: soft-delete column (see Contact).
   deletedAt DateTime?
 
+  // Lead Reports cluster — activity kind + result of a scheduled meeting or
+  // site visit. Both nullable and additive: every pre-existing Task row keeps
+  // working unchanged, and routes/lead_reports.js falls back to a title
+  // keyword probe (lib/leadReportMetrics.js `isVisitTask`) for rows written
+  // before these columns existed.
+  //   type    — "Task" | "Call" | "Meeting" | "Site Visit" | "Follow Up"
+  //   outcome — "booked" | "interested" | "not_interested" | "reschedule" |
+  //             "no_show" | "pending"; only meaningful once status=Completed.
+  type      String?
+  outcome   String?
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

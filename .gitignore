@@ -2,6 +2,7 @@
 # Local dev runtime / caches (never commit)
 # ──────────────────────────────────────────────
 .local-runtime/
+.tmp-chrome-pdf/
 
 # ──────────────────────────────────────────────
 # iOS / Xcode

@@ -43,6 +43,10 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+// Tasks reads `?create=1&type=…` via useSearchParams (the Lead Reports
+// "Meetings & Visits" report deep-links into its create drawer), so the SUT
+// needs a router context — which is how it always mounts in App.jsx.
+import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -73,6 +77,8 @@ vi.mock('../pages/wellness/patients/TagPickerPopover', () => ({
 vi.mock('../pages/wellness/patients/styles', () => ({
   tagChipStyle: () => ({}),
   chipRemoveStyle: {},
+  filterLabelStyle: {},
+  modalInputStyle: {},
 }));
 vi.mock('../pages/wellness/patients/constants', () => ({
   tagColour: () => '#888',
@@ -157,11 +163,13 @@ function defaultFetchMock(url, opts) {
   return Promise.resolve(null);
 }
 
-function renderTasks() {
+function renderTasks(initialEntry = '/tasks') {
   return render(
-    <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' } }}>
-      <Tasks />
-    </AuthContext.Provider>,
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' } }}>
+        <Tasks />
+      </AuthContext.Provider>
+    </MemoryRouter>,
   );
 }
 
@@ -169,9 +177,21 @@ function renderTasks() {
 // tenant.vertical === 'travel' lights up the "Assign to (staff)" dropdown.
 function renderTravelTasks() {
   return render(
-    <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'travel' } }}>
-      <Tasks />
-    </AuthContext.Provider>,
+    <MemoryRouter initialEntries={['/tasks']}>
+      <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'travel' } }}>
+        <Tasks />
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  );
+}
+
+function renderWellnessTasks() {
+  return render(
+    <MemoryRouter initialEntries={['/tasks']}>
+      <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'wellness' } }}>
+        <Tasks />
+      </AuthContext.Provider>
+    </MemoryRouter>,
   );
 }
 
@@ -565,6 +585,231 @@ describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
       const body = JSON.parse(post[1].body);
       expect(body.targetUserId).toBe('201');
       expect(body.assignedToId).toBeUndefined();
+    });
+  });
+});
+
+describe('<Tasks /> â€” wellness assignee source', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    notifyInfo.mockReset();
+    notifyPrompt.mockReset();
+    notifyPrompt.mockResolvedValue('Resolved via test');
+  });
+
+  it('wellness vertical: fetches /api/staff and renders staff users in the assignee select', async () => {
+    renderWellnessTasks();
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/staff');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    const staffOption = await screen.findByRole('option', { name: /Asha Agent/ });
+    expect(staffOption).toBeInTheDocument();
+    const assigneeSelect = staffOption.closest('select');
+    expect(within(assigneeSelect).queryByRole('option', { name: /Anita Sharma/ })).not.toBeInTheDocument();
+  });
+
+  it('wellness: submitting with a chosen assignee sends the staff user id, not a contact id', async () => {
+    renderWellnessTasks();
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    fireEvent.change(document.getElementById('task-title-input'), { target: { value: 'Testing' } });
+
+    const staffOption = await screen.findByRole('option', { name: /Asha Agent/ });
+    const assigneeSelect = staffOption.closest('select');
+    fireEvent.change(assigneeSelect, { target: { value: '201' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/tasks' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.targetUserId).toBe('201');
+    });
+  });
+});
+
+// The counter chips are one-click filters and the bar below them narrows the
+// queue client-side. Two invariants matter most: chip COUNTS stay unfiltered
+// (so you can always see what clearing would bring back), and an empty result
+// caused by a filter must not read as "Queue is empty. Excellent work."
+describe('<Tasks /> — queue filters', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+  });
+
+  it('clicking the Critical chip narrows the queue to Critical tasks', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    expect(screen.getByText('High priority follow-up')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /1 Critical/ }));
+
+    expect(screen.getByText('Q3 Renewal Call')).toBeInTheDocument();
+    expect(screen.queryByText('High priority follow-up')).not.toBeInTheDocument();
+    expect(screen.queryByText('Low priority cleanup')).not.toBeInTheDocument();
+  });
+
+  it('the chip toggles off on a second click', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    const chip = screen.getByRole('button', { name: /1 Critical/ });
+    fireEvent.click(chip);
+    expect(screen.queryByText('High priority follow-up')).not.toBeInTheDocument();
+    fireEvent.click(chip);
+    expect(screen.getByText('High priority follow-up')).toBeInTheDocument();
+  });
+
+  it('chip counts stay unfiltered while a filter is applied', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    fireEvent.click(screen.getByRole('button', { name: /1 Critical/ }));
+    // Still reports the whole queue, not the 2-row slice on screen.
+    expect(screen.getByRole('button', { name: /1 High/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /4 total pending/ })).toBeInTheDocument();
+  });
+
+  it('the Overdue chip filters to past-due tasks only', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    fireEvent.click(screen.getByRole('button', { name: /1 Overdue/ }));
+    expect(screen.getByText('Overdue check-in')).toBeInTheDocument();
+    expect(screen.queryByText('Q3 Renewal Call')).not.toBeInTheDocument();
+  });
+
+  it('the total-pending chip clears every active filter', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    fireEvent.click(screen.getByRole('button', { name: /1 Critical/ }));
+    expect(screen.queryByText('Low priority cleanup')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /total pending/ }));
+    expect(screen.getByText('Low priority cleanup')).toBeInTheDocument();
+  });
+
+  it('search matches on title', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    fireEvent.change(screen.getByLabelText('Search tasks'), { target: { value: 'renewal' } });
+    expect(screen.getByText('Q3 Renewal Call')).toBeInTheDocument();
+    expect(screen.queryByText('Low priority cleanup')).not.toBeInTheDocument();
+  });
+
+  it('search matches on the linked client name', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    fireEvent.change(screen.getByLabelText('Search tasks'), { target: { value: 'Anita' } });
+    expect(screen.getByText('Q3 Renewal Call')).toBeInTheDocument();
+    expect(screen.queryByText('High priority follow-up')).not.toBeInTheDocument();
+  });
+
+  it('the priority dropdown filters independently of the chips', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    fireEvent.change(screen.getByLabelText('Filter by priority'), { target: { value: 'Low' } });
+    expect(screen.getByText('Low priority cleanup')).toBeInTheDocument();
+    expect(screen.queryByText('Q3 Renewal Call')).not.toBeInTheDocument();
+  });
+
+  it('"No type set" finds the legacy rows the visit reports can only title-match', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    // Every fixture task predates the type column, so all of them match.
+    fireEvent.change(screen.getByLabelText('Filter by type'), { target: { value: '__none' } });
+    expect(screen.getByText('Q3 Renewal Call')).toBeInTheDocument();
+    // …and asking for a real type empties the queue.
+    fireEvent.change(screen.getByLabelText('Filter by type'), { target: { value: 'Site Visit' } });
+    expect(screen.queryByText('Q3 Renewal Call')).not.toBeInTheDocument();
+  });
+
+  it('an empty filter result does not claim the queue is empty', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    fireEvent.change(screen.getByLabelText('Search tasks'), { target: { value: 'zzz-no-match' } });
+    expect(screen.getByText(/No tasks match these filters/)).toBeInTheDocument();
+    expect(document.getElementById('empty-queue-msg')).toBeNull();
+  });
+
+  it('shows an "N of M shown" readout and a Clear control while filtering', async () => {
+    renderTasks();
+    await screen.findByText('Q3 Renewal Call');
+    expect(screen.queryByText(/of 4 shown/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /1 Critical/ }));
+    expect(screen.getByText('1 of 4 shown')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Clear$/ }));
+    expect(screen.getByText('Low priority cleanup')).toBeInTheDocument();
+  });
+});
+
+// The Lead Reports "Meetings & Visits" / "Follow-Ups" reports are built from
+// Tasks, so they link here to create the thing they report on. Without the
+// deep link those reports dead-end on an empty state.
+describe('<Tasks /> — ?create deep link from Lead Reports', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+  });
+
+  it('opens the create drawer with the requested type pre-selected', async () => {
+    renderTasks('/tasks?create=1&type=Site%20Visit');
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    // Drawer is open without the user clicking the header CTA.
+    expect(document.getElementById('task-title-input')).toBeTruthy();
+    expect(document.getElementById('task-type-select').value).toBe('Site Visit');
+    // Outcome unlocks because the type is a visit.
+    expect(document.getElementById('task-outcome-select').disabled).toBe(false);
+  });
+
+  it('ignores a type outside the allowlist rather than pre-filling an unsaveable value', async () => {
+    renderTasks('/tasks?create=1&type=Teleportation');
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    expect(document.getElementById('task-type-select').value).toBe('');
+    // A non-visit type keeps Outcome locked.
+    expect(document.getElementById('task-outcome-select').disabled).toBe(true);
+  });
+
+  it('leaves the drawer closed on a normal visit', async () => {
+    renderTasks('/tasks');
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    expect(document.getElementById('task-title-input')).toBeNull();
+  });
+
+  it('sends the selected type and outcome on the create POST', async () => {
+    renderTasks('/tasks?create=1&type=Site%20Visit');
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    fireEvent.change(document.getElementById('task-title-input'), {
+      target: { value: 'Whitefield plot walkthrough' },
+    });
+    fireEvent.change(document.getElementById('task-outcome-select'), { target: { value: 'booked' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) => u === '/api/tasks' && o?.method === 'POST');
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.type).toBe('Site Visit');
+      expect(body.outcome).toBe('booked');
+    });
+  });
+
+  it('omits type/outcome entirely when they are left blank — the pre-existing POST shape', async () => {
+    renderTasks('/tasks');
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    fireEvent.change(document.getElementById('task-title-input'), { target: { value: 'Plain todo' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) => u === '/api/tasks' && o?.method === 'POST');
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect('type' in body).toBe(false);
+      expect('outcome' in body).toBe(false);
     });
   });
 });

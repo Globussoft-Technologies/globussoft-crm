@@ -297,6 +297,25 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'whatsapp', action: 'read' }],
   },
   {
+    // Generic-vertical WhatsApp inbox (Meta Cloud API). The same agent-inbox
+    // UI the wellness entry above serves, but reachable by plain-CRM tenants:
+    // the backend /api/whatsapp/* surface has always been vertical-agnostic,
+    // while the only two UI mount points were prefix-scoped to /wellness/ and
+    // /travel/, so a generic tenant could configure WhatsApp in Settings and
+    // then had nowhere to read or reply to messages.
+    //
+    // `vertical: 'generic'` is load-bearing: without it, getCatalogForVertical's
+    // no-prefix fall-through (`return true`) would surface this for wellness and
+    // travel tenants too, giving them a second WhatsApp nav item alongside their
+    // own vertical's entry.
+    path: '/whatsapp',
+    label: 'WhatsApp',
+    description: 'Two-way WhatsApp conversations',
+    category: 'Leads & Revenue',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'whatsapp', action: 'read' }],
+  },
+  {
     path: '/travel/whatsapp',
     label: 'WhatsApp',
     description: 'Two-way WhatsApp conversations',
@@ -1376,6 +1395,15 @@ const PAGE_CATALOG = [
     path: '/agent-reports',
     label: 'Agent Reports',
     description: 'Staff performance analytics',
+    category: 'Reports',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'reports', action: 'read' }],
+  },
+  {
+    path: '/lead-reports',
+    label: 'Lead Reports',
+    description:
+      'Productivity, lead quality, follow-up tracking, source analysis, lead-stage funnel, meetings & site visits',
     category: 'Reports',
     vertical: 'generic',
     requiredPermissions: [{ module: 'reports', action: 'read' }],

@@ -154,6 +154,17 @@ test.afterAll(async ({ request }) => {
   for (const id of createdPlanIds) {
     await authDelete(request, `/api/wellness/membership-plans/${id}`).catch(() => {});
   }
+  // Rename created patients so the demo scrub script (test-data-patterns.js)
+  // deletes them when the global teardown is skipped (E2E_SKIP_SCRUB=1).
+  if (createdPatientId) {
+    await authPut(request, `/api/wellness/patients/${createdPatientId}`, { name: `_teardown_memb_${createdPatientId}` }).catch(() => {});
+  }
+  if (secondPatientId) {
+    await authPut(request, `/api/wellness/patients/${secondPatientId}`, { name: `_teardown_memb_${secondPatientId}` }).catch(() => {});
+  }
+  if (invalidDatePatientId) {
+    await authPut(request, `/api/wellness/patients/${invalidDatePatientId}`, { name: `_teardown_memb_${invalidDatePatientId}` }).catch(() => {});
+  }
 });
 
 // ── Shared seed discovery ─────────────────────────────────────────
@@ -168,6 +179,10 @@ let createdPatientId = null;
 // for the redeem describe block which depends on createdMembershipIds[0]
 // staying active throughout the spec.
 let secondPatientId = null;
+// The fresh patient created for the invalid-startDate probe is created
+// inside a nested test; track it so we can rename it for teardown cleanup
+// when E2E_SKIP_SCRUB disables the global scrub.
+let invalidDatePatientId = null;
 
 test.beforeAll(async ({ request }) => {
   const tok = await login(request, 'admin');
@@ -487,7 +502,8 @@ test.describe('Memberships — POST /patients/:id/memberships', () => {
       phone: nextPhone(),
       gender: 'F',
     });
-    const patientId = fresh.status() === 201 ? (await fresh.json()).id : secondPatientId;
+    if (fresh.status() === 201) invalidDatePatientId = (await fresh.json()).id;
+    const patientId = invalidDatePatientId || secondPatientId;
     const res = await authPost(request, `/api/wellness/patients/${patientId}/memberships`, {
       planId: createdPlanIds[0],
       startDate: 'not-a-date',

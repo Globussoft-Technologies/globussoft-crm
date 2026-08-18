@@ -486,6 +486,19 @@ test.describe('Wellness Reports API — regression-coverage-backlog #12', () => 
       timeout: REQUEST_TIMEOUT,
     });
   }
+  async function wAuthPut(request, path, body) {
+    const token = await getWellnessToken(request);
+    if (!token) throw new Error('Wellness auth failed');
+    return request.put(`${BASE_URL}${path}`, {
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      data: body || {},
+      timeout: REQUEST_TIMEOUT,
+    });
+  }
+
+  // Patient created in the end-of-day (#234) test — tracked for rename cleanup
+  // when global teardown is skipped (E2E_SKIP_SCRUB=1).
+  let eodPatientId = null;
 
   // ── Shared seed discovery ────────────────────────────────────────
   let seededServiceId = null;
@@ -657,6 +670,7 @@ test.describe('Wellness Reports API — regression-coverage-backlog #12', () => 
         test.skip(true, `patient create failed: ${pRes.status()} ${await pRes.text()}`);
       }
       const patient = await pRes.json();
+      eodPatientId = patient.id;
 
       if (!seededDoctorId) test.skip(true, 'no doctorId discovered for visit creation');
 
@@ -908,5 +922,13 @@ test.describe('Wellness Reports API — regression-coverage-backlog #12', () => 
       // For a generic-tenant admin the tenant check fires first.
       expect(['WELLNESS_TENANT_REQUIRED', 'WELLNESS_ROLE_FORBIDDEN']).toContain(body.code);
     });
+  });
+
+  // Rename the EOD patient so the demo scrub script (test-data-patterns.js)
+  // deletes it when the global teardown is skipped (E2E_SKIP_SCRUB=1).
+  test.afterAll(async ({ request }) => {
+    if (eodPatientId) {
+      await wAuthPut(request, `/api/wellness/patients/${eodPatientId}`, { name: `_teardown_rpt_${eodPatientId}` }).catch(() => {});
+    }
   });
 });

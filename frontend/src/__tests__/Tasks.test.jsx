@@ -4,13 +4,13 @@
  *
  * Scope: pins the page-surface invariants for the productivity / follow-up
  * queue surface used daily by SDR-like roles. The page reads from
- * /api/tasks + /api/contacts, displays a priority-sorted Active queue + a
+ * /api/tasks + /api/staff, displays a priority-sorted Active queue + a
  * Completed log, and exposes a drawer-shaped "Add Todo" form that
  * POSTs to /api/tasks then refreshes.
  *
  * Invariants pinned here:
  *   1. Heading + Create Task button + priority-counter chips render.
- *   2. Initial mount fires GET /api/tasks AND GET /api/contacts in parallel.
+ *   2. Initial mount fires GET /api/tasks AND GET /api/staff.
  *   3. Active queue renders one row per non-Completed task, sorted by the
  *      priority order (Critical → High → Medium → Low).
  *   4. Completed log renders only tasks with status=Completed (with the
@@ -90,11 +90,6 @@ import { AuthContext } from '../App';
 const futureISO = new Date(Date.now() + 7 * 86_400_000).toISOString();
 const pastISO = new Date(Date.now() - 7 * 86_400_000).toISOString();
 
-const sampleContacts = [
-  { id: 11, name: 'Anita Sharma', email: 'anita@example.com' },
-  { id: 12, name: 'Rohit Verma', email: 'rohit@example.com' },
-];
-
 // Travel staff roster for the "Assign to (staff)" dropdown (travel vertical).
 const sampleStaff = [
   { id: 201, name: 'Asha Agent', email: 'asha@travelstall.in', role: 'USER', subBrandAccess: ['rfu'] },
@@ -143,9 +138,6 @@ const sampleTasks = [
 function defaultFetchMock(url, opts) {
   if (url === '/api/tasks' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(sampleTasks);
-  }
-  if (url === '/api/contacts' && (!opts || !opts.method || opts.method === 'GET')) {
-    return Promise.resolve(sampleContacts);
   }
   if (url === '/api/staff' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(sampleStaff);
@@ -222,17 +214,17 @@ describe('<Tasks /> — page surface', () => {
     expect(screen.getByText(/1 Overdue/i)).toBeInTheDocument();
   });
 
-  it('initial mount fires GET /api/tasks AND GET /api/contacts in parallel', async () => {
+  it('initial mount fires GET /api/tasks AND GET /api/staff', async () => {
     renderTasks();
     await waitFor(() => {
       const taskCall = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/tasks' && (!o || !o.method || o.method === 'GET'),
       );
-      const contactsCall = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/contacts' && (!o || !o.method || o.method === 'GET'),
+      const staffCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/staff' && (!o || !o.method || o.method === 'GET'),
       );
       expect(taskCall).toBeTruthy();
-      expect(contactsCall).toBeTruthy();
+      expect(staffCall).toBeTruthy();
     });
   });
 
@@ -277,7 +269,6 @@ describe('<Tasks /> — page surface', () => {
   it('empty-active state renders "Queue is empty." when no Pending tasks exist', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/tasks') return Promise.resolve([]);
-      if (url === '/api/contacts') return Promise.resolve(sampleContacts);
       return defaultFetchMock(url, opts);
     });
     renderTasks();
@@ -461,7 +452,6 @@ describe('<Tasks /> — page surface', () => {
           },
         ]);
       }
-      if (url === '/api/contacts') return Promise.resolve([]);
       return defaultFetchMock(url, opts);
     });
 
@@ -560,10 +550,18 @@ describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
     expect(within(staffSelect).queryByRole('option', { name: /Anita Sharma/ })).not.toBeInTheDocument();
   });
 
-  it('generic vertical: no /api/staff call', async () => {
+  it('generic vertical: fetches /api/staff and keeps contacts out of the assignee select', async () => {
     renderTasks(); // no AuthContext → tenant undefined → isTravel false
     await screen.findByRole('heading', { name: /Agent Task Queue/i });
-    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/staff');
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/staff');
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    const staffOption = await screen.findByRole('option', { name: /Asha Agent/ });
+    expect(staffOption).toBeInTheDocument();
+    const staffSelect = staffOption.closest('select');
+    expect(within(staffSelect).getByRole('option', { name: /Vikram Agent/ })).toBeInTheDocument();
+    expect(within(staffSelect).queryByRole('option', { name: /Anita Sharma/ })).not.toBeInTheDocument();
   });
 
   it('travel: submitting with a chosen staff sends targetUserId', async () => {

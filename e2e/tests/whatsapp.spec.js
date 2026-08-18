@@ -306,10 +306,15 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
     // returns 200 (Meta retry contract) but creates NO thread, so the
     // "inbound webhook creates a new WhatsAppThread" assertions can't find
     // one. This upsert maps the test's phone_number_id to the agent's tenant.
-    await request.put(`${API}/whatsapp/config/meta_cloud`, {
+    //
+    // isActive:false because PR #1355 requires Meta Cloud configs to be
+    // validated (onboardedAt set) before they can be activated; the webhook
+    // tenant router does NOT filter on isActive, so routing still works.
+    const configRes = await request.put(`${API}/whatsapp/config/meta_cloud`, {
       headers: { Authorization: `Bearer ${agentToken}` },
-      data: { phoneNumberId: 'pn_test', businessAccountId: 'waba_e2e', isActive: true },
+      data: { phoneNumberId: 'pn_test', businessAccountId: 'waba_e2e', isActive: false },
     });
+    expect(configRes.status()).toBeLessThan(300);
 
     // Wellness tenant for cross-tenant isolation tests.
     const wellnessLogin = await request.post(`${API}/auth/login`, {

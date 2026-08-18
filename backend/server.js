@@ -731,6 +731,10 @@ const industryTemplatesRoutes = require("./routes/industry_templates");
 const socialRoutes = require("./routes/social");
 const sandboxRoutes = require("./routes/sandbox");
 const funnelRoutes = require("./routes/funnel");
+// Lead Reports cluster (generic vertical): productivity, lead quality,
+// follow-up tracking, source analysis, lead-stage funnel builder, meetings &
+// site visits, and visit-done-not-booked nurturing.
+const leadReportsRoutes = require("./routes/lead_reports");
 const zapierRoutes = require("./routes/zapier");
 const voiceTranscriptionRoutes = require("./routes/voice_transcription");
 const emailThreadingRoutes = require("./routes/email_threading");
@@ -1297,6 +1301,7 @@ app.use("/api/industry-templates", industryTemplatesRoutes);
 app.use("/api/social", socialRoutes);
 app.use("/api/sandbox", sandboxRoutes);
 app.use("/api/funnel", funnelRoutes);
+app.use("/api/lead-reports", leadReportsRoutes);
 app.use("/api/zapier", zapierRoutes);
 app.use("/api/voice-transcription", voiceTranscriptionRoutes);
 app.use("/api/email-threading", emailThreadingRoutes);

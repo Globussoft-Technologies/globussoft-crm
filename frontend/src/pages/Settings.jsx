@@ -37,6 +37,7 @@ import PasswordInput from "../components/PasswordInput";
 import LeadSourceAllowlistCard from "../components/LeadSourceAllowlistCard";
 import WebhookSigningCredential from "../components/WebhookSigningCredential";
 import OrganizationAiSettingsCard from "../components/OrganizationAiSettingsCard";
+import WhatsAppMetaConfigCard from "../components/WhatsAppMetaConfigCard";
 import RoleHistoryDialog from "../components/RoleHistoryDialog";
 import { SUB_BRAND_IDS, subBrandShortLabel, subBrandBackground } from "../utils/travelSubBrand";
 import { useActiveSubBrand } from "../utils/subBrand";
@@ -2222,6 +2223,14 @@ export default function Settings() {
               BYOK or request CRM-managed AI access from one place. */}
           {hasPermission("settings", "manage") && <OrganizationAiSettingsCard />}
 
+          {/* WhatsApp / Meta Configuration — per-tenant Meta Cloud API
+              credentials. Every organization connects its OWN WhatsApp
+              Business account; there is no shared platform number. Credentials
+              are validated against Meta before the integration activates, and
+              the backend route is ADMIN-gated independently of this render
+              guard. Vertical-agnostic: the travel (Wati) and WhatsApp-Web (QR)
+              transports have their own separate surfaces. */}
+          {hasPermission("settings", "manage") && <WhatsAppMetaConfigCard />}
 
           {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
               webhooks (GlobusPhone lead-sync). Self-contained admin component;

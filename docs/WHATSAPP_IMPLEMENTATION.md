@@ -53,7 +53,10 @@ Root: [backend/](../backend/)
 | POST | `/api/whatsapp/templates/:id/sync` | `verifyToken` | Pull approval status from Meta. |
 | POST | `/api/whatsapp/templates/sync` | `verifyToken` + ADMIN/MANAGER | Bulk re-sync all templates. |
 | GET | `/api/whatsapp/config` | `verifyToken` + ADMIN | Masked provider configs (#651). |
-| PUT | `/api/whatsapp/config/:provider` | `verifyToken` + ADMIN | Upsert provider config; stamps `lastRotatedAt` + audit. |
+| PUT | `/api/whatsapp/config/:provider` | `verifyToken` + ADMIN | Upsert provider config; stamps `lastRotatedAt` + audit. For `meta_cloud` this can no longer *activate* an unvalidated row — `isActive: true` on a config with `onboardedAt = null` returns `409 WHATSAPP_NOT_VALIDATED`, and creates default to inactive. Other providers keep the legacy active-on-create default. |
+| GET | `/api/whatsapp/config/status` | `verifyToken` + ADMIN | Masked connection state for the Settings card: `computeStatus()` verdict, masked config, Meta metadata (display number, verified name, Business ID), plus the values *we* generate (`ours.callbackUrl`, `ours.verifyTokenSource`). |
+| POST | `/api/whatsapp/config/:provider/connect` | `verifyToken` + ADMIN | **Manual per-tenant connect.** Validates pasted Meta credentials against Graph, then persists encrypted + activates. `meta_cloud` only (`400 PROVIDER_NOT_VALIDATABLE` otherwise). `422` on bad credentials (`MISSING_FIELDS`, `INVALID_ACCESS_TOKEN`, `INVALID_PHONE_NUMBER_ID`, `INVALID_BUSINESS_ACCOUNT_ID`, `PHONE_NUMBER_WABA_MISMATCH`), `409 PHONE_NUMBER_CLAIMED` when another tenant owns the number. |
+| POST | `/api/whatsapp/config/:provider/disconnect` | `verifyToken` + ADMIN | Soft-disconnect: `isActive=false`, `webhookVerified=false`, `disconnectedAt=now`. Best-effort Meta `unsubscribeApp`. Credentials + history preserved. |
 
 **Sender gates (enforced in `/send` before queueing):**
 
@@ -64,7 +67,7 @@ Root: [backend/](../backend/)
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/whatsapp/webhook` | Verify challenge. Token resolution order: `META_VERIFY_TOKEN` env → per-tenant `WhatsAppConfig.webhookVerifyToken` (decrypted) → legacy `WHATSAPP_VERIFY_TOKEN`. Echo `hub.challenge` or 403. |
+| GET | `/api/whatsapp/webhook` | Verify challenge. Token resolution order: per-tenant `WhatsAppConfig.webhookVerifyToken` (decrypted) → `META_VERIFY_TOKEN` env → legacy `WHATSAPP_VERIFY_TOKEN`. Echo `hub.challenge` or 403. **Per-tenant is checked first** — each tenant brings their own Meta app, so their own token is authoritative and the platform env var is only a shared fallback. Candidates are not filtered on `isActive`, because verification is precisely the step that precedes activation. |
 | POST | `/api/whatsapp/webhook` | Event ingress. Async pipeline (see §2.4). |
 
 Subscribed Meta fields:
@@ -112,6 +115,7 @@ Error classification: 4xx → parsed `error.message` / `error.error_user_msg`; 5
 | [lib/whatsappQueue.js](../backend/lib/whatsappQueue.js) | Driver abstraction. Singleton selected by `WHATSAPP_QUEUE_DRIVER` (`"db"` default; `"bullmq"` falls back to db with warning). Interface: `enqueueSend`, `enqueueMedia`, `retryJob`, `killJob`, `stats`. Re-evaluates env per call so tests can rebind. |
 | [lib/whatsappQueue.db.js](../backend/lib/whatsappQueue.db.js) | MySQL driver. Inserts `WaOutboundJob` / `WaMediaJob` with `PENDING`. `retryJob` resets `FAILED/DEAD → PENDING` and clears locks. `killJob` marks `DEAD` (preserves audit trail). |
 | [lib/whatsappOnboardingService.js](../backend/lib/whatsappOnboardingService.js) | Embedded Signup orchestrator. `exchangeAndDebug()` runs code → token → extend → debug → scope check. `finalize()` runs subscribeApp → registerPhone (optional PIN) → encrypt → persist → sync templates in a single transaction. Failure codes: `META_CREDS_MISSING`, `META_AUTH_FAILED`, `TOKEN_DEBUG_FAILED`, `TOKEN_INVALID`, `SCOPE_MISSING`, `WEBHOOK_SUBSCRIBE_FAILED`, `PHONE_REGISTER_FAILED`, `PERSIST_FAILED`. Required scopes: `whatsapp_business_management`, `whatsapp_business_messaging`. |
+| [lib/whatsappTenantConnect.js](../backend/lib/whatsappTenantConnect.js) | **Manual per-tenant connect** — the credential-paste path that works without Meta App Review (contrast `whatsappOnboardingService`, which needs it). `validateAndConnect()` probes Graph with the tenant's own token (`GET /{phoneNumberId}` → `GET /{wabaId}/phone_numbers` ownership cross-check → optional `debug_token` for expiry/scopes → `subscribeApp`) and only then encrypts + upserts + activates. Refuses `PHONE_NUMBER_CLAIMED` when another tenant owns the number rather than reassigning it. A failed probe deactivates any existing row so the UI can never show a false "Connected". `disconnect()` soft-disconnects; `getConnectionState()` returns the masked Settings-card payload. |
 | [lib/whatsappHealth.js](../backend/lib/whatsappHealth.js) | Pure `computeStatus(cfg)` function. Returns one of 9 states with `{status, label, severity, reason?, tokenExpiresAt?, daysUntilExpiry?}`. Precedence (most severe first): `NOT_CONNECTED` → `DISCONNECTED` → `TOKEN_EXPIRED` → `BUSINESS_RESTRICTED` → `QUALITY_RED` → `WEBHOOK_FAILED` → `EXPIRING_SOON` → `QUALITY_YELLOW` → `CONNECTED`. |
 
 ### 2.4 Webhook Pipeline — [middleware/metaWebhook.js](../backend/middleware/metaWebhook.js)
@@ -210,6 +214,7 @@ Status: `RECEIVED | PROCESSED | FAILED | IGNORED | DUPLICATE`
 | [test/services/whatsappProvider.test.js](../backend/test/services/whatsappProvider.test.js) | `sendTemplate`, `sendText`, `exchangeCode`, `extendToken`, `debugToken`, `subscribeApp`, `registerPhone`, `listTemplates`, `submitTemplateToMeta`, HMAC redaction, error classification |
 | [test/lib/whatsappQueue.test.js](../backend/test/lib/whatsappQueue.test.js) | `enqueueSend`, `enqueueMedia`, `retryJob`, `killJob`, `stats`, driver fallback |
 | [test/lib/whatsappOnboardingService.test.js](../backend/test/lib/whatsappOnboardingService.test.js) | `exchangeAndDebug` (scope validation), `finalize` (atomicity), `disconnect`, feature-flag gate |
+| [test/lib/whatsappTenantConnect.test.js](../backend/test/lib/whatsappTenantConnect.test.js) | Manual connect: Graph probe uses the tenant's own token, activation + `onboardedAt` stamping, credential round-trip through the encryption helper, sibling-provider stand-down, all five rejection codes, `PHONE_NUMBER_CLAIMED` isolation guard (no write, no Graph spend), failed-probe deactivation, masked-sentinel reuse, no plaintext in responses, soft-disconnect, `getConnectionState` shape |
 | [test/lib/whatsappHealth.test.js](../backend/test/lib/whatsappHealth.test.js) | All 9 health states with precedence |
 | [test/cron/whatsappOutboundEngine.test.js](../backend/test/cron/whatsappOutboundEngine.test.js) | Pessimistic locking, stale reclaim, retry classification, tier budgets |
 | [test/cron/whatsappTokenRefreshEngine.test.js](../backend/test/cron/whatsappTokenRefreshEngine.test.js) | Never-expires skip, expired, expiring-soon extend, extend failure + debug probe |
@@ -421,7 +426,37 @@ Customer sends WhatsApp message
   → 30s polling fallback if socket drops
 ```
 
-### 4.3 Onboarding (Tenant Admin Connects Meta)
+### 4.3 Onboarding — Path A: Manual credentials (no Meta App Review needed)
+
+```
+Admin opens Settings → WhatsApp / Meta Configuration
+  → GET /api/whatsapp/config/status → "NOT_CONNECTED"
+  → card renders 3 field groups: from-Meta / you-choose / generated-by-us
+
+Admin pastes phoneNumberId + wabaId + System User token (+ verify token)
+Admin clicks "Validate & Connect"
+
+POST /api/whatsapp/config/meta_cloud/connect
+  → guard: another tenant already owns this phoneNumberId? → 409 PHONE_NUMBER_CLAIMED
+  → GET /{phoneNumberId}            (tenant's own token)  → 190? INVALID_ACCESS_TOKEN
+  → GET /{wabaId}/phone_numbers     ownership cross-check → PHONE_NUMBER_WABA_MISMATCH
+  → GET /debug_token                (only if META_APP_ID/SECRET set) → expiry + scopes
+  → subscribeApp(wabaId, token)     (tolerate "already subscribed")
+  → encrypt token (AES-256-GCM)
+  → upsert WhatsAppConfig (isActive=true, onboardedAt=now, webhookVerified)
+  → deactivate sibling providers for THIS tenant
+  → audit: WHATSAPP_CONNECT (connectedVia: "manual")
+  ← 200 {success, config: masked, status, meta: {displayPhoneNumber, verifiedName, …}}
+
+Admin copies the Callback URL + same verify token into
+  Meta → WhatsApp → Configuration → Webhook → Verify and save
+```
+
+Any probe failure returns the specific code and leaves the integration
+**inactive** — a previously-active row is explicitly deactivated so the badge
+can never claim "Connected" while sends would fail at Meta.
+
+### 4.3b Onboarding — Path B: Embedded Signup (requires Meta App Review)
 
 ```
 Admin opens Settings → Channels → WhatsApp tab
@@ -506,4 +541,10 @@ GET /api/whatsapp/onboard/status → "CONNECTED"
 - **Shared API helper.** All `/api/whatsapp/*` calls inline in components; no centralized service module.
 - **BullMQ driver.** `WHATSAPP_QUEUE_DRIVER=bullmq` is a stub that falls back to `db` with a warning.
 - **System User token.** `META_SYSTEM_USER_TOKEN` reserved for cross-tenant ops; not yet wired.
-- **Manual token-paste fallback.** Available behind `EMBEDDED_SIGNUP_NOT_APPROVED` when Meta App Review pending.
+- ~~**Manual token-paste fallback.**~~ **Shipped** — `POST /api/whatsapp/config/meta_cloud/connect` +
+  [lib/whatsappTenantConnect.js](../backend/lib/whatsappTenantConnect.js) +
+  Settings → WhatsApp / Meta Configuration
+  ([components/WhatsAppMetaConfigCard.jsx](../frontend/src/components/WhatsAppMetaConfigCard.jsx)).
+  Tenant-admin credential entry, validated against Graph before activation, with
+  no dependency on Meta App Review. Client-facing setup guide:
+  [WHATSAPP_TENANT_SETUP.md](WHATSAPP_TENANT_SETUP.md).

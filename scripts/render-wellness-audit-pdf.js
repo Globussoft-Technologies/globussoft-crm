@@ -1,13 +1,17 @@
+const fs = require("fs/promises");
+const os = require("os");
 const path = require("path");
 const puppeteer = require(path.resolve(__dirname, "../backend/node_modules/puppeteer"));
 
 async function main() {
   const htmlPath = path.resolve(__dirname, "../docs/wellness-audit-2026-07-27.html");
   const pdfPath = path.resolve(__dirname, "../docs/wellness-audit-2026-07-27.pdf");
+  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "globuscrm-chrome-pdf-"));
 
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    userDataDir,
   });
 
   try {
@@ -29,6 +33,7 @@ async function main() {
     console.log(pdfPath);
   } finally {
     await browser.close();
+    await fs.rm(userDataDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

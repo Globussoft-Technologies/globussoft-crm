@@ -29,6 +29,7 @@ import {
   Target,
   CheckSquare,
   UserPlus,
+  UserCheck,
   Building2,
   Receipt,
   Ticket,
@@ -1043,6 +1044,10 @@ const Sidebar = ({
                   permissionsReady,
                   counts,
                   user,
+                  // Only isMobileViewport is needed: the generic nav's one
+                  // collapsible group (GenericLeadsNavGroup) owns its open state
+                  // locally, so hovering it no longer re-renders the whole nav.
+                  isMobileViewport,
                 })}
         </nav>
       </aside>
@@ -1090,6 +1095,10 @@ const PAGE_ICON_BY_PATH = {
   // Leads & Revenue
   "/inbox": InboxIcon,
   "/wellness/whatsapp": MessageSquare,
+  // Generic-vertical WhatsApp inbox. Separate row from /wellness/whatsapp
+  // because PAGE_ICON_BY_PATH is keyed on the exact catalog path, and the
+  // generic entry is scoped to generic tenants via `vertical: 'generic'`.
+  "/whatsapp": MessageSquare,
   "/wellness/telecaller": PhoneCall,
   "/leads": UserPlus,
   "/converted-leads": UserPlus,
@@ -1201,6 +1210,9 @@ const WELLNESS_CATEGORY_ICON = {
   Scheduling: Calendar,
   Staff: UsersRound,
   "Leads & Revenue": Target,
+  // Used by the generic nav's collapsible "Leads" group (WellnessNavGroup
+  // derives its icon from this map by label).
+  Leads: UserPlus,
   Finance: IndianRupee,
   "Events Management": Ticket,
   Marketing: Megaphone,
@@ -1211,6 +1223,53 @@ const WELLNESS_CATEGORY_ICON = {
   User: UserCircle,
   Admin: Shield,
 };
+
+// The generic nav's single collapsible group ("Leads"), owning its open state
+// LOCALLY instead of lifting it to the Sidebar. Two reasons, both bugs we hit
+// by lifting it first:
+//
+//   1. STUCK PANEL. WellnessNavGroup closes when `activeGroup` moves to another
+//      label. In the wellness nav every sibling is also a group, so hovering any
+//      of them reassigns it. In the generic nav every sibling is a plain <Link>,
+//      so nothing ever reassigned it — and clicking the trigger pins it open,
+//      which defeats the mouse-leave timer. The panel then hung over the next
+//      page you navigated to. The pathname effect below is the actual fix.
+//   2. RE-RENDER COST. Hover called the Sidebar's setState, re-rendering the
+//      entire nav (hundreds of NavLinks) twice per hover — open and close. Local
+//      state confines that to this subtree.
+//
+// Only one group exists in the generic nav, so "one open at a time" is satisfied
+// by construction and needs no shared state.
+function GenericLeadsNavGroup({ Link, counts = {}, isMobileViewport = false }) {
+  const [openGroup, setOpenGroup] = useState(null);
+  const { pathname } = useLocation();
+
+  // Close on navigation. Covers every exit route — clicking an item inside the
+  // panel, clicking a different sidebar link, or a programmatic redirect.
+  useEffect(() => {
+    setOpenGroup(null);
+  }, [pathname]);
+
+  return (
+    <WellnessNavGroup
+      label="Leads"
+      paths={["/leads", "/converted-leads", "/lead-reports", "/lead-routing", "/lead-scoring"]}
+      isMobileViewport={isMobileViewport}
+      activeGroup={openGroup}
+      // WellnessNavGroup calls this with a label AND with an updater fn
+      // (deactivatePanel); a raw setState handles both.
+      onActivate={setOpenGroup}
+    >
+      <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} />
+      <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" />
+      {/* managerOnly is handled inside <Link>, so ADMIN/MANAGER-only entries
+          stay hidden for lower roles exactly as they were before grouping. */}
+      <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly />
+      <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly />
+      <Link to="/lead-reports" icon={BarChart3} label="Lead Reports" managerOnly />
+    </WellnessNavGroup>
+  );
+}
 
 function WellnessNavGroup({
   label,
@@ -2180,6 +2239,7 @@ function renderGenericNav({
   hasPermission = () => false,
   permissionsReady = false,
   counts = {},
+  isMobileViewport = false,
 }) {
   // Generic-nav finance links use the per-link `requiredPermission` prop
   // directly; the hook references here keep the destructure stable for
@@ -2201,10 +2261,24 @@ function renderGenericNav({
       {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
       {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
       <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} />
+      {/* WhatsApp (Meta Cloud API) agent inbox. The generic nav is a HARDCODED
+          list — unlike the wellness nav it does NOT read the page catalog — so
+          this link is what actually surfaces /whatsapp; the catalog row only
+          feeds permission metadata and landing-page choices.
+          Left ungated to match its neighbours (/inbox, /contacts, /pipeline are
+          all ungated here): the Link gate is hide-by-default and hasPermission
+          short-circuits only for isOwner, so a `whatsapp.read` requirement
+          would hide the entry from any admin lacking that explicit grant. Access
+          is still enforced server-side — the routes carry verifyToken (+ADMIN on
+          config) and thread responses PII-mask for low-trust viewers (#681). To
+          gate it anyway, add requiredPermission={{ module: "whatsapp", action:
+          "read" }} and grant whatsapp.read in Roles & Permissions.
+          Travel has its own Wati entry in renderTravelNav; wellness reaches its
+          copy through the catalog. */}
+      <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" />
       <Link to="/contacts" icon={Users} label="Contacts" />
       <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
-      <Link to="/leads" icon={UserPlus} label="Leads" count={counts.leads} />
-      <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" />
+      <GenericLeadsNavGroup Link={Link} counts={counts} isMobileViewport={isMobileViewport} />
       <Link to="/clients" icon={Building2} label="Clients" />
       <Link
         to="/tasks"
@@ -2276,6 +2350,11 @@ function renderGenericNav({
       <Link to="/win-loss" icon={BadgePercent} label="Win/Loss" managerOnly />
       <Link to="/funnel" icon={BarChart3} label="Funnel" managerOnly />
       <Link to="/reports" icon={BarChart3} label="Reports" managerOnly />
+      {/* Lead Reports cluster — productivity (daily/weekly/monthly), lead
+          quality, follow-up tracking, source analysis, lead-stage funnel
+          builder, meetings & site visits, visited-but-not-booked nurturing.
+          Manager-gated like its Reports/Funnel neighbours; the API behind it
+          is ADMIN/MANAGER-only server-side too. */}
       <Link
         to="/agent-reports"
         icon={Trophy}
@@ -2295,7 +2374,6 @@ function renderGenericNav({
         managerOnly
       />
       <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly />
-      <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly />
       <Link to="/territories" icon={Network} label="Territories" managerOnly />
 
       <Link to="/marketing" icon={Send} label="Marketing" managerOnly />
@@ -2317,7 +2395,6 @@ function renderGenericNav({
       <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly />
       <Link to="/sla" icon={Target} label="SLA Policies" managerOnly />
       <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
-      <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly />
       <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly />
       {/* Generic CRM workflow automation. Kept in the generic navigation only;
           travel and wellness render their own vertical navigation branches. */}

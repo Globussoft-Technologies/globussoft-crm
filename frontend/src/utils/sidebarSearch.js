@@ -29,7 +29,6 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel/school-terms', label: 'School Term Calendar', brand: 'tmc' },
   { path: '/travel/brochures', label: 'Brochure Engine' },
   { path: '/landing-pages', label: 'Landing Pages' },
-  { path: '/travel/whatsapp', label: 'WhatsApp' },
   { path: '/inbox', label: 'Inbox' },
   { path: '/tasks', label: 'Tasks' },
   { path: '/calendar-sync', label: 'Calendar' },

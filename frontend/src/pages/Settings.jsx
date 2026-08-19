@@ -2230,7 +2230,9 @@ export default function Settings() {
               the backend route is ADMIN-gated independently of this render
               guard. Vertical-agnostic: the travel (Wati) and WhatsApp-Web (QR)
               transports have their own separate surfaces. */}
-          {hasPermission("settings", "manage") && <WhatsAppMetaConfigCard />}
+          {hasPermission("settings", "manage") && isGenericVertical && (
+            <WhatsAppMetaConfigCard />
+          )}
 
           {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
               webhooks (GlobusPhone lead-sync). Self-contained admin component;

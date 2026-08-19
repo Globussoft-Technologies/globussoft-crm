@@ -8,10 +8,12 @@ import {
   Compass,
   Filter,
   Plus,
+  Trash2,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import CalendarRangePicker from "../../components/CalendarRangePicker";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -48,10 +50,14 @@ export default function Diagnostics() {
   const [classification, setClassification] = useState(
     searchParams.get("classification") || "",
   );
+  const [fromDate, setFromDate] = useState(searchParams.get("fromDate") || "");
+  const [toDate, setToDate] = useState(searchParams.get("toDate") || "");
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
   const [customPageSize, setCustomPageSize] = useState("");
   const [reloadTick, setReloadTick] = useState(0);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const reqIdRef = useRef(0);
 
@@ -89,6 +95,8 @@ export default function Diagnostics() {
       const qs = new URLSearchParams();
       if (subBrand) qs.set("subBrand", subBrand);
       if (classification) qs.set("classification", classification);
+      if (fromDate) qs.set("fromDate", fromDate);
+      if (toDate) qs.set("toDate", toDate);
       qs.set("limit", String(pageSize));
       qs.set("offset", String(Math.max(0, (page - 1) * pageSize)));
 
@@ -97,11 +105,13 @@ export default function Diagnostics() {
         if (myReqId !== reqIdRef.current) return;
         const rows = Array.isArray(res?.diagnostics) ? res.diagnostics : [];
         setDiagnostics(rows);
+        setSelectedIds(new Set());
         setTotal(Number(res?.total) || 0);
       } catch (e) {
         if (myReqId !== reqIdRef.current) return;
         notify.error(e?.body?.error || "Failed to load diagnostics");
         setDiagnostics([]);
+        setSelectedIds(new Set());
         setTotal(0);
       } finally {
         if (myReqId === reqIdRef.current) {
@@ -109,7 +119,7 @@ export default function Diagnostics() {
         }
       }
     },
-    [classification, notify, page, pageSize, subBrand],
+    [classification, fromDate, notify, page, pageSize, subBrand, toDate],
   );
 
   useEffect(() => {
@@ -142,6 +152,58 @@ export default function Diagnostics() {
   );
 
   const activeDiagnostics = useMemo(() => diagnostics, [diagnostics]);
+  const selectedCount = selectedIds.size;
+  const allVisibleSelected =
+    activeDiagnostics.length > 0 &&
+    activeDiagnostics.every((d) => selectedIds.has(d.id));
+
+  const toggleSelected = useCallback((id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (activeDiagnostics.every((d) => next.has(d.id))) {
+        activeDiagnostics.forEach((d) => next.delete(d.id));
+      } else {
+        activeDiagnostics.forEach((d) => next.add(d.id));
+      }
+      return next;
+    });
+  }, [activeDiagnostics]);
+
+  const handleBulkDelete = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return;
+    const ok = await notify.confirm({
+      message: `Delete ${ids.length} selected diagnostic${ids.length === 1 ? "" : "s"}? This cannot be undone.`,
+      confirmText: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      setBulkDeleting(true);
+      const res = await fetchApi("/api/travel/diagnostics/bulk", {
+        method: "DELETE",
+        body: JSON.stringify({ ids }),
+      });
+      notify.success(
+        `Deleted ${Number(res?.deletedCount) || ids.length} diagnostic${ids.length === 1 ? "" : "s"}.`,
+      );
+      setSelectedIds(new Set());
+      reload();
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Failed to bulk delete diagnostics");
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [notify, reload, selectedIds]);
 
   return (
     <div
@@ -177,15 +239,13 @@ export default function Diagnostics() {
               <Plus size={16} aria-hidden /> New bank
             </Link>
           )}
-          {!isAdmin && (
-            <Link
-              to="/travel/diagnostics/new"
-              style={ctaPrimary}
-              aria-label="Take a diagnostic"
-            >
-              <Compass size={16} aria-hidden /> Take diagnostic
-            </Link>
-          )}
+          <Link
+            to="/travel/diagnostics/new"
+            style={ctaPrimary}
+            aria-label="Add new diagnostic entry"
+          >
+            <Compass size={16} aria-hidden /> Add diagnostic entry
+          </Link>
         </div>
       </div>
       <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
@@ -204,6 +264,9 @@ export default function Diagnostics() {
           borderRadius: 8,
           border: "1px solid var(--border-color)",
           marginBottom: 16,
+          overflow: "visible",
+          position: "relative",
+          zIndex: 5,
         }}
       >
         <Filter
@@ -211,11 +274,11 @@ export default function Diagnostics() {
           aria-hidden
           style={{ color: "var(--text-secondary)" }}
         />
-          <select
+        <select
           value={subBrand}
           onChange={(e) => {
             setSubBrand(e.target.value);
-            updateParams({ page: 1 });
+            updateParams({ subBrand: e.target.value, page: 1 });
           }}
           style={selectStyle}
           aria-label="Filter by sub-brand"
@@ -230,7 +293,7 @@ export default function Diagnostics() {
           value={classification}
           onChange={(e) => {
             setClassification(e.target.value);
-            updateParams({ page: 1 });
+            updateParams({ classification: e.target.value, page: 1 });
           }}
           style={selectStyle}
           aria-label="Filter by classification"
@@ -241,6 +304,17 @@ export default function Diagnostics() {
           <option value="level_3">Level 3</option>
           <option value="level_4">Level 4</option>
         </select>
+        <CalendarRangePicker
+          value={{ from: fromDate, to: toDate }}
+          onChange={(next) => {
+            const nextFrom = next?.from || "";
+            const nextTo = next?.to || "";
+            setFromDate(nextFrom);
+            setToDate(nextTo);
+            updateParams({ fromDate: nextFrom, toDate: nextTo, page: 1 });
+          }}
+          label="All time"
+        />
         <button
           type="button"
           onClick={reload}
@@ -249,6 +323,22 @@ export default function Diagnostics() {
         >
           Refresh
         </button>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={handleBulkDelete}
+            disabled={!selectedCount || bulkDeleting}
+            style={{
+              ...bulkDeleteBtn,
+              opacity: !selectedCount || bulkDeleting ? 0.55 : 1,
+              cursor: !selectedCount || bulkDeleting ? "not-allowed" : "pointer",
+            }}
+            aria-label="Delete selected diagnostics"
+          >
+            <Trash2 size={14} aria-hidden />
+            {bulkDeleting ? "Deleting..." : `Delete selected${selectedCount ? ` (${selectedCount})` : ""}`}
+          </button>
+        )}
       </div>
 
       <div
@@ -267,7 +357,7 @@ export default function Diagnostics() {
             ) : (
               <>
                 No diagnostics submitted yet. Click{" "}
-                <strong>Take diagnostic</strong> to start.
+                <strong>Add diagnostic entry</strong> to start.
               </>
             )}
           </div>
@@ -281,6 +371,7 @@ export default function Diagnostics() {
                 }}
               >
                 <colgroup>
+                  {isAdmin && <col style={{ width: "44px" }} />}
                   <col style={{ width: "150px" }} />
                   <col style={{ width: "120px" }} />
                   <col style={{ width: "190px" }} />
@@ -290,6 +381,16 @@ export default function Diagnostics() {
                 </colgroup>
                 <thead>
                   <tr>
+                    {isAdmin && (
+                      <th style={thCheckbox}>
+                        <input
+                          type="checkbox"
+                          checked={allVisibleSelected}
+                          onChange={toggleSelectAllVisible}
+                          aria-label="Select all visible diagnostics"
+                        />
+                      </th>
+                    )}
                     <th style={th}>Submitted</th>
                     <th style={th}>Sub-brand</th>
                     <th style={th}>Contact</th>
@@ -311,6 +412,16 @@ export default function Diagnostics() {
                         key={d.id}
                         style={{ borderTop: "1px solid var(--border-light)" }}
                       >
+                        {isAdmin && (
+                          <td style={tdCheckbox}>
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(d.id)}
+                              onChange={() => toggleSelected(d.id)}
+                              aria-label={`Select diagnostic #${d.id}`}
+                            />
+                          </td>
+                        )}
                         <td style={td}>
                           <Link
                             to={`/travel/diagnostics/${d.id}`}
@@ -738,6 +849,18 @@ const refreshBtn = {
   cursor: "pointer",
 };
 
+const bulkDeleteBtn = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "6px 12px",
+  borderRadius: 6,
+  border: "1px solid rgba(239, 68, 68, 0.45)",
+  background: "rgba(127, 29, 29, 0.18)",
+  color: "#fca5a5",
+  fontSize: 13,
+};
+
 const empty = {
   padding: 32,
   textAlign: "center",
@@ -761,11 +884,25 @@ const th = {
   whiteSpace: "nowrap",
 };
 
+const thCheckbox = {
+  ...th,
+  width: 44,
+  textAlign: "center",
+  padding: "8px 6px",
+};
+
 const td = {
   padding: "10px 12px",
   fontSize: 14,
   color: "var(--text-primary)",
   minWidth: 0,
+};
+
+const tdCheckbox = {
+  ...td,
+  width: 44,
+  textAlign: "center",
+  padding: "10px 6px",
 };
 
 const brandBadge = {

@@ -316,13 +316,6 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'whatsapp', action: 'read' }],
   },
   {
-    path: '/travel/whatsapp',
-    label: 'WhatsApp',
-    description: 'Two-way WhatsApp conversations',
-    category: 'Communications',
-    requiredPermissions: [{ module: 'whatsapp', action: 'read' }],
-  },
-  {
     path: '/wellness/telecaller',
     label: 'Telecaller Queue',
     description: 'Outbound call queue + scripts',
@@ -695,6 +688,11 @@ const PAGE_CATALOG = [
     label: 'Channels',
     description: 'SMS / WhatsApp / call channel config',
     category: 'Admin',
+    // Generic-only integrations hub. Travel and wellness use their own
+    // WhatsApp / channel surfaces, so keep this out of their page catalogs
+    // (which drive sidebar + omnibar search) to avoid exposing the wrong
+    // configuration flow.
+    vertical: 'generic',
     // .manage  channels is provider-keys config (SMS/WhatsApp/Telephony),
     // not just a comms view. Matches the admin-only RoleGuard on this
     // route in App.jsx. Manager has communications.read but not

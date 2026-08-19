@@ -2256,12 +2256,14 @@ export default function App() {
                       <Route
                         path="channels"
                         element={
-                          <RoleGuard
-                            allow={["ADMIN"]}
-                            message="Channels requires admin access."
-                          >
-                            <Channels />
-                          </RoleGuard>
+                          <GenericOnly>
+                            <RoleGuard
+                              allow={["ADMIN"]}
+                              message="Channels requires admin access."
+                            >
+                              <Channels />
+                            </RoleGuard>
+                          </GenericOnly>
                         }
                       />
                       <Route

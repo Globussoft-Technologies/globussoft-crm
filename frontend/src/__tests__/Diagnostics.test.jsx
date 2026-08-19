@@ -10,7 +10,7 @@
  *   - DiagnosticWizard.test.jsx (51afa31) → /new wizard
  *
  *   1. Page chrome: heading "Diagnostics" + sub-brand filter + classification
- *      filter + Refresh button + "Take diagnostic" CTA always present;
+ *      filter + Refresh button + "Add diagnostic entry" CTA always present;
  *      "New bank" CTA only renders for ADMIN role (SUT lines 74-82).
  *   2. Loading state: shows "Loading…" before first GET resolves
  *      (await findByText per CLAUDE.md tick #108 cron-learning).
@@ -18,7 +18,7 @@
  *      NO subBrand/classification query params when filters are blank
  *      (SUT lines 60-80: builds URLSearchParams; pagination is server-side).
  *   4. Empty-state: zero diagnostics → renders the "No diagnostics submitted
- *      yet." copy + the "Take diagnostic" hint (SUT lines 138-140).
+ *      yet." copy + the "Add diagnostic entry" hint.
  *   5. Sub-brand filter: selecting "rfu" re-fetches with ?subBrand=rfu
  *      (camelCase per SUT line 49 — pinned).
  *   6. Classification filter: selecting "level_2" re-fetches with
@@ -38,7 +38,7 @@
  *      (--subtle-bg-3 / --primary-color); we assert the uppercase text only.
  *  11. Navigation: clicking the row's created-at link navigates to
  *      /travel/diagnostics/:id via <Link to=`...`> (SUT lines 162-168).
- *  12. "Take diagnostic" CTA targets /travel/diagnostics/new (SUT line 84).
+ *  12. "Add diagnostic entry" CTA targets /travel/diagnostics/new.
  *  13. "New bank" CTA targets /travel/diagnostics/banks/new and is hidden
  *      for non-ADMIN roles.
  *  14. Error handling: GET rejection surfaces e.body.error via notify.error
@@ -190,8 +190,17 @@ const DIAGNOSTICS_DEFAULT = [
 // surface they care about.
 function installFetchMock({
   list = { diagnostics: DIAGNOSTICS_DEFAULT },
+  bulkDelete = { deletedCount: 0, deletedIds: [] },
 } = {}) {
-  fetchApiMock.mockImplementation((url) => {
+  fetchApiMock.mockImplementation((url, options = {}) => {
+    if (
+      typeof url === 'string' &&
+      url === '/api/travel/diagnostics/bulk' &&
+      options.method === 'DELETE'
+    ) {
+      if (bulkDelete instanceof Error) return Promise.reject(bulkDelete);
+      return Promise.resolve(bulkDelete);
+    }
     if (typeof url === 'string' && url.startsWith('/api/travel/diagnostics')) {
       if (list instanceof Error) return Promise.reject(list);
       return Promise.resolve({
@@ -231,14 +240,14 @@ afterEach(() => {
 });
 
 describe('<Diagnostics /> — page chrome + filter bar', () => {
-  it('renders heading + sub-brand filter + classification filter + Refresh + Take diagnostic CTA', async () => {
-    // "Take diagnostic" is shown to operators; admins see "New bank" instead.
+  it('renders heading + sub-brand filter + classification filter + Refresh + add-diagnostic CTA', async () => {
     renderPage(REGULAR_USER);
     expect(screen.getByRole('heading', { name: /Diagnostics/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Take a diagnostic/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
     // Wait for the mount-time GET to settle.
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
@@ -248,9 +257,9 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     });
   });
 
-  it('Take diagnostic CTA targets /travel/diagnostics/new (SUT line 84)', async () => {
+  it('add-diagnostic CTA targets /travel/diagnostics/new', async () => {
     renderPage(REGULAR_USER);
-    const cta = screen.getByRole('link', { name: /Take a diagnostic/i });
+    const cta = screen.getByRole('link', { name: /Add new diagnostic entry/i });
     expect(cta.getAttribute('href')).toBe('/travel/diagnostics/new');
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalled();
@@ -266,11 +275,15 @@ describe('<Diagnostics /> — RBAC on "New bank" CTA (SUT lines 74-82)', () => {
     expect(newBank.getAttribute('href')).toBe('/travel/diagnostics/banks/new');
   });
 
+  it('ADMIN role also gets the add-diagnostic CTA', async () => {
+    renderPage(ADMIN_USER);
+    expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
+  });
+
   it('USER role: "New bank" CTA is hidden (admin-only mutation surface)', async () => {
     renderPage(REGULAR_USER);
     expect(screen.queryByRole('link', { name: /Create new diagnostic bank/i })).toBeNull();
-    // "Take diagnostic" CTA still renders for non-admin (SUT lines 83-89).
-    expect(screen.getByRole('link', { name: /Take a diagnostic/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
   });
 });
 
@@ -337,7 +350,7 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
 
     expect(table.style.width).toBe('100%');
     expect(table.style.tableLayout).toBe('fixed');
-    expect(table.querySelectorAll('col').length).toBe(6);
+    expect(table.querySelectorAll('col').length).toBe(7);
     expect(screen.queryByTestId('diagnostics-table-scroll')).toBeNull();
     expect(screen.queryByText('travelstall')).toBeNull();
   });
@@ -411,6 +424,73 @@ describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', (
         typeof u === 'string' && u.startsWith('/api/travel/diagnostics'),
       );
       expect(call).toBeTruthy();
+    });
+  });
+
+  it('setting a date range re-fetches with fromDate and toDate query params', async () => {
+    renderPage();
+    await screen.findByText('tmc');
+    fetchApiMock.mockClear();
+    installFetchMock();
+
+    // Open the calendar-range picker and select two dates to form a range.
+    fireEvent.click(screen.getByRole('button', { name: /All time/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Select date range/i })).toBeInTheDocument();
+    });
+
+    // Pick two in-month day cells. The dialog defaults to the current month.
+    const dayButtons = screen.getAllByRole('button', { name: /^\d+$/ });
+    expect(dayButtons.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(dayButtons[10]);
+    fireEvent.click(dayButtons[15]);
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' &&
+        u.includes('fromDate=') &&
+        u.includes('toDate='),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+});
+
+describe('<Diagnostics /> — admin bulk delete', () => {
+  it('renders selection controls for ADMIN users', async () => {
+    renderPage();
+    expect(await screen.findByLabelText(/Select all visible diagnostics/i)).toBeInTheDocument();
+  });
+
+  it('hides selection controls for non-admin users', async () => {
+    renderPage(REGULAR_USER);
+    await screen.findByText('tmc');
+    expect(screen.queryByLabelText(/Select all visible diagnostics/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Delete selected diagnostics/i })).toBeNull();
+  });
+
+  it('deletes selected diagnostics through the bulk endpoint and reloads the list', async () => {
+    installFetchMock({
+      bulkDelete: { deletedCount: 2, deletedIds: [701, 702] },
+    });
+    renderPage();
+    await screen.findByText('tmc');
+
+    fireEvent.click(screen.getByLabelText(/Select diagnostic #701/i));
+    fireEvent.click(screen.getByLabelText(/Select diagnostic #702/i));
+    fireEvent.click(screen.getByRole('button', { name: /Delete selected diagnostics/i }));
+
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled());
+    await waitFor(() => {
+      const deleteCall = fetchApiMock.mock.calls.find(
+        ([u, options]) =>
+          u === '/api/travel/diagnostics/bulk' && options?.method === 'DELETE',
+      );
+      expect(deleteCall).toBeTruthy();
+      expect(JSON.parse(deleteCall[1].body)).toEqual({ ids: [701, 702] });
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith('Deleted 2 diagnostics.');
     });
   });
 });

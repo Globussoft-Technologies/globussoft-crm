@@ -44,5 +44,19 @@ describe('filterSidebarPages', () => {
     expect(filtered.map((page) => page.path)).toEqual(['/travel/visa', '/travel/visa/applications']);
     expect(filtered.every((page) => page.path.startsWith('/travel/visa'))).toBe(true);
   });
+
+  it('keeps hidden travel WhatsApp Web page out of the filtered travel pages', () => {
+    const pages = [
+      { path: '/travel/whatsapp', label: 'WhatsApp', description: 'WhatsApp Web QR chat' },
+      { path: '/developer', label: 'Developer', description: 'API + webhook console' },
+    ];
+
+    const filtered = filterSidebarPages(pages, {
+      vertical: 'travel',
+      activeSubBrand: 'travelstall',
+    });
+
+    expect(filtered.map((page) => page.path)).toEqual(['/developer']);
+  });
 });
 

@@ -149,7 +149,6 @@ export default function Tasks() {
   const notify = useNotify();
   const { hasPermission, isReady: permsReady } = usePermissions();
   const [tasks, setTasks] = useState([]);
-  const [contacts, setContacts] = useState([]);
   const [staff, setStaff] = useState([]);
   const [allTags, setAllTags] = useState([]);
   const [newTask, setNewTask] = useState(EMPTY_FORM);
@@ -218,17 +217,15 @@ export default function Tasks() {
       .catch(() => {});
   }, [isWellness]);
 
-  // Travel + wellness: load the staff roster for the "Assign to" dropdown.
-  // Wellness tasks also persist assignees in Task.userId, so feeding the
-  // picker with contacts writes the wrong FK and can 500 on save.
-  // Fail-soft (own catch) so a staff-list permission error never blocks the
-  // task queue; generic tenants keep the historical contacts-based picker.
+  // All task assignees are staff users. Pre-fix the generic path populated
+  // this dropdown from contacts, which mixed customers into a Task.userId
+  // foreign-key picker and let non-staff rows appear as assignees.
+  // Travel keeps the sub-brand filter on top of this shared staff roster.
   useEffect(() => {
-    if (!isTravel && !isWellness) return;
     fetchApi('/api/staff')
       .then((d) => setStaff(Array.isArray(d) ? d : []))
       .catch(() => {});
-  }, [isTravel, isWellness]);
+  }, []);
 
   // #893: ESC closes the drawer to match the c031ba0 Travel-page convention.
   useEffect(() => {
@@ -244,12 +241,8 @@ export default function Tasks() {
 
   const loadData = async () => {
     try {
-      const [t, c] = await Promise.all([
-        fetchApi('/api/tasks'),
-        fetchApi('/api/contacts'),
-      ]);
+      const t = await fetchApi('/api/tasks');
       setTasks(Array.isArray(t) ? t : []);
-      setContacts(Array.isArray(c) ? c : []);
     } catch (err) {
       console.error(err);
     }
@@ -1275,16 +1268,13 @@ export default function Tasks() {
                 }}
               >
                 <option value="">Select Assignees</option>
-                {(isTravel || isWellness)
-                  ? assignableStaff.map(s => {
-                      const brands = accessibleSubBrands(s);
-                      const scope = brands.length && brands.length < 4
-                        ? ` · ${brands.map(subBrandShortLabel).join('/')}`
-                        : '';
-                      return <option key={s.id} value={s.id}>{s.name}{scope}</option>;
-                    })
-                  : contacts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)
-                }
+                {assignableStaff.map(s => {
+                  const brands = accessibleSubBrands(s);
+                  const scope = isTravel && brands.length && brands.length < 4
+                    ? ` · ${brands.map(subBrandShortLabel).join('/')}`
+                    : '';
+                  return <option key={s.id} value={s.id}>{s.name}{scope}</option>;
+                })}
               </select>
             </div>
 

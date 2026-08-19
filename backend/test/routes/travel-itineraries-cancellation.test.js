@@ -49,6 +49,12 @@ prisma.travelPortalNotification = prisma.travelPortalNotification || {};
 prisma.travelPortalNotification.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+prisma.travelDiagnostic = prisma.travelDiagnostic || {};
+prisma.travelDiagnostic.findFirst = vi.fn();
+prisma.travelQuote = prisma.travelQuote || {};
+prisma.travelQuote.findMany = vi.fn();
+prisma.travelSightseeing = prisma.travelSightseeing || {};
+prisma.travelSightseeing.findMany = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -106,6 +112,9 @@ beforeEach(() => {
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.travelPortalNotification.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
+  prisma.travelDiagnostic.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelQuote.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelSightseeing.findMany.mockReset().mockResolvedValue([]);
 });
 
 describe('PATCH /api/travel/itineraries/:id/cancellation — paymentOverdueAt clearing', () => {

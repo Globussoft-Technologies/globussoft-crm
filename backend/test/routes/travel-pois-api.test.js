@@ -70,6 +70,12 @@ prisma.travelPoi = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.travelSightseeing = {
+  findMany: vi.fn(),
+  findFirst: vi.fn(),
+  update: vi.fn(),
+  create: vi.fn(),
+};
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 
@@ -132,6 +138,10 @@ beforeEach(() => {
   prisma.travelPoi.findFirst.mockReset();
   prisma.travelPoi.update.mockReset();
   prisma.travelPoi.delete.mockReset();
+  prisma.travelSightseeing.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelSightseeing.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelSightseeing.update.mockReset().mockResolvedValue({ id: 1 });
+  prisma.travelSightseeing.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   writeAuditSpy.mockReset().mockResolvedValue(undefined);
 });
@@ -174,6 +184,10 @@ describe('GET /api/travel/pois — catalog list (S93)', () => {
       offset: 0,
     });
     expect(res.body.pois).toHaveLength(2);
+    for (const poi of res.body.pois) {
+      expect(poi.pendingApproval).toBe(false);
+      expect(poi.destinationSlug).toBe('goa');
+    }
 
     const findCall = prisma.travelPoi.findMany.mock.calls[0][0];
     expect(findCall.where.destinationSlug).toBe('goa');
@@ -181,8 +195,10 @@ describe('GET /api/travel/pois — catalog list (S93)', () => {
     // Tenant-OR-null scope.
     expect(findCall.where.OR).toEqual([{ tenantId: 1 }, { tenantId: null }]);
     expect(findCall.orderBy).toEqual({ name: 'asc' });
-    expect(findCall.take).toBe(50);
-    expect(findCall.skip).toBe(0);
+    // Merged catalog fetches a superset to account for sightseeing rows,
+    // then slices client-side; skip is applied during slicing.
+    expect(findCall.take).toBe(100);
+    expect(findCall.skip).toBeUndefined();
   });
 
   test('missing destinationSlug -> 400 MISSING_FIELDS', async () => {
@@ -234,8 +250,9 @@ describe('GET /api/travel/pois — catalog list (S93)', () => {
       .get('/api/travel/pois?destinationSlug=goa&limit=20&offset=40')
       .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 1 })}`);
     let findCall = prisma.travelPoi.findMany.mock.calls[0][0];
-    expect(findCall.take).toBe(20);
-    expect(findCall.skip).toBe(40);
+    // Superset fetch so merged catalog can be sliced correctly.
+    expect(findCall.take).toBe(110);
+    expect(findCall.skip).toBeUndefined();
 
     // Cap at 200.
     prisma.travelPoi.findMany.mockClear();
@@ -243,7 +260,7 @@ describe('GET /api/travel/pois — catalog list (S93)', () => {
       .get('/api/travel/pois?destinationSlug=goa&limit=999')
       .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 1 })}`);
     findCall = prisma.travelPoi.findMany.mock.calls[0][0];
-    expect(findCall.take).toBe(200);
+    expect(findCall.take).toBe(250);
   });
 
   test('hides pendingApproval=true rows — picker only shows approved + catalog-wide', async () => {

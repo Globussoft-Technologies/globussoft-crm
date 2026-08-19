@@ -75,6 +75,13 @@ const day = (d) => (d ? formatDateMedium(d) : '—');
 // number is actually non-zero, so an empty tenant isn't a wall of red.
 const toneIf = (value, tone) => ((Number(value) || 0) > 0 ? tone : undefined);
 
+const truncateSourceLabel = (value, max = 18) => {
+  const text = String(value || '').trim();
+  if (!text) return 'Unknown';
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+};
+
 function Stat({ label, value, hint, tone }) {
   return (
     <div className="card">
@@ -769,6 +776,11 @@ function FollowUpsTab({ d }) {
 function SourcesTab({ d }) {
   const t = d.totals || {};
   const pie = (d.sources || []).slice(0, 8).map((s) => ({ name: s.source, value: s.leads }));
+  const pieTotal = pie.reduce((sum, slice) => sum + Number(slice?.value || 0), 0);
+  const pieLabel = ({ name, percent = 0 }) => {
+    if (percent < 0.06) return '';
+    return `${truncateSourceLabel(name)} ${Math.round(percent * 100)}%`;
+  };
   return (
     <div className="lead-reports-page__sections">
       <StatRow>
@@ -792,15 +804,29 @@ function SourcesTab({ d }) {
                   dataKey="value"
                   isAnimationActive={false}
                   innerRadius={58}
-                  outerRadius={100}
+                  outerRadius={92}
+                  cx="38%"
+                  cy="50%"
                   paddingAngle={3}
                   stroke="none"
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  label={pieLabel}
                   labelLine={false}
                 >
                   {pie.map((entry, i) => <Cell key={entry.name} fill={COLORS[i % COLORS.length]} />)}
                 </Pie>
                 <Tooltip contentStyle={TOOLTIP_STYLE} />
+                <Legend
+                  layout="vertical"
+                  align="right"
+                  verticalAlign="middle"
+                  wrapperStyle={{ fontSize: '0.75rem', paddingLeft: 12 }}
+                  formatter={(value, _entry, index) => {
+                    const slice = pie[index] || null;
+                    const count = Number(slice?.value || 0);
+                    const percent = pieTotal > 0 ? Math.round((count / pieTotal) * 100) : 0;
+                    return `${truncateSourceLabel(value, 22)}${pieTotal > 0 ? ` (${percent}%)` : ''}`;
+                  }}
+                />
               </PieChart>
             </Chart>
           )}

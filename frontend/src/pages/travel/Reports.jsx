@@ -24,6 +24,9 @@ const TABS = [
   { key: "tmc", label: "TMC", icon: School },
   { key: "rfu", label: "RFU", icon: Globe },
   { key: "cross-brand", label: "Cross-brand", icon: BarChart3 },
+  { key: "brand-tours", label: "Brand tours", icon: MapPin },
+  { key: "agents", label: "Agents", icon: Users },
+  { key: "leads", label: "Leads", icon: Users },
 ];
 
 const DATE_PRESETS = [
@@ -194,6 +197,9 @@ export default function TravelReports() {
       {tab === "tmc" && <TmcTab dateParams={dateParams} />}
       {tab === "rfu" && <RfuTab dateParams={dateParams} />}
       {tab === "cross-brand" && <CrossBrandTab dateParams={dateParams} />}
+      {tab === "brand-tours" && <BrandToursTab dateParams={dateParams} />}
+      {tab === "agents" && <AgentsTab dateParams={dateParams} />}
+      {tab === "leads" && <LeadsTab dateParams={dateParams} />}
     </div>
   );
 }
@@ -907,6 +913,205 @@ function CrossBrandTab({ dateParams }) {
               </Card>
             </>
           )}
+        </div>
+      )}
+    </StateShell>
+  );
+}
+
+function BrandToursTab({ dateParams }) {
+  const { data, loading, error, reload } = useReport("/api/travel/reports/brand-tours", dateParams);
+  const rows = data?.rows || [];
+  const summary = data?.summary || {};
+
+  return (
+    <StateShell loading={loading} error={error} reload={reload}>
+      {data && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={summaryBand}>
+            <SummaryMetric label="Total tours" value={summary.totalTours ?? 0} helper={`${summary.brandCount ?? 0} brands`} />
+            <SummaryMetric label="Revenue" value={money(summary.totalRevenue)} helper={`${summary.destinationCount ?? 0} destination groups`} />
+            <SummaryMetric label="Avg tours/group" value={rows.length ? Number((summary.totalTours / rows.length).toFixed(2)) : 0} helper="selected date range" />
+            <SummaryMetric label="Updated groups" value={rows.filter((row) => row.latestUpdatedAt).length} helper="latest itinerary update per group" />
+          </div>
+
+          <Card title="Brand-wise tour details" wide>
+            <div style={detailHelpText}>
+              Tour rows are grouped by sub-brand and destination so the team can see which branded trip families are moving in the selected date range.
+            </div>
+            <TopScrollSync>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
+                <thead>
+                  <tr>
+                    <th style={th}>Brand</th>
+                    <th style={th}>Destination</th>
+                    <th style={thRight}>Tours</th>
+                    <th style={thRight}>Revenue</th>
+                    <th style={thRight}>Avg revenue</th>
+                    <th style={thRight}>Avg pax</th>
+                    <th style={thRight}>Status mix</th>
+                    <th style={th}>Last updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 && <tr><td colSpan="8" style={emptyCell}>No brand tour rows yet for this date range.</td></tr>}
+                  {rows.map((row) => (
+                    <tr key={`${row.subBrand}-${row.destination}`} style={trStyle}>
+                      <td style={td}><span style={brandBadge}>{row.subBrand}</span></td>
+                      <td style={td}>
+                        <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{row.destination}</div>
+                        {row.sampleContactName && <div style={mutedSmall}>{row.sampleContactName}</div>}
+                      </td>
+                      <td style={tdRight}>{row.tourCount}</td>
+                      <td style={tdRight}>{money(row.revenue)}</td>
+                      <td style={tdRight}>{money(row.avgRevenue)}</td>
+                      <td style={tdRight}>{row.avgPax}</td>
+                      <td style={tdRight}>
+                        {row.acceptedCount}/{row.sentCount}/{row.draftCount}/{row.rejectedCount}
+                      </td>
+                      <td style={td}>{formatReportDate(row.latestUpdatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TopScrollSync>
+            <div style={mutedFooter}>Status mix is shown as accepted / sent / draft / rejected.</div>
+          </Card>
+        </div>
+      )}
+    </StateShell>
+  );
+}
+
+function AgentsTab({ dateParams }) {
+  const { data, loading, error, reload } = useReport("/api/travel/reports/agents", dateParams);
+  const rows = data?.rows || [];
+  const summary = data?.summary || {};
+
+  return (
+    <StateShell loading={loading} error={error} reload={reload}>
+      {data && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={summaryBand}>
+            <SummaryMetric label="Active agents" value={summary.activeAgents ?? 0} helper={`${summary.totalActions ?? 0} total actions`} />
+            <SummaryMetric label="Collected" value={money(summary.totalCollected)} helper="quote-linked collections" />
+            <SummaryMetric label="Created quotes" value={summary.totalCreatedQuotes ?? 0} helper="operator-created quotes" />
+            <SummaryMetric label="Visible rows" value={rows.length} helper="selected date range" />
+          </div>
+
+          <Card title="Per-agent report" wide>
+            <div style={detailHelpText}>
+              This view rolls up quote activity and collections by staff member for the chosen date range.
+            </div>
+            <TopScrollSync>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
+                <thead>
+                  <tr>
+                    <th style={th}>Agent</th>
+                    <th style={thRight}>Actions</th>
+                    <th style={thRight}>Created</th>
+                    <th style={thRight}>Sent</th>
+                    <th style={thRight}>Accepted</th>
+                    <th style={thRight}>Declined</th>
+                    <th style={thRight}>Updated</th>
+                    <th style={thRight}>Paid</th>
+                    <th style={thRight}>Collected</th>
+                    <th style={th}>Last activity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 && <tr><td colSpan="10" style={emptyCell}>No agent activity yet for this date range.</td></tr>}
+                  {rows.map((row) => (
+                    <tr key={row.userId} style={trStyle}>
+                      <td style={td}>
+                        <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{row.name}</div>
+                        <div style={mutedSmall}>User #{row.userId}</div>
+                      </td>
+                      <td style={tdRight}>{row.totalActions}</td>
+                      <td style={tdRight}>{row.createdQuotes}</td>
+                      <td style={tdRight}>{row.sentQuotes}</td>
+                      <td style={tdRight}>{row.acceptedQuotes}</td>
+                      <td style={tdRight}>{row.declinedQuotes}</td>
+                      <td style={tdRight}>{row.updatedQuotes}</td>
+                      <td style={tdRight}>{row.paidQuotes}</td>
+                      <td style={tdRight}>{money(row.paymentAmount)}</td>
+                      <td style={td}>{formatReportDate(row.lastActivityAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TopScrollSync>
+          </Card>
+        </div>
+      )}
+    </StateShell>
+  );
+}
+
+function LeadsTab({ dateParams }) {
+  const { data, loading, error, reload } = useReport("/api/travel/reports/leads", dateParams);
+  const rows = data?.rows || [];
+  const summary = data?.summary || {};
+
+  return (
+    <StateShell loading={loading} error={error} reload={reload}>
+      {data && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={summaryBand}>
+            <SummaryMetric label="Leads" value={summary.leads ?? 0} helper={`${summary.activeLeads ?? 0} active in range`} />
+            <SummaryMetric label="Quotes" value={summary.totalQuotes ?? 0} helper="lead-linked quotes" />
+            <SummaryMetric label="Itineraries" value={summary.totalItineraries ?? 0} helper="lead-linked itineraries" />
+            <SummaryMetric label="Touchpoints" value={summary.totalTouchpoints ?? 0} helper={`${summary.totalActivities ?? 0} activities`} />
+          </div>
+
+          <Card title="Per-lead report" wide>
+            <div style={detailHelpText}>
+              Leads are filtered to the selected date range by their related activity, quote, itinerary, touchpoint, or creation date.
+            </div>
+            <TopScrollSync>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
+                <thead>
+                  <tr>
+                    <th style={th}>Lead</th>
+                    <th style={th}>Brand</th>
+                    <th style={th}>Stage</th>
+                    <th style={thRight}>Quotes</th>
+                    <th style={thRight}>Itineraries</th>
+                    <th style={thRight}>Diagnostics</th>
+                    <th style={thRight}>Touchpoints</th>
+                    <th style={thRight}>Activities</th>
+                    <th style={th}>Owner</th>
+                    <th style={th}>Last touch</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 && <tr><td colSpan="10" style={emptyCell}>No lead rows yet for this date range.</td></tr>}
+                  {rows.map((row) => (
+                    <tr key={row.contactId} style={trStyle}>
+                      <td style={td}>
+                        <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{row.leadName}</div>
+                        <div style={mutedSmall}>
+                          {[row.email, row.phone, row.company].filter(Boolean).join(" · ") || "No contact details"}
+                        </div>
+                      </td>
+                      <td style={td}><span style={brandBadge}>{row.subBrand}</span></td>
+                      <td style={td}>{humanizeKey(row.status)}</td>
+                      <td style={tdRight}>{row.quoteCount}</td>
+                      <td style={tdRight}>{row.itineraryCount}</td>
+                      <td style={tdRight}>{row.diagnosticCount}</td>
+                      <td style={tdRight}>{row.touchpointCount}</td>
+                      <td style={tdRight}>{row.activityCount}</td>
+                      <td style={td}>
+                        <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{row.assignedToName || "-"}</div>
+                        <div style={mutedSmall}>{row.aiScore != null ? `AI score ${row.aiScore}` : "No score"}</div>
+                      </td>
+                      <td style={td}>{formatReportDate(row.lastTouchAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TopScrollSync>
+          </Card>
         </div>
       )}
     </StateShell>

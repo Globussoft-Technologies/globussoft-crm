@@ -60,6 +60,8 @@ const label = {
 const isBankStatementRow = (row) =>
   String(row?.reference || "").startsWith("STATEMENT-DEBIT-") ||
   /bank statement debit/i.test(String(row?.category || ""));
+const getCustomerTripValue = (row) =>
+  Number(row?.amount || 0);
 let activeTcsUpdater = null;
 let activeGstUpdater = null;
 let activeSupplierGstUpdater = null;
@@ -468,19 +470,28 @@ export default function Tally() {
   activeGstUpdater = step === 1 ? updateCustomerGst : null;
   activeSupplierGstUpdater = step === 1 ? updateSupplierGst : null;
 
-  const tripFilterOptions = master.tripId
-    ? trips
-    : trips.filter((trip) => {
+  const activeTripOptions = trips.filter((trip) => {
         const id = String(trip.id);
         const earnings = customers
           .filter((row) => String(row.itineraryId) === id)
-          .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+          .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
         const spent = suppliers
           .filter((row) => !isBankStatementRow(row))
           .filter((row) => String(row.itineraryId) === id)
           .reduce((sum, row) => sum + Number(row.amount || 0), 0);
         return earnings > 0 || spent > 0;
       });
+  const visibleTrips = master.tripId
+    ? trips.filter((trip) => String(trip.id) === String(master.tripId))
+    : activeTripOptions;
+  const visibleTripIds = new Set(visibleTrips.map((trip) => String(trip.id)));
+  const visibleCustomers = customers.filter((row) =>
+    !row.itineraryId || visibleTripIds.has(String(row.itineraryId)),
+  );
+  const visibleSuppliers = suppliers.filter(
+    (row) => !row.itineraryId || visibleTripIds.has(String(row.itineraryId)),
+  );
+  const tripSuppliers = visibleSuppliers.filter((row) => !isBankStatementRow(row));
 
   // Manage optional report fields added by the user.
   const addCustomField = () =>
@@ -508,6 +519,8 @@ export default function Tally() {
   const validateLedgerStep = () => {
     if (!trips.length)
       return "No trips found for the selected sub-brand and dates.";
+    if (!activeTripOptions.length)
+      return "No trips with earnings or spending for the selected filters.";
     const applicableTrips = master.tripId
       ? trips.filter((trip) => String(trip.id) === String(master.tripId))
       : trips;
@@ -515,7 +528,7 @@ export default function Tally() {
       const id = String(trip.id);
       const earnings = customers
         .filter((row) => String(row.itineraryId) === id)
-        .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
       const spent = suppliers
         .filter((row) => !isBankStatementRow(row))
         .filter((row) => String(row.itineraryId) === id)
@@ -710,10 +723,10 @@ export default function Tally() {
               onChange={(event) => updateMaster("tripId")(event.target.value)}
               style={input}
             >
-              {tripFilterOptions.length ? (
+              {activeTripOptions.length ? (
                 <>
                   <option value="">All trips</option>
-                  {tripFilterOptions.map((trip) => (
+                  {activeTripOptions.map((trip) => (
                     <option key={trip.id} value={trip.id}>
                       {trip.destination || `Trip ${trip.id}`} -{" "}
                       {trip.status || "Booking"}
@@ -967,14 +980,14 @@ export default function Tally() {
               <DetailCard
                 title="Customer A/c"
                 description="Sales and invoice details."
-                rows={customers}
+                rows={visibleCustomers}
                 empty="No customer sales found for these filters."
                 customer
               />
               <DetailCard
                 title="Supplier A/c"
                 description="Purchase and expense details."
-                rows={suppliers.filter((row) => !isBankStatementRow(row))}
+                rows={visibleSuppliers}
                 empty="No supplier purchases found for these filters."
               />
             </div>
@@ -982,15 +995,9 @@ export default function Tally() {
         )}
         {step === 1 && (
           <TripTaxTable
-            trips={
-              master.tripId
-                ? trips.filter(
-                    (trip) => String(trip.id) === String(master.tripId),
-                  )
-                : trips
-            }
-            customers={customers}
-            suppliers={suppliers}
+            trips={visibleTrips}
+            customers={visibleCustomers}
+            suppliers={tripSuppliers}
             tripTaxes={tripTaxes}
             selectedTripId={master.tripId}
             onChange={updateTripTax}
@@ -999,9 +1006,9 @@ export default function Tally() {
         <div style={{ display: step === 1 ? "block" : "none" }}>
           <ReconciliationQueue
             accounts={accounts}
-            customers={customers}
-            suppliers={suppliers}
-            trips={trips}
+            customers={visibleCustomers}
+            suppliers={visibleSuppliers}
+            trips={visibleTrips}
             tripTaxes={tripTaxes}
             onTripTaxChange={updateTripTax}
             onLedgerApplied={applyReconciliation}
@@ -1013,15 +1020,9 @@ export default function Tally() {
             accounts={accounts}
             gst={gst}
             customFields={customFields}
-            customers={customers}
-            suppliers={suppliers}
-            trips={
-              master.tripId
-                ? trips.filter(
-                    (trip) => String(trip.id) === String(master.tripId),
-                  )
-                : trips
-            }
+            customers={visibleCustomers}
+            suppliers={tripSuppliers}
+            trips={visibleTrips}
             tripTaxes={tripTaxes}
             statementItems={statementItems}
             tripSummary={tripSummary}
@@ -1066,7 +1067,7 @@ export default function Tally() {
             <button
               type="button"
               onClick={continueWizard}
-              disabled={step === 1 && !trips.length}
+              disabled={step === 1 && !activeTripOptions.length}
               style={{
                 border: 0,
                 borderRadius: 9,
@@ -1077,8 +1078,11 @@ export default function Tally() {
                 gap: 8,
                 alignItems: "center",
                 fontWeight: 700,
-                opacity: step === 1 && !trips.length ? 0.55 : 1,
-                cursor: step === 1 && !trips.length ? "not-allowed" : "pointer",
+                opacity: step === 1 && !activeTripOptions.length ? 0.55 : 1,
+                cursor:
+                  step === 1 && !activeTripOptions.length
+                    ? "not-allowed"
+                    : "pointer",
               }}
             >
               Continue <ArrowRight size={16} />
@@ -1158,6 +1162,8 @@ function TripProfitLossWithTrips({
   selectedTripId = "",
   tripTaxes = {},
   statementItems = [],
+  salesOverride = null,
+  purchaseOverride = null,
 }) {
   const grouped = new Map(
     trips.map((trip) => [
@@ -1216,13 +1222,6 @@ function TripProfitLossWithTrips({
   const selectedTrip = selectedTripId
     ? tripRows.find((row) => row.key === String(selectedTripId))
     : null;
-  const credits = statementItems
-    .filter((item) => item.direction !== "DEBIT")
-    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const debits = statementItems
-    .filter((item) => item.direction === "DEBIT")
-    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const bankProfit = credits - debits;
   const totals = tripRows.reduce(
     (sum, row) => ({
       sales: sum.sales + row.sales,
@@ -1231,8 +1230,12 @@ function TripProfitLossWithTrips({
       tcs: sum.tcs + row.tcs,
       profit: sum.profit + row.profit,
     }),
-    { sales: credits, expenses: debits, gst: 0, tcs: 0, profit: bankProfit },
+    { sales: 0, expenses: 0, gst: 0, tcs: 0, profit: 0 },
   );
+  const totalSales = salesOverride != null ? Number(salesOverride) : totals.sales;
+  const totalExpenses =
+    purchaseOverride != null ? Number(purchaseOverride) : totals.expenses;
+  const totalProfit = totalSales - totalExpenses - totals.gst - totals.tcs;
   const cell = {
     padding: "10px 8px",
     borderBottom: "1px solid var(--border-color, rgba(148,163,184,.1))",
@@ -1305,26 +1308,6 @@ function TripProfitLossWithTrips({
                   </tr>
                 ))}
               </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan="3" style={{ padding: 10, fontWeight: 800 }}>
-                    Bank statement total Profit / Loss
-                  </td>
-                  <td style={{ ...right, fontWeight: 800 }}>
-                    {formatMoney(credits)}
-                  </td>
-                  <td
-                    style={{
-                      ...right,
-                      color: bankProfit >= 0 ? "#34d399" : "#f87171",
-                      fontWeight: 800,
-                    }}
-                  >
-                    {bankProfit >= 0 ? "Profit " : "Loss "}
-                    {formatMoney(Math.abs(bankProfit))}
-                  </td>
-                </tr>
-              </tfoot>
             </table>
           </div>
         </div>
@@ -1415,10 +1398,10 @@ function TripProfitLossWithTrips({
                   Cumulative total Profit / Loss
                 </td>
                 <td style={{ ...right, fontWeight: 800 }}>
-                  {formatMoney(totals.sales)}
+                  {formatMoney(totalSales)}
                 </td>
                 <td style={{ ...right, fontWeight: 800 }}>
-                  {formatMoney(totals.expenses)}
+                  {formatMoney(totalExpenses)}
                 </td>
                 <td style={{ ...right, fontWeight: 800 }}>
                   {formatMoney(totals.gst)}
@@ -1429,12 +1412,12 @@ function TripProfitLossWithTrips({
                 <td
                   style={{
                     ...right,
-                    color: totals.profit >= 0 ? "#34d399" : "#f87171",
+                    color: totalProfit >= 0 ? "#34d399" : "#f87171",
                     fontWeight: 800,
                   }}
                 >
-                  {totals.profit >= 0 ? "Profit " : "Loss "}
-                  {formatMoney(Math.abs(totals.profit))}
+                  {totalProfit >= 0 ? "Profit " : "Loss "}
+                  {formatMoney(Math.abs(totalProfit))}
                 </td>
               </tr>
             </tfoot>
@@ -1453,12 +1436,14 @@ function CumulativeReportCard({
   suppliers = [],
   statementItems = [],
   selectedTripId = "",
+  salesOverride = null,
+  purchaseOverride = null,
 }) {
   const activeTrips = trips.filter((trip) => {
     const id = String(trip.id);
     const earnings = customers
       .filter((row) => String(row.itineraryId) === id)
-      .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
     const spent = suppliers
       .filter(
         (row) =>
@@ -1479,18 +1464,19 @@ function CumulativeReportCard({
           !isBankStatementRow(row) &&
           activeTripIds.has(String(row.itineraryId)),
       );
-  const sales = reportCustomers.reduce(
-    (sum, row) => sum + Number(row.amount || 0),
-    0,
-  );
-  const supplierExpenses = reportSuppliers.reduce(
-    (sum, row) => sum + Number(row.amount || 0),
-    0,
-  );
-  const statementDebits = statementItems
-    .filter((item) => item.direction === "DEBIT")
-    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const expenses = supplierExpenses + statementDebits;
+  const sales = salesOverride != null
+    ? Number(salesOverride)
+    : reportCustomers.reduce(
+        (sum, row) => sum + Number(row.amount || 0),
+        0,
+      );
+  const supplierExpenses = purchaseOverride != null
+    ? Number(purchaseOverride)
+    : reportSuppliers.reduce(
+        (sum, row) => sum + Number(row.amount || 0),
+        0,
+      );
+  const expenses = supplierExpenses;
   const expenseBreakdown = reportSuppliers
     .filter(
       (row) =>
@@ -1625,12 +1611,6 @@ function LedgerPreview({
             character
           ],
       );
-    const credits = statementItems
-      .filter((item) => item.direction !== "DEBIT")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    const debits = statementItems
-      .filter((item) => item.direction === "DEBIT")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
     const tripRows = trips.map((trip) => {
       const key = String(trip.id);
       const customerRows = customers.filter((row) => String(row.itineraryId) === key);
@@ -1638,7 +1618,7 @@ function LedgerPreview({
         .filter((row) => !isBankStatementRow(row))
         .filter((row) => String(row.itineraryId) === key);
       const earnings = customerRows.reduce(
-        (sum, row) => sum + Number(row.amount || 0),
+        (sum, row) => sum + getCustomerTripValue(row),
         0,
       );
       const spent = supplierRows.reduce(
@@ -1687,7 +1667,7 @@ function LedgerPreview({
     );
     if (!popup) return;
     popup.document.write(
-      `<!doctype html><html><head><meta charset="utf-8"><title>Travel Tally Report</title><style>@page{size:A4;margin:16mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;background:#fff;margin:0;font-size:10px;line-height:1.35}header{border-bottom:3px solid #2563eb;padding-bottom:12px;margin-bottom:18px}h1{font-size:22px;margin:0 0 5px;color:#0f172a}h2{font-size:14px;margin:0 0 9px;color:#0f172a}p{margin:0;color:#64748b}.section{margin:0 0 20px;break-inside:avoid}table{width:100%;border-collapse:collapse;table-layout:fixed}th{background:#eaf1ff;color:#1e3a8a;font-size:9px;text-transform:uppercase;letter-spacing:.03em;text-align:left}th,td{border:1px solid #d7deea;padding:7px 8px;vertical-align:top;overflow-wrap:anywhere}tbody tr:nth-child(even){background:#f8fafc}.num{text-align:right;white-space:nowrap}.positive{color:#047857;font-weight:700}.negative{color:#b91c1c;font-weight:700}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.metric{border:1px solid #d7deea;border-radius:7px;padding:9px 10px;background:#f8fafc}.metric label{display:block;color:#64748b;font-size:9px;margin-bottom:3px}.metric strong{font-size:13px}.total-row td{background:#eefcf7;font-weight:700}.muted{color:#64748b;font-size:9px}thead{display:table-header-group}tr{break-inside:avoid}</style></head><body><header><h1>Travel Tally Report</h1><p>${escapeHtml(master.companyName || "Travel accounting")} · ${escapeHtml(master.subBrand || "All sub-brands")} · ${escapeHtml(master.from || "Any date")} to ${escapeHtml(master.to || "Any date")}</p></header><section class="section"><h2>Bank Statement Transactions</h2>${statementItems.length ? `<table><thead><tr><th style="width:13%">Date</th><th style="width:34%">Description</th><th style="width:25%">Reference</th><th style="width:14%" class="num">Credit</th><th style="width:14%" class="num">Debit / Withdrawal</th></tr></thead><tbody>${statementRows}</tbody><tfoot><tr class="total-row"><td colspan="3">Bank statement total Profit / Loss</td><td class="num positive">${escapeHtml(formatMoney(credits))}</td><td class="num ${credits - debits >= 0 ? "positive" : "negative"}">${credits - debits >= 0 ? "Profit " : "Loss "}${escapeHtml(formatMoney(Math.abs(credits - debits)))}</td></tr></tfoot></table>` : `<p class="muted">No bank statement transactions were added.</p>`}</section><section class="section"><h2>Trip Details / Profit &amp; Loss</h2>${tripRows.length ? `<table><thead><tr><th style="width:22%">Trip / Place</th><th style="width:16%">Ledger dates</th><th class="num">Earnings</th><th class="num">Spent</th><th class="num">GST</th><th class="num">TCS</th><th class="num">Profit / Loss</th></tr></thead><tbody>${tripRowsHtml}</tbody></table>` : `<p class="muted">No trip details were found for the selected filters.</p>`}</section><section class="section"><h2>Cumulative Profit / Loss</h2><div class="summary"><div class="metric"><label>Total earnings</label><strong>${escapeHtml(formatMoney(sales))}</strong></div><div class="metric"><label>Total spent</label><strong>${escapeHtml(formatMoney(expenses))}</strong></div><div class="metric"><label>Total GST</label><strong>${escapeHtml(formatMoney(totalGst))}</strong></div><div class="metric"><label>Total TCS</label><strong>${escapeHtml(formatMoney(totalTcs))}</strong></div></div><table><tbody><tr class="total-row"><td>Cumulative ${cumulativeProfit >= 0 ? "Profit" : "Loss"}</td><td class="num ${cumulativeProfit >= 0 ? "positive" : "negative"}">${escapeHtml(formatMoney(Math.abs(cumulativeProfit)))}</td></tr></tbody></table></section></body></html>`,
+      `<!doctype html><html><head><meta charset="utf-8"><title>Travel Tally Report</title><style>@page{size:A4;margin:16mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;background:#fff;margin:0;font-size:10px;line-height:1.35}header{border-bottom:3px solid #2563eb;padding-bottom:12px;margin-bottom:18px}h1{font-size:22px;margin:0 0 5px;color:#0f172a}h2{font-size:14px;margin:0 0 9px;color:#0f172a}p{margin:0;color:#64748b}.section{margin:0 0 20px;break-inside:avoid}table{width:100%;border-collapse:collapse;table-layout:fixed}th{background:#eaf1ff;color:#1e3a8a;font-size:9px;text-transform:uppercase;letter-spacing:.03em;text-align:left}th,td{border:1px solid #d7deea;padding:7px 8px;vertical-align:top;overflow-wrap:anywhere}tbody tr:nth-child(even){background:#f8fafc}.num{text-align:right;white-space:nowrap}.positive{color:#047857;font-weight:700}.negative{color:#b91c1c;font-weight:700}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.metric{border:1px solid #d7deea;border-radius:7px;padding:9px 10px;background:#f8fafc}.metric label{display:block;color:#64748b;font-size:9px;margin-bottom:3px}.metric strong{font-size:13px}.total-row td{background:#eefcf7;font-weight:700}.muted{color:#64748b;font-size:9px}thead{display:table-header-group}tr{break-inside:avoid}</style></head><body><header><h1>Travel Tally Report</h1><p>${escapeHtml(master.companyName || "Travel accounting")} · ${escapeHtml(master.subBrand || "All sub-brands")} · ${escapeHtml(master.from || "Any date")} to ${escapeHtml(master.to || "Any date")}</p></header><section class="section"><h2>Bank Statement Transactions</h2>${statementItems.length ? `<table><thead><tr><th style="width:13%">Date</th><th style="width:34%">Description</th><th style="width:25%">Reference</th><th style="width:14%" class="num">Credit</th><th style="width:14%" class="num">Debit / Withdrawal</th></tr></thead><tbody>${statementRows}</tbody></table>` : `<p class="muted">No bank statement transactions were added.</p>`}</section><section class="section"><h2>Trip Details / Profit &amp; Loss</h2>${tripRows.length ? `<table><thead><tr><th style="width:22%">Trip / Place</th><th style="width:16%">Ledger dates</th><th class="num">Earnings</th><th class="num">Spent</th><th class="num">GST</th><th class="num">TCS</th><th class="num">Profit / Loss</th></tr></thead><tbody>${tripRowsHtml}</tbody></table>` : `<p class="muted">No trip details were found for the selected filters.</p>`}</section><section class="section"><h2>Cumulative Profit / Loss</h2><div class="summary"><div class="metric"><label>Total earnings</label><strong>${escapeHtml(formatMoney(sales))}</strong></div><div class="metric"><label>Total spent</label><strong>${escapeHtml(formatMoney(expenses))}</strong></div><div class="metric"><label>Total GST</label><strong>${escapeHtml(formatMoney(totalGst))}</strong></div><div class="metric"><label>Total TCS</label><strong>${escapeHtml(formatMoney(totalTcs))}</strong></div></div><table><tbody><tr class="total-row"><td>Cumulative ${cumulativeProfit >= 0 ? "Profit" : "Loss"}</td><td class="num ${cumulativeProfit >= 0 ? "positive" : "negative"}">${escapeHtml(formatMoney(Math.abs(cumulativeProfit)))}</td></tr></tbody></table></section></body></html>`,
     );
     popup.document.close();
     popup.focus();
@@ -1756,6 +1736,12 @@ function LedgerPreview({
         selectedTripId={master.tripId}
         tripTaxes={tripTaxes}
         statementItems={statementItems}
+        salesOverride={Number(
+          accounts.find((account) => account.id === "sales")?.amount || 0,
+        )}
+        purchaseOverride={Number(
+          accounts.find((account) => account.id === "purchase")?.amount || 0,
+        )}
       />
       <CumulativeReportCard
         trips={trips}
@@ -1764,6 +1750,12 @@ function LedgerPreview({
         suppliers={suppliers}
         statementItems={statementItems}
         selectedTripId={master.tripId}
+        salesOverride={Number(
+          accounts.find((account) => account.id === "sales")?.amount || 0,
+        )}
+        purchaseOverride={Number(
+          accounts.find((account) => account.id === "purchase")?.amount || 0,
+        )}
       />
       <div
         style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}

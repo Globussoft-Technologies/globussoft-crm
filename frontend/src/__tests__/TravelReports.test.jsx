@@ -280,13 +280,19 @@ describe('<TravelReports /> — page chrome + tabs', () => {
     expect(
       screen.getByRole('heading', { name: /Travel Reports/i }),
     ).toBeInTheDocument();
-    // All three tabs render as role=tab.
+    // All report tabs render as role=tab.
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(4);
+    expect(tabs).toHaveLength(7);
     expect(tabs.map((t) => t.textContent.trim())).toEqual(
-      expect.arrayContaining([expect.stringContaining('Overview'), expect.stringContaining('TMC'),
+      expect.arrayContaining([
+        expect.stringContaining('Overview'),
+        expect.stringContaining('TMC'),
         expect.stringContaining('RFU'),
-        expect.stringContaining('Cross-brand')]),
+        expect.stringContaining('Cross-brand'),
+        expect.stringContaining('Brand tours'),
+        expect.stringContaining('Agents'),
+        expect.stringContaining('Leads'),
+      ]),
     );
     // Let the mount-time GET settle.
     await waitFor(() => {

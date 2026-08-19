@@ -245,8 +245,7 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     expect(screen.getByRole('heading', { name: /Diagnostics/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Filter from date/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Filter to date/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
     // Wait for the mount-time GET to settle.
@@ -434,18 +433,23 @@ describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', (
     fetchApiMock.mockClear();
     installFetchMock();
 
-    fireEvent.change(screen.getByLabelText(/Filter from date/i), {
-      target: { value: '2026-06-17' },
+    // Open the calendar-range picker and select two dates to form a range.
+    fireEvent.click(screen.getByRole('button', { name: /All time/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Select date range/i })).toBeInTheDocument();
     });
-    fireEvent.change(screen.getByLabelText(/Filter to date/i), {
-      target: { value: '2026-06-23' },
-    });
+
+    // Pick two in-month day cells. The dialog defaults to the current month.
+    const dayButtons = screen.getAllByRole('button', { name: /^\d+$/ });
+    expect(dayButtons.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(dayButtons[10]);
+    fireEvent.click(dayButtons[15]);
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(([u]) =>
         typeof u === 'string' &&
-        u.includes('fromDate=2026-06-17') &&
-        u.includes('toDate=2026-06-23'),
+        u.includes('fromDate=') &&
+        u.includes('toDate='),
       );
       expect(call).toBeTruthy();
     });

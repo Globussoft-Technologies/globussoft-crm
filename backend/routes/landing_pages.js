@@ -1206,21 +1206,50 @@ router.get("/public/featured", async (req, res) => {
 
   try {
 
+    const rawCustomerId = typeof req.query.customerId === "string" && req.query.customerId.length > 0
+
+      ? req.query.customerId
+
+      : undefined;
+
+    const customerId = rawCustomerId ? Number.parseInt(rawCustomerId, 10) : null;
+
+    if (rawCustomerId && (!Number.isInteger(customerId) || customerId <= 0)) {
+
+      return res.status(400).json({
+
+        error: "customerId must be a positive integer",
+
+        code: "INVALID_CUSTOMER_ID",
+
+      });
+
+    }
+
     const rawSubBrand = typeof req.query.subBrand === "string" && req.query.subBrand.length > 0
 
       ? req.query.subBrand
 
       : undefined;
 
-    const where = { isFeatured: true, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) };
+    // External embeds pass customerId to mean the owning tenant/account id.
+    // When present, resolve "the current published page for this customer"
+    // directly and do not require a sub-brand hint.
+    const where = customerId
+      ? { tenantId: customerId, status: "PUBLISHED" }
+      : { isFeatured: true, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) };
 
-    if (rawSubBrand === "none") {
+    if (!customerId) {
 
-      where.subBrand = null;
+      if (rawSubBrand === "none") {
 
-    } else if (rawSubBrand) {
+        where.subBrand = null;
 
-      where.subBrand = rawSubBrand;
+      } else if (rawSubBrand) {
+
+        where.subBrand = rawSubBrand;
+
+      }
 
     }
 
@@ -1228,7 +1257,9 @@ router.get("/public/featured", async (req, res) => {
 
       where,
 
-      orderBy: { featuredAt: "desc" },
+      orderBy: customerId
+        ? [{ isFeatured: "desc" }, { featuredAt: "desc" }, { publishedAt: "desc" }, { updatedAt: "desc" }]
+        : { featuredAt: "desc" },
 
       select: {
 
@@ -1316,21 +1347,49 @@ router.get("/public/featured-full", async (req, res) => {
 
   try {
 
+    const rawCustomerId = typeof req.query.customerId === "string" && req.query.customerId.length > 0
+
+      ? req.query.customerId
+
+      : undefined;
+
+    const customerId = rawCustomerId ? Number.parseInt(rawCustomerId, 10) : null;
+
+    if (rawCustomerId && (!Number.isInteger(customerId) || customerId <= 0)) {
+
+      return res.status(400).json({
+
+        error: "customerId must be a positive integer",
+
+        code: "INVALID_CUSTOMER_ID",
+
+      });
+
+    }
+
     const rawSubBrand = typeof req.query.subBrand === "string" && req.query.subBrand.length > 0
 
       ? req.query.subBrand
 
       : undefined;
 
-    const where = { isFeatured: true, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) };
+    // customerId maps to tenantId here so one embed can always resolve the
+    // currently published landing page for one customer account.
+    const where = customerId
+      ? { tenantId: customerId, status: "PUBLISHED" }
+      : { isFeatured: true, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) };
 
-    if (rawSubBrand === "none") {
+    if (!customerId) {
 
-      where.subBrand = null;
+      if (rawSubBrand === "none") {
 
-    } else if (rawSubBrand) {
+        where.subBrand = null;
 
-      where.subBrand = rawSubBrand;
+      } else if (rawSubBrand) {
+
+        where.subBrand = rawSubBrand;
+
+      }
 
     }
 
@@ -1338,7 +1397,9 @@ router.get("/public/featured-full", async (req, res) => {
 
       where,
 
-      orderBy: { featuredAt: "desc" },
+      orderBy: customerId
+        ? [{ isFeatured: "desc" }, { featuredAt: "desc" }, { publishedAt: "desc" }, { updatedAt: "desc" }]
+        : { featuredAt: "desc" },
 
       select: {
 
@@ -1490,6 +1551,199 @@ router.get("/public/by-slug/:slug", async (req, res) => {
     console.error("[LandingPages] public/by-slug error:", err);
 
     return res.status(500).json({ error: "Failed to load page payload" });
+
+  }
+
+});
+// ID-targeted version of /public/featured-full. External sites that already
+// know the numeric LandingPage id can lock to one exact published page
+// without relying on featured-page switching or a mutable slug.
+router.get("/public/by-id/:id", async (req, res) => {
+
+  try {
+
+    const pageId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(pageId) || pageId <= 0) {
+
+      return res.status(400).json({
+
+        error: "Landing page id must be a positive integer",
+
+        code: "INVALID_PAGE_ID",
+
+      });
+
+    }
+
+    const page = await prisma.landingPage.findFirst({
+
+      where: { id: pageId, status: "PUBLISHED" },
+
+      select: {
+
+        id: true,
+
+        slug: true,
+
+        title: true,
+
+        status: true,
+
+        templateType: true,
+
+        destination: true,
+
+        subBrand: true,
+
+        metaTitle: true,
+
+        metaDescription: true,
+
+        featuredAt: true,
+
+        publishedAt: true,
+
+        updatedAt: true,
+
+        content: true,
+
+      },
+
+    });
+
+    if (!page) {
+
+      return res.status(404).json({
+
+        error: "No page is published",
+
+        code: "NO_PAGE_PUBLISHED",
+
+      });
+
+    }
+
+    let parsedContent = page.content;
+
+    if (typeof parsedContent === "string") {
+
+      try {
+
+        parsedContent = JSON.parse(parsedContent);
+
+      } catch (_e) {
+
+        return res.status(500).json({ error: "Published page content is not valid JSON" });
+
+      }
+
+    }
+
+    return res.json(decoratePublishedPublicPayload(page, parsedContent));
+
+  } catch (err) {
+
+    console.error("[LandingPages] public/by-id error:", err);
+
+    return res.status(500).json({ error: "Failed to load page payload" });
+
+  }
+
+});
+// Trip-targeted version of /public/featured-full. External sites can fetch
+// the currently published landing page linked to one exact trip id.
+router.get("/public/by-trip/:tripId", async (req, res) => {
+
+  try {
+
+    const tripId = Number.parseInt(req.params.tripId, 10);
+
+    if (!Number.isInteger(tripId) || tripId <= 0) {
+
+      return res.status(400).json({
+
+        error: "tripId must be a positive integer",
+
+        code: "INVALID_TRIP_ID",
+
+      });
+
+    }
+
+    const page = await prisma.landingPage.findFirst({
+
+      where: { tripId, status: "PUBLISHED" },
+
+      orderBy: [{ isFeatured: "desc" }, { featuredAt: "desc" }, { publishedAt: "desc" }, { updatedAt: "desc" }],
+
+      select: {
+
+        id: true,
+
+        slug: true,
+
+        title: true,
+
+        status: true,
+
+        templateType: true,
+
+        destination: true,
+
+        subBrand: true,
+
+        metaTitle: true,
+
+        metaDescription: true,
+
+        featuredAt: true,
+
+        publishedAt: true,
+
+        updatedAt: true,
+
+        content: true,
+
+      },
+
+    });
+
+    if (!page) {
+
+      return res.status(404).json({
+
+        error: "No published landing page is linked to this trip",
+
+        code: "NO_PAGE_FOR_TRIP",
+
+      });
+
+    }
+
+    let parsedContent = page.content;
+
+    if (typeof parsedContent === "string") {
+
+      try {
+
+        parsedContent = JSON.parse(parsedContent);
+
+      } catch (_e) {
+
+        return res.status(500).json({ error: "Published page content is not valid JSON" });
+
+      }
+
+    }
+
+    return res.json(decoratePublishedPublicPayload(page, parsedContent));
+
+  } catch (err) {
+
+    console.error("[LandingPages] public/by-trip error:", err);
+
+    return res.status(500).json({ error: "Failed to load trip landing page payload" });
 
   }
 

@@ -56,6 +56,13 @@ const button = (variant = 'primary') => ({
 
 const PALETTE = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#ef4444', '#84cc16'];
 
+function truncateLeadSourceLabel(value, max = 18) {
+  const text = String(value || '').trim();
+  if (!text) return 'Unknown';
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+}
+
 // ─── Widget Catalog ────────────────────────────────────────────────
 
 const WIDGET_CATALOG = [
@@ -133,15 +140,42 @@ function RevenueTrendChart({ data }) {
 
 function LeadsSourceChart({ data }) {
   const rows = Array.isArray(data) ? data : [];
+  const total = rows.reduce((sum, row) => sum + Number(row?.count || 0), 0);
+  const pieLabel = ({ name, percent = 0 }) => {
+    if (percent < 0.06) return '';
+    return `${truncateLeadSourceLabel(name)} ${Math.round(percent * 100)}%`;
+  };
   return (
     <div style={{ padding: '0.75rem', height: '100%' }}>
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
-          <Pie data={rows} dataKey="count" nameKey="source" cx="50%" cy="50%" outerRadius="75%" label>
+          <Pie
+            data={rows}
+            dataKey="count"
+            nameKey="source"
+            cx="38%"
+            cy="50%"
+            innerRadius="42%"
+            outerRadius="72%"
+            paddingAngle={rows.length > 1 ? 2 : 0}
+            labelLine={false}
+            label={pieLabel}
+          >
             {rows.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
           </Pie>
           <Tooltip contentStyle={{ background: 'rgba(15,23,42,0.95)', border: '1px solid #334155', borderRadius: 8 }} />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Legend
+            layout="vertical"
+            align="right"
+            verticalAlign="middle"
+            wrapperStyle={{ fontSize: 11, paddingLeft: 12 }}
+            formatter={(value, _entry, index) => {
+              const row = rows[index] || null;
+              const count = Number(row?.count || 0);
+              const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+              return `${truncateLeadSourceLabel(value, 22)}${total > 0 ? ` (${pct}%)` : ''}`;
+            }}
+          />
         </PieChart>
       </ResponsiveContainer>
     </div>

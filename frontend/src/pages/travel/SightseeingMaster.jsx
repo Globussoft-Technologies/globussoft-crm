@@ -33,6 +33,7 @@ import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 import PatientPager from '../wellness/patients/PatientPager';
 import { useActiveSubBrand } from '../../utils/subBrand';
+import { geocode } from '../../lib/geocoder';
 import {
   accessibleSubBrands,
   defaultSubBrandFor,
@@ -57,6 +58,9 @@ const EMPTY_FORM = {
   name: '',
   description: '',
   imageUrl: '',
+  latitude: '',
+  longitude: '',
+  locationSearch: '',
   durationMinutes: '',
   priceReferenceMinor: '',
   currency: 'INR',
@@ -64,6 +68,19 @@ const EMPTY_FORM = {
   subBrand: '',
   notes: '',
 };
+
+function minorToDisplayAmount(value) {
+  if (value == null || value === '') return '';
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '';
+  return String(amount / 100);
+}
+
+function displayAmountToMinor(value) {
+  const amount = Number.parseFloat(String(value || '').trim());
+  if (!Number.isFinite(amount)) return null;
+  return Math.round(amount * 100);
+}
 
 export default function SightseeingMaster() {
   const notify = useNotify();
@@ -95,6 +112,7 @@ export default function SightseeingMaster() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState(null);
+  const [locating, setLocating] = useState(false);
 
   // Image upload
   const imgInputRef = useRef(null);
@@ -214,7 +232,10 @@ export default function SightseeingMaster() {
   };
 
   const openCreate = () => {
-    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
+    setForm({
+      ...EMPTY_FORM,
+      subBrand: defaultSubBrandFor(user, activeSubBrand),
+    });
     setEditingId(null);
     setShowForm(true);
   };
@@ -225,9 +246,12 @@ export default function SightseeingMaster() {
       name: item.name || '',
       description: item.description || '',
       imageUrl: item.imageUrl || '',
+      latitude: item.latitude != null ? String(item.latitude) : '',
+      longitude: item.longitude != null ? String(item.longitude) : '',
+      locationSearch: `${item.name || ''} ${item.destinationName || ''}`.trim(),
       durationMinutes: item.durationMinutes != null ? String(item.durationMinutes) : '',
       priceReferenceMinor:
-        item.priceReferenceMinor != null ? String(item.priceReferenceMinor) : '',
+        minorToDisplayAmount(item.priceReferenceMinor),
       currency: item.currency || 'INR',
       category: item.category || '',
       subBrand: item.subBrand || '',
@@ -253,15 +277,26 @@ export default function SightseeingMaster() {
       name: form.name.trim(),
       description: form.description.trim() || null,
       imageUrl: form.imageUrl.trim() || null,
+      latitude: form.latitude !== '' ? Number(form.latitude) : null,
+      longitude: form.longitude !== '' ? Number(form.longitude) : null,
       durationMinutes: form.durationMinutes ? Number(form.durationMinutes) : null,
       priceReferenceMinor: form.priceReferenceMinor
-        ? Number(form.priceReferenceMinor)
+        ? displayAmountToMinor(form.priceReferenceMinor)
         : null,
       currency: form.currency.trim() || null,
       category: form.category || null,
       subBrand: form.subBrand || null,
       notes: form.notes.trim() || null,
     };
+
+    if (payload.latitude != null && (!Number.isFinite(payload.latitude) || payload.latitude < -90 || payload.latitude > 90)) {
+      notify.error('Latitude must be between -90 and 90');
+      return;
+    }
+    if (payload.longitude != null && (!Number.isFinite(payload.longitude) || payload.longitude < -180 || payload.longitude > 180)) {
+      notify.error('Longitude must be between -180 and 180');
+      return;
+    }
 
     try {
       if (editingId) {
@@ -281,6 +316,36 @@ export default function SightseeingMaster() {
       reloadFirstPage();
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to save entry');
+    }
+  };
+
+  const handleLocate = async () => {
+    const query = String(
+      form.locationSearch?.trim() || `${form.name || ''} ${form.destinationName || ''}`.trim(),
+    );
+    if (!query) {
+      notify.error('Enter a place name or destination first');
+      return;
+    }
+    setLocating(true);
+    try {
+      let result = await geocode(query);
+      if (!result && form.destinationName.trim()) {
+        result = await geocode(`${form.name || ''} ${form.destinationName}`.trim());
+      }
+      if (!result) {
+        notify.error('Could not auto-find coordinates. You can still type them manually.');
+        return;
+      }
+      setForm((prev) => ({
+        ...prev,
+        latitude: result.lat.toFixed(6),
+        longitude: result.lng.toFixed(6),
+        locationSearch: result.display_name || query,
+      }));
+      notify.success('Location found');
+    } finally {
+      setLocating(false);
     }
   };
 
@@ -548,6 +613,7 @@ export default function SightseeingMaster() {
                   aria-label="subBrand"
                   style={selectStyle}
                 >
+                  <option value="">Tenant-wide</option>
                   {myBrands.map((b) => (
                     <option key={b} value={b}>
                       {subBrandShortLabel(b)}
@@ -555,6 +621,51 @@ export default function SightseeingMaster() {
                   ))}
                 </select>
               )}
+            </Field>
+            <Field label="Location search">
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  value={form.locationSearch}
+                  onChange={(e) => setForm({ ...form, locationSearch: e.target.value })}
+                  placeholder="e.g. Adiyogi Shiva Statue Bangalore"
+                  aria-label="locationSearch"
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={handleLocate}
+                  disabled={locating}
+                  style={{ ...secondaryBtn, whiteSpace: 'nowrap' }}
+                >
+                  <MapPin size={13} /> {locating ? 'Finding…' : 'Find'}
+                </button>
+              </div>
+            </Field>
+            <Field label="Latitude">
+              <input
+                type="number"
+                step="any"
+                min={-90}
+                max={90}
+                value={form.latitude}
+                onChange={(e) => setForm({ ...form, latitude: e.target.value })}
+                placeholder="Optional"
+                aria-label="latitude"
+                style={inputStyle}
+              />
+            </Field>
+            <Field label="Longitude">
+              <input
+                type="number"
+                step="any"
+                min={-180}
+                max={180}
+                value={form.longitude}
+                onChange={(e) => setForm({ ...form, longitude: e.target.value })}
+                placeholder="Optional"
+                aria-label="longitude"
+                style={inputStyle}
+              />
             </Field>
             <Field label="Duration (minutes)">
               <input
@@ -567,15 +678,16 @@ export default function SightseeingMaster() {
                 style={inputStyle}
               />
             </Field>
-            <Field label="Price reference (minor units)">
+            <Field label="Price reference">
               <input
                 type="number"
                 min={0}
+                step="0.01"
                 value={form.priceReferenceMinor}
                 onChange={(e) =>
                   setForm({ ...form, priceReferenceMinor: e.target.value })
                 }
-                placeholder="e.g. 50000 for ₹500"
+                placeholder="e.g. 120 for Rs 120"
                 aria-label="priceReferenceMinor"
                 style={inputStyle}
               />
@@ -640,6 +752,11 @@ export default function SightseeingMaster() {
             </Field>
           </div>
 
+          <div style={{ marginTop: 12 }}>
+            <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Location is optional, but adding it helps itineraries drop map pins automatically later.
+            </p>
+          </div>
           <div style={{ marginTop: 12 }}>
             <Field label="Description">
               <textarea
@@ -707,6 +824,7 @@ export default function SightseeingMaster() {
                 <th style={th}>Category</th>
                 <th style={th}>Duration</th>
                 <th style={th}>Price ref.</th>
+                <th style={th}>Map</th>
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Active</th>
                 <th style={th}>Actions</th>
@@ -743,6 +861,9 @@ export default function SightseeingMaster() {
                   <td style={td}>{item.category || '—'}</td>
                   <td style={td}>{formatDuration(item.durationMinutes)}</td>
                   <td style={td}>{formatPrice(item)}</td>
+                  <td style={td}>
+                    {item.latitude != null && item.longitude != null ? 'Mapped' : '—'}
+                  </td>
                   <td style={td}>
                     {item.subBrand ? (
                       <span style={brandBadge}>{item.subBrand}</span>

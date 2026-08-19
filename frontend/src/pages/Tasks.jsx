@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
@@ -93,10 +94,49 @@ function decodeNotes(raw) {
   }
 }
 
+// Activity kind + visit result. Both are optional — leaving Type blank keeps
+// the pre-existing "plain task" behaviour. "Meeting" / "Site Visit" are what
+// the Lead Reports meetings-and-visits and visited-but-not-booked reports read
+// (see backend/lib/leadReportMetrics.js).
+const TASK_TYPES = ['Task', 'Call', 'Meeting', 'Site Visit', 'Follow Up'];
+// Allowlist for the `?type=` deep-link param — an unrecognised value falls
+// back to a blank type rather than putting an unsaveable string in the form
+// (the backend rejects anything outside ALLOWED_TASK_TYPES with a 400).
+const ALLOWED_DEEPLINK_TYPES = TASK_TYPES;
+const TASK_OUTCOMES = [
+  { value: '', label: 'No outcome yet' },
+  { value: 'booked', label: 'Booked' },
+  { value: 'interested', label: 'Interested' },
+  { value: 'not_interested', label: 'Not interested' },
+  { value: 'reschedule', label: 'Reschedule' },
+  { value: 'no_show', label: 'No show' },
+];
+const VISIT_TYPES = ['Meeting', 'Site Visit'];
+
+// Queue filters. All client-side: GET /api/tasks already returns the tenant's
+// queue in one payload, so filtering here is instant and costs no round-trip.
+const EMPTY_FILTERS = {
+  q: '',
+  priority: '',
+  type: '',
+  assignee: '',
+  due: '',
+  overdueOnly: false,
+};
+
+const DUE_FILTERS = [
+  { value: '', label: 'Any due date' },
+  { value: 'today', label: 'Due today' },
+  { value: 'week', label: 'Due in 7 days' },
+  { value: 'nodate', label: 'No due date' },
+];
+
 const EMPTY_FORM = {
   title: '',
   status: 'Pending',
   priority: 'Medium',
+  type: '',
+  outcome: '',
   dueDate: '',
   completedAt: '',
   assignedToId: '',
@@ -109,7 +149,6 @@ export default function Tasks() {
   const notify = useNotify();
   const { hasPermission, isReady: permsReady } = usePermissions();
   const [tasks, setTasks] = useState([]);
-  const [contacts, setContacts] = useState([]);
   const [staff, setStaff] = useState([]);
   const [allTags, setAllTags] = useState([]);
   const [newTask, setNewTask] = useState(EMPTY_FORM);
@@ -139,12 +178,34 @@ export default function Tasks() {
   // eating vertical real-estate and inviting accidental typing. Mirror the
   // c031ba0 pattern: header "+ Create Task" CTA opens this drawer; close on
   // X / ESC / outside-click; submit handler is preserved verbatim.
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [creating, setCreating] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [editingTask, setEditingTask] = useState(false);
   const [editTask, setEditTask] = useState(EMPTY_FORM);
 
   useEffect(() => { loadData(); }, []);
+
+  // Deep link: `/tasks?create=1&type=Site%20Visit` opens the create drawer with
+  // the type pre-selected. The Lead Reports "Meetings & Visits" report links
+  // here — that report reads Tasks, so without an entry point it dead-ends on
+  // an empty state with no way to add the thing it is reporting on.
+  // The params are stripped once consumed so a refresh (or a back-nav) doesn't
+  // silently re-open the drawer over whatever the user is doing.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('create') !== '1') return;
+    const requestedType = searchParams.get('type') || '';
+    setNewTask((prev) => ({
+      ...prev,
+      type: ALLOWED_DEEPLINK_TYPES.includes(requestedType) ? requestedType : '',
+    }));
+    setCreating(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete('create');
+    next.delete('type');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // Load tenant tags from the wellness patients/tags endpoint so the tag
   // picker in the Add Todo modal reuses the same tag set as patients.
@@ -156,15 +217,15 @@ export default function Tasks() {
       .catch(() => {});
   }, [isWellness]);
 
-  // Travel-only: load the staff roster for the "Assign to" dropdown. Fail-soft
-  // (own catch) so a staff-list permission error never blocks the task queue,
-  // and gated to travel so generic / wellness make no extra request.
+  // All task assignees are staff users. Pre-fix the generic path populated
+  // this dropdown from contacts, which mixed customers into a Task.userId
+  // foreign-key picker and let non-staff rows appear as assignees.
+  // Travel keeps the sub-brand filter on top of this shared staff roster.
   useEffect(() => {
-    if (!isTravel) return;
     fetchApi('/api/staff')
       .then((d) => setStaff(Array.isArray(d) ? d : []))
       .catch(() => {});
-  }, [isTravel]);
+  }, []);
 
   // #893: ESC closes the drawer to match the c031ba0 Travel-page convention.
   useEffect(() => {
@@ -180,12 +241,8 @@ export default function Tasks() {
 
   const loadData = async () => {
     try {
-      const [t, c] = await Promise.all([
-        fetchApi('/api/tasks'),
-        fetchApi('/api/contacts'),
-      ]);
+      const t = await fetchApi('/api/tasks');
       setTasks(Array.isArray(t) ? t : []);
-      setContacts(Array.isArray(c) ? c : []);
     } catch (err) {
       console.error(err);
     }
@@ -214,6 +271,10 @@ export default function Tasks() {
         title: newTask.title,
         status: newTask.status,
         priority: newTask.priority,
+        // Optional — omitted entirely when blank so the POST body matches the
+        // pre-existing shape for anyone who doesn't use the new fields.
+        type: newTask.type || undefined,
+        outcome: newTask.outcome || undefined,
         dueDate: newTask.dueDate ? new Date(newTask.dueDate).toISOString() : null,
         // Tags + description are packed into the notes field using a sentinel
         // prefix so no schema migration is needed.
@@ -311,6 +372,8 @@ export default function Tasks() {
       title: task.title || '',
       status: task.status || 'Pending',
       priority: normalizePriority(task.priority),
+      type: task.type || '',
+      outcome: task.outcome || '',
       dueDate: formatDateTimeLocal(task.dueDate),
       completedAt: '',
       assignedToId: task.userId ? String(task.userId) : '',
@@ -332,6 +395,10 @@ export default function Tasks() {
         title: editTask.title,
         status: editTask.status,
         priority: editTask.priority,
+        // Sent as null (not undefined) so clearing the field on an existing
+        // task actually clears the stored column.
+        type: editTask.type || null,
+        outcome: editTask.outcome || null,
         dueDate: editTask.dueDate ? new Date(editTask.dueDate).toISOString() : null,
         notes: encodeNotes(editTask.tagIds, editTask.description, editTask.resolutionNote),
         targetUserId: editTask.assignedToId || '',
@@ -375,14 +442,91 @@ export default function Tasks() {
   const selectedTags = allTags.filter((t) => newTask.tagIds.includes(t.id));
 
   const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
-  const activeTasks = tasks
+  // Unfiltered splits. The counter chips read from these so they always show
+  // the true queue size — a chip that shrank to match its own filter would
+  // make it impossible to tell what clearing the filter would bring back.
+  const allActiveTasks = tasks
     .filter(t => t.status !== 'Completed')
     .sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 99) - (PRIORITY_ORDER[b.priority] ?? 99));
-  const completedTasks = tasks.filter(t => t.status === 'Completed');
+  const allCompletedTasks = tasks.filter(t => t.status === 'Completed');
 
-  const criticalCount = activeTasks.filter(t => t.priority === 'Critical').length;
-  const highCount = activeTasks.filter(t => t.priority === 'High').length;
-  const overdueCount = activeTasks.filter(isOverdue).length;
+  const criticalCount = allActiveTasks.filter(t => normalizePriority(t.priority) === 'Critical').length;
+  const highCount = allActiveTasks.filter(t => normalizePriority(t.priority) === 'High').length;
+  const overdueCount = allActiveTasks.filter(isOverdue).length;
+
+  // ── Filtering ──────────────────────────────────────────────────────
+  const matchesFilters = (t) => {
+    if (filters.priority && normalizePriority(t.priority) !== filters.priority) return false;
+    if (filters.overdueOnly && !isOverdue(t)) return false;
+
+    if (filters.type) {
+      const type = t.type || '';
+      // `__none` finds the legacy rows written before Type existed — the ones
+      // the visit reports can only match on their title.
+      if (filters.type === '__none' ? Boolean(type) : type !== filters.type) return false;
+    }
+
+    if (filters.assignee) {
+      const uid = t.userId ? String(t.userId) : 'unassigned';
+      if (uid !== filters.assignee) return false;
+    }
+
+    if (filters.due) {
+      if (filters.due === 'nodate') {
+        if (t.dueDate) return false;
+      } else {
+        if (!t.dueDate) return false;
+        const due = new Date(t.dueDate);
+        if (Number.isNaN(due.getTime())) return false;
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        const endOfToday = new Date(startOfToday.getTime() + 86_400_000 - 1);
+        if (filters.due === 'today' && (due < startOfToday || due > endOfToday)) return false;
+        if (filters.due === 'week' && (due < startOfToday || due > new Date(startOfToday.getTime() + 7 * 86_400_000))) return false;
+      }
+    }
+
+    if (filters.q) {
+      const needle = filters.q.trim().toLowerCase();
+      const decoded = decodeNotes(t.notes);
+      const haystack = [
+        t.title,
+        decoded.description,
+        decoded.resolutionNote,
+        t.contact?.name,
+        t.contact?.email,
+        t.user?.name,
+        t.type,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(needle)) return false;
+    }
+
+    return true;
+  };
+
+  const activeTasks = allActiveTasks.filter(matchesFilters);
+  const completedTasks = allCompletedTasks.filter(matchesFilters);
+
+  const filtersActive = Boolean(
+    filters.q || filters.priority || filters.type || filters.assignee || filters.due || filters.overdueOnly,
+  );
+  const clearFilters = () => setFilters(EMPTY_FILTERS);
+  const togglePriority = (p) =>
+    setFilters((f) => ({ ...f, priority: f.priority === p ? '' : p }));
+  const toggleOverdue = () => setFilters((f) => ({ ...f, overdueOnly: !f.overdueOnly }));
+
+  // Assignee options come from the queue itself rather than /api/staff — that
+  // endpoint is only loaded for the travel vertical, and deriving them here
+  // guarantees every option actually matches at least one row.
+  const assigneeOptions = Array.from(
+    tasks.reduce((map, t) => {
+      const id = t.userId ? String(t.userId) : 'unassigned';
+      if (!map.has(id)) {
+        map.set(id, t.user?.name || t.user?.email || (t.userId ? `User #${t.userId}` : 'Unassigned'));
+      }
+      return map;
+    }, new Map()),
+  ).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
 
   // Priority color for the priority select dropdown value
   const priorityColor = {
@@ -423,27 +567,121 @@ export default function Tasks() {
         )}
       </header>
 
-      {/* Stats bar */}
-      {activeTasks.length > 0 && (
-        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+      {/* Counter chips double as one-click filters — the number you want to act
+          on is the thing you click. Counts stay unfiltered so the chips always
+          describe the whole queue, not the slice currently on screen. */}
+      {allActiveTasks.length > 0 && (
+        <div className="tasks-chips" role="group" aria-label="Filter the queue">
           {criticalCount > 0 && (
-            <span style={{ padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(239,68,68,0.3)' }}>
+            <button
+              type="button"
+              className={`tasks-chip tasks-chip--critical${filters.priority === 'Critical' ? ' is-active' : ''}`}
+              aria-pressed={filters.priority === 'Critical'}
+              onClick={() => togglePriority('Critical')}
+            >
               🔴 {criticalCount} Critical
-            </span>
+            </button>
           )}
           {highCount > 0 && (
-            <span style={{ padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(249,115,22,0.1)', color: '#f97316', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(249,115,22,0.3)' }}>
+            <button
+              type="button"
+              className={`tasks-chip tasks-chip--high${filters.priority === 'High' ? ' is-active' : ''}`}
+              aria-pressed={filters.priority === 'High'}
+              onClick={() => togglePriority('High')}
+            >
               🟠 {highCount} High
-            </span>
+            </button>
           )}
           {overdueCount > 0 && (
-            <span style={{ padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(239,68,68,0.08)', color: '#f87171', fontSize: '0.8rem', fontWeight: '600', border: '1px solid rgba(239,68,68,0.2)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <button
+              type="button"
+              className={`tasks-chip tasks-chip--overdue${filters.overdueOnly ? ' is-active' : ''}`}
+              aria-pressed={filters.overdueOnly}
+              onClick={toggleOverdue}
+            >
               <AlertTriangle size={12} /> {overdueCount} Overdue
-            </span>
+            </button>
           )}
-          <span style={{ padding: '0.4rem 1rem', borderRadius: '999px', background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', fontSize: '0.8rem', border: '1px solid var(--border-color)' }}>
-            {activeTasks.length} total pending
-          </span>
+          <button
+            type="button"
+            className={`tasks-chip${!filtersActive ? ' is-active' : ''}`}
+            aria-pressed={!filtersActive}
+            onClick={clearFilters}
+          >
+            {allActiveTasks.length} total pending
+          </button>
+        </div>
+      )}
+
+      {/* Filter bar */}
+      {tasks.length > 0 && (
+        <div className="tasks-filterbar">
+          <label className="tasks-filterbar__search">
+            <Search size={14} />
+            <input
+              type="search"
+              aria-label="Search tasks"
+              placeholder="Search title, notes, client…"
+              value={filters.q}
+              onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))}
+            />
+          </label>
+
+          <select
+            aria-label="Filter by priority"
+            className="input-field"
+            value={filters.priority}
+            onChange={(e) => setFilters((f) => ({ ...f, priority: e.target.value }))}
+          >
+            <option value="">Any priority</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+          </select>
+
+          <select
+            aria-label="Filter by type"
+            className="input-field"
+            value={filters.type}
+            onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
+          >
+            <option value="">Any type</option>
+            {TASK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            <option value="__none">No type set</option>
+          </select>
+
+          <select
+            aria-label="Filter by due date"
+            className="input-field"
+            value={filters.due}
+            onChange={(e) => setFilters((f) => ({ ...f, due: e.target.value }))}
+          >
+            {DUE_FILTERS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+          </select>
+
+          {assigneeOptions.length > 1 && (
+            <select
+              aria-label="Filter by assignee"
+              className="input-field"
+              value={filters.assignee}
+              onChange={(e) => setFilters((f) => ({ ...f, assignee: e.target.value }))}
+            >
+              <option value="">Anyone</option>
+              {assigneeOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          )}
+
+          {filtersActive && (
+            <>
+              <span className="tasks-filterbar__count">
+                {activeTasks.length} of {allActiveTasks.length} shown
+              </span>
+              <button type="button" className="tasks-filterbar__clear" onClick={clearFilters}>
+                <X size={13} /> Clear
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -458,9 +696,21 @@ export default function Tasks() {
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {activeTasks.length === 0 ? (
-              <p id="empty-queue-msg" style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
-                Queue is empty. Excellent work.
-              </p>
+              // "Nothing matched" and "nothing to do" are different states —
+              // showing "Excellent work" over a filter that hid everything is a
+              // lie the user then has to debug.
+              allActiveTasks.length > 0 ? (
+                <p id="empty-filtered-msg" style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
+                  No tasks match these filters.{' '}
+                  <button type="button" className="tasks-filterbar__clear" onClick={clearFilters}>
+                    <X size={13} /> Clear filters
+                  </button>
+                </p>
+              ) : (
+                <p id="empty-queue-msg" style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
+                  Queue is empty. Excellent work.
+                </p>
+              )
             ) : activeTasks.map(t => {
               const cfg = PRIORITY_CONFIG[t.priority] || PRIORITY_CONFIG.Medium;
               const overdue = isOverdue(t);
@@ -634,6 +884,30 @@ export default function Tasks() {
                       <option value="High">High</option>
                       <option value="Medium">Medium</option>
                       <option value="Low">Low</option>
+                    </select>
+                  </label>
+                </div>
+                {/* Type + Outcome — Outcome stays disabled until the task is a
+                    Meeting / Site Visit, matching the create form. Logging the
+                    outcome here is what moves a client off the Lead Reports
+                    "visited but did not book" recovery queue. */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                    Type
+                    <select value={editTask.type} onChange={(e) => setEditTask({ ...editTask, type: e.target.value })} style={modalInputStyle}>
+                      <option value="">General task</option>
+                      {TASK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                    Outcome
+                    <select
+                      value={editTask.outcome}
+                      disabled={!VISIT_TYPES.includes(editTask.type)}
+                      onChange={(e) => setEditTask({ ...editTask, outcome: e.target.value })}
+                      style={modalInputStyle}
+                    >
+                      {TASK_OUTCOMES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                   </label>
                 </div>
@@ -868,6 +1142,50 @@ export default function Tasks() {
               </div>
             </div>
 
+            {/* Type + Outcome. Type is what promotes a task into the Lead
+                Reports meetings-and-site-visits queue; Outcome is only offered
+                once the task is a Meeting / Site Visit, since it means nothing
+                on a plain to-do. Both optional — blank keeps the old shape. */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Type:</span>
+                <select
+                  id="task-type-select"
+                  aria-label="Task type"
+                  value={newTask.type}
+                  onChange={e => setNewTask({ ...newTask, type: e.target.value })}
+                  style={{
+                    flex: 1, minWidth: 0, padding: '0.38rem 0.5rem', fontSize: '0.82rem',
+                    borderRadius: 7, background: 'transparent', color: 'var(--text-primary)',
+                    border: '1px solid var(--border-color, rgba(0,0,0,0.15))', outline: 'none', cursor: 'pointer',
+                  }}
+                >
+                  <option value="">General task</option>
+                  {TASK_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Outcome:</span>
+                <select
+                  id="task-outcome-select"
+                  aria-label="Visit outcome"
+                  value={newTask.outcome}
+                  disabled={!VISIT_TYPES.includes(newTask.type)}
+                  onChange={e => setNewTask({ ...newTask, outcome: e.target.value })}
+                  style={{
+                    flex: 1, minWidth: 0, padding: '0.38rem 0.5rem', fontSize: '0.82rem',
+                    borderRadius: 7, background: 'transparent',
+                    color: VISIT_TYPES.includes(newTask.type) ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    border: '1px solid var(--border-color, rgba(0,0,0,0.15))', outline: 'none',
+                    cursor: VISIT_TYPES.includes(newTask.type) ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {TASK_OUTCOMES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            </div>
+
             {/* Due At + Completed At — stacked label above input, two columns */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
               {/* Due At */}
@@ -950,16 +1268,13 @@ export default function Tasks() {
                 }}
               >
                 <option value="">Select Assignees</option>
-                {isTravel
-                  ? assignableStaff.map(s => {
-                      const brands = accessibleSubBrands(s);
-                      const scope = brands.length && brands.length < 4
-                        ? ` · ${brands.map(subBrandShortLabel).join('/')}`
-                        : '';
-                      return <option key={s.id} value={s.id}>{s.name}{scope}</option>;
-                    })
-                  : contacts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)
-                }
+                {assignableStaff.map(s => {
+                  const brands = accessibleSubBrands(s);
+                  const scope = isTravel && brands.length && brands.length < 4
+                    ? ` · ${brands.map(subBrandShortLabel).join('/')}`
+                    : '';
+                  return <option key={s.id} value={s.id}>{s.name}{scope}</option>;
+                })}
               </select>
             </div>
 

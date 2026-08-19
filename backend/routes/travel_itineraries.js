@@ -1986,7 +1986,10 @@ router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
     }
     const itin = await prisma.itinerary.findFirst({
       where: { id, tenantId: req.travelTenant.id },
-      include: { items: { orderBy: { position: "asc" } } },
+      include: {
+        items: { orderBy: { position: "asc" } },
+        contact: { select: { id: true, name: true, email: true, phone: true } },
+      },
     });
     if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
 
@@ -1994,11 +1997,109 @@ router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
     if (!canAccessSubBrand(allowed, itin.subBrand)) {
       return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
     }
+    const relatedContext = {
+      latestDiagnostic: null,
+      curriculumRecommendations: [],
+      relatedQuotes: [],
+      latestProposalQuote: null,
+      sightseeingSuggestions: [],
+    };
+
+    if (itin.contactId) {
+      const [latestDiagnostic, relatedQuotes] = await Promise.all([
+        prisma.travelDiagnostic.findFirst({
+          where: {
+            tenantId: req.travelTenant.id,
+            contactId: itin.contactId,
+            ...(itin.subBrand ? { subBrand: itin.subBrand } : {}),
+          },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            subBrand: true,
+            score: true,
+            classification: true,
+            classificationLabel: true,
+            recommendedTier: true,
+            curriculumFitJson: true,
+            reportPdfUrl: true,
+            engineState: true,
+            leadQuality: true,
+            createdAt: true,
+          },
+        }),
+        prisma.travelQuote.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            contactId: itin.contactId,
+            ...(itin.subBrand ? { subBrand: itin.subBrand } : {}),
+          },
+          orderBy: { createdAt: "desc" },
+          take: 5,
+          select: {
+            id: true,
+            subBrand: true,
+            status: true,
+            totalAmount: true,
+            currency: true,
+            validUntil: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        }),
+      ]);
+
+      if (latestDiagnostic) {
+        relatedContext.latestDiagnostic = latestDiagnostic;
+        if (latestDiagnostic.curriculumFitJson) {
+          try {
+            const parsed = JSON.parse(latestDiagnostic.curriculumFitJson);
+            relatedContext.curriculumRecommendations = Array.isArray(parsed)
+              ? parsed.slice(0, 5)
+              : [];
+          } catch {
+            relatedContext.curriculumRecommendations = [];
+          }
+        }
+      }
+
+      relatedContext.relatedQuotes = relatedQuotes;
+      relatedContext.latestProposalQuote =
+        relatedQuotes.find((q) => ["Sent", "Accepted", "Rejected"].includes(String(q.status || ""))) ||
+        null;
+    }
+
+    if (itin.destination) {
+      relatedContext.sightseeingSuggestions = await prisma.travelSightseeing.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          isActive: true,
+          destinationName: { contains: String(itin.destination).trim() },
+          OR: [
+            { subBrand: null },
+            ...(itin.subBrand ? [{ subBrand: itin.subBrand }] : []),
+          ],
+        },
+        orderBy: [{ destinationName: "asc" }, { name: "asc" }],
+        take: 6,
+        select: {
+          id: true,
+          destinationName: true,
+          name: true,
+          category: true,
+          subBrand: true,
+          durationMinutes: true,
+          priceReferenceMinor: true,
+          currency: true,
+        },
+      });
+    }
     // When a cancellation is in play, attach the policy-driven refund preview so
     // the advisor sees the exact refund due before approving.
     if (itin.cancellationStatus) {
       itin.cancellationRefund = await resolveCancellationRefund(itin);
     }
+    itin.relatedContext = relatedContext;
     res.json(itin);
   } catch (e) {
     console.error("[travel-itin] get error:", e.message);

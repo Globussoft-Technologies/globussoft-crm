@@ -37,6 +37,19 @@ function parseTenantDateInput(input) {
 // silent coercion to "Pending".
 const ALLOWED_TASK_STATUSES = new Set(["Pending", "In Progress", "Completed", "Cancelled"]);
 const ALLOWED_TASK_PRIORITIES = new Set(["Low", "Medium", "High", "Critical"]);
+// Lead Reports cluster: activity kind + visit result. Both columns are
+// nullable, so omitting them keeps the pre-existing task shape verbatim.
+// "Meeting" / "Site Visit" are what routes/lead_reports.js reads to build the
+// daily meetings-and-site-visits and visit-done-not-booked reports.
+const ALLOWED_TASK_TYPES = new Set(["Task", "Call", "Meeting", "Site Visit", "Follow Up"]);
+const ALLOWED_TASK_OUTCOMES = new Set([
+  "pending",
+  "booked",
+  "interested",
+  "not_interested",
+  "reschedule",
+  "no_show",
+]);
 const VALID_EXTENSION_SOURCES = new Set(["gmail", "whatsapp"]);
 function canViewAllTasks(req) {
   return ["ADMIN", "MANAGER", "OWNER"].includes(String(req.user?.role || "").toUpperCase());
@@ -175,6 +188,14 @@ function validateTaskInput(body) {
     const e = ensureDateInRange(body.dueDate, { minYear: 2000, maxYear: 2100, field: "dueDate", code: "INVALID_DUEDATE" });
     if (e) return e;
   }
+  if (body.type !== undefined && body.type !== null && body.type !== "") {
+    const e = ensureEnum(body.type, ALLOWED_TASK_TYPES, { field: "type", code: "INVALID_TASK_TYPE" });
+    if (e) return e;
+  }
+  if (body.outcome !== undefined && body.outcome !== null && body.outcome !== "") {
+    const e = ensureEnum(body.outcome, ALLOWED_TASK_OUTCOMES, { field: "outcome", code: "INVALID_TASK_OUTCOME" });
+    if (e) return e;
+  }
   return null;
 }
 
@@ -261,6 +282,11 @@ router.get("/", verifyToken, async (req, res) => {
         userId: true,
         tenantId: true,
         createdAt: true,
+        // NOTE: `type` / `outcome` are deliberately NOT in the slim shape.
+        // The #920 slice-4 contract pins this column set exactly
+        // (test/routes/tasks.test.js), and nothing needs them here — the
+        // Lead Reports route runs its own explicit selects and the Tasks page
+        // reads the full include.
       };
     } else {
       findManyArgs.include = { contact: true, user: true };
@@ -325,7 +351,7 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
     // badge sat at 0. Accept `targetUserId` (renamed surface, never stripped)
     // and fall through to req.strippedFields.userId for back-compat with old
     // clients that still POST `userId`.
-    const { title, dueDate, contactId, targetUserId, notes, priority } = req.body;
+    const { title, dueDate, contactId, targetUserId, notes, priority, type, outcome } = req.body;
     const assigneeRaw = (targetUserId !== undefined && targetUserId !== null && targetUserId !== "")
       ? targetUserId
       : (req.strippedFields && req.strippedFields.userId);
@@ -347,6 +373,11 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
           ? parseInt(assigneeRaw)
           : null,
         notes: notes || null,
+        // Lead Reports cluster — nullable when omitted, so the pre-existing
+        // create shape is byte-for-byte unchanged for callers that don't send
+        // these (extension capture, orchestrator fan-out, workflow engine).
+        type: type || null,
+        outcome: outcome || null,
         tenantId: req.user.tenantId,
       },
       include: { contact: true, user: true },
@@ -387,7 +418,7 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
     const inputErr = validateTaskInput(req.body);
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
-    const { title, notes, dueDate, priority, status, targetUserId } = req.body;
+    const { title, notes, dueDate, priority, status, targetUserId, type, outcome } = req.body;
     const data = {};
     if (title !== undefined) data.title = title;
     if (notes !== undefined) data.notes = notes;
@@ -395,6 +426,10 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
     if (dueDate !== undefined) data.dueDate = dueDate ? parseTenantDateInput(dueDate) : null;
     if (priority !== undefined) data.priority = priority;
     if (status !== undefined) data.status = status;
+    // Lead Reports cluster — only written when the caller sends the key, so an
+    // update that omits them leaves the stored values untouched.
+    if (type !== undefined) data.type = type || null;
+    if (outcome !== undefined) data.outcome = outcome || null;
     if (targetUserId !== undefined) {
       data.userId = targetUserId !== null && targetUserId !== "" ? parseInt(targetUserId) : null;
     }
@@ -468,6 +503,14 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
     const data = { status: "Completed" };
     if (req.body && Object.prototype.hasOwnProperty.call(req.body, "notes")) {
       data.notes = req.body.notes || null;
+    }
+    // Lead Reports cluster — resolving a Meeting / Site Visit can carry its
+    // outcome ("booked", "no_show", …) in the same call, which is what feeds
+    // the visit-done-not-booked follow-up queue.
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, "outcome")) {
+      const outcomeErr = validateTaskInput({ outcome: req.body.outcome });
+      if (outcomeErr) return res.status(outcomeErr.status).json(outcomeErr);
+      data.outcome = req.body.outcome || null;
     }
 
     const task = await prisma.task.update({

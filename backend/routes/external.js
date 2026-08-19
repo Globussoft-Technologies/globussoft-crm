@@ -31,6 +31,7 @@ const {
 } = require("../lib/leadNotifications");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
+const { normalizeMetaLeadPayload } = require("../lib/inboundLeadVerification");
 
 const router = express.Router();
 
@@ -368,7 +369,13 @@ router.get("/leads", async (req, res) => {
 
 router.post("/leads", async (req, res) => {
   try {
-    const { name, phone, email, note, utm, externalId } = req.body;
+    // Meta Lead Ads can arrive as field_data. Normalize that shape before
+    // junk classification so the classifier sees the real name/email/phone
+    // and the leadgen_id can participate in idempotent ingestion.
+    req.body = normalizeMetaLeadPayload(req.body);
+    const { name, phone, email, note, utm } = req.body;
+    const metaLeadgenId = req.body.leadgen_id || req.body.metaJson?.leadgen_id;
+    const externalId = req.body.externalId || (metaLeadgenId ? `meta:${String(metaLeadgenId)}` : null);
     const submittedSource = resolveSubmittedSource(req.body);
     const { rawCustomFields, storageCustomFields } = splitCustomLeadFields(req.body);
     const externalPayloadJson = JSON.stringify(req.body);
@@ -547,6 +554,34 @@ router.post("/leads", async (req, res) => {
       await notifyAdminsOfNewLead({ tenantId: req.tenantId, contact, io: req.io });
     }
 
+    // Workflow automation must observe the same ingestion result that the
+    // lead-junk filter used. This is intentionally tenant-scoped and does not
+    // change the existing partner webhook stream above.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      await emitEvent(deduped ? "contact.updated" : "contact.created", {
+        contactId: contact.id,
+        name: contact.name,
+        email: contact.email,
+        phone: contact.phone,
+        company: contact.company,
+        title: contact.title,
+        status: contact.status,
+        source: contact.source,
+        aiScore: contact.aiScore,
+        assignedToId: contact.assignedToId,
+        metaLeadgenId: metaLeadgenId || null,
+        externalId: contact.externalId || externalId || null,
+        metaSignal: contact.status === "Junk" ? "junk" : ["Prospect", "Customer"].includes(contact.status) ? "qualified" : null,
+        metaIsJunk: contact.status === "Junk",
+        metaIsQualified: ["Prospect", "Customer"].includes(contact.status),
+        userId: null,
+        tenantId: req.tenantId,
+      }, req.tenantId, req.io);
+    } catch (workflowError) {
+      console.error("[external] lead workflow event failed:", workflowError.message);
+    }
+
     // Auto-dial newly-created external Leads that have a Callified campaign + phone.
     // Mirrors the manual-create path in contacts.js.
     if (contact.status === "Lead" && contact.callifiedCampaignId && contact.phone) {
@@ -687,6 +722,26 @@ router.patch("/leads/:id/stage", async (req, res) => {
           tenantId: req.tenantId,
         }, req.tenantId);
       } catch (_e) { /* fire-and-forget */ }
+      try {
+        const { emitEvent } = require("../lib/eventBus");
+        await emitEvent("contact.updated", {
+          contactId: contact.id,
+          name: contact.name,
+          email: contact.email,
+          phone: contact.phone,
+          status: contact.status,
+          previousStatus: existing.status,
+          assignedToId: contact.assignedToId,
+          externalId: contact.externalId || null,
+          metaLeadgenId: typeof contact.externalId === "string" && contact.externalId.startsWith("meta:") ? contact.externalId.slice(5) : null,
+          metaSignal: contact.status === "Junk" ? "junk" : ["Prospect", "Customer"].includes(contact.status) ? "qualified" : null,
+          metaIsJunk: contact.status === "Junk",
+          metaIsQualified: ["Prospect", "Customer"].includes(contact.status),
+          tenantId: req.tenantId,
+        }, req.tenantId, req.io);
+      } catch (workflowError) {
+        console.error("[external] stage workflow event failed:", workflowError.message);
+      }
     }
 
     res.json(contact);

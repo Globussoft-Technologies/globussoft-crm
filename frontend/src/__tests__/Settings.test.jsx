@@ -405,6 +405,19 @@ describe("<Settings /> — page shell + representative card pin", () => {
   });
 
   // 12b — Consent Templates DOES render when wellness
+  it("does NOT render the WhatsApp / Meta Configuration card for travel vertical", async () => {
+    fetchApiMock.mockImplementation(
+      buildDefaultFetch({ tenant: { ...baseTenant, vertical: "travel" } }),
+    );
+    renderSettings();
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("Acme Corp")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("heading", { name: /WhatsApp \/ Meta Configuration/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it('renders the Consent Templates card when tenant.vertical === "wellness"', async () => {
     fetchApiMock.mockImplementation(
       buildDefaultFetch({ tenant: { ...baseTenant, vertical: "wellness" } }),

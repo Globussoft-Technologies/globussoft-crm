@@ -584,9 +584,23 @@ export function TripTaxTable({
   customers,
   suppliers,
   tripTaxes,
+  selectedTripId = "",
   onChange,
 }) {
   if (!trips.length) return null;
+  const displayedTrips = selectedTripId
+    ? trips
+    : trips.filter((trip) => {
+        const id = String(trip.id);
+        const earnings = customers
+          .filter((row) => String(row.itineraryId) === id)
+          .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        const spent = suppliers
+          .filter((row) => String(row.itineraryId) === id)
+          .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        return earnings > 0 || spent > 0;
+      });
+  if (!displayedTrips.length) return null;
   return (
     <div style={{ ...box, padding: 12, marginTop: 14 }}>
       <strong>Trip totals and taxes</strong>
@@ -641,7 +655,7 @@ export function TripTaxTable({
             </tr>
           </thead>
           <tbody>
-            {trips.map((trip) => {
+            {displayedTrips.map((trip) => {
               const id = String(trip.id);
               const earnings = customers
                 .filter((row) => String(row.itineraryId) === id)

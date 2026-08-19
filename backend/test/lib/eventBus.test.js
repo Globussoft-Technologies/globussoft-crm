@@ -25,7 +25,7 @@
 //   patch on imported prisma, .mockReset() per test, default-return then
 //   per-test override.
 
-import { describe, test, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import sut from '../../lib/eventBus.js';
 
@@ -38,6 +38,7 @@ describe('module shape', () => {
     expect(typeof renderTemplate).toBe('function');
     expect(typeof lookupField).toBe('function');
     expect(typeof sut.executeAction).toBe('function');
+    expect(typeof sut.testRule).toBe('function');
     expect(bus).toBeDefined();
     expect(typeof bus.emit).toBe('function');
   });
@@ -338,10 +339,14 @@ beforeAll(() => {
   prisma.automationRule = { findMany: vi.fn() };
   prisma.notification = { create: vi.fn() };
   prisma.task = { create: vi.fn() };
-  prisma.contact = { update: vi.fn() };
-  prisma.deal = { update: vi.fn() };
+  prisma.contact = { findFirst: vi.fn(), update: vi.fn() };
+  prisma.deal = { findFirst: vi.fn(), update: vi.fn() };
+  prisma.task.findFirst = vi.fn();
+  prisma.task.update = vi.fn();
+  prisma.ticket = { findFirst: vi.fn(), update: vi.fn() };
+  prisma.user.findFirst = vi.fn();
   prisma.approvalRequest = { create: vi.fn() };
-  prisma.auditLog = { create: vi.fn() };
+  prisma.auditLog = { create: vi.fn(), findMany: vi.fn() };
   prisma.webhook = { findMany: vi.fn() };
   // send_webhook now resolves the tenant's signing secret via
   // lib/webhookEntitlement.resolveTenantWebhookSecret → webhookCredential.findFirst.
@@ -353,11 +358,19 @@ beforeEach(() => {
   prisma.notification.create.mockReset().mockResolvedValue({});
   prisma.task.create.mockReset().mockResolvedValue({});
   prisma.contact.update.mockReset().mockResolvedValue({});
+  prisma.contact.findFirst.mockReset().mockImplementation(({ where }) => Promise.resolve({ id: where.id }));
   prisma.deal.update.mockReset().mockResolvedValue({});
+  prisma.deal.findFirst.mockReset().mockImplementation(({ where }) => Promise.resolve({ id: where.id }));
+  prisma.task.findFirst.mockReset().mockImplementation(({ where }) => Promise.resolve({ id: where.id }));
+  prisma.task.update.mockReset().mockResolvedValue({});
+  prisma.ticket.findFirst.mockReset().mockImplementation(({ where }) => Promise.resolve({ id: where.id }));
+  prisma.ticket.update.mockReset().mockResolvedValue({});
+  prisma.user.findFirst.mockReset().mockImplementation(({ where }) => Promise.resolve({ id: where.id }));
   prisma.approvalRequest.create.mockReset().mockResolvedValue({
     id: 999, entity: 'Deal', entityId: 7, reason: null,
   });
   prisma.auditLog.create.mockReset().mockResolvedValue({});
+  prisma.auditLog.findMany.mockReset().mockResolvedValue([]);
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
   // Default: no per-tenant credential → send_webhook falls back to the env/null
   // secret (unsigned) without a real DB hit.
@@ -368,7 +381,7 @@ describe('emitEvent — prisma async tail (rule fan-out + webhook delivery)', ()
   test('queries automationRule scoped to tenant + eventName + isActive=true', async () => {
     await emitEvent('contact.created', { contactId: 1 }, 42);
     expect(prisma.automationRule.findMany).toHaveBeenCalledWith({
-      where: { tenantId: 42, triggerType: 'contact.created', isActive: true },
+      where: { tenantId: 42, triggerType: { in: ['contact.created', 'contact.created_or_updated'] }, isActive: true },
     });
   });
 
@@ -418,6 +431,34 @@ describe('emitEvent — prisma async tail (rule fan-out + webhook delivery)', ()
     ]);
     await emitEvent('evt', { userId: 5 }, 42);
     expect(prisma.notification.create).toHaveBeenCalled();
+  });
+
+  test('executes matching rules in their persisted drag-and-drop order', async () => {
+    prisma.automationRule.findMany.mockResolvedValueOnce([
+      { id: 2, name: 'Second', triggerType: 'evt', actionType: 'send_notification', targetState: JSON.stringify({ order: 1, userId: 5, title: 'Second' }), condition: null },
+      { id: 1, name: 'First', triggerType: 'evt', actionType: 'send_notification', targetState: JSON.stringify({ order: 0, userId: 5, title: 'First' }), condition: null },
+    ]);
+
+    await emitEvent('evt', { userId: 5 }, 42);
+
+    expect(prisma.notification.create.mock.calls.map((call) => call[0].data.title)).toEqual(['First', 'Second']);
+  });
+
+  test('skips a once-per-record workflow that already has an execution log', async () => {
+    prisma.automationRule.findMany.mockResolvedValueOnce([
+      {
+        id: 31, name: 'Only once', triggerType: 'contact.created',
+        actionType: 'create_task', targetState: JSON.stringify({ execution: 'once', actions: [{ type: 'create_task', config: {} }] }),
+        condition: null,
+      },
+    ]);
+    prisma.auditLog.findMany.mockResolvedValueOnce([
+      { details: JSON.stringify({ recordKey: 'contactId:12' }) },
+    ]);
+
+    await emitEvent('contact.created', { contactId: 12, userId: 5 }, 42);
+
+    expect(prisma.task.create).not.toHaveBeenCalled();
   });
 
   test('rule that throws inside executeAction is logged but does NOT abort siblings', async () => {
@@ -529,6 +570,31 @@ describe('executeAction — create_task', () => {
     expect(arg.data.contactId).toBeNull();
     expect(arg.data.title).toBe('Custom');
   });
+
+  test('runs every configured builder action with its own settings', async () => {
+    const rule = {
+      id: 91,
+      name: 'New contact follow-up',
+      triggerType: 'contact.created',
+      actionType: 'create_task',
+      targetState: JSON.stringify({
+        actions: [
+          { type: 'create_task', config: { title: 'Call new contact', dueInDays: 1, assignToId: 88 } },
+          { type: 'send_notification', config: { userId: 99, title: 'New contact', message: 'Please review.' } },
+        ],
+      }),
+    };
+
+    await executeAction(rule, { contactId: 11, userId: 5 }, 42);
+
+    expect(prisma.task.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ title: 'Call new contact', userId: 88, contactId: 11, tenantId: 42 }),
+    });
+    expect(prisma.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ title: 'New contact', message: 'Please review.', userId: 99, tenantId: 42 }),
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('executeAction — update_field', () => {
@@ -538,6 +604,7 @@ describe('executeAction — update_field', () => {
       targetState: JSON.stringify({ entity: 'contact', field: 'status', value: 'qualified' }),
     };
     await executeAction(rule, { contactId: 7 }, 42);
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({ where: { id: 7, tenantId: 42 }, select: { id: true } });
     expect(prisma.contact.update).toHaveBeenCalledWith({
       where: { id: 7 }, data: { status: 'qualified' },
     });
@@ -549,6 +616,7 @@ describe('executeAction — update_field', () => {
       targetState: JSON.stringify({ entity: 'deal', field: 'stage', value: 'won' }),
     };
     await executeAction(rule, { dealId: 99 }, 42);
+    expect(prisma.deal.findFirst).toHaveBeenCalledWith({ where: { id: 99, tenantId: 42 }, select: { id: true } });
     expect(prisma.deal.update).toHaveBeenCalledWith({
       where: { id: 99 }, data: { stage: 'won' },
     });
@@ -557,17 +625,17 @@ describe('executeAction — update_field', () => {
   test('honours explicit config.entityId override', async () => {
     const rule = {
       id: 1, actionType: 'update_field',
-      targetState: JSON.stringify({ entity: 'contact', entityId: 555, field: 'tier', value: 'gold' }),
+      targetState: JSON.stringify({ entity: 'contact', entityId: 555, field: 'status', value: 'Customer' }),
     };
     await executeAction(rule, { contactId: 1 }, 42);
     expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 555 }, data: { tier: 'gold' },
+      where: { id: 555 }, data: { status: 'Customer' },
     });
   });
 
   test('does nothing when entity / entityId / field missing', async () => {
     const rule = { id: 1, actionType: 'update_field', targetState: JSON.stringify({}) };
-    await executeAction(rule, {}, 42);
+    await expect(executeAction(rule, {}, 42)).rejects.toThrow(/Unsupported workflow entity/);
     expect(prisma.contact.update).not.toHaveBeenCalled();
     expect(prisma.deal.update).not.toHaveBeenCalled();
   });
@@ -577,7 +645,7 @@ describe('executeAction — update_field', () => {
       id: 1, actionType: 'update_field',
       targetState: JSON.stringify({ entity: 'nonexistent', field: 'x', value: 'y' }),
     };
-    await executeAction(rule, { nonexistentId: 1 }, 42);
+    await expect(executeAction(rule, { nonexistentId: 1 }, 42)).rejects.toThrow(/Unsupported workflow entity/);
     expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 });
@@ -589,6 +657,7 @@ describe('executeAction — assign_agent', () => {
       targetState: JSON.stringify({ userId: 88 }),
     };
     await executeAction(rule, { contactId: 7 }, 42);
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({ where: { id: 88, tenantId: 42 }, select: { id: true } });
     expect(prisma.contact.update).toHaveBeenCalledWith({
       where: { id: 7 }, data: { assignedToId: 88 },
     });
@@ -599,13 +668,45 @@ describe('executeAction — assign_agent', () => {
       id: 1, actionType: 'assign_agent',
       targetState: JSON.stringify({ userId: 88 }),
     };
-    await executeAction(rule, {}, 42);
+    await expect(executeAction(rule, {}, 42)).rejects.toThrow(/Unsupported workflow entity/);
     expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 
   test('skips when config.userId missing', async () => {
     const rule = { id: 1, actionType: 'assign_agent', targetState: null };
-    await executeAction(rule, { contactId: 7 }, 42);
+    await expect(executeAction(rule, { contactId: 7 }, 42)).rejects.toThrow(/valid assignee/);
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('coerces numeric deal fields entered through the builder', async () => {
+    const rule = {
+      id: 1, actionType: 'update_field',
+      targetState: JSON.stringify({ entity: 'deal', field: 'amount', value: '1250.50' }),
+    };
+    await executeAction(rule, { dealId: 99 }, 42);
+    expect(prisma.deal.update).toHaveBeenCalledWith({ where: { id: 99 }, data: { amount: 1250.5 } });
+  });
+
+  test.each([
+    ['deal', 'dealId', 'ownerId'],
+    ['task', 'taskId', 'userId'],
+    ['ticket', 'ticketId', 'assigneeId'],
+  ])('assigns a %s record using its module-specific assignee field', async (entity, idKey, assigneeField) => {
+    await executeAction(
+      { id: 2, actionType: 'assign_agent', targetState: JSON.stringify({ entity, userId: 88 }) },
+      { [idKey]: 17 },
+      42
+    );
+    expect(prisma[entity].update).toHaveBeenCalledWith({ where: { id: 17 }, data: { [assigneeField]: 88 } });
+  });
+
+  test('rejects an assignee from another tenant', async () => {
+    prisma.user.findFirst.mockResolvedValueOnce(null);
+    await expect(executeAction(
+      { id: 3, actionType: 'assign_agent', targetState: JSON.stringify({ entity: 'contact', userId: 88 }) },
+      { contactId: 7 },
+      42
+    )).rejects.toThrow(/Assignee not found in this tenant/);
     expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 });
@@ -614,54 +715,48 @@ describe('executeAction — send_email (no SENDGRID_API_KEY → log-only path)',
   // SENDGRID_API_KEY isn't set in the test env (.env loads dotenv but
   // CI / local-dev typically don't define it). The function returns
   // {sent:false, reason:'no_api_key'} without making a network call.
-  test('with config.to recipient, calls sendSendGrid (logs-only without API key)', async () => {
+  test('reports a provider failure when SendGrid is not configured', async () => {
     const rule = {
       id: 1, name: 'Welcome', actionType: 'send_email',
       targetState: JSON.stringify({ to: 'a@b.co', subject: 'Hi', body: 'Welcome' }),
     };
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await executeAction(rule, {}, 42);
+    await expect(executeAction(rule, {}, 42)).rejects.toThrow(/Email was not sent/);
     logSpy.mockRestore();
     // No throw — execution reached the audit log step.
-    expect(prisma.auditLog.create).toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   test('falls back to payload.email when config.to absent', async () => {
     const rule = { id: 1, name: 'r', actionType: 'send_email', targetState: null };
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await executeAction(rule, { email: 'fallback@x.co' }, 42);
+    await expect(executeAction(rule, { email: 'fallback@x.co' }, 42)).rejects.toThrow(/Email was not sent/);
     logSpy.mockRestore();
-    expect(prisma.auditLog.create).toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
-  test('warns when no recipient resolvable but still writes the audit row', async () => {
+  test('fails when no recipient can be resolved', async () => {
     const rule = { id: 1, name: 'r', actionType: 'send_email', targetState: null };
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await executeAction(rule, {}, 42);
-    warnSpy.mockRestore();
-    expect(prisma.auditLog.create).toHaveBeenCalled();
+    await expect(executeAction(rule, {}, 42)).rejects.toThrow(/No email recipient/);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });
 
 describe('executeAction — send_sms (placeholder)', () => {
-  test('logs the SMS action without throwing', async () => {
+  test('fails clearly when the tenant has no active SMS provider', async () => {
     const rule = {
       id: 1, name: 'r', actionType: 'send_sms',
       targetState: JSON.stringify({ to: '+91999', message: 'Hi' }),
     };
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await executeAction(rule, {}, 42);
-    logSpy.mockRestore();
-    expect(prisma.auditLog.create).toHaveBeenCalled();
+    await expect(executeAction(rule, {}, 42)).rejects.toThrow(/No active SMS provider/);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
-  test('handles fallback to payload.phone + rule.name when config absent', async () => {
+  test('resolves payload.phone before requiring a configured provider', async () => {
     const rule = { id: 1, name: 'Fallback rule', actionType: 'send_sms', targetState: null };
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await executeAction(rule, { phone: '+91888' }, 42);
-    logSpy.mockRestore();
+    await expect(executeAction(rule, { phone: '+91888' }, 42)).rejects.toThrow(/No active SMS provider/);
     // Audit fired — engine reached the audit step.
-    expect(prisma.auditLog.create).toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });
 
@@ -814,18 +909,18 @@ describe('executeAction — create_approval', () => {
 });
 
 describe('executeAction — malformed targetState', () => {
-  test('treats non-JSON targetState as empty config and still writes audit log', async () => {
+  test('treats non-JSON targetState as empty config and reports missing SMS configuration', async () => {
     const rule = {
       id: 1, name: 'r', triggerType: 'evt', actionType: 'send_sms',
       targetState: 'amount > 100000',
     };
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await executeAction(rule, { phone: '9999999999' }, 42);
+    await expect(executeAction(rule, { phone: '9999999999' }, 42)).rejects.toThrow(/No active SMS provider/);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('targetState is not valid JSON')
     );
     warnSpy.mockRestore();
-    expect(prisma.auditLog.create).toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });
 

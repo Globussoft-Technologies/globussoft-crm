@@ -231,6 +231,10 @@ const IndustryTemplates = lazy(() => import("./pages/IndustryTemplates"));
 const Social = lazy(() => import("./pages/Social"));
 const Sandbox = lazy(() => import("./pages/Sandbox"));
 const Funnel = lazy(() => import("./pages/Funnel"));
+// Lead Reports cluster (generic vertical): productivity, lead quality,
+// follow-up tracking, source analysis, lead-stage funnel builder, meetings &
+// site visits, and visited-but-not-booked nurturing.
+const LeadReports = lazy(() => import("./pages/LeadReports"));
 const Zapier = lazy(() => import("./pages/Zapier"));
 // RBAC: admin role/permission management + per-user effective-permission view.
 // Both are protected behind auth (Layout wrapper) but use page-internal
@@ -1873,6 +1877,18 @@ export default function App() {
                           </WellnessOnly>
                         }
                       />
+                      {/* Generic-vertical WhatsApp (Meta Cloud API) — same agent
+                        inbox + template manager as the wellness routes above,
+                        mounted WITHOUT <WellnessOnly> so plain-CRM tenants can
+                        actually read and reply to the messages they configured
+                        in Settings → WhatsApp / Meta Configuration. The backend
+                        /api/whatsapp/* surface was always vertical-agnostic;
+                        only these UI mount points were prefix-scoped. Sidebar
+                        visibility comes from the `/whatsapp` catalog row
+                        (vertical: 'generic') in backend/lib/pageCatalog.js.
+                        Travel keeps its own Wati surface at /travel/whatsapp. */}
+                      <Route path="whatsapp" element={<WellnessWhatsAppThreads transport="meta" />} />
+                      <Route path="whatsapp/templates" element={<WellnessWhatsAppTemplates />} />
                       <Route
                         path="wellness/reports"
                         element={
@@ -2222,7 +2238,14 @@ export default function App() {
                           </GenericOnly>
                         }
                       />
-                      <Route path="workflows" element={<Workflows />} />
+                      <Route
+                        path="workflows"
+                        element={
+                          <GenericOnly>
+                            <Workflows />
+                          </GenericOnly>
+                        }
+                      />
                       <Route path="developer" element={<Developer />} />
                       <Route
                         path="billing"
@@ -2233,12 +2256,14 @@ export default function App() {
                       <Route
                         path="channels"
                         element={
-                          <RoleGuard
-                            allow={["ADMIN"]}
-                            message="Channels requires admin access."
-                          >
-                            <Channels />
-                          </RoleGuard>
+                          <GenericOnly>
+                            <RoleGuard
+                              allow={["ADMIN"]}
+                              message="Channels requires admin access."
+                            >
+                              <Channels />
+                            </RoleGuard>
+                          </GenericOnly>
                         }
                       />
                       <Route
@@ -2729,6 +2754,14 @@ export default function App() {
                         element={
                           <GenericOnly>
                             <Funnel />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="lead-reports"
+                        element={
+                          <GenericOnly>
+                            <LeadReports />
                           </GenericOnly>
                         }
                       />

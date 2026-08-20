@@ -195,7 +195,7 @@ router.get("/history", async (req, res) => {
     res.json({ logs, total, limit, offset });
   } catch (error) {
     console.error("[Workflows] History error:", error.message);
-    res.status(500).json({ error: "Failed to fetch workflow history" });
+    res.status(500).json({ error: "Failed to fetch workflow history", code: "WORKFLOW_HISTORY_FAILED" });
   }
 });
 
@@ -227,8 +227,9 @@ router.get("/", async (req, res) => {
     if (isSummary) findArgs.select = slimSelect;
     const rules = await prisma.automationRule.findMany(findArgs);
     res.json(isSummary ? rules : rules.map(maskWorkflowSecrets));
-  } catch (_error) {
-    res.status(500).json({ error: "Failed to fetch workflows" });
+  } catch (error) {
+    console.error("[Workflows] List error:", error.message);
+    res.status(500).json({ error: "Failed to fetch workflows", code: "WORKFLOW_LIST_FAILED" });
   }
 });
 
@@ -258,7 +259,7 @@ router.put("/order", async (req, res) => {
     res.json({ success: true, workflowIds: ids });
   } catch (error) {
     console.error("[Workflows] Order update error:", error.message);
-    res.status(500).json({ error: "Failed to save workflow order" });
+    res.status(500).json({ error: "Failed to save workflow order", code: "WORKFLOW_ORDER_FAILED" });
   }
 });
 
@@ -279,7 +280,7 @@ router.get("/stats/actions", async (req, res) => {
     res.json(Object.fromEntries(grouped.map((item) => [String(item.entityId), item._count._all])));
   } catch (error) {
     console.error("[Workflows] Stats error:", error.message);
-    res.status(500).json({ error: "Failed to fetch workflow statistics" });
+    res.status(500).json({ error: "Failed to fetch workflow statistics", code: "WORKFLOW_STATS_FAILED" });
   }
 });
 
@@ -330,10 +331,25 @@ router.get("/:id", async (req, res) => {
     });
     if (!wf) return res.status(404).json({ error: "Workflow not found" });
     res.json(maskWorkflowSecrets(wf));
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to fetch workflow" });
+  } catch (error) {
+    console.error("[Workflows] Fetch error:", error.message);
+    res.status(500).json({ error: "Failed to fetch workflow", code: "WORKFLOW_FETCH_FAILED" });
   }
 });
+
+// Prisma P2000 = "value too long for the column". This used to reach the caller
+// as a bare HTTP 500: AutomationRule.targetState was varchar(191) while the
+// builder writes the whole workflow JSON into it, so every non-trivial save
+// failed with an untraceable "something went wrong" toast. targetState is now
+// @db.Text, but `name` is still varchar(191) — surface that class of failure as
+// a 400 the user can actually act on instead of a generic server error.
+function writeFailure(res, error, fallbackMessage, fallbackCode) {
+  if (error?.code === "P2000") {
+    const column = error?.meta?.column_name || error?.meta?.target || "a field";
+    return res.status(400).json({ error: `Value too long for ${column} — please shorten it.`, code: "VALUE_TOO_LONG" });
+  }
+  return res.status(500).json({ error: fallbackMessage, code: fallbackCode });
+}
 
 // Helper: validate that a triggerType / actionType is in the supported whitelist.
 // #18: previously accepted any string; engine would silently log "Unknown actionType"
@@ -451,7 +467,7 @@ router.post("/", async (req, res) => {
     res.status(201).json(maskWorkflowSecrets(newRule));
   } catch (error) {
     console.error("[Workflows] Create error:", error.message);
-    res.status(500).json({ error: "Failed to save workflow" });
+    writeFailure(res, error, "Failed to save workflow", "WORKFLOW_CREATE_FAILED");
   }
 });
 
@@ -497,7 +513,7 @@ router.put("/:id", async (req, res) => {
     res.json(maskWorkflowSecrets(updated));
   } catch (error) {
     console.error("[Workflows] Update error:", error.message);
-    res.status(500).json({ error: "Failed to update workflow" });
+    writeFailure(res, error, "Failed to update workflow", "WORKFLOW_UPDATE_FAILED");
   }
 });
 
@@ -512,8 +528,9 @@ router.delete("/:id", async (req, res) => {
 
     await prisma.automationRule.delete({ where: { id: existing.id } });
     res.json({ success: true });
-  } catch (_error) {
-    res.status(500).json({ error: "Failed to delete workflow" });
+  } catch (error) {
+    console.error("[Workflows] Delete error:", error.message);
+    res.status(500).json({ error: "Failed to delete workflow", code: "WORKFLOW_DELETE_FAILED" });
   }
 });
 
@@ -531,8 +548,9 @@ router.put("/:id/toggle", async (req, res) => {
       data: { isActive: !existing.isActive },
     });
     res.json(maskWorkflowSecrets(rule));
-  } catch (_error) {
-    res.status(500).json({ error: "Failed to toggle workflow" });
+  } catch (error) {
+    console.error("[Workflows] Toggle error:", error.message);
+    res.status(500).json({ error: "Failed to toggle workflow", code: "WORKFLOW_TOGGLE_FAILED" });
   }
 });
 
@@ -589,7 +607,7 @@ router.post("/:id/test", async (req, res) => {
     });
   } catch (error) {
     console.error("[Workflows] Test error:", error.message);
-    res.status(500).json({ error: "Failed to test workflow" });
+    res.status(500).json({ error: "Failed to test workflow", code: "WORKFLOW_TEST_FAILED" });
   }
 });
 

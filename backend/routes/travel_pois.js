@@ -471,7 +471,7 @@ router.post("/", verifyToken, async (req, res) => {
         destinationSlug: created.destinationSlug,
         externalSource: EXTERNAL_SOURCE_OPERATOR,
       },
-    ).catch(() => {});
+    ).catch(() => { });
 
     return res.status(201).json(created);
   } catch (e) {
@@ -666,7 +666,7 @@ router.post(
           category: existing.category,
           destinationSlug: existing.destinationSlug,
         },
-      ).catch(() => {});
+      ).catch(() => { });
 
       res.json(updated);
     } catch (e) {
@@ -708,7 +708,7 @@ router.post(
           category: existing.category,
           destinationSlug: existing.destinationSlug,
         },
-      ).catch(() => {});
+      ).catch(() => { });
 
       res.json({ ok: true, id });
     } catch (e) {

@@ -1778,7 +1778,12 @@ router.post('/:id/resummarize-capture', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+// #367 follow-up: /converted-leads reverts a converted contact with
+// PATCH /api/contacts/:id, but only PUT was ever registered here, so every
+// revert 404'd with "Endpoint not found". The body has always been treated as a
+// partial update (validateContactInput isUpdate:true + Prisma spread), so PUT
+// and PATCH share this one handler — both are registered right below it.
+const updateContactById = async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
@@ -1963,7 +1968,10 @@ router.put('/:id', async (req, res) => {
     console.error('[contacts] update error:', err && err.message);
     res.status(500).json({ error: 'Failed to update contact' });
   }
-});
+};
+
+router.put('/:id', updateContactById);
+router.patch('/:id', updateContactById);
 
 // CSV Import — accepts pre-parsed rows
 // #154: validation hardening

@@ -1310,7 +1310,15 @@ model AutomationRule {
   name        String
   triggerType String
   actionType  String
-  targetState String?
+  // targetState holds the ENTIRE workflow-builder state as one JSON blob —
+  // module, execution mode, description, and the full actions[] array with
+  // each action's config (email bodies, webhook URLs + headers, ...). Before
+  // this was `@db.Text` it mapped to MySQL varchar(191), so every save of a
+  // non-trivial workflow died with Prisma P2000 ("value too long for the
+  // column") and surfaced as a bare HTTP 500 in the builder UI. A minimal
+  // skeleton is ~102 chars; a single email action with to/subject/body is
+  // already ~233. Text, not varchar.
+  targetState String? @db.Text
   // #20: optional JSON-encoded array of clauses, AND-joined.
   // Format: [{"field":"deal.amount","op":"gt","value":50000}, ...]
   // Operators: eq, neq, gt, gte, lt, lte, in, nin, contains, startsWith.

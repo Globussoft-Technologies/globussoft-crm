@@ -36,11 +36,11 @@ vi.mock('../components/wellness/CsvImportExportToolbar', () => ({
 import { AuthContext } from '../App';
 import Leads from '../pages/Leads';
 
-function renderLeads() {
+function renderLeads(vertical = 'generic') {
   const authValue = {
     user: { userId: 1, name: 'Admin', email: 'admin@example.com', role: 'ADMIN' },
     token: 'fake-token',
-    tenant: { id: 1, vertical: 'generic', name: 'Generic CRM' },
+    tenant: { id: 1, vertical, name: vertical === 'wellness' ? 'Enhanced Wellness' : 'Generic CRM' },
     loading: false,
   };
 
@@ -89,5 +89,19 @@ describe('<Leads /> import/export toolbar wiring', () => {
       meta: '/api/csv/contacts',
       import: '/api/csv/contacts/import.csv',
     });
+  });
+
+  it('also renders the shared contacts CSV/XLSX toolbar for wellness tenants', async () => {
+    renderLeads('wellness');
+
+    await waitFor(() => expect(screen.getByTestId('leads-csv-toolbar')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: /Leads/i })).toBeInTheDocument();
+    expect(toolbarSpy).toHaveBeenCalled();
+
+    const props = toolbarSpy.mock.calls.at(-1)[0];
+    expect(props.entity).toBe('contacts');
+    expect(props.label).toBe('Leads');
+    expect(props.formats).toEqual(['csv', 'xlsx']);
+    expect(props.compact).toBe(true);
   });
 });

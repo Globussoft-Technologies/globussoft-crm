@@ -14,6 +14,7 @@ const { evaluateAutoCampaignRules } = require('../lib/callifiedAutoCampaignRules
 const callifiedClient = require("../services/callifiedClient");
 const { CALL_STATUS, normalizeLeadStatus } = require("../lib/callifiedLeadStatus");
 const { sanitizeText } = require("../lib/sanitizeJson");
+const { normalizePhoneValue } = require("../lib/phoneFormatting");
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
 // FieldPermissions UI had zero effect on read/write payloads. Default
@@ -47,6 +48,15 @@ function parseContactTags(tagsJson) {
   }
 }
 
+function normalizeContactPhone(contact) {
+  if (!contact || typeof contact !== "object") return contact;
+  if (contact.phone === null || contact.phone === undefined || String(contact.phone).trim() === "") {
+    return contact;
+  }
+  const normalizedPhone = normalizePhoneValue(contact.phone);
+  return normalizedPhone === contact.phone ? contact : { ...contact, phone: normalizedPhone };
+}
+
 function workflowContactPayload(contact, userId, changedFields = []) {
   const callifiedStatus = String(contact.callifiedLeadStatus || "").toLowerCase();
   const isJunk = contact.status === "Junk" || callifiedStatus === "junk";
@@ -56,7 +66,7 @@ function workflowContactPayload(contact, userId, changedFields = []) {
     contactId: contact.id,
     name: contact.name,
     email: contact.email,
-    phone: contact.phone,
+    phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
     company: contact.company,
     title: contact.title,
     status: contact.status,
@@ -81,7 +91,7 @@ function workflowContactPayload(contact, userId, changedFields = []) {
 
 function serializeContactTags(contact) {
   if (!contact || typeof contact !== "object") return contact;
-  const { tagsJson, ...rest } = contact;
+  const { tagsJson, ...rest } = normalizeContactPhone(contact);
   return { ...rest, tags: parseContactTags(tagsJson) };
 }
 
@@ -1503,7 +1513,7 @@ router.post('/', async (req, res) => {
               id: c.id,
               name: c.name,
               email: c.email,
-              phone: c.phone,
+              phone: c.phone ? normalizePhoneValue(c.phone) : c.phone,
               company: c.company,
               status: c.status,
               subBrand: c.subBrand,
@@ -1552,7 +1562,7 @@ router.post('/', async (req, res) => {
         await deliverWebhooks("lead.new", {
           id: contact.id,
           name: contact.name,
-          phone: contact.phone,
+          phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
           email: contact.email,
           status: contact.status,
           assignedToId: contact.assignedToId,
@@ -1700,6 +1710,30 @@ router.put('/bulk-assign-campaign', verifyRole(['ADMIN']), async (req, res) => {
   }
 });
 
+// Bulk soft-delete multiple contacts (must stay before /:id routes).
+router.delete('/bulk-delete', verifyRole(['ADMIN']), async (req, res) => {
+  try {
+    const { contactIds } = req.body;
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({ error: 'No contact IDs provided' });
+    }
+
+    const ids = [...new Set(contactIds.map((id) => parseInt(id)).filter(Number.isFinite))];
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'No valid contact IDs provided', code: 'INVALID_CONTACT_IDS' });
+    }
+
+    const { count } = await prisma.contact.updateMany({
+      where: { id: { in: ids }, tenantId: req.user.tenantId, deletedAt: null },
+      data: { deletedAt: new Date() },
+    });
+
+    res.json({ deleted: count });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to bulk delete contacts' });
+  }
+});
+
 router.post('/:id/activities', async (req, res) => {
   try {
     const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
@@ -1778,7 +1812,12 @@ router.post('/:id/resummarize-capture', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+// #367 follow-up: /converted-leads reverts a converted contact with
+// PATCH /api/contacts/:id, but only PUT was ever registered here, so every
+// revert 404'd with "Endpoint not found". The body has always been treated as a
+// partial update (validateContactInput isUpdate:true + Prisma spread), so PUT
+// and PATCH share this one handler — both are registered right below it.
+const updateContactById = async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
@@ -1847,7 +1886,7 @@ router.put('/:id', async (req, res) => {
       await deliverWebhooks("contact.updated", {
         id: contact.id,
         name: contact.name,
-        phone: contact.phone,
+        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
         email: contact.email,
         status: contact.status,
         assignedToId: contact.assignedToId,
@@ -1907,7 +1946,8 @@ router.put('/:id', async (req, res) => {
             where: { tenantId: req.user.tenantId, contactId: contact.id },
           });
           if (!patient && contact.phone) {
-            const last10 = String(contact.phone).replace(/\D/g, "").slice(-10);
+            const normalizedContactPhone = normalizePhone(contact.phone);
+            const last10 = normalizedContactPhone ? normalizedContactPhone.slice(-10) : "";
             if (last10.length === 10) {
               patient = await prisma.patient.findFirst({
                 where: { tenantId: req.user.tenantId, phone: { contains: last10 } },
@@ -1963,7 +2003,10 @@ router.put('/:id', async (req, res) => {
     console.error('[contacts] update error:', err && err.message);
     res.status(500).json({ error: 'Failed to update contact' });
   }
-});
+};
+
+router.put('/:id', updateContactById);
+router.patch('/:id', updateContactById);
 
 // CSV Import — accepts pre-parsed rows
 // #154: validation hardening
@@ -1983,6 +2026,18 @@ function sanitizeCellForExport(v) {
   // on import (rather than only on export) means stored data is also safe if
   // exported via any other path.
   return FORMULA_INJECTION_RE.test(v) ? `'${v}` : v;
+}
+
+function getSpreadsheetValue(row, aliases) {
+  if (!row || typeof row !== "object") return "";
+  const lookup = new Map(Object.entries(row).map(([key, value]) => [String(key).toLowerCase(), value]));
+  for (const alias of aliases) {
+    const value = lookup.get(String(alias).toLowerCase());
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return "";
 }
 
 router.post('/import-csv', async (req, res) => {
@@ -2028,6 +2083,9 @@ router.post('/import-csv', async (req, res) => {
           data: {
             name: sanitizeCellForExport(String(row.name || "").trim()),
             email,
+            phone: normalizePhoneValue(
+              getSpreadsheetValue(row, ["phone", "phone_number", "phoneNumber", "sms_number", "smsNumber"]),
+            ) || null,
             company: sanitizeCellForExport(String(row.company || "").trim()),
             title: String(row.title || "").trim(),
             status,
@@ -2103,13 +2161,13 @@ router.put('/:id/assign', verifyRole(['ADMIN']), async (req, res) => {
       await deliverWebhooks("lead.assigned", {
         id: contact.id,
         name: contact.name,
-        phone: contact.phone,
+        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
         status: contact.status,
         assignedToId: contact.assignedToId,
         tenantId: req.user.tenantId,
       }, req.user.tenantId);
     } catch (_e) { /* webhook delivery is fire-and-forget */ }
-    res.json(contact);
+    res.json(serializeContactTags(contact));
   } catch (_err) {
     res.status(500).json({ error: 'Failed to assign agent' });
   }
@@ -2127,10 +2185,11 @@ router.get('/duplicates/find', async (req, res) => {
       where: { tenantId: req.user.tenantId, deletedAt: null },
       select: { id: true, name: true, email: true, phone: true, company: true, status: true, aiScore: true, createdAt: true }
     });
+    const normalizedContacts = contacts.map(normalizeContactPhone);
     const dupes = [];
     const seen = new Map();
 
-    for (const c of contacts) {
+    for (const c of normalizedContacts) {
       // Match by email domain + name similarity, or exact phone
       const key = c.email.toLowerCase();
       if (seen.has(key)) {
@@ -2146,12 +2205,14 @@ router.get('/duplicates/find', async (req, res) => {
 
       // Phone match
       if (c.phone) {
-        const phoneKey = c.phone.replace(/[^0-9]/g, '').slice(-10);
-        if (phoneKey.length >= 10) {
+        const phoneKey = normalizePhone(c.phone);
+        const phoneDigits = phoneKey ? phoneKey.slice(-10) : "";
+        if (phoneDigits.length >= 10) {
           for (const [, other] of seen) {
             if (other.id !== c.id && other.phone) {
-              const otherPhone = other.phone.replace(/[^0-9]/g, '').slice(-10);
-              if (phoneKey === otherPhone && !dupes.find(d => (d.primary.id === other.id && d.duplicates.some(dd => dd.id === c.id)))) {
+              const otherPhoneKey = normalizePhone(other.phone);
+              const otherPhone = otherPhoneKey ? otherPhoneKey.slice(-10) : "";
+              if (phoneDigits === otherPhone && !dupes.find(d => (d.primary.id === other.id && d.duplicates.some(dd => dd.id === c.id)))) {
                 const existing = dupes.find(d => d.primary.id === other.id);
                 if (existing) { existing.duplicates.push(c); }
                 else { dupes.push({ primary: other, duplicates: [c], reason: 'Same phone' }); }
@@ -2538,7 +2599,7 @@ router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
     if (existing.deletedAt) {
-      return res.json({ ...existing, idempotent: true, softDeleted: true });
+      return res.json({ ...serializeContactTags(existing), idempotent: true, softDeleted: true });
     }
     try {
       await prisma.auditLog.create({
@@ -2558,7 +2619,7 @@ router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
       await deliverWebhooks("contact.updated", {
         id: contact.id,
         name: contact.name,
-        phone: contact.phone,
+        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
         email: contact.email,
         status: contact.status,
         assignedToId: contact.assignedToId,
@@ -2566,7 +2627,7 @@ router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
         tenantId: req.user.tenantId,
       }, req.user.tenantId);
     } catch (_e) { /* webhook delivery is fire-and-forget */ }
-    res.json({ ...contact, softDeleted: true });
+    res.json({ ...serializeContactTags(contact), softDeleted: true });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to delete contact' });
   }
@@ -2578,7 +2639,7 @@ router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
     if (!existing.deletedAt) {
-      return res.json({ ...existing, idempotent: true, restored: false });
+      return res.json({ ...serializeContactTags(existing), idempotent: true, restored: false });
     }
     try {
       await prisma.auditLog.create({
@@ -2597,7 +2658,7 @@ router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
       await deliverWebhooks("contact.updated", {
         id: contact.id,
         name: contact.name,
-        phone: contact.phone,
+        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
         email: contact.email,
         status: contact.status,
         assignedToId: contact.assignedToId,
@@ -2605,7 +2666,7 @@ router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
         tenantId: req.user.tenantId,
       }, req.user.tenantId);
     } catch (_e) { /* webhook delivery is fire-and-forget */ }
-    res.json({ ...contact, restored: true });
+    res.json({ ...serializeContactTags(contact), restored: true });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to restore contact' });
   }

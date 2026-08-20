@@ -79,6 +79,7 @@ prisma.contact = {
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  upsert: vi.fn(),
 };
 prisma.service = {
   findMany: vi.fn(),
@@ -139,6 +140,7 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset();
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
+  prisma.contact.upsert.mockReset();
   prisma.service.findMany.mockReset();
   prisma.service.findFirst.mockReset();
   prisma.service.create.mockReset();
@@ -244,17 +246,17 @@ describe('GET /api/csv/contacts/template.csv?format=xlsx', () => {
 });
 
 describe('POST /api/csv/contacts/import.csv with XLSX', () => {
-  test('imports a workbook uploaded as .xlsx', async () => {
+  test('imports a workbook uploaded as .xlsx and normalizes phone_number values', async () => {
     prisma.contact.findFirst.mockResolvedValue(null);
-    prisma.contact.create.mockResolvedValue({ id: 99 });
+    prisma.contact.upsert.mockResolvedValue({ id: 99 });
 
     const workbook = toXlsxBuffer(
-      ['name', 'email', 'phone', 'company', 'title', 'status', 'source'],
+      ['name', 'email', 'phone_number', 'company', 'title', 'status', 'source'],
       [
         {
           name: 'Jane Doe',
           email: 'jane@example.com',
-          phone: '+919876543210',
+          phone_number: '9.1956E+11',
           company: 'Acme Health',
           title: 'Owner',
           status: 'Lead',
@@ -274,17 +276,70 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
     expect(res.body.errors).toEqual([]);
-    expect(prisma.contact.create).toHaveBeenCalledWith(
+    expect(prisma.contact.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
+        where: { email_tenantId: { email: 'jane@example.com', tenantId: 1 } },
+        create: expect.objectContaining({
           name: 'Jane Doe',
           email: 'jane@example.com',
+          phone: '919560000000',
           status: 'Lead',
           source: 'website',
           tenantId: 1,
         }),
+        update: expect.objectContaining({
+          email: 'jane@example.com',
+          phone: '919560000000',
+          deletedAt: null,
+        }),
       }),
     );
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('updates an existing email instead of hitting the tenant email unique constraint', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 77 });
+    prisma.contact.upsert.mockResolvedValue({ id: 77 });
+
+    const workbook = toXlsxBuffer(
+      ['name', 'email', 'phone_number', 'status'],
+      [
+        {
+          name: 'Shashank bankar',
+          email: 'shashankbankar23@gmail.com',
+          phone_number: '+919535148570',
+          status: 'Lead',
+        },
+      ],
+      'Contacts Import',
+    );
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .attach('file', workbook, {
+        filename: 'test customer (2).xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 0, updated: 1, skipped: 0 });
+    expect(res.body.errors).toEqual([]);
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { email: 'shashankbankar23@gmail.com', tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.contact.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { email_tenantId: { email: 'shashankbankar23@gmail.com', tenantId: 1 } },
+        update: expect.objectContaining({
+          name: 'Shashank bankar',
+          email: 'shashankbankar23@gmail.com',
+          phone: '+919535148570',
+          deletedAt: null,
+        }),
+      }),
+    );
+    expect(prisma.contact.create).not.toHaveBeenCalled();
   });
 });
 // ─── Services export ───────────────────────────────────────────────

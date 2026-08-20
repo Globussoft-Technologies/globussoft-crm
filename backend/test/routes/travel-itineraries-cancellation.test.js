@@ -195,7 +195,7 @@ describe('GET /api/travel/itineraries/:id — trip-specific cancellation policy 
       itin({
         cancellationStatus: 'requested',
         advancePaidAmount: 120000,
-        startDate: new Date('2026-08-20T00:00:00Z'),
+        startDate: new Date(Date.now() + 5 * 86_400_000),
       }),
     );
     prisma.cancellationPolicy.findFirst.mockResolvedValue({

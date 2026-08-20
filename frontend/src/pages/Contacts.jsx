@@ -1,8 +1,8 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
-import React, { useState, useEffect, useContext, useRef } from 'react';
-import { Search, Plus, Trash2, Pencil, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, Users, GitMerge, EyeOff } from 'lucide-react';
+import { useState, useEffect, useContext, useRef } from 'react';
+import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, SlidersHorizontal, GitMerge, EyeOff } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
@@ -35,9 +35,29 @@ const parseCSV = (text) => {
     // #154: track column-count mismatch so the preview can flag short/long rows
     row.__columnCount = values.length;
     row.__expectedCount = headers.length;
-    headers.forEach((h, i) => { row[h] = values[i] || ''; });
+    headers.forEach((h, i) => { row[h] = normalizeSpreadsheetValue(values[i] ?? ''); });
     return row;
   });
+};
+
+const SCI_NOTATION_RE = /^([+-]?\d+(?:\.\d+)?)e([+-]?\d+)$/i;
+
+const normalizeSpreadsheetValue = (value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
+  if (typeof value !== 'string') return String(value).trim();
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (!SCI_NOTATION_RE.test(trimmed)) return trimmed;
+  const match = trimmed.match(/^([+-]?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/);
+  if (!match) return trimmed;
+  const [, sign, whole, fraction = '', exponentText] = match;
+  const exponent = Number(exponentText);
+  if (!Number.isFinite(exponent) || exponent < 0) return trimmed;
+  const digits = `${whole}${fraction}`.replace(/^0+/, '') || '0';
+  const shift = exponent - fraction.length;
+  if (shift < 0) return trimmed;
+  return `${sign === '-' ? '-' : ''}${digits}${'0'.repeat(shift)}`;
 };
 
 // Excel (.xlsx/.xls) import — reads the first sheet, treats row 1 as headers,
@@ -65,7 +85,7 @@ const parseExcel = async (arrayBuffer) => {
       const row = {};
       row.__columnCount = cells.length;
       row.__expectedCount = headers.length;
-      headers.forEach((h, i) => { row[h] = String(cells[i] ?? '').trim(); });
+      headers.forEach((h, i) => { row[h] = normalizeSpreadsheetValue(cells[i] ?? ''); });
       return row;
     });
 };
@@ -120,6 +140,7 @@ const Contacts = () => {
   // the existing ADMIN-only role check.
   const [selectedContacts, setSelectedContacts] = useState([]);
   const [bulkAgent, setBulkAgent] = useState('');
+  const [contactsBulkActionsOpen, setContactsBulkActionsOpen] = useState(false);
   // Generic-vertical-only "Saved Views" — a named fixed list of contact IDs
   // (see components/SavedViewsBar.jsx). activeViewId null = "All Contacts"
   // (no filtering). activeViewMemberIds is the fetched membership of
@@ -335,8 +356,8 @@ const Contacts = () => {
     if (result?.updated > 0) {
       notify.success?.(
         result.updated === 1
-          ? 'Assigned 1 lead successfully'
-          : 'Assigned ' + result.updated + ' leads successfully'
+          ? 'Assigned 1 contact successfully'
+          : 'Assigned ' + result.updated + ' contacts successfully'
       );
     }
     if (result?.skipped > 0) {
@@ -346,13 +367,46 @@ const Contacts = () => {
         : '';
       notify.info?.(
         result.skipped === 1
-          ? '1 lead was skipped' + why + '.'
-          : result.skipped + ' leads were skipped' + why + '.'
+          ? '1 contact was skipped' + why + '.'
+          : result.skipped + ' contacts were skipped' + why + '.'
       );
     }
     setSelectedContacts([]);
     setBulkAgent('');
     fetchContacts();
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedContacts.length === 0) return;
+
+    const ok = await notify.confirm({
+      title: 'Delete selected contacts?',
+      message: `Delete ${selectedContacts.length} selected contact${selectedContacts.length === 1 ? '' : 's'}? This can't be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setContactsBulkActionsOpen(false);
+    try {
+      const res = await fetchApi('/api/contacts/bulk-delete', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactIds: selectedContacts }),
+      });
+      const deletedCount = Number.isFinite(Number(res?.deleted))
+        ? Number(res.deleted)
+        : selectedContacts.length;
+      notify.success(
+        `Deleted ${deletedCount} contact${deletedCount === 1 ? '' : 's'}`,
+      );
+      setSelectedContacts([]);
+      setBulkAgent('');
+      fetchContacts();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to delete contacts');
+    }
   };
 
   const toggleSelectContact = (id) => {
@@ -445,6 +499,9 @@ const Contacts = () => {
       const mapped = csvRows.map(row => ({
         name: row.name || row.Name || '',
         email: row.email || row.Email || '',
+        phone: normalizeSpreadsheetValue(
+          row.phone || row.phone_number || row.sms_number || row.Phone || row.PhoneNumber || row.smsNumber || '',
+        ),
         company: row.company || row.Company || '',
         title: row.title || row.Title || '',
         status: row.status || row.Status || 'Lead',
@@ -456,7 +513,7 @@ const Contacts = () => {
       });
       setImportResult(result);
       fetchContacts();
-    } catch (err) {
+    } catch {
       setImportResult({ error: 'Import failed' });
     } finally {
       setImporting(false);
@@ -538,6 +595,166 @@ const Contacts = () => {
               allContacts={contacts}
             />
           )}
+          {isAdmin && (
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setContactsBulkActionsOpen(prev => !prev)}
+                aria-haspopup="menu"
+                aria-expanded={contactsBulkActionsOpen}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  justifyContent: 'center',
+                }}
+              >
+                <SlidersHorizontal size={15} />
+                Bulk actions
+                {contactsBulkActionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                {selectedContacts.length > 0 && (
+                  <span
+                    style={{
+                      minWidth: 18,
+                      height: 18,
+                      padding: '0 5px',
+                      borderRadius: 999,
+                      background: 'var(--accent-color)',
+                      color: '#fff',
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    {selectedContacts.length}
+                  </span>
+                )}
+              </button>
+              {contactsBulkActionsOpen && (
+                <>
+                  <div
+                    style={{
+                      position: 'fixed',
+                      inset: 0,
+                      zIndex: 1088,
+                      background: 'transparent',
+                    }}
+                    onClick={() => setContactsBulkActionsOpen(false)}
+                  />
+                  <div
+                    role="menu"
+                    aria-label="Bulk actions"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    style={{
+                      position: 'absolute',
+                      top: 'calc(100% + 4px)',
+                      right: 0,
+                      left: 'auto',
+                      zIndex: 1089,
+                      width: 'min(420px, 92vw)',
+                      padding: '0.85rem',
+                      background: 'var(--bg-color)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 12,
+                      boxShadow: '0 12px 32px rgba(0,0,0,0.2)',
+                      display: 'grid',
+                      gap: '0.75rem',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <strong style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+                        Bulk actions
+                      </strong>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                        {selectedContacts.length} selected
+                      </span>
+                    </div>
+                    {selectedContacts.length === 0 ? (
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        Select one or more contacts to use bulk actions.
+                      </div>
+                    ) : (
+                      <div style={{ display: 'grid', gap: '0.65rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <select
+                            className="input-field"
+                            value={bulkAgent}
+                            onChange={e => setBulkAgent(e.target.value)}
+                            style={{ flex: 1, minWidth: 180, padding: '0.5rem' }}
+                            aria-label="Bulk assign staff"
+                          >
+                            <option value="">Unassign</option>
+                            {staff.map(s => (
+                              <option key={s.id} value={s.id}>{staffOptionLabel(s)}</option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => {
+                              setContactsBulkActionsOpen(false);
+                              handleBulkAssign();
+                            }}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '0.35rem',
+                              fontSize: '0.85rem',
+                            }}
+                          >
+                            <UserCheck size={14} /> Assign to staff
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-danger"
+                          onClick={handleBulkDelete}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.35rem',
+                            fontSize: '0.85rem',
+                          }}
+                        >
+                          <Trash2 size={14} /> Delete selected contacts
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setSelectedContacts([]);
+                            setBulkAgent('');
+                            setContactsBulkActionsOpen(false);
+                          }}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.35rem',
+                            fontSize: '0.85rem',
+                          }}
+                        >
+                          Clear selection
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <button
             onClick={handleRescore}
             disabled={rescoring}
@@ -552,42 +769,13 @@ const Contacts = () => {
             <GitMerge size={15} /> Find Duplicates
           </button>
           <button onClick={() => { setShowImportModal(true); setCsvRows([]); setCsvHeaders([]); setImportResult(null); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Upload size={15} /> Import CSV/Excel
+            <Download size={15} /> Import CSV/Excel
           </button>
           <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={18} /> Add Contact
           </button>
         </div>
       </header>
-
-      {/* Bulk Assign Bar — admin only, same pattern + backend endpoint as Leads.jsx */}
-      {isAdmin && selectedContacts.length > 0 && (
-        <div className="card" style={{ padding: '0.75rem 1.25rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', flexWrap: 'wrap' }}>
-          <Users size={18} color="var(--primary-color, var(--accent-color))" />
-          <span style={{ fontWeight: '500', fontSize: '0.875rem' }}>{selectedContacts.length} contact{selectedContacts.length !== 1 ? 's' : ''} selected</span>
-          <select
-            className="input-field"
-            value={bulkAgent}
-            onChange={e => setBulkAgent(e.target.value)}
-            style={{ width: '200px', padding: '0.5rem' }}
-          >
-            <option value="">Unassign</option>
-            {staff.map(s => (
-              <option key={s.id} value={s.id}>{staffOptionLabel(s)}</option>
-            ))}
-          </select>
-          <button className="btn-primary" onClick={handleBulkAssign} style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>
-            <UserCheck size={15} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} />
-            Assign
-          </button>
-          {/* Clear must (a) drop the underlying selection so checkbox rows
-              un-tick, AND (b) reset the bulk-agent dropdown so a
-              re-selection doesn't pick up the previously-chosen agent. */}
-          <button onClick={() => { setSelectedContacts([]); setBulkAgent(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.875rem' }}>
-            Clear
-          </button>
-        </div>
-      )}
 
       <div className="card" style={{ overflow: 'hidden' }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -889,7 +1077,7 @@ const Contacts = () => {
 
             <div style={{ marginBottom: '1.5rem' }}>
               <label style={{ display: 'block', padding: '2rem', border: '2px dashed var(--border-color)', borderRadius: '12px', textAlign: 'center', cursor: 'pointer', transition: 'var(--transition)' }}>
-                <Upload size={32} style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }} />
+                <Download size={32} style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }} />
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Click to select a .csv or .xlsx/.xls file</p>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.25rem' }}>Expected columns: name, email, company, title, status</p>
                 <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFileSelect} style={{ display: 'none' }} />

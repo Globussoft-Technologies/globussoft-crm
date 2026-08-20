@@ -40,6 +40,8 @@ const taxInput = {
   display: "block",
   boxSizing: "border-box",
 };
+const getCustomerTripValue = (row) =>
+  Number(row?.amount || 0);
 
 // The parent owns ledger totals and report data; this component only manages
 // the statement-review UI and sends confirmed changes through callbacks.
@@ -594,7 +596,7 @@ export function TripTaxTable({
         const id = String(trip.id);
         const earnings = customers
           .filter((row) => String(row.itineraryId) === id)
-          .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+          .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
         const spent = suppliers
           .filter((row) => String(row.itineraryId) === id)
           .reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -659,7 +661,7 @@ export function TripTaxTable({
               const id = String(trip.id);
               const earnings = customers
                 .filter((row) => String(row.itineraryId) === id)
-                .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+                .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
               const spent = suppliers
                 .filter((row) => String(row.itineraryId) === id)
                 .reduce((sum, row) => sum + Number(row.amount || 0), 0);

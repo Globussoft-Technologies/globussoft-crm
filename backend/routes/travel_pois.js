@@ -200,6 +200,84 @@ async function syncApprovedPoiToSightseeing(prismaClient, poi) {
   });
 }
 
+function slugifyDestination(raw) {
+  return String(raw || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "");
+}
+
+function destinationLabelFromSlug(raw) {
+  const slug = slugifyDestination(raw);
+  if (!slug) return "";
+  return slug
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function comparablePlaceKey(destination, name) {
+  return `${slugifyDestination(destination)}::${String(name || "").trim().toLowerCase()}`;
+}
+
+function normalizeSubBrandId(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return null;
+  const compact = value.toLowerCase().replace(/[\s_-]+/g, "");
+  if (compact === "travelstall") return "travelstall";
+  if (compact === "visasure") return "visasure";
+  if (compact === "tmc") return "tmc";
+  if (compact === "rfu") return "rfu";
+  return value.toLowerCase();
+}
+
+async function syncApprovedPoiToSightseeing(prismaClient, poi) {
+  const destinationName = destinationLabelFromSlug(poi.destinationSlug);
+  if (!poi?.tenantId || !destinationName || !poi?.name) return null;
+
+  const existing = await prismaClient.travelSightseeing.findFirst({
+    where: {
+      tenantId: poi.tenantId,
+      destinationName,
+      name: poi.name,
+    },
+  });
+
+  const data = {
+    category: poi.category || null,
+    imageUrl: poi.imageUrl || null,
+    description: poi.descriptionShort || null,
+    isActive: true,
+  };
+
+  if (existing) {
+    return prismaClient.travelSightseeing.update({
+      where: { id: existing.id },
+      data: {
+        category: existing.category || data.category,
+        imageUrl: existing.imageUrl || data.imageUrl,
+        description: existing.description || data.description,
+        isActive: existing.isActive === false ? true : existing.isActive,
+      },
+    });
+  }
+
+  return prismaClient.travelSightseeing.create({
+    data: {
+      tenantId: poi.tenantId,
+      destinationName,
+      name: poi.name,
+      description: data.description,
+      imageUrl: data.imageUrl,
+      category: data.category,
+      notes: "Auto-created from approved POI catalog entry.",
+      isActive: true,
+    },
+  });
+}
+
 // ───────────────────────────────────────────────────────────────────
 // Validation helpers
 // ───────────────────────────────────────────────────────────────────
@@ -338,6 +416,7 @@ router.get("/", verifyToken, async (req, res) => {
         country: null,
         destinationSlug,
         destinationName: row.destinationName,
+        pendingApproval: false,
         imageUrl: row.imageUrl || null,
         descriptionShort: row.description || null,
         notes: row.notes || null,
@@ -374,6 +453,7 @@ router.get("/", verifyToken, async (req, res) => {
         country: row.country || null,
         destinationSlug: row.destinationSlug || destinationSlug,
         destinationName: destinationLabel || null,
+        pendingApproval: false,
         imageUrl: row.imageUrl || null,
         descriptionShort: row.descriptionShort || null,
         notes: null,
@@ -469,7 +549,7 @@ router.post("/", verifyToken, async (req, res) => {
         destinationSlug: created.destinationSlug,
         externalSource: EXTERNAL_SOURCE_OPERATOR,
       },
-    ).catch(() => {});
+    ).catch(() => { });
 
     return res.status(201).json(created);
   } catch (e) {
@@ -664,7 +744,7 @@ router.post(
           category: existing.category,
           destinationSlug: existing.destinationSlug,
         },
-      ).catch(() => {});
+      ).catch(() => { });
 
       res.json(updated);
     } catch (e) {
@@ -706,7 +786,7 @@ router.post(
           category: existing.category,
           destinationSlug: existing.destinationSlug,
         },
-      ).catch(() => {});
+      ).catch(() => { });
 
       res.json({ ok: true, id });
     } catch (e) {

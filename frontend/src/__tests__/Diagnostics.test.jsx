@@ -247,6 +247,7 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter from date/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter to date/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
     // Wait for the mount-time GET to settle.

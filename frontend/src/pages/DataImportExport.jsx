@@ -2,7 +2,7 @@
 // shared CSV toolbar; endpoint config below decides whether a tenant should use
 // generic CRM CSV routes or wellness PHI-gated CSV routes.
 import { useContext, useMemo, useState } from 'react';
-import { Database, Download, Upload, Info } from 'lucide-react';
+import { Database, Upload, Download, Info } from 'lucide-react';
 import { AuthContext } from '../App';
 import CsvImportExportToolbar from '../components/wellness/CsvImportExportToolbar';
 
@@ -76,20 +76,51 @@ const WELLNESS_ENTITIES = [
 
 export default function DataImportExport() {
   const { tenant } = useContext(AuthContext);
-  const entities = tenant?.vertical === 'wellness' ? WELLNESS_ENTITIES : GENERIC_ENTITIES;
+  const isWellness = tenant?.vertical === 'wellness';
+  const entities = isWellness ? WELLNESS_ENTITIES : GENERIC_ENTITIES;
   const [entityKey, setEntityKey] = useState(entities[0].key);
   const entity = useMemo(() => entities.find((e) => e.key === entityKey) || entities[0], [entities, entityKey]);
+  const toolbarFormats = isWellness ? ['csv', 'xlsx'] : ['csv'];
+  const pageTitle = isWellness ? 'Template Import / Export' : 'Import / Export Data';
+  const pageDescription = isWellness
+    ? 'Download a CSV or Excel template, fill it in, then bulk import or export the matching wellness dataset.'
+    : 'One place to bulk-import or download any dataset as CSV. Pick the data type below, then use the buttons on the right.';
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out', maxWidth: 900 }}>
       <header style={{ marginBottom: '1.5rem' }}>
         <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Database size={24} /> Import / Export Data
+          <Database size={24} /> {pageTitle}
         </h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          One place to bulk-import or download any dataset as CSV. Pick the data type below, then use the buttons on the right.
+          {pageDescription}
         </p>
       </header>
+
+      {isWellness && (
+        <div
+          className="glass"
+          data-testid="wellness-template-guidance"
+          style={{
+            marginBottom: '1.25rem',
+            padding: '1rem 1.1rem',
+            border: '1px solid rgba(38, 88, 85, 0.18)',
+            background: 'linear-gradient(135deg, rgba(205, 148, 129, 0.12), rgba(38, 88, 85, 0.08))',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.35rem',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700 }}>
+            <Info size={16} />
+            Template-based wellness imports
+          </div>
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.5 }}>
+            Patients, services, drugs/products, membership packages, and bookings all use the same downloadable templates.
+            Fill one out, then import CSV or Excel with the matching columns.
+          </p>
+        </div>
+      )}
 
       <div className="glass" style={{ padding: '1.5rem', marginBottom: '1.25rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.4rem' }}>
@@ -111,6 +142,7 @@ export default function DataImportExport() {
             entity={entity.key}
             label={entity.label}
             endpoints={entity.endpoints}
+            formats={toolbarFormats}
           />
         </div>
 
@@ -121,15 +153,17 @@ export default function DataImportExport() {
       </div>
 
       <div className="glass" style={{ padding: '1.25rem 1.5rem' }}>
-        <h2 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.6rem' }}>How it works</h2>
+        <h2 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.6rem' }}>
+          {isWellness ? 'How the template flow works' : 'How it works'}
+        </h2>
         <ul style={{ paddingLeft: '1.1rem', margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
           <li style={{ marginBottom: '0.3rem' }}>
-            <Download size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />
-            <strong style={{ color: 'var(--text-primary)' }}>Export CSV</strong> - streams the full filtered list as a CSV download.
+            <Upload size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />
+            <strong style={{ color: 'var(--text-primary)' }}>{isWellness ? 'Export CSV / Excel' : 'Export CSV'}</strong> - {isWellness ? 'streams the full filtered list as a CSV or Excel download.' : 'streams the full filtered list as a CSV download.'}
           </li>
           <li style={{ marginBottom: '0.3rem' }}>
-            <Upload size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />
-            <strong style={{ color: 'var(--text-primary)' }}>Import CSV</strong> - opens the upload modal. Get the template first, fill in the rows, preview parses client-side, then submit.
+            <Download size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />
+            <strong style={{ color: 'var(--text-primary)' }}>{isWellness ? 'Import CSV / Excel' : 'Import CSV'}</strong> - opens the upload modal. Get the template first, fill in the rows, preview parses client-side, then submit.
           </li>
           <li>
             Imports are <strong style={{ color: 'var(--text-primary)' }}>upserts</strong> - existing rows get updated, new rows are inserted. Errors surface row-by-row so you can fix and re-upload only the failing rows.

@@ -415,6 +415,34 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
   });
 
+  it('renders the Name column as a profile link instead of an inline edit trigger', async () => {
+    renderLeads(authValue);
+
+    const aliceLink = await screen.findByRole('link', { name: 'Alice Lead' });
+    expect(aliceLink).toHaveAttribute('href', '/contacts/101');
+
+    fireEvent.click(aliceLink);
+    expect(navigateMock).toHaveBeenCalledWith('/contacts/101');
+    expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveAttribute('type', 'button');
+  });
+
+  it('keeps the Name column edit icon as the only way to inline-edit the name', async () => {
+    renderLeads(authValue);
+
+    const aliceLink = await screen.findByRole('link', { name: 'Alice Lead' });
+    const nameDisplay = aliceLink.closest('.inline-cell-editor-display');
+    const editButton = screen.getByLabelText('Edit Name for Alice Lead');
+
+    expect(editButton).toHaveStyle({ opacity: '0' });
+    fireEvent.mouseEnter(nameDisplay);
+    await waitFor(() => {
+      expect(editButton).toHaveStyle({ opacity: '0.85' });
+    });
+
+    fireEvent.click(editButton);
+    expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveValue('Alice Lead');
+  });
+
   it('saves built-in column edits inline without opening the full edit drawer', async () => {
     renderLeads(authValue);
 
@@ -531,7 +559,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
-    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Lead' }));
 
     expect(screen.getByRole('dialog', { name: 'Lead preview' })).toBeInTheDocument();
     expect(screen.getByText('Contact information')).toBeInTheDocument();
@@ -1131,12 +1159,17 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     });
   });
 
-  it('opens the new header Bulk actions menu, auto-selects all visible leads, and exposes the existing staff assignment action', async () => {
+  it('opens the new header Bulk actions menu, preserves manual deselection on reopen, and exposes the existing staff assignment action', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^Bulk actions$/i }));
+    const bulkActionsButton = screen.getByRole('button', { name: /Bulk actions/i });
+    fireEvent.click(bulkActionsButton);
     const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    expect(menu).toHaveStyle({
+      left: '0px',
+      right: 'auto',
+    });
     await waitFor(() => {
       expect(screen.getByText(/3 leads selected/i)).toBeInTheDocument();
     });
@@ -1145,8 +1178,49 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     checkboxes.forEach((checkbox) => {
       expect(checkbox).toBeChecked();
     });
+    const rubixCheckbox = screen.getAllByRole('checkbox')[2];
+    fireEvent.click(rubixCheckbox);
+    await waitFor(() => {
+      expect(screen.getByText(/2 leads selected/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(bulkActionsButton);
+    await waitFor(() => {
+      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).toBeNull();
+    });
+    fireEvent.click(bulkActionsButton);
+    const reopenedMenu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    expect(within(reopenedMenu).getByText(/2 selected/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox').slice(1)[1]).not.toBeChecked();
     expect(within(menu).getByRole('button', { name: /Assign to staff/i })).toBeInTheDocument();
     expect(within(menu).getByLabelText(/Bulk assign staff/i)).toBeInTheDocument();
+    expect(within(menu).getByRole('button', { name: /Delete selected leads/i })).toBeInTheDocument();
+  });
+
+  it('bulk delete action DELETEs the selected leads and clears the selection', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Bulk actions$/i }));
+    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
+    const rubixCheckbox = screen.getAllByRole('checkbox').slice(1)[1];
+    fireEvent.click(rubixCheckbox);
+    await waitFor(() => {
+      expect(within(menu).getByText(/2 selected/i)).toBeInTheDocument();
+    });
+    fireEvent.click(within(menu).getByRole('button', { name: /Delete selected leads/i }));
+
+    await waitFor(() => {
+      const deleteCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/bulk-delete' && opts?.method === 'DELETE',
+      );
+      expect(deleteCall).toBeDefined();
+      expect(JSON.parse(deleteCall[1].body)).toEqual({ contactIds: [11, 13] });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/2 leads selected/i)).toBeNull();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Deleted 2 leads');
   });
 
   it('filters the row list by search term against name / email / company', async () => {
@@ -1528,6 +1602,25 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(travelFetchMock);
     notifyError.mockReset();
+  });
+
+  it('opens the travel lead profile when clicking a name in the Name column', async () => {
+    renderLeads(TRAVEL_AUTH);
+    const lilyLink = await screen.findByRole('link', { name: 'Lily' });
+    expect(lilyLink).toHaveAttribute('href', '/travel/leads/50');
+
+    fireEvent.click(lilyLink);
+    expect(navigateMock).toHaveBeenCalledWith('/travel/leads/50');
+    expect(screen.getByLabelText('Edit Name for Lily')).toHaveAttribute('type', 'button');
+  });
+
+  it('keeps travel lead name editing behind the Name column edit icon', async () => {
+    renderLeads(TRAVEL_AUTH);
+    const lilyLink = await screen.findByRole('link', { name: 'Lily' });
+    const nameDisplay = lilyLink.closest('.inline-cell-editor-display');
+    fireEvent.mouseEnter(nameDisplay);
+    fireEvent.click(screen.getByLabelText('Edit Name for Lily'));
+    expect(screen.getByLabelText('Edit Name for Lily')).toHaveValue('Lily');
   });
 
   it('shows TMC paid-by-contact amount for a lead with no itinerary advancePaidAmount', async () => {

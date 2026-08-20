@@ -43,9 +43,12 @@
  *   12. ADMIN delete → 200 with softDeleted:true; second DELETE on
  *       already-deleted row returns idempotent:true (#167 idempotency)
  *
+ *   DELETE /api/contacts/bulk-delete (ADMIN-gated):
+ *   13. bulk delete soft-removes the selected tenant rows and returns count
+ *
  *   Auth gate (CLAUDE.md standing rule):
- *   13. no token → 401 (we exercise this via the REAL verifyToken — the
- *       other 12 tests pass-through-mock auth like the slice test does)
+ *   14. no token → 401 (we exercise this via the REAL verifyToken — the
+ *       other 13 tests pass-through-mock auth like the slice test does)
  *
  * Test pattern
  * ────────────
@@ -195,6 +198,7 @@ prisma.contact.findFirst = vi.fn();
 prisma.contact.findUnique = vi.fn();
 prisma.contact.create = vi.fn();
 prisma.contact.update = vi.fn();
+prisma.contact.updateMany = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 prisma.wallet = prisma.wallet || {};
@@ -271,7 +275,7 @@ beforeEach(() => {
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
-  prisma.contact.updateMany = vi.fn().mockResolvedValue({ count: 0 });
+  prisma.contact.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
@@ -722,6 +726,48 @@ describe('POST /api/contacts — create', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+describe('POST /api/contacts/import-csv — bulk import', () => {
+  test('accepts phone_number aliases and normalizes scientific-notation phone values', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({ id: 4242 });
+
+    const res = await request(makeApp())
+      .post('/api/contacts/import-csv')
+      .send({
+        contacts: [
+          {
+            name: 'Spreadsheet Lead',
+            email: 'sheet@example.com',
+            phone_number: '9.1956E+11',
+            company: 'Sheet Co',
+            title: 'Owner',
+            status: 'Lead',
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ imported: 1, skipped: 0, errors: [] });
+    expect(prisma.contact.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phone: '919560000000',
+          tenantId: TENANT_ID,
+          status: 'Lead',
+        }),
+      }),
+    );
+    expect(writeAuditMock).toHaveBeenCalledWith(
+      'Contact',
+      'CSV_IMPORT',
+      null,
+      USER_ID,
+      TENANT_ID,
+      expect.objectContaining({ rowCount: 1, imported: 1, skipped: 0, errorCount: 0, source: 'csv' }),
+    );
+  });
+});
+
 describe('PUT /api/contacts/:id — update', () => {
   test('unknown id → 404 Contact not found; update NOT called', async () => {
     prisma.contact.findFirst.mockResolvedValueOnce(null);
@@ -1050,6 +1096,23 @@ describe('PUT /api/contacts/bulk-assign-campaign', () => {
     expect(prisma.contact.updateMany).toHaveBeenCalledWith({
       where: { id: { in: [9001] }, tenantId: TENANT_ID },
       data: { callifiedCampaignId: null },
+    });
+  });
+});
+
+describe('DELETE /api/contacts/bulk-delete', () => {
+  test('soft-deletes tenant-scoped contacts in one bulk update and returns the deleted count', async () => {
+    prisma.contact.updateMany.mockResolvedValueOnce({ count: 2 });
+
+    const res = await request(makeApp())
+      .delete('/api/contacts/bulk-delete')
+      .send({ contactIds: [9001, '9002', 9001, 'not-a-number'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: 2 });
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: [9001, 9002] }, tenantId: TENANT_ID, deletedAt: null },
+      data: { deletedAt: expect.any(Date) },
     });
   });
 });

@@ -6,8 +6,8 @@
  * pins the Add Contact email validator (#607). This file pins the rest of the
  * page — initial fetch + loading state, list rendering, empty state, the #461
  * search + status filter wiring, AI re-score affordance, delete confirm,
- * assign-to-staff dropdown, CSV import modal preview + #154 row-validation,
- * and the #143 contact count.
+ * assign-to-staff dropdown, bulk actions menu (assign/delete), CSV import
+ * modal preview + #154 row-validation, and the #143 contact count.
  *
  * Mocks:
  *   - `../utils/api`.fetchApi — per-URL mockImplementation returning the
@@ -18,7 +18,6 @@
  *   - `../components/DuplicateContactModal` — rendered only on 409
  *     DUPLICATE_CONTACT, mocked here so tests don't depend on its internals.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -287,6 +286,76 @@ describe('Contacts.jsx — top-level page contract', () => {
     });
   });
 
+  it('bulk actions menu assigns the selected contacts and shows the selected-count badge', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    const aaravRow = screen.getByText('Aarav Sharma').closest('tr');
+    const priyaRow = screen.getByText('Priya Iyer').closest('tr');
+    fireEvent.click(within(aaravRow).getByRole('checkbox'));
+    fireEvent.click(within(priyaRow).getByRole('checkbox'));
+
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = screen.getByRole('menu', { name: /Bulk actions/i });
+    expect(within(menu).getByText('2 selected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Bulk actions/i })).toBeInTheDocument();
+
+    const assignSelect = within(menu).getByRole('combobox', { name: /Bulk assign staff/i });
+    fireEvent.change(assignSelect, { target: { value: '8' } });
+
+    fetchApiMock.mockImplementationOnce((url) => {
+      if (url === '/api/contacts/bulk-assign') return Promise.resolve({ updated: 2, skipped: 0 });
+      return defaultFetchImpl(url);
+    });
+
+    fireEvent.click(within(menu).getByRole('button', { name: /Assign to staff/i }));
+
+    await waitFor(() => {
+      const bulkAssignCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts/bulk-assign' && opts?.method === 'PUT');
+      expect(bulkAssignCall).toBeTruthy();
+      expect(JSON.parse(bulkAssignCall[1].body)).toEqual({
+        contactIds: [1, 2],
+        assignedToId: '8',
+      });
+    });
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalledWith('Assigned 2 contacts successfully'));
+  });
+
+  it('bulk actions menu confirms and DELETEs the selected contacts', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    const aaravRow = screen.getByText('Aarav Sharma').closest('tr');
+    const rohanRow = screen.getByText('Rohan Mehta').closest('tr');
+    fireEvent.click(within(aaravRow).getByRole('checkbox'));
+    fireEvent.click(within(rohanRow).getByRole('checkbox'));
+
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = screen.getByRole('menu', { name: /Bulk actions/i });
+    expect(within(menu).getByText('2 selected')).toBeInTheDocument();
+
+    fetchApiMock.mockImplementationOnce((url) => {
+      if (url === '/api/contacts/bulk-delete') return Promise.resolve({ deleted: 2 });
+      return defaultFetchImpl(url);
+    });
+
+    fireEvent.click(within(menu).getByRole('button', { name: /Delete selected contacts/i }));
+
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalledTimes(1));
+    expect(notifyObj.confirm.mock.calls[0][0]).toMatchObject({
+      title: 'Delete selected contacts?',
+      destructive: true,
+      confirmText: 'Delete',
+    });
+
+    await waitFor(() => {
+      const bulkDeleteCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts/bulk-delete' && opts?.method === 'DELETE');
+      expect(bulkDeleteCall).toBeTruthy();
+      expect(JSON.parse(bulkDeleteCall[1].body)).toEqual({ contactIds: [1, 3] });
+    });
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalledWith('Deleted 2 contacts'));
+  });
+
   it('non-ADMIN user sees read-only assigned-to text, not a dropdown', async () => {
     const { AuthContext } = await import('../App');
 
@@ -325,7 +394,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     unmount();
   });
 
-  it('Import CSV modal opens, parses a pasted file, and POSTs to /api/contacts/import-csv on Import', async () => {
+  it('Import CSV modal opens, parses a pasted file, and POSTs the phone_number column to /api/contacts/import-csv on Import', async () => {
     renderContacts();
     await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
 
@@ -336,7 +405,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     expect(screen.getByText(/Click to select a .csv or .xlsx\/.xls file/i)).toBeInTheDocument();
 
     // Drive the file input. parseCSV expects a header row + data rows.
-    const csvText = 'name,email,company,title,status\nKabir Singh,kabir@example.com,Singh Trading,Director,Lead\nMeera Nair,meera@example.com,Nair Co,Manager,Customer\n';
+    const csvText = 'name,email,phone_number,company,title,status\nKabir Singh,kabir@example.com,+919876543210,Singh Trading,Director,Lead\nMeera Nair,meera@example.com,9.1956E+11,Nair Co,Manager,Customer\n';
     const file = new File([csvText], 'contacts.csv', { type: 'text/csv' });
     const fileInput = document.querySelector('input[type="file"]');
     fireEvent.change(fileInput, { target: { files: [file] } });
@@ -344,6 +413,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     // parseCSV runs inside a FileReader.onload — wait for the preview row to land.
     await waitFor(() => expect(screen.getByText('Kabir Singh')).toBeInTheDocument(), { timeout: 2000 });
     expect(screen.getByText('Meera Nair')).toBeInTheDocument();
+    expect(screen.getByText('919560000000')).toBeInTheDocument();
     // Header chips listed under "Detected columns: name, email, company, title, status".
     expect(screen.getByText(/Detected columns:/i)).toBeInTheDocument();
 
@@ -359,12 +429,66 @@ describe('Contacts.jsx — top-level page contract', () => {
       expect(importCall).toBeTruthy();
       const body = JSON.parse(importCall[1].body);
       expect(body.contacts).toHaveLength(2);
-      expect(body.contacts[0]).toMatchObject({ name: 'Kabir Singh', email: 'kabir@example.com', company: 'Singh Trading' });
+      expect(body.contacts[0]).toMatchObject({
+        name: 'Kabir Singh',
+        email: 'kabir@example.com',
+        phone: '+919876543210',
+        company: 'Singh Trading',
+      });
+      expect(body.contacts[1]).toMatchObject({
+        name: 'Meera Nair',
+        email: 'meera@example.com',
+        phone: '919560000000',
+        company: 'Nair Co',
+      });
     });
 
     // Success card renders.
     await waitFor(() => expect(screen.getByText(/Import Complete/i)).toBeInTheDocument());
     expect(screen.getByText(/2 imported, 0 skipped/i)).toBeInTheDocument();
+  });
+
+  it('Import CSV modal also normalizes numeric Excel phone_number cells before POSTing', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Import CSV/i }));
+    expect(screen.getAllByText(/Import CSV/i).length).toBeGreaterThanOrEqual(2);
+
+    const XLSX = await import('xlsx');
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['name', 'email', 'phone_number', 'company', 'title', 'status'],
+      ['Excel Lead', 'excel@example.com', 919560000000, 'Excel Co', 'Owner', 'Lead'],
+    ]);
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Contacts');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const file = new File([buffer], 'contacts.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const fileInput = document.querySelector('input[type="file"]');
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => expect(screen.getByText('Excel Lead')).toBeInTheDocument(), { timeout: 2000 });
+    expect(screen.getByText('919560000000')).toBeInTheDocument();
+
+    fetchApiMock.mockImplementationOnce(() => Promise.resolve({ imported: 1, skipped: 0, errors: [] }));
+    fireEvent.click(screen.getByRole('button', { name: /Import 1 valid Contact/i }));
+
+    await waitFor(() => {
+      const importCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/import-csv' && opts?.method === 'POST',
+      );
+      expect(importCall).toBeTruthy();
+      const body = JSON.parse(importCall[1].body);
+      expect(body.contacts).toHaveLength(1);
+      expect(body.contacts[0]).toMatchObject({
+        name: 'Excel Lead',
+        email: 'excel@example.com',
+        phone: '919560000000',
+        company: 'Excel Co',
+      });
+    });
   });
 
   it('#154: CSV preview flags invalid rows (bad email, bad status) and disables Import when ALL rows are invalid', async () => {

@@ -137,6 +137,11 @@ describe('deduplication — normalizePhone', () => {
   test('non-10-digit short numbers pass through as digits', () => {
     expect(normalizePhone('12345')).toBe('12345');
   });
+
+  test('expands scientific-notation strings before stripping digits', () => {
+    expect(normalizePhone('9.1956E+11')).toBe('919560000000');
+    expect(normalizePhone(919560000000)).toBe('919560000000');
+  });
 });
 
 // #595 — toE164 canonicalises the *display* phone form (with `+` prefix) for

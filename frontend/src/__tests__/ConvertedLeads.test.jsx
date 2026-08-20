@@ -185,10 +185,10 @@ describe('<ConvertedLeads /> — multi-status contact lifecycle page', () => {
     notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
   });
 
-  it('renders the heading, overview button, status filter, and search toolbar', async () => {
+  it('renders the heading, status filter, and search toolbar', async () => {
     renderPage();
     expect(screen.getByRole('heading', { name: /Converted Leads/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Customize overview/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Customize overview/i })).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Search leads/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Lifecycle stage/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/All sources/i)).toBeInTheDocument();
@@ -601,6 +601,6 @@ describe('<ConvertedLeads /> — multi-status contact lifecycle page', () => {
     expect(css).toMatch(/align-items:\s*stretch/);
     expect(css).toMatch(/\.converted-leads__controls-row\s*\{/);
     expect(css).toMatch(/\.converted-leads__status-grid\s*\{[\s\S]*?display:\s*flex;/);
-    expect(css).toMatch(/clip-path:\s*polygon\(10px 0,\s*calc\(100% - 10px\) 0,\s*100% 50%/);
+    expect(css).toMatch(/\.converted-leads__status-button\s*\{[\s\S]*?clip-path:\s*polygon\(/);
   });
 });

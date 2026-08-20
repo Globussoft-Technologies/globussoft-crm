@@ -234,10 +234,9 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
 
   // R-15 — Quote Builder must mirror InvoicesAdmin's customer dropdown so
   // operators can't accidentally attach a quote to the wrong customer by
-  // typing a wrong numeric id. Pre-fix the field was a raw <input type
-  // ="number"> with placeholder "Contact ID *"; post-fix it's a <select>
-  // populated from GET /api/contacts?fields=summary&limit=500.
-  it('NEW mode: customer field is a <select> populated from /api/contacts', async () => {
+  // typing a wrong numeric id. The field is now a searchable inline picker
+  // instead of a separate search box + native <select>.
+  it('NEW mode: customer field is a searchable input populated from /api/contacts', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
 
@@ -249,17 +248,16 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
       expect(contactsFetch).toBeTruthy();
     });
 
-    const customerSelect = screen.getByLabelText('Customer');
-    expect(customerSelect.tagName).toBe('SELECT');
-    // The default "Select customer *" placeholder + the 3 seeded contacts
-    // from defaultFetchHandler.
+    const customerInput = screen.getByLabelText('Customer');
+    expect(customerInput.tagName).toBe('INPUT');
+    expect(customerInput).toHaveAttribute('placeholder', 'Select customer *');
+    fireEvent.focus(customerInput);
     await waitFor(() => {
-      expect(customerSelect.querySelectorAll('option').length).toBeGreaterThanOrEqual(4);
+      expect(screen.getByRole('listbox', { name: /Customer search results/i })).toBeInTheDocument();
     });
-    // Contact names + emails are visible in the dropdown options.
-    expect(screen.getByRole('option', { name: /Ahmed Khan.*ahmed@example.com/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Bharat Pilgrim/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Select customer/i })).toBeInTheDocument();
+    // Contact names + emails are visible in the inline results.
+    expect(screen.getByRole('button', { name: /Ahmed Khan.*ahmed@example.com/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bharat Pilgrim/i })).toBeInTheDocument();
   });
 });
 
@@ -303,7 +301,9 @@ describe('<QuoteBuilder /> — EDIT mode hydration', () => {
       expect(get).toBeTruthy();
     });
     const contactInput = await screen.findByLabelText('Customer');
-    expect(contactInput.value).toBe('5050');
+    await waitFor(() => {
+      expect(contactInput.value).toContain('5050');
+    });
     expect(screen.getByLabelText(/^Currency$/i).value).toBe('USD');
     expect(screen.getByLabelText(/Sub-brand/i).value).toBe('rfu');
     // Quote # + Sent status badge (multi-occurrence acceptable for "Sent"
@@ -661,7 +661,7 @@ describe('<QuoteBuilder /> — Save Draft (quote header)', () => {
     });
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
-    // Wait for the contacts list to land before changing the select.
+    // Wait for the contacts list to land before using the inline search.
     await waitFor(() => {
       expect(
         fetchApiMock.mock.calls.find(([u]) =>
@@ -669,7 +669,10 @@ describe('<QuoteBuilder /> — Save Draft (quote header)', () => {
         ),
       ).toBeTruthy();
     });
-    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: '5050' } });
+    const customerInput = screen.getByLabelText('Customer');
+    fireEvent.focus(customerInput);
+    fireEvent.change(customerInput, { target: { value: 'Ahmed' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Ahmed Khan.*ahmed@example.com/i }));
     fireEvent.change(screen.getByLabelText(/^Currency$/i), { target: { value: 'usd' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Draft/i }));
     await waitFor(() => {

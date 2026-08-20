@@ -427,29 +427,17 @@ describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', (
     });
   });
 
-  it('setting a date range re-fetches with fromDate and toDate query params', async () => {
-    renderPage();
-    await screen.findByText('tmc');
-    fetchApiMock.mockClear();
-    installFetchMock();
-
-    // Open the calendar-range picker and select two dates to form a range.
-    fireEvent.click(screen.getByRole('button', { name: /All time/i }));
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: /Select date range/i })).toBeInTheDocument();
-    });
-
-    // Pick two in-month day cells. The dialog defaults to the current month.
-    const dayButtons = screen.getAllByRole('button', { name: /^\d+$/ });
-    expect(dayButtons.length).toBeGreaterThanOrEqual(2);
-    fireEvent.click(dayButtons[10]);
-    fireEvent.click(dayButtons[15]);
+  it('reads a date range from the URL and re-fetches with fromDate and toDate query params', async () => {
+    renderPage(
+      ADMIN_USER,
+      ['/travel/diagnostics?fromDate=2026-06-17&toDate=2026-06-23'],
+    );
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(([u]) =>
         typeof u === 'string' &&
-        u.includes('fromDate=') &&
-        u.includes('toDate='),
+        u.includes('fromDate=2026-06-17') &&
+        u.includes('toDate=2026-06-23'),
       );
       expect(call).toBeTruthy();
     });

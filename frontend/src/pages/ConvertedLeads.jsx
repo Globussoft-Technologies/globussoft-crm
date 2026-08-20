@@ -1,6 +1,6 @@
 import { fetchApi } from '../utils/api';
 import { useState, useEffect, useContext } from 'react';
-import { UserPlus, Search, Users, Filter, Settings, MoreVertical } from 'lucide-react';
+import { UserPlus, Search, Users, Filter, MoreVertical } from 'lucide-react';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import { AuthContext } from '../App';
@@ -465,27 +465,6 @@ const ConvertedLeads = () => {
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.65rem 0.95rem',
-            borderRadius: '10px',
-            border: '1px solid var(--border-color)',
-            background: 'var(--surface-color)',
-            color: 'var(--text-primary)',
-            fontSize: '0.875rem',
-            fontWeight: 500,
-            cursor: 'pointer',
-            boxShadow: '0 6px 16px rgba(15, 23, 42, 0.04)',
-          }}
-          title="Customize overview"
-        >
-          <Settings size={16} />
-          Customize overview
-        </button>
       </header>
 
       {/* Bulk Assign Bar */}

@@ -38,6 +38,7 @@ const {
   setCsvDownloadHeaders,
 } = require("../lib/csvHelpers");
 const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
+const { normalizePhoneValue } = require("../lib/phoneFormatting");
 
 const router = express.Router();
 
@@ -78,6 +79,18 @@ function writeImportAudit(req, entity, summary) {
     ...summary,
     source: "csv",
   });
+}
+
+function getSpreadsheetValue(row, aliases) {
+  if (!row || typeof row !== "object") return "";
+  const lookup = new Map(Object.entries(row).map(([key, value]) => [String(key).toLowerCase(), value]));
+  for (const alias of aliases) {
+    const value = lookup.get(String(alias).toLowerCase());
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return "";
 }
 
 // Generic CRM Contacts
@@ -260,9 +273,10 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
       const row = rows[i];
       const rowNumber = i + 2;
       try {
-        const name = String(row.name || row.Name || "").trim();
-        const email = String(row.email || row.Email || "").trim();
-        const status = String(row.status || row.Status || "Lead").trim();
+        const name = String(getSpreadsheetValue(row, ["name", "Name"])).trim();
+        const email = String(getSpreadsheetValue(row, ["email", "Email"])).trim();
+        const rawStatus = getSpreadsheetValue(row, ["status", "Status"]);
+        const status = String(rawStatus || "Lead").trim();
 
         if (!email) {
           errors.push({ rowNumber, reason: "missing email" });
@@ -280,24 +294,40 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           continue;
         }
 
-        const data = {
+        const phone = normalizePhoneValue(
+          getSpreadsheetValue(row, ["phone", "phone_number", "phoneNumber", "sms_number", "smsNumber"]),
+        );
+        const company = String(getSpreadsheetValue(row, ["company", "Company"])).trim();
+        const title = String(getSpreadsheetValue(row, ["title", "Title"])).trim();
+        const source = String(getSpreadsheetValue(row, ["source", "Source", "lead_source", "leadSource", "Lead Source"])).trim();
+        const createData = {
           name: sanitizeCellForExport(name),
           email,
-          phone: String(row.phone || row.Phone || "").trim(),
-          company: sanitizeCellForExport(String(row.company || row.Company || "").trim()),
-          title: String(row.title || row.Title || "").trim(),
-          status: status,
-          source: String(row.source || row.Source || "").trim() || null,
+          phone: phone || null,
+          company: sanitizeCellForExport(company),
+          title,
+          status,
+          source: source || null,
         };
+        const updateData = { email, deletedAt: null };
+        if (name) updateData.name = sanitizeCellForExport(name);
+        if (phone) updateData.phone = phone;
+        if (company) updateData.company = sanitizeCellForExport(company);
+        if (title) updateData.title = title;
+        if (rawStatus) updateData.status = status;
+        if (source) updateData.source = source;
 
-        const existing = await prisma.contact.findFirst({ where: { email, tenantId: req.user.tenantId, deletedAt: null } });
-        if (existing) {
-          await prisma.contact.update({ where: { id: existing.id }, data });
-          updated++;
-        } else {
-          await prisma.contact.create({ data: { ...data, tenantId: req.user.tenantId } });
-          imported++;
-        }
+        const existing = await prisma.contact.findFirst({
+          where: { email, tenantId: req.user.tenantId },
+          select: { id: true },
+        });
+        await prisma.contact.upsert({
+          where: { email_tenantId: { email, tenantId: req.user.tenantId } },
+          update: updateData,
+          create: { ...createData, tenantId: req.user.tenantId },
+        });
+        if (existing) updated++;
+        else imported++;
       } catch (rowErr) {
         errors.push({ rowNumber, reason: rowErr.message });
         skipped++;

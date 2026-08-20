@@ -5,7 +5,7 @@
  * first dropdown option should be Contacts and the toolbar must receive the
  * generic /api/csv/contacts/* endpoints rather than the wellness PHI routes.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 const toolbarSpy = vi.fn();
@@ -28,6 +28,10 @@ vi.mock('../components/wellness/CsvImportExportToolbar', () => ({
 import { AuthContext } from '../App';
 import DataImportExport from '../pages/DataImportExport';
 
+beforeEach(() => {
+  toolbarSpy.mockReset();
+});
+
 function renderPage(tenant = { id: 1, vertical: 'generic' }) {
   const user = { userId: 1, name: 'Admin', email: 'admin@example.com', role: 'ADMIN' };
   return render(
@@ -48,13 +52,20 @@ describe('<DataImportExport />', () => {
     expect(screen.getByTestId('toolbar')).toHaveAttribute('data-export', '/api/csv/contacts/export.csv');
     expect(screen.getByTestId('toolbar')).toHaveAttribute('data-template', '/api/csv/contacts/template.csv');
     expect(toolbarSpy).toHaveBeenCalled();
+    expect(toolbarSpy.mock.calls.at(-1)[0].formats).toEqual(['csv']);
   });
 
   it('switches to the wellness patient dataset for a wellness tenant', () => {
     renderPage({ id: 2, vertical: 'wellness' });
 
+    expect(screen.getByRole('heading', { name: /Template Import \/ Export/i })).toBeInTheDocument();
+    expect(screen.getByTestId('wellness-template-guidance')).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Patients' })).toBeInTheDocument();
     expect(screen.getByTestId('toolbar')).toHaveAttribute('data-entity', 'customers');
     expect(screen.getByTestId('toolbar')).toHaveTextContent('Patients');
+    expect(toolbarSpy).toHaveBeenCalled();
+
+    const props = toolbarSpy.mock.calls.at(-1)[0];
+    expect(props.formats).toEqual(['csv', 'xlsx']);
   });
 });

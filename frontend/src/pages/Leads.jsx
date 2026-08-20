@@ -18,6 +18,7 @@ import {
   UserPlus,
   Search,
   ArrowRightCircle,
+  Eye,
   Plus,
   X,
   Pencil,
@@ -815,6 +816,7 @@ function BuiltInInlineCellEditor({
   onSave,
   required = false,
   renderValue = null,
+  editOnDisplayClick = true,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -852,11 +854,14 @@ function BuiltInInlineCellEditor({
     return (
       <span
         className="inline-cell-editor-display"
-        onClick={() => setEditing(true)}
+        onClick={editOnDisplayClick ? () => setEditing(true) : undefined}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        title={`Click to edit ${label}`}
-        style={inlineBuiltinCellStyle}
+        title={editOnDisplayClick ? `Click to edit ${label}` : undefined}
+        style={{
+          ...inlineBuiltinCellStyle,
+          cursor: editOnDisplayClick ? inlineBuiltinCellStyle.cursor : "default",
+        }}
       >
         <span
           style={{
@@ -2317,6 +2322,38 @@ const Leads = () => {
     fetchLeads({ background: true });
   };
 
+  const handleBulkDelete = async () => {
+    if (selectedLeads.length === 0) return;
+
+    const ok = await notify.confirm({
+      title: "Delete selected leads?",
+      message: `Delete ${selectedLeads.length} selected lead${selectedLeads.length === 1 ? "" : "s"}? This can't be undone.`,
+      confirmText: "Delete",
+      cancelText: "Cancel",
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setLeadBulkActionsOpen(false);
+    try {
+      const res = await fetchApi("/api/contacts/bulk-delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactIds: selectedLeads }),
+      });
+      const deletedCount = Number.isFinite(Number(res?.deleted))
+        ? Number(res.deleted)
+        : selectedLeads.length;
+      notify.success(`Deleted ${deletedCount} lead${deletedCount === 1 ? "" : "s"}`);
+      setSelectedLeads([]);
+      setBulkAgent("");
+      setBulkCampaignDropdownOpen(false);
+      fetchLeads({ background: true });
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to delete leads");
+    }
+  };
+
   const handleBulkAssignCampaign = async (campaignId) => {
     if (selectedLeads.length === 0) return;
     setBulkCampaignSaving(true);
@@ -2674,7 +2711,9 @@ const Leads = () => {
       setLeadBulkActionsOpen(false);
       return;
     }
-    setSelectedLeads(filteredLeads.map((lead) => lead.id));
+    if (selectedLeads.length === 0) {
+      setSelectedLeads(filteredLeads.map((lead) => lead.id));
+    }
     setLeadBulkActionsOpen(true);
   };
 
@@ -4172,7 +4211,7 @@ const Leads = () => {
             <RefreshCw size={14} /> Refresh
           </button>
 
-          {isGeneric && (
+          {(isGeneric || isWellness) && (
             <CsvImportExportToolbar
               entity="contacts"
               label="Leads"
@@ -4822,7 +4861,8 @@ const Leads = () => {
                   style={{
                     position: "absolute",
                     top: "calc(100% + 4px)",
-                    right: 0,
+                    left: 0,
+                    right: "auto",
                     zIndex: 1089,
                     width: "min(420px, 92vw)",
                     padding: "0.85rem",
@@ -4956,10 +4996,26 @@ const Leads = () => {
                             gap: "0.35rem",
                             fontSize: "0.85rem",
                           }}
-                        >
+                          >
                           <Filter size={14} /> Assign campaign
                         </button>
                       )}
+                      <button
+                        type="button"
+                        className="btn-danger"
+                        onClick={() => {
+                          handleBulkDelete();
+                        }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "0.35rem",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        <Trash2 size={14} /> Delete selected leads
+                      </button>
                       <button
                         type="button"
                         className="btn-secondary"
@@ -6135,6 +6191,35 @@ const Leads = () => {
                               value={lead.name}
                               onSave={updateLeadInlineValue}
                               required
+                              editOnDisplayClick={false}
+                              renderValue={(name) => (
+                                <a
+                                  href={leadDetailPath(lead)}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    navigate(leadDetailPath(lead));
+                                  }}
+                                  title={`Open profile for ${lead.name || "lead"}`}
+                                  style={{
+                                    minWidth: 0,
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                    color: "var(--accent-color)",
+                                    fontWeight: 700,
+                                    textDecoration: "none",
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.textDecoration = "underline";
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.textDecoration = "none";
+                                  }}
+                                >
+                                  {name || "Unnamed lead"}
+                                </a>
+                              )}
                             />
                           </div>
                         </div>
@@ -6694,9 +6779,10 @@ const Leads = () => {
                           <button
                             onClick={() => setPreviewLead(lead)}
                             title="Preview lead"
+                            aria-label={`Preview ${lead.name || "lead"}`}
                             style={actionIconBtn}
                           >
-                            View
+                            <Eye size={15} />
                           </button>
                           <button
                             onClick={() => openEdit(lead)}

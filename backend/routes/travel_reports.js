@@ -1868,8 +1868,9 @@ async function checkinMissSummary(req, dateRange) {
   };
 }
 
-async function agentProductivitySummary(req, allowed, dateRange) {
+async function agentProductivitySummary(req, allowed, dateRange, opts = {}) {
   const tenantId = req.travelTenant.id;
+  const limit = opts.limit === undefined ? 10 : opts.limit;
   const quoteActions = [
     "CREATE",
     "UPDATE",
@@ -2007,9 +2008,13 @@ async function agentProductivitySummary(req, allowed, dateRange) {
       updatedQuotes: 0,
       paidQuotes: 0,
       paymentAmount: 0,
+      lastActivityAt: null,
       byAction: {},
     };
     agents[id].totalActions += 1;
+    if (!agents[id].lastActivityAt || new Date(row.createdAt) > new Date(agents[id].lastActivityAt)) {
+      agents[id].lastActivityAt = row.createdAt;
+    }
     agents[id].byAction[row.action] = (agents[id].byAction[row.action] || 0) + 1;
     if (row.action === "CREATE") agents[id].createdQuotes += 1;
     if (row.action === "QUOTE_SHARE") agents[id].sentQuotes += 1;
@@ -2042,8 +2047,379 @@ async function agentProductivitySummary(req, allowed, dateRange) {
       };
     })
     .sort((a, b) => new Date(b.paidAt || 0) - new Date(a.paidAt || 0));
-  return { agents: Object.values(agents).sort((a, b) => b.totalActions - a.totalActions).slice(0, 10), payments: paymentDetails };
+  const sortedAgents = Object.values(agents).sort((a, b) => b.totalActions - a.totalActions || String(a.name).localeCompare(String(b.name)));
+  return { agents: limit == null ? sortedAgents : sortedAgents.slice(0, limit), payments: paymentDetails };
 }
+
+async function buildBrandTourReport(req, allowed, dateRange) {
+  const tenantId = req.travelTenant.id;
+  if (allowed !== null && allowed.size === 0) {
+    return {
+      summary: { totalTours: 0, totalRevenue: 0, brandCount: 0, destinationCount: 0 },
+      rows: [],
+      currency: "INR",
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  const where = applyAllowedSubBrands({ tenantId }, allowed);
+  if (dateRange) where.createdAt = dateRange;
+
+  const itineraries = await prisma.itinerary.findMany({
+    where,
+    orderBy: [{ subBrand: "asc" }, { destination: "asc" }, { createdAt: "desc" }],
+    select: {
+      id: true,
+      subBrand: true,
+      destination: true,
+      status: true,
+      totalAmount: true,
+      pax: true,
+      createdAt: true,
+      updatedAt: true,
+      contactId: true,
+      contact: { select: { id: true, name: true, email: true } },
+    },
+  });
+
+  const grouped = new Map();
+  for (const row of itineraries) {
+    const key = `${row.subBrand}::${row.destination}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        subBrand: row.subBrand,
+        destination: row.destination || "Untitled",
+        tourCount: 0,
+        revenue: 0,
+        totalPax: 0,
+        acceptedCount: 0,
+        sentCount: 0,
+        draftCount: 0,
+        rejectedCount: 0,
+        latestUpdatedAt: null,
+        sampleItineraryId: row.id,
+        sampleContactId: row.contactId || null,
+        sampleContactName: row.contact?.name || row.contact?.email || null,
+      });
+    }
+
+    const bucket = grouped.get(key);
+    bucket.tourCount += 1;
+    bucket.revenue += Number(row.totalAmount || 0);
+    bucket.totalPax += Number(row.pax || 0);
+    const normalizedStatus = String(row.status || "").toLowerCase();
+    if (isAcceptedQuoteStatus(row.status) || ["accepted", "advance_paid", "fully_paid"].includes(normalizedStatus)) {
+      bucket.acceptedCount += 1;
+    } else if (isRejectedQuoteStatus(row.status) || normalizedStatus === "rejected") {
+      bucket.rejectedCount += 1;
+    } else if (normalizedStatus === "sent") {
+      bucket.sentCount += 1;
+    } else {
+      bucket.draftCount += 1;
+    }
+
+    const updatedAt = row.updatedAt || row.createdAt;
+    if (!bucket.latestUpdatedAt || new Date(updatedAt) > new Date(bucket.latestUpdatedAt)) {
+      bucket.latestUpdatedAt = updatedAt;
+      bucket.sampleItineraryId = row.id;
+      bucket.sampleContactId = row.contactId || bucket.sampleContactId;
+      bucket.sampleContactName = row.contact?.name || row.contact?.email || bucket.sampleContactName;
+    }
+  }
+
+  const rows = [...grouped.values()]
+    .map((row) => ({
+      ...row,
+      avgRevenue: row.tourCount > 0 ? Number((row.revenue / row.tourCount).toFixed(2)) : 0,
+      avgPax: row.tourCount > 0 ? Number((row.totalPax / row.tourCount).toFixed(2)) : 0,
+    }))
+    .sort((a, b) => b.revenue - a.revenue || b.tourCount - a.tourCount || String(a.destination).localeCompare(String(b.destination)));
+
+  return {
+    summary: {
+      totalTours: itineraries.length,
+      totalRevenue: rows.reduce((sum, row) => sum + Number(row.revenue || 0), 0),
+      brandCount: new Set(rows.map((row) => row.subBrand)).size,
+      destinationCount: rows.length,
+    },
+    rows,
+    currency: "INR",
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function buildAgentReport(req, allowed, dateRange) {
+  if (allowed !== null && allowed.size === 0) {
+    return {
+      summary: { activeAgents: 0, totalActions: 0, totalCollected: 0, totalCreatedQuotes: 0 },
+      rows: [],
+      payments: [],
+      currency: "INR",
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  const data = await agentProductivitySummary(req, allowed, dateRange, { limit: null });
+  const rows = data.agents || [];
+  return {
+    summary: {
+      activeAgents: rows.length,
+      totalActions: rows.reduce((sum, row) => sum + Number(row.totalActions || 0), 0),
+      totalCollected: rows.reduce((sum, row) => sum + Number(row.paymentAmount || 0), 0),
+      totalCreatedQuotes: rows.reduce((sum, row) => sum + Number(row.createdQuotes || 0), 0),
+    },
+    rows,
+    payments: data.payments || [],
+    currency: "INR",
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function buildLeadReport(req, allowed, dateRange) {
+  const tenantId = req.travelTenant.id;
+  if (allowed !== null && allowed.size === 0) {
+    return {
+      summary: { leads: 0, activeLeads: 0, totalQuotes: 0, totalItineraries: 0, totalDiagnostics: 0, totalTouchpoints: 0, totalActivities: 0 },
+      rows: [],
+      currency: "INR",
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  const allowedList = allowedSubBrandArray(allowed);
+  const leadWhere = {
+    tenantId,
+    deletedAt: null,
+  };
+  if (allowedList !== null) {
+    leadWhere.subBrand = { in: allowedList };
+  }
+
+  const quoteWhere = applyAllowedSubBrands({ tenantId }, allowed);
+  const itineraryWhere = applyAllowedSubBrands({ tenantId }, allowed);
+  const diagnosticWhere = applyAllowedSubBrands({ tenantId }, allowed);
+  if (dateRange) {
+    quoteWhere.createdAt = dateRange;
+    itineraryWhere.createdAt = dateRange;
+    // TravelDiagnostic does not expose createdAt in the Prisma schema.
+    // Consent capture is the closest stable submission timestamp and keeps
+    // the new lead report date-filtered without changing existing flows.
+    diagnosticWhere.consentCapturedAt = dateRange;
+  }
+
+  const [contacts, quoteRows, itineraryRows, diagnosticRows, touchpointRows, activityRows] = await Promise.all([
+    prisma.contact.findMany({
+      where: leadWhere,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        company: true,
+        title: true,
+        status: true,
+        source: true,
+        subBrand: true,
+        aiScore: true,
+        createdAt: true,
+        assignedToId: true,
+        assignedTo: { select: { id: true, name: true, email: true } },
+      },
+    }),
+    prisma.travelQuote.findMany({
+      where: quoteWhere,
+      select: { contactId: true, status: true, totalAmount: true, createdAt: true, updatedAt: true },
+    }).catch(() => []),
+    prisma.itinerary.findMany({
+      where: itineraryWhere,
+      select: { contactId: true, status: true, totalAmount: true, createdAt: true, updatedAt: true },
+    }).catch(() => []),
+    prisma.travelDiagnostic.findMany({
+      where: diagnosticWhere,
+      select: { contactId: true, consentCapturedAt: true },
+    }).catch(() => []),
+    prisma.touchpoint.findMany({
+      where: {
+        tenantId,
+        ...(dateRange ? { timestamp: dateRange } : {}),
+      },
+      select: { contactId: true, timestamp: true },
+    }).catch(() => []),
+    prisma.activity.findMany({
+      where: {
+        tenantId,
+        ...(dateRange ? { createdAt: dateRange } : {}),
+      },
+      select: { contactId: true, createdAt: true },
+    }).catch(() => []),
+  ]);
+
+  const isInDateRange = (value) => {
+    if (!dateRange) return true;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return false;
+    if (dateRange.gte && d < dateRange.gte) return false;
+    if (dateRange.lte && d > dateRange.lte) return false;
+    return true;
+  };
+
+  const contactIds = new Set();
+  for (const contact of contacts) {
+    if (!dateRange || isInDateRange(contact.createdAt)) contactIds.add(contact.id);
+  }
+
+  const buckets = new Map();
+  const ensure = (contactId) => {
+    if (!buckets.has(contactId)) {
+      buckets.set(contactId, {
+        quoteCount: 0,
+        itineraryCount: 0,
+        diagnosticCount: 0,
+        touchpointCount: 0,
+        activityCount: 0,
+        quoteRevenue: 0,
+        itineraryRevenue: 0,
+        lastQuoteAt: null,
+        lastItineraryAt: null,
+        lastTouchAt: null,
+      });
+    }
+    return buckets.get(contactId);
+  };
+
+  for (const row of quoteRows) {
+    if (row.contactId == null) continue;
+    const bucket = ensure(row.contactId);
+    bucket.quoteCount += 1;
+    bucket.quoteRevenue += Number(row.totalAmount || 0);
+    const latest = row.updatedAt || row.createdAt;
+    if (!bucket.lastQuoteAt || new Date(latest) > new Date(bucket.lastQuoteAt)) bucket.lastQuoteAt = latest;
+    contactIds.add(row.contactId);
+  }
+  for (const row of itineraryRows) {
+    if (row.contactId == null) continue;
+    const bucket = ensure(row.contactId);
+    bucket.itineraryCount += 1;
+    bucket.itineraryRevenue += Number(row.totalAmount || 0);
+    const latest = row.updatedAt || row.createdAt;
+    if (!bucket.lastItineraryAt || new Date(latest) > new Date(bucket.lastItineraryAt)) bucket.lastItineraryAt = latest;
+    contactIds.add(row.contactId);
+  }
+  for (const row of diagnosticRows) {
+    if (row.contactId == null) continue;
+    ensure(row.contactId).diagnosticCount += 1;
+    contactIds.add(row.contactId);
+  }
+  for (const row of touchpointRows) {
+    if (row.contactId == null) continue;
+    const bucket = ensure(row.contactId);
+    bucket.touchpointCount += 1;
+    if (!bucket.lastTouchAt || new Date(row.timestamp) > new Date(bucket.lastTouchAt)) bucket.lastTouchAt = row.timestamp;
+    contactIds.add(row.contactId);
+  }
+  for (const row of activityRows) {
+    if (row.contactId == null) continue;
+    const bucket = ensure(row.contactId);
+    bucket.activityCount += 1;
+    if (!bucket.lastTouchAt || new Date(row.createdAt) > new Date(bucket.lastTouchAt)) bucket.lastTouchAt = row.createdAt;
+    contactIds.add(row.contactId);
+  }
+
+  const rows = contacts
+    .filter((contact) => contactIds.has(contact.id))
+    .map((contact) => {
+      const bucket = buckets.get(contact.id) || {
+        quoteCount: 0,
+        itineraryCount: 0,
+        diagnosticCount: 0,
+        touchpointCount: 0,
+        activityCount: 0,
+        quoteRevenue: 0,
+        itineraryRevenue: 0,
+        lastQuoteAt: null,
+        lastItineraryAt: null,
+        lastTouchAt: null,
+      };
+      const lastTouchAt = [bucket.lastTouchAt, bucket.lastQuoteAt, bucket.lastItineraryAt, contact.createdAt]
+        .filter(Boolean)
+        .sort((a, b) => new Date(b) - new Date(a))[0] || contact.createdAt;
+      return {
+        contactId: contact.id,
+        leadName: contact.name,
+        email: contact.email,
+        phone: contact.phone,
+        company: contact.company,
+        title: contact.title,
+        status: contact.status,
+        source: contact.source,
+        subBrand: contact.subBrand || "generic",
+        aiScore: contact.aiScore,
+        assignedToId: contact.assignedToId,
+        assignedToName: contact.assignedTo?.name || contact.assignedTo?.email || null,
+        quoteCount: bucket.quoteCount,
+        itineraryCount: bucket.itineraryCount,
+        diagnosticCount: bucket.diagnosticCount,
+        touchpointCount: bucket.touchpointCount,
+        activityCount: bucket.activityCount,
+        quoteRevenue: bucket.quoteRevenue,
+        itineraryRevenue: bucket.itineraryRevenue,
+        lastTouchAt,
+        lastQuoteAt: bucket.lastQuoteAt,
+        lastItineraryAt: bucket.lastItineraryAt,
+        createdAt: contact.createdAt,
+      };
+    })
+    .sort((a, b) => new Date(b.lastTouchAt || 0) - new Date(a.lastTouchAt || 0) || String(a.leadName).localeCompare(String(b.leadName)));
+
+  return {
+    summary: {
+      leads: rows.length,
+      activeLeads: rows.filter((row) => row.quoteCount > 0 || row.itineraryCount > 0 || row.touchpointCount > 0 || row.activityCount > 0 || row.diagnosticCount > 0).length,
+      totalQuotes: rows.reduce((sum, row) => sum + Number(row.quoteCount || 0), 0),
+      totalItineraries: rows.reduce((sum, row) => sum + Number(row.itineraryCount || 0), 0),
+      totalDiagnostics: rows.reduce((sum, row) => sum + Number(row.diagnosticCount || 0), 0),
+      totalTouchpoints: rows.reduce((sum, row) => sum + Number(row.touchpointCount || 0), 0),
+      totalActivities: rows.reduce((sum, row) => sum + Number(row.activityCount || 0), 0),
+    },
+    rows,
+    currency: "INR",
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+router.get("/reports/brand-tours", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const dateRange = parseDateRange(req);
+    res.json(await buildBrandTourReport(req, allowed, dateRange));
+  } catch (e) {
+    console.error("[travel-reports] brand-tours error:", e.message);
+    res.status(500).json({ error: "Failed to compute brand-wise tour report" });
+  }
+});
+
+router.get("/reports/agents", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const dateRange = parseDateRange(req);
+    res.json(await buildAgentReport(req, allowed, dateRange));
+  } catch (e) {
+    console.error("[travel-reports] agents error:", e.message);
+    res.status(500).json({ error: "Failed to compute agent report" });
+  }
+});
+
+router.get("/reports/leads", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const dateRange = parseDateRange(req);
+    res.json(await buildLeadReport(req, allowed, dateRange));
+  } catch (e) {
+    console.error("[travel-reports] leads error:", e.message);
+    res.status(500).json({ error: "Failed to compute lead report" });
+  }
+});
+
 router.get("/reports/pnl", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const allowed = await getSubBrandAccessSet(req.user.userId);

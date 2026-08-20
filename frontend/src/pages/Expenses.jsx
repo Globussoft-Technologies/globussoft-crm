@@ -245,9 +245,19 @@ export default function Expenses() {
 
   useEffect(() => {
     if (!isCreateFormOpen) return undefined;
+    if (!form.subBrand) {
+      setItineraries([]);
+      return undefined;
+    }
     let cancelled = false;
 
-    fetchApi('/api/travel/itineraries?fields=summary&limit=200')
+    const qs = new URLSearchParams({
+      fields: 'summary',
+      limit: '200',
+      subBrand: form.subBrand,
+    });
+
+    fetchApi(`/api/travel/itineraries?${qs.toString()}`)
       .then((data) => {
         if (!cancelled) {
           setItineraries(Array.isArray(data?.itineraries) ? data.itineraries : []);
@@ -260,7 +270,7 @@ export default function Expenses() {
     return () => {
       cancelled = true;
     };
-  }, [isCreateFormOpen]);
+  }, [isCreateFormOpen, form.subBrand]);
 
   useEffect(() => {
     if (!tableScrollRef.current || loading || loadingMore || !hasMore) return;
@@ -567,7 +577,11 @@ export default function Expenses() {
                 <select
                   className="input-field"
                   value={form.subBrand}
-                  onChange={e => setForm({ ...form, subBrand: e.target.value })}
+                  onChange={e => setForm({
+                    ...form,
+                    subBrand: e.target.value,
+                    itineraryId: '',
+                  })}
                   required
                   style={{ background: 'var(--input-bg)' }}
                 >
@@ -590,17 +604,20 @@ export default function Expenses() {
                     className="input-field"
                     required
                     aria-required="true"
-                    placeholder="Select or search a trip"
+                    placeholder={form.subBrand ? "Select or search a trip" : "First select a sub-brand"}
+                    disabled={!form.subBrand}
                     value={isItineraryPickerOpen
                       ? itinerarySearch
                       : (itineraries.find(itinerary => String(itinerary.id) === String(form.itineraryId))
                         ? `${itineraries.find(itinerary => String(itinerary.id) === String(form.itineraryId)).destination || `Trip ${form.itineraryId}`}${itineraries.find(itinerary => String(itinerary.id) === String(form.itineraryId)).subBrand ? ` - ${itineraries.find(itinerary => String(itinerary.id) === String(form.itineraryId)).subBrand}` : ''}`
                         : '')}
                     onFocus={() => {
+                      if (!form.subBrand) return;
                       setIsItineraryPickerOpen(true);
                       setItinerarySearch('');
                     }}
                     onChange={e => {
+                      if (!form.subBrand) return;
                       setIsItineraryPickerOpen(true);
                       setItinerarySearch(e.target.value);
                       setForm({ ...form, itineraryId: '' });
@@ -666,7 +683,9 @@ export default function Expenses() {
                   )}
                 </div>
                 <small style={{ display: 'block', marginTop: '0.35rem', color: 'var(--text-secondary)' }}>
-                  Choose a trip to include this expense in its Tally spending total.
+                  {form.subBrand
+                    ? 'Choose a trip to include this expense in its Tally spending total.'
+                    : 'Please select a sub-brand first, then choose a trip.'}
                 </small>
               </div>}
 

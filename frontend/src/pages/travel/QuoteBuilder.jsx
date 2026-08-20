@@ -92,7 +92,7 @@
 //   - Supplier list is fetched on subBrand-change and re-used across all
 //     row pickers in the table (single fetch, not per-row).
 
-import { useEffect, useState, useContext, useCallback, useMemo } from "react";
+import { useEffect, useState, useContext, useCallback, useMemo, useRef } from "react";
 import HotelOfferImageGenerator from "./HotelOfferImageGenerator";
 import { Link, useLocation, useParams } from "react-router-dom";
 import {
@@ -194,6 +194,173 @@ function fmtSearchTime(s) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatCustomerLabel(customer, currentSubBrand = null) {
+  if (!customer) return "";
+  const name = customer.name || `Contact #${customer.id}`;
+  const email = customer.email ? ` — ${customer.email}` : "";
+  const subBrandSuffix = customer.subBrand
+    ? currentSubBrand && customer.subBrand !== currentSubBrand
+      ? ` — ${SUB_BRAND_LABELS[customer.subBrand] || customer.subBrand}`
+      : ""
+    : " · (unassigned)";
+  return `${name}${email}${subBrandSuffix}`;
+}
+
+function SearchableCustomerSelect({
+  options,
+  value,
+  onChange,
+  placeholder = "Select customer *",
+  currentSubBrand = "",
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const selected = options.find((c) => String(c.id) === String(value));
+  const selectedLabel = selected ? formatCustomerLabel(selected, currentSubBrand) : "";
+  const filtered = query.trim()
+    ? options.filter((c) => {
+        const needle = query.trim().toLowerCase();
+        return (
+          String(c.id || "").includes(needle) ||
+          (c.name || "").toLowerCase().includes(needle) ||
+          (c.email || "").toLowerCase().includes(needle) ||
+          (c.phone || "").toLowerCase().includes(needle)
+        );
+      })
+    : options;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocDown = (event) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onDocDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [open]);
+
+  const commit = (customer) => {
+    onChange(String(customer.id));
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", width: "100%", minWidth: 0, overflow: "visible" }}>
+      <div style={{ position: "relative", zIndex: 2 }}>
+        <input
+          ref={inputRef}
+          type="text"
+          value={open ? query : selectedLabel}
+          onFocus={() => {
+            setOpen(true);
+            setQuery("");
+          }}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          placeholder={placeholder}
+          aria-label="Customer"
+          autoComplete="off"
+          style={{ ...inputStyle, width: "100%", boxSizing: "border-box", paddingRight: 36 }}
+        />
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          aria-label="Toggle customer search"
+          style={{
+            position: "absolute",
+            right: 8,
+            top: "50%",
+            transform: "translateY(-50%)",
+            border: "none",
+            background: "transparent",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            padding: 4,
+            lineHeight: 1,
+          }}
+        >
+          ▾
+        </button>
+      </div>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label="Customer search results"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 0,
+            right: 0,
+            maxHeight: 260,
+            overflowY: "auto",
+            zIndex: 60,
+            background: "var(--bg-color)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 10,
+            boxShadow: "0 16px 36px rgba(15, 23, 42, 0.16)",
+          }}
+        >
+          {filtered.length === 0 ? (
+            <div style={{ padding: "10px 12px", fontSize: 13, color: "var(--text-secondary)" }}>
+              No matches.
+            </div>
+          ) : (
+            filtered.map((customer) => {
+              const isSelected = String(customer.id) === String(value);
+              return (
+                <button
+                  key={customer.id}
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => commit(customer)}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "10px 12px",
+                    border: "none",
+                    background: isSelected ? "rgba(59, 130, 246, 0.12)" : "transparent",
+                    color: "var(--text-primary)",
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  {formatCustomerLabel(customer, currentSubBrand)}
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const EMPTY_DRAFT = () => ({
@@ -316,7 +483,6 @@ export default function QuoteBuilder() {
   const [quoteId, setQuoteId] = useState(routeId ? Number(routeId) : null);
   const [status, setStatus] = useState("Draft");
   const [contactId, setContactId] = useState("");
-  const [customerSearch, setCustomerSearch] = useState("");
   // Contact picker — mirrors the InvoicesAdmin pattern. Loads the tenant's
   // contacts once on mount so the header field can be a labelled <select>
   // instead of a raw numeric "Contact ID" input that lets an operator
@@ -695,16 +861,18 @@ export default function QuoteBuilder() {
   const selectedCustomer = customers.find(
     (c) => String(c.id) === String(contactId),
   );
-
-  // Filtered list for the customer search input.
-  const customerSearchLower = customerSearch.toLowerCase();
-  const filteredCustomers = customerSearchLower
-    ? visibleCustomers.filter(
-        (c) =>
-          (c.name || "").toLowerCase().includes(customerSearchLower) ||
-          (c.email || "").toLowerCase().includes(customerSearchLower) ||
-          (c.phone || "").toLowerCase().includes(customerSearchLower),
-      )
+  const selectedCustomerForPicker = selectedCustomer || (contactId
+    ? {
+        id: contactId,
+        name: contactsById[contactId]?.name || null,
+        email: contactsById[contactId]?.email || null,
+        subBrand: null,
+      }
+    : null);
+  const customerPickerOptions = selectedCustomerForPicker && !visibleCustomers.some(
+    (c) => String(c.id) === String(selectedCustomerForPicker.id),
+  )
+    ? [...visibleCustomers, selectedCustomerForPicker]
     : visibleCustomers;
 
   // Fetch the supplier list when subBrand changes (or on initial load
@@ -2617,55 +2785,24 @@ export default function QuoteBuilder() {
         style={{
           padding: 16,
           marginBottom: 16,
+          position: "relative",
+          zIndex: 2,
           display: "grid",
           gridTemplateColumns:
             "repeat(auto-fit, minmax(min(100%, 200px), 1fr))",
           gap: 10,
-          alignItems: "end",
+          alignItems: "start",
         }}
       >
         <label style={fieldLabel}>
           Customer
-          {/* Search input filters the native select options below. */}
-          <input
-            type="text"
-            value={customerSearch}
-            onChange={(e) => setCustomerSearch(e.target.value)}
-            placeholder="Search customers…"
-            style={{ ...inputStyle, marginBottom: 4 }}
-          />
-          <select
+          <SearchableCustomerSelect
+            options={customerPickerOptions}
             value={contactId}
-            onChange={(e) => {
-              setContactId(e.target.value);
-              setCustomerSearch("");
-            }}
-            style={inputStyle}
-            aria-label="Customer"
-          >
-            <option value="">Select customer *</option>
-            {contactId &&
-              !filteredCustomers.some(
-                (c) => String(c.id) === String(contactId),
-              ) && (
-                <option value={contactId}>
-                  {(selectedCustomer?.name ||
-                    contactsById[contactId]?.name ||
-                    `Contact #${contactId}`) +
-                    (selectedCustomer?.subBrand &&
-                    selectedCustomer.subBrand !== subBrand
-                      ? ` — ${SUB_BRAND_LABELS[selectedCustomer.subBrand] || selectedCustomer.subBrand}`
-                      : "")}
-                </option>
-              )}
-            {filteredCustomers.map((c) => (
-              <option key={c.id} value={String(c.id)}>
-                {(c.name || `Contact #${c.id}`) +
-                  (c.email ? ` — ${c.email}` : "") +
-                  (!c.subBrand ? " · (unassigned)" : "")}
-              </option>
-            ))}
-          </select>
+            onChange={setContactId}
+            currentSubBrand={subBrand}
+            placeholder="Select customer *"
+          />
           <span
             style={{
               fontSize: 11,
@@ -2721,7 +2858,7 @@ export default function QuoteBuilder() {
       <section
         className="glass"
         aria-label="Plan trip"
-        style={{ padding: 16, marginBottom: 16 }}
+        style={{ padding: 16, marginBottom: 16, position: "relative", zIndex: 1 }}
       >
         <h2
           style={{

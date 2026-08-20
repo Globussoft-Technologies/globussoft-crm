@@ -23,7 +23,7 @@
 // renders a graceful "access denied" surface for USER role rather than
 // crashing on the 403.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BadgeCheck,
   XCircle,
@@ -33,10 +33,12 @@ import {
   Trash2,
   ShieldAlert,
   Upload,
+  ChevronUp,
   List,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import SearchHighlight from "../../components/ui/SearchHighlight";
 
 const REJECT_REASONS = [
   { value: "blurry_photo", label: "Blurry / unreadable photo" },
@@ -82,6 +84,31 @@ function rowBase(row) {
     : `/api/travel/passport/participants/${id}`;
 }
 
+function requestSearchText(row) {
+  return [
+    row.fullName,
+    row.trip?.tripCode,
+    row.trip?.destination,
+    row.passportNumber,
+    row.extraction?.passportNumber,
+    row.subBrand,
+    row.relationship,
+    row.provider,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function compareRequests(a, b, sortOrder = "oldest") {
+  const aTime = new Date(a.extractedAt || 0).getTime();
+  const bTime = new Date(b.extractedAt || 0).getTime();
+  if (aTime !== bTime) {
+    return sortOrder === "newest" ? bTime - aTime : aTime - bTime;
+  }
+  return String(a.fullName || "").localeCompare(String(b.fullName || ""));
+}
+
 const SUB_BRAND_LABEL = {
   tmc: "TMC",
   rfu: "RFU",
@@ -94,13 +121,15 @@ function PassportVerificationTab() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortOrder, setSortOrder] = useState("oldest");
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState({});
   const [rejectingId, setRejectingId] = useState(null);
   const [rejectReason, setRejectReason] = useState("blurry_photo");
   const [busyId, setBusyId] = useState(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true);
     setError(null);
     fetchApi("/api/travel/passport/verification-queue")
@@ -112,9 +141,14 @@ function PassportVerificationTab() {
         setError(e?.message || "Failed to load verification queue");
         setLoading(false);
       });
-  };
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const visibleRows = [...rows]
+    .filter((row) => !normalizedSearch || requestSearchText(row).includes(normalizedSearch))
+    .sort((a, b) => compareRequests(a, b, sortOrder));
 
   const startEdit = (row) => {
     setEditingId(rowKey(row));
@@ -188,7 +222,7 @@ function PassportVerificationTab() {
 
   // ── Styles (theme variables) ──────────────────────────────────────
 
-  const wrap = { padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" };
+  const wrap = { display: "flex", flexDirection: "column", gap: 16 };
   const headerStyle = {
     display: "flex", alignItems: "center", gap: 12, marginBottom: 8,
   };
@@ -198,9 +232,10 @@ function PassportVerificationTab() {
   const card = {
     background: "var(--surface-color)",
     border: "1px solid var(--border-color)",
-    borderRadius: 8,
-    padding: 16,
+    borderRadius: 12,
+    padding: 20,
     marginBottom: 12,
+    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
   };
   const fieldGrid = {
     display: "grid",
@@ -249,6 +284,43 @@ function PassportVerificationTab() {
     borderRadius: 4, fontSize: 13, width: "100%",
     background: "var(--bg-color)", color: "var(--text-primary)",
   };
+  const controlsGrid = {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1.4fr) minmax(220px, 0.75fr) auto",
+    gap: 14,
+    alignItems: "end",
+  };
+  const controlsShell = {
+    marginTop: 12,
+    marginBottom: 16,
+    padding: 16,
+    border: "1px solid var(--border-color)",
+    borderRadius: 10,
+    background: "var(--subtle-bg, rgba(255,255,255,0.04))",
+  };
+  const controlLabel = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    fontSize: 13,
+    color: "var(--text-secondary)",
+    minWidth: 0,
+  };
+  const resultsSummary = {
+    marginTop: 8,
+    fontSize: 12,
+    color: "var(--text-secondary)",
+  };
+  const filterField = {
+    width: "100%",
+    height: 40,
+    boxSizing: "border-box",
+    padding: "0 12px",
+    border: "1px solid var(--border-color)",
+    borderRadius: 6,
+    background: "var(--bg-color)",
+    color: "var(--text-primary)",
+  };
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -271,6 +343,55 @@ function PassportVerificationTab() {
         STUB mode: extractions returned by the canned vendor stub pending PC-1 decision.
       </p>
 
+      <div style={controlsShell}>
+        <div style={controlsGrid}>
+          <label style={controlLabel}>
+            Search participants
+            <input
+              type="search"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search name, trip code, destination, or passport number"
+              aria-label="Search passport participants"
+              style={filterField}
+            />
+          </label>
+          <label style={controlLabel}>
+            Request order
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value)}
+              aria-label="Sort passport requests"
+              style={filterField}
+            >
+              <option value="oldest">Oldest first</option>
+              <option value="newest">Newest first</option>
+            </select>
+          </label>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "flex-end" }}>
+            {(searchTerm || sortOrder !== "oldest") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchTerm("");
+                  setSortOrder("oldest");
+                }}
+                style={secondaryBtn}
+                aria-label="Reset passport verification filters"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {!loading && !error && rows.length > 0 && (
+        <div style={resultsSummary}>
+          Showing {visibleRows.length} of {rows.length} request{rows.length === 1 ? "" : "s"}
+        </div>
+      )}
+
       {loading && <div style={card}>Loading verification queue&hellip;</div>}
 
       {error && (
@@ -291,7 +412,13 @@ function PassportVerificationTab() {
         </div>
       )}
 
-      {!loading && !error && rows.map((row) => {
+      {!loading && !error && rows.length > 0 && visibleRows.length === 0 && (
+        <div style={{ ...card, textAlign: "center", color: "var(--text-secondary)" }}>
+          No passport verification requests match your search.
+        </div>
+      )}
+
+      {!loading && !error && visibleRows.map((row) => {
         const ex = row.extraction || {};
         const key = rowKey(row);
         const isEditing = editingId === key;
@@ -303,7 +430,7 @@ function PassportVerificationTab() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)" }}>
-                  {row.fullName}
+                  <SearchHighlight text={row.fullName} query={searchTerm} />
                   {row.rejectedAt && (
                     <span style={{
                       marginLeft: 8, fontSize: 11, fontWeight: 600,
@@ -317,20 +444,42 @@ function PassportVerificationTab() {
                 <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>
                   {row.kind === "customer" ? (
                     <>
-                      Source: <strong>{SUB_BRAND_LABEL[row.subBrand] || row.subBrand || "Customer"}</strong>
+                      Source: <strong>
+                        <SearchHighlight
+                          text={SUB_BRAND_LABEL[row.subBrand] || row.subBrand || "Customer"}
+                          query={searchTerm}
+                        />
+                      </strong>
                       {" · "}customer portal
-                      {row.relationship ? ` · ${row.relationship}` : ""}
+                      {row.relationship ? (
+                        <>
+                          {" · "}
+                          <SearchHighlight text={row.relationship} query={searchTerm} />
+                        </>
+                      ) : ""}
                     </>
                   ) : (
                     <>
-                      Trip: <strong>{row.trip?.tripCode || "—"}</strong>
-                      {row.trip?.destination ? ` · ${row.trip.destination}` : ""}
+                      Trip: <strong>
+                        <SearchHighlight text={row.trip?.tripCode || "—"} query={searchTerm} />
+                      </strong>
+                      {row.trip?.destination ? (
+                        <>
+                          {" · "}
+                          <SearchHighlight text={row.trip.destination} query={searchTerm} />
+                        </>
+                      ) : ""}
                     </>
                   )}
                 </div>
                 <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
                   Extracted {fmtDateTime(row.extractedAt)}
-                  {row.provider ? ` · provider: ${row.provider}` : ""}
+                  {row.provider ? (
+                    <>
+                      {" · provider: "}
+                      <SearchHighlight text={row.provider} query={searchTerm} />
+                    </>
+                  ) : ""}
                   {row.confidence != null ? ` · confidence: ${fmtConfidence(row.confidence)}` : ""}
                 </div>
               </div>
@@ -362,22 +511,23 @@ function PassportVerificationTab() {
               </div>
             )}
 
-            {Array.isArray(row.identityCandidates) && row.identityCandidates.length > 0 && (
-              <div style={{
-                marginTop: 12,
-                padding: "10px 12px",
-                borderRadius: 6,
+                {Array.isArray(row.identityCandidates) && row.identityCandidates.length > 0 && (
+                  <div style={{
+                    marginTop: 12,
+                    padding: "10px 12px",
+                    borderRadius: 6,
                 fontSize: 13,
                 background: "rgba(200,154,78,0.12)",
                 border: "1px solid rgba(200,154,78,0.35)",
                 color: "#8A5F1D",
-              }}>
+                }}>
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>
                   Possible existing master/client match
                 </div>
                 {row.identityCandidates.slice(0, 3).map((candidate) => (
                   <div key={`${candidate.sourceType}:${candidate.sourceId}`}>
-                    {candidateLabel(candidate)} matched by {matchLabel(candidate)}
+                    <SearchHighlight text={candidateLabel(candidate)} query={searchTerm} /> matched by{" "}
+                    <SearchHighlight text={matchLabel(candidate)} query={searchTerm} />
                     {candidate.contact?.id ? ` - Contact #${candidate.contact.id}` : ""}
                   </div>
                 ))}
@@ -399,7 +549,9 @@ function PassportVerificationTab() {
                     aria-label="Edit passport number"
                   />
                 ) : (
-                  <div>{ex.passportNumber || "—"}</div>
+                  <div>
+                    <SearchHighlight text={ex.passportNumber || "—"} query={searchTerm} />
+                  </div>
                 )}
               </div>
               <div style={fieldBox}>
@@ -593,6 +745,7 @@ function PassportListTab() {
   const [directFiles, setDirectFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [summary, setSummary] = useState(null);
+  const [uploadPanelOpen, setUploadPanelOpen] = useState(false);
   const [assigningId, setAssigningId] = useState(null);
   const [contactSearch, setContactSearch] = useState('');
   const [contactOptions, setContactOptions] = useState([]);
@@ -605,7 +758,7 @@ function PassportListTab() {
   const sentinelRef = useRef(null);
   const loadingMoreRef = useRef(false);
 
-  const load = (
+  const load = useCallback((
     nextPage = page,
     nextSearch = search,
     nextStatus = statusFilter,
@@ -645,11 +798,11 @@ function PassportListTab() {
         if (isAppend) setLoadingMore(false);
         else setLoading(false);
       });
-  };
+  }, [page, search, statusFilter, sourceFilter]);
 
   useEffect(() => {
     load(page, search, statusFilter, sourceFilter, page === 1 ? 'replace' : 'append');
-  }, [page, search, statusFilter, sourceFilter]);
+  }, [load, page, search, statusFilter, sourceFilter]);
 
   useEffect(() => {
     if (!listRef.current || loading || loadingMore || !meta.hasNext || rows.length === 0) return;
@@ -818,6 +971,12 @@ function PassportListTab() {
   const selectStyle = { ...input, minWidth: 0 };
   const primaryBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer' };
   const secondaryBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' };
+  const toggleBtn = (isOpen) => ({
+    ...secondaryBtn,
+    borderColor: isOpen ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)',
+    background: isOpen ? 'var(--subtle-bg, rgba(255,255,255,0.04))' : 'transparent',
+    fontWeight: 600,
+  });
 
   return (
     <div style={wrap}>
@@ -832,7 +991,89 @@ function PassportListTab() {
           <button type="button" onClick={() => resetAndReload()} style={secondaryBtn} aria-label="Refresh passport list">
             <RefreshCw size={14} aria-hidden /> Refresh
           </button>
+          <button
+            type="button"
+            onClick={() => setUploadPanelOpen((current) => !current)}
+            style={toggleBtn(uploadPanelOpen)}
+            aria-expanded={uploadPanelOpen}
+            aria-controls="passport-bulk-upload-panel"
+          >
+            {uploadPanelOpen ? <ChevronUp size={14} aria-hidden /> : <Upload size={14} aria-hidden />}
+            {uploadPanelOpen ? 'Hide uploads' : 'Bulk uploads'}
+          </button>
         </div>
+
+        {uploadPanelOpen && (
+          <div
+            id="passport-bulk-upload-panel"
+            style={{
+              marginBottom: 16,
+              padding: 16,
+              borderRadius: 10,
+              border: '1px solid var(--border-color)',
+              background: 'var(--subtle-bg, rgba(255,255,255,0.04))',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 600 }}>Bulk uploads</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4 }}>
+                  Upload passports from a ZIP archive or individual files. Collapse the panel once you are done.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: 12 }}>
+              <label style={label}>
+                ZIP archive
+                <input type="file" accept=".zip" onChange={pickArchive} aria-label="Passport ZIP archive" style={input} />
+              </label>
+              <label style={label}>
+                Direct files
+                <input type="file" multiple accept=".jpg,.jpeg,.png,.pdf" onChange={pickFiles} aria-label="Passport files" style={input} />
+              </label>
+            </div>
+
+            <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
+              For best auto-matching, name each file after the traveller&apos;s full name. Unmatched files are kept in the imported passport inbox for contact assignment later.
+            </div>
+
+            {(archiveFile || directFiles.length > 0) && (
+              <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
+                {archiveFile ? `Selected ZIP: ${archiveFile.name}` : `Selected files: ${directFiles.map((f) => f.name).join(', ')}`}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+              <button type="button" onClick={submitBulkUpload} disabled={uploading} style={primaryBtn} aria-label="Upload passports in bulk">
+                <Upload size={14} aria-hidden /> {uploading ? 'Uploading...' : 'Upload bulk passports'}
+              </button>
+              <button type="button" onClick={() => { setArchiveFile(null); setDirectFiles([]); setSummary(null); }} disabled={uploading} style={secondaryBtn}>
+                Clear selection
+              </button>
+            </div>
+
+            {summary && (
+              <div data-testid="passport-bulk-summary" style={{ marginTop: 16, padding: 12, borderRadius: 6, background: 'var(--subtle-bg, rgba(255,255,255,0.04))', border: '1px solid var(--border-color)' }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Bulk upload summary</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  Total: {summary.total || 0} - Queued: {summary.queued || 0} - Skipped: {summary.skipped || 0} - Failed: {summary.failed || 0}
+                </div>
+                {Array.isArray(summary.results) && summary.results.length > 0 && (
+                  <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {summary.results.slice(0, 12).map((item) => (
+                      <div key={`${item.fileName}-${item.status}`} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        <strong style={{ color: 'var(--text-primary)' }}>{item.fileName}</strong> - {item.status}
+                        {item.matchedTo ? ` - ${item.matchedTo}` : ''}
+                        {item.message ? ` - ${item.message}` : ''}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) repeat(2, minmax(180px, 0.75fr))', gap: 12, marginBottom: 16 }}>
           <label style={label}>
@@ -894,56 +1135,6 @@ function PassportListTab() {
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 16 }}>
           Search runs against the full passport database. Filters help staff focus on imported inbox passports, unresolved pending items, or verified trip-linked records.
         </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: 12 }}>
-          <label style={label}>
-            ZIP archive
-            <input type="file" accept=".zip" onChange={pickArchive} aria-label="Passport ZIP archive" style={input} />
-          </label>
-          <label style={label}>
-            Direct files
-            <input type="file" multiple accept=".jpg,.jpeg,.png,.pdf" onChange={pickFiles} aria-label="Passport files" style={input} />
-          </label>
-        </div>
-
-        <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
-          For best auto-matching, name each file after the traveller's full name. Unmatched files are kept in the imported passport inbox for contact assignment later.
-        </div>
-
-        {(archiveFile || directFiles.length > 0) && (
-          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
-            {archiveFile ? `Selected ZIP: ${archiveFile.name}` : `Selected files: ${directFiles.map((f) => f.name).join(', ')}`}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-          <button type="button" onClick={submitBulkUpload} disabled={uploading} style={primaryBtn} aria-label="Upload passports in bulk">
-            <Upload size={14} aria-hidden /> {uploading ? 'Uploading...' : 'Upload bulk passports'}
-          </button>
-          <button type="button" onClick={() => { setArchiveFile(null); setDirectFiles([]); setSummary(null); }} disabled={uploading} style={secondaryBtn}>
-            Clear selection
-          </button>
-        </div>
-
-        {summary && (
-          <div data-testid="passport-bulk-summary" style={{ marginTop: 16, padding: 12, borderRadius: 6, background: 'var(--subtle-bg, rgba(255,255,255,0.04))', border: '1px solid var(--border-color)' }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Bulk upload summary</div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-              Total: {summary.total || 0} - Queued: {summary.queued || 0} - Skipped: {summary.skipped || 0} - Failed: {summary.failed || 0}
-            </div>
-            {Array.isArray(summary.results) && summary.results.length > 0 && (
-              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {summary.results.slice(0, 12).map((item) => (
-                  <div key={`${item.fileName}-${item.status}`} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                    <strong style={{ color: 'var(--text-primary)' }}>{item.fileName}</strong> - {item.status}
-                    {item.matchedTo ? ` - ${item.matchedTo}` : ''}
-                    {item.message ? ` - ${item.message}` : ''}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {loading && <div style={card}>Loading passport list...</div>}
@@ -970,29 +1161,58 @@ function PassportListTab() {
                 <div key={key} style={card}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                     <div>
-                      <div style={{ fontSize: 16, fontWeight: 600 }}>{row.fullName}</div>
-                      <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
-                        {row.kind === 'trip'
-                          ? `Trip: ${row.trip?.tripCode || '-'}${row.trip?.destination ? ` - ${row.trip.destination}` : ''}`
-                          : isInbox
-                            ? 'Imported passport inbox'
-                            : `Customer traveller - ${row.subBrand || 'travel'}`}
+                      <div style={{ fontSize: 16, fontWeight: 600 }}>
+                        <SearchHighlight text={row.fullName} query={search} />
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                        Passport #: {row.passportNumber || '-'} - Uploaded: {fmtDateTime(row.extractedAt)}
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {row.kind === 'trip'
+                          ? (
+                            <>
+                              Trip: <strong>
+                                <SearchHighlight text={row.trip?.tripCode || '-'} query={search} />
+                              </strong>
+                              {row.trip?.destination ? (
+                                <>
+                                  {" - "}
+                                  <SearchHighlight text={row.trip.destination} query={search} />
+                                </>
+                              ) : ""}
+                            </>
+                          )
+                          : isInbox ? (
+                            <SearchHighlight text="Imported passport inbox" query={search} />
+                          ) : (
+                            <>
+                              Customer traveller -{" "}
+                              <SearchHighlight text={row.subBrand || 'travel'} query={search} />
+                            </>
+                          )}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                        Passport #: <SearchHighlight text={row.passportNumber || '-'} query={search} /> - Uploaded: {fmtDateTime(row.extractedAt)}
                         {row.verifiedAt ? ` - Verified: ${fmtDateTime(row.verifiedAt)}` : ''}
                       </div>
                       {row.kind === 'customer' && row.contactId > 0 && row.contactName && (
                         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                          Linked contact: {row.contactName}
-                          {row.contactEmail ? ` - ${row.contactEmail}` : ''}
-                          {row.contactPhone ? ` - ${row.contactPhone}` : ''}
+                          Linked contact: <SearchHighlight text={row.contactName} query={search} />
+                          {row.contactEmail ? (
+                            <>
+                              {" - "}
+                              <SearchHighlight text={row.contactEmail} query={search} />
+                            </>
+                          ) : ''}
+                          {row.contactPhone ? (
+                            <>
+                              {" - "}
+                              <SearchHighlight text={row.contactPhone} query={search} />
+                            </>
+                          ) : ''}
                         </div>
                       )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ padding: '4px 8px', borderRadius: 999, fontSize: 12, fontWeight: 600, background: row.status === 'verified' ? 'rgba(47,122,77,0.14)' : row.status === 'rejected' ? 'rgba(168,50,63,0.14)' : 'rgba(200,154,78,0.18)', color: row.status === 'verified' ? '#2F7A4D' : row.status === 'rejected' ? '#A8323F' : '#9A6F2E' }}>
-                        {row.status}
+                        <SearchHighlight text={row.status} query={search} />
                       </span>
                       {isInbox && (
                         <button type="button" onClick={() => openAssignPanel(row)} style={secondaryBtn} aria-label={`Assign contact for ${row.fullName}`}>
@@ -1060,7 +1280,7 @@ function PassportListTab() {
                                     }}
                                     aria-label={`Select ${contact.name || `contact ${contact.id}`} for passport assignment`}
                                   >
-                                    {labelText}
+                                    <SearchHighlight text={labelText} query={contactSearch} />
                                   </button>
                                 );
                               })

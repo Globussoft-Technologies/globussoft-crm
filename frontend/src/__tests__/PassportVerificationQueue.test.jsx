@@ -6,6 +6,8 @@
  * backend/routes/travel_passport.js. Verifies:
  *   - Page header + tabs render.
  *   - Passport List tab fetches the uploaded-passport list endpoint.
+ *   - Passport Verification search filters participants client-side.
+ *   - Request order toggles between oldest-first and newest-first.
  *   - Empty state renders PRD-correct messaging.
  *   - Data rows render fullName / trip code / extracted fields.
  *   - Approve happy path POSTs /passport-verify with approved=true.
@@ -156,6 +158,65 @@ describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
     expect(await screen.findByText(/No uploaded passports found for the current search and filters\./i)).toBeTruthy();
   });
 
+  it('opens and collapses the bulk uploads panel from the top action button', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl([]));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Passport List tab/i }));
+
+    expect(screen.queryByLabelText(/Passport ZIP archive/i)).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Bulk uploads/i }));
+
+    expect(await screen.findByLabelText(/Passport ZIP archive/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Hide uploads/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/Passport ZIP archive/i)).toBeNull();
+    });
+  });
+
+  it('searches the passport verification queue by participant name and trip details', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_PENDING));
+    renderPage();
+
+    await screen.findByText('Jane Doe');
+
+    const searchInput = screen.getByLabelText(/Search passport participants/i);
+    fireEvent.change(searchInput, { target: { value: 'Yusuf' } });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Jane Doe')).toBeNull();
+    });
+    expect(screen.getByText((_, element) => element?.textContent === 'Yusuf Rahman')).toBeTruthy();
+    expect(screen.getByText('Yusuf', { selector: 'mark' })).toBeTruthy();
+  });
+
+  it('sorts passport verification requests by newest and oldest first', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_PENDING));
+    renderPage();
+
+    await screen.findByText('Jane Doe');
+
+    const sortSelect = screen.getByLabelText(/Sort passport requests/i);
+    expect(screen.getByText('Jane Doe').compareDocumentPosition(screen.getByText('Yusuf Rahman')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.change(sortSelect, { target: { value: 'newest' } });
+
+    await waitFor(() => {
+      const jane = screen.getByText('Jane Doe');
+      const yusuf = screen.getByText('Yusuf Rahman');
+      expect(yusuf.compareDocumentPosition(jane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    fireEvent.change(sortSelect, { target: { value: 'oldest' } });
+
+    await waitFor(() => {
+      const jane = screen.getByText('Jane Doe');
+      const yusuf = screen.getByText('Yusuf Rahman');
+      expect(jane.compareDocumentPosition(yusuf) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+  });
+
   it('searches the full passport list through the backend and keeps the 3-row page contract', async () => {
     const passportRows = [
       {
@@ -201,7 +262,8 @@ describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/passport-list?page=1&pageSize=3&q=Ahmed&status=&source=');
     });
-    expect(await screen.findByText('Ahmed Khan')).toBeTruthy();
+    expect(screen.getAllByText((_, element) => element?.textContent?.includes('Ahmed Khan')).length).toBeGreaterThan(0);
+    expect(screen.getByText('Ahmed', { selector: 'mark' })).toBeTruthy();
     expect(screen.getByText(/Loaded 1 of 7 passports - more load automatically as you scroll/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Next passport page/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Previous passport page/i })).toBeNull();
@@ -260,6 +322,14 @@ describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/contact-search?q=&limit=10');
     });
 
+    const contactSearchInput = await screen.findByLabelText(/Search contact for passport assignment/i);
+    fireEvent.change(contactSearchInput, { target: { value: 'Jane' } });
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/contact-search?q=Jane&limit=10');
+    });
+    expect(screen.getByText('Jane', { selector: 'mark' })).toBeTruthy();
+
     fireEvent.click(await screen.findByRole('button', { name: /Select Jane Doe for passport assignment/i }));
     fireEvent.click(screen.getByRole('button', { name: /Save Assignment/i }));
 
@@ -308,7 +378,7 @@ describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
     renderPage();
 
     await screen.findByText(/Possible existing master\/client match/i);
-    expect(screen.getByText(/matched by passport number/i)).toBeTruthy();
+    expect(screen.getAllByText((_, element) => element?.textContent?.includes('matched by passport number')).length).toBeGreaterThan(0);
     expect(screen.getByText(/Contact #3140/i)).toBeTruthy();
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);

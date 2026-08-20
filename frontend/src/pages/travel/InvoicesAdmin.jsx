@@ -40,7 +40,7 @@
 
 import { useEffect, useRef, useState, useContext } from "react";
 import { Link } from "react-router-dom";
-import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, History } from "lucide-react";
+import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, History, Upload } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
@@ -55,6 +55,7 @@ import { useActiveSubBrand } from "../../utils/subBrand";
 // Branding Wave 4 G102: per-sub-brand brand-kit lookup for primary CTA tint.
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
+import CountBadge from "../../components/CountBadge";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -876,9 +877,10 @@ export default function InvoicesAdmin() {
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
             <Receipt size={26} aria-hidden /> Travel Invoices
+            <CountBadge count={total} title={`${total.toLocaleString()} invoices`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-            Customer invoices — Draft / Issued / Partial / Paid / Voided. {total.toLocaleString()} invoice{total === 1 ? "" : "s"}.
+            Customer invoices — Draft / Issued / Partial / Paid / Voided.
           </p>
         </div>
         {canWrite && (
@@ -890,7 +892,7 @@ export default function InvoicesAdmin() {
               style={{ ...secondaryBtn, opacity: exporting ? 0.6 : 1, cursor: exporting ? "wait" : "pointer" }}
               title="Download an Excel workbook of invoices (for your CA / Excel Software for Travel)"
             >
-              <FileDown size={14} /> {exporting === "xlsx" ? "Exporting…" : "Excel"}
+              <Upload size={14} /> {exporting === "xlsx" ? "Exporting…" : "Excel"}
             </button>
             <button
               type="button"
@@ -899,7 +901,7 @@ export default function InvoicesAdmin() {
               style={{ ...secondaryBtn, opacity: exporting ? 0.6 : 1, cursor: exporting ? "wait" : "pointer" }}
               title="Download CA CSV (per-line, GST-split)"
             >
-              <FileDown size={14} /> {exporting === "csv" ? "Exporting…" : "CSV"}
+              <Upload size={14} /> {exporting === "csv" ? "Exporting…" : "CSV"}
             </button>
             <button
               type="button"
@@ -908,7 +910,7 @@ export default function InvoicesAdmin() {
               style={{ ...secondaryBtn, opacity: exporting ? 0.6 : 1, cursor: exporting ? "wait" : "pointer" }}
               title="Download Tally-importable XML vouchers"
             >
-              <FileDown size={14} /> {exporting === "tally" ? "Exporting…" : "Tally"}
+              <Upload size={14} /> {exporting === "tally" ? "Exporting…" : "Tally"}
             </button>
             <button type="button" onClick={openCreate} style={primaryBtnBranded}>
               <Plus size={14} /> New Invoice

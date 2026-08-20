@@ -31,6 +31,7 @@ import { useEffect, useState } from "react";
 import { MessageSquare, RefreshCw, AlertTriangle, Trash2 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import TopScrollSync from "../../components/TopScrollSync";
 
 const STATUS_FILTERS = [
@@ -166,6 +167,7 @@ export default function TravelWhatsAppLog() {
             }}
           >
             <MessageSquare size={26} aria-hidden /> WhatsApp
+            <CountBadge count={total} title={`${total.toLocaleString()} messages`} />
           </h1>
           <p
             style={{
@@ -175,8 +177,7 @@ export default function TravelWhatsAppLog() {
             }}
           >
             Travel WhatsApp dispatch log (Wati) — OTPs, reminders, itinerary
-            shares and boarding-pass deliveries. {total.toLocaleString()}{" "}
-            message{total === 1 ? "" : "s"}.
+            shares and boarding-pass deliveries.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>

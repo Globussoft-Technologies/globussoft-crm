@@ -41,6 +41,7 @@ describe('<TravelWhatsAppTemplates />', () => {
     fetchApiMock.mockResolvedValue({ templates: TEMPLATES, stub: false });
     renderPage();
     expect(await screen.findByRole('heading', { name: /WhatsApp Templates/i })).toBeInTheDocument();
+    expect(screen.getByTitle('2 templates')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Wati dashboard/i })).toHaveAttribute('href', 'https://app.wati.io');
     expect(screen.getByRole('link', { name: /Back to chat/i })).toHaveAttribute('href', '/travel/whatsapp');
   });

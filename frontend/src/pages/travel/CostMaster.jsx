@@ -1,7 +1,7 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  BadgePercent, IndianRupee, Download, Filter, Plus, Upload,
+  BadgePercent, IndianRupee, Upload, Download, Filter, Plus,
   Pencil, Trash2, Check, X,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
@@ -12,6 +12,7 @@ import {
   accessibleSubBrands, defaultSubBrandFor,
   SUB_BRAND_IDS, SUB_BRAND_LABEL,
 } from "../../utils/travelSubBrand";
+import CountBadge from "../../components/CountBadge";
 
 const CATEGORIES = [
   { value: "", label: "All categories" },
@@ -602,13 +603,14 @@ export default function CostMaster() {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 6 }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 8, margin: 0, fontSize: 22, fontWeight: 600, color: "var(--success-color, #3ecf7e)" }}>
           <IndianRupee size={22} aria-hidden /> Cost Master
+          <CountBadge count={total} title={`${total.toLocaleString()} cost rows`} />
         </h1>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Link to="/travel/pricing-rules" style={{ ...secondaryBtn, textDecoration: "none" }}>
             <BadgePercent size={14} /> Pricing rules
           </Link>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
           </button>
           <button type="button" onClick={() => downloadTemplate("csv")} style={secondaryBtn}>
             <Download size={14} /> Download CSV Template
@@ -618,7 +620,7 @@ export default function CostMaster() {
           </button>
           <button type="button" onClick={() => fileRef.current?.click()} style={secondaryBtn}
             title="Bulk-upload supplier rates (CSV or Excel). Columns: subBrand, category, routeOrSku, supplierName, baseRate, currency, seasonName, validFrom, validTo, hotelView, hotelFloorLevel, roomCategory, isActive.">
-            <Upload size={14} /> Import CSV/Excel
+            <Download size={14} /> Import CSV/Excel
           </button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,text/csv" onChange={importCsv}
             style={{ display: "none" }} aria-label="Upload cost-master CSV or Excel file" />

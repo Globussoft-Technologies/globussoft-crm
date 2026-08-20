@@ -47,6 +47,7 @@ import { ShieldOff, Plus, Pencil, Trash2, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 import {
   SUB_BRAND_BG,
   accessibleSubBrands,
@@ -483,13 +484,16 @@ export default function CancellationPolicies() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: 12,
               margin: 0,
               fontSize: "1.75rem",
               fontWeight: 600,
+              lineHeight: 1.15,
+              flexWrap: "wrap",
             }}
           >
             <ShieldOff size={26} aria-hidden /> Cancellation Policies
+            <CountBadge count={total} title={`${total.toLocaleString()} policies`} />
           </h1>
           <p
             style={{
@@ -498,8 +502,7 @@ export default function CancellationPolicies() {
               fontSize: "0.9rem",
             }}
           >
-            Per-sub-brand refund ladders for travel invoice voids. {" "}
-            {total.toLocaleString()} polic{total === 1 ? "y" : "ies"}.
+            Per-sub-brand refund ladders for travel invoice voids.
           </p>
         </div>
         {canWrite && (

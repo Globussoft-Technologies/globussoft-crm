@@ -10,7 +10,7 @@
 // and generic verticals); the route is mounted at /wellness/attendance for
 // the wellness sidebar but the page itself doesn't gate on tenant.vertical.
 import { useEffect, useState, useContext } from 'react';
-import { Clock, LogIn, LogOut, Calendar, Users } from 'lucide-react';
+import { Clock, LogIn, LogOut, Calendar, Users, Upload } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
@@ -482,7 +482,7 @@ function ManagerStaffSnapshot() {
               cursor: exporting ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600,
             }}
           >
-            Export Payroll CSV
+            <Upload size={14} /> Export Payroll CSV
           </button>
         </div>
       </div>

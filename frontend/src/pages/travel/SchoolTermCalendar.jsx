@@ -373,7 +373,7 @@ export default function SchoolTermCalendar() {
             <input ref={importInputRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => setImportFile(e.target.files?.[0] || null)} style={inp} />
           </Field>
           <button type="button" onClick={handleImport} disabled={importing || !importFile} style={{ ...btn, opacity: importing || !importFile ? 0.6 : 1 }}>
-            <Upload size={14} aria-hidden /> {importing ? "Importing..." : "Import rows"}
+            <Download size={14} aria-hidden /> {importing ? "Importing..." : "Import rows"}
           </button>
         </div>
         {importResult && (

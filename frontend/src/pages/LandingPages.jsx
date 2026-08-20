@@ -1,12 +1,97 @@
-import React, { useState, useEffect } from 'react';
-import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, BarChart3, Star, Sparkles, AlertCircle, ExternalLink } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Star, Sparkles, AlertCircle, ExternalLink, Search, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
 import { useNotify } from '../utils/notify';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
 
 const STATUS_COLORS = { DRAFT: { bg: 'rgba(59,130,246,0.1)', color: '#3b82f6' }, PUBLISHED: { bg: 'rgba(16,185,129,0.1)', color: '#10b981' }, ARCHIVED: { bg: 'rgba(107,114,128,0.1)', color: '#6b7280' } };
+const LANDING_PAGES_PUBLIC_EXPERIENCE_LABEL = 'Public experience';
+function isDarkDocumentTheme() {
+  if (typeof document === 'undefined') return false;
+  return document.documentElement.getAttribute('data-theme') === 'dark';
+}
+
+function useDocumentTheme() {
+  const [theme, setTheme] = useState(() => (isDarkDocumentTheme() ? 'dark' : 'light'));
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') {
+      return undefined;
+    }
+
+    const root = document.documentElement;
+    const syncTheme = () => {
+      setTheme(root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+    };
+
+    syncTheme();
+
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+
+    return () => observer.disconnect();
+  }, []);
+
+  return theme;
+}
+
+function getLandingPageCardStyle(isDarkTheme) {
+  return {
+    background: isDarkTheme
+      ? 'linear-gradient(180deg, rgba(17, 20, 27, 0.98), rgba(10, 12, 16, 0.95))'
+      : 'linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 255, 0.96))',
+    border: isDarkTheme
+      ? '1px solid rgba(255, 255, 255, 0.08)'
+      : '1px solid rgba(148, 163, 184, 0.22)',
+    boxShadow: isDarkTheme
+      ? '0 20px 50px rgba(0, 0, 0, 0.42)'
+      : '0 18px 42px rgba(15, 23, 42, 0.08)',
+    backdropFilter: 'blur(12px)',
+    WebkitBackdropFilter: 'blur(12px)',
+    borderRadius: '18px',
+  };
+}
+
+function getLandingPageMetricTileStyle(isDarkTheme) {
+  return {
+    textAlign: 'center',
+    padding: '0.75rem 0.5rem',
+    background: isDarkTheme
+      ? 'linear-gradient(180deg, rgba(26, 31, 40, 0.98), rgba(18, 22, 29, 0.96))'
+      : 'linear-gradient(180deg, rgba(246, 249, 252, 0.98), rgba(239, 244, 249, 0.94))',
+    border: isDarkTheme
+      ? '1px solid rgba(255, 255, 255, 0.05)'
+      : '1px solid rgba(148, 163, 184, 0.14)',
+    borderRadius: '8px',
+    boxShadow: isDarkTheme
+      ? 'inset 0 1px 0 rgba(255, 255, 255, 0.03)'
+      : 'inset 0 1px 0 rgba(255, 255, 255, 0.72)',
+  };
+}
+
+function getLandingPagesFilterButtonStyle(isDarkTheme, active) {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '0.4rem',
+    padding: '0.45rem 0.8rem',
+    borderRadius: 999,
+    border: active ? '1px solid transparent' : '1px solid var(--border-color)',
+    background: active
+      ? 'linear-gradient(135deg, var(--primary-color, var(--accent-color)), var(--accent-hover))'
+      : isDarkTheme
+        ? 'rgba(255,255,255,0.03)'
+        : 'rgba(255,255,255,0.8)',
+    color: active ? '#fff' : 'var(--text-primary)',
+    boxShadow: active ? '0 10px 18px rgba(37, 99, 235, 0.18)' : 'none',
+    cursor: 'pointer',
+    fontSize: '0.8rem',
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
+  };
+}
 
 function friendlyAiError(rawError) {
   if (!rawError) return null;
@@ -17,8 +102,24 @@ function friendlyAiError(rawError) {
   return null;
 }
 
+function createGenFormDefaults(tripContext = null, overrides = {}) {
+  return {
+    destination: tripContext?.destination || '',
+    durationDays: tripContext?.durationDays || 7,
+    audience: tripContext?.audience || '',
+    subBrand: tripContext?.subBrand || 'tmc',
+    style: 'premium',
+    ...overrides,
+  };
+}
+
 export default function LandingPages() {
   const notify = useNotify();
+  const location = useLocation();
+  const themeName = useDocumentTheme();
+  const isDarkTheme = themeName === 'dark';
+  const pageReturnState = location.state?.returnTo ? location.state : null;
+  const tripLandingPageContext = pageReturnState?.tripContext || null;
   const [pages, setPages] = useState([]);
   const [templates, setTemplates] = useState([]);
   // Phase D1 — premium template catalogue (educational-trip-v1 etc.).
@@ -46,24 +147,64 @@ export default function LandingPages() {
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
   const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
   const [copiedId, setCopiedId] = useState(null);
-  const [featuringId, setFeaturingId] = useState(null);
-  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
-  // Filter by createdAt so users can scope to "pages created this month" etc.
-  // The analytics (visits/leads/conv) shown on each card are still all-time;
-  // a per-page analytics-window filter belongs on the page-detail screen.
-  const visiblePages = ((rangeStart && rangeEnd)
-    ? pages.filter((p) => {
-        const ts = new Date(p.createdAt).getTime();
-        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
-      })
-    : pages
-  ).slice().sort((a, b) => {
-    // Pin: featured+published always first, then published, then drafts
-    const rank = (p) => (p.isFeatured && p.status === 'PUBLISHED') ? 0 : p.status === 'PUBLISHED' ? 1 : 2;
-    return rank(a) - rank(b);
-  });
+  const cardSurfaceStyle = getLandingPageCardStyle(isDarkTheme);
+  const metricTileStyle = getLandingPageMetricTileStyle(isDarkTheme);
+  useEffect(() => {
+    if (tripLandingPageContext) {
+      setGenForm(createGenFormDefaults(tripLandingPageContext));
+    }
+  }, [tripLandingPageContext]);
+  const openGenerateModal = () => {
+    if (tripLandingPageContext) {
+      setGenForm(createGenFormDefaults(tripLandingPageContext));
+    }
+    setGenError(null);
+    setShowGenerateModal(true);
+  };
+  const summaryAndVisiblePages = useMemo(() => {
+    const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+    const counts = pages.reduce((acc, page) => {
+      acc.total += 1;
+      if (page.status === 'PUBLISHED') acc.published += 1;
+      else if (page.status === 'DRAFT') acc.draft += 1;
+      else if (page.status === 'ARCHIVED') acc.archived += 1;
+      return acc;
+    }, { total: 0, published: 0, draft: 0, archived: 0 });
+
+    const term = searchQuery.trim().toLowerCase();
+    const filtered = pages.filter((page) => {
+      if (rangeStart && rangeEnd) {
+        const ts = new Date(page.createdAt).getTime();
+        if (ts < rangeStart.getTime() || ts > rangeEnd.getTime()) return false;
+      }
+      if (statusFilter !== 'ALL' && page.status !== statusFilter) return false;
+      if (term) {
+        const haystack = [page.title, page.slug, page.status].filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(term)) return false;
+      }
+      return true;
+    }).slice().sort((a, b) => {
+      // Pin: featured+published always first, then published, then drafts.
+      const rank = (p) => (p.isFeatured && p.status === 'PUBLISHED') ? 0 : p.status === 'PUBLISHED' ? 1 : 2;
+      return rank(a) - rank(b);
+    });
+
+    return {
+      counts,
+      visiblePages: filtered,
+    };
+  }, [dateFilter, pages, searchQuery, statusFilter]);
+  const { counts, visiblePages } = summaryAndVisiblePages;
+  const builderNavigationState = pageReturnState || undefined;
+  const statusFilterOptions = [
+    { value: 'ALL', label: 'All', count: counts.total },
+    { value: 'PUBLISHED', label: 'Published', count: counts.published },
+    { value: 'DRAFT', label: 'Drafts', count: counts.draft },
+  ];
 
   const loadPages = () => {
     setLoading(true);
@@ -107,13 +248,11 @@ export default function LandingPages() {
     const premium = premiumTemplates.find(t => t.id === templateType);
     if (premium) {
       const family = (premium.family || '').toLowerCase();
-      setGenForm({
-        destination: '',
-        durationDays: 7,
-        audience: familyToAudience[family] || 'Travellers',
-        subBrand: familyToSubBrand[family] || 'travelstall',
+      setGenForm(createGenFormDefaults(tripLandingPageContext, {
+        audience: tripLandingPageContext?.audience || familyToAudience[family] || 'Travellers',
+        subBrand: tripLandingPageContext?.subBrand || familyToSubBrand[family] || 'travelstall',
         style: 'premium',
-      });
+      }));
       setGenError(null);
       setShowTemplatePicker(false);
       setShowGenerateModal(true);
@@ -136,7 +275,8 @@ export default function LandingPages() {
         silent: true,
       });
       setShowTemplatePicker(false);
-      navigate(`/landing-pages/builder/${page.id}`);
+      if (builderNavigationState) navigate(`/landing-pages/builder/${page.id}`, { state: builderNavigationState });
+      else navigate(`/landing-pages/builder/${page.id}`);
     } catch (err) {
       // 409 with existingId → server says a Draft with this title already
       // exists. Offer to open it instead of dead-ending in a generic error.
@@ -147,7 +287,10 @@ export default function LandingPages() {
         const ok = await notify.confirm(
           `${err.message}\n\nOpen the existing draft?`,
         );
-        if (ok) navigate(`/landing-pages/builder/${err.data.existingId}`);
+        if (ok) {
+          if (builderNavigationState) navigate(`/landing-pages/builder/${err.data.existingId}`, { state: builderNavigationState });
+          else navigate(`/landing-pages/builder/${err.data.existingId}`);
+        }
         return;
       }
       notify.error(err?.message || 'Failed to create page');
@@ -185,7 +328,10 @@ export default function LandingPages() {
         const ok = await notify.confirm(
           `Publish blocked — page is not ready (${issueCount} issue${issueCount === 1 ? '' : 's'} to fix).\n\nOpen the builder to see what's missing?`
         );
-        if (ok) navigate(`/landing-pages/builder/${id}`);
+        if (ok) {
+          if (builderNavigationState) navigate(`/landing-pages/builder/${id}`, { state: builderNavigationState });
+          else navigate(`/landing-pages/builder/${id}`);
+        }
       } else {
         notify.error(err?.message || 'Publish failed.');
       }
@@ -205,7 +351,7 @@ export default function LandingPages() {
     });
   };
 
-  const handleSetFeatured = async (page) => {
+  /* legacy featured toggle removed; keep the block here only if the action returns.
     if (featuringId) return;
     setFeaturingId(page.id);
     try {
@@ -220,7 +366,7 @@ export default function LandingPages() {
     } finally {
       setFeaturingId(null);
     }
-  };
+  */
 
   // PR-B — AI Generate flow. Posts to /generate-from-destination with
   // autoCreate=true so the backend creates the DRAFT row + returns its
@@ -278,8 +424,9 @@ export default function LandingPages() {
         notify.success('AI draft created. Review every section before publishing.');
       }
       setShowGenerateModal(false);
-      setGenForm({ destination: '', durationDays: 7, audience: '', subBrand: 'tmc', style: 'premium' });
-      navigate(`/landing-pages/builder/${res.page.id}?ai=1`);
+      setGenForm(createGenFormDefaults(tripLandingPageContext));
+      if (builderNavigationState) navigate(`/landing-pages/builder/${res.page.id}?ai=1`, { state: builderNavigationState });
+      else navigate(`/landing-pages/builder/${res.page.id}?ai=1`);
     } catch (err) {
       if (err?.status === 429 && err?.code === 'LLM_BUDGET_EXCEEDED') {
         setGenError("This tenant has reached its monthly LLM spend cap. Try again next month or raise the cap in tenant settings.");
@@ -315,6 +462,43 @@ export default function LandingPages() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
+      {pageReturnState && (
+        <nav
+          aria-label="Breadcrumb"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.45rem',
+            flexWrap: 'wrap',
+            marginBottom: '0.85rem',
+            fontSize: '0.82rem',
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <Link
+            to={pageReturnState.returnTo.path}
+            state={pageReturnState}
+            style={{
+              color: 'var(--primary-color, var(--accent-color))',
+              fontWeight: 600,
+              textDecoration: 'none',
+            }}
+          >
+            {pageReturnState.returnTo.label}
+          </Link>
+          <span aria-hidden="true">/</span>
+          <Link
+            to={pageReturnState.currentPath || pageReturnState.returnTo.path}
+            state={pageReturnState}
+            style={{
+              color: 'var(--text-primary)',
+              textDecoration: 'none',
+            }}
+          >
+            {pageReturnState.currentLabel || LANDING_PAGES_PUBLIC_EXPERIENCE_LABEL}
+          </Link>
+        </nav>
+      )}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <PanelTop size={24} style={{ color: 'var(--accent-color)' }} />
@@ -329,7 +513,7 @@ export default function LandingPages() {
               and we navigate straight to the builder. Pricing,
               testimonials, images stay manual. */}
           <button
-            onClick={() => { setShowGenerateModal(true); setGenError(null); }}
+            onClick={openGenerateModal}
             title="Generate a destination landing-page draft with AI"
             style={{
               display: 'flex', alignItems: 'center', gap: '0.4rem',
@@ -346,8 +530,85 @@ export default function LandingPages() {
         </div>
       </header>
 
+      {pages.length > 0 && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', flex: '1 1 560px', minWidth: 0 }}>
+              <div style={{ position: 'relative', flex: '1 1 320px', maxWidth: '420px', minWidth: '240px' }}>
+                <Search size={15} aria-hidden style={{ position: 'absolute', left: '0.8rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search landing pages"
+                  aria-label="Search landing pages"
+                  className="input-field"
+                  style={{ width: '100%', paddingLeft: '2.1rem', paddingRight: searchQuery ? '2.2rem' : '0.9rem' }}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    aria-label="Clear search"
+                    style={{
+                      position: 'absolute',
+                      right: '0.45rem',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--text-secondary)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                    }}
+                  >
+                    <X size={14} aria-hidden />
+                  </button>
+                )}
+              </div>
+              <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by created date" />
+            </div>
+            <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', alignSelf: 'center' }}>
+              {statusFilterOptions.map((option) => {
+                const active = statusFilter === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setStatusFilter(option.value)}
+                    aria-pressed={active}
+                    style={getLandingPagesFilterButtonStyle(isDarkTheme, active)}
+                  >
+                    <span>{option.label}</span>
+                    <span style={{
+                      minWidth: '1.75rem',
+                      padding: '0.1rem 0.45rem',
+                      borderRadius: 999,
+                      background: active ? 'rgba(255,255,255,0.18)' : 'var(--subtle-bg)',
+                      color: active ? '#fff' : 'var(--text-secondary)',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      textAlign: 'center',
+                    }}>
+                      {option.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {visiblePages.length !== counts.total && (
+            <div style={{ marginBottom: '0.9rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+              Showing {visiblePages.length.toLocaleString()} of {counts.total.toLocaleString()} landing pages
+            </div>
+          )}
+        </>
+      )}
+
       {loading ? <p style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading...</p> : pages.length === 0 ? (
-        <div className="card" style={{ padding: '4rem', textAlign: 'center' }}>
+        <div className="card" style={{ ...cardSurfaceStyle, padding: '4rem', textAlign: 'center' }}>
           <PanelTop size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
           <h3 style={{ marginBottom: '0.5rem' }}>No landing pages yet</h3>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Create your first landing page from a template to start capturing leads.</p>
@@ -355,17 +616,9 @@ export default function LandingPages() {
         </div>
       ) : (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-            <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by created date" />
-            {visiblePages.length !== pages.length && (
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                {visiblePages.length} of {pages.length}
-              </span>
-            )}
-          </div>
           {visiblePages.length === 0 ? (
-            <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-              No pages in the selected range.
+            <div className="card" style={{ ...cardSurfaceStyle, padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              No landing pages match the current search or filters.
             </div>
           ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
@@ -376,7 +629,16 @@ export default function LandingPages() {
             // an integer 0 fallback that rendered as bare "0%".
             const convRate = page.visits > 0 ? (page.submissions / page.visits) * 100 : 0;
             return (
-              <div key={page.id} className="card" style={{ padding: '1.5rem', ...(page.isFeatured && page.status === 'PUBLISHED' ? { border: '1.5px solid rgba(200,154,78,0.45)', boxShadow: '0 0 0 3px rgba(200,154,78,0.08)' } : {}) }}>
+              <div key={page.id} className="card" style={{
+                ...cardSurfaceStyle,
+                padding: '1.5rem',
+                ...(page.isFeatured && page.status === 'PUBLISHED' ? {
+                  border: '1.5px solid rgba(200,154,78,0.45)',
+                  boxShadow: isDarkTheme
+                    ? '0 0 0 3px rgba(200,154,78,0.08), 0 20px 50px rgba(0, 0, 0, 0.42)'
+                    : '0 0 0 3px rgba(200,154,78,0.08), 0 18px 42px rgba(15, 23, 42, 0.08)',
+                } : {}),
+              }}>
                 {/* Pinned banner */}
                 {page.isFeatured && page.status === 'PUBLISHED' && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', fontWeight: 700, color: '#b8893b', marginBottom: '0.6rem', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
@@ -409,21 +671,21 @@ export default function LandingPages() {
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
-                  <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
+                  <div style={metricTileStyle}>
                     <div style={{ fontSize: '1.25rem', fontWeight: '600' }}>{page.visits}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Visits</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
+                  <div style={metricTileStyle}>
                     <div style={{ fontSize: '1.25rem', fontWeight: '600' }}>{page.submissions}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Leads</div>
                   </div>
-                  <div style={{ textAlign: 'center', padding: '0.5rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
+                  <div style={metricTileStyle}>
                     <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#10b981' }}>{formatPercent(convRate)}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Conv.</div>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <Link to={`/landing-pages/builder/${page.id}`} className="btn-primary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}>
+                  <Link to={`/landing-pages/builder/${page.id}`} state={builderNavigationState} className="btn-primary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}>
                     <FileEdit size={13} /> Edit
                   </Link>
                   {/* View button removed — the hardcoded :5173→:5000 host
@@ -521,7 +783,7 @@ export default function LandingPages() {
           style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.5))', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }}
           onClick={(e) => { if (e.target === e.currentTarget && !generating) setShowGenerateModal(false); }}
         >
-          <div className="card" style={{ padding: '1.75rem', width: 'min(540px, 92vw)', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="card" style={{ ...cardSurfaceStyle, padding: '1.75rem', width: 'min(540px, 92vw)', maxHeight: '90vh', overflowY: 'auto' }}>
             <h3 id="generate-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, marginBottom: '0.4rem', fontSize: '1.2rem' }}>
               <Sparkles size={20} style={{ color: '#b8893b' }} /> Generate Destination Landing Page
             </h3>
@@ -683,7 +945,7 @@ export default function LandingPages() {
       {/* Template Picker Modal */}
       {showTemplatePicker && (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-          <div className="card" style={{ padding: '2rem', width: '780px', maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto' }}>
+          <div className="card" style={{ ...cardSurfaceStyle, padding: '2rem', width: '780px', maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto' }}>
             <h3 style={{ fontWeight: 'bold', marginBottom: '0.4rem', fontSize: '1.25rem' }}>Choose a Template</h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
               Premium travel templates ship a curated layout — you only edit content slots.

@@ -30,6 +30,7 @@ import { Link } from 'react-router-dom';
 import { Download, Edit2, Filter, MapPin, Plus, Trash2, Upload, X } from 'lucide-react';
 import { fetchApi, getActiveTenantId, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import CountBadge from '../../components/CountBadge';
 import { AuthContext } from '../../App';
 import PatientPager from '../wellness/patients/PatientPager';
 import { useActiveSubBrand } from '../../utils/subBrand';
@@ -392,8 +393,9 @@ export default function SightseeingMaster() {
         }}
       >
         <div>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
+          <h1 style={{ display: 'flex', alignItems: 'center', gap: 12, margin: 0, fontSize: '1.75rem', fontWeight: 600, lineHeight: 1.15, flexWrap: 'wrap' }}>
             <MapPin size={28} aria-hidden /> Sightseeing Master
+            <CountBadge count={total} title={`${total.toLocaleString()} sightseeing entries`} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
             Destination → POI catalog with description, image, duration, indicative price.{' '}
@@ -417,7 +419,7 @@ export default function SightseeingMaster() {
             disabled={importing}
             title="Bulk-import sightseeing rows from CSV or Excel using the shared template."
           >
-            <Upload size={14} /> {importing ? 'Importing...' : 'Import CSV/Excel'}
+            <Download size={14} /> {importing ? 'Importing...' : 'Import CSV/Excel'}
           </button>
           <input
             ref={importInputRef}

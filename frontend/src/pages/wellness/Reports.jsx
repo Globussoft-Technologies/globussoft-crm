@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart3, TrendingUp, Stethoscope, MapPin, Download, Loader2 } from 'lucide-react';
+import { BarChart3, TrendingUp, Stethoscope, MapPin, Upload, Loader2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 import { formatPercent } from '../../utils/percent';
@@ -304,7 +304,7 @@ export default function Reports() {
         >
           {exporting === 'csv'
             ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-            : <Download size={14} />}
+            : <Upload size={14} />}
           Export CSV
         </button>
         <button
@@ -316,7 +316,7 @@ export default function Reports() {
         >
           {exporting === 'xlsx'
             ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-            : <Download size={14} />}
+            : <Upload size={14} />}
           Export Excel
         </button>
         <button
@@ -328,7 +328,7 @@ export default function Reports() {
         >
           {exporting === 'pdf'
             ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-            : <Download size={14} />}
+            : <Upload size={14} />}
           Export PDF
         </button>
       </div>

@@ -29,11 +29,12 @@
 import { useContext, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  CalendarRange, ChevronLeft, Download, Edit2, Filter,
-  Percent, Plus, Save, ToggleLeft, ToggleRight, Trash2, Upload, X,
+  CalendarRange, ChevronLeft, Upload, Download, Edit2, Filter,
+  Percent, Plus, Save, ToggleLeft, ToggleRight, Trash2, X,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import { AuthContext } from "../../App";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
@@ -360,11 +361,11 @@ function SeasonsSection() {
         <h2 style={sectionTitle}>
           <CalendarRange size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Seasons
-          <span style={countBadge}>{total || seasons.length}</span>
+            <CountBadge count={total || seasons.length} title={`${(total || seasons.length).toLocaleString()} seasons`} />
         </h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
           </button>
           <button type="button" onClick={() => downloadSeasonTemplate("csv")} style={secondaryBtn}>
             <Download size={14} /> Download CSV Template
@@ -378,7 +379,7 @@ function SeasonsSection() {
             style={secondaryBtn}
             title="Bulk-upload seasons (CSV or Excel). Columns: subBrand, seasonName, startDate, endDate, multiplier."
           >
-            <Upload size={14} /> Import CSV/Excel
+            <Download size={14} /> Import CSV/Excel
           </button>
           <input
             ref={fileRef}
@@ -817,11 +818,11 @@ function MarkupRulesSection() {
         <h2 style={sectionTitle}>
           <Percent size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Markup Rules
-          <span style={countBadge}>{total || rules.length}</span>
+            <CountBadge count={total || rules.length} title={`${(total || rules.length).toLocaleString()} markup rules`} />
         </h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
           </button>
           <button type="button" onClick={() => downloadMarkupTemplate("csv")} style={secondaryBtn}>
             <Download size={14} /> Download CSV Template
@@ -835,7 +836,7 @@ function MarkupRulesSection() {
             style={secondaryBtn}
             title="Bulk-upload markup rules (CSV or Excel). Columns: subBrand, scope, matchKeyJson, markupPct OR markupFlat, priority, isActive."
           >
-            <Upload size={14} /> Import CSV/Excel
+            <Download size={14} /> Import CSV/Excel
           </button>
           <input
             ref={fileRef}
@@ -1061,11 +1062,6 @@ const sectionHeader = {
   display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12,
 };
 const sectionTitle = { margin: 0, fontSize: 18, display: "flex", alignItems: "center" };
-const countBadge = {
-  marginLeft: 8, padding: "2px 8px", borderRadius: 10,
-  fontSize: 11, fontWeight: 600,
-  background: "var(--subtle-bg)", color: "var(--text-secondary)",
-};
 const filterRow = {
   display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center",
   padding: 12, marginBottom: 12,

@@ -200,6 +200,7 @@ describe('<QuoteTemplates /> — page chrome + filter bar', () => {
     expect(
       await screen.findByRole('heading', { name: /Quote Templates/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/templates/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by category/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by active status/i)).toBeInTheDocument();

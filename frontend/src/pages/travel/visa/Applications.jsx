@@ -48,6 +48,7 @@ import { FileText, Filter, Search, AlertTriangle, ShieldAlert, Layers, Plus, X, 
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { AuthContext } from '../../../App';
+import CountBadge from '../../../components/CountBadge';
 import TopScrollSync from '../../../components/TopScrollSync';
 
 const PAGE_SIZE = 50;
@@ -920,12 +921,17 @@ export default function VisaApplications() {
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 10,
+              gap: 12,
               margin: 0,
               marginBottom: 4,
+              fontSize: '1.75rem',
+              fontWeight: 600,
+              lineHeight: 1.15,
+              flexWrap: 'wrap',
             }}
           >
             <FileText size={28} aria-hidden /> Visa Applications
+            <CountBadge count={total} title={`${total.toLocaleString()} applications`} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
             All visa applications across your tenant. Click a row to open the

@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import PatientPager from "../wellness/patients/PatientPager";
 
 // Rewrite /uploads/... → /api/uploads/... so production deployments (where the
@@ -318,6 +319,7 @@ export default function WebCheckinQueue() {
         }}
       >
         <Ticket size={28} aria-hidden /> Web Check-ins
+        <CountBadge count={total} title={`${total.toLocaleString()} check-ins`} />
       </h1>
       <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
         Flight check-in queue. Rows auto-spawn when itineraries with flight

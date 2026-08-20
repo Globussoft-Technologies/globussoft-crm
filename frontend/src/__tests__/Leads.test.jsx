@@ -1192,9 +1192,9 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     const reopenedMenu = await screen.findByRole('menu', { name: /Bulk actions/i });
     expect(within(reopenedMenu).getByText(/2 selected/i)).toBeInTheDocument();
     expect(screen.getAllByRole('checkbox').slice(1)[1]).not.toBeChecked();
-    expect(within(menu).getByRole('button', { name: /Assign to staff/i })).toBeInTheDocument();
-    expect(within(menu).getByLabelText(/Bulk assign staff/i)).toBeInTheDocument();
-    expect(within(menu).getByRole('button', { name: /Delete selected leads/i })).toBeInTheDocument();
+    expect(within(reopenedMenu).getByRole('button', { name: /Assign to staff/i })).toBeInTheDocument();
+    expect(within(reopenedMenu).getByLabelText(/Bulk assign staff/i)).toBeInTheDocument();
+    expect(within(reopenedMenu).getByRole('button', { name: /Delete selected leads/i })).toBeInTheDocument();
   });
 
   it('bulk delete action DELETEs the selected leads and clears the selection', async () => {

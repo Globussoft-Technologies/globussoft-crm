@@ -111,7 +111,7 @@ export default function Suppliers() {
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
             <Key size={28} aria-hidden /> Supplier Credentials
-            <CountBadge count={total} title={`${total.toLocaleString()} credentials`} />
+            <CountBadge count={creds.length} title={`${creds.length.toLocaleString()} credentials`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4 }}>
             Encrypted vault. AES-256-GCM at-rest. Every reveal is logged.

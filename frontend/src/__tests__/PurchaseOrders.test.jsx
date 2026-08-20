@@ -72,7 +72,7 @@ describe('<PurchaseOrders />', () => {
     renderPage();
 
     expect(await screen.findByRole('heading', { name: /Supplier Purchase Orders/i })).toBeInTheDocument();
-    expect(screen.getByTitle('2 purchase orders')).toBeInTheDocument();
+    expect(screen.getByTitle('2 Total Purchase Orders')).toBeInTheDocument();
     expect(screen.getByText('PO-001')).toBeInTheDocument();
     expect(screen.getByText('PO-002')).toBeInTheDocument();
   });

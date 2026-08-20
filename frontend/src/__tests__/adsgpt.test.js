@@ -60,7 +60,7 @@ describe('utils/adsgpt — launchAdsGptAs (backend-proxied SSO)', () => {
     await launchAdsGptAs('user with spaces');
 
     expect(fetchApi).toHaveBeenCalledWith(
-      `/api/integrations/adsgpt/sso-url?login=${encodeURIComponent('user with spaces')}`,
+      `/api/integrations/adsgpt/sso-url?${new URLSearchParams({ login: 'user with spaces' }).toString()}`,
     );
   });
 

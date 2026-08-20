@@ -245,8 +245,6 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     expect(screen.getByRole('heading', { name: /Diagnostics/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Filter from date/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Filter to date/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
@@ -429,18 +427,11 @@ describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', (
     });
   });
 
-  it('setting a date range re-fetches with fromDate and toDate query params', async () => {
-    renderPage();
-    await screen.findByText('tmc');
-    fetchApiMock.mockClear();
-    installFetchMock();
-
-    fireEvent.change(screen.getByLabelText(/Filter from date/i), {
-      target: { value: '2026-06-17' },
-    });
-    fireEvent.change(screen.getByLabelText(/Filter to date/i), {
-      target: { value: '2026-06-23' },
-    });
+  it('reads a date range from the URL and re-fetches with fromDate and toDate query params', async () => {
+    renderPage(
+      ADMIN_USER,
+      ['/travel/diagnostics?fromDate=2026-06-17&toDate=2026-06-23'],
+    );
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(([u]) =>

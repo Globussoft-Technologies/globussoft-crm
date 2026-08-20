@@ -18,6 +18,7 @@
  */
 
 function truthy(v) {
+
   return /^(1|true|yes|on)$/i.test(String(v == null ? "" : v).trim());
 }
 

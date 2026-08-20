@@ -13,6 +13,7 @@ import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import PasswordInput from "../../components/PasswordInput";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 
 const CATEGORIES = [
   { value: "", label: "All categories" },
@@ -110,6 +111,7 @@ export default function Suppliers() {
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
             <Key size={28} aria-hidden /> Supplier Credentials
+            <CountBadge count={creds.length} title={`${creds.length.toLocaleString()} credentials`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4 }}>
             Encrypted vault. AES-256-GCM at-rest. Every reveal is logged.

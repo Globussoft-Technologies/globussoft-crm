@@ -54,6 +54,7 @@ import { formatMoney } from "../../utils/money";
 import { useActiveSubBrand } from "../../utils/subBrand";
 // Branding Wave 4 G102: per-sub-brand brand-kit lookup for active-chip tint.
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
+import CountBadge from "../../components/CountBadge";
 
 const STATUS_CHIPS = [
   { value: "", label: "All" },
@@ -278,9 +279,10 @@ export default function Payables() {
       <header style={{ marginBottom: 16 }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
           <Wallet size={26} aria-hidden /> All Payables
+          <CountBadge count={filtered.length} title={`${filtered.length.toLocaleString()} payables in view`} />
         </h1>
         <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-          Cross-supplier A/P ledger — every payable across every supplier in one view. {total.toLocaleString()} payable{total === 1 ? "" : "s"} match.
+          Cross-supplier A/P ledger — every payable across every supplier in one view.
         </p>
       </header>
 

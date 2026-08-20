@@ -165,6 +165,7 @@ describe('<SightseeingMaster /> â€” page chrome', () => {
     expect(
       screen.getByRole('heading', { name: /Sightseeing Master/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/sightseeing entries/i)).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Add sightseeing/i }),
     ).toBeInTheDocument();

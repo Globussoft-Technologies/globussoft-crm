@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { LayoutTemplate, RefreshCw, ArrowLeft, ExternalLink } from "lucide-react";
 import { fetchApi } from "../../utils/api";
+import CountBadge from "../../components/CountBadge";
 import TopScrollSync from "../../components/TopScrollSync";
 
 const STATUS_COLORS = {
@@ -57,13 +58,14 @@ export default function TravelWhatsAppTemplates() {
         }}
       >
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+          <h1 style={{ display: "flex", alignItems: "center", gap: 12, margin: 0, fontSize: "1.75rem", fontWeight: 600, flexWrap: "wrap" }}>
             <LayoutTemplate size={26} aria-hidden /> WhatsApp Templates
+            <CountBadge count={templates.length} title={`${templates.length.toLocaleString()} templates`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem", maxWidth: 640 }}>
             Templates on the connected Wati account. Only{" "}
             <strong>approved</strong> templates can be sent to numbers that
-            haven't messaged you in the last 24 hours. Create / edit / submit
+            haven&apos;t messaged you in the last 24 hours. Create / edit / submit
             templates for approval in the{" "}
             <a
               href="https://app.wati.io"

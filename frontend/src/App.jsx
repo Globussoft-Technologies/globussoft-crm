@@ -26,6 +26,7 @@ import RoleGuard from "./components/RoleGuard";
 import { NotifyProvider } from "./utils/notify";
 import { ActiveSubBrandProvider } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
+import { SearchQueryProvider } from "./components/search/SearchQueryContext";
 import {
   setAuthToken,
   getAuthToken,
@@ -1232,26 +1233,29 @@ export default function App() {
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       <AuthContext.Provider value={authValue}>
-        <NotifyProvider>
-          <ActiveSubBrandProvider>
-            <BrowserRouter>
-              <RouteErrorBoundary>
-                <Suspense
-                  fallback={
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "center",
-                        alignItems: "center",
-                        height: "100vh",
-                        color: "var(--text-primary)",
-                      }}
-                    >
-                      Loading...
-                    </div>
-                  }
-                >
-                  <Routes>
+        <SearchQueryProvider
+          resetKey={`${user?.userId ?? "anonymous"}:${tenant?.id ?? "none"}`}
+        >
+          <NotifyProvider>
+            <ActiveSubBrandProvider>
+              <BrowserRouter>
+                <RouteErrorBoundary>
+                  <Suspense
+                    fallback={
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "center",
+                          alignItems: "center",
+                          height: "100vh",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        Loading...
+                      </div>
+                    }
+                  >
+                    <Routes>
                     <Route
                       path="/login"
                       element={
@@ -3476,12 +3480,13 @@ export default function App() {
                   show a real 404 with a path suggestion when applicable. */}
                       <Route path="*" element={<NotFound />} />
                     </Route>
-                  </Routes>
-                </Suspense>
-              </RouteErrorBoundary>
-            </BrowserRouter>
-          </ActiveSubBrandProvider>
-        </NotifyProvider>
+                    </Routes>
+                  </Suspense>
+                </RouteErrorBoundary>
+              </BrowserRouter>
+            </ActiveSubBrandProvider>
+          </NotifyProvider>
+        </SearchQueryProvider>
       </AuthContext.Provider>
     </ThemeContext.Provider>
   );

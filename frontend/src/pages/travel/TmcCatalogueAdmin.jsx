@@ -40,9 +40,11 @@ import {
   X,
   Calendar,
   Settings,
+  Download,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import { AuthContext } from "../../App";
 
 // Server-side enum values per backend/routes/travel_tmc_catalogue.js
@@ -126,7 +128,7 @@ export default function TmcCatalogueAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const role = user?.role || "USER";
-  const isAdmin = role === "ADMIN";
+  const isAdmin = role === "ADMIN" || role === "OWNER";
   const canWrite = isAdmin || role === "MANAGER";
 
   const [tab, setTab] = useState(STATUS_ACTIVE); // active | archived
@@ -600,12 +602,16 @@ export default function TmcCatalogueAdmin() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: 12,
               margin: 0,
               fontSize: 22,
+              fontWeight: 600,
+              lineHeight: 1.15,
+              flexWrap: "wrap",
             }}
           >
             <ShieldCheck size={26} aria-hidden /> TMC Trip Catalogue
+            <CountBadge count={total} title={`${total.toLocaleString()} catalogue items`} />
           </h1>
           <p
             style={{
@@ -683,7 +689,7 @@ export default function TmcCatalogueAdmin() {
               onClick={openBulkImportModal}
               style={secondaryBtn}
             >
-              Import file
+              <Download size={14} /> Import file
             </button>
           </div>
 

@@ -208,6 +208,7 @@ describe('<EmbassyRulesAdmin /> — page chrome + RBAC', () => {
   it('renders heading + filter chrome + "New Rule" CTA when role=ADMIN; fires GET on mount', async () => {
     renderPage();
     expect(screen.getByRole('heading', { name: /Embassy Rules/i })).toBeInTheDocument();
+    expect(screen.getByTitle(/rules/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by destination country/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by rule type/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by severity/i)).toBeInTheDocument();

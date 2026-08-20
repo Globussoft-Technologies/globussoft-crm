@@ -35,6 +35,7 @@ import {
 import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -415,9 +416,10 @@ export default function QuotesAdmin() {
           )}
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
             <Receipt size={26} aria-hidden /> Travel Quotes
+            <CountBadge count={visibleQuotes.length} title={`${visibleQuotes.length.toLocaleString()} quotes in view`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-            Customer quotes — Draft / Sent / Accepted / Rejected. {total.toLocaleString()} quote{total === 1 ? "" : "s"}.
+            Customer quotes — Draft / Sent / Accepted / Rejected.
           </p>
         </div>
         {/* Quotes are created in the Quote Builder (/travel/quotes/builder),

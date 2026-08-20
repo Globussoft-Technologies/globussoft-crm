@@ -285,6 +285,13 @@ describe('<Trips /> — page chrome', () => {
       );
       expect(calls.length).toBeGreaterThan(0);
     });
+    await waitFor(() => {
+      const badge = screen.getByText((_, node) => {
+        const text = node?.textContent?.replace(/\s+/g, " ").trim();
+        return text === `${TRIPS_DEFAULT.length} Total Trips`;
+      });
+      expect(badge).toBeInTheDocument();
+    });
     expect(screen.getByRole('table')).toBeInTheDocument();
   });
 });
@@ -593,8 +600,48 @@ describe('<Trips /> — search + pagination behavior', () => {
       );
       expect(call).toBeTruthy();
     });
-    expect(await screen.findByText('TMC-PAGE-05')).toBeInTheDocument();
-    expect(screen.queryByText('TMC-PAGE-21')).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /TMC-PAGE-05/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /TMC-PAGE-21/i })).not.toBeInTheDocument();
+  });
+
+  it('highlights matching trip text after searching the list', async () => {
+    const allTrips = makeTrips(25);
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/trips') && method === 'GET') {
+        const parsed = new URL(`http://local${url}`);
+        const search = parsed.searchParams.get('search') || '';
+        const offset = Number(parsed.searchParams.get('offset') || 0);
+        const limit = Number(parsed.searchParams.get('limit') || 20);
+        if (search === 'PAGE-05') {
+          return Promise.resolve({ trips: [allTrips[4]], total: 1, limit, offset: 0 });
+        }
+        return Promise.resolve({
+          trips: allTrips.slice(offset, offset + limit),
+          total: allTrips.length,
+          limit,
+          offset,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText('TMC-PAGE-01');
+    fetchApiMock.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/Search trips/i), {
+      target: { value: 'PAGE-05' },
+    });
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string'
+        && u.includes('search=PAGE-05')
+        && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+      expect(screen.getAllByText(/PAGE-05/i, { selector: 'mark' }).length).toBeGreaterThan(0);
+    });
   });
 
   it('page 2 requests offset=20 and renders the second slice', async () => {
@@ -673,8 +720,8 @@ describe('<Trips /> — search + pagination behavior', () => {
       );
       expect(call).toBeTruthy();
     });
-    expect(await screen.findByText('TMC-PAGE-05')).toBeInTheDocument();
-    expect(screen.queryByText('TMC-PAGE-21')).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /TMC-PAGE-05/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /TMC-PAGE-21/i })).not.toBeInTheDocument();
   });
 
   it('search input updates the query string and page 1 is used for filtered results', async () => {
@@ -712,8 +759,8 @@ describe('<Trips /> — search + pagination behavior', () => {
       );
       expect(call).toBeTruthy();
     });
-    expect(await screen.findByText('TMC-PAGE-05')).toBeInTheDocument();
-    expect(screen.queryByText('TMC-PAGE-01')).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /TMC-PAGE-05/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /TMC-PAGE-01/i })).not.toBeInTheDocument();
   });
 
   it('status filter re-fetches from the API instead of filtering the current page locally', async () => {

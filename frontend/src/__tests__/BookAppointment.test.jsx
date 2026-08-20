@@ -56,15 +56,30 @@ import BookAppointment from '../pages/wellness/BookAppointment';
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Default fetchApi: all 4 load calls resolve immediately so loading clears. */
-function installDefaultMock() {
+function installDefaultMock({
+  doctors = [],
+  services = [],
+  appointments = [],
+  memberships = [],
+} = {}) {
   fetchApiMock.mockImplementation((url) => {
-    if (url.includes('/api/wellness/doctors/availability')) return Promise.resolve([]);
-    if (url.includes('/api/wellness/services'))             return Promise.resolve([]);
-    if (url.includes('/api/wellness/appointments/my-memberships')) return Promise.resolve([]);
-    if (url.includes('/api/wellness/appointments/my'))      return Promise.resolve([]);
+    if (url.includes('/api/wellness/doctors/availability')) return Promise.resolve(doctors);
+    if (url.includes('/api/wellness/services'))             return Promise.resolve(services);
+    if (url.includes('/api/wellness/appointments/my-memberships')) return Promise.resolve(memberships);
+    if (url.includes('/api/wellness/appointments/my'))      return Promise.resolve(appointments);
     return Promise.resolve({});
   });
 }
+
+const SAMPLE_APPOINTMENT = {
+  id: 101,
+  doctorAssigned: true,
+  doctorName: 'Priya Sharma',
+  serviceName: 'Skin consultation',
+  status: 'booked',
+  appointmentDate: '2026-07-08T11:00:00.000Z',
+  reason: 'Routine follow-up',
+};
 
 /**
  * Render the page and return { container, getDateInput, getTimeSelect }.
@@ -326,5 +341,38 @@ describe('<BookAppointment /> — existing validation gates', () => {
 
     // appointmentTime stays '' (no slots) → canSubmit=false even with reason filled.
     expect(screen.getByRole('button', { name: /Confirm Appointment/i })).toBeDisabled();
+  });
+});
+describe('<BookAppointment /> — theme-aware card surfaces', () => {
+  it('renders the booking panels and empty state with theme tokens', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-07T10:00:00'));
+    installDefaultMock();
+    renderPage();
+
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    expect(screen.getByTestId('book-appointment-form-card')).toHaveStyle(
+      'background: var(--surface-color); border-width: 1px; border-style: solid;',
+    );
+    expect(screen.getByTestId('book-appointment-list-card')).toHaveStyle(
+      'background: var(--surface-color); border-width: 1px; border-style: solid;',
+    );
+    expect(screen.getByTestId('book-appointment-empty-state')).toHaveStyle(
+      'background: var(--subtle-bg); border-width: 1px; border-style: dashed;',
+    );
+  });
+
+  it('renders booked appointments with the nested card treatment', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-07T10:00:00'));
+    installDefaultMock({ appointments: [SAMPLE_APPOINTMENT] });
+    renderPage();
+
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    expect(await screen.findByTestId('book-appointment-item-101')).toHaveStyle(
+      'background: var(--subtle-bg); border-style: solid; border-left-width: 4px; border-left-style: solid;',
+    );
   });
 });

@@ -342,7 +342,7 @@ export default function TravelContactProfilePanel({ contactId }) {
         <h3 style={subTitle}>Import master profile file</h3>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => setImportFile(e.target.files?.[0] || null)} />
-          <button type="button" style={primaryBtn} onClick={importProfiles} disabled={importing}><Upload size={14} /> {importing ? "Importing..." : "Import CSV/Excel"}</button>
+          <button type="button" style={primaryBtn} onClick={importProfiles} disabled={importing}><Download size={14} /> {importing ? "Importing..." : "Import CSV/Excel"}</button>
           <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>{importFile ? importFile.name : "No import file selected"}</span>
         </div>
       </div>

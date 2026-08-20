@@ -35,6 +35,24 @@ const TABS = [
   { key: "microsite", label: "Public Experience", icon: Globe },
 ];
 
+function buildLandingPagesReturnState(trip, tripState = {}) {
+  return {
+    returnTo: { label: "TMC Trips", path: `/travel/trips/${trip.id}?tab=overview` },
+    currentLabel: "Public experience",
+    currentPath: `/travel/trips/${trip.id}?tab=microsite`,
+    backTo: tripState.backTo || "/travel/trips",
+    backLabel: tripState.backLabel || "Trips",
+    tripContext: {
+      tripId: trip.id,
+      tripCode: trip.tripCode,
+      destination: trip.destination || "",
+      durationDays: tripDurationDays(trip),
+      audience: "School students",
+      subBrand: "tmc",
+    },
+  };
+}
+
 function fmt(d) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString();
@@ -70,7 +88,8 @@ export default function TripDetail() {
   const { id } = useParams();
   const location = useLocation();
   const notify = useNotify();
-  const [tab, setTab] = useState("overview");
+  const requestedTab = location.state?.tab || new URLSearchParams(location.search).get("tab") || "overview";
+  const [tab, setTab] = useState(() => requestedTab);
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
   const hasLoadedRef = useRef(false);
@@ -94,6 +113,9 @@ export default function TripDetail() {
     hasLoadedRef.current = false;
   }, [id]);
   useEffect(load, [load]);
+  useEffect(() => {
+    setTab(requestedTab);
+  }, [requestedTab]);
 
 
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
@@ -821,7 +843,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
             </div>
           </div>
           <button type="button" onClick={openBulkImportModal} style={{ ...secondaryBtn, alignSelf: "center" }}>
-            <Upload size={14} /> Import file
+            <Download size={14} /> Import file
           </button>
         </div>
         {bulkImportResult && (
@@ -2692,8 +2714,10 @@ function MicrositeCard({ trip, onChange, notify }) {
 // registration-draft branch fire — without it the wizard submission
 // falls back to the legacy lead-capture path.
 function LandingPageCard({ trip, notify }) {
+  const location = useLocation();
   const [page, setPage] = useState(null);
   const [loading, setLoading] = useState(true);
+  const landingPagesReturnState = buildLandingPagesReturnState(trip, location.state || {});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2745,6 +2769,7 @@ function LandingPageCard({ trip, notify }) {
           </div>
           <Link
             to="/landing-pages"
+            state={landingPagesReturnState}
             data-testid="goto-landing-pages-link"
             style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
           >
@@ -2769,6 +2794,7 @@ function LandingPageCard({ trip, notify }) {
           </div>
           <Link
             to={`/landing-pages/builder/${page.id}`}
+            state={landingPagesReturnState}
             data-testid="manage-landing-page-link"
             style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
           >

@@ -35,9 +35,10 @@
 
 import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, ArchiveRestore, Copy, Download, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Upload, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Copy, Upload, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Download, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import CountBadge from '../../components/CountBadge';
 import { AuthContext } from '../../App';
 import { useActiveSubBrand } from '../../utils/subBrand';
 import PatientPager from '../wellness/patients/PatientPager';
@@ -587,8 +588,9 @@ export default function ItineraryTemplates() {
         }}
       >
         <div>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
+          <h1 style={{ display: 'flex', alignItems: 'center', gap: 12, margin: 0, fontSize: '1.75rem', fontWeight: 600, lineHeight: 1.15, flexWrap: 'wrap' }}>
             <FileText size={28} aria-hidden /> Itinerary Template Library
+            <CountBadge count={total} title={`${total.toLocaleString()} templates`} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
             Pre-loaded itinerary templates - destination, duration, base price, sub-brand
@@ -609,7 +611,7 @@ export default function ItineraryTemplates() {
             data-testid="export-csv-btn"
             title="Download a CSV with id, name, sub-brand, usage, accepted, avg sale, last used, version"
           >
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
           </button>
           {!showForm && (
             <button type="button" onClick={openCreateForm} style={primaryBtn}>

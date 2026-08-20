@@ -243,6 +243,7 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
   it('renders heading + sub-brand filter + classification filter + Refresh + add-diagnostic CTA', async () => {
     renderPage(REGULAR_USER);
     expect(screen.getByRole('heading', { name: /Diagnostics/i })).toBeInTheDocument();
+    expect(screen.getByTitle(/diagnostics/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();

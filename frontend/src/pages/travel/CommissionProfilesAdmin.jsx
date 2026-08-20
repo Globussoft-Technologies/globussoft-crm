@@ -69,7 +69,7 @@
 // Template: pattern-matched against SuppliersAdmin / FlyerTemplates / QuotesAdmin.
 
 import { useEffect, useState, useContext } from "react";
-import { Percent, Plus, Pencil, Trash2, Calculator, List, Download } from "lucide-react";
+import { Percent, Plus, Pencil, Trash2, Calculator, List, Upload } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import TopScrollSync from "../../components/TopScrollSync";
 import { useNotify } from "../../utils/notify";
@@ -83,6 +83,7 @@ import { useActiveSubBrand } from "../../utils/subBrand";
 // Branding Wave 4 G102: per-sub-brand brand-kit lookup for primary CTA tint.
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
+import CountBadge from "../../components/CountBadge";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -671,12 +672,12 @@ export default function CommissionProfilesAdmin() {
         }}
       >
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+          <h1 style={{ display: "flex", alignItems: "center", gap: 12, margin: 0, fontSize: "1.75rem", fontWeight: 600, lineHeight: 1.15, flexWrap: "wrap" }}>
             <Percent size={26} aria-hidden /> Commission Profiles
+            <CountBadge count={total} title={`${total.toLocaleString()} profiles`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-            Named agent-payout shapes consumed by the commission calculator. {total.toLocaleString()} profile
-            {total === 1 ? "" : "s"}.
+            Named agent-payout shapes consumed by the commission calculator.
           </p>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.82rem" }}>
             Each profile can be scoped by sub-brand, agent, active date window, and release timing.
@@ -1182,7 +1183,7 @@ export default function CommissionProfilesAdmin() {
               data-testid="commission-profile-ledger-download-csv"
               title="Download the ledger as CSV (mirrors the current stage filter)"
             >
-              <Download size={14} /> {ledgerCsvBusy ? "Downloading…" : "Download CSV"}
+              <Upload size={14} /> {ledgerCsvBusy ? "Downloading…" : "Download CSV"}
             </button>
             <button
               type="button"

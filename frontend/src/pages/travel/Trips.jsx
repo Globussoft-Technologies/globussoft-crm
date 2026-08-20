@@ -23,7 +23,9 @@ import {
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 import TripPager from "./TripPager";
+import SearchHighlight from "../../components/ui/SearchHighlight";
 
 // School is captured as free-text so the operator doesn't have to pre-create
 // a Contact row for every new school. The backend POST /api/travel/trips
@@ -336,6 +338,7 @@ export default function Trips() {
             }}
           >
             <Luggage size={28} aria-hidden /> TMC Trips
+            <CountBadge count={total} title={`${total.toLocaleString()} trips`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
             School educational trips. Operational view per trip — participants,
@@ -499,15 +502,17 @@ export default function Trips() {
                               fontWeight: 600,
                             }}
                           >
-                            {t.tripCode}
+                            <SearchHighlight text={t.tripCode} query={search} />
                           </Link>
                         </td>
-                        <td style={{ ...td, minWidth: 0 }}>{t.destination}</td>
+                        <td style={{ ...td, minWidth: 0 }}>
+                          <SearchHighlight text={t.destination} query={search} />
+                        </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
                           <span style={brandBadge}>{BRAND_LABEL}</span>
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
-                          {SUB_BRAND_LABEL}
+                          <SearchHighlight text={SUB_BRAND_LABEL} query={search} />
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
                           <span
@@ -522,10 +527,15 @@ export default function Trips() {
                           </span>
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
-                          {t.schoolName ||
-                            (t.schoolContactId
-                              ? `School #${t.schoolContactId}`
-                              : "?")}
+                          <SearchHighlight
+                            text={
+                              t.schoolName ||
+                              (t.schoolContactId
+                                ? `School #${t.schoolContactId}`
+                                : "?")
+                            }
+                            query={search}
+                          />
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
                           <span

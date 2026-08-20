@@ -18,12 +18,13 @@
 import { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
-  Plane, Plus, Download, RefreshCw, Pencil, Trash2, X,
+  Plane, Plus, Upload, RefreshCw, Pencil, Trash2, X,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 import {
   accessibleSubBrands,
   defaultSubBrandFor,
@@ -73,6 +74,7 @@ const WON_STATUSES = new Set(["accepted", "advance_paid", "fully_paid"]);
 const NEGOTIATION_STATUSES = new Set(["sent", "revised"]);
 // "Lost" = closed-negative.
 const LOST_STATUSES = new Set(["rejected", "expired"]);
+const API_STATUSES = new Set(EDITABLE_STATUSES.map((option) => option.value));
 
 const LIGHT_THEME = "light";
 const DARK_THEME = "dark";
@@ -146,6 +148,16 @@ function getStatusTone(theme, current) {
 function getSubBrandTone(theme, value) {
   const palette = SUB_BRAND_STYLE[theme] || SUB_BRAND_STYLE.light;
   return palette[value] || { ...palette.tmc, label: value };
+}
+
+function labelForStatus(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "Draft";
+  const known = EDITABLE_STATUSES.find((option) => option.value === normalized);
+  if (known) return known.label;
+  return normalized
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 // ??? Helpers ??????????????????????????????????????????????????????????????
@@ -326,6 +338,10 @@ export default function TravelPipeline() {
 
   // ── Inline status update ─────────────────────────────────────────────
   const updateStatus = async (id, newStatus) => {
+    if (!API_STATUSES.has(newStatus)) {
+      notify.error("Status cannot be updated to that value");
+      return;
+    }
     setUpdatingId(id);
     try {
       await fetchApi(`/api/travel/itineraries/${id}`, {
@@ -441,6 +457,7 @@ export default function TravelPipeline() {
           </div>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>
             Travel Pipeline
+            <CountBadge count={visible.length} title={`${visible.length.toLocaleString()} deals in view`} />
           </h1>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -451,7 +468,7 @@ export default function TravelPipeline() {
             aria-label="Export pipeline as CSV"
             title="Export to CSV"
           >
-            <Download size={14} /> Export
+            <Upload size={14} /> Export
           </button>
           <button
             type="button"
@@ -475,7 +492,7 @@ export default function TravelPipeline() {
             </span>
           ))
         }.{" "}
-        <strong style={{ color: "var(--text-primary)" }}>{total}</strong> deal{total !== 1 ? "s" : ""}.
+        Sales pipeline data matches the filters currently applied.
       </p>
 
       {/* Filters */}
@@ -854,10 +871,17 @@ export default function TravelPipeline() {
 // When `disabled` is true (update in flight) it shows a spinner-like faded
 // state.
 function StatusDropdown({ id: _id, current, disabled, onChange, theme }) {
+  const normalizedCurrent = String(current || "draft").trim() || "draft";
   const s = getStatusTone(theme, current);
+  const options = EDITABLE_STATUSES.some((option) => option.value === normalizedCurrent)
+    ? EDITABLE_STATUSES
+    : [
+        { value: normalizedCurrent, label: labelForStatus(normalizedCurrent) },
+        ...EDITABLE_STATUSES,
+      ];
   return (
     <select
-      value={current || ""}
+      value={normalizedCurrent}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       aria-label="Change status"
@@ -871,16 +895,13 @@ function StatusDropdown({ id: _id, current, disabled, onChange, theme }) {
         fontWeight: 600,
         cursor: disabled ? "wait" : "pointer",
         opacity: disabled ? 0.6 : 1,
-        appearance: "none",
-        WebkitAppearance: "none",
-        backgroundImage: `linear-gradient(45deg, transparent 50%, ${s.color} 50%), linear-gradient(135deg, ${s.color} 50%, transparent 50%)`,
-        backgroundRepeat: "no-repeat",
-        backgroundPosition: "calc(100% - 14px) calc(50% - 1px), calc(100% - 10px) calc(50% - 1px)",
-        backgroundSize: "4px 4px, 4px 4px",
         minWidth: 120,
+        lineHeight: 1.25,
+        textAlign: "left",
+        colorScheme: theme,
       }}
     >
-      {EDITABLE_STATUSES.map((o) => (
+      {options.map((o) => (
         <option
           key={o.value}
           value={o.value}

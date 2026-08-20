@@ -160,7 +160,7 @@ export default function CsvImportExportToolbar({
               aria-label={`Export ${displayLabel}`}
               style={toolbarButtonStyle}
             >
-              <Download size={14} /> {exporting ? "Exporting..." : "Export"}
+              <Upload size={14} /> {exporting ? "Exporting..." : "Export"}
               <ChevronDown size={12} style={{ marginLeft: "0.15rem" }} />
             </button>
             {exportMenuOpen && (
@@ -191,7 +191,7 @@ export default function CsvImportExportToolbar({
             aria-label={`Export ${displayLabel} as CSV`}
             style={toolbarButtonStyle}
           >
-            <Download size={14} /> {exporting ? "Exporting..." : "Export CSV"}
+            <Upload size={14} /> {exporting ? "Exporting..." : "Export CSV"}
           </button>
         )}
         <button
@@ -200,7 +200,7 @@ export default function CsvImportExportToolbar({
           aria-label={`Import ${displayLabel}`}
           style={toolbarButtonStyle}
         >
-          <Upload size={14} /> {multiFormat ? "Import" : "Import CSV"}
+          <Download size={14} /> {multiFormat ? "Import" : "Import CSV"}
         </button>
       </div>
 
@@ -467,7 +467,7 @@ function ImportModal({
         </button>
 
         <h2 id="csv-import-title" style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <Upload size={20} /> Import {label} from {formats.length > 1 ? "CSV / Excel" : "CSV"}
+          <Download size={20} /> Import {label} from {formats.length > 1 ? "CSV / Excel" : "CSV"}
         </h2>
 
         <p style={{ color: "var(--text-secondary)", marginBottom: "1rem" }}>
@@ -510,7 +510,7 @@ function ImportModal({
             onClick={() => fileInputRef.current?.click()}
             style={filePickerBtnStyle}
           >
-            <Upload size={14} />
+            <Download size={14} />
             {file ? "Change file" : (formats.length > 1 ? "Choose CSV or Excel file" : "Choose CSV file")}
           </button>
           <div style={fileMetaStyle}>

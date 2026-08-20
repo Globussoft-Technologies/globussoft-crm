@@ -430,6 +430,7 @@ describe("<Itineraries /> — page chrome + filter bar", () => {
     expect(
       screen.getByRole("heading", { name: /Itineraries/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/itineraries/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by status/i)).toBeInTheDocument();
     expect(
@@ -684,7 +685,10 @@ describe("<Itineraries /> — load + render lifecycle", () => {
     fireEvent.change(screen.getByLabelText(/Search itineraries/i), {
       target: { value: "mecca" },
     });
-    await screen.findByText("Hidden Mecca Escape");
+    const destination = await screen.findByText((_, node) => {
+      return node?.tagName?.toLowerCase() === "strong" && node.textContent === "Hidden Mecca Escape";
+    });
+    expect(destination).toBeInTheDocument();
     expect(
       fetchApiMock.mock.calls.some(
         ([u, o]) =>
@@ -694,6 +698,28 @@ describe("<Itineraries /> — load + render lifecycle", () => {
           (!o?.method || o.method === "GET"),
       ),
     ).toBe(true);
+  });
+
+  it("highlights matching itinerary text for single-letter searches", async () => {
+    renderPage();
+    await screen.findByText("Andaman Islands");
+    fetchApiMock.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/Search itineraries/i), {
+      target: { value: "a" },
+    });
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === "string" &&
+          u.startsWith("/api/travel/itineraries") &&
+          u.includes("search=a") &&
+          (!o?.method || o.method === "GET"),
+      );
+      expect(call).toBeTruthy();
+    });
+    expect(screen.getAllByText(/a/i, { selector: "mark" }).length).toBeGreaterThan(0);
   });
 
   it("renders empty-state copy when itineraries=[] (SUT line 234-237)", async () => {

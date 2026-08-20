@@ -184,6 +184,11 @@ export default function LandingPageBuilder() {
   const isTravelTenant = auth?.user?.tenant?.vertical === 'travel' || auth?.tenant?.vertical === 'travel';
   const isGenericLandingSites = location.pathname.startsWith('/landing-sites');
   const isWellnessTenant = auth?.user?.tenant?.vertical === 'wellness' || auth?.tenant?.vertical === 'wellness';
+  const backTrackState = location.state?.returnTo ? location.state : null;
+  const builderBackTarget = backTrackState?.returnTo?.path || (isGenericLandingSites ? '/landing-sites' : '/landing-pages');
+  const builderBackLabel = backTrackState?.returnTo?.label || (isGenericLandingSites ? 'Landing sites list' : 'Landing pages list');
+  const builderCurrentLabel = backTrackState?.currentLabel || 'Public experience';
+  const builderCurrentTarget = backTrackState?.currentPath || builderBackTarget;
   // G094: sub-brand preview context. Admin lands at
   //   /landing-pages/<id>/builder?sub_brand=tmc
   // to preview the page chrome under the TMC brand kit; absent param
@@ -225,6 +230,7 @@ export default function LandingPageBuilder() {
   const [tripPickerOpen, setTripPickerOpen] = useState(false);
   const [tripSearch, setTripSearch] = useState('');
   const tripPickerRef = useRef(null);
+  const tripFetchSeqRef = useRef(0);
   // #454: dirty-state tracking + beforeunload guard.
   const [isDirty, setIsDirty] = useState(false);
   // Version-history drawer state. Lightweight versioning per PRD ?
@@ -296,19 +302,42 @@ export default function LandingPageBuilder() {
       .catch(() => setAllPages([]));
   }, []);
 
-  // Fetch TMC trips for the "Link to trip" picker. Travel admins only;
-  // 403 (non-travel tenant or non-TMC sub-brand access) ? silently
-  // leave the picker empty so the toolbar renders without the dropdown
-  // for generic users.
-  useEffect(() => {
+  const loadTmcTrips = useCallback(async (query = '') => {
     if (!isTravelTenant) {
       setTmcTrips([]);
       return;
     }
-    fetchApi('/api/travel/trips?limit=200')
-      .then(res => Array.isArray(res?.trips) ? setTmcTrips(res.trips) : setTmcTrips([]))
-      .catch(() => setTmcTrips([]));
+    const seq = ++tripFetchSeqRef.current;
+    const qs = new URLSearchParams();
+    qs.set('fields', 'summary');
+    qs.set('limit', '200');
+    const trimmed = String(query || '').trim();
+    if (trimmed) qs.set('search', trimmed);
+    try {
+      const res = await fetchApi(`/api/travel/trips?${qs.toString()}`, { silent: true });
+      if (seq !== tripFetchSeqRef.current) return;
+      setTmcTrips(Array.isArray(res?.trips) ? res.trips : []);
+    } catch (_err) {
+      if (seq !== tripFetchSeqRef.current) return;
+      setTmcTrips([]);
+    }
   }, [isTravelTenant]);
+
+  // Fetch TMC trips for the "Link to trip" picker. Travel admins only;
+  // 403 (non-travel tenant or non-TMC sub-brand access) leaves it empty.
+  // The picker also refreshes on open/search so live deployments do not
+  // get stuck with a stale mount-time cache after a new trip is created.
+  useEffect(() => {
+    loadTmcTrips('');
+  }, [loadTmcTrips]);
+
+  useEffect(() => {
+    if (!tripPickerOpen || !isTravelTenant) return undefined;
+    const timer = window.setTimeout(() => {
+      loadTmcTrips(tripSearch);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [isTravelTenant, loadTmcTrips, tripPickerOpen, tripSearch]);
   // Sync linking state with the page's persisted tripId so the
   // dropdown reflects "Linked to trip X" on load.
   useEffect(() => {
@@ -681,7 +710,14 @@ export default function LandingPageBuilder() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       {/* Builder top bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.65rem 1rem', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--surface-color)' }}>
-        <Link to={isGenericLandingSites ? '/landing-sites' : '/landing-pages'} title={isGenericLandingSites ? 'Back to landing sites list' : 'Back to landing pages list'} style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>
+        <Link to={builderBackTarget} state={backTrackState || undefined} title={`Back to ${builderBackLabel}`} style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>
+        {backTrackState && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            <Link to={builderBackTarget} state={backTrackState || undefined} style={{ color: 'var(--primary-color, var(--accent-color))', textDecoration: 'none', fontWeight: 600 }}>{builderBackLabel}</Link>
+            <span aria-hidden="true">/</span>
+            <Link to={builderCurrentTarget} state={backTrackState || undefined} style={{ color: 'var(--text-primary)', textDecoration: 'none' }}>{builderCurrentLabel}</Link>
+          </div>
+        )}
         <input className="input-field" value={page.title} onChange={e => { setPage({ ...page, title: e.target.value }); setIsDirty(true); }} style={{ fontWeight: '600', fontSize: '0.95rem', padding: '0.35rem 0.65rem', width: '220px' }} aria-label="Page title" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
           <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
@@ -749,14 +785,9 @@ export default function LandingPageBuilder() {
             <Globe size={14} /> Open live
           </a>
         )}
-        {isTravelTenant && tmcTrips.length > 0 && (() => {
+        {isTravelTenant && (() => {
           const selectedTrip = tmcTrips.find((t) => t.id === linkingTripId);
-          const filteredTrips = tripSearch.trim()
-            ? tmcTrips.filter((t) =>
-                t.tripCode?.toLowerCase().includes(tripSearch.toLowerCase()) ||
-                t.destination?.toLowerCase().includes(tripSearch.toLowerCase())
-              )
-            : tmcTrips;
+          const filteredTrips = tmcTrips;
           return (
             <div
               ref={tripPickerRef}
@@ -771,7 +802,14 @@ export default function LandingPageBuilder() {
             >
               <button
                 type="button"
-                onClick={() => { setTripPickerOpen((open) => !open); setTripSearch(''); }}
+                onClick={() => {
+                  setTripPickerOpen((open) => {
+                    const nextOpen = !open;
+                    if (nextOpen) loadTmcTrips('');
+                    return nextOpen;
+                  });
+                  setTripSearch('');
+                }}
                 title="Link this landing page to a TMC trip so wizard submissions enroll participants immediately"
                 aria-label="Link landing page to TMC trip"
                 aria-expanded={tripPickerOpen}
@@ -779,7 +817,7 @@ export default function LandingPageBuilder() {
                 style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0.3rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.78rem', background: 'var(--surface-color)', color: 'var(--text-primary)', cursor: 'pointer', maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
               >
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, textAlign: 'left' }}>
-                  {selectedTrip ? (selectedTrip.tripCode + ' (' + selectedTrip.destination + ')') : '- Not linked to a trip -'}
+                  {selectedTrip ? (selectedTrip.tripCode + ' (' + selectedTrip.destination + ')') : (linkingTripId ? `Trip #${linkingTripId}` : '- Not linked to a trip -')}
                 </span>
                 <ChevronDown size={12} aria-hidden style={{ flexShrink: 0 }} />
               </button>

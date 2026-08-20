@@ -101,6 +101,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { AuthContext } from '../App';
 
 const fetchApiMock = vi.fn();
 const rawFetchMock = vi.fn();
@@ -131,6 +132,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import TripDetail from '../pages/travel/TripDetail';
+import LandingPageBuilder from '../pages/LandingPageBuilder';
 
 // Canonical trip fixture — exercises Overview + Participants + Microsite
 // surfaces. Default has no microsite (un-published path), and one
@@ -173,6 +175,7 @@ function installFetchMock({
   // empty / not-linked so existing tests stay green.
   pendingRegs = [],
   landingPage = { status: 404, body: { code: 'NOT_LINKED' } }, // 404 = no page linked
+  builderLandingPage = null,
   landingPageCreate = null, // override to return a created page on POST
   registrationDecide = null, // override per-test to assert approve/reject
   itinerarySuggest = null, // override to return a custom AI suggestion
@@ -218,6 +221,18 @@ function installFetchMock({
       }
       return Promise.resolve(landingPage);
     }
+    // GET /api/landing-pages/:id (builder surface reached from the trip page)
+    if (method === 'GET' && /^\/api\/landing-pages\/\d+$/.test(url)) {
+      if (builderLandingPage instanceof Error) return Promise.reject(builderLandingPage);
+      if (builderLandingPage) return Promise.resolve(builderLandingPage);
+      return Promise.resolve({
+        id: 77,
+        title: 'Trip Microsite',
+        slug: 'trip-microsite',
+        status: 'DRAFT',
+        content: JSON.stringify([]),
+      });
+    }
     // Phase 8 — POST /api/travel/trips/:id/landing-page (lazy create)
     if (method === 'POST' && /^\/api\/travel\/trips\/\d+\/landing-page$/.test(url)) {
       if (landingPageCreate instanceof Error) return Promise.reject(landingPageCreate);
@@ -261,15 +276,33 @@ function installFetchMock({
 // reads { id: '101' }. The SUT does NOT consume AuthContext (no role gate),
 // so no Provider is needed.
 function renderPage(tripId = 101, entryState = null) {
-  const entry = entryState
-    ? { pathname: `/travel/trips/${tripId}`, state: entryState }
-    : `/travel/trips/${tripId}`;
+  let entry = `/travel/trips/${tripId}`;
+  if (entryState) {
+    if (typeof entryState === 'object' && (Object.prototype.hasOwnProperty.call(entryState, 'pathname') || Object.prototype.hasOwnProperty.call(entryState, 'search') || Object.prototype.hasOwnProperty.call(entryState, 'hash'))) {
+      entry = {
+        pathname: entryState.pathname || `/travel/trips/${tripId}`,
+        search: entryState.search || '',
+        hash: entryState.hash || '',
+        state: Object.prototype.hasOwnProperty.call(entryState, 'state') ? entryState.state : null,
+      };
+    } else {
+      entry = { pathname: `/travel/trips/${tripId}`, state: entryState };
+    }
+  }
+  const authValue = {
+    user: { tenant: { vertical: 'travel' } },
+    tenant: { vertical: 'travel' },
+    loading: false,
+  };
   return render(
-    <MemoryRouter initialEntries={[entry]}>
-      <Routes>
-        <Route path="/travel/trips/:id" element={<TripDetail />} />
-      </Routes>
-    </MemoryRouter>,
+    <AuthContext.Provider value={authValue}>
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route path="/travel/trips/:id" element={<TripDetail />} />
+          <Route path="/landing-pages/builder/:id" element={<LandingPageBuilder />} />
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
   );
 }
 
@@ -370,6 +403,12 @@ describe('<TripDetail /> — header + status badge', () => {
 });
 
 describe('<TripDetail /> — tab strip', () => {
+  it('opens the Public Experience tab when the route carries ?tab=microsite', async () => {
+    renderPage(101, { search: '?tab=microsite' });
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    expect(screen.getByRole('tab', { name: /Public Experience/i })).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('uses preserved report result URL when opened from Reports drill-down', async () => {
     renderPage(101, { backTo: '/travel/trips?status=confirmed&from=reports', backLabel: 'Back to reports results' });
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
@@ -1831,6 +1870,35 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
     expect(screen.queryByTestId('open-landing-page-link')).not.toBeInTheDocument();
     expect(screen.queryByTestId('copy-landing-page-url-btn')).not.toBeInTheDocument();
     expect(screen.queryByTestId('create-landing-page-btn')).not.toBeInTheDocument();
+  });
+
+  it('the landing-page handoff from Public Experience preserves the TMC Trips return state', async () => {
+    installFetchMock({
+      landingPage: {
+        id: 77,
+        slug: 'trip-bali2026',
+        status: 'PUBLISHED',
+        tripId: 101,
+        title: 'Bali Trip — bali2026',
+      },
+      builderLandingPage: {
+        id: 77,
+        slug: 'trip-bali2026',
+        status: 'DRAFT',
+        title: 'Bali Trip — bali2026',
+        content: JSON.stringify([]),
+      },
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
+
+    fireEvent.click(await screen.findByTestId('manage-landing-page-link'));
+
+    expect(await screen.findByTitle('Back to TMC Trips')).toHaveAttribute('href', '/travel/trips/101?tab=overview');
+    expect(screen.getByRole('link', { name: 'TMC Trips' })).toHaveAttribute('href', '/travel/trips/101?tab=overview');
+    expect(screen.getByText('Public experience')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Public experience' })).toHaveAttribute('href', '/travel/trips/101?tab=microsite');
   });
 
   it('Public Experience tab renders BOTH landing-page card AND microsite section', async () => {

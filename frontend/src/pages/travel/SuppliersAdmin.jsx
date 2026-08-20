@@ -31,8 +31,8 @@ import {
   Wallet,
   BarChart3,
   AlertTriangle,
-  Download,
   Upload,
+  Download,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -48,6 +48,7 @@ import { useActiveSubBrand } from "../../utils/subBrand";
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -876,6 +877,7 @@ export default function SuppliersAdmin() {
             }}
           >
             <Building2 size={26} aria-hidden /> Travel Suppliers
+            <CountBadge count={total} title={`${total.toLocaleString()} suppliers`} />
           </h1>
           <p
             style={{
@@ -884,13 +886,12 @@ export default function SuppliersAdmin() {
               fontSize: "0.9rem",
             }}
           >
-            Master list — Hotel / Flight / Transport / Visa Consul / Other.{" "}
-            {total.toLocaleString()} supplier{total === 1 ? "" : "s"}.
+            Master list — Hotel / Flight / Transport / Visa Consul / Other.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
           </button>
           <button type="button" onClick={() => downloadTemplate("csv")} style={secondaryBtn}>
             <Download size={14} /> Download CSV Template
@@ -906,7 +907,7 @@ export default function SuppliersAdmin() {
                 style={secondaryBtn}
                 title="Bulk-import suppliers from CSV or Excel using the downloadable template."
               >
-                <Upload size={14} /> Import CSV/Excel
+                <Download size={14} /> Import CSV/Excel
               </button>
               <input
                 ref={fileRef}

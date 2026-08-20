@@ -60,6 +60,29 @@ function renderLayout(args = {}) {
   );
 }
 
+function renderTravelLayout(args = {}) {
+  const { user, initialRoute = '/travel' } = args;
+  const tenant = 'tenant' in args ? args.tenant : { id: 7, name: 'Travel Stall', vertical: 'travel' };
+  return render(
+    <MemoryRouter initialEntries={[initialRoute]}>
+      <AuthContext.Provider value={{
+        user: user || { name: 'Alice', email: 'alice@x.test', role: 'USER' },
+        setUser: vi.fn(),
+        token: 't-abc',
+        setToken: vi.fn(),
+        tenant,
+        setTenant: vi.fn(),
+      }}>
+        <Routes>
+          <Route path="/*" element={<Layout />}>
+            <Route path="*" element={<div data-testid="outlet">TRAVEL</div>} />
+          </Route>
+        </Routes>
+      </AuthContext.Provider>
+    </MemoryRouter>
+  );
+}
+
 describe('Layout', () => {
   beforeEach(() => {
     setupPushMock.mockClear();
@@ -380,6 +403,25 @@ describe('Layout', () => {
     );
     expect(subCalls.length).toBeGreaterThanOrEqual(1);
     expect(subCalls[0][1]).toMatchObject({ silent: true });
+  });
+
+  it('renders a travel keyboard-shortcuts info button on travel routes', () => {
+    renderTravelLayout();
+    const btn = screen.getByRole('button', { name: /Show travel keyboard shortcuts/i });
+    expect(btn).toBeInTheDocument();
+    expect(btn).toHaveAttribute('title', expect.stringMatching(/Ctrl\+\//));
+  });
+
+  it('opens the travel keyboard-shortcuts dialog when the info button is clicked', () => {
+    renderTravelLayout();
+    fireEvent.click(screen.getByRole('button', { name: /Show travel keyboard shortcuts/i }));
+    expect(screen.getByRole('dialog', { name: /Travel keyboard shortcuts/i })).toBeInTheDocument();
+    expect(screen.getByText(/Show keyboard shortcuts/i)).toBeInTheDocument();
+  });
+
+  it('does not render the travel keyboard-shortcuts info button on generic routes', () => {
+    renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
+    expect(screen.queryByRole('button', { name: /Show travel keyboard shortcuts/i })).not.toBeInTheDocument();
   });
 
 });

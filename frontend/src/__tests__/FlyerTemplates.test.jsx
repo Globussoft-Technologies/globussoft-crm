@@ -222,6 +222,7 @@ describe('<FlyerTemplates /> — page chrome + initial fetch', () => {
     expect(
       screen.getByText(/Reusable flyer designs for marketing campaigns/i),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/templates/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Search templates/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /New Template/i })).toBeInTheDocument();
@@ -604,11 +605,9 @@ describe('<FlyerTemplates /> — Download dropdown (slice S77 / FR-3.4 / FR-3.5)
   // before mounting so the SUT can call it. Same for revokeObjectURL.
   beforeEach(() => {
     if (!('createObjectURL' in URL)) {
-      // eslint-disable-next-line no-undef
       Object.defineProperty(URL, 'createObjectURL', { writable: true, value: () => 'blob:url' });
     }
     if (!('revokeObjectURL' in URL)) {
-      // eslint-disable-next-line no-undef
       Object.defineProperty(URL, 'revokeObjectURL', { writable: true, value: () => {} });
     }
     createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-url');

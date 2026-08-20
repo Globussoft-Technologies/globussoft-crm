@@ -242,6 +242,7 @@ describe('<CommissionProfilesAdmin /> — page chrome + initial fetch', () => {
     expect(
       screen.getByRole('heading', { name: /Commission Profiles/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/profiles/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Active profiles only/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /New profile/i })).toBeInTheDocument();

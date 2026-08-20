@@ -108,8 +108,14 @@ const CommandPalette = () => {
                     >
                       <FileText size={18} color="var(--text-secondary)" />
                       <div style={{ flex: 1 }}>
-                        <p style={{ fontWeight: '500' }}>{deal.title}</p>
-                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{deal.company} • {formatMoney(deal.amount || 0, { currency: deal.currency, maximumFractionDigits: 0 })}</p>
+                        <p style={{ fontWeight: '500' }}>
+                          {deal.title}
+                        </p>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                          {deal.company}
+                          {' '}
+                          • {formatMoney(deal.amount || 0, { currency: deal.currency, maximumFractionDigits: 0 })}
+                        </p>
                       </div>
                       <span style={{ fontSize: '0.75rem', padding: '0.1rem 0.5rem', borderRadius: '8px', background: 'var(--subtle-bg-3)' }}>{deal.stage}</span>
                     </div>
@@ -129,8 +135,14 @@ const CommandPalette = () => {
                     >
                       <User size={18} color="var(--text-secondary)" />
                       <div style={{ flex: 1 }}>
-                        <p style={{ fontWeight: '500' }}>{contact.name}</p>
-                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{contact.email} • {contact.role}</p>
+                        <p style={{ fontWeight: '500' }}>
+                          {contact.name}
+                        </p>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                          {contact.email}
+                          {' '}
+                          • {contact.role}
+                        </p>
                       </div>
                     </div>
                   ))}

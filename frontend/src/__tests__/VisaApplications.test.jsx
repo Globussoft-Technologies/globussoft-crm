@@ -333,6 +333,7 @@ describe('<VisaApplications /> — page chrome + RBAC', () => {
     expect(
       screen.getByRole('heading', { name: /Visa Applications/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/applications/i)).toBeInTheDocument();
     expect(screen.getByRole('searchbox', { name: /Search by contact name/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Filters/i })).toBeInTheDocument();

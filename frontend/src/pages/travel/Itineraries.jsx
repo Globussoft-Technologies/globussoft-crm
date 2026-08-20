@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { AuthContext } from "../../App";
 import PermissionGate from "../../components/PermissionGate";
@@ -58,6 +59,7 @@ import {
 // rows that do have coordinates.
 import MapPreview from "../../components/MapPreview";
 import TripPager from "./TripPager";
+import SearchHighlight from "../../components/ui/SearchHighlight";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -812,12 +814,17 @@ export default function Itineraries() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: 12,
               margin: 0,
               marginBottom: 4,
+              fontSize: "1.75rem",
+              fontWeight: 600,
+              lineHeight: 1.15,
+              flexWrap: "wrap",
             }}
           >
             <Map size={28} aria-hidden /> Itineraries
+            <CountBadge count={total} title={`${total.toLocaleString()} itineraries`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
             Multi-product trip itineraries (RFU + Travel Stall + visa). Create
@@ -1090,17 +1097,26 @@ export default function Itineraries() {
                       aria-label={`Open itinerary ${it.destination}`}
                     >
                       <td style={td}>
-                        <strong>{it.destination}</strong>
+                        <strong>
+                          <SearchHighlight text={it.destination} query={searchQuery} />
+                        </strong>
                       </td>
                       <td style={td}>
                         <span style={brandBadge}>{it.subBrand}</span>
                       </td>
                       <td style={td}>
-                        {it.contact
-                          ? it.contact.name ||
-                            it.contact.email ||
-                            `#${it.contact.id}`
-                          : "?"}
+                        {it.contact ? (
+                          <SearchHighlight
+                            text={
+                              it.contact.name ||
+                              it.contact.email ||
+                              `#${it.contact.id}`
+                            }
+                            query={searchQuery}
+                          />
+                        ) : (
+                          "?"
+                        )}
                       </td>
                       <td style={td}>
                         {it.startDate || it.endDate
@@ -2613,20 +2629,12 @@ const inputStyle = {
   boxSizing: "border-box",
 };
 
-// Native <select> with a custom chevron (the default OS arrow looks dated). We
-// strip the browser appearance and paint a chevron via an inline SVG background.
-// Used by the Suggest-itinerary modal + create drawer selects.
+// Native <select> styling. Keep the browser arrow intact: forcing a custom
+// chevron with appearance:none caused selected text/arrow overlap on Windows.
 const modalSelectStyle = {
   ...inputStyle,
-  appearance: "none",
-  WebkitAppearance: "none",
-  MozAppearance: "none",
   cursor: "pointer",
   paddingRight: 34,
-  backgroundImage:
-    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23889' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>\")",
-  backgroundRepeat: "no-repeat",
-  backgroundPosition: "right 11px center",
 };
 
 // Redesigned day-card styling for the Suggest-itinerary preview (the operator

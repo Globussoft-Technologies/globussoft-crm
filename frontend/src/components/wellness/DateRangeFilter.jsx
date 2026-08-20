@@ -22,8 +22,8 @@ import { Calendar, X, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const fieldStyle = {
   padding: '0.4rem 0.6rem',
-  background: 'rgba(255,255,255,0.05)',
-  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'var(--surface-color)',
+  border: '1px solid var(--border-color)',
   borderRadius: 8,
   color: 'var(--text-primary)',
   fontSize: '0.9rem',
@@ -145,33 +145,35 @@ export function DateRangeFilter({ value, onChange, label = 'Filter by date', inc
 
   return (
     <>
-      {label && (
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-          <Calendar size={14} /> {label}
-        </label>
-      )}
-      <select
-        value={v.preset}
-        onChange={(ev) => onChange({ ...v, preset: ev.target.value })}
-        style={{ ...fieldStyle, width: 'auto', minWidth: 160 }}
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
-      {isCustom && (
-        <button
-          type="button"
-          onClick={() => setPickerOpen(true)}
-          style={{
-            ...fieldStyle, width: 'auto', padding: '0.4rem 0.75rem',
-            display: 'inline-flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer',
-          }}
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'nowrap', minWidth: 0 }}>
+        {label && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+            <Calendar size={14} /> {label}
+          </label>
+        )}
+        <select
+          value={v.preset}
+          onChange={(ev) => onChange({ ...v, preset: ev.target.value })}
+          style={{ ...fieldStyle, width: 'auto', minWidth: 160, flexShrink: 0 }}
         >
-          <Calendar size={14} />
-          {v.start && v.end ? `${v.start} – ${v.end}` : 'Pick dates'}
-        </button>
-      )}
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        {isCustom && (
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            style={{
+              ...fieldStyle, width: 'auto', padding: '0.4rem 0.75rem',
+              display: 'inline-flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', flexShrink: 0,
+            }}
+          >
+            <Calendar size={14} />
+            {v.start && v.end ? `${v.start} – ${v.end}` : 'Pick dates'}
+          </button>
+        )}
+      </div>
       {pickerOpen && (
         <RangePickerModal
           initialStart={v.start}
@@ -217,7 +219,7 @@ function RangePickerModal({ initialStart, initialEnd, onClose, onSave }) {
   const nextMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 1);
   const canSave = !!(tempStart && tempEnd);
 
-  const navBtn = { background: 'transparent', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6, padding: '0.3rem 0.55rem', cursor: 'pointer', color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center' };
+  const navBtn = { background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.3rem 0.55rem', cursor: 'pointer', color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center' };
 
   return createPortal((
     <div

@@ -14,6 +14,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import CalendarRangePicker from "../../components/CalendarRangePicker";
+import CountBadge from "../../components/CountBadge";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -225,9 +226,19 @@ export default function Diagnostics() {
         }}
       >
         <h1
-          style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            margin: 0,
+            fontSize: "1.75rem",
+            fontWeight: 600,
+            lineHeight: 1.15,
+            flexWrap: "wrap",
+          }}
         >
           <ClipboardCheck size={28} aria-hidden /> Diagnostics
+          <CountBadge count={total} title={`${total.toLocaleString()} diagnostics`} />
         </h1>
         <div style={{ display: "flex", gap: 8 }}>
           {isAdmin && (

@@ -22,6 +22,7 @@ import {
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
+import CountBadge from '../../components/CountBadge';
 
 const SUB_BRAND_LABELS = {
   tmc: 'TMC (school trips)',
@@ -363,6 +364,7 @@ export default function KnowledgeBaseAdmin() {
   };
 
   const canSync = oauth.connected && oauth.rootFolderId && config.qdrantEnabled;
+  const indexedFilesCount = filesTotal || files.length;
 
   const activeStep = (() => {
     if (!oauth.configured) return STEP.CONFIG;
@@ -739,7 +741,10 @@ export default function KnowledgeBaseAdmin() {
       {/* Jobs table */}
       {jobs.length > 0 && (
         <div className="card" style={{ padding: 24, marginTop: 20 }}>
-          <h2 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700 }}>Recent sync jobs</h2>
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 16px', fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
+            Recent sync jobs
+            <CountBadge count={jobs.length} title={`${jobs.length.toLocaleString()} sync jobs`} />
+          </h2>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
@@ -773,7 +778,10 @@ export default function KnowledgeBaseAdmin() {
       {/* Files table */}
       {files.length > 0 && (
         <div className="card" style={{ padding: 24, marginTop: 20 }}>
-          <h2 style={{ margin: '0 0 16px', fontSize: 16, fontWeight: 700 }}>Indexed files</h2>
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 16px', fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
+            Indexed files
+            <CountBadge count={indexedFilesCount} title={`${indexedFilesCount.toLocaleString()} indexed files`} />
+          </h2>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>

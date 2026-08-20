@@ -921,15 +921,16 @@ const Sidebar = ({
         onClick={onMobileClose}
         aria-hidden="true"
       />
-      <aside
-        ref={asideRef}
-        id="app-sidebar"
-        role={asideRole}
-        aria-modal={asideAriaModal}
-        aria-label="Main navigation"
-        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}`}
-        style={{
-          width: "250px",
+    <aside
+      ref={asideRef}
+      id="app-sidebar"
+      role={asideRole}
+      aria-modal={asideAriaModal}
+      aria-label="Main navigation"
+      data-search-highlight-scope="global-search"
+      className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}`}
+      style={{
+        width: "250px",
           height: "100vh",
           padding: "1rem 1.25rem",
           display: "flex",
@@ -1369,6 +1370,7 @@ function WellnessNavGroup({
       id={panelId}
       role="menu"
       aria-label={`${label} submodules`}
+      data-search-highlight-scope="global-search"
       onMouseEnter={() => {
         panelHoverRef.current = true;
         openPanel();

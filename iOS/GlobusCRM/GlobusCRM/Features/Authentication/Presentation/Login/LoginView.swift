@@ -56,7 +56,7 @@ struct LoginView: View {
                     .resizable()
                     .scaledToFit()
             default:
-                Image("WellnessLogo")
+                Image("WellnessSplashLogo")
                     .resizable()
                     .scaledToFit()
             }

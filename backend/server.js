@@ -71,6 +71,7 @@ const rateLimit = require("express-rate-limit");
 // below — that's why this block sits up here, not down by the route mounts.
 const { validateNumericId } = require("./middleware/validateNumericId");
 const { resolveSubscriptionAccess } = require("./lib/subscriptionAccess");
+const { shouldSkipLoginAccountLimiter } = require("./lib/loginLimiterPolicy");
 {
   const _RouterFactory = express.Router;
   // express.Router is a callable factory (not a class). Wrap it to attach
@@ -302,10 +303,12 @@ const apiLimiter = rateLimit({
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
 // Login brute-force defense (#191):
-// Two stacked limiters on POST /api/auth/login. Successful logins (2xx) do
-// NOT count toward the limit, so a legitimate user who fat-fingers and then
-// succeeds doesn't burn budget. The per-username limiter keys on the lowercased
-// email so an attacker can't escape it by rotating IPs.
+// Keep the IP limiter everywhere, but skip the account bucket on the shared
+// demo/local login hosts so repeated QA attempts do not lock the demo out.
+// Successful logins (2xx) do NOT count toward the limit, so a legitimate user
+// who fat-fingers and then succeeds doesn't burn budget. The per-username
+// limiter keys on the lowercased email so an attacker can't escape it by
+// rotating IPs.
 // IMPORTANT: only applied to /api/auth/login itself — /api/auth/2fa/verify
 // is a separate endpoint with its own threat model.
 const { ipKeyGenerator } = require("express-rate-limit");
@@ -345,13 +348,18 @@ const loginUsernameLimiter = rateLimit({
   },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
+const loginAccountLimiter = (req, res, next) => {
+  if (shouldSkipLoginAccountLimiter(req)) return next();
+  return loginUsernameLimiter(req, res, next);
+};
 // Order matters: per-IP first (cheap, blocks scrapers), per-username second
-// (catches distributed attacks against one account). Both must pass before
-// the route handler runs. Scoped to POST so OPTIONS preflight isn't counted.
+// (catches distributed attacks against one account). The account limiter is
+// bypassed on demo/local hosts, but the IP limiter still runs before the
+// route handler. Scoped to POST so OPTIONS preflight isn't counted.
 app.post(
   "/api/auth/login",
   loginIpLimiter,
-  loginUsernameLimiter,
+  loginAccountLimiter,
   (req, res, next) => next(),
 );
 
@@ -1552,59 +1560,13 @@ app.use("/p", landingPagesPublic);
 // Public legal/policy pages — rendered from Markdown (no auth)
 app.use(require("./routes/legal"));
 
-// Public /trips marketing surface — renders the currently featured
-// PUBLISHED landing page when one exists. When no featured page is set,
-// falls through to the SPA shell so the frontend TripsResolver can show
-// the hardcoded Japan TripsLanding fallback instead of a bare 404.
-app.get("/trips", async (req, res, next) => {
-  try {
-    const prismaClient = require("./lib/prisma");
-    const page = await prismaClient.landingPage.findFirst({
-      where: { status: "PUBLISHED", isFeatured: true, subBrand: "tmc" },
-      orderBy: { featuredAt: "desc" },
-    });
-    if (!page) {
-      // No featured page yet — fall through to the SPA shell so the frontend
-      // TripsResolver can render the hardcoded Japan TripsLanding fallback.
-      return next();
-    }
-
-    prismaClient.landingPage.update({
-      where: { id: page.id },
-      data: { visits: { increment: 1 } },
-    }).catch((e) => console.warn("[trips] visit increment skipped:", e.message));
-    prismaClient.landingPageAnalytics.create({
-      data: {
-        landingPageId: page.id,
-        eventType: "VISIT",
-        visitorIp: req.ip,
-        userAgent: req.headers["user-agent"],
-        referrer: req.headers["referer"],
-        tenantId: page.tenantId || 1,
-      },
-    }).catch((e) => console.warn("[trips] analytics write skipped:", e.message));
-    const { renderPage } = require("./services/landingPageRenderer");
-    const html = renderPage(page);
-    if (page.templateType === "wanderlux-v1") {
-      res.set("Content-Security-Policy", [
-        "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
-        "font-src 'self' data: https://fonts.gstatic.com",
-        "img-src 'self' data: blob: https:",
-        "media-src 'self' https: blob:",
-        "connect-src 'self' https://image.pollinations.ai",
-        "frame-src 'self' https://www.youtube.com https://player.vimeo.com https://fast.wistia.net https://*.wistia.com",
-        "object-src 'none'",
-      ].join("; "));
-    }
-    res.set("Content-Type", "text/html");
-    return res.send(html);
-  } catch (err) {
-    console.error("[Trips] Render error:", err);
-    res.status(500).send("<h1>Server error</h1>");
-  }
-});
+// Public /trips marketing surface — root still resolves the featured
+// travel page when one exists, while /trips/:id-or-slug serves the direct
+// share link for other published travel trips. When no featured page
+// exists, /trips falls through to the SPA shell so the frontend
+// TripsResolver can show the hardcoded Japan TripsLanding fallback
+// instead of a bare 404. No nginx changes are required for this flow.
+app.use("/trips", require("./routes/trips_public").router);
 
 // #917 slice S119 (FR-3.X) — CSP-nonce static-file middleware.
 // Substitutes `__CSP_NONCE__` placeholders in the SPA index.html with the

@@ -17,7 +17,8 @@
  *           Pre-fix the headers were missing entirely and a CSP bug was
  *           silently disabling subsequent headers in some Nginx setups.
  *   #191  — POST /api/auth/login is wired to the express-rate-limit stack
- *           (loginIpLimiter max=5 + loginUsernameLimiter max=10/hr).
+ *           (loginIpLimiter max=5; the account limiter is skipped on
+ *           demo/local login hosts).
  *           Pre-fix the route had no brute-force defense.
  *   #192  — login response time variance valid-vs-invalid email is bounded.
  *           Pre-fix bcrypt was only run on found-email rows; missing-email
@@ -270,7 +271,8 @@ test.describe('#186/#342 — security headers (tightened pins)', () => {
 
 // ──────────────────────────────────────────────────────────────────────
 // #191 — login rate-limit wired (tightened: assert the headers exist
-// AND that hitting the limiter eventually returns 429)
+// without actually burning the IP budget on a 429; the account limiter
+// itself is skipped on demo/local login hosts)
 // ──────────────────────────────────────────────────────────────────────
 
 test.describe('#191 — login rate-limit wired', () => {
@@ -315,7 +317,8 @@ test.describe('#192 — login timing oracle bounded', () => {
   // with 30+ attempts. Two CI realities make 30 attempts unworkable:
   //   1. loginIpLimiter max=5 — the 6th wrong-password attempt 429s,
   //      breaking the timing measurement (429 is faster than 401).
-  //   2. loginUsernameLimiter max=10/hr — same issue with rotated emails.
+  //   2. The account limiter is skipped on demo/local login hosts, so
+  //      it does not interfere with the timing samples there.
   //
   // Compromise that's still meaningful: N=2 per side (so only 4 total
   // wrong-password attempts, well under 5/15min limit per IP, leaving
@@ -354,8 +357,8 @@ test.describe('#192 — login timing oracle bounded', () => {
 
       const t1 = Date.now();
       const r2 = await request.post(`${API}/auth/login`, {
-        // Different email each iteration so the per-username limiter
-        // doesn't fire (max=10/hr per email).
+        // Different email each iteration keeps the request shape stable
+        // regardless of whether the account limiter is enabled on host.
         data: { email: `nonexistent-${i}-${Date.now()}@example.test`, password: 'whatever' },
         headers: { 'Content-Type': 'application/json' },
         timeout: REQUEST_TIMEOUT,

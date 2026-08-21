@@ -44,6 +44,13 @@ vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 import { AuthContext } from '../App';
 import CostMaster from '../pages/travel/CostMaster';
 
+function ymdOffset(days = 0) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
 const fetchMock = vi.fn();
 
@@ -265,6 +272,21 @@ describe('<CostMaster /> — add-rate form', () => {
     });
     expect(fetchApiMock.mock.calls.filter(([u, o]) => u === '/api/travel/cost-master' && o?.method === 'POST')).toHaveLength(0);
   });
+
+  it('validation: past valid-from date is rejected, no POST', async () => {
+    renderPage();
+    await screen.findByText('Makkah:Hilton:Deluxe');
+    fireEvent.click(screen.getByRole('button', { name: /Add rate/i }));
+    fireEvent.change(screen.getByPlaceholderText(/BLR-DPS-Economy/i), { target: { value: 'Madinah:Pullman:Suite' } });
+    fireEvent.change(screen.getByPlaceholderText(/22000/i), { target: { value: '12500' } });
+    fireEvent.change(screen.getByLabelText(/Valid from/i), { target: { value: ymdOffset(-1) } });
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Valid from must be today or later');
+    });
+    expect(fetchApiMock.mock.calls.filter(([u, o]) => u === '/api/travel/cost-master' && o?.method === 'POST')).toHaveLength(0);
+  });
 });
 
 // ── 11. Toggle-active ─────────────────────────────────────────────────────────
@@ -301,6 +323,20 @@ describe('<CostMaster /> — inline edit', () => {
       expect(JSON.parse(patch[1].body).routeOrSku).toBe('Makkah:Hilton:Suite');
     });
     expect(notifySuccess).toHaveBeenCalledWith('Rate updated');
+  });
+
+  it('validation: valid-to before valid-from is rejected, no PATCH', async () => {
+    renderPage();
+    await screen.findByText('Makkah:Hilton:Deluxe');
+    fireEvent.click(screen.getByRole('button', { name: /Edit rate Makkah:Hilton:Deluxe/i }));
+    fireEvent.change(screen.getByLabelText(/Edit valid from/i), { target: { value: ymdOffset(1) } });
+    fireEvent.change(screen.getByLabelText(/Edit valid to/i), { target: { value: ymdOffset(1) } });
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Save changes for Makkah:Hilton:Deluxe/i }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Valid to must be after valid from');
+    });
+    expect(fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'PATCH')).toHaveLength(0);
   });
 
   it('cancel edit → read row restored, no PATCH', async () => {

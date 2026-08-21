@@ -6,8 +6,8 @@
 //   1. Manual row entry
 //   2. CSV / Excel import
 //   3. PDF / image upload of the school's published calendar
-import { useCallback, useEffect, useRef, useState } from "react";
-import { CalendarDays, Trash2, Plus, Search, Upload, FileSpreadsheet, FileText, Download, ExternalLink } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CalendarDays, Trash2, Plus, Search, Upload, FileSpreadsheet, FileText, Download, ExternalLink, ChevronDown, ChevronUp, ArrowUpDown } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
@@ -35,9 +35,32 @@ function fmt(d) {
   }
 }
 
+function nextDateIso(dateIso) {
+  const [year, month, day] = dateIso.split("-").map(Number);
+  const date = new Date(year, month - 1, day + 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function openDatePicker(e) {
+  try {
+    e.currentTarget.showPicker?.();
+  } catch {
+    // Browsers without showPicker still open the native picker from the date icon.
+  }
+}
+
+function preventDateTyping(e) {
+  if (e.key === "Tab") return;
+  e.preventDefault();
+  if (e.key === "Enter" || e.key === " ") openDatePicker(e);
+}
+
 export default function SchoolTermCalendar() {
   const notify = useNotify();
   const [rows, setRows] = useState([]);
+  const [sortDirection, setSortDirection] = useState(null);
+  const [filterKind, setFilterKind] = useState("");
+  const [labelSearch, setLabelSearch] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [uploads, setUploads] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -63,6 +86,31 @@ export default function SchoolTermCalendar() {
   const hasMoreRef = useRef(true);
   const importInputRef = useRef(null);
   const uploadInputRef = useRef(null);
+
+  const sortedRows = useMemo(() => {
+    const search = labelSearch.trim().toLowerCase();
+    const rowsCopy = rows.filter((row) => {
+      const matchesType = !filterKind || row.kind === filterKind;
+      const matchesLabel = !search || String(row.label || "").toLowerCase().includes(search);
+      return matchesType && matchesLabel;
+    });
+    if (!sortDirection) return rowsCopy;
+    rowsCopy.sort((a, b) => {
+      const aStart = String(a.startDate || "");
+      const bStart = String(b.startDate || "");
+      const dateCompare = aStart.localeCompare(bStart);
+      if (dateCompare !== 0) {
+        return sortDirection === "asc" ? dateCompare : -dateCompare;
+      }
+      const aId = Number(a.id);
+      const bId = Number(b.id);
+      if (Number.isFinite(aId) && Number.isFinite(bId) && aId !== bId) {
+        return bId - aId;
+      }
+      return String(b.id || "").localeCompare(String(a.id || ""));
+    });
+    return rowsCopy;
+  }, [rows, sortDirection, filterKind, labelSearch]);
 
   useEffect(() => {
     loadingRef.current = loading;
@@ -157,10 +205,38 @@ export default function SchoolTermCalendar() {
     }
   }, [loadRows]);
 
+  const toggleFromSort = () => {
+    setSortDirection((current) => (current === null ? "asc" : current === "asc" ? "desc" : null));
+  };
+
+  const sortButton = (label) => {
+    const Icon = sortDirection === "asc" ? ChevronUp : sortDirection === "desc" ? ChevronDown : ArrowUpDown;
+    return (
+      <button
+        type="button"
+        onClick={toggleFromSort}
+        aria-label={`Sort ${label}`}
+        title={`Sort ${label}`}
+        style={{ ...sortButtonStyle, ...(sortDirection ? sortButtonActiveStyle : null) }}
+      >
+        <span>{label}</span>
+        <Icon size={14} aria-hidden />
+      </button>
+    );
+  };
+
   const addRow = async (e) => {
     e.preventDefault();
     if (!form.label || !form.startDate || !form.endDate) {
       notify.error("Label, start date and end date are required");
+      return;
+    }
+    if (form.startDate < todayIso) {
+      notify.error("Start date must be today or a future date");
+      return;
+    }
+    if (form.endDate <= form.startDate) {
+      notify.error("End date must be after the start date");
       return;
     }
     setSaving(true);
@@ -194,6 +270,16 @@ export default function SchoolTermCalendar() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
+  const endDateMin = form.startDate ? nextDateIso(form.startDate) : "";
+
+  const handleStartDateChange = (e) => {
+    const startDate = e.target.value;
+    setForm((current) => ({
+      ...current,
+      startDate,
+      endDate: current.endDate && current.endDate <= startDate ? "" : current.endDate,
+    }));
+  };
 
   const runCheck = async () => {
     if (!checkDate) {
@@ -318,11 +404,40 @@ export default function SchoolTermCalendar() {
         </p>
       </header>
 
-      <div className="glass" style={{ padding: 12, marginBottom: 16, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+      <div
+        className="glass"
+        style={{
+          padding: 12,
+          marginBottom: 16,
+          display: "flex",
+          gap: 10,
+          flexWrap: "nowrap",
+          alignItems: "center",
+          overflowX: "auto",
+          whiteSpace: "nowrap",
+        }}
+      >
         <Search size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
-        <input type="date" value={checkDate} min={todayIso} onChange={(e) => setCheckDate(e.target.value)} style={inp} aria-label="Date to check" />
-        <input type="text" placeholder="School (optional)" value={checkSchool} onChange={(e) => setCheckSchool(e.target.value)} style={inp} />
-        <button type="button" onClick={runCheck} style={btn}>Check date</button>
+        <input
+          type="date"
+          value={checkDate}
+          min={todayIso}
+          onChange={(e) => setCheckDate(e.target.value)}
+          onClick={openDatePicker}
+          onKeyDown={preventDateTyping}
+          onPaste={(e) => e.preventDefault()}
+          onDrop={(e) => e.preventDefault()}
+          style={{ ...inp, flex: "0 0 160px", minWidth: 160, cursor: "pointer" }}
+          aria-label="Date to check"
+        />
+        <input
+          type="text"
+          placeholder="School (optional)"
+          value={checkSchool}
+          onChange={(e) => setCheckSchool(e.target.value)}
+          style={{ ...inp, flex: "1 1 240px", minWidth: 180 }}
+        />
+        <button type="button" onClick={runCheck} style={{ ...btn, flex: "0 0 auto" }}>Check date</button>
         {checkResult && (() => {
           // Three outcomes, not two — see the /check route. A date with no
           // window on file used to render the same green "OK to schedule"
@@ -347,8 +462,13 @@ export default function SchoolTermCalendar() {
                 ? "No term, holiday or exam window on file covers this date, so this is not a confirmation - add the school's windows below to get a definite answer."
                 : undefined}
               style={{
-                padding: "4px 12px", borderRadius: 999, fontWeight: 700, fontSize: 13,
-                background: tone.bg, color: tone.fg,
+                padding: "4px 12px",
+                borderRadius: 999,
+                fontWeight: 700,
+                fontSize: 13,
+                background: tone.bg,
+                color: tone.fg,
+                flex: "0 0 auto",
               }}
             >
               {text}
@@ -413,16 +533,60 @@ export default function SchoolTermCalendar() {
         <Field label="Board"><input type="text" value={form.board} onChange={(e) => setForm({ ...form, board: e.target.value })} style={inp} placeholder="CBSE" /></Field>
         <Field label="Type"><select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} style={inp}>{KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}</select></Field>
         <Field label="Label *"><input type="text" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} style={inp} placeholder="Summer Break 2027" /></Field>
-        <Field label="Start *"><input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} style={inp} /></Field>
-        <Field label="End *"><input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} style={inp} /></Field>
+        <Field label="Start *">
+          <input
+            type="date"
+            value={form.startDate}
+            min={todayIso}
+            onChange={handleStartDateChange}
+            onClick={openDatePicker}
+            onKeyDown={preventDateTyping}
+            onPaste={(e) => e.preventDefault()}
+            onDrop={(e) => e.preventDefault()}
+            style={{ ...inp, cursor: "pointer" }}
+          />
+        </Field>
+        <Field label="End *">
+          <input
+            type="date"
+            value={form.endDate}
+            min={endDateMin}
+            disabled={!form.startDate}
+            onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+            onClick={openDatePicker}
+            onKeyDown={preventDateTyping}
+            onPaste={(e) => e.preventDefault()}
+            onDrop={(e) => e.preventDefault()}
+            style={{ ...inp, cursor: form.startDate ? "pointer" : "not-allowed", opacity: form.startDate ? 1 : 0.6 }}
+          />
+        </Field>
         <button type="submit" disabled={saving} style={{ ...btn, opacity: saving ? 0.6 : 1 }}><Plus size={14} aria-hidden /> {saving ? "Adding..." : "Add window"}</button>
       </form>
 
       <div className="glass" style={{ padding: 0, overflow: "hidden", marginBottom: 16, background: "var(--surface-color)" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", padding: 12, borderBottom: "1px solid var(--border-color)" }}>
+          <select value={filterKind} onChange={(e) => setFilterKind(e.target.value)} style={{ ...inp, width: "auto", minWidth: 180 }} aria-label="Filter school terms by type">
+            <option value="">All types</option>
+            {KINDS.map((kind) => <option key={kind.value} value={kind.value}>{kind.label}</option>)}
+          </select>
+          <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 360 }}>
+            <Search size={15} aria-hidden style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)" }} />
+            <input
+              type="search"
+              value={labelSearch}
+              onChange={(e) => setLabelSearch(e.target.value)}
+              placeholder="Search by label"
+              aria-label="Search school terms by label"
+              style={{ ...inp, paddingLeft: 30 }}
+            />
+          </div>
+        </div>
         {loading ? (
           <div style={empty}>Loading...</div>
         ) : rows.length === 0 ? (
           <div style={empty}>No term windows yet - add one above, import a spreadsheet, or upload a school calendar.</div>
+        ) : sortedRows.length === 0 ? (
+          <div style={empty}>No term windows match the selected filters.</div>
         ) : (
           <TopScrollSync>
             <div
@@ -438,13 +602,18 @@ export default function SchoolTermCalendar() {
                     <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>Board</th>
                     <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>Type</th>
                     <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>Label</th>
-                    <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>From</th>
+                    <th
+                      style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}
+                      aria-sort={sortDirection === "asc" ? "ascending" : sortDirection === "desc" ? "descending" : "none"}
+                    >
+                      {sortButton("From")}
+                    </th>
                     <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>To</th>
                     <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => (
+                  {sortedRows.map((r) => (
                     <tr key={r.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                       <td style={td}>{r.schoolName || <em style={{ color: "var(--text-secondary)" }}>All schools</em>}</td>
                       <td style={td}>{r.board || "-"}</td>
@@ -521,6 +690,8 @@ function Field({ label, children }) {
 
 const inp = { padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--surface-color)", color: "var(--text-primary)", fontSize: 13, width: "100%", boxSizing: "border-box" };
 const btn = { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13, background: "var(--primary-color, var(--accent-color))", color: "#fff", border: "none", cursor: "pointer" };
+const sortButtonStyle = { display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6, width: "100%", padding: "4px 8px", border: "none", borderRadius: 999, background: "transparent", color: "inherit", font: "inherit", textTransform: "inherit", letterSpacing: "inherit", cursor: "pointer", textAlign: "left", transition: "background-color 0.15s ease, color 0.15s ease" };
+const sortButtonActiveStyle = { color: "var(--primary-color)" };
 const secondaryBtn = { display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13, background: "transparent", color: "var(--text-primary)", border: "1px solid var(--border-color)", cursor: "pointer" };
 const th = { textAlign: "left", padding: "10px 12px", fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)", background: "var(--subtle-bg)", fontWeight: 600 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };

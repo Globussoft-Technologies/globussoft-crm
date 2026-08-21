@@ -1023,7 +1023,7 @@ export default function Tasks() {
         <div
           onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
           style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+            position: 'fixed', inset: 0, background: 'var(--catalogue-modal-backdrop)',
             backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             zIndex: 1000, padding: '1rem',

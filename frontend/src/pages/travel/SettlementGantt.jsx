@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { useActiveSubBrand } from "../../utils/subBrand";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -60,12 +61,17 @@ function formatMoney(n, currency) {
 
 export default function SettlementGantt() {
   const notify = useNotify();
+  const { activeSubBrand } = useActiveSubBrand();
   const [from, setFrom] = useState(todayPlus(-30));
   const [to, setTo] = useState(todayPlus(90));
-  const [subBrand, setSubBrand] = useState("");
+  const [subBrand, setSubBrand] = useState(activeSubBrand || "");
   const [data, setData] = useState({ items: [], summary: null });
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand]);
 
   useEffect(() => {
     let cancelled = false;

@@ -153,6 +153,7 @@ export default function TmcCatalogueAdmin() {
   const [bulkImportResult, setBulkImportResult] = useState(null);
   const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
   const [pendingReviewTripIds, setPendingReviewTripIds] = useState(() => new Set());
+  const [titleSearch, setTitleSearch] = useState("");
   const listContainerRef = useRef(null);
   const formRef = useRef(null);
   const requestSeqRef = useRef(0);
@@ -264,6 +265,15 @@ export default function TmcCatalogueAdmin() {
   const reload = useCallback(() => {
     load({ reset: true });
   }, [load]);
+
+  const normalizedTitleSearch = titleSearch.trim().toLowerCase();
+  const visibleRows = normalizedTitleSearch
+    ? rows.filter((row) =>
+        String(row.title || row.tripId || "")
+          .toLowerCase()
+          .includes(normalizedTitleSearch),
+      )
+    : rows;
 
   const handleListScroll = useCallback((e) => {
     const el = e.currentTarget;
@@ -831,6 +841,26 @@ export default function TmcCatalogueAdmin() {
           gap: 16,
         }}
       >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-start",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <input
+          type="search"
+          value={titleSearch}
+          onChange={(e) => setTitleSearch(e.target.value)}
+          placeholder="Search by title..."
+          aria-label="Search catalogue by title"
+          style={{
+            ...inputStyle,
+            width: 220,
+          }}
+        />
+      </div>
       {/* Tabs */}
       <div role="tablist" aria-label="Catalogue status tabs" style={tabRow}>
         <button
@@ -863,6 +893,14 @@ export default function TmcCatalogueAdmin() {
         >
           <RotateCw size={14} /> Refresh
         </button>
+        <span
+          aria-live="polite"
+          style={{ color: "var(--text-secondary)", fontSize: 12, whiteSpace: "nowrap", marginLeft: 8 }}
+        >
+          {visibleRows.length === 0
+            ? `Showing 0 of ${total.toLocaleString()}`
+            : `Showing 1–${Math.min(visibleRows.length, total).toLocaleString()} of ${total.toLocaleString()}`}
+        </span>
       </div>
 
       {/* Create / edit form — only shown inside the Active tab so it does
@@ -871,14 +909,35 @@ export default function TmcCatalogueAdmin() {
         <form
           ref={formRef}
           onSubmit={handleSubmit}
+          onClick={(e) => { if (e.target === e.currentTarget) resetForm(); }}
           style={{
-            background: "var(--bg-color, #111318)",
+            position: "fixed",
+            inset: 0,
+            zIndex: 1200,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             padding: 16,
-            borderRadius: 8,
-            border: "1px solid var(--border-color)",
-            marginBottom: 16,
+            background: "var(--catalogue-modal-backdrop)",
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+            overflowY: "auto",
           }}
         >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(1440px, 100%)",
+              maxHeight: "calc(100vh - 32px)",
+              overflowY: "auto",
+              boxSizing: "border-box",
+              background: "var(--bg-color, #111318)",
+              padding: 16,
+              borderRadius: 12,
+              border: "1px solid var(--border-color)",
+              boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+            }}
+          >
           <div
             style={{
               display: "flex",
@@ -1189,6 +1248,7 @@ export default function TmcCatalogueAdmin() {
               Cancel
             </button>
           </div>
+          </div>
         </form>
       )}
 
@@ -1202,9 +1262,11 @@ export default function TmcCatalogueAdmin() {
         >
           {loadError}
         </div>
-      ) : rows.length === 0 ? (
+      ) : visibleRows.length === 0 ? (
         <div style={emptyStyle}>
-          {tab === STATUS_ACTIVE
+          {rows.length > 0 && normalizedTitleSearch
+            ? "No catalogue entries match this title."
+            : tab === STATUS_ACTIVE
             ? "No active catalogue entries. Newly-created rows land in Archived — promote them to active here."
             : "No archived catalogue entries. New entries appear here for review before promotion."}
         </div>
@@ -1229,7 +1291,7 @@ export default function TmcCatalogueAdmin() {
               "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
           }}
         >
-          {rows.map((row) => (
+          {visibleRows.map((row) => (
             <div
               key={row.id}
               role="listitem"

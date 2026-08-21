@@ -111,6 +111,46 @@ function injectBankTemplateName(questionsJson, templateName) {
   return JSON.stringify(parsed);
 }
 
+const DIAGNOSTIC_SORT_ORDER = {
+  entry: 0,
+  primary: 1,
+  premium: 2,
+};
+
+function diagnosticSortValue(diagnostic, key) {
+  if (key === "submitted") return new Date(diagnostic.createdAt || 0).getTime();
+  if (key === "subBrand") return String(diagnostic.subBrand || "").toLowerCase();
+  if (key === "contact") {
+    return String(
+      diagnostic.contact?.name || diagnostic.contact?.email || diagnostic.contactId || "",
+    ).toLowerCase();
+  }
+  if (key === "score") return diagnostic.score == null ? null : Number(diagnostic.score);
+  if (key === "classification") {
+    return String(diagnostic.classificationLabel || diagnostic.classification || "").toLowerCase();
+  }
+  if (key === "tier") {
+    const tier = String(diagnostic.recommendedTier || "").toLowerCase();
+    return tier ? (DIAGNOSTIC_SORT_ORDER[tier] ?? Number.MAX_SAFE_INTEGER) : null;
+  }
+  return "";
+}
+
+function compareDiagnostics(a, b, key, direction) {
+  const left = diagnosticSortValue(a, key);
+  const right = diagnosticSortValue(b, key);
+  const leftEmpty = left === null || left === "";
+  const rightEmpty = right === null || right === "";
+  if (leftEmpty || rightEmpty) {
+    if (leftEmpty && rightEmpty) return Number(b.id || 0) - Number(a.id || 0);
+    return leftEmpty ? 1 : -1;
+  }
+  const result = typeof left === "number" && typeof right === "number"
+    ? left - right
+    : String(left).localeCompare(String(right));
+  return (direction === "desc" ? -1 : 1) * (result || Number(b.id || 0) - Number(a.id || 0));
+}
+
 //  Question banks
 
 // GET /api/travel/diagnostic-banks?subBrand=tmc&active=true
@@ -984,13 +1024,16 @@ router.get(
 
       const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
       const skip = parseInt(req.query.offset, 10) || 0;
+      const sortByRaw = String(req.query.sortBy || "").trim();
+      const sortOrderRaw = String(req.query.sortOrder || "desc").toLowerCase();
+      const sortBy = ["submitted", "subBrand", "contact", "score", "classification", "tier"].includes(sortByRaw)
+        ? sortByRaw
+        : "submitted";
+      const sortOrder = sortOrderRaw === "asc" ? "asc" : "desc";
 
       const [diagnostics, total] = await Promise.all([
         prisma.travelDiagnostic.findMany({
           where,
-          orderBy: { createdAt: "desc" },
-          take,
-          skip,
         }),
         prisma.travelDiagnostic.count({ where }),
       ]);
@@ -1039,7 +1082,9 @@ router.get(
         contact: d.contactId ? contactMap[d.contactId] || null : null,
         ragResult: ragMap[d.id] || null,
       }));
-      res.json({ diagnostics: enriched, total, limit: take, offset: skip });
+      const sorted = [...enriched].sort((a, b) => compareDiagnostics(a, b, sortBy, sortOrder));
+      const paginated = sorted.slice(skip, skip + take);
+      res.json({ diagnostics: paginated, total, limit: take, offset: skip, sortBy, sortOrder });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] list diagnostics error:", e.message);

@@ -55,7 +55,14 @@ const { resolveForSubBrand } = require("../lib/subBrandConfig");
 // const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
 const watiClient = require("../services/whatsappWebClient"); // connected WhatsApp Web (drop-in)
 
-const VALID_STATUSES = Object.freeze(["pending", "done"]);
+const VALID_STATUSES = Object.freeze([
+  "pending",
+  "reminded",
+  "in-progress",
+  "done",
+  "fallback-agent",
+  "failed",
+]);
 
 // ─── Multer config: boarding-pass upload ─────────────────────────────
 //
@@ -113,11 +120,16 @@ router.get("/webcheckins", verifyToken, requireTravelTenant, async (req, res) =>
   try {
     const where = { tenantId: req.travelTenant.id };
     if (req.query.status) {
-      const s = String(req.query.status);
-      if (!VALID_STATUSES.includes(s)) {
+      const statuses = [...new Set(
+        (Array.isArray(req.query.status) ? req.query.status : [req.query.status])
+          .flatMap((value) => String(value).split(","))
+          .map((status) => status.trim())
+          .filter(Boolean),
+      )];
+      if (!statuses.length || statuses.some((status) => !VALID_STATUSES.includes(status))) {
         return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
       }
-      where.status = s;
+      where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
     }
     if (req.query.contactId) {
       const cid = parseInt(req.query.contactId, 10);

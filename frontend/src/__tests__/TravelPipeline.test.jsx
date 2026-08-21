@@ -198,6 +198,48 @@ describe("TravelPipeline", () => {
     expect(screen.getByText("Status")).toBeInTheDocument();
   });
 
+  it("sorts statuses in pipeline lifecycle order", async () => {
+    const statuses = [
+      "expired", "advance_paid", "draft", "rejected",
+      "accepted", "sent", "fully_paid", "revised",
+    ];
+    mockFetch(statuses.map((status, index) => makeItin({
+      id: index + 1,
+      destination: `${status} tour`,
+      status,
+    })));
+    renderPage();
+    await screen.findByText("draft tour");
+
+    const destinations = () => within(screen.getByRole("table"))
+      .getAllByTitle("Open itinerary detail")
+      .map((link) => link.textContent);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort Status" }));
+    expect(destinations()).toEqual([
+      "draft tour",
+      "sent tour",
+      "revised tour",
+      "accepted tour",
+      "advance_paid tour",
+      "fully_paid tour",
+      "rejected tour",
+      "expired tour",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort Status" }));
+    expect(destinations()).toEqual([
+      "expired tour",
+      "rejected tour",
+      "fully_paid tour",
+      "advance_paid tour",
+      "accepted tour",
+      "revised tour",
+      "sent tour",
+      "draft tour",
+    ]);
+  });
+
   // 7. Empty state
   it("shows empty state when no itineraries returned", async () => {
     mockFetch([]);

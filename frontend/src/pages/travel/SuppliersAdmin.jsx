@@ -25,7 +25,9 @@ import {
   Pencil,
   Trash2,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
+  ArrowUpDown,
   CheckCircle2,
   XCircle,
   Wallet,
@@ -68,6 +70,67 @@ const SUPPLIER_CATEGORIES = [
 ];
 
 const SUPPLIERS_PAGE_SIZE = 20;
+const SUPPLIER_SORT_KEYS = [
+  "name",
+  "contactPerson",
+  "phone",
+  "email",
+  "gstin",
+  "subBrand",
+  "supplierCategory",
+];
+
+function readSupplierListState() {
+  if (window.location.pathname !== "/travel/suppliers-admin") {
+    return {
+      subBrand: null,
+      subBrandExplicit: false,
+      supplierCategory: "",
+      includeInactive: false,
+      sortKey: "createdAt",
+      sortDirection: "desc",
+    };
+  }
+  const params = new URLSearchParams(window.location.search);
+  const sortKey = SUPPLIER_SORT_KEYS.includes(params.get("sortKey"))
+    ? params.get("sortKey")
+    : "createdAt";
+  const sortDirection = params.get("sortDirection") === "asc" ? "asc" : "desc";
+  return {
+    subBrand: params.has("subBrand")
+      ? params.get("subBrand") === "all"
+        ? ""
+        : params.get("subBrand") || ""
+      : null,
+    subBrandExplicit: params.has("subBrand"),
+    supplierCategory: params.get("supplierCategory") || "",
+    includeInactive: params.get("includeInactive") === "1",
+    sortKey,
+    sortDirection,
+  };
+}
+
+function updateSupplierListUrl(next) {
+  if (window.location.pathname !== "/travel/suppliers-admin") return;
+  const params = new URLSearchParams(window.location.search);
+  ["subBrand", "supplierCategory", "includeInactive", "sortKey", "sortDirection"].forEach((key) =>
+    params.delete(key),
+  );
+  params.set("subBrand", next.subBrand || "all");
+  if (next.supplierCategory) params.set("supplierCategory", next.supplierCategory);
+  if (next.includeInactive) params.set("includeInactive", "1");
+  if (next.sortKey && next.sortKey !== "createdAt") params.set("sortKey", next.sortKey);
+  if (next.sortDirection && next.sortDirection !== "desc") params.set("sortDirection", next.sortDirection);
+  const query = params.toString();
+  window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+}
+
+function compareSupplierValues(a, b, key) {
+  if (key === "isActive") return Number(Boolean(a)) - Number(Boolean(b));
+  const left = String(a ?? "").toLowerCase();
+  const right = String(b ?? "").toLowerCase();
+  return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+}
 
 // Sub-brand pill background: imported from utils/travelSubBrand (rule-of-3
 // promotion 2026-05-24 tick #99 — was inline here as the origin copy at
@@ -274,6 +337,7 @@ export default function SuppliersAdmin() {
   // users get the full 4-brand dropdown; users restricted to exactly one brand
   // get a read-only locked field; 2-3-brand users get a dropdown of just theirs.
   const { activeSubBrand } = useActiveSubBrand();
+  const initialListState = readSupplierListState();
   // G102: BrandKit lookup for primary-CTA tint.
   const { brandKit } = useBrandKit(activeSubBrand);
   const primaryBtnBranded = {
@@ -292,14 +356,37 @@ export default function SuppliersAdmin() {
   // honestly says "Access restricted" instead of "No suppliers match."
   const [permissionDenied, setPermissionDenied] = useState(false);
 
-  const [subBrand, setSubBrand] = useState("");
-  const [supplierCategory, setSupplierCategory] = useState("");
-  const [includeInactive, setIncludeInactive] = useState(false);
+  const [subBrand, setSubBrand] = useState(initialListState.subBrand ?? activeSubBrand ?? "");
+  const [supplierCategory, setSupplierCategory] = useState(initialListState.supplierCategory);
+  const [includeInactive, setIncludeInactive] = useState(initialListState.includeInactive);
+  const [sortKey, setSortKey] = useState(initialListState.sortKey);
+  const [sortDirection, setSortDirection] = useState(initialListState.sortDirection);
+
+  useEffect(() => {
+    if (!initialListState.subBrandExplicit) setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand, initialListState.subBrandExplicit]);
+
+  useEffect(() => {
+    updateSupplierListUrl({ subBrand, supplierCategory, includeInactive, sortKey, sortDirection });
+    try {
+      window.sessionStorage.setItem(
+        "travel.suppliers.lastListUrl",
+        `${window.location.pathname}${window.location.search}`,
+      );
+    } catch { /* URL remains authoritative. */ }
+  }, [subBrand, supplierCategory, includeInactive, sortKey, sortDirection]);
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const supplierFormRef = useRef(null);
+
+  useEffect(() => {
+    if (showForm && supplierFormRef.current?.scrollIntoView) {
+      supplierFormRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [showForm]);
 
   // Slice 4 (#903) — payables panel state. Single-expanded UX (only one
   // supplier's panel open at a time) keeps DOM + outbound fetches tight on
@@ -418,6 +505,72 @@ export default function SuppliersAdmin() {
       load({ reset: false });
     }
   }, [load]);
+
+  const sortedSuppliers = [...suppliers].sort((left, right) => {
+    const result = compareSupplierValues(left[sortKey], right[sortKey], sortKey);
+    return sortDirection === "asc" ? result : -result;
+  });
+
+  const handleSort = (key) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDirection("asc");
+      return;
+    }
+
+    if (sortDirection === "asc") {
+      setSortDirection("desc");
+      return;
+    }
+
+    setSortKey("createdAt");
+    setSortDirection("desc");
+  };
+
+  const resetListFilters = () => {
+    setSubBrand(activeSubBrand || "");
+    setSupplierCategory("");
+    setIncludeInactive(false);
+    setSortKey("createdAt");
+    setSortDirection("desc");
+  };
+
+  const renderSortHeader = (label, key) => {
+    const active = sortKey === key;
+    const Icon = active
+      ? sortDirection === "asc"
+        ? ChevronUp
+        : ChevronDown
+      : ArrowUpDown;
+    return (
+      <button
+        type="button"
+        onClick={() => handleSort(key)}
+        aria-label={`Sort ${label} ${!active ? "default" : sortDirection === "desc" ? "descending" : "ascending"}`}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+          width: "100%",
+          padding: "4px 8px",
+          border: "none",
+          borderRadius: 999,
+          background: active ? "var(--accent-bg)" : "transparent",
+          color: active ? "var(--primary-color)" : "inherit",
+          font: "inherit",
+          textTransform: "inherit",
+          letterSpacing: "inherit",
+          cursor: "pointer",
+          textAlign: "left",
+          transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease",
+        }}
+      >
+        <span>{label}</span>
+        <Icon size={14} aria-hidden />
+      </button>
+    );
+  };
 
   // Slice 9 (#903) — load aged-payable report on mount + when sub-brand or
   // category filters change (so the panel mirrors the suppliers list the
@@ -998,6 +1151,22 @@ export default function SuppliersAdmin() {
           />
           Include inactive
         </label>
+        <button
+          type="button"
+          onClick={resetListFilters}
+          style={secondaryBtn}
+          aria-label="Reset supplier filters"
+        >
+          Reset filters
+        </button>
+        <button
+          type="button"
+          onClick={() => load({ reset: true })}
+          style={secondaryBtn}
+          aria-label="Refresh suppliers"
+        >
+          Refresh
+        </button>
       </div>
 
       {/* Slice 9 (#903) — Payables Aging panel. Consumes GET /api/travel/
@@ -1457,6 +1626,7 @@ export default function SuppliersAdmin() {
 
       {showForm && (
         <form
+          ref={supplierFormRef}
           onSubmit={handleSubmit}
           className="glass"
           style={{
@@ -1704,19 +1874,19 @@ export default function SuppliersAdmin() {
             style={{
               maxHeight: "calc(100vh - 360px)",
               overflowY: "auto",
-              overflowX: "hidden",
+              overflowX: "auto",
             }}
           >
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", minWidth: 1120, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                <th style={th}>Name</th>
-                <th style={th}>Contact</th>
-                <th style={th}>Phone</th>
-                <th style={th}>Email</th>
-                <th style={th}>GSTIN</th>
-                <th style={th}>Sub-brand</th>
-                <th style={th}>Category</th>
+                <th style={th}>{renderSortHeader("Name", "name")}</th>
+                <th style={th}>{renderSortHeader("Contact", "contactPerson")}</th>
+                <th style={th}>{renderSortHeader("Phone", "phone")}</th>
+                <th style={th}>{renderSortHeader("Email", "email")}</th>
+                <th style={th}>{renderSortHeader("GSTIN", "gstin")}</th>
+                <th style={th}>{renderSortHeader("Sub-brand", "subBrand")}</th>
+                <th style={th}>{renderSortHeader("Category", "supplierCategory")}</th>
                 <th style={th}>Status</th>
                 {canWrite && (
                   <th style={{ ...th, textAlign: "center" }}>Actions</th>
@@ -1724,7 +1894,7 @@ export default function SuppliersAdmin() {
               </tr>
             </thead>
             <tbody>
-              {suppliers.map((s) => {
+              {sortedSuppliers.map((s) => {
                 // Slice 2 (#903) — "PT/CL" sub-line under each supplier name,
                 // surfacing payment-terms + credit-limit when populated.
                 // Renders as "NET-30 · ₹50K credit". Either token may be

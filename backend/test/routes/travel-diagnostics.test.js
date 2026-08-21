@@ -598,10 +598,26 @@ describe('GET /diagnostics (list)', () => {
     });
     expect(prisma.travelDiagnostic.findMany.mock.calls[0][0]).toMatchObject({
       where: { tenantId: 1, subBrand: 'tmc', classification: 'level_2', contactId: 42 },
-      orderBy: { createdAt: 'desc' },
-      take: 25,
-      skip: 10,
     });
+    expect(res.body).toMatchObject({ sortBy: 'submitted', sortOrder: 'desc' });
+  });
+
+  test('sorts the full dataset before applying offset/limit', async () => {
+    prisma.travelDiagnostic.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, subBrand: 'tmc', contactId: null, score: 1, classification: 'level_1', classificationLabel: 'One', recommendedTier: 'premium', createdAt: '2026-06-03T10:00:00.000Z' },
+      { id: 2, tenantId: 1, subBrand: 'tmc', contactId: null, score: 2, classification: 'level_1', classificationLabel: 'Two', recommendedTier: 'entry', createdAt: '2026-06-01T10:00:00.000Z' },
+      { id: 3, tenantId: 1, subBrand: 'tmc', contactId: null, score: 3, classification: 'level_1', classificationLabel: 'Three', recommendedTier: 'primary', createdAt: '2026-06-02T10:00:00.000Z' },
+    ]);
+    prisma.travelDiagnostic.count.mockResolvedValue(3);
+
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics?sortBy=submitted&sortOrder=asc&limit=1&offset=1')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 3, limit: 1, offset: 1, sortBy: 'submitted', sortOrder: 'asc' });
+    expect(res.body.diagnostics).toHaveLength(1);
+    expect(res.body.diagnostics[0].id).toBe(3);
   });
 
   test('accepts fromDate + toDate and narrows createdAt inclusively', async () => {

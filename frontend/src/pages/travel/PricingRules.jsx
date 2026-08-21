@@ -26,11 +26,11 @@
 // Closes Phase 1.5 / 8e from the 2026-05-20 PM handoff. Backend routes were
 // already shipped; this is the missing admin UI on top.
 
-import { useContext, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
-  CalendarRange, ChevronLeft, Upload, Download, Edit2, Filter,
-  Percent, Plus, Save, ToggleLeft, ToggleRight, Trash2, X,
+  CalendarRange, ChevronLeft, Download, Edit2, Filter,
+  Percent, Plus, Save, ToggleLeft, ToggleRight, Trash2, Upload, X, ChevronDown, ChevronUp, ArrowUpDown,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -151,6 +151,27 @@ function fmtDate(d) {
   return dt.toISOString().slice(0, 10);
 }
 
+function openDatePicker(e) {
+  try {
+    e.currentTarget.showPicker?.();
+  } catch {
+    // Browsers without showPicker still open the native picker from its icon.
+  }
+}
+
+function preventDateTyping(e) {
+  if (e.key === "Tab") return;
+  e.preventDefault();
+  if (e.key === "Enter" || e.key === " ") openDatePicker(e);
+}
+
+const pickerOnlyProps = {
+  onClick: openDatePicker,
+  onKeyDown: preventDateTyping,
+  onPaste: (e) => e.preventDefault(),
+  onDrop: (e) => e.preventDefault(),
+};
+
 export default function PricingRules() {
   return (
     <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
@@ -180,6 +201,8 @@ export default function PricingRules() {
 
 function SeasonsSection() {
   const notify = useNotify();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
   // Sub-brands this user may create rows for. Single-brand users get a locked
@@ -191,7 +214,9 @@ function SeasonsSection() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const [filterSubBrand, setFilterSubBrand] = useState("");
+  const [filterSubBrand, setFilterSubBrand] = useState(searchParams.get("seasonSubBrand") || activeSubBrand || "");
+  const [sortKey, setSortKey] = useState(searchParams.get("seasonSortKey") || null);
+  const [sortDirection, setSortDirection] = useState(searchParams.get("seasonSortDirection") || null);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const blankForm = { subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), seasonName: "", startDate: "", endDate: "", multiplier: "" };
@@ -202,6 +227,16 @@ function SeasonsSection() {
   const loadingRef = useRef(false);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
+  const loadRequestRef = useRef(0);
+
+  const updateParams = (patch) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value === null || value === undefined || value === "") next.delete(key);
+      else next.set(key, String(value));
+    });
+    setSearchParams(next, { replace: true });
+  };
 
   const load = ({ reset = true } = {}) => {
     if (reset) {
@@ -211,14 +246,17 @@ function SeasonsSection() {
       setSeasons([]);
       setHasMore(true);
       setLoading(true);
+      setLoadingMore(false);
       loadingRef.current = true;
+      loadingMoreRef.current = false;
     } else {
       if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
       setLoadingMore(true);
       loadingMoreRef.current = true;
     }
+    const requestId = ++loadRequestRef.current;
     const qs = new URLSearchParams();
-    if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     const startOffset = reset ? 0 : offsetRef.current;
     if (startOffset > 0) {
       qs.set("limit", String(PAGE_SIZE));
@@ -226,6 +264,7 @@ function SeasonsSection() {
     }
     fetchApi(`/api/travel/seasons?${qs.toString()}`)
       .then((res) => {
+        if (requestId !== loadRequestRef.current) return;
         const rows = Array.isArray(res?.seasons) ? res.seasons : [];
         const nextRows = reset ? rows : [...seasonsRef.current, ...rows];
         const totalRows = Number.isFinite(res?.total) ? res.total : nextRows.length;
@@ -237,6 +276,7 @@ function SeasonsSection() {
         setHasMore(hasMoreRef.current);
       })
       .catch((e) => {
+        if (requestId !== loadRequestRef.current) return;
         if (reset) {
           seasonsRef.current = [];
           offsetRef.current = 0;
@@ -248,6 +288,7 @@ function SeasonsSection() {
         notify.error(e?.body?.error || "Failed to load seasons");
       })
       .finally(() => {
+        if (requestId !== loadRequestRef.current) return;
         if (reset) {
           setLoading(false);
           loadingRef.current = false;
@@ -258,6 +299,41 @@ function SeasonsSection() {
       });
   };
   useEffect(() => { load({ reset: true }); }, [filterSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/pricing-rules") return;
+    try { window.sessionStorage.setItem("travel.markupRules.lastListUrl", `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    if (!searchParams.get("seasonSubBrand")) setFilterSubBrand(activeSubBrand || "");
+  }, [activeSubBrand, searchParams]);
+
+  const sortedSeasons = useMemo(() => {
+    if (!sortKey || !sortDirection || sortKey === "subBrand") return seasons;
+    return [...seasons].sort((a, b) => {
+      const left = sortKey === "multiplier"
+        ? Number(a.multiplier ?? 0)
+        : String(a[sortKey] || "").toLowerCase();
+      const right = sortKey === "multiplier"
+        ? Number(b.multiplier ?? 0)
+        : String(b[sortKey] || "").toLowerCase();
+      return (left > right ? 1 : left < right ? -1 : 0) * (sortDirection === "desc" ? -1 : 1);
+    });
+  }, [seasons, sortDirection, sortKey]);
+
+  const resetFilters = () => {
+    setFilterSubBrand(activeSubBrand || "");
+    setSortKey(null);
+    setSortDirection(null);
+    updateParams({ seasonSubBrand: null, seasonSortKey: null, seasonSortDirection: null });
+  };
+
+  const sortButton = (key, label) => {
+    const active = sortKey === key;
+    const Icon = active && sortDirection === "asc" ? ChevronUp : active && sortDirection === "desc" ? ChevronDown : ArrowUpDown;
+    return <button type="button" onClick={() => { const next = !active ? "asc" : sortDirection === "asc" ? "desc" : null; setSortKey(next ? key : null); setSortDirection(next); updateParams({ seasonSortKey: next ? key : null, seasonSortDirection: next }); }} aria-label={`Sort ${label}`} style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}><span>{label}</span><Icon size={14} /></button>;
+  };
 
   const handleTableScroll = (e) => {
     const el = e.currentTarget;
@@ -326,7 +402,7 @@ function SeasonsSection() {
 
   const exportCsv = () => {
     const qs = new URLSearchParams();
-    if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     return downloadCsv(notify, `/api/travel/seasons/export.csv?${qs.toString()}`, "travel-seasons.csv");
   };
   const downloadSeasonTemplate = async (format) => {
@@ -399,10 +475,12 @@ function SeasonsSection() {
 
       <div style={filterRow}>
         <Filter size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
-        <select value={filterSubBrand} onChange={(e) => setFilterSubBrand(e.target.value)} style={selectStyle} aria-label="Filter seasons by sub-brand">
-          <option value="">All sub-brands</option>
+        <select value={filterSubBrand} onChange={(e) => { setFilterSubBrand(e.target.value); updateParams({ seasonSubBrand: e.target.value }); }} style={selectStyle} aria-label="Filter seasons by sub-brand">
+          <option value="all">All sub-brands</option>
           {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
+        <button type="button" onClick={() => load({ reset: true })} style={secondaryBtn}>Refresh</button>
+        <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
 
       {showForm && (
@@ -442,14 +520,16 @@ function SeasonsSection() {
               type="date"
               value={form.startDate}
               onChange={(e) => setForm({ ...form, startDate: e.target.value })}
-              style={input}
+              {...pickerOnlyProps}
+              style={{ ...input, cursor: "pointer" }}
               aria-label="Start date"
             />
             <input
               type="date"
               value={form.endDate}
               onChange={(e) => setForm({ ...form, endDate: e.target.value })}
-              style={input}
+              {...pickerOnlyProps}
+              style={{ ...input, cursor: "pointer" }}
               aria-label="End date"
             />
             <input
@@ -492,15 +572,15 @@ function SeasonsSection() {
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
-                <th style={th}>Name</th>
-                <th style={th}>Start</th>
-                <th style={th}>End</th>
-                <th style={th}>Multiplier</th>
+                <th style={th}>{sortButton("seasonName", "Name")}</th>
+                <th style={th}>{sortButton("startDate", "Start")}</th>
+                <th style={th}>{sortButton("endDate", "End")}</th>
+                <th style={th}>{sortButton("multiplier", "Multiplier")}</th>
                 <th style={{ ...th, width: 100 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {seasons.map((s) => (
+              {sortedSeasons.map((s) => (
                 <tr key={s.id} style={trStyle}>
                   <td style={td}><span style={brandBadge}>{s.subBrand}</span></td>
                   <td style={td}>{s.seasonName}</td>
@@ -544,6 +624,8 @@ function SeasonsSection() {
 
 function MarkupRulesSection() {
   const notify = useNotify();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
   // See SeasonsSection: single-brand users get a locked read-only sub-brand;
@@ -555,9 +637,20 @@ function MarkupRulesSection() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const [filterSubBrand, setFilterSubBrand] = useState("");
-  const [filterScope, setFilterScope] = useState("");
-  const [filterActive, setFilterActive] = useState("");
+  const [filterSubBrand, setFilterSubBrand] = useState(searchParams.get("subBrand") || activeSubBrand || "");
+  const [filterScope, setFilterScope] = useState(searchParams.get("scope") || "");
+  const [filterActive, setFilterActive] = useState(searchParams.get("active") || "");
+  const [sortKey, setSortKey] = useState(
+    ["subBrand", "scope"].includes(searchParams.get("sortKey"))
+      ? null
+      : searchParams.get("sortKey") === "markupType" ? "markupValue" : searchParams.get("sortKey") || null,
+  );
+  const [sortDirection, setSortDirection] = useState(searchParams.get("sortDirection") || null);
+  const updateParams = (patch) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(patch).forEach(([key, value]) => { if (value === null || value === undefined || value === "") next.delete(key); else next.set(key, String(value)); });
+    setSearchParams(next, { replace: true });
+  };
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const blankForm = {
@@ -572,6 +665,7 @@ function MarkupRulesSection() {
   const loadingRef = useRef(false);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
+  const loadRequestRef = useRef(0);
 
   // Fetch supplier names when the markup-rule form is open and the match
   // field is "supplier". Used to populate the match-value dropdown.
@@ -603,14 +697,17 @@ function MarkupRulesSection() {
       setRules([]);
       setHasMore(true);
       setLoading(true);
+      setLoadingMore(false);
       loadingRef.current = true;
+      loadingMoreRef.current = false;
     } else {
       if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
       setLoadingMore(true);
       loadingMoreRef.current = true;
     }
+    const requestId = ++loadRequestRef.current;
     const qs = new URLSearchParams();
-    if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     if (filterScope) qs.set("scope", filterScope);
     if (filterActive) qs.set("active", filterActive);
     const startOffset = reset ? 0 : offsetRef.current;
@@ -620,6 +717,7 @@ function MarkupRulesSection() {
     }
     fetchApi(`/api/travel/markup-rules?${qs.toString()}`)
       .then((res) => {
+        if (requestId !== loadRequestRef.current) return;
         const rows = Array.isArray(res?.rules) ? res.rules : [];
         const nextRows = reset ? rows : [...rulesRef.current, ...rows];
         const totalRows = Number.isFinite(res?.total) ? res.total : nextRows.length;
@@ -631,6 +729,7 @@ function MarkupRulesSection() {
         setHasMore(hasMoreRef.current);
       })
       .catch((e) => {
+        if (requestId !== loadRequestRef.current) return;
         if (reset) {
           rulesRef.current = [];
           offsetRef.current = 0;
@@ -642,6 +741,7 @@ function MarkupRulesSection() {
         notify.error(e?.body?.error || "Failed to load markup rules");
       })
       .finally(() => {
+        if (requestId !== loadRequestRef.current) return;
         if (reset) {
           setLoading(false);
           loadingRef.current = false;
@@ -652,6 +752,43 @@ function MarkupRulesSection() {
       });
   };
   useEffect(() => { load({ reset: true }); }, [filterSubBrand, filterScope, filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/pricing-rules") return;
+    try { window.sessionStorage.setItem("travel.markupRules.lastListUrl", `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
+
+  const sortedRules = useMemo(() => {
+    if (!sortKey || !sortDirection || ["subBrand", "scope"].includes(sortKey)) return rules;
+    return [...rules].sort((a, b) => {
+      const left = sortKey === "markupValue"
+        ? Number(a.markupPct ?? a.markupFlat ?? 0)
+        : sortKey === "priority"
+          ? Number(a.priority || 0)
+          : String(a[sortKey] || "").toLowerCase();
+      const right = sortKey === "markupValue"
+        ? Number(b.markupPct ?? b.markupFlat ?? 0)
+        : sortKey === "priority"
+          ? Number(b.priority || 0)
+          : String(b[sortKey] || "").toLowerCase();
+      return (left > right ? 1 : left < right ? -1 : 0) * (sortDirection === "desc" ? -1 : 1);
+    });
+  }, [rules, sortDirection, sortKey]);
+
+  const resetFilters = () => {
+    setFilterSubBrand(activeSubBrand || ""); setFilterScope(""); setFilterActive(""); setSortKey(null); setSortDirection(null);
+    updateParams({ subBrand: activeSubBrand || null, scope: null, active: null, sortKey: null, sortDirection: null });
+  };
+
+  const sortButton = (key, label) => {
+    const active = sortKey === key;
+    const Icon = active && sortDirection === "asc" ? ChevronUp : active && sortDirection === "desc" ? ChevronDown : ArrowUpDown;
+    return <button type="button" onClick={() => { const next = !active ? "asc" : sortDirection === "asc" ? "desc" : null; setSortKey(next ? key : null); setSortDirection(next); updateParams({ sortKey: next ? key : null, sortDirection: next }); }} aria-label={`Sort ${label}`} style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}><span>{label}</span><Icon size={14} /></button>;
+  };
+
+  useEffect(() => {
+    if (!searchParams.get("subBrand")) setFilterSubBrand(activeSubBrand || "");
+  }, [activeSubBrand, searchParams]);
 
   const handleTableScroll = (e) => {
     const el = e.currentTarget;
@@ -784,7 +921,7 @@ function MarkupRulesSection() {
 
   const exportCsv = () => {
     const qs = new URLSearchParams();
-    if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     if (filterScope) qs.set("scope", filterScope);
     return downloadCsv(notify, `/api/travel/markup-rules/export.csv?${qs.toString()}`, "travel-markup-rules.csv");
   };
@@ -856,19 +993,21 @@ function MarkupRulesSection() {
 
       <div style={filterRow}>
         <Filter size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
-        <select value={filterSubBrand} onChange={(e) => setFilterSubBrand(e.target.value)} style={selectStyle} aria-label="Filter rules by sub-brand">
-          <option value="">All sub-brands</option>
+        <select value={filterSubBrand} onChange={(e) => { setFilterSubBrand(e.target.value); updateParams({ subBrand: e.target.value }); }} style={selectStyle} aria-label="Filter rules by sub-brand">
+          <option value="all">All sub-brands</option>
           {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={filterScope} onChange={(e) => setFilterScope(e.target.value)} style={selectStyle} aria-label="Filter rules by scope">
+        <select value={filterScope} onChange={(e) => { setFilterScope(e.target.value); updateParams({ scope: e.target.value }); }} style={selectStyle} aria-label="Filter rules by scope">
           <option value="">All scopes</option>
           {SCOPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={filterActive} onChange={(e) => setFilterActive(e.target.value)} style={selectStyle} aria-label="Filter rules by active state">
+        <select value={filterActive} onChange={(e) => { setFilterActive(e.target.value); updateParams({ active: e.target.value }); }} style={selectStyle} aria-label="Filter rules by active state">
           <option value="">Active + inactive</option>
           <option value="true">Active only</option>
           <option value="false">Inactive only</option>
         </select>
+        <button type="button" onClick={() => load({ reset: true })} style={secondaryBtn}>Refresh</button>
+        <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
 
       {showForm && (
@@ -996,14 +1135,14 @@ function MarkupRulesSection() {
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Scope</th>
                 <th style={th}>Match key</th>
-                <th style={th}>Markup</th>
-                <th style={th}>Priority</th>
+                <th style={th}>{sortButton("markupValue", "Markup")}</th>
+                <th style={th}>{sortButton("priority", "Priority")}</th>
                 <th style={th}>Active</th>
                 <th style={{ ...th, width: 100 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {rules.map((r) => (
+              {sortedRules.map((r) => (
                 <tr key={r.id} style={{ ...trStyle, opacity: r.isActive ? 1 : 0.5 }}>
                   <td style={td}><span style={brandBadge}>{r.subBrand}</span></td>
                   <td style={td}>{r.scope}</td>
@@ -1112,6 +1251,8 @@ const th = {
   zIndex: 3,
   overflowWrap: "anywhere",
 };
+const sortButtonStyle = { display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6, width: "100%", padding: "4px 8px", border: "none", borderRadius: 999, background: "transparent", color: "inherit", font: "inherit", textTransform: "inherit", letterSpacing: "inherit", cursor: "pointer", textAlign: "left", transition: "background-color 0.15s ease, color 0.15s ease" };
+const sortButtonActiveStyle = { color: "var(--primary-color)" };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)", overflowWrap: "anywhere" };
 const actionsTd = { ...td, whiteSpace: "nowrap" };
 const trStyle = { borderTop: "1px solid var(--border-light)" };

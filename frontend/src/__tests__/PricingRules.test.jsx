@@ -165,6 +165,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import { AuthContext } from '../App';
+import { ActiveSubBrandProvider } from '../utils/subBrand';
 import PricingRules from '../pages/travel/PricingRules';
 
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
@@ -273,13 +274,16 @@ function renderPage(user = ADMIN_USER) {
   return render(
     <MemoryRouter>
       <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false }}>
-        <PricingRules />
+        <ActiveSubBrandProvider>
+          <PricingRules />
+        </ActiveSubBrandProvider>
       </AuthContext.Provider>
     </MemoryRouter>,
   );
 }
 
 beforeEach(() => {
+  window.sessionStorage.clear();
   fetchApiMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();
@@ -317,6 +321,23 @@ describe('<PricingRules /> — page chrome', () => {
 });
 
 describe('<PricingRules /> — load + render lifecycle', () => {
+  it('applies the active sidebar sub-brand to both initial list requests', async () => {
+    window.sessionStorage.setItem('travel.activeSubBrand', 'tmc');
+    renderPage();
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url === '/api/travel/seasons?subBrand=tmc',
+      )).toBe(true);
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url === '/api/travel/markup-rules?subBrand=tmc',
+      )).toBe(true);
+    });
+
+    expect(screen.getByLabelText(/Filter seasons by sub-brand/i)).toHaveValue('tmc');
+    expect(screen.getByLabelText(/Filter rules by sub-brand/i)).toHaveValue('tmc');
+  });
+
   it('shows "Loading…" in BOTH sections before first GETs resolve', async () => {
     let resolveSeasons;
     let resolveRules;

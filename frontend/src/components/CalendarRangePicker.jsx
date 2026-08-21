@@ -68,8 +68,17 @@ function isBetween(d, start, end) {
 // keeps every existing caller pixel-identical; pass 'right' when the picker
 // sits in a right-aligned toolbar, where a left-anchored 300px popover would
 // otherwise run off the right edge of the viewport and clip the last two
-// weekday columns.
-export default function CalendarRangePicker({ value, onChange, label = 'Date range', align = 'left' }) {
+// weekday columns. `width`/`height`/`compact` let individual pages use a
+// tighter pill without affecting the shared default size.
+export default function CalendarRangePicker({
+  value,
+  onChange,
+  label = 'Date range',
+  align = 'left',
+  width = 182,
+  height = 46,
+  compact = false,
+}) {
   const state = value || { from: '', to: '' };
   const committedFrom = parseIso(state.from);
   const committedTo = parseIso(state.to);
@@ -170,24 +179,25 @@ export default function CalendarRangePicker({ value, onChange, label = 'Date ran
         aria-expanded={open}
         style={{
           display: 'flex', alignItems: 'center', gap: 6,
-          width: 182,
-          minWidth: 182,
-          flex: '0 0 182px',
-          height: 46,
+          width,
+          minWidth: width,
+          flex: `0 0 ${width}px`,
+          height,
           boxSizing: 'border-box',
           justifyContent: 'flex-start',
           cursor: 'pointer',
-          fontSize: '0.9rem',
-          fontWeight: 600,
-          borderRadius: 10,
+          padding: compact ? '6px 10px' : undefined,
+          fontSize: compact ? '13px' : '0.9rem',
+          fontWeight: compact ? 400 : 600,
+          borderRadius: compact ? 6 : 10,
           background: 'var(--input-bg, var(--surface-color, #101321))',
         }}
       >
-        <Calendar size={14} style={{ flexShrink: 0, color: 'var(--text-secondary, #9aa0ab)' }} />
+        <Calendar size={compact ? 13 : 14} style={{ flexShrink: 0, color: 'var(--text-secondary, #9aa0ab)' }} />
         <span style={{ whiteSpace: 'nowrap' }}>{buttonLabel}</span>
         {committedFrom && (
           <X
-            size={13}
+            size={compact ? 12 : 13}
             onClick={(e) => { e.stopPropagation(); reset(); }}
             style={{ marginLeft: 'auto', flexShrink: 0, color: 'var(--text-secondary, #9aa0ab)' }}
           />

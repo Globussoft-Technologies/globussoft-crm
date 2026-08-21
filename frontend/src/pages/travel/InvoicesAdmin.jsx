@@ -39,8 +39,8 @@
 // mode allows any starting status (Draft is the sensible default).
 
 import { useEffect, useRef, useState, useContext } from "react";
-import { Link } from "react-router-dom";
-import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, History, Upload } from "lucide-react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, History, Upload, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
@@ -58,7 +58,7 @@ import { AuthContext } from "../../App";
 import CountBadge from "../../components/CountBadge";
 
 const SUB_BRANDS = [
-  { value: "", label: "All sub-brands" },
+  { value: "all", label: "All sub-brands" },
   { value: "tmc", label: "TMC (schools)" },
   { value: "rfu", label: "RFU (Umrah)" },
   { value: "travelstall", label: "Travel Stall" },
@@ -73,6 +73,8 @@ const INVOICE_STATUSES = [
   { value: "Paid", label: "Paid" },
   { value: "Voided", label: "Voided" },
 ];
+const INVOICE_SORT_KEYS = ["invoiceNum", "contact", "status", "totalAmount", "currency", "dueDate", "subBrand", "paidAt"];
+const LAST_LIST_URL_KEY = "travel.invoices.lastListUrl";
 
 // SUB_BRAND_BG now imported from ../../utils/travelSubBrand (rule-of-3
 // promotion 2026-05-24 tick #99 — this file was the third caller that
@@ -131,6 +133,27 @@ function tomorrowISO() {
   return d.toISOString().slice(0, 10);
 }
 
+function openDatePicker(e) {
+  try {
+    e.currentTarget.showPicker?.();
+  } catch {
+    // Browsers without showPicker still open the native picker from its icon.
+  }
+}
+
+function preventDateTyping(e) {
+  if (e.key === "Tab") return;
+  e.preventDefault();
+  if (e.key === "Enter" || e.key === " ") openDatePicker(e);
+}
+
+const pickerOnlyProps = {
+  onClick: openDatePicker,
+  onKeyDown: preventDateTyping,
+  onPaste: (e) => e.preventDefault(),
+  onDrop: (e) => e.preventDefault(),
+};
+
 // Statuses on which TDS withholding is meaningful to surface — TDS lines
 // are operator-relevant only AFTER an invoice has been issued (Draft +
 // Voided invoices' TDS lines are noise). Matches the slice 21 contract on
@@ -173,6 +196,8 @@ export default function InvoicesAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   // G102: BrandKit lookup for primary-CTA tint. Module-level cache keeps
   // this cheap on re-mount.
   const { brandKit } = useBrandKit(activeSubBrand);
@@ -208,9 +233,28 @@ export default function InvoicesAdmin() {
   // honestly says "Access restricted" instead of "No invoices match."
   const [permissionDenied, setPermissionDenied] = useState(false);
 
-  const [subBrand, setSubBrand] = useState("");
-  const [status, setStatus] = useState("");
-  const [customerNameFilter, setCustomerNameFilter] = useState("");
+  const [subBrand, setSubBrand] = useState(searchParams.get("subBrand") || activeSubBrand || "");
+  const [status, setStatus] = useState(searchParams.get("status") || "");
+  const [customerNameFilter, setCustomerNameFilter] = useState(searchParams.get("customer") || "");
+  const [sortKey, setSortKey] = useState(INVOICE_SORT_KEYS.includes(searchParams.get("sortKey")) ? searchParams.get("sortKey") : null);
+  const [sortDirection, setSortDirection] = useState(searchParams.get("sortDirection") === "desc" ? "desc" : "asc");
+  const handleSort = (key) => {
+    const next = new URLSearchParams(searchParams);
+    const direction = sortKey !== key ? "asc" : sortDirection === "asc" ? "desc" : null;
+    setSortKey(direction ? key : null); setSortDirection(direction || "asc");
+    if (direction) { next.set("sortKey", key); next.set("sortDirection", direction); } else { next.delete("sortKey"); next.delete("sortDirection"); }
+    setSearchParams(next, { replace: true });
+  };
+  const sortHeader = (label, key) => {
+    const active = sortKey === key;
+    const Icon = active ? (sortDirection === "asc" ? ChevronUp : ChevronDown) : ArrowUpDown;
+    return <button type="button" onClick={() => handleSort(key)} aria-label={`Sort ${label}`} style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}><span>{label}</span><Icon size={14} aria-hidden /></button>;
+  };
+  const updateListParam = (key, value) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value); else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -279,7 +323,7 @@ export default function InvoicesAdmin() {
 
     const fetchPage = (extraQs = {}, usePagination = true) => {
       const qs = new URLSearchParams();
-      if (subBrand) qs.set("subBrand", subBrand);
+      if (subBrand && subBrand !== "all") qs.set("subBrand", subBrand);
       if (status) qs.set("status", status);
       Object.entries(extraQs).forEach(([key, value]) => {
         if (value != null && value !== "") qs.set(key, String(value));
@@ -363,13 +407,18 @@ export default function InvoicesAdmin() {
   // Sync the global sub-brand selector into the local filter state so the
   // list automatically re-scopes when the user switches brand in the sidebar.
   useEffect(() => {
-    setSubBrand(activeSubBrand || "");
+    if (!searchParams.get("subBrand")) setSubBrand(activeSubBrand || "");
   }, [activeSubBrand]);
 
   useEffect(() => {
     load(page, pageSize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subBrand, status, page, pageSize, reloadTick, customerNameFilter, customers]);
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/invoices-admin") return;
+    try { window.sessionStorage.setItem(LAST_LIST_URL_KEY, `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
 
   // Load the tenant's contacts once for the customer dropdown.
   useEffect(() => {
@@ -496,7 +545,20 @@ export default function InvoicesAdmin() {
     return INVOICE_STATUSES.filter((s) => s.value && labels.has(s.value));
   };
 
-  const visibleInvoices = invoices;
+  const visibleInvoices = [...invoices].sort((a, b) => {
+    if (!sortKey) return 0;
+    const value = (row) => sortKey === "contact" ? contactsById[row.contactId]?.name || `#${row.contactId}` : sortKey === "totalAmount" ? Number(row.totalAmount || 0) : row[sortKey] || "";
+    const left = value(a); const right = value(b);
+    const result = typeof left === "number" ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+    return sortDirection === "desc" ? -result : result;
+  });
+
+  const resetFilters = () => {
+    setSubBrand(activeSubBrand || ""); setStatus(""); setCustomerNameFilter(""); setPage(1); setSortKey(null); setSortDirection("asc");
+    const next = new URLSearchParams(searchParams);
+    ["subBrand", "status", "customer", "sortKey", "sortDirection"].forEach((key) => next.delete(key));
+    setSearchParams(next, { replace: true });
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -809,7 +871,7 @@ export default function InvoicesAdmin() {
     setExporting(formatKey);
     try {
       const token = getAuthToken();
-      const qs = subBrand ? `?subBrand=${encodeURIComponent(subBrand)}` : "";
+      const qs = subBrand && subBrand !== "all" ? `?subBrand=${encodeURIComponent(subBrand)}` : "";
       const resp = await fetch(`/api/travel/invoices/export/${fmt.path}${qs}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -841,7 +903,7 @@ export default function InvoicesAdmin() {
       const token = getAuthToken();
       const fd = new FormData();
       fd.append("file", reconFile);
-      const qs = subBrand ? `?subBrand=${encodeURIComponent(subBrand)}` : "";
+      const qs = subBrand && subBrand !== "all" ? `?subBrand=${encodeURIComponent(subBrand)}` : "";
       const resp = await fetch(`/api/travel/invoices/reconcile/excel-software${qs}`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -979,20 +1041,22 @@ export default function InvoicesAdmin() {
           flexWrap: "wrap",
         }}
       >
-        <select value={subBrand} onChange={(e) => { setSubBrand(e.target.value); setPage(1); }} style={selectStyle} aria-label="Filter by sub-brand">
+        <select value={subBrand} onChange={(e) => { const value = e.target.value; setSubBrand(value); setPage(1); const next = new URLSearchParams(searchParams); if (value) next.set("subBrand", value); else next.delete("subBrand"); setSearchParams(next, { replace: true }); }} style={selectStyle} aria-label="Filter by sub-brand">
           {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} style={selectStyle} aria-label="Filter by status">
+        <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); updateListParam("status", e.target.value); }} style={selectStyle} aria-label="Filter by status">
           {INVOICE_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <input
           type="text"
           placeholder="Filter by customer name…"
           value={customerNameFilter}
-          onChange={(e) => { setCustomerNameFilter(e.target.value); setPage(1); }}
+          onChange={(e) => { setCustomerNameFilter(e.target.value); setPage(1); updateListParam("customer", e.target.value); }}
           style={{ ...selectStyle, minWidth: 220 }}
           aria-label="Filter by customer name"
         />
+        <button type="button" onClick={() => setReloadTick((tick) => tick + 1)} style={secondaryBtn}>Refresh</button>
+        <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
 
       {showForm && editingTds && editingTds.totalTds > 0 && (
@@ -1093,7 +1157,8 @@ export default function InvoicesAdmin() {
             min={editingId ? undefined : tomorrowISO()}
             value={form.dueDate}
             onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
-            style={inputStyle}
+            {...pickerOnlyProps}
+            style={{ ...inputStyle, cursor: "pointer" }}
             aria-label="Due date"
             title="Due date"
           />
@@ -1175,14 +1240,14 @@ export default function InvoicesAdmin() {
             </colgroup>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                <th style={th}>Invoice #</th>
-                <th style={th}>Contact</th>
-                <th style={th}>Status</th>
-                <th style={th}>Total</th>
-                <th style={th}>Currency</th>
-                <th style={th}>Due Date</th>
-                <th style={th}>Sub-brand</th>
-                <th style={th}>Paid At</th>
+                <th style={th}>{sortHeader("Invoice #", "invoiceNum")}</th>
+                <th style={th}>{sortHeader("Contact", "contact")}</th>
+                <th style={th}>{sortHeader("Status", "status")}</th>
+                <th style={th}>{sortHeader("Total", "totalAmount")}</th>
+                <th style={th}>{sortHeader("Currency", "currency")}</th>
+                <th style={th}>{sortHeader("Due Date", "dueDate")}</th>
+                <th style={th}>{sortHeader("Sub-brand", "subBrand")}</th>
+                <th style={th}>{sortHeader("Paid At", "paidAt")}</th>
                 {canWrite && <th style={th}>Actions</th>}
               </tr>
             </thead>
@@ -1676,6 +1741,12 @@ const th = {
   zIndex: 3,
   fontWeight: 600,
 };
+const sortButtonStyle = {
+  display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6,
+  width: "100%", padding: "4px 8px", border: "none", borderRadius: 999,
+  background: "transparent", color: "inherit", font: "inherit", cursor: "pointer", textAlign: "left",
+};
+const sortButtonActiveStyle = { color: "var(--primary-color)", background: "var(--accent-bg)" };
 const td = {
   padding: "10px 12px",
   fontSize: 14,

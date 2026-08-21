@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useActiveSubBrand } from "../../utils/subBrand";
 import { Loader2, Plus, Send, Trash2, Plane, Search, Clock3, ChevronLeft, Building2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { fetchApi } from "../../utils/api";
@@ -228,11 +229,50 @@ function toText(value) {
   return String(value == null ? "" : value).trim();
 }
 
+function openDatePicker(e) {
+  try {
+    e.currentTarget.showPicker?.();
+  } catch {
+    // Browsers without showPicker still open the native picker from its icon.
+  }
+}
+
+function preventDateTyping(e) {
+  if (e.key === "Tab") return;
+  e.preventDefault();
+  if (e.key === "Enter" || e.key === " ") openDatePicker(e);
+}
+
+const pickerOnlyProps = {
+  onClick: openDatePicker,
+  onKeyDown: preventDateTyping,
+  onPaste: (e) => e.preventDefault(),
+  onDrop: (e) => e.preventDefault(),
+};
+
 function toNumberText(value) {
   const text = toText(value);
   if (!text) return "";
   const num = Number(text);
   return Number.isFinite(num) ? String(num) : "";
+}
+
+function ymd(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (!Number.isFinite(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function isTodayOrFuture(value) {
+  return !!value && String(value).slice(0, 10) >= ymd();
+}
+
+function isAfterStart(endValue, startValue) {
+  if (!endValue || !startValue) return false;
+  const end = new Date(endValue);
+  const start = new Date(startValue);
+  if (!Number.isFinite(end.getTime()) || !Number.isFinite(start.getTime())) return false;
+  return end > start;
 }
 
 function buildOptionPayload(option, tripMode) {
@@ -395,10 +435,15 @@ function buildSvgDataUrl(svg) {
 export default function FlightQuoteAgent() {
   const notify = useNotify();
   const navigate = useNavigate();
+  const { activeSubBrand } = useActiveSubBrand();
   const [contacts, setContacts] = useState([]);
   const [contactQuery, setContactQuery] = useState("");
   const [selectedContactId, setSelectedContactId] = useState("");
-  const [subBrand, setSubBrand] = useState("tmc");
+  const [subBrand, setSubBrand] = useState(activeSubBrand || "tmc");
+
+  useEffect(() => {
+    if (activeSubBrand) setSubBrand(activeSubBrand);
+  }, [activeSubBrand]);
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const [tripMode, setTripMode] = useState("oneway");
   const [rules, setRules] = useState([]);
@@ -501,6 +546,7 @@ export default function FlightQuoteAgent() {
     })
     .filter(Boolean), [flightOptions, rules, activeMarkupRuleId]);
   const totalQuotedAmount = pricedOptions.reduce((sum, option) => sum + (Number(option.total) || 0), 0);
+  const today = ymd();
   const routeLabel = [flightSearch.from, flightSearch.to].filter(Boolean).join(" -> ") || (pricedOptions[0] ? [pricedOptions[0].from, pricedOptions[0].to].filter(Boolean).join(" -> ") : "Flight quotation");
   const tripModeLabel = tripMode === "roundtrip" ? "Round trip" : "One way";
   const subBrandLabel = subBrand === "tmc" ? "TMC" : subBrand === "rfu" ? "RFU" : subBrand === "travelstall" ? "Travel Stall" : subBrand;
@@ -526,6 +572,10 @@ export default function FlightQuoteAgent() {
       notify.error("Enter the flight origin, destination, and date before searching.");
       return;
     }
+    if (!isTodayOrFuture(flightSearch.date)) {
+      notify.error("Flight date must be today or later.");
+      return;
+    }
     setSearchSummary(`Searching ${flightSearch.from} -> ${flightSearch.to} on ${flightSearch.date} (${flightSearch.cabinClass}).`);
   };
 
@@ -537,7 +587,34 @@ export default function FlightQuoteAgent() {
       return;
     }
 
-    const options = flightOptions
+    const candidateOptions = flightOptions.filter((option) => (
+      toText(option.airline)
+      || toText(option.flightNumber)
+      || toText(option.from)
+      || toText(option.to)
+      || toText(option.departAt)
+      || toText(option.arriveAt)
+      || toText(option.farePerPax)
+      || toText(option.returnFlightNumber)
+      || toText(option.returnDepartAt)
+      || toText(option.returnArriveAt)
+      || toText(option.baggage)
+    ));
+
+    const invalidStart = candidateOptions.find((option) => !isTodayOrFuture(option.departAt));
+    if (invalidStart) {
+      notify.error("Start date must be today or later.");
+      return;
+    }
+    if (tripMode === "roundtrip") {
+      const invalidEnd = candidateOptions.find((option) => !isAfterStart(option.returnDepartAt || option.returnArriveAt, option.departAt));
+      if (invalidEnd) {
+        notify.error("End date must be after Start date.");
+        return;
+      }
+    }
+
+    const options = candidateOptions
       .map((option) => buildOptionPayload(option, tripMode))
       .filter((option) => option.airline && Number.isFinite(option.pricePerPax));
 
@@ -660,11 +737,13 @@ export default function FlightQuoteAgent() {
             style={fieldStyle}
           />
           <input
+            type="date"
             aria-label="Flight date"
-            placeholder="dd-mm-yyyy"
             value={flightSearch.date}
             onChange={(e) => setFlightSearch((prev) => ({ ...prev, date: e.target.value }))}
-            style={fieldStyle}
+            {...pickerOnlyProps}
+            min={today}
+            style={{ ...fieldStyle, cursor: "pointer" }}
           />
           <select
             aria-label="Cabin class"
@@ -748,18 +827,21 @@ export default function FlightQuoteAgent() {
                   style={fieldStyle}
                 />
                 <input
+                  type="datetime-local"
                   aria-label={`Departure ${index + 1}`}
-                  placeholder="dd-mm-yyyy  --:--"
                   value={option.departAt}
                   onChange={(e) => updateOption(index, { departAt: e.target.value })}
-                  style={fieldStyle}
+                  {...pickerOnlyProps}
+                  min={today}
+                  style={{ ...fieldStyle, cursor: "pointer" }}
                 />
                 <input
+                  type="datetime-local"
                   aria-label={`Arrival ${index + 1}`}
-                  placeholder="dd-mm-yyyy  --:--"
                   value={option.arriveAt}
                   onChange={(e) => updateOption(index, { arriveAt: e.target.value })}
-                  style={fieldStyle}
+                  {...pickerOnlyProps}
+                  style={{ ...fieldStyle, cursor: "pointer" }}
                 />
                 <input
                   aria-label={`Fare ${index + 1}`}
@@ -798,18 +880,21 @@ export default function FlightQuoteAgent() {
                     style={fieldStyle}
                   />
                   <input
+                    type="datetime-local"
                     aria-label={`Return departure ${index + 1}`}
-                    placeholder="Return date/time"
                     value={option.returnDepartAt}
                     onChange={(e) => updateOption(index, { returnDepartAt: e.target.value })}
-                    style={fieldStyle}
+                    {...pickerOnlyProps}
+                    min={option.departAt || today}
+                    style={{ ...fieldStyle, cursor: "pointer" }}
                   />
                   <input
+                    type="datetime-local"
                     aria-label={`Return arrival ${index + 1}`}
-                    placeholder="Return arrival"
                     value={option.returnArriveAt}
                     onChange={(e) => updateOption(index, { returnArriveAt: e.target.value })}
-                    style={fieldStyle}
+                    {...pickerOnlyProps}
+                    style={{ ...fieldStyle, cursor: "pointer" }}
                   />
                 </div>
               ) : null}

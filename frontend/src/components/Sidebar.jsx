@@ -154,6 +154,24 @@ import { useEffectiveBrand } from "../hooks/useEffectiveBrand";
 // escaping to the (visually hidden) main content.
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const ITINERARIES_LAST_LIST_URL_KEY = "travel.itineraries.lastListUrl";
+const DIAGNOSTICS_LAST_LIST_URL_KEY = "travel.diagnostics.lastListUrl";
+const TRIPS_LAST_LIST_URL_KEY = "travel.trips.lastListUrl";
+const WEBCHECKINS_LAST_LIST_URL_KEY = "travel.webcheckins.lastListUrl";
+const COST_MASTER_LAST_LIST_URL_KEY = "travel.costMaster.lastListUrl";
+const SIGHTSEEING_LAST_LIST_URL_KEY = "travel.sightseeing.lastListUrl";
+const ITINERARY_TEMPLATES_LAST_LIST_URL_KEY = "travel.itineraryTemplates.lastListUrl";
+const MARKUP_RULES_LAST_LIST_URL_KEY = "travel.markupRules.lastListUrl";
+const TRAVEL_LAST_LIST_URL_KEYS = {
+  "/travel/commission-profiles": "travel.commissionProfiles.lastListUrl",
+  "/travel/quotes-admin": "travel.quotes.lastListUrl",
+  "/travel/quote-templates": "travel.quoteTemplates.lastListUrl",
+  "/travel/cancellation-policies": "travel.cancellationPolicies.lastListUrl",
+  "/travel/curriculum-mappings": "travel.curriculumMappings.lastListUrl",
+  "/travel/pipeline": "travel.pipeline.lastListUrl",
+  "/travel/invoices-admin": "travel.invoices.lastListUrl",
+  "/travel/payables": "travel.payables.lastListUrl",
+};
 
 const Sidebar = ({
   mobileOpen = false,
@@ -612,15 +630,74 @@ const Sidebar = ({
     ) {
       return null;
     }
+    const resolvedTo =
+      to === "/travel/itineraries"
+        ? (() => {
+            try {
+              return window.sessionStorage.getItem(ITINERARIES_LAST_LIST_URL_KEY) || to;
+            } catch {
+              return to;
+            }
+          })()
+        : to === "/travel/diagnostics"
+          ? (() => {
+              try {
+                return window.sessionStorage.getItem(DIAGNOSTICS_LAST_LIST_URL_KEY) || to;
+              } catch {
+                return to;
+              }
+            })()
+        : to === "/travel/trips"
+          ? (() => {
+              try {
+                return window.sessionStorage.getItem(TRIPS_LAST_LIST_URL_KEY) || to;
+              } catch {
+                return to;
+              }
+            })()
+        : to === "/travel/web-checkins"
+          ? (() => {
+              try {
+                return window.sessionStorage.getItem(WEBCHECKINS_LAST_LIST_URL_KEY) || to;
+              } catch {
+                return to;
+              }
+            })()
+        : to === "/travel/cost-master"
+          ? (() => {
+              try {
+                return window.sessionStorage.getItem(COST_MASTER_LAST_LIST_URL_KEY) || to;
+              } catch {
+                return to;
+              }
+            })()
+        : to === "/travel/sightseeing"
+          ? (() => {
+              try { return window.sessionStorage.getItem(SIGHTSEEING_LAST_LIST_URL_KEY) || to; } catch { return to; }
+            })()
+        : to === "/travel/itinerary-templates"
+          ? (() => {
+              try { return window.sessionStorage.getItem(ITINERARY_TEMPLATES_LAST_LIST_URL_KEY) || to; } catch { return to; }
+            })()
+        : to === "/travel/pricing-rules"
+          ? (() => {
+              try { return window.sessionStorage.getItem(MARKUP_RULES_LAST_LIST_URL_KEY) || to; } catch { return to; }
+            })()
+        : TRAVEL_LAST_LIST_URL_KEYS[to]
+          ? (() => {
+              try { return window.sessionStorage.getItem(TRAVEL_LAST_LIST_URL_KEYS[to]) || to; } catch { return to; }
+            })()
+          : to;
+    const activeTarget = to;
     return (
       <NavLink
-        to={to}
+        to={resolvedTo}
         end={end}
         className={({ isActive }) => {
           const isPathMatch = matchPaths.some(
             (path) => location.pathname === path,
           );
-          const isSegmentMatch = end ? false : segmentMatches(location.pathname, to);
+          const isSegmentMatch = end ? false : segmentMatches(location.pathname, activeTarget);
           const active = isActive || isPathMatch || isSegmentMatch;
           return `nav-link ${active ? "active" : ""}`;
         }}

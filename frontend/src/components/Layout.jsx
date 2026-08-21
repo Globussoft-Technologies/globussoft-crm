@@ -344,6 +344,11 @@ const Layout = () => {
     } catch {
       /* ignore */
     }
+    try {
+      sessionStorage.clear();
+    } catch {
+      /* ignore */
+    }
     navigate("/login");
   };
 

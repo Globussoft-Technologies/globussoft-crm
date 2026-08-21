@@ -214,7 +214,7 @@ function SeasonsSection() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const [filterSubBrand, setFilterSubBrand] = useState(searchParams.get("seasonSubBrand") || "");
+  const [filterSubBrand, setFilterSubBrand] = useState(searchParams.get("seasonSubBrand") || activeSubBrand || "");
   const [sortKey, setSortKey] = useState(searchParams.get("seasonSortKey") || null);
   const [sortDirection, setSortDirection] = useState(searchParams.get("seasonSortDirection") || null);
   const [adding, setAdding] = useState(false);
@@ -227,6 +227,7 @@ function SeasonsSection() {
   const loadingRef = useRef(false);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
+  const loadRequestRef = useRef(0);
 
   const updateParams = (patch) => {
     const next = new URLSearchParams(searchParams);
@@ -245,12 +246,15 @@ function SeasonsSection() {
       setSeasons([]);
       setHasMore(true);
       setLoading(true);
+      setLoadingMore(false);
       loadingRef.current = true;
+      loadingMoreRef.current = false;
     } else {
       if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
       setLoadingMore(true);
       loadingMoreRef.current = true;
     }
+    const requestId = ++loadRequestRef.current;
     const qs = new URLSearchParams();
     if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     const startOffset = reset ? 0 : offsetRef.current;
@@ -260,6 +264,7 @@ function SeasonsSection() {
     }
     fetchApi(`/api/travel/seasons?${qs.toString()}`)
       .then((res) => {
+        if (requestId !== loadRequestRef.current) return;
         const rows = Array.isArray(res?.seasons) ? res.seasons : [];
         const nextRows = reset ? rows : [...seasonsRef.current, ...rows];
         const totalRows = Number.isFinite(res?.total) ? res.total : nextRows.length;
@@ -271,6 +276,7 @@ function SeasonsSection() {
         setHasMore(hasMoreRef.current);
       })
       .catch((e) => {
+        if (requestId !== loadRequestRef.current) return;
         if (reset) {
           seasonsRef.current = [];
           offsetRef.current = 0;
@@ -282,6 +288,7 @@ function SeasonsSection() {
         notify.error(e?.body?.error || "Failed to load seasons");
       })
       .finally(() => {
+        if (requestId !== loadRequestRef.current) return;
         if (reset) {
           setLoading(false);
           loadingRef.current = false;
@@ -658,6 +665,7 @@ function MarkupRulesSection() {
   const loadingRef = useRef(false);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
+  const loadRequestRef = useRef(0);
 
   // Fetch supplier names when the markup-rule form is open and the match
   // field is "supplier". Used to populate the match-value dropdown.
@@ -689,12 +697,15 @@ function MarkupRulesSection() {
       setRules([]);
       setHasMore(true);
       setLoading(true);
+      setLoadingMore(false);
       loadingRef.current = true;
+      loadingMoreRef.current = false;
     } else {
       if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
       setLoadingMore(true);
       loadingMoreRef.current = true;
     }
+    const requestId = ++loadRequestRef.current;
     const qs = new URLSearchParams();
     if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     if (filterScope) qs.set("scope", filterScope);
@@ -706,6 +717,7 @@ function MarkupRulesSection() {
     }
     fetchApi(`/api/travel/markup-rules?${qs.toString()}`)
       .then((res) => {
+        if (requestId !== loadRequestRef.current) return;
         const rows = Array.isArray(res?.rules) ? res.rules : [];
         const nextRows = reset ? rows : [...rulesRef.current, ...rows];
         const totalRows = Number.isFinite(res?.total) ? res.total : nextRows.length;
@@ -717,6 +729,7 @@ function MarkupRulesSection() {
         setHasMore(hasMoreRef.current);
       })
       .catch((e) => {
+        if (requestId !== loadRequestRef.current) return;
         if (reset) {
           rulesRef.current = [];
           offsetRef.current = 0;
@@ -728,6 +741,7 @@ function MarkupRulesSection() {
         notify.error(e?.body?.error || "Failed to load markup rules");
       })
       .finally(() => {
+        if (requestId !== loadRequestRef.current) return;
         if (reset) {
           setLoading(false);
           loadingRef.current = false;

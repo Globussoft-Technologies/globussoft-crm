@@ -22,4 +22,5 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
 extension Notification.Name {
     static let handleDeepLink = Notification.Name("handleDeepLink")
+    static let pushNotificationReceived = Notification.Name("pushNotificationReceived")
 }

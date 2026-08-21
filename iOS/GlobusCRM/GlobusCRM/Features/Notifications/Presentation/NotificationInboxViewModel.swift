@@ -12,6 +12,7 @@ final class NotificationInboxViewModel: ObservableObject {
     private let getNotificationsUseCase: GetNotificationsUseCase
     private let markReadUseCase: MarkNotificationReadUseCase
     private let markAllReadUseCase: MarkAllNotificationsReadUseCase
+    private var pushNotificationObserver: NSObjectProtocol?
 
     init(dao: NotificationDAO,
          appState: AppState,
@@ -23,6 +24,22 @@ final class NotificationInboxViewModel: ObservableObject {
         self.getNotificationsUseCase = getNotificationsUseCase
         self.markReadUseCase = markReadUseCase
         self.markAllReadUseCase = markAllReadUseCase
+        pushNotificationObserver = NotificationCenter.default.addObserver(
+            forName: .pushNotificationReceived,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let item = notification.object as? AppNotification else { return }
+            Task { @MainActor [weak self] in
+                self?.receive(item)
+            }
+        }
+    }
+
+    deinit {
+        if let pushNotificationObserver {
+            NotificationCenter.default.removeObserver(pushNotificationObserver)
+        }
     }
 
     // MARK: - Load (server-first, local fallback)
@@ -80,6 +97,16 @@ final class NotificationInboxViewModel: ObservableObject {
         for idx in notifications.indices { notifications[idx].isRead = true }
         refreshUnreadCount()
         Task { await markAllReadUseCase() }
+    }
+
+    private func receive(_ notification: AppNotification) {
+        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+            notifications[index] = notification
+        } else {
+            notifications.insert(notification, at: 0)
+        }
+        notifications.sort { $0.receivedAt > $1.receivedAt }
+        refreshUnreadCount()
     }
 
     // MARK: - Private

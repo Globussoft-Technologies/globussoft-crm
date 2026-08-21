@@ -1,21 +1,24 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   Brain,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   ClipboardCheck,
   Compass,
   Filter,
   Plus,
   Trash2,
+  ArrowUpDown,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import CalendarRangePicker from "../../components/CalendarRangePicker";
 import CountBadge from "../../components/CountBadge";
+import { useActiveSubBrand } from "../../utils/subBrand";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -28,6 +31,7 @@ const SUB_BRANDS = [
 const DEFAULT_PAGE_SIZE = 20;
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 const MAX_PAGE_SIZE = 200;
+const TIER_SORT_ORDER = { entry: 0, primary: 1, premium: 2 };
 
 function fmt(d) {
   if (!d) return "—";
@@ -100,28 +104,45 @@ function ContactCell({ contact, contactId }) {
   return content;
 }
 
+function readPageSizeParam(params) {
+  const value = parseInt(params.get("pageSize") || String(DEFAULT_PAGE_SIZE), 10);
+  return Math.min(MAX_PAGE_SIZE, Math.max(1, value || DEFAULT_PAGE_SIZE));
+}
+
 export default function Diagnostics() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
+  const { activeSubBrand } = useActiveSubBrand();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const page = readPageParam(searchParams);
   const [diagnostics, setDiagnostics] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [subBrand, setSubBrand] = useState(searchParams.get("subBrand") || "");
+  const [subBrand, setSubBrand] = useState(
+    searchParams.get("subBrand") === "all"
+      ? ""
+      : searchParams.get("subBrand") || activeSubBrand || "",
+  );
   const [classification, setClassification] = useState(
     searchParams.get("classification") || "",
   );
   const [fromDate, setFromDate] = useState(searchParams.get("fromDate") || "");
   const [toDate, setToDate] = useState(searchParams.get("toDate") || "");
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [pageSize, setPageSize] = useState(() => readPageSizeParam(searchParams));
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
   const [customPageSize, setCustomPageSize] = useState("");
   const [reloadTick, setReloadTick] = useState(0);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [selectionMode, setSelectionMode] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [sortKey, setSortKey] = useState(() => searchParams.get("sortBy") || null);
+  const [sortDirection, setSortDirection] = useState(() => {
+    const value = searchParams.get("sortOrder");
+    return value === "asc" || value === "desc" ? value : null;
+  });
 
   const reqIdRef = useRef(0);
   const seenDiagnosticIdsRef = useRef(new Set());
@@ -159,10 +180,14 @@ export default function Diagnostics() {
       }
 
       const qs = new URLSearchParams();
-      if (subBrand) qs.set("subBrand", subBrand);
+      if (subBrand && subBrand !== "all") qs.set("subBrand", subBrand);
       if (classification) qs.set("classification", classification);
       if (fromDate) qs.set("fromDate", fromDate);
       if (toDate) qs.set("toDate", toDate);
+      if (sortKey) {
+        qs.set("sortBy", sortKey);
+        qs.set("sortOrder", sortDirection || "asc");
+      }
       qs.set("limit", String(pageSize));
       qs.set("offset", String(Math.max(0, (page - 1) * pageSize)));
 
@@ -196,7 +221,7 @@ export default function Diagnostics() {
         }
       }
     },
-    [classification, fromDate, notify, page, pageSize, subBrand, toDate],
+    [classification, fromDate, notify, page, pageSize, sortDirection, sortKey, subBrand, toDate],
   );
 
   useEffect(() => {
@@ -217,9 +242,50 @@ export default function Diagnostics() {
     }
   }, [page, pageCount, total, updateParams]);
 
+  useEffect(() => {
+    if (searchParams.has("subBrand")) return;
+    setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand, searchParams]);
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/diagnostics") return;
+    try {
+      window.sessionStorage.setItem(
+        "travel.diagnostics.lastListUrl",
+        `${location.pathname}${location.search}`,
+      );
+    } catch {
+      // Ignore storage failures; the URL still carries the active filters.
+    }
+  }, [location.pathname, location.search]);
+
   const reload = useCallback(() => {
     setReloadTick((t) => t + 1);
   }, []);
+
+  const resetFilters = useCallback(() => {
+    const nextSubBrand = activeSubBrand || "";
+    setSubBrand(nextSubBrand);
+    setClassification("");
+    setFromDate("");
+    setToDate("");
+    setPageSize(DEFAULT_PAGE_SIZE);
+    setIsCustomPageSize(false);
+    setCustomPageSize("");
+    setSortKey(null);
+    setSortDirection(null);
+    updateParams({
+      subBrand: nextSubBrand,
+      classification: null,
+      fromDate: null,
+      toDate: null,
+      sortBy: null,
+      sortOrder: null,
+      pageSize: null,
+      page: 1,
+    });
+    setReloadTick((t) => t + 1);
+  }, [activeSubBrand, updateParams]);
 
   const setPage = useCallback(
     (nextPage) => {
@@ -231,12 +297,91 @@ export default function Diagnostics() {
   const setPageSizeAndReset = useCallback(
     (nextPageSize) => {
       setPageSize(nextPageSize);
-      updateParams({ page: 1 });
+      updateParams({ page: 1, pageSize: nextPageSize });
     },
     [updateParams],
   );
 
-  const activeDiagnostics = useMemo(() => diagnostics, [diagnostics]);
+  const activeDiagnostics = useMemo(() => {
+    if (!sortKey) return diagnostics;
+
+    const valueFor = (diagnostic) => {
+      if (sortKey === "submitted") return new Date(diagnostic.createdAt || 0).getTime();
+      if (sortKey === "subBrand") return String(diagnostic.subBrand || "").toLowerCase();
+      if (sortKey === "contact") {
+        return String(
+          diagnostic.contact?.name ||
+          diagnostic.contact?.email ||
+          diagnostic.contactId ||
+          "",
+        ).toLowerCase();
+      }
+      if (sortKey === "score") return diagnostic.score == null ? null : Number(diagnostic.score);
+      if (sortKey === "classification") {
+        return String(diagnostic.classificationLabel || diagnostic.classification || "").toLowerCase();
+      }
+      if (sortKey === "tier") {
+        const tier = String(diagnostic.recommendedTier || "").toLowerCase();
+        return tier ? (TIER_SORT_ORDER[tier] ?? Number.MAX_SAFE_INTEGER) : null;
+      }
+      return "";
+    };
+
+    return [...diagnostics].sort((leftDiagnostic, rightDiagnostic) => {
+      const left = valueFor(leftDiagnostic);
+      const right = valueFor(rightDiagnostic);
+      const leftEmpty = left === null || left === "" || Number.isNaN(left);
+      const rightEmpty = right === null || right === "" || Number.isNaN(right);
+      if (leftEmpty || rightEmpty) {
+        if (leftEmpty && rightEmpty) return 0;
+        return leftEmpty ? 1 : -1;
+      }
+      const comparison = typeof left === "number" && typeof right === "number"
+        ? left - right
+        : String(left).localeCompare(String(right));
+      return sortDirection === "desc" ? -comparison : comparison;
+    });
+  }, [diagnostics, sortDirection, sortKey]);
+
+  const toggleSort = useCallback((key) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDirection("asc");
+      updateParams({ sortBy: key, sortOrder: "asc", page: 1 });
+      return;
+    }
+
+    if (sortDirection === "asc") {
+      setSortDirection("desc");
+      updateParams({ sortBy: key, sortOrder: "desc", page: 1 });
+      return;
+    }
+
+    setSortKey(null);
+    setSortDirection(null);
+    updateParams({ sortBy: null, sortOrder: null, page: 1 });
+  }, [sortDirection, sortKey, updateParams]);
+
+  const sortButton = (key, label) => {
+    const active = sortKey === key;
+    const direction = active ? sortDirection : null;
+    const Icon = direction === "asc" ? ChevronUp : direction === "desc" ? ChevronDown : ArrowUpDown;
+    const sortStateLabel = !active ? "default" : direction === "desc" ? "descending" : "ascending";
+    return (
+      <button
+        type="button"
+        onClick={() => toggleSort(key)}
+        aria-label={`Sort ${label} ${sortStateLabel}`}
+        style={{
+          ...sortButtonStyle,
+          ...(active ? sortButtonActiveStyle : null),
+        }}
+      >
+        <span>{label}</span>
+        <Icon size={14} aria-hidden />
+      </button>
+    );
+  };
   const selectedCount = selectedIds.size;
   const allVisibleSelected =
     activeDiagnostics.length > 0 &&
@@ -282,6 +427,7 @@ export default function Diagnostics() {
         `Deleted ${Number(res?.deletedCount) || ids.length} diagnostic${ids.length === 1 ? "" : "s"}.`,
       );
       setSelectedIds(new Set());
+      setSelectionMode(false);
       reload();
     } catch (e) {
       notify.error(e?.body?.error || e?.message || "Failed to bulk delete diagnostics");
@@ -301,6 +447,7 @@ export default function Diagnostics() {
       }}
     >
       <div
+        className="diagnostics-filter-bar"
         style={{
           display: "flex",
           justifyContent: "space-between",
@@ -363,113 +510,140 @@ export default function Diagnostics() {
           flexWrap: "wrap",
           alignItems: "center",
           background: "var(--surface-color)",
-          padding: 12,
-          borderRadius: 8,
+          padding: 14,
+          borderRadius: 12,
           border: "1px solid var(--border-color)",
           marginBottom: 16,
           overflow: "visible",
           position: "relative",
           zIndex: 5,
+          boxShadow: "0 10px 28px rgba(15, 23, 42, 0.04)",
         }}
       >
-        <Filter
-          size={16}
-          aria-hidden
-          style={{ color: "var(--text-secondary)" }}
-        />
-        <select
-          value={subBrand}
-          onChange={(e) => {
-            setSubBrand(e.target.value);
-            updateParams({ subBrand: e.target.value, page: 1 });
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            flexWrap: "wrap",
+            alignItems: "center",
+            flex: "1 1 auto",
           }}
-          style={selectStyle}
-          aria-label="Filter by sub-brand"
         >
-          {SUB_BRANDS.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={classification}
-          onChange={(e) => {
-            setClassification(e.target.value);
-            updateParams({ classification: e.target.value, page: 1 });
-          }}
-          style={selectStyle}
-          aria-label="Filter by classification"
-        >
-          <option value="">All classifications</option>
-          <option value="level_1">Level 1</option>
-          <option value="level_2">Level 2</option>
-          <option value="level_3">Level 3</option>
-          <option value="level_4">Level 4</option>
-        </select>
-        <CalendarRangePicker
-          value={{ from: fromDate, to: toDate }}
-          onChange={(next) => {
-            const nextFrom = next?.from || "";
-            const nextTo = next?.to || "";
-            setFromDate(nextFrom);
-            setToDate(nextTo);
-            updateParams({ fromDate: nextFrom, toDate: nextTo, page: 1 });
-          }}
-          label="All time"
-        />
-        <button
-          type="button"
-          onClick={reload}
-          style={refreshBtn}
-          aria-label="Reload list"
-        >
-          Refresh
-        </button>
-        {(subBrand || classification || fromDate || toDate) && (
+          <Filter
+            size={16}
+            aria-hidden
+            style={{ color: "var(--text-secondary)" }}
+          />
+          <select
+            value={subBrand}
+            onChange={(e) => {
+              setSubBrand(e.target.value);
+              updateParams({ subBrand: e.target.value || "all", page: 1 });
+            }}
+            style={selectStyle}
+            aria-label="Filter by sub-brand"
+          >
+            {SUB_BRANDS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={classification}
+            onChange={(e) => {
+              setClassification(e.target.value);
+              updateParams({ classification: e.target.value, page: 1 });
+            }}
+            style={selectStyle}
+            aria-label="Filter by classification"
+          >
+            <option value="">All classifications</option>
+            <option value="level_1">Level 1</option>
+            <option value="level_2">Level 2</option>
+            <option value="level_3">Level 3</option>
+            <option value="level_4">Level 4</option>
+          </select>
+          <CalendarRangePicker
+            value={{ from: fromDate, to: toDate }}
+            onChange={(next) => {
+              const nextFrom = next?.from || "";
+              const nextTo = next?.to || "";
+              setFromDate(nextFrom);
+              setToDate(nextTo);
+              updateParams({ fromDate: nextFrom, toDate: nextTo, page: 1 });
+            }}
+            label="All time"
+            width={148}
+            height={32}
+            compact
+          />
           <button
             type="button"
-            onClick={() => {
-              setSubBrand("");
-              setClassification("");
-              setFromDate("");
-              setToDate("");
-              updateParams({
-                subBrand: "",
-                classification: "",
-                fromDate: "",
-                toDate: "",
-                page: 1,
-              });
-            }}
-            style={refreshBtn}
-            aria-label="Clear filters"
+            onClick={resetFilters}
+            style={resetBtn}
+            aria-label="Reset filters"
           >
-            Clear filters
+            Reset filters
           </button>
-        )}
+          <button
+            type="button"
+            onClick={reload}
+            style={resetBtn}
+            aria-label="Reload list"
+          >
+            Refresh
+          </button>
+        </div>
         {isAdmin && (
-          <button
-            type="button"
-            onClick={handleBulkDelete}
-            disabled={!selectedCount || bulkDeleting}
-            style={{
-              ...bulkDeleteBtn,
-              opacity: !selectedCount || bulkDeleting ? 0.55 : 1,
-              cursor: !selectedCount || bulkDeleting ? "not-allowed" : "pointer",
-            }}
-            aria-label="Delete selected diagnostics"
-          >
-            <Trash2 size={14} aria-hidden />
-            {bulkDeleting ? "Deleting..." : `Delete selected${selectedCount ? ` (${selectedCount})` : ""}`}
-          </button>
+          <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectionMode((enabled) => {
+                  if (enabled) setSelectedIds(new Set());
+                  return !enabled;
+                });
+              }}
+              style={resetBtn}
+              aria-label={selectionMode ? "Done selecting diagnostics" : "Select diagnostics"}
+            >
+              {selectionMode ? "Done" : "Select diagnostics"}
+            </button>
+            {selectionMode && (
+              <>
+                <button
+                  type="button"
+                  onClick={toggleSelectAllVisible}
+                  style={resetBtn}
+                  aria-label="Select all visible diagnostics"
+                >
+                  {allVisibleSelected ? "Clear visible" : "Select all visible"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkDelete}
+                  disabled={!selectedCount || bulkDeleting}
+                  style={{
+                    ...bulkDeleteBtn,
+                    opacity: !selectedCount || bulkDeleting ? 0.55 : 1,
+                    cursor: !selectedCount || bulkDeleting ? "not-allowed" : "pointer",
+                  }}
+                  aria-label="Delete selected diagnostics"
+                >
+                  <Trash2 size={14} aria-hidden />
+                  {bulkDeleting ? "Deleting..." : `Delete selected${selectedCount ? ` (${selectedCount})` : ""}`}
+                </button>
+              </>
+            )}
+          </div>
         )}
       </div>
 
       <div
         style={{
           background: "var(--surface-color)",
-          borderRadius: 8,
+          borderRadius: "8px",
           border: "1px solid var(--border-color)",
         }}
       >
@@ -488,6 +662,7 @@ export default function Diagnostics() {
           </div>
         ) : (
           <table
+                className="diagnostics-table"
                 aria-label="Diagnostics results"
                 style={{
                   width: "100%",
@@ -496,7 +671,7 @@ export default function Diagnostics() {
                 }}
               >
                 <colgroup>
-                  {isAdmin && <col style={{ width: "44px" }} />}
+                  {isAdmin && selectionMode && <col style={{ width: "44px" }} />}
                   <col style={{ width: "160px" }} />
                   <col style={{ width: "260px" }} />
                   <col style={{ width: "110px" }} />
@@ -506,8 +681,8 @@ export default function Diagnostics() {
                 </colgroup>
                 <thead>
                   <tr>
-                    {isAdmin && (
-                      <th style={thCheckbox}>
+                    {isAdmin && selectionMode && (
+                      <th style={thCheckbox} aria-sort="none">
                         <input
                           type="checkbox"
                           checked={allVisibleSelected}
@@ -516,12 +691,12 @@ export default function Diagnostics() {
                         />
                       </th>
                     )}
-                    <th style={th}>Submitted</th>
-                    <th style={th}>Contact</th>
-                    <th style={th}>Sub-brand</th>
-                    <th style={th}>Classification</th>
-                    <th style={th}>Tier</th>
-                    <th style={th}>Score</th>
+                    <th style={th} aria-sort={sortKey === "submitted" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("submitted", "Submitted")}</th>
+                    <th style={th} aria-sort={sortKey === "contact" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("contact", "Contact")}</th>
+                    <th style={th} aria-sort={sortKey === "subBrand" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("subBrand", "Sub-brand")}</th>
+                    <th style={th} aria-sort={sortKey === "classification" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("classification", "Classification")}</th>
+                    <th style={th} aria-sort={sortKey === "tier" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("tier", "Tier")}</th>
+                    <th style={th} aria-sort={sortKey === "score" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("score", "Score")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -535,9 +710,10 @@ export default function Diagnostics() {
                     return (
                       <tr
                         key={d.id}
+                        className="diagnostics-row"
                         style={{ borderTop: "1px solid var(--border-light)" }}
                       >
-                        {isAdmin && (
+                        {isAdmin && selectionMode && (
                           <td style={tdCheckbox}>
                             <input
                               type="checkbox"
@@ -566,7 +742,10 @@ export default function Diagnostics() {
                           {d.classificationLabel || d.classification || "—"}
                         </td>
                         <td style={td}>
-                          <span className={tierClass}>
+                          <span
+                            className={tierClass}
+                            style={diagnosticsTierBadgeStyle}
+                          >
                             {d.recommendedTier || "—"}
                           </span>
                         </td>
@@ -938,7 +1117,7 @@ const selectStyle = {
   fontSize: 13,
 };
 
-const refreshBtn = {
+const resetBtn = {
   padding: "6px 12px",
   borderRadius: 6,
   border: "1px solid var(--border-color)",
@@ -972,11 +1151,12 @@ const th = {
   top: 0,
   zIndex: 3,
   textAlign: "left",
-  padding: "8px 10px",
+  padding: "10px 10px",
   fontSize: 12,
   textTransform: "uppercase",
   letterSpacing: 0.5,
-  color: "var(--text-secondary)",
+  fontWeight: 700,
+  color: "var(--text-primary)",
   borderBottom: "1px solid var(--border-color)",
   background: "var(--modal-bg, var(--bg-color))",
   boxShadow: "inset 0 -1px 0 var(--border-color)",
@@ -990,12 +1170,43 @@ const thCheckbox = {
   padding: "8px 6px",
 };
 
+const sortButtonStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 6,
+  width: "100%",
+  padding: "4px 8px",
+  border: "none",
+  borderRadius: 999,
+  background: "transparent",
+  color: "inherit",
+  font: "inherit",
+  textTransform: "inherit",
+  letterSpacing: "inherit",
+  cursor: "pointer",
+  textAlign: "left",
+  transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease",
+};
+
+const sortButtonActiveStyle = {
+  color: "var(--primary-color)",
+};
+
 const td = {
   padding: "10px 12px",
   fontSize: 14,
   color: "var(--text-primary)",
   minWidth: 0,
   verticalAlign: "top",
+};
+
+const diagnosticsTierBadgeStyle = {
+  minWidth: 78,
+  justifyContent: "center",
+  display: "inline-flex",
+  alignItems: "center",
+  boxShadow: "0 1px 1px rgba(15, 23, 42, 0.04)",
 };
 
 const tdCheckbox = {

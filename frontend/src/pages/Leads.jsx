@@ -42,6 +42,7 @@ import InlineCellEditor from "../components/InlineCellEditor";
 import ScrollableSelect from "../components/ScrollableSelect";
 import TopScrollSync from "../components/TopScrollSync";
 import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
+import { useActiveSubBrand } from "../utils/subBrand";
 import CallifiedLeadCallDialog from "../components/CallifiedLeadCallDialog";
 import CallifiedCallDetailsDrawer from "../components/CallifiedCallDetailsDrawer";
 import CallifiedCallStatusDrawer from "../components/CallifiedCallStatusDrawer";
@@ -972,6 +973,7 @@ const Leads = () => {
   const auth = useContext(AuthContext);
   const isWellness = auth?.tenant?.vertical === "wellness";
   const isTravel = auth?.tenant?.vertical === "travel";
+  const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
   // Only ADMINs may assign / reassign leads. All other roles see the
@@ -1041,8 +1043,14 @@ const Leads = () => {
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
   const [sourceFilter, setSourceFilter] = useState("");
-  const [subBrandFilter, setSubBrandFilter] = useState("");
+  const [subBrandFilter, setSubBrandFilter] = useState(
+    isTravel ? activeSubBrand || "" : "",
+  );
   const [stageFilter, setStageFilter] = useState("");
+
+  useEffect(() => {
+    if (isTravel) setSubBrandFilter(activeSubBrand || "");
+  }, [activeSubBrand, isTravel]);
   const [previewLead, setPreviewLead] = useState(null);
   // Generic CRM Callified filters
   const [campaignFilter, setCampaignFilter] = useState("");
@@ -7887,7 +7895,7 @@ const Leads = () => {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.75)",
+            background: "var(--catalogue-modal-backdrop)",
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
             display: "flex",
@@ -8175,7 +8183,7 @@ const Leads = () => {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.75)",
+            background: "var(--catalogue-modal-backdrop)",
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
             display: "flex",

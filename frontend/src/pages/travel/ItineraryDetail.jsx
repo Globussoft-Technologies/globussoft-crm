@@ -33,7 +33,7 @@ import { useLocation, useParams, Link } from "react-router-dom";
 import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Plus, Pencil, Trash2, X, Sparkles, Share2, Download, Check, XCircle, Copy,
-  Calendar, ChevronDown, ChevronRight,
+  Calendar, ChevronLeft, ChevronDown, ChevronRight,
   Train, Bus, Car, Camera, Utensils, Package,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
@@ -51,6 +51,19 @@ import { AuthContext } from "../../App";
 // partially-geocoded itinerary still maps the subset that has coords.
 // Mirrors the S81 list-page wire-in pattern.
 import MapPreview from "../../components/MapPreview";
+
+const ITINERARIES_LAST_LIST_URL_KEY = "travel.itineraries.lastListUrl";
+
+function getItinerariesListUrl() {
+  try {
+    const savedUrl = window.sessionStorage.getItem(ITINERARIES_LAST_LIST_URL_KEY);
+    return savedUrl && savedUrl.startsWith("/travel/itineraries")
+      ? savedUrl
+      : "/travel/itineraries";
+  } catch {
+    return "/travel/itineraries";
+  }
+}
 
 // Item types cover both fly + non-fly (domestic) trips and general expenses.
 // Keep in sync with VALID_ITEM_TYPES in backend/routes/travel_itineraries.js.
@@ -416,8 +429,9 @@ function StatusBadge({ status }) {
 export default function ItineraryDetail() {
   const { id } = useParams();
   const location = useLocation();
-  const backTo = location.state?.backTo || null;
-  const backLabel = location.state?.backLabel || "Back";
+  const [savedListUrl] = useState(getItinerariesListUrl);
+  const backTo = location.state?.backTo || savedListUrl;
+  const backLabel = location.state?.backLabel || "Back to itineraries";
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
@@ -951,7 +965,8 @@ export default function ItineraryDetail() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
           <div>
             {backTo && (
-              <Link to={backTo} style={{ ...secondaryBtn, textDecoration: "none", marginBottom: 10 }}>
+              <Link to={backTo} style={{ ...backLink, marginBottom: 10 }}>
+                <ChevronLeft size={16} aria-hidden />
                 {backLabel}
               </Link>
             )}
@@ -2126,6 +2141,12 @@ const primaryBtn = {
   background: "var(--primary-color, var(--accent-color))", color: "#fff",
   border: "none", cursor: "pointer",
 };
+const backLink = {
+  display: "inline-flex", alignItems: "center", gap: 4,
+  fontSize: 13, color: "var(--text-secondary)", textDecoration: "none",
+  padding: "4px 8px", borderRadius: 4,
+};
+
 const secondaryBtn = {
   display: "inline-flex", alignItems: "center", gap: 6,
   padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,

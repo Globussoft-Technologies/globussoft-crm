@@ -137,16 +137,13 @@ describe("ReligiousPackets — page contract", () => {
     expect(screen.getAllByText("Inactive").length).toBeGreaterThan(0);
   });
 
-  it("filter dropdowns drive query params on the GET", async () => {
+  it("RFU scope and active filter drive query params on the GET", async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl());
     renderPage();
     await screen.findByText(/Umrah preparation/i);
 
-    fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), { target: { value: "rfu" } });
-    await waitFor(() => {
-      const urls = fetchApiMock.mock.calls.map((c) => c[0]);
-      expect(urls.some((u) => u.includes("subBrand=rfu"))).toBe(true);
-    });
+    const urls = fetchApiMock.mock.calls.map((c) => c[0]);
+    expect(urls.some((u) => u.includes("subBrand=rfu"))).toBe(true);
 
     fireEvent.change(screen.getByLabelText(/Filter by active state/i), { target: { value: "true" } });
     await waitFor(() => {
@@ -482,11 +479,10 @@ describe("ReligiousPackets — page contract", () => {
     fireEvent.change(screen.getByPlaceholderText(/Rendered into the WhatsApp/i), {
       target: { value: "<p>tmc</p>" },
     });
-    // Sub-brand select inside the form. There are two filter selects above
-    // the form (subBrand filter + active filter) and ONE select inside the
-    // form (form sub-brand). The form's select is the 3rd select on the page.
+    // The active-state filter remains above the form; the form sub-brand
+    // select is now the second select on the page.
     const allSelects = document.querySelectorAll("select");
-    const formSubBrandSelect = allSelects[2];
+    const formSubBrandSelect = allSelects[1];
     fireEvent.change(formSubBrandSelect, { target: { value: "tmc" } });
 
     fireEvent.click(screen.getAllByRole("button", { name: /^Save$/ })[0]);

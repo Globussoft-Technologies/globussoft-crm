@@ -503,6 +503,52 @@ describe("<Itineraries /> — load + render lifecycle", () => {
     expect(screen.getByText("Schengen visa")).toBeInTheDocument();
   });
 
+  it("sorts itineraries by item count when the Items header is clicked", async () => {
+    renderPage();
+    await screen.findByText("Andaman Islands");
+
+    fireEvent.click(screen.getByRole("button", { name: /Sort Items default/i }));
+
+    await waitFor(() => {
+      const rows = screen.getByRole("table").querySelectorAll("tbody tr");
+      expect(rows[0]).toHaveTextContent("Schengen visa");
+      expect(rows[1]).toHaveTextContent("Andaman Islands");
+      expect(rows[2]).toHaveTextContent("Mecca Umrah Package");
+    });
+  });
+
+  it("Refresh clears the current filters and active sort back to defaults", async () => {
+    renderPage();
+    await screen.findByText("Andaman Islands");
+
+    const subBrandSelect = screen.getByLabelText(/Filter by sub-brand/i);
+    const statusSelect = screen.getByLabelText(/Filter by status/i);
+    const searchInput = screen.getByLabelText(/Search itineraries by destination or contact name/i);
+      const pageSizeTrigger = screen.getByRole("button", { name: /Per page:/i });
+    const initialSubBrand = subBrandSelect.value;
+
+    fireEvent.change(subBrandSelect, { target: { value: "rfu" } });
+    fireEvent.change(statusSelect, { target: { value: "sent" } });
+    fireEvent.change(searchInput, { target: { value: "Mecca" } });
+    fireEvent.click(pageSizeTrigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: "10" }));
+    fireEvent.click(screen.getByRole("button", { name: /Sort Items default/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Sort Items ascending/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Reload list/i }));
+
+    await waitFor(() => {
+      expect(subBrandSelect).toHaveValue(initialSubBrand);
+      expect(statusSelect).toHaveValue("");
+      expect(searchInput).toHaveValue("");
+      expect(within(screen.getByRole("button", { name: /Per page:/i })).getByText("20")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Sort Items default/i })).toBeInTheDocument();
+    });
+  });
+
   it("shows synced top and bottom horizontal scrollbars", async () => {
     const scrollWidthSpy = vi
       .spyOn(HTMLElement.prototype, "scrollWidth", "get")
@@ -945,6 +991,34 @@ describe("<Itineraries /> — create drawer + submit", () => {
       ([u, o]) => u === "/api/travel/itineraries" && o?.method === "POST",
     );
     expect(posts.length).toBe(0);
+  });
+
+  it("uses the Trips backdrop and enforces picker-only Start/End date ordering", async () => {
+    renderPage();
+    await screen.findByText("Andaman Islands");
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create a new itinerary/i }),
+    );
+    const heading = await screen.findByRole("heading", { name: /New Itinerary/i });
+    const backdrop = heading.closest("form").parentElement;
+    expect(backdrop.style.background).toBe("var(--catalogue-modal-backdrop)");
+
+    const startInput = screen.getByLabelText(/^Start date$/i);
+    const endInput = screen.getByLabelText(/^End date$/i);
+    expect(startInput.min).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(endInput).toBeDisabled();
+
+    startInput.showPicker = vi.fn();
+    fireEvent.click(startInput);
+    expect(startInput.showPicker).toHaveBeenCalledTimes(1);
+    expect(fireEvent.keyDown(startInput, { key: "1" })).toBe(false);
+
+    fireEvent.change(startInput, { target: { value: "2999-01-01" } });
+    expect(endInput).not.toBeDisabled();
+    expect(endInput.min).toBe("2999-01-02");
+    fireEvent.change(endInput, { target: { value: "2999-01-03" } });
+    fireEvent.change(startInput, { target: { value: "2999-01-03" } });
+    expect(endInput).toHaveValue("");
   });
 
   it("submit happy path: POSTs /api/travel/itineraries with parsed body + closes drawer + notify.success", async () => {

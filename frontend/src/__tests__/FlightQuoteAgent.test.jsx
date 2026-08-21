@@ -62,6 +62,12 @@ const EXTRACT_RESULT = {
   rows: [{ label: "Air India", basePrice: 12345, currency: "INR" }],
 };
 
+function ymdOffset(days = 0) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 function installFetchMock({ quote = QUOTE_RESULT } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
@@ -144,6 +150,9 @@ describe("<FlightQuoteAgent />", () => {
     renderPage();
     expect(screen.getByPlaceholderText("From city or code")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("To city or code")).toBeInTheDocument();
+    expect(screen.getByLabelText("Flight date")).toHaveAttribute("type", "date");
+    expect(screen.getByLabelText("Departure 1")).toHaveAttribute("type", "datetime-local");
+    expect(screen.getByLabelText("Arrival 1")).toHaveAttribute("type", "datetime-local");
     expect(screen.getByText("Option 1: enter a fare to preview")).toBeInTheDocument();
 
   });
@@ -168,10 +177,33 @@ describe("<FlightQuoteAgent />", () => {
     renderPage();
     fireEvent.change(screen.getByLabelText("Flight from"), { target: { value: "BLR" } });
     fireEvent.change(screen.getByLabelText("Flight to"), { target: { value: "DEL" } });
-    fireEvent.change(screen.getByLabelText("Flight date"), { target: { value: "05/08/26" } });
+    fireEvent.change(screen.getByLabelText("Flight date"), { target: { value: ymdOffset(1) } });
     fireEvent.click(screen.getByRole("button", { name: /^Search$/i }));
-    expect(screen.getByText(/Searching BLR -> DEL on 05\/08\/26/i)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`Searching BLR -> DEL on ${ymdOffset(1)}`, "i"))).toBeInTheDocument();
     expect(notifyInfo).not.toHaveBeenCalled();
+  });
+
+  it("rejects a past flight date before search", () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText("Flight from"), { target: { value: "BLR" } });
+    fireEvent.change(screen.getByLabelText("Flight to"), { target: { value: "DEL" } });
+    fireEvent.change(screen.getByLabelText("Flight date"), { target: { value: ymdOffset(-1) } });
+    fireEvent.click(screen.getByRole("button", { name: /^Search$/i }));
+    expect(notifyError).toHaveBeenCalledWith("Flight date must be today or later.");
+  });
+
+  it("rejects a round-trip end date that is not after the start date when creating a quote", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByLabelText("Select contact")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Select contact"), { target: { value: "31" } });
+    fireEvent.click(screen.getByRole("button", { name: /Round trip/i }));
+    fireEvent.change(screen.getByLabelText("Departure 1"), { target: { value: `${ymdOffset(1)}T10:00` } });
+    fireEvent.change(screen.getByLabelText("Return departure 1"), { target: { value: `${ymdOffset(1)}T09:00` } });
+    fireEvent.change(screen.getByLabelText("Airline 1"), { target: { value: "AI" } });
+    fireEvent.change(screen.getByLabelText("Fare 1"), { target: { value: "1000" } });
+    fireEvent.click(screen.getByRole("button", { name: /Create quote/i }));
+    expect(notifyError).toHaveBeenCalledWith("End date must be after Start date.");
+    expect(fetchApiMock.mock.calls.some(([url, opts]) => url === "/api/v1/flight-plugin/agent-quotes" && opts?.method === "POST")).toBe(false);
   });
 
   it("adds and removes option rows", () => {

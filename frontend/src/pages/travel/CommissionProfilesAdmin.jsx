@@ -68,8 +68,9 @@
 //
 // Template: pattern-matched against SuppliersAdmin / FlyerTemplates / QuotesAdmin.
 
-import { useEffect, useState, useContext } from "react";
-import { Percent, Plus, Pencil, Trash2, Calculator, List, Upload } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useContext } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
+import { Percent, Plus, Pencil, Trash2, Calculator, List, Upload, Download, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import TopScrollSync from "../../components/TopScrollSync";
 import { useNotify } from "../../utils/notify";
@@ -86,12 +87,14 @@ import { AuthContext } from "../../App";
 import CountBadge from "../../components/CountBadge";
 
 const SUB_BRANDS = [
-  { value: "", label: "All sub-brands" },
+  { value: "all", label: "All sub-brands" },
   { value: "tmc", label: "TMC (schools)" },
   { value: "rfu", label: "RFU (Umrah)" },
   { value: "travelstall", label: "Travel Stall" },
   { value: "visasure", label: "Visa Sure" },
 ];
+
+const LAST_LIST_URL_KEY = "travel.commissionProfiles.lastListUrl";
 
 // Profile-type whitelist mirror — kept in lockstep with the backend
 // VALID_PROFILE_TYPES constant in routes/travel_commission_profiles.js.
@@ -300,10 +303,51 @@ function parseProfileJsonForForm(profileType, raw) {
   return out;
 }
 
+function readStoredListParams() {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = window.sessionStorage.getItem(LAST_LIST_URL_KEY);
+    if (!stored) return null;
+    const parsed = new URL(stored, window.location.origin);
+    if (!parsed.search) return null;
+    return parsed.searchParams;
+  } catch (_e) {
+    return null;
+  }
+}
+
+function readInitialListState(activeSubBrand, currentParams) {
+  const explicitCurrent =
+    currentParams.has("subBrand") ||
+    currentParams.has("activeOnly") ||
+    currentParams.has("sortKey") ||
+    currentParams.has("sortDirection");
+  const sourceParams = explicitCurrent ? currentParams : readStoredListParams();
+  const source = sourceParams || currentParams;
+  const subBrand = source.get("subBrand");
+  const activeOnly = source.has("activeOnly")
+    ? source.get("activeOnly") !== "false"
+    : true;
+  const sortKey = source.get("sortKey");
+  const sortDirection = source.get("sortDirection");
+  return {
+    source: sourceParams ? "stored" : explicitCurrent ? "url" : "default",
+    subBrandFilter: subBrand != null
+      ? subBrand
+      : (explicitCurrent ? "all" : (activeSubBrand || "all")),
+    activeOnly,
+    sortKey: sortKey === "name" || sortKey === "validity" ? sortKey : null,
+    sortDirection: sortDirection === "asc" || sortDirection === "desc" ? sortDirection : null,
+  };
+}
+
 export default function CommissionProfilesAdmin() {
   const notify = useNotify();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
+  const initialListStateRef = useRef(readInitialListState(activeSubBrand, searchParams));
   // G102: BrandKit lookup for primary-CTA tint.
   const { brandKit } = useBrandKit(activeSubBrand);
   const brandCtaColor = brandPrimaryColor(brandKit);
@@ -329,9 +373,11 @@ export default function CommissionProfilesAdmin() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [permissionDenied, setPermissionDenied] = useState(false);
+  const [sortKey, setSortKey] = useState(initialListStateRef.current.sortKey);
+  const [sortDirection, setSortDirection] = useState(initialListStateRef.current.sortDirection);
 
-  const [subBrandFilter, setSubBrandFilter] = useState("");
-  const [activeOnly, setActiveOnly] = useState(true);
+  const [subBrandFilter, setSubBrandFilter] = useState(initialListStateRef.current.subBrandFilter);
+  const [activeOnly, setActiveOnly] = useState(initialListStateRef.current.activeOnly);
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -367,7 +413,7 @@ export default function CommissionProfilesAdmin() {
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
-    if (subBrandFilter) qs.set("subBrand", subBrandFilter);
+    if (subBrandFilter && subBrandFilter !== "all") qs.set("subBrand", subBrandFilter);
     if (activeOnly) qs.set("isActive", "true");
     const url = `/api/travel/commission-profiles${qs.toString() ? `?${qs.toString()}` : ""}`;
     fetchApi(url)
@@ -387,10 +433,109 @@ export default function CommissionProfilesAdmin() {
   useEffect(load, [subBrandFilter, activeOnly]);
 
   useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    const nextSubBrand = subBrandFilter && subBrandFilter !== "all" ? subBrandFilter : "all";
+    const nextActiveOnly = activeOnly ? "true" : "false";
+    const nextSortKey = sortKey || null;
+    const nextSortDirection = sortDirection || null;
+
+    if (next.get("subBrand") !== nextSubBrand) next.set("subBrand", nextSubBrand);
+    if (next.get("activeOnly") !== nextActiveOnly) next.set("activeOnly", nextActiveOnly);
+    if (nextSortKey) next.set("sortKey", nextSortKey);
+    else next.delete("sortKey");
+    if (nextSortDirection) next.set("sortDirection", nextSortDirection);
+    else next.delete("sortDirection");
+
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [activeOnly, searchParams, setSearchParams, sortDirection, sortKey, subBrandFilter]);
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/commission-profiles") return;
+    try {
+      window.sessionStorage.setItem(LAST_LIST_URL_KEY, `${location.pathname}${location.search}`);
+    } catch {
+      // Ignore storage failures; the URL is still authoritative.
+    }
+  }, [location.pathname, location.search]);
+
+  // Mirror the sidebar's active sub-brand into the page filter so the list
+  // re-scopes when operators switch brands globally, but only when the URL
+  // does not already carry an explicit sub-brand choice.
+  useEffect(() => {
+    if (initialListStateRef.current.source === "stored") return;
+    if (!searchParams.has("subBrand")) setSubBrandFilter(activeSubBrand || "all");
+  }, [activeSubBrand, searchParams]);
+
+  useEffect(() => {
     fetchApi("/api/staff?fields=summary", { silent: true })
       .then((data) => setStaffOptions(Array.isArray(data) ? data : []))
       .catch(() => setStaffOptions([]));
   }, []);
+
+  const resetFilters = () => {
+    setSubBrandFilter(activeSubBrand || "all");
+    setActiveOnly(true);
+    setSortKey(null);
+    setSortDirection(null);
+  };
+
+  const sortedProfiles = useMemo(() => {
+    if (!sortKey || !sortDirection) return profiles;
+    const direction = sortDirection === "desc" ? -1 : 1;
+    return [...profiles].sort((left, right) => {
+      const leftValue = sortKey === "validity"
+        ? [
+          left?.validFrom ? new Date(left.validFrom).getTime() : Number.NEGATIVE_INFINITY,
+          left?.validTo ? new Date(left.validTo).getTime() : Number.POSITIVE_INFINITY,
+        ]
+        : String(left?.name || "").toLowerCase();
+      const rightValue = sortKey === "validity"
+        ? [
+          right?.validFrom ? new Date(right.validFrom).getTime() : Number.NEGATIVE_INFINITY,
+          right?.validTo ? new Date(right.validTo).getTime() : Number.POSITIVE_INFINITY,
+        ]
+        : String(right?.name || "").toLowerCase();
+
+      if (Array.isArray(leftValue) && Array.isArray(rightValue)) {
+        const [leftFrom, leftTo] = leftValue;
+        const [rightFrom, rightTo] = rightValue;
+        if (leftFrom !== rightFrom) return (leftFrom > rightFrom ? 1 : -1) * direction;
+        if (leftTo !== rightTo) return (leftTo > rightTo ? 1 : -1) * direction;
+        return String(left?.name || "").toLowerCase().localeCompare(String(right?.name || "").toLowerCase()) * direction;
+      }
+
+      return (leftValue > rightValue ? 1 : leftValue < rightValue ? -1 : 0) * direction;
+    });
+  }, [profiles, sortKey, sortDirection]);
+
+  const handleSort = (key) => {
+    const next = !sortKey || sortKey !== key ? "asc" : sortDirection === "asc" ? "desc" : null;
+    setSortKey(next ? key : null);
+    setSortDirection(next);
+  };
+
+  const sortHeaderButton = (label, key) => {
+    const active = sortKey === key;
+    const Icon = active
+      ? sortDirection === "asc" ? ChevronUp : ChevronDown
+      : ArrowUpDown;
+    return (
+      <button
+        type="button"
+        onClick={() => handleSort(key)}
+        aria-label={`Sort ${label}`}
+        style={{
+          ...sortButtonStyle,
+          ...(active ? sortButtonActiveStyle : null),
+        }}
+      >
+        <span>{label}</span>
+        <Icon size={14} aria-hidden />
+      </button>
+    );
+  };
 
   const staffNameById = new Map(
     staffOptions.map((member) => [
@@ -734,6 +879,8 @@ export default function CommissionProfilesAdmin() {
           />
           Active only
         </label>
+        <button type="button" onClick={() => load()} style={secondaryBtn}>Refresh</button>
+        <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
 
       {showForm && (
@@ -1398,18 +1545,18 @@ export default function CommissionProfilesAdmin() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                <th style={th}>Name</th>
+                <th style={th}>{sortHeaderButton("Name", "name")}</th>
                 <th style={th}>Type</th>
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Agent</th>
-                <th style={th}>Validity</th>
+                <th style={th}>{sortHeaderButton("Validity", "validity")}</th>
                 <th style={th}>Release</th>
                 <th style={th}>Status</th>
                 {canWrite && <th style={{ ...th, textAlign: "center" }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {profiles.map((p) => (
+              {sortedProfiles.map((p) => (
                 <tr
                   key={p.id}
                   data-testid={`commission-profile-row-${p.id}`}
@@ -1656,6 +1803,27 @@ const statusBadge = {
   borderRadius: 10,
   fontSize: 11,
   fontWeight: 600,
+};
+const sortButtonStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 6,
+  width: "100%",
+  padding: "4px 8px",
+  border: "none",
+  borderRadius: 999,
+  background: "transparent",
+  color: "inherit",
+  font: "inherit",
+  textTransform: "inherit",
+  letterSpacing: "inherit",
+  cursor: "pointer",
+  textAlign: "left",
+  transition: "background-color 0.15s ease, color 0.15s ease",
+};
+const sortButtonActiveStyle = {
+  color: "var(--primary-color)",
 };
 
 

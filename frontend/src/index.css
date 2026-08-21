@@ -60,6 +60,7 @@
   --card-shimmer: rgba(255, 255, 255, 0.03);
 
   --overlay-bg: rgba(0, 0, 0, 0.6);
+  --catalogue-modal-backdrop: rgba(6, 10, 18, 0.9);
   --subtle-bg: rgba(255, 255, 255, 0.05);
   --subtle-bg-2: rgba(255, 255, 255, 0.02);
   --subtle-bg-3: rgba(255, 255, 255, 0.1);
@@ -126,6 +127,7 @@
   --card-shimmer: rgba(0, 0, 0, 0.02);
 
   --overlay-bg: rgba(0, 0, 0, 0.4);
+  --catalogue-modal-backdrop: rgba(240, 242, 245, 0.96);
   --subtle-bg: rgba(0, 0, 0, 0.04);
   --subtle-bg-2: rgba(0, 0, 0, 0.02);
   --subtle-bg-3: rgba(0, 0, 0, 0.06);

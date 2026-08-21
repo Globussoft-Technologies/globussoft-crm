@@ -309,6 +309,29 @@ html[data-theme="dark"][data-vertical="travel"],
   color: #E0C088;
 }
 
+/* Diagnostics list polish.
+ * Keeps the current data behavior intact while giving the list a clearer
+ * interactive affordance and a slightly stronger tier badge treatment. */
+.diagnostics-row {
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.diagnostics-row:hover {
+  background: rgba(79, 70, 229, 0.035);
+}
+.diagnostics-table thead th {
+  vertical-align: middle;
+}
+.diagnostics-tier-badge {
+  min-width: 78px;
+  justify-content: center;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+}
+
+[data-theme="dark"][data-vertical="travel"] .diagnostics-row:hover,
+[data-theme="dark"] [data-vertical="travel"] .diagnostics-row:hover {
+  background: rgba(168, 181, 200, 0.08);
+}
+
 /* #871 — Inbox conversation-list bubbles + status pills + avatars (Phase 1
  * of dark-mode cluster refactor, mirror of #867 Diagnostics pattern). The
  * pre-refactor inline styles in Inbox.jsx used hardcoded RGBA hex pairs

@@ -494,7 +494,7 @@ export default function Expenses() {
             position: 'fixed',
             inset: 0,
             zIndex: 1000,
-            background: 'var(--overlay-bg, rgba(0,0,0,0.6))',
+            background: 'var(--catalogue-modal-backdrop)',
             backdropFilter: 'blur(4px)',
             WebkitBackdropFilter: 'blur(4px)',
             display: 'flex',

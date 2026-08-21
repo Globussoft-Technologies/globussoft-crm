@@ -1,8 +1,9 @@
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   BadgePercent, IndianRupee, Upload, Download, Filter, Plus,
   Pencil, Trash2, Check, X,
+  ChevronDown, ChevronUp, ArrowUpDown,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -45,6 +46,43 @@ const FLOOR_LABELS = { low: "Low floor", mid: "Mid floor", high: "High floor" };
 const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SAR"];
 const OTHER_OPTION = "__other__";
 const PAGE_SIZE = 200;
+const COST_MASTER_LAST_LIST_URL_KEY = "travel.costMaster.lastListUrl";
+const COST_SORT_KEYS = new Set(["subBrand", "category", "routeOrSku", "baseRate", "currency"]);
+
+function ymd(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (!Number.isFinite(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function addDaysYmd(value, days) {
+  if (!value) return "";
+  const d = new Date(`${value}T00:00:00`);
+  if (!Number.isFinite(d.getTime())) return "";
+  d.setDate(d.getDate() + days);
+  return ymd(d);
+}
+
+function openDatePicker(e) {
+  try {
+    e.currentTarget.showPicker?.();
+  } catch {
+    // Browsers without showPicker still open the native picker from its icon.
+  }
+}
+
+function preventDateTyping(e) {
+  if (e.key === "Tab") return;
+  e.preventDefault();
+  if (e.key === "Enter" || e.key === " ") openDatePicker(e);
+}
+
+const pickerOnlyProps = {
+  onClick: openDatePicker,
+  onKeyDown: preventDateTyping,
+  onPaste: (e) => e.preventDefault(),
+  onDrop: (e) => e.preventDefault(),
+};
 
 function AttributeChips({ attributes }) {
   const chips = [];
@@ -130,6 +168,7 @@ function EditRow({ rate, onSave, onCancel, saving, supplierOptions, seasonOption
       ? edit.seasonOtherName
       : normalizedSeasonChoice,
   };
+  const validToMin = edit.validFrom ? addDaysYmd(edit.validFrom, 1) : ymd();
 
   return (
     <tr style={{ background: "var(--subtle-bg, rgba(255,255,255,0.03))", borderBottom: "1px solid var(--border-color)" }}>
@@ -201,14 +240,18 @@ function EditRow({ rate, onSave, onCancel, saving, supplierOptions, seasonOption
             type="date"
             value={edit.validFrom}
             onChange={(e) => setEdit({ ...edit, validFrom: e.target.value })}
-            style={{ ...inlineInput, fontSize: 11 }}
+            {...pickerOnlyProps}
+            min={ymd()}
+            style={{ ...inlineInput, fontSize: 11, cursor: "pointer" }}
             aria-label="Edit valid from"
           />
           <input
             type="date"
             value={edit.validTo}
             onChange={(e) => setEdit({ ...edit, validTo: e.target.value })}
-            style={{ ...inlineInput, fontSize: 11 }}
+            {...pickerOnlyProps}
+            min={validToMin}
+            style={{ ...inlineInput, fontSize: 11, cursor: "pointer" }}
             aria-label="Edit valid to"
           />
           {edit.category === "hotel" ? (
@@ -249,6 +292,8 @@ function EditRow({ rate, onSave, onCancel, saving, supplierOptions, seasonOption
 
 export default function CostMaster() {
   const notify = useNotify();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
   const myBrands = accessibleSubBrands(user);
@@ -257,8 +302,14 @@ export default function CostMaster() {
   const [rates, setRates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [filterSubBrand, setFilterSubBrand] = useState("");
-  const [filterCategory, setFilterCategory] = useState("");
+  const [filterSubBrand, setFilterSubBrand] = useState(
+    searchParams.get("subBrand") === "all"
+      ? ""
+      : searchParams.get("subBrand") || activeSubBrand || "",
+  );
+  const [filterCategory, setFilterCategory] = useState(searchParams.get("category") || "");
+  const [sortKey, setSortKey] = useState(searchParams.get("sortKey") || null);
+  const [sortDirection, setSortDirection] = useState(searchParams.get("sortDirection") || null);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -292,6 +343,24 @@ export default function CostMaster() {
     roomCategory: "",
   });
 
+  const updateParams = (patch) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value === null || value === undefined || value === "") next.delete(key);
+      else next.set(key, String(value));
+    });
+    setSearchParams(next, { replace: true });
+  };
+
+  const sortedRates = useMemo(() => {
+    if (!sortKey || !sortDirection) return rates;
+    return [...rates].sort((a, b) => {
+      const left = sortKey === "baseRate" ? Number(a.baseRate || 0) : String(a[sortKey] || "").toLowerCase();
+      const right = sortKey === "baseRate" ? Number(b.baseRate || 0) : String(b[sortKey] || "").toLowerCase();
+      return (left > right ? 1 : left < right ? -1 : 0) * (sortDirection === "desc" ? -1 : 1);
+    });
+  }, [rates, sortDirection, sortKey]);
+
   useEffect(() => {
     ratesRef.current = rates;
   }, [rates]);
@@ -312,6 +381,15 @@ export default function CostMaster() {
     hasMoreRef.current = hasMore;
   }, [hasMore]);
 
+  useEffect(() => {
+    if (!searchParams.has("subBrand")) setFilterSubBrand(activeSubBrand || "");
+  }, [activeSubBrand, searchParams]);
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/cost-master") return;
+    try { window.sessionStorage.setItem(COST_MASTER_LAST_LIST_URL_KEY, `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
+
   const load = useCallback(async ({ reset = false } = {}) => {
     const startOffset = reset ? 0 : offsetRef.current;
     if (reset) {
@@ -328,7 +406,7 @@ export default function CostMaster() {
       setLoadingMore(true);
     }
     const qs = new URLSearchParams();
-    if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     if (filterCategory) qs.set("category", filterCategory);
     qs.set("limit", String(PAGE_SIZE));
     qs.set("offset", String(startOffset));
@@ -374,11 +452,29 @@ export default function CostMaster() {
     loadLookupData();
   }, [loadLookupData]);
 
+  const validateRateDates = ({ validFrom, validTo }) => {
+    const today = ymd();
+    if (validFrom && validFrom < today) {
+      notify.error("Valid from must be today or later");
+      return false;
+    }
+    if (validTo && validTo < today) {
+      notify.error("Valid to must be today or later");
+      return false;
+    }
+    if (validFrom && validTo && validTo <= validFrom) {
+      notify.error("Valid to must be after valid from");
+      return false;
+    }
+    return true;
+  };
+
   const add = async () => {
     if (!form.routeOrSku.trim() || !form.baseRate) {
       notify.error("routeOrSku and baseRate required");
       return;
     }
+    if (!validateRateDates(form)) return;
     try {
       const {
         view, floorLevel, roomCategory,
@@ -434,6 +530,7 @@ export default function CostMaster() {
       notify.error("Route/SKU and base rate are required");
       return;
     }
+    if (!validateRateDates(editFields)) return;
     setSaving(true);
     try {
       const body = {
@@ -528,7 +625,7 @@ export default function CostMaster() {
   const exportCsv = async () => {
     try {
       const qs = new URLSearchParams();
-      if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+      if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
       if (filterCategory) qs.set("category", filterCategory);
       const res = await fetch(`/api/travel/cost-master/export.csv?${qs.toString()}`, {
         headers: { Authorization: `Bearer ${getAuthToken()}` },
@@ -577,6 +674,27 @@ export default function CostMaster() {
       load({ reset: false });
     }
   }, [load]);
+
+  const toggleSort = (key) => {
+    const nextDirection = sortKey !== key ? "asc" : sortDirection === "asc" ? "desc" : null;
+    setSortKey(nextDirection ? key : null);
+    setSortDirection(nextDirection);
+    updateParams({ sortKey: nextDirection ? key : null, sortDirection: nextDirection });
+  };
+
+  const resetFilters = () => {
+    setFilterSubBrand(activeSubBrand || "");
+    setFilterCategory("");
+    setSortKey(null);
+    setSortDirection(null);
+    updateParams({ subBrand: activeSubBrand || null, category: null, sortKey: null, sortDirection: null });
+  };
+
+  const sortButton = (key, label) => {
+    const active = sortKey === key;
+    const Icon = active && sortDirection === "asc" ? ChevronUp : active && sortDirection === "desc" ? ChevronDown : ArrowUpDown;
+    return <button type="button" onClick={() => toggleSort(key)} aria-label={`Sort ${label}`} style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}><span>{label}</span><Icon size={14} /></button>;
+  };
 
   // All sub-brands for the filter dropdown (not scoped to user access — filter
   // should show what's IN the table, not what the user can create).
@@ -645,12 +763,14 @@ export default function CostMaster() {
       {/* Filters */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", background: "var(--surface-color)", padding: 16, borderRadius: 12, border: "1px solid var(--border-color)", marginBottom: 20 }}>
         <Filter size={15} aria-hidden style={{ color: "var(--text-secondary)" }} />
-        <select value={filterSubBrand} onChange={(e) => setFilterSubBrand(e.target.value)} style={selectStyle} aria-label="Sub-brand">
+        <select value={filterSubBrand} onChange={(e) => { setFilterSubBrand(e.target.value); updateParams({ subBrand: e.target.value || "all" }); }} style={selectStyle} aria-label="Sub-brand">
           {ALL_SUBBRAND_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} style={selectStyle} aria-label="Category">
+        <select value={filterCategory} onChange={(e) => { setFilterCategory(e.target.value); updateParams({ category: e.target.value }); }} style={selectStyle} aria-label="Category">
           {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
         </select>
+        <button type="button" onClick={() => load({ reset: true })} style={secondaryBtn}>Refresh</button>
+        <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
 
       {/* Add form */}
@@ -750,13 +870,13 @@ export default function CostMaster() {
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <label style={fieldLabel}>Valid from</label>
               <div style={fieldHint}>Optional. Use this when the rate should start on a specific date.</div>
-              <input type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} style={input} />
+              <input type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} {...pickerOnlyProps} min={ymd()} style={{ ...input, cursor: "pointer" }} aria-label="Valid from" />
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <label style={fieldLabel}>Valid to</label>
               <div style={fieldHint}>Optional. Leave blank if the rate does not have an end date yet.</div>
-              <input type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} style={input} />
+              <input type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} {...pickerOnlyProps} min={form.validFrom ? addDaysYmd(form.validFrom, 1) : ymd()} style={{ ...input, cursor: "pointer" }} aria-label="Valid to" />
             </div>
 
             {form.category === "hotel" && (
@@ -818,18 +938,18 @@ export default function CostMaster() {
             </colgroup>
             <thead>
               <tr>
-                <th style={th}>Sub-brand</th>
-                <th style={th}>Category</th>
-                <th style={th}>Route / SKU</th>
-                <th style={th}>Base rate</th>
-                <th style={th}>Currency</th>
+                <th style={th}>{sortButton("subBrand", "Sub-brand")}</th>
+                <th style={th}>{sortButton("category", "Category")}</th>
+                <th style={th}>{sortButton("routeOrSku", "Route / SKU")}</th>
+                <th style={th}>{sortButton("baseRate", "Base rate")}</th>
+                <th style={th}>{sortButton("currency", "Currency")}</th>
                 <th style={th}>Attributes</th>
                 <th style={th}>Active</th>
                 <th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {rates.map((r) =>
+              {sortedRates.map((r) =>
                 editingId === r.id ? (
                   <EditRow key={r.id} rate={r} saving={saving}
                     supplierOptions={suppliers}
@@ -919,6 +1039,8 @@ const input = { padding: "8px 10px", borderRadius: 8, border: "1px solid var(--b
 const inlineInput = { padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--bg-color)", color: "var(--text-primary)", fontSize: 13, width: "100%" };
 const emptyStyle = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const th = { position: "sticky", top: 0, background: "var(--modal-bg, var(--bg-color))", zIndex: 3, textAlign: "left", padding: "14px 16px", fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)", boxShadow: "inset 0 -1px 0 var(--border-color)", fontWeight: 600, whiteSpace: "nowrap" };
+const sortButtonStyle = { display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6, width: "100%", padding: "4px 8px", border: "none", borderRadius: 999, background: "transparent", color: "inherit", font: "inherit", textTransform: "inherit", letterSpacing: "inherit", cursor: "pointer", textAlign: "left", transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease" };
+const sortButtonActiveStyle = { color: "var(--primary-color)" };
 const td = { padding: "14px 16px", fontSize: 13.5, color: "var(--text-primary)", verticalAlign: "middle" };
 const brandBadge = { display: "inline-block", padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--subtle-bg-3, rgba(91,110,248,0.15))", color: "var(--primary-color, #5b6ef8)", textTransform: "uppercase", letterSpacing: 0.5 };
 const attrChip = { padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "var(--subtle-bg)", color: "var(--text-secondary)", border: "1px solid var(--border-color)", whiteSpace: "nowrap" };

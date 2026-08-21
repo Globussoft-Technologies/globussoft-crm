@@ -19,6 +19,19 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
+const TRIPS_LAST_LIST_URL_KEY = "travel.trips.lastListUrl";
+
+function getTripsListUrl() {
+  try {
+    const savedUrl = window.sessionStorage.getItem(TRIPS_LAST_LIST_URL_KEY);
+    return savedUrl && savedUrl.startsWith("/travel/trips")
+      ? savedUrl
+      : "/travel/trips";
+  } catch {
+    return "/travel/trips";
+  }
+}
+
 const TABS = [
   { key: "overview", label: "Overview", icon: Luggage },
   // Per decision #7, Participants is the SINGLE home for both
@@ -90,11 +103,12 @@ export default function TripDetail() {
   const notify = useNotify();
   const requestedTab = location.state?.tab || new URLSearchParams(location.search).get("tab") || "overview";
   const [tab, setTab] = useState(() => requestedTab);
+  const [savedListUrl] = useState(getTripsListUrl);
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
   const hasLoadedRef = useRef(false);
-  const backTo = location.state?.backTo || "/travel/trips";
-  const backLabel = location.state?.backLabel || "Trips";
+  const backTo = location.state?.backTo || savedListUrl;
+  const backLabel = location.state?.backLabel || "Back to trips";
 
   const load = useCallback(() => {
     // Keep the current trip visible on refreshes so tab-local state

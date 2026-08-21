@@ -253,6 +253,8 @@ beforeEach(() => {
   // overrides return [] for /api/pages/me — which is fine since those
   // tests don't depend on the catalog.
   currentAccessiblePages = [];
+  window.sessionStorage.removeItem('travel.itineraries.lastListUrl');
+  window.sessionStorage.removeItem('travel.diagnostics.lastListUrl');
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (url === '/api/pages/me') {
@@ -263,6 +265,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.sessionStorage.removeItem('travel.itineraries.lastListUrl');
+  window.sessionStorage.removeItem('travel.diagnostics.lastListUrl');
   consoleErrorSpy?.mockRestore();
 });
 
@@ -1021,6 +1025,30 @@ describe('Sidebar — load-bearing render surface', () => {
   });
 
   describe('Travel vertical — admin / manager gated entries', () => {
+    it('restores the last saved Itineraries URL from the sidebar link', () => {
+      window.sessionStorage.setItem(
+        'travel.itineraries.lastListUrl',
+        '/travel/itineraries?subBrand=rfu&status=sent&search=Mecca&sortKey=items&sortDirection=desc&page=2&pageSize=10',
+      );
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', path: '/travel/diagnostics' });
+      const link = screen.getByText('Itineraries').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe(
+        '/travel/itineraries?subBrand=rfu&status=sent&search=Mecca&sortKey=items&sortDirection=desc&page=2&pageSize=10',
+      );
+    });
+    it('restores the last saved Diagnostics URL from the sidebar link', () => {
+      window.sessionStorage.setItem(
+        'travel.diagnostics.lastListUrl',
+        '/travel/diagnostics?page=1&classification=level_2&subBrand=rfu&fromDate=2026-08-01&toDate=2026-08-31',
+      );
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', path: '/travel/itineraries' });
+      const link = screen.getByText('Diagnostics').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe(
+        '/travel/diagnostics?page=1&classification=level_2&subBrand=rfu&fromDate=2026-08-01&toDate=2026-08-31',
+      );
+    });
     it('renders Visa Sure cluster (Applications / Checklists / Embassy Rules) for ADMIN only', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN' });
       expect(screen.getByText('Applications')).toBeTruthy();

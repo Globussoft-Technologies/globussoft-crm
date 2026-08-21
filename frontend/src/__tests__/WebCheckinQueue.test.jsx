@@ -219,19 +219,20 @@ describe('WebCheckinQueue â€” operator queue (PRD Â§4.6)', () => {
     });
   });
 
-  it('status filter changes the fetch URL', async () => {
+  it('status filter supports multiple selections in the fetch URL', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
     await screen.findByText('ABC123');
 
-    const filterSelect = screen.getByLabelText(/Filter by status/i);
-    fireEvent.change(filterSelect, { target: { value: 'done' } });
+    fireEvent.click(screen.getByLabelText(/^Filter by status$/i));
+    fireEvent.click(screen.getByLabelText(/Filter status Pending/i));
+    fireEvent.click(screen.getByLabelText(/Filter status Done/i));
 
     await waitFor(() => {
-      const doneCall = fetchApiMock.mock.calls.find(
-        ([u]) => typeof u === 'string' && u.includes('status=done'),
+      const multiStatusCall = fetchApiMock.mock.calls.find(
+        ([u]) => typeof u === 'string' && u.includes('status=pending%2Cdone'),
       );
-      expect(doneCall).toBeTruthy();
+      expect(multiStatusCall).toBeTruthy();
     });
   });
 

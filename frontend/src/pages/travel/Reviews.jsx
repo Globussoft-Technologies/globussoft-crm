@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { useActiveSubBrand } from "../../utils/subBrand";
 
 const PRIMARY = "var(--primary-color, var(--accent-color, #122647))";
 
@@ -63,6 +64,15 @@ const RATING_OPTIONS = [
   { value: "1", label: "1+ stars" },
 ];
 
+const EXACT_RATING_OPTIONS = [
+  { value: "", label: "Any exact rating" },
+  { value: "5", label: "Exactly 5 stars" },
+  { value: "4", label: "Exactly 4 stars" },
+  { value: "3", label: "Exactly 3 stars" },
+  { value: "2", label: "Exactly 2 stars" },
+  { value: "1", label: "Exactly 1 star" },
+];
+
 const SORT_OPTIONS = [
   { value: "newest", label: "Newest first" },
   { value: "oldest", label: "Oldest first" },
@@ -91,7 +101,6 @@ function Stars({ value, size = 16 }) {
 }
 
 const fmtDateTime = (d) => (d ? new Date(d).toLocaleString() : "—");
-
 // Theme-safe surface — uses the travel theme's --surface-color / --text-* so it
 // reads correctly in BOTH light and dark mode.
 const card = {
@@ -113,6 +122,7 @@ function readIntParam(params, key, fallback) {
 
 export default function Reviews() {
   const notify = useNotify();
+  const { activeSubBrand } = useActiveSubBrand();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [reviews, setReviews] = useState([]);
@@ -120,8 +130,12 @@ export default function Reviews() {
   const [pageSizeMenuOpen, setPageSizeMenuOpen] = useState(false);
 
   const search = searchParams.get("search") || "";
-  const subBrand = searchParams.get("subBrand") || "";
+  const requestedSubBrand = searchParams.get("subBrand");
+  const subBrand = requestedSubBrand === "all"
+    ? ""
+    : requestedSubBrand || activeSubBrand || "";
   const minRating = searchParams.get("minRating") || "";
+  const rating = searchParams.get("rating") || "";
   const sort = searchParams.get("sort") || "newest";
   const page = Math.max(1, readIntParam(searchParams, "page", 1));
   const pageSize = Math.min(200, Math.max(1, readIntParam(searchParams, "pageSize", DEFAULT_PAGE_SIZE)));
@@ -166,6 +180,9 @@ export default function Reviews() {
       const min = Number(minRating);
       out = out.filter((r) => (r.overallRating || 0) >= min);
     }
+    if (rating) {
+      out = out.filter((r) => Number(r.overallRating) === Number(rating));
+    }
     out = [...out].sort((a, b) => {
       if (sort === "newest") return new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0);
       if (sort === "oldest") return new Date(a.submittedAt || 0) - new Date(b.submittedAt || 0);
@@ -174,7 +191,7 @@ export default function Reviews() {
       return 0;
     });
     return out;
-  }, [reviews, search, subBrand, minRating, sort]);
+  }, [reviews, search, subBrand, minRating, rating, sort]);
 
   const total = filtered.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -193,13 +210,13 @@ export default function Reviews() {
   const rated = reviews.filter((r) => typeof r.overallRating === "number");
   const avg = rated.length ? (rated.reduce((s, r) => s + r.overallRating, 0) / rated.length) : 0;
 
-  const hasFilters = search || subBrand || minRating || sort !== "newest";
+  const hasFilters = search || subBrand || minRating || rating || sort !== "newest";
 
   const setPage = (nextPage) => updateParams({ page: nextPage });
   const setPageSizeAndReset = (next) => updateParams({ pageSize: next, page: 1 });
 
   const clearFilters = () => {
-    updateParams({ search: "", subBrand: "", minRating: "", sort: "", page: "", pageSize: "" });
+    updateParams({ search: "", subBrand: activeSubBrand || "", minRating: "", rating: "", sort: "", page: "", pageSize: "" });
   };
 
   return (
@@ -287,7 +304,7 @@ export default function Reviews() {
 
         <select
           value={subBrand}
-          onChange={(e) => updateParams({ subBrand: e.target.value, page: 1 })}
+          onChange={(e) => updateParams({ subBrand: e.target.value || "all", page: 1 })}
           aria-label="Filter by sub-brand"
           style={selectStyle}
         >
@@ -307,6 +324,19 @@ export default function Reviews() {
           {RATING_OPTIONS.map((r) => (
             <option key={r.value} value={r.value}>
               {r.label}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={rating}
+          onChange={(e) => updateParams({ rating: e.target.value, page: 1 })}
+          aria-label="Filter reviews by star rating"
+          style={selectStyle}
+        >
+          {EXACT_RATING_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
@@ -348,7 +378,6 @@ export default function Reviews() {
       </div>
 
       {loading && <p style={{ color: "var(--text-secondary)" }}>Loading…</p>}
-
       {!loading && pageReviews.length === 0 && (
         <div style={{ ...card, textAlign: "center", color: "var(--text-secondary)" }}>
           {hasFilters

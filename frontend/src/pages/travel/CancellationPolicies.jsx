@@ -43,7 +43,8 @@
 // "first tier whose threshold is <= actual days-before-start" walk.
 
 import { useEffect, useMemo, useState, useContext } from "react";
-import { ShieldOff, Plus, Pencil, Trash2, X } from "lucide-react";
+import { useLocation, useSearchParams } from "react-router-dom";
+import { ShieldOff, Plus, Pencil, Trash2, X, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
@@ -58,7 +59,7 @@ import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
-  { value: "", label: "All sub-brands" },
+  { value: "all", label: "All sub-brands" },
   { value: "_tenant", label: "Tenant-wide (no sub-brand)" },
   { value: "tmc", label: "TMC (schools)" },
   { value: "rfu", label: "RFU (Umrah)" },
@@ -71,6 +72,9 @@ const ACTIVE_FILTER = [
   { value: "true", label: "Active only" },
   { value: "false", label: "Inactive only" },
 ];
+
+const CANCELLATION_SORT_KEYS = ["name", "trip", "tiers", "updated"];
+const LAST_LIST_URL_KEY = "travel.cancellationPolicies.lastListUrl";
 
 // Default tier ladder for a new policy — matches the TMC Default seed in
 // prisma/seed-travel.js so operators creating a new policy see a sensible
@@ -219,8 +223,10 @@ export function renderTierPreview(tiers) {
 
 export default function CancellationPolicies() {
   const notify = useNotify();
+  const location = useLocation();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
+  const [searchParams, setSearchParams] = useSearchParams();
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
   // Per backend posture: DELETE is ADMIN-only (verifyRole(["ADMIN"])).
   const canDelete = user?.role === "ADMIN";
@@ -234,8 +240,47 @@ export default function CancellationPolicies() {
   const [loading, setLoading] = useState(true);
   const [permissionDenied, setPermissionDenied] = useState(false);
 
-  const [subBrand, setSubBrand] = useState("");
-  const [activeFilter, setActiveFilter] = useState("true");
+  const [subBrand, setSubBrand] = useState(searchParams.get("subBrand") || activeSubBrand || "");
+  const [activeFilter, setActiveFilter] = useState(searchParams.get("active") || "true");
+  const initialSortKey = CANCELLATION_SORT_KEYS.includes(searchParams.get("sortKey")) ? searchParams.get("sortKey") : null;
+  const [sortKey, setSortKey] = useState(initialSortKey);
+  const [sortDirection, setSortDirection] = useState(
+    initialSortKey ? (searchParams.get("sortDirection") === "desc" ? "desc" : "asc") : null,
+  );
+
+  const handleSort = (key) => {
+    const next = new URLSearchParams(searchParams);
+    if (sortKey !== key) {
+      setSortKey(key); setSortDirection("asc"); next.set("sortKey", key); next.set("sortDirection", "asc");
+    } else if (sortDirection === "asc") {
+      setSortDirection("desc"); next.set("sortDirection", "desc");
+    } else {
+      setSortKey(null); setSortDirection(null); next.delete("sortKey"); next.delete("sortDirection");
+    }
+    setSearchParams(next, { replace: true });
+  };
+
+  const sortHeader = (label, key) => {
+    const active = sortKey === key;
+    const Icon = active ? (sortDirection === "asc" ? ChevronUp : ChevronDown) : ArrowUpDown;
+    return (
+      <button type="button" onClick={() => handleSort(key)}
+        aria-label={`Sort ${label} ${!active ? "default" : sortDirection === "desc" ? "descending" : "ascending"}`}
+        style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}>
+        <span>{label}</span><Icon size={14} aria-hidden />
+      </button>
+    );
+  };
+
+  const resetFilters = () => {
+    setSubBrand(activeSubBrand || "");
+    setActiveFilter("true");
+    setSortKey(null);
+    setSortDirection(null);
+    const next = new URLSearchParams(searchParams);
+    ["subBrand", "active", "sortKey", "sortDirection"].forEach((key) => next.delete(key));
+    setSearchParams(next, { replace: true });
+  };
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -249,7 +294,7 @@ export default function CancellationPolicies() {
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
-    if (subBrand) qs.set("subBrand", subBrand);
+    if (subBrand && subBrand !== "all") qs.set("subBrand", subBrand);
     if (activeFilter) qs.set("active", activeFilter);
     const url = `/api/travel/cancellation-policies${qs.toString() ? `?${qs.toString()}` : ""}`;
     fetchApi(url)
@@ -270,9 +315,28 @@ export default function CancellationPolicies() {
   useEffect(load, [subBrand, activeFilter]);
 
   useEffect(() => {
+    if (!searchParams.get("subBrand")) setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand, searchParams]);
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/cancellation-policies") return;
+    try { window.sessionStorage.setItem(LAST_LIST_URL_KEY, `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
+
+  const sortedPolicies = [...policies].sort((left, right) => {
+    if (!sortKey) return 0;
+    const leftValue = sortKey === "trip" ? formatItineraryLabel(left.itinerary) : sortKey === "tiers" ? (parseTiers(left.tiersJson) || []).length : sortKey === "updated" ? (left.updatedAt || left.createdAt || "") : left[sortKey];
+    const rightValue = sortKey === "trip" ? formatItineraryLabel(right.itinerary) : sortKey === "tiers" ? (parseTiers(right.tiersJson) || []).length : sortKey === "updated" ? (right.updatedAt || right.createdAt || "") : right[sortKey];
+    const result = typeof leftValue === "number" && typeof rightValue === "number"
+      ? leftValue - rightValue
+      : String(leftValue ?? "").localeCompare(String(rightValue ?? ""), undefined, { numeric: true, sensitivity: "base" });
+    return sortDirection === "desc" ? -result : result;
+  });
+
+  useEffect(() => {
     let cancelled = false;
 
-    const effectiveTripBrand = editingId ? form.subBrand : (policyScope === "tenant" ? form.subBrand : (form.subBrand || subBrand));
+    const effectiveTripBrand = editingId ? form.subBrand : (policyScope === "tenant" ? form.subBrand : (form.subBrand && subBrand !== "all" ? form.subBrand : ""));
 
     const loadTrips = async () => {
       if (!showForm || !effectiveTripBrand) {
@@ -316,14 +380,14 @@ export default function CancellationPolicies() {
     setForm({
       ...EMPTY_FORM,
       tiers: DEFAULT_TIERS.map((t) => ({ ...t })),
-      subBrand: mode === "tenant" ? "" : (subBrand || defaultSubBrandFor(user, activeSubBrand) || "tmc"),
+      subBrand: mode === "tenant" ? "" : (subBrand && subBrand !== "all" ? subBrand : defaultSubBrandFor(user, activeSubBrand) || "tmc"),
       itineraryId: "",
     });
     setShowForm(true);
   };
 
   useEffect(() => {
-    if (!showForm || editingId || !subBrand) return;
+    if (!showForm || editingId || !subBrand || subBrand === "all") return;
     setForm((current) => {
       if (current.subBrand === subBrand) return current;
       return { ...current, subBrand, itineraryId: "" };
@@ -538,7 +602,7 @@ export default function CancellationPolicies() {
       >
         <select
           value={subBrand}
-          onChange={(e) => setSubBrand(e.target.value)}
+          onChange={(e) => { const value = e.target.value; setSubBrand(value); const next = new URLSearchParams(searchParams); if (value) next.set("subBrand", value); else next.delete("subBrand"); setSearchParams(next, { replace: true }); }}
           style={selectStyle}
           aria-label="Filter by sub-brand"
         >
@@ -550,7 +614,7 @@ export default function CancellationPolicies() {
         </select>
         <select
           value={activeFilter}
-          onChange={(e) => setActiveFilter(e.target.value)}
+          onChange={(e) => { const value = e.target.value; setActiveFilter(value); const next = new URLSearchParams(searchParams); if (value) next.set("active", value); else next.delete("active"); setSearchParams(next, { replace: true }); }}
           style={selectStyle}
           aria-label="Filter by active status"
         >
@@ -560,6 +624,8 @@ export default function CancellationPolicies() {
             </option>
           ))}
         </select>
+        <button type="button" onClick={load} style={secondaryBtn}>Refresh</button>
+        <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
 
       {showForm && (
@@ -807,18 +873,18 @@ export default function CancellationPolicies() {
                 <tr
                   style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
                 >
-                  <th style={th}>Name</th>
+                  <th style={th}>{sortHeader("Name", "name")}</th>
                   <th style={th}>Sub-brand</th>
-                  <th style={th}>Trip</th>
-                  <th style={th}>Tiers</th>
+                  <th style={th}>{sortHeader("Trip", "trip")}</th>
+                  <th style={th}>{sortHeader("Tiers", "tiers")}</th>
                   <th style={th}>Preview</th>
                   <th style={th}>Active</th>
-                  <th style={th}>Updated</th>
+                  <th style={th}>{sortHeader("Updated", "updated")}</th>
                   {canWrite && <th style={th}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
-                {policies.map((p) => {
+                {sortedPolicies.map((p) => {
                   const parsed = parseTiers(p.tiersJson);
                   const tierCount = parsed ? parsed.length : "—";
                   const preview = parsed ? renderTierPreview(parsed) : "—";
@@ -971,6 +1037,13 @@ const th = {
   background: "var(--subtle-bg)",
   fontWeight: 600,
 };
+const sortButtonStyle = {
+  display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6,
+  width: "100%", padding: "4px 8px", border: "none", borderRadius: 999,
+  background: "transparent", color: "inherit", font: "inherit", textTransform: "inherit",
+  letterSpacing: "inherit", cursor: "pointer", textAlign: "left",
+};
+const sortButtonActiveStyle = { color: "var(--primary-color)", background: "var(--accent-bg)" };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const empty = {
   padding: 32,

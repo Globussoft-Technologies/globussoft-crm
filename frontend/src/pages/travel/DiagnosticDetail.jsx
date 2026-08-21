@@ -66,6 +66,19 @@ const SUB_BRAND_LABEL = {
   visasure: "Visa Sure",
 };
 
+const DIAGNOSTICS_LAST_LIST_URL_KEY = "travel.diagnostics.lastListUrl";
+
+function getDiagnosticsListUrl() {
+  try {
+    const savedUrl = window.sessionStorage.getItem(DIAGNOSTICS_LAST_LIST_URL_KEY);
+    return savedUrl && savedUrl.startsWith("/travel/diagnostics")
+      ? savedUrl
+      : "/travel/diagnostics";
+  } catch {
+    return "/travel/diagnostics";
+  }
+}
+
 const CLASS_COLORS = {
   match: { bg: "rgba(47, 122, 77, 0.14)", color: "#2F7A4D", border: "#2F7A4D" },
   review: { bg: "rgba(200, 154, 78, 0.18)", color: "#9A6F2E", border: "#9A6F2E" },
@@ -206,6 +219,7 @@ function getDiagnosticPdfFilename(url, fallback = "diagnostic-report.pdf") {
 
 export default function DiagnosticDetail() {
   const { id } = useParams();
+  const [diagnosticsListUrl] = useState(getDiagnosticsListUrl);
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const canRegen = user?.role === "ADMIN" || user?.role === "MANAGER";
@@ -535,7 +549,7 @@ export default function DiagnosticDetail() {
   if (loading) {
     return (
       <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-        <Link to="/travel/diagnostics" style={backLink}>
+        <Link to={diagnosticsListUrl} style={backLink}>
           <ChevronLeft size={16} aria-hidden /> Back to diagnostics
         </Link>
         <p style={{ color: "var(--text-secondary)" }}>Loading&hellip;</p>
@@ -548,7 +562,7 @@ export default function DiagnosticDetail() {
     const isForbidden = loadError.status === 403 || loadError.code === "SUB_BRAND_DENIED";
     return (
       <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-        <Link to="/travel/diagnostics" style={backLink}>
+        <Link to={diagnosticsListUrl} style={backLink}>
           <ChevronLeft size={16} aria-hidden /> Back to diagnostics
         </Link>
         <div style={errorBox} role="alert">
@@ -590,7 +604,7 @@ export default function DiagnosticDetail() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-      <Link to="/travel/diagnostics" style={backLink}>
+      <Link to={diagnosticsListUrl} style={backLink}>
         <ChevronLeft size={16} aria-hidden /> Back to diagnostics
       </Link>
 

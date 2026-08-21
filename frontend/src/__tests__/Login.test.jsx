@@ -32,7 +32,9 @@
  *   5. Travel tenant login redirects to /travel for
  *      tenant.vertical='travel'.
  *   6. Failed login (non-2xx) surfaces the server's `error` string in
- *      the red banner; setUser is NOT called.
+ *      the red banner; 401 may fall back to the customer portal, but
+ *      429 and other errors stay on the staff login path; setUser is
+ *      NOT called.
  *   7. Server-error (fetch rejection) surfaces the "Server error.
  *      Ensure backend is running." copy.
  *   8. Missing email or password surfaces "Please fill out all
@@ -292,6 +294,37 @@ describe('<Login /> — page surface', () => {
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
 
     expect(await screen.findByText(/Invalid credentials/i)).toBeInTheDocument();
+    expect(setUserMock).not.toHaveBeenCalled();
+    expect(setTokenMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('429 login responses surface the rate-limit error without attempting portal fallback', async () => {
+    localStorage.clear();
+    global.fetch.mockImplementation((url) => {
+      if (url === '/api/auth/login') {
+        return fetchResponse(
+          { error: 'Too many login attempts for this account, please try again later.' },
+          429,
+        );
+      }
+      if (url === '/api/portal/login') {
+        return fetchResponse({
+          token: 'portal-jwt',
+          contact: { id: 65, name: 'Ahmed Khan', email: 'ahmed.pilgrim@demo.test' },
+        });
+      }
+      return fetchResponse({}, 404);
+    });
+    renderLogin();
+
+    fillCredentials('rishu@enhancedwellness.in');
+    fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
+
+    expect(
+      await screen.findByText(/Too many login attempts for this account, please try again later\./i),
+    ).toBeInTheDocument();
+    expect(global.fetch.mock.calls.some(([u]) => u === '/api/portal/login')).toBe(false);
     expect(setUserMock).not.toHaveBeenCalled();
     expect(setTokenMock).not.toHaveBeenCalled();
     expect(navigateMock).not.toHaveBeenCalled();

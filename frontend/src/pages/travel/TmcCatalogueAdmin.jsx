@@ -30,7 +30,7 @@
 // isAdmin gates so non-write users see read-only chrome (no Create /
 // Edit / Delete / Promote buttons) but still browse the catalogue.
 
-import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   Edit2,
   Plus,
@@ -40,7 +40,9 @@ import {
   X,
   Calendar,
   Settings,
-  Download,
+  FileDown,
+  FileSpreadsheet,
+  Import,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -152,6 +154,7 @@ export default function TmcCatalogueAdmin() {
   const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
   const [pendingReviewTripIds, setPendingReviewTripIds] = useState(() => new Set());
   const listContainerRef = useRef(null);
+  const formRef = useRef(null);
   const requestSeqRef = useRef(0);
   const bulkFileInputRef = useRef(null);
   const rowsRef = useRef([]);
@@ -285,6 +288,14 @@ export default function TmcCatalogueAdmin() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setShowForm(true);
+    if (tab !== STATUS_ACTIVE) {
+      setTab(STATUS_ACTIVE);
+    }
+    // Scroll to the form once it has rendered so the user can see where
+    // the new entry is being added.
+    setTimeout(() => {
+      formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   };
 
   const handleEdit = (row) => {
@@ -621,13 +632,13 @@ export default function TmcCatalogueAdmin() {
               maxWidth: 720,
             }}
           >
-            Manage the TMC diagnostic engine's recommendation set. New rows land
+            Manage the TMC diagnostic engine&apos;s recommendation set. New rows land
             in <strong>Archived</strong> per the human-verify gate; an ADMIN{" "}
-            <em>Promote to active</em> flips a reviewed row into the engine's
+            <em>Promote to active</em> flips a reviewed row into the engine&apos;s
             matching pool.
           </p>
         </div>
-        {canWrite && !showForm && (
+        {canWrite && (tab !== STATUS_ACTIVE || !showForm) && (
           <button
             type="button"
             onClick={handleAdd}
@@ -643,7 +654,9 @@ export default function TmcCatalogueAdmin() {
           booking-link URL). Renders only when the operator can write
           (ADMIN+MANAGER for the standing-facts override; ADMIN-only for
           the booking-link save per backend gate). */}
+      {/* TMC configuration panel hidden per UI cleanup request.
       {canWrite && <TmcConfigPanel notify={notify} isAdmin={isAdmin} />}
+      */}
 
       {canWrite && (
         <section
@@ -675,21 +688,21 @@ export default function TmcCatalogueAdmin() {
               onClick={() => downloadTemplate("csv")}
               style={secondaryBtn}
             >
-              Download CSV template
+              <FileDown size={14} aria-hidden /> Download CSV template
             </button>
             <button
               type="button"
               onClick={() => downloadTemplate("xlsx")}
               style={secondaryBtn}
             >
-              Download XLSX template
+              <FileSpreadsheet size={14} aria-hidden /> Download XLSX template
             </button>
             <button
               type="button"
               onClick={openBulkImportModal}
               style={secondaryBtn}
             >
-              <Download size={14} /> Import file
+              <Import size={14} aria-hidden /> Import file
             </button>
           </div>
 
@@ -852,9 +865,11 @@ export default function TmcCatalogueAdmin() {
         </button>
       </div>
 
-      {/* Create / edit form */}
-      {showForm && (
+      {/* Create / edit form — only shown inside the Active tab so it does
+          not appear under Archived as well. */}
+      {showForm && tab === STATUS_ACTIVE && (
         <form
+          ref={formRef}
           onSubmit={handleSubmit}
           style={{
             background: "var(--bg-color, #111318)",
@@ -1435,6 +1450,8 @@ function plainTextToFactsJson(text) {
   return trimmed ? JSON.stringify({ plainText: trimmed }) : null;
 }
 
+// Component kept in source but currently hidden from the UI below.
+// eslint-disable-next-line no-unused-vars
 function TmcConfigPanel({ notify, isAdmin }) {
   const [collapsed, setCollapsed] = useState(true);
   // G105

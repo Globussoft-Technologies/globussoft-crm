@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Diagnostic Form</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:#f8fafc;color:#0f172a;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    body{overflow:hidden}
+    #frame{display:block;width:100vw;height:100vh;border:0;background:#fff}
+    #status{position:fixed;inset:0;display:grid;place-items:center;padding:24px;background:#f8fafc;color:#0f172a;text-align:center}
+    #status.hidden{display:none}
+    .panel{width:min(100%,560px);border:1px solid rgba(148,163,184,.28);border-radius:18px;background:#fff;padding:24px;box-shadow:0 20px 60px rgba(15,23,42,.1)}
+    .title{margin:0 0 8px;font-size:20px;line-height:1.25;font-weight:800}
+    .text{margin:0;color:#475569;font-size:14px;line-height:1.6}
+    .error{color:#991b1b;background:#fef2f2;border-color:#fecaca}
+    .spinner{display:inline-block;width:18px;height:18px;border:2px solid #cbd5e1;border-top-color:#4f46e5;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:14px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <div id="status">
+    <div class="panel">
+      <span class="spinner" aria-hidden="true"></span>
+      <h1 class="title">Loading diagnostic form</h1>
+      <p class="text">Fetching the latest published form from the CRM.</p>
+    </div>
+  </div>
+  <iframe id="frame" title="Diagnostic form"></iframe>
+
+  <script>
+    window.GBS_DIAGNOSTIC_EMBED_CONFIG = window.GBS_DIAGNOSTIC_EMBED_CONFIG || {
+      // DevOps installs this file ONCE on the client domain and never has to
+      // touch it again — the page resolves the latest published CRM
+      // diagnostic at runtime, and (via `bases` below) automatically finds
+      // whichever CRM environment the form was actually published on.
+      //
+      // `bases`: CRM environments to try, IN ORDER. The page calls the first
+      // one; if that environment has no form published for this
+      // subBrand/tenantSlug (404), it automatically tries the next one — no
+      // manual apiBase/formBase editing needed when switching between
+      // testing on dev and shipping to prod. Each entry's own origin is used
+      // for BOTH the JSON lookup AND the iframed form page (they're always
+      // the same CRM environment).
+      bases: [
+        'https://globuscrm.globussoft.com', // prod — tried first
+        'https://crm.globusdemos.com',      // dev — fallback if prod has nothing published
+      ],
+      subBrand: 'tmc',
+      tenantSlug: 'travel-stall',
+      customerId: '',
+      pageId: ''
+    };
+  </script>
+  <script>
+    (function(){
+      var config = window.GBS_DIAGNOSTIC_EMBED_CONFIG || {};
+      var params = new URLSearchParams(window.location.search);
+      var isLocalHost = ['localhost', '127.0.0.1'].indexOf(window.location.hostname) !== -1;
+
+      // Explicit ?apiBase=/?api= (or config.apiBase, kept for back-compat
+      // with older deployments of this file) pins ONE environment and skips
+      // the try-each-in-order fallback below — useful for manually forcing
+      // a specific environment while testing.
+      var pinnedApiBase = params.get('apiBase') || params.get('api') || config.apiBase || null;
+      var pinnedFormBase = params.get('formBase') || config.formBase || pinnedApiBase;
+
+      var candidateBases;
+      if (isLocalHost) {
+        candidateBases = [{ api: 'http://localhost:5000', form: window.location.origin }];
+      } else if (pinnedApiBase) {
+        candidateBases = [{ api: pinnedApiBase.replace(/\/+$/, ''), form: (pinnedFormBase || pinnedApiBase).replace(/\/+$/, '') }];
+      } else {
+        var list = Array.isArray(config.bases) && config.bases.length ? config.bases : ['https://globuscrm.globussoft.com'];
+        candidateBases = list.map(function(base){
+          var b = String(base).replace(/\/+$/, '');
+          return { api: b, form: b };
+        });
+      }
+
+      var subBrand = (params.get('subBrand') || config.subBrand || 'tmc').trim();
+      var tenantSlug = (params.get('tenantSlug') || config.tenantSlug || '').trim();
+      var customerId = (params.get('customerId') || config.customerId || '').trim();
+      var pageId = (params.get('pageId') || config.pageId || '').trim();
+      var statusEl = document.getElementById('status');
+      var frame = document.getElementById('frame');
+
+      function esc(v){
+        return String(v == null ? '' : v).replace(/[&<>"']/g,function(c){
+          return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);
+        });
+      }
+
+      function showError(message){
+        statusEl.className = '';
+        statusEl.innerHTML =
+          '<div class="panel error">' +
+          '<h1 class="title">Diagnostic form unavailable</h1>' +
+          '<p class="text">' + esc(message) + '</p>' +
+          '</div>';
+        postSize();
+      }
+
+      function hideStatus(){
+        statusEl.classList.add('hidden');
+        postSize();
+      }
+
+      function postSize(){
+        try {
+          parent.postMessage({ source:'gbs-diagnostic-page', type:'size', height: document.body.scrollHeight }, '*');
+        } catch (_e) {}
+      }
+
+      async function readError(response){
+        var payload = null;
+        try { payload = await response.json(); } catch (_e) { payload = null; }
+        if (response.status === 404) {
+          return 'No diagnostic form is currently published for this sub-brand.';
+        }
+        if (payload && payload.error) return payload.error + ' (status ' + response.status + ')';
+        return 'Diagnostic form lookup failed with status ' + response.status + '.';
+      }
+
+      function buildEndpoint(apiBase){
+        if (pageId) {
+          return apiBase + '/api/diagnostic-pages/public/by-id/' + encodeURIComponent(pageId);
+        }
+        var qs = new URLSearchParams();
+        qs.set('subBrand', subBrand);
+        if (tenantSlug) qs.set('tenantSlug', tenantSlug);
+        if (customerId) qs.set('customerId', customerId);
+        return apiBase + '/api/diagnostic-pages/public/featured-full?' + qs.toString();
+      }
+
+      // Tries each candidate CRM environment in order and uses the first one
+      // that actually has a published form. Not-found (404) on one
+      // environment moves on to the next; any other failure (network error,
+      // 5xx, malformed payload) is remembered and only surfaces if every
+      // candidate fails.
+      async function resolvePublishedForm(){
+        var lastError = null;
+        for (var i = 0; i < candidateBases.length; i++) {
+          var base = candidateBases[i];
+          try {
+            var response = await fetch(buildEndpoint(base.api), { method:'GET', headers:{ Accept:'application/json' } });
+            if (!response.ok) {
+              lastError = await readError(response);
+              continue; // try the next candidate — most commonly a 404 (nothing published there yet)
+            }
+            var page = await response.json();
+            if (!page || !page.publicUrl) {
+              lastError = 'Diagnostic page payload did not include a public URL.';
+              continue;
+            }
+            return { page: page, formBase: base.form };
+          } catch (fetchErr) {
+            lastError = String(fetchErr && fetchErr.message ? fetchErr.message : fetchErr);
+          }
+        }
+        var tried = candidateBases.map(function(b){ return b.api; }).join(', ');
+        throw new Error((lastError || 'No published form found') + ' (checked: ' + tried + ')');
+      }
+
+      async function boot(){
+        try {
+          if (window.location.protocol === 'file:') {
+            throw new Error(
+              'Open this file through a local web server, not file://. Example: cd frontend/public && python -m http.server 8000'
+            );
+          }
+          if (!pageId && !subBrand) throw new Error('subBrand is required.');
+          var resolved = await resolvePublishedForm();
+          window.__diagnosticPagePayload = resolved.page;
+          document.title = resolved.page.title || (resolved.page.form && resolved.page.form.title) || 'Diagnostic Form';
+          frame.src = resolved.formBase + resolved.page.publicUrl;
+          frame.addEventListener('load', hideStatus, { once:true });
+        } catch (error) {
+          showError(String(error && error.message ? error.message : error));
+        }
+      }
+
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(postSize).observe(document.body);
+      }
+      boot();
+    })();
+  </script>
+</body>
+</html>

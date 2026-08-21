@@ -38,6 +38,7 @@ import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import CountBadge from "../../components/CountBadge";
 import PatientPager from "../wellness/patients/PatientPager";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // Rewrite /uploads/... → /api/uploads/... so production deployments (where the
 // frontend SPA catches /uploads/* before it reaches the backend static mount)
@@ -71,6 +72,8 @@ const STATUS_COLORS = {
   "fallback-agent": { bg: "rgba(168,50,63,0.16)", color: "#A8323F" },
   failed: { bg: "rgba(168,50,63,0.18)", color: "#A8323F" },
 };
+
+const TABLE_MIN_WIDTH = 1340;
 
 const empty = {
   padding: 32,
@@ -388,260 +391,261 @@ export default function WebCheckinQueue() {
       </div>
 
       {/* Table */}
-      <div
-        data-testid="webcheckins-table-scroll"
-        style={{
-          background: "var(--surface-color)",
-          borderRadius: 8,
-          border: "1px solid var(--border-color)",
-          overflowX: "auto",
-          overflowY: "visible",
-          display: "inline-block",
-          minWidth: "100%",
-        }}
-      >
-        {loading ? (
-          <div style={empty}>Loading&hellip;</div>
-        ) : total === 0 ? (
-          <div style={empty}>
-            No web check-ins yet. They appear automatically when itineraries
-            with flights are accepted.
-          </div>
-        ) : (
-          <table
-            className="stable-table webcheckins-table"
-            style={{
-              width: "max-content",
-              borderCollapse: "collapse",
-            }}
-          >
-            <colgroup>
-              <col style={{ width: "116px" }} />
-              <col style={{ width: "88px" }} />
-              <col style={{ width: "90px" }} />
-              <col style={{ width: "78px" }} />
-              <col style={{ width: "178px" }} />
-              <col style={{ width: "170px" }} />
-              <col style={{ width: "150px" }} />
-              <col style={{ width: "140px" }} />
-              <col style={{ width: "330px" }} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th style={th}>Window opens</th>
-                <th style={th}>PNR</th>
-                <th style={th}>Flight</th>
-                <th style={th}>Airline</th>
-                <th style={th}>Departure</th>
-                <th style={th}>Passenger</th>
-                <th style={th}>Status</th>
-                <th style={th}>Boarding pass</th>
-                <th style={th}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((r) => {
-                const sc = STATUS_COLORS[r.status] || {
-                  bg: "var(--subtle-bg)",
-                  color: "var(--text-secondary)",
-                };
-                return (
-                  <tr
-                    key={r.id}
-                    style={{ borderTop: "1px solid var(--border-light)" }}
-                  >
-                    <td style={td}>
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                        }}
-                      >
-                        <CalendarIcon size={12} aria-hidden />
-                        {fmtDateTime(r.windowOpenAt)}
-                      </span>
-                    </td>
-                    <td style={td}>
-                      <code>{r.pnr}</code>
-                    </td>
-                    <td style={td}>{r.flightNumber}</td>
-                    <td style={td}>{r.airlineCode}</td>
-                    <td style={td}>{fmtDateTime(r.departureAt)}</td>
-                    <td style={td}>{r.passengerName}</td>
-                    <td style={td}>
-                      <span
-                        data-testid={`status-badge-${r.id}`}
-                        style={{
-                          background: sc.bg,
-                          color: sc.color,
-                          padding: "4px 8px",
-                          borderRadius: 4,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          textTransform: "uppercase",
-                          letterSpacing: 0.5,
-                          display: "inline-flex",
-                          alignItems: "center",
-                          height: 24,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {r.status}
-                      </span>
-                    </td>
-                    <td style={td}>
-                      {r.boardingPassUrl ? (
-                        <a
-                          href={normalizeUploadUrl(r.boardingPassUrl)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 4,
-                            padding: "4px 8px",
-                            borderRadius: 4,
-                            border: "1px solid rgba(47,122,77,0.35)",
-                            background: "rgba(47,122,77,0.10)",
-                            color: "var(--text-primary)",
-                            textDecoration: "none",
-                            fontSize: 12,
-                            fontWeight: 600,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          View file
-                        </a>
-                      ) : (
+      {loading ? (
+        <div style={empty}>Loading&hellip;</div>
+      ) : total === 0 ? (
+        <div style={empty}>
+          No web check-ins yet. They appear automatically when itineraries
+          with flights are accepted.
+        </div>
+      ) : (
+        <div
+          data-testid="webcheckins-table-scroll"
+          style={{
+            background: "var(--surface-color)",
+            borderRadius: 8,
+            border: "1px solid var(--border-color)",
+            maxWidth: "100%",
+            minWidth: 0,
+          }}
+        >
+          <TopScrollSync forceScrollbar scrollWidth={`${TABLE_MIN_WIDTH}px`}>
+            <table
+              className="stable-table webcheckins-table"
+              style={{
+                width: "100%",
+                minWidth: `${TABLE_MIN_WIDTH}px`,
+                borderCollapse: "collapse",
+              }}
+            >
+              <colgroup>
+                <col style={{ width: "116px" }} />
+                <col style={{ width: "88px" }} />
+                <col style={{ width: "90px" }} />
+                <col style={{ width: "78px" }} />
+                <col style={{ width: "178px" }} />
+                <col style={{ width: "170px" }} />
+                <col style={{ width: "150px" }} />
+                <col style={{ width: "140px" }} />
+                <col style={{ width: "330px" }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th style={th}>Window opens</th>
+                  <th style={th}>PNR</th>
+                  <th style={th}>Flight</th>
+                  <th style={th}>Airline</th>
+                  <th style={th}>Departure</th>
+                  <th style={th}>Passenger</th>
+                  <th style={th}>Status</th>
+                  <th style={th}>Boarding pass</th>
+                  <th style={th}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((r) => {
+                  const sc = STATUS_COLORS[r.status] || {
+                    bg: "var(--subtle-bg)",
+                    color: "var(--text-secondary)",
+                  };
+                  return (
+                    <tr
+                      key={r.id}
+                      style={{ borderTop: "1px solid var(--border-light)" }}
+                    >
+                      <td style={td}>
                         <span
                           style={{
                             display: "inline-flex",
                             alignItems: "center",
-                            padding: "4px 8px",
-                            borderRadius: 4,
-                            border: "1px solid var(--border-color)",
-                            background: "var(--subtle-bg)",
-                            color: "var(--text-secondary)",
-                            fontSize: 12,
-                            fontWeight: 600,
-                            whiteSpace: "nowrap",
+                            gap: 4,
                           }}
                         >
-                          Not uploaded
+                          <CalendarIcon size={12} aria-hidden />
+                          {fmtDateTime(r.windowOpenAt)}
                         </span>
-                      )}
-                    </td>
-                    <td style={td}>
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: 6,
-                          flexWrap: "nowrap",
-                          alignItems: "center",
-                          minWidth: 0,
-                        }}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => onUploadClick(r.id)}
-                          style={actionBtn}
-                          disabled={uploadingId === r.id}
-                          aria-label={`Upload boarding pass for ${r.pnr}`}
-                          title={
-                            uploadingId === r.id
-                              ? "Uploading…"
-                              : "Upload boarding pass"
-                          }
-                        >
-                          <Upload
-                            size={12}
-                            aria-hidden
-                            style={{ marginRight: 3, flexShrink: 0 }}
-                          />
-                          <span style={{ whiteSpace: "nowrap" }}>
-                            {uploadingId === r.id ? "Uploading…" : "Upload"}
-                          </span>
-                        </button>
-                        <input
-                          ref={(el) => {
-                            fileInputs.current[r.id] = el;
-                          }}
-                          type="file"
-                          accept="application/pdf,image/*"
-                          style={{ display: "none" }}
-                          onChange={(e) => onUploadFileChange(r.id, e)}
-                          aria-label={`Boarding pass file for ${r.pnr}`}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => onDeliver(r)}
-                          style={actionBtn}
-                          disabled={deliveringId === r.id || !!r.deliveredAt}
-                          aria-label={`Deliver boarding pass for ${r.pnr}`}
-                          title={
-                            r.deliveredAt
-                              ? "Already delivered"
-                              : deliveringId === r.id
-                                ? "Sending…"
-                                : "Send to passenger"
-                          }
-                        >
-                          <Send
-                            size={12}
-                            aria-hidden
-                            style={{ marginRight: 3, flexShrink: 0 }}
-                          />
-                          <span style={{ whiteSpace: "nowrap" }}>
-                            {r.deliveredAt
-                              ? "Delivered"
-                              : deliveringId === r.id
-                                ? "Sending…"
-                                : "Deliver"}
-                          </span>
-                        </button>
+                      </td>
+                      <td style={td}>
+                        <code>{r.pnr}</code>
+                      </td>
+                      <td style={td}>{r.flightNumber}</td>
+                      <td style={td}>{r.airlineCode}</td>
+                      <td style={td}>{fmtDateTime(r.departureAt)}</td>
+                      <td style={td}>{r.passengerName}</td>
+                      <td style={td}>
                         <span
+                          data-testid={`status-badge-${r.id}`}
                           style={{
+                            background: sc.bg,
+                            color: sc.color,
+                            padding: "4px 8px",
+                            borderRadius: 4,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            textTransform: "uppercase",
+                            letterSpacing: 0.5,
                             display: "inline-flex",
                             alignItems: "center",
-                            gap: 4,
-                            minWidth: 0,
-                            flexShrink: 0,
+                            height: 24,
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          <UserCheck
-                            size={12}
-                            aria-hidden
+                          {r.status}
+                        </span>
+                      </td>
+                      <td style={td}>
+                        {r.boardingPassUrl ? (
+                          <a
+                            href={normalizeUploadUrl(r.boardingPassUrl)}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "4px 8px",
+                              borderRadius: 4,
+                              border: "1px solid rgba(47,122,77,0.35)",
+                              background: "rgba(47,122,77,0.10)",
+                              color: "var(--text-primary)",
+                              textDecoration: "none",
+                              fontSize: 12,
+                              fontWeight: 600,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            View file
+                          </a>
+                        ) : (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              padding: "4px 8px",
+                              borderRadius: 4,
+                              border: "1px solid var(--border-color)",
+                              background: "var(--subtle-bg)",
                               color: "var(--text-secondary)",
+                              fontSize: 12,
+                              fontWeight: 600,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Not uploaded
+                          </span>
+                        )}
+                      </td>
+                      <td style={td}>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            flexWrap: "nowrap",
+                            alignItems: "center",
+                            minWidth: 0,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => onUploadClick(r.id)}
+                            style={actionBtn}
+                            disabled={uploadingId === r.id}
+                            aria-label={`Upload boarding pass for ${r.pnr}`}
+                            title={
+                              uploadingId === r.id
+                                ? "Uploading…"
+                                : "Upload boarding pass"
+                            }
+                          >
+                            <Upload
+                              size={12}
+                              aria-hidden
+                              style={{ marginRight: 3, flexShrink: 0 }}
+                            />
+                            <span style={{ whiteSpace: "nowrap" }}>
+                              {uploadingId === r.id ? "Uploading…" : "Upload"}
+                            </span>
+                          </button>
+                          <input
+                            ref={(el) => {
+                              fileInputs.current[r.id] = el;
+                            }}
+                            type="file"
+                            accept="application/pdf,image/*"
+                            style={{ display: "none" }}
+                            onChange={(e) => onUploadFileChange(r.id, e)}
+                            aria-label={`Boarding pass file for ${r.pnr}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => onDeliver(r)}
+                            style={actionBtn}
+                            disabled={deliveringId === r.id || !!r.deliveredAt}
+                            aria-label={`Deliver boarding pass for ${r.pnr}`}
+                            title={
+                              r.deliveredAt
+                                ? "Already delivered"
+                                : deliveringId === r.id
+                                  ? "Sending…"
+                                  : "Send to passenger"
+                            }
+                          >
+                            <Send
+                              size={12}
+                              aria-hidden
+                              style={{ marginRight: 3, flexShrink: 0 }}
+                            />
+                            <span style={{ whiteSpace: "nowrap" }}>
+                              {r.deliveredAt
+                                ? "Delivered"
+                                : deliveringId === r.id
+                                  ? "Sending…"
+                                  : "Deliver"}
+                            </span>
+                          </button>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              minWidth: 0,
                               flexShrink: 0,
                             }}
-                          />
-                          <select
-                            value={r.assignedAgentId ?? ""}
-                            onChange={(e) => onReassign(r, e.target.value)}
-                            disabled={reassigningId === r.id}
-                            aria-label={`Reassign agent for ${r.pnr}`}
-                            style={miniSelectStyle}
-                            title="Assign operator to handle this check-in"
                           >
-                            <option value="">Unassigned</option>
-                            {staff.map((u) => (
-                              <option key={u.id} value={u.id}>
-                                {u.name || u.email}
-                              </option>
-                            ))}
-                          </select>
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+                            <UserCheck
+                              size={12}
+                              aria-hidden
+                              style={{
+                                color: "var(--text-secondary)",
+                                flexShrink: 0,
+                              }}
+                            />
+                            <select
+                              value={r.assignedAgentId ?? ""}
+                              onChange={(e) => onReassign(r, e.target.value)}
+                              disabled={reassigningId === r.id}
+                              aria-label={`Reassign agent for ${r.pnr}`}
+                              style={miniSelectStyle}
+                              title="Assign operator to handle this check-in"
+                            >
+                              <option value="">Unassigned</option>
+                              {staff.map((u) => (
+                                <option key={u.id} value={u.id}>
+                                  {u.name || u.email}
+                                </option>
+                              ))}
+                            </select>
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TopScrollSync>
+        </div>
+      )}
 
       {!loading && total > 0 && (
         <PatientPager

@@ -641,9 +641,9 @@ describe('<TmcCatalogueAdmin /> — theme + role gating', () => {
     expect(
       screen.getByRole('button', { name: /Add catalogue entry/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: /TMC configuration/i }),
-    ).toBeInTheDocument();
+    // TMC configuration panel is deliberately commented out in the SUT per
+    // UI cleanup request (see TmcCatalogueAdmin.jsx ~line 657) — no longer
+    // rendered for any role, so this assertion doesn't apply.
     expect(screen.getByTestId('tmc-catalogue-bulk-import')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Download CSV template/i }),

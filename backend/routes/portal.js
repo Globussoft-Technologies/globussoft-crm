@@ -10,6 +10,9 @@ const s3Service = require("../services/s3Service");
 const passportOcrClient = require("../services/passportOcrClient");
 const { findPassportIdentityCandidates } = require("../lib/passportIdentityLinker");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
+const {
+  buildCurriculumFitForDiagnostic,
+} = require("../lib/travelDiagnosticCurriculumFit");
 const travelRag = require("../lib/travelRag");
 const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
 const { notifyMany } = require("../lib/notificationService");
@@ -1535,6 +1538,17 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       return res.status(500).json({ error: "Diagnostic is temporarily unavailable", code: "BANK_CORRUPTED" });
     }
     const result = scoreDiagnostic(parsed, answers);
+    let curriculumFit = null;
+    try {
+      curriculumFit = await buildCurriculumFitForDiagnostic({
+        tenantId: req.portal.tenantId,
+        subBrand: bank.subBrand,
+        answers,
+        questions: parsed.questions,
+      });
+    } catch (fitErr) {
+      console.warn("[Portal][travel/diagnostics POST] curriculum-fit build failed (non-fatal):", fitErr.message);
+    }
     const snapshot = JSON.stringify({
       bankId: bank.id,
       bankVersion: bank.version,
@@ -1555,6 +1569,7 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
         classification: result.classification,
         classificationLabel: result.classificationLabel,
         recommendedTier: result.recommendedTier,
+        curriculumFitJson: curriculumFit ? JSON.stringify(curriculumFit) : null,
       },
     });
 
@@ -1588,6 +1603,7 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       recommendedTier: result.recommendedTier,
       reportPdfUrl: reportPdfUrl || diag.reportPdfUrl,
       createdAt: diag.createdAt,
+      recommendations: curriculumFit?.recommendations || [],
       ragResult,
     });
   } catch (err) {

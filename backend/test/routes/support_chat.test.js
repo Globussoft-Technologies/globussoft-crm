@@ -204,12 +204,15 @@ describe('POST /api/support-chat/message', () => {
     expect(res.body.links).toEqual([]);
 
     // Two LLM rounds → two calls, both against the BYOK endpoint + key.
+    // Gemini's generateContent endpoint authenticates via the x-goog-api-key header.
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
     );
     expect(init.headers['x-goog-api-key']).toBe(BYOK_KEY);
+    expect(init.headers.Authorization).toBeUndefined();
+    expect(init.headers['Content-Type']).toBe('application/json');
 
     // The KB search ran tenant-scoped + published-only.
     expect(prisma.kbArticle.findMany).toHaveBeenCalledWith(

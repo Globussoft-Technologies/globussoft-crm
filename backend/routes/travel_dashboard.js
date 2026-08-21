@@ -41,6 +41,11 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { computeTeamWorkload } = require("../lib/travelWorkload");
+const { getTenantAiState } = require("../lib/aiProviderManagement");
+const whatsappWebClient = require("../services/whatsappWebClient");
+const googleDriveOAuth = require("../lib/googleDriveOAuth");
+
+const KNOWLEDGE_BASE_ROOT_FOLDER_KEY = "travel.knowledgeBase.rootFolderId";
 
 // Build a Prisma `where` clause for tenant + sub-brand scoping. The
 // narrowWhereBySubBrand helper mutates and returns; we wrap it so each
@@ -268,6 +273,132 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
     res.status(500).json({ error: "Failed to compute dashboard" });
   }
 });
+
+// GET /api/travel/dashboard/readiness — System readiness snapshot for the
+// Travel CRM dashboard tile. Read-only; scopes to the caller's travel tenant.
+// Returns the connection/config status of the integrations an operator must
+// wire up in the UI before the travel vertical is fully usable.
+//
+// Response shape:
+//   {
+//     checks: [
+//       { id, label, ready, detail?, link }
+//     ],
+//     readyCount: <number>,
+//     totalCount: <number>
+//   }
+//
+// Checks (all customer-connectable via existing UI):
+//   - gmail          → /gmail
+//   - calendar       → /calendar-sync
+//   - whatsapp       → /travel/whatsapp
+//   - drive          → /travel/trip-knowledge
+//   - driveFolder    → /travel/trip-knowledge
+//   - aiProvider     → /settings
+//   - razorpay       → /payments
+router.get(
+  "/dashboard/readiness",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const userId = req.user.userId;
+
+      const [
+        gmailIntegration,
+        calendarIntegration,
+        driveConnected,
+        driveRootFolder,
+        aiState,
+        razorpayConfig,
+      ] = await Promise.all([
+        prisma.gmailIntegration.findUnique({
+          where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
+        }).catch(() => null),
+        prisma.calendarIntegration.findUnique({
+          where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
+        }).catch(() => null),
+        googleDriveOAuth.isConnected(tenantId).catch(() => false),
+        prisma.tenantSetting.findUnique({
+          where: { tenantId_key: { tenantId, key: KNOWLEDGE_BASE_ROOT_FOLDER_KEY } },
+        }).catch(() => null),
+        getTenantAiState(tenantId).catch(() => ({ resolverAccess: "none" })),
+        prisma.paymentGatewayConfig.findFirst({
+          where: { tenantId, provider: "razorpay" },
+        }).catch(() => null),
+      ]);
+
+      const waState = whatsappWebClient.getState(tenantId);
+
+      const checks = [
+        {
+          id: "gmail",
+          label: "Gmail",
+          ready: Boolean(gmailIntegration?.accessToken),
+          detail: gmailIntegration?.emailAddress || null,
+          link: "/gmail",
+        },
+        {
+          id: "calendar",
+          label: "Google Calendar",
+          ready: Boolean(calendarIntegration?.accessToken),
+          detail: calendarIntegration?.calendarId
+            ? `Calendar: ${calendarIntegration.calendarId}`
+            : null,
+          link: "/calendar-sync",
+        },
+        {
+          id: "whatsapp",
+          label: "WhatsApp Web",
+          ready: Boolean(waState?.connected),
+          detail: waState?.phone || null,
+          link: "/travel/whatsapp",
+        },
+        {
+          id: "drive",
+          label: "Google Drive",
+          ready: driveConnected,
+          detail: null,
+          link: "/travel/trip-knowledge",
+        },
+        {
+          id: "driveFolder",
+          label: "Drive folder for RAG",
+          ready: Boolean(driveRootFolder?.value),
+          detail: driveRootFolder?.value || null,
+          link: "/travel/trip-knowledge",
+        },
+        {
+          id: "aiProvider",
+          label: "AI provider",
+          ready: aiState.resolverAccess !== "none",
+          detail: aiState.byok?.providerLabel || aiState.activeSubscription?.planName || null,
+          link: "/settings",
+        },
+        {
+          id: "razorpay",
+          label: "Razorpay",
+          ready: Boolean(razorpayConfig?.isActive && razorpayConfig?.keyId),
+          detail: razorpayConfig?.keyId || null,
+          link: "/payments",
+        },
+      ];
+
+      const readyCount = checks.filter((c) => c.ready).length;
+
+      res.json({
+        checks,
+        readyCount,
+        totalCount: checks.length,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-dashboard] readiness error:", e.message);
+      res.status(500).json({ error: "Failed to compute readiness" });
+    }
+  },
+);
 
 // GET /api/travel/dashboard/workload — MANAGER/ADMIN only (PRD §4.1
 // gap A9b: "Manager view — pending tasks, delayed tasks, staff-wise

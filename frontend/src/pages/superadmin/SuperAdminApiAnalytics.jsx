@@ -110,6 +110,7 @@ export default function SuperAdminApiAnalytics() {
   const [dateRange, setDateRange] = useState({ from: "", to: "" });
   const [providerFilter, setProviderFilter] = useState("");
   const [modelFilter, setModelFilter] = useState("");
+  const [planFilter, setPlanFilter] = useState("");
   const [filterOptions, setFilterOptions] = useState({ providers: [], models: [] });
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -126,6 +127,7 @@ export default function SuperAdminApiAnalytics() {
       }
       if (providerFilter) params.set("provider", providerFilter);
       if (modelFilter) params.set("model", modelFilter);
+      if (planFilter) params.set("planId", planFilter);
       const res = await superAdminFetch(`/api-analytics/overview?${params.toString()}`);
       setData(res);
     } catch (e) {
@@ -133,7 +135,7 @@ export default function SuperAdminApiAnalytics() {
     }
     setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [days, dateRange, providerFilter, modelFilter]);
+  }, [days, dateRange, providerFilter, modelFilter, planFilter]);
 
   useEffect(() => {
     load();
@@ -144,7 +146,7 @@ export default function SuperAdminApiAnalytics() {
     if (providerFilter) params.set("provider", providerFilter);
     superAdminFetch(`/api-analytics/filters?${params.toString()}`)
       .then((opts) => {
-        setFilterOptions(opts);
+        setFilterOptions({ providers: opts.providers || [], models: opts.models || [], plans: opts.plans || [] });
         // If the currently-selected model doesn't belong to the newly
         // scoped list (e.g. provider changed to "openai" while "gemini-flash"
         // was selected), clear it rather than silently querying an
@@ -209,12 +211,21 @@ export default function SuperAdminApiAnalytics() {
               </option>
             ))}
           </select>
-          {(providerFilter || modelFilter || dateRange.from || dateRange.to) && (
+          <select className="input-field" value={planFilter} onChange={(e) => setPlanFilter(e.target.value)} style={{ width: 220 }}>
+            <option value="">All AI plans</option>
+            {(filterOptions.plans || []).map((plan) => (
+              <option key={plan.id} value={plan.id}>
+                {plan.name}{plan.isActive ? "" : " (inactive)"}
+              </option>
+            ))}
+          </select>
+          {(providerFilter || modelFilter || planFilter || dateRange.from || dateRange.to) && (
             <button
               className="btn-secondary"
               onClick={() => {
                 setProviderFilter("");
                 setModelFilter("");
+                setPlanFilter("");
                 setDateRange({ from: "", to: "" });
               }}
               style={{ fontSize: "0.8rem" }}
@@ -409,8 +420,8 @@ function CallLogTab() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState({ provider: "", model: "", status: "", search: "", from: "", to: "" });
-  const [filterOptions, setFilterOptions] = useState({ providers: [], models: [] });
+  const [filters, setFilters] = useState({ provider: "", model: "", status: "", search: "", from: "", to: "", planId: "" });
+  const [filterOptions, setFilterOptions] = useState({ providers: [], models: [], plans: [] });
   const pageSize = 25;
 
   const load = useCallback(async () => {
@@ -437,7 +448,7 @@ function CallLogTab() {
     if (filters.provider) params.set("provider", filters.provider);
     superAdminFetch(`/api-analytics/filters?${params.toString()}`)
       .then((opts) => {
-        setFilterOptions(opts);
+        setFilterOptions({ providers: opts.providers || [], models: opts.models || [], plans: opts.plans || [] });
         // Same rule as the Overview tab — a model belonging to a different
         // provider than the one now selected would silently 0-result the query.
         setFilters((f) => (f.model && !opts.models.includes(f.model) ? { ...f, model: "" } : f));
@@ -495,6 +506,22 @@ function CallLogTab() {
           <option value="">All statuses</option>
           <option value="success">Success</option>
           <option value="failed">Failed</option>
+        </select>
+        <select
+          className="input-field"
+          style={{ width: 220 }}
+          value={filters.planId}
+          onChange={(e) => {
+            setFilters((f) => ({ ...f, planId: e.target.value }));
+            setPage(1);
+          }}
+        >
+          <option value="">All AI plans</option>
+          {(filterOptions.plans || []).map((plan) => (
+            <option key={plan.id} value={plan.id}>
+              {plan.name}{plan.isActive ? "" : " (inactive)"}
+            </option>
+          ))}
         </select>
         <input
           className="input-field"

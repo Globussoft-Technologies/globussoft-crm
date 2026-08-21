@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Cloud,
   Database,
+  Download,
   ExternalLink,
   FileText,
   Folder,
@@ -45,7 +46,7 @@ export default function KnowledgeBaseAdmin() {
   const [searchParams] = useSearchParams();
 
   const [oauth, setOauth] = useState({ configured: false, connected: false, userInfo: null, rootFolderId: '' });
-  const [config, setConfig] = useState({ rootFolderId: '', qdrantEnabled: false });
+  const [config, setConfig] = useState({ rootFolderId: '', qdrantEnabled: false, embedEnabled: false, embedProvider: null, embedModel: null, vectorSize: null });
   const [folderInput, setFolderInput] = useState('');
   const [status, setStatus] = useState(null);
   const [jobs, setJobs] = useState([]);
@@ -60,6 +61,12 @@ export default function KnowledgeBaseAdmin() {
   const [connecting, setConnecting] = useState(false);
   const [completingOAuth, setCompletingOAuth] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+
+  // Bulk selection state for indexed files and sync jobs.
+  const [selectedFileIds, setSelectedFileIds] = useState(new Set());
+  const [selectedJobIds, setSelectedJobIds] = useState(new Set());
+  const [bulkDeletingFiles, setBulkDeletingFiles] = useState(false);
+  const [bulkDeletingJobs, setBulkDeletingJobs] = useState(false);
 
   const [folders, setFolders] = useState([]);
   const [pickerBreadcrumbs, setPickerBreadcrumbs] = useState([{ id: 'root', name: 'My Drive' }]);
@@ -129,9 +136,9 @@ export default function KnowledgeBaseAdmin() {
         fetchApi('/api/travel/knowledge-base/files?limit=50&offset=0', { silent: true }).catch(() => ({ files: [], total: 0 })),
         fetchApi('/api/travel/knowledge-base/oauth/status', { silent: true }).catch(() => ({ configured: false, connected: false, userInfo: null, rootFolderId: '' })),
       ]);
-      setConfig(cfg || { rootFolderId: '', qdrantEnabled: false });
+      setConfig(cfg || { rootFolderId: '', qdrantEnabled: false, embedEnabled: false, embedProvider: null, embedModel: null, vectorSize: null });
       setFolderInput(cfg?.rootFolderId || oauthStatus?.rootFolderId || '');
-      setStatus(st || { stats: [], lastJob: null });
+      setStatus(st || { stats: [], lastJob: null, providerChunks: {}, activeProvider: null });
       setJobs(jbs?.jobs || []);
       setFiles(fls?.files || []);
       setFilesTotal(fls?.total || 0);
@@ -146,6 +153,17 @@ export default function KnowledgeBaseAdmin() {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  // If a previous sync was left running (e.g. backend restart) and the user
+  // reloads the page, adopt the most recent running job so the stop button works.
+  useEffect(() => {
+    if (activeJobId) return;
+    const running = jobs.find((j) => j.status === 'running');
+    if (running) {
+      setSyncing(true);
+      setActiveJobId(running.id);
+    }
+  }, [jobs, activeJobId]);
 
   useEffect(() => {
     const onMessage = (event) => {
@@ -246,7 +264,7 @@ export default function KnowledgeBaseAdmin() {
         method: 'POST',
         body: JSON.stringify({ rootFolderId: folderId }),
       });
-      setConfig(res);
+      setConfig((prev) => ({ ...prev, ...res }));
       setFolderInput(res.rootFolderId);
       setOauth((prev) => ({ ...prev, rootFolderId: res.rootFolderId }));
       notify.success('Folder selected for RAG pipeline');
@@ -265,7 +283,7 @@ export default function KnowledgeBaseAdmin() {
         method: 'POST',
         body: JSON.stringify({ rootFolderId: folderInput }),
       });
-      setConfig(res);
+      setConfig((prev) => ({ ...prev, ...res }));
       setFolderInput(res.rootFolderId);
       setOauth((prev) => ({ ...prev, rootFolderId: res.rootFolderId }));
       notify.success('Drive folder ID saved');
@@ -312,6 +330,48 @@ export default function KnowledgeBaseAdmin() {
     }
   };
 
+  const stopAllSyncs = async () => {
+    if (!isAdmin) return;
+    setStopping(true);
+    try {
+      const res = await fetchApi('/api/travel/knowledge-base/sync/stop-all', { method: 'POST' });
+      notify.success(`Stopped ${res.stopped || 0} running sync job(s)`);
+      setSyncing(false);
+      setActiveJobId(null);
+      await loadAll();
+    } catch (e) {
+      notify.error(e.message || 'Failed to stop running syncs');
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const wipeAndResync = async () => {
+    if (!isAdmin) return;
+    const rootFolderId = (folderInput || '').trim() || config.rootFolderId;
+    if (!rootFolderId) {
+      notify.error('Select a Drive folder first');
+      return;
+    }
+    const confirmed = window.confirm(
+      'This will delete ALL indexed PDF data for this tenant across every provider collection and start a fresh sync from the selected folder.\n\nAre you sure?',
+    );
+    if (!confirmed) return;
+    setSyncing(true);
+    setActiveJobId(null);
+    try {
+      const res = await fetchApi('/api/travel/knowledge-base/sync/wipe-and-resync', {
+        method: 'POST',
+        body: JSON.stringify({ rootFolderId }),
+      });
+      setActiveJobId(res.jobId || null);
+      notify.success('Index wiped; fresh sync started');
+    } catch (e) {
+      notify.error(e.message || 'Wipe and resync failed');
+      setSyncing(false);
+    }
+  };
+
   const pollJobStatus = useCallback(async () => {
     if (!activeJobId) return;
     try {
@@ -348,7 +408,12 @@ export default function KnowledgeBaseAdmin() {
 
   const deleteFile = async (id) => {
     if (!isAdmin) return;
-    if (!window.confirm('Remove this file from the index?')) return;
+    if (!await notify.confirm({
+      title: 'Remove Indexed File',
+      message: 'Remove this file from the index?',
+      confirmText: 'Remove',
+      destructive: true,
+    })) return;
     try {
       await fetchApi(`/api/travel/knowledge-base/files/${id}`, { method: 'DELETE' });
       notify.success('File removed from index');
@@ -358,12 +423,90 @@ export default function KnowledgeBaseAdmin() {
     }
   };
 
+  const bulkDeleteFiles = async () => {
+    if (!isAdmin) return;
+    const ids = Array.from(selectedFileIds);
+    if (ids.length === 0) return;
+    if (!await notify.confirm({
+      title: 'Remove Selected Files',
+      message: `Remove ${ids.length} selected file${ids.length === 1 ? '' : 's'} from the index? This also deletes their Qdrant vectors.`,
+      confirmText: 'Remove',
+      destructive: true,
+    })) return;
+    setBulkDeletingFiles(true);
+    try {
+      const res = await fetchApi('/api/travel/knowledge-base/files/bulk-delete', {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      });
+      notify.success(`${res.deleted || ids.length} file${res.deleted === 1 ? '' : 's'} removed from index`);
+      setSelectedFileIds(new Set());
+      await loadAll();
+    } catch (e) {
+      notify.error(e.message || 'Failed to remove selected files');
+    } finally {
+      setBulkDeletingFiles(false);
+    }
+  };
+
+  const bulkDeleteJobs = async () => {
+    if (!isAdmin) return;
+    const ids = Array.from(selectedJobIds);
+    if (ids.length === 0) return;
+    if (!await notify.confirm({
+      title: 'Delete Selected Sync Jobs',
+      message: `Delete ${ids.length} selected sync job${ids.length === 1 ? '' : 's'} from history? Running jobs must be stopped first.`,
+      confirmText: 'Delete',
+      destructive: true,
+    })) return;
+    setBulkDeletingJobs(true);
+    try {
+      const res = await fetchApi('/api/travel/knowledge-base/jobs/bulk-delete', {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      });
+      notify.success(`${res.deleted || ids.length} job${res.deleted === 1 ? '' : 's'} deleted`);
+      setSelectedJobIds(new Set());
+      await loadAll();
+    } catch (e) {
+      notify.error(e.message || 'Failed to delete selected jobs');
+    } finally {
+      setBulkDeletingJobs(false);
+    }
+  };
+
+  const toggleFileSelection = (id) => {
+    setSelectedFileIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllFiles = (select) => {
+    setSelectedFileIds(select ? new Set(files.map((f) => f.id)) : new Set());
+  };
+
+  const toggleJobSelection = (id) => {
+    setSelectedJobIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllJobs = (select) => {
+    setSelectedJobIds(select ? new Set(jobs.map((j) => j.id)) : new Set());
+  };
+
   const formatDate = (d) => {
     if (!d) return '—';
     try { return new Date(d).toLocaleString(); } catch { return String(d); }
   };
 
-  const canSync = oauth.connected && oauth.rootFolderId && config.qdrantEnabled;
+  const canSync = oauth.connected && oauth.rootFolderId && config.qdrantEnabled && config.embedEnabled;
   const indexedFilesCount = filesTotal || files.length;
 
   const activeStep = (() => {
@@ -408,9 +551,18 @@ export default function KnowledgeBaseAdmin() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto', color: 'var(--text-primary)' }}>
-      <Link to="/travel" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 13, textDecoration: 'none', marginBottom: 16 }}>
-        <ArrowLeft size={16} /> Back to Travel
-      </Link>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+        <Link to="/travel" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 13, textDecoration: 'none' }}>
+          <ArrowLeft size={16} /> Back to Travel
+        </Link>
+        <Link
+          to="/travel/diagnostics"
+          title="Jump to Diagnostics — brochure PDFs indexed here power the trip recommendations shown on diagnostic results."
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 13, textDecoration: 'none' }}
+        >
+          <ArrowLeft size={16} /> Go to Diagnostics
+        </Link>
+      </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
         <div style={{ width: 56, height: 56, borderRadius: 16, background: 'rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -493,13 +645,21 @@ export default function KnowledgeBaseAdmin() {
                 If Google shows “This app hasn&apos;t been verified”, click <strong>Continue</strong> or ask your admin to add your email as a test user in the Google Cloud OAuth consent screen. The redirect must point to the backend callback URL.
               </div>
               {isAdmin ? (
-                <button className="btn-primary" onClick={connectDrive} disabled={connecting || !oauth.configured || completingOAuth} style={{ width: '100%' }}>
+                <button className="btn-primary" onClick={connectDrive} disabled={connecting || !oauth.configured || completingOAuth} style={{ width: '100%', marginBottom: 12 }}>
                   <ExternalLink size={16} style={{ marginRight: 6 }} />
                   {connecting ? 'Opening Google…' : completingOAuth ? 'Completing…' : 'Connect Google Drive'}
                 </button>
               ) : (
-                <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-color)', fontSize: 13, ...muted }}>Admin only</div>
+                <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-color)', fontSize: 13, ...muted, marginBottom: 12 }}>Admin only</div>
               )}
+              <a
+                href="/templates/brochure-template.zip"
+                download
+                className="btn-secondary"
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 12, textDecoration: 'none', width: '100%' }}
+              >
+                <Download size={14} /> Download brochure folder template
+              </a>
             </>
           ) : (
             <div style={{ padding: 12, borderRadius: 10, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)' }}>
@@ -518,7 +678,7 @@ export default function KnowledgeBaseAdmin() {
                 <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: '#22c55e' }}>Active</span>
               </div>
               {isAdmin && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
                   <button
                     className="btn-secondary"
                     onClick={disconnectDrive}
@@ -530,6 +690,14 @@ export default function KnowledgeBaseAdmin() {
                   </button>
                 </div>
               )}
+              <a
+                href="/templates/brochure-template.zip"
+                download
+                className="btn-secondary"
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 12, textDecoration: 'none', width: '100%' }}
+              >
+                <Download size={14} /> Download brochure folder template
+              </a>
             </div>
           )}
         </div>
@@ -648,21 +816,72 @@ export default function KnowledgeBaseAdmin() {
             </div>
           </div>
           {isAdmin && (
-            <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               {syncing && activeJobId ? (
                 <button className="btn-danger" onClick={stopSync} disabled={stopping}>
                   <XCircle size={16} style={{ marginRight: 6 }} />
                   {stopping ? 'Stopping…' : 'Stop sync'}
                 </button>
               ) : (
-                <button className="btn-primary" onClick={runSync} disabled={syncing || !canSync}>
-                  <RefreshCw size={16} style={{ marginRight: 6, animation: syncing ? 'spin 1s linear infinite' : undefined }} />
-                  {syncing ? 'Syncing…' : 'Sync now'}
-                </button>
+                <>
+                  <button className="btn-primary" onClick={runSync} disabled={syncing || !canSync}>
+                    <RefreshCw size={16} style={{ marginRight: 6, animation: syncing ? 'spin 1s linear infinite' : undefined }} />
+                    {syncing ? 'Syncing…' : 'Sync now'}
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={wipeAndResync}
+                    disabled={syncing || !canSync}
+                    title="Delete all indexed data and start a fresh sync from the selected folder"
+                    style={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)' }}
+                  >
+                    <Trash2 size={16} style={{ marginRight: 6 }} />
+                    Wipe & resync
+                  </button>
+                </>
               )}
             </div>
           )}
         </div>
+
+        {config.embedProvider && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)', marginBottom: 16 }}>
+            <Database size={16} color="var(--accent-color)" />
+            <span style={{ fontSize: 13 }}>
+              Active embedding provider: <strong>{config.embedProvider}</strong>
+              {config.embedModel && ` (${config.embedModel}`}
+              {config.vectorSize && `, ${config.vectorSize} dims`}
+              {config.embedModel ? ')' : ''}. New syncs index into the provider-specific Qdrant collection.
+            </span>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8, background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', marginBottom: 16 }}>
+          <AlertCircle size={16} color="var(--accent-color)" />
+          <span style={{ fontSize: 13 }}>
+            AI-based recommendations in TMC diagnostics work only when an <strong>OpenAI</strong> or <strong>Gemini</strong> key is configured in AI Settings. Other providers can sync the index but will not power the RAG answer layer.
+          </span>
+        </div>
+
+        {(() => {
+          if (!status?.activeProvider || !status?.providerChunks) return null;
+          const activeChunks = status.providerChunks[status.activeProvider] || 0;
+          const otherProviders = Object.entries(status.providerChunks).filter(([k]) => k !== status.activeProvider);
+          const hasOtherData = otherProviders.some(([, v]) => v > 0);
+          if (activeChunks > 0 || !hasOtherData) return null;
+          const others = otherProviders
+            .filter(([, v]) => v > 0)
+            .map(([k, v]) => `${k}: ${v} chunks`)
+            .join(', ');
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8, background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.25)', marginBottom: 16 }}>
+              <AlertCircle size={16} color="#eab308" />
+              <span style={{ fontSize: 13 }}>
+                Provider switched to <strong>{status.activeProvider}</strong> but the index has data only for {others}. Run a resync to populate the {status.activeProvider} collection.
+              </span>
+            </div>
+          );
+        })()}
 
         {!canSync && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8, background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.25)', marginBottom: 16 }}>
@@ -671,6 +890,7 @@ export default function KnowledgeBaseAdmin() {
               {!oauth.connected && 'Connect Google Drive and select a folder before syncing.'}
               {oauth.connected && !oauth.rootFolderId && 'Select a Drive folder above before syncing.'}
               {oauth.connected && oauth.rootFolderId && !config.qdrantEnabled && 'Qdrant is not configured. Sync is disabled.'}
+              {oauth.connected && oauth.rootFolderId && config.qdrantEnabled && !config.embedEnabled && 'No supported AI provider is configured for embeddings. Configure OpenAI or Gemini in AI Settings.'}
             </span>
           </div>
         )}
@@ -707,13 +927,16 @@ export default function KnowledgeBaseAdmin() {
           <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <FileText size={18} color="var(--accent-color)" />
           </div>
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <h3 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 700 }}>Expected Drive folder structure</h3>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, ...muted }}>
-              Select the <strong>Brochures</strong> folder (or any folder that contains one immediate sub-folder per sub-brand). The sync walks every sub-brand folder recursively, so nested folders and direct PDFs inside them are all indexed.
+              Select the <strong>brochure</strong> folder (or any folder that contains one immediate sub-folder per sub-brand). The sync walks every sub-brand folder recursively, so nested folders and direct PDFs inside them are all indexed.
+            </p>
+            <p style={{ margin: '8px 0 0', fontSize: 12, ...muted }}>
+              New to this? Download the template above, drop your PDFs into the matching sub-brand folders, then upload the whole <strong>brochure</strong> folder to Google Drive.
             </p>
             <pre style={{ margin: '12px 0 0', padding: 12, borderRadius: 8, background: 'var(--bg-color)', fontSize: 12, overflowX: 'auto', color: 'var(--text-primary)' }}>
-{`Brochures/
+{`brochure/
   tmc/
     DAY TRIPS/
       JUNIOR -GRADE Nursery to 5/
@@ -741,14 +964,46 @@ export default function KnowledgeBaseAdmin() {
       {/* Jobs table */}
       {jobs.length > 0 && (
         <div className="card" style={{ padding: 24, marginTop: 20 }}>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 16px', fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
-            Recent sync jobs
-            <CountBadge count={jobs.length} title={`${jobs.length.toLocaleString()} sync jobs`} />
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0, fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
+              Recent sync jobs
+              <CountBadge count={jobs.length} title={`${jobs.length.toLocaleString()} sync jobs`} />
+            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {isAdmin && selectedJobIds.size > 0 && (
+                <button
+                  className="btn-danger"
+                  onClick={bulkDeleteJobs}
+                  disabled={bulkDeletingJobs}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
+                  <Trash2 size={14} />
+                  {bulkDeletingJobs ? 'Deleting…' : `Delete selected (${selectedJobIds.size})`}
+                </button>
+              )}
+              {isAdmin && jobs.some((j) => j.status === 'running') && (
+                <button className="btn-danger" onClick={stopAllSyncs} disabled={stopping} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <XCircle size={14} />
+                  {stopping ? 'Stopping…' : 'Stop all running syncs'}
+                </button>
+              )}
+            </div>
+          </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)' }}>
+                  {isAdmin && (
+                    <th style={{ width: 40, padding: '10px 8px', textAlign: 'center', verticalAlign: 'middle' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedJobIds.size > 0 && selectedJobIds.size === jobs.length}
+                        onChange={(e) => toggleAllJobs(e.target.checked)}
+                        aria-label="Select all jobs"
+                        style={{ cursor: 'pointer', width: 16, height: 16, margin: 0, verticalAlign: 'middle' }}
+                      />
+                    </th>
+                  )}
                   <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Started</th>
                   <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Status</th>
                   <th style={{ textAlign: 'right', padding: '10px 8px', fontWeight: 700 }}>Discovered</th>
@@ -759,6 +1014,17 @@ export default function KnowledgeBaseAdmin() {
               <tbody>
                 {jobs.map((job) => (
                   <tr key={job.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    {isAdmin && (
+                      <td style={{ width: 40, padding: '10px 8px', textAlign: 'center', verticalAlign: 'middle' }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedJobIds.has(job.id)}
+                          onChange={() => toggleJobSelection(job.id)}
+                          aria-label={`Select sync job ${job.id}`}
+                          style={{ cursor: 'pointer', width: 16, height: 16, margin: 0, verticalAlign: 'middle' }}
+                        />
+                      </td>
+                    )}
                     <td style={{ padding: '10px 8px' }}>{formatDate(job.startedAt)}</td>
                     <td style={{ padding: '10px 8px' }}>
                       {job.status === 'completed' ? <CheckCircle size={14} color="#22c55e" /> : <XCircle size={14} color="#ef4444" />}
@@ -778,14 +1044,38 @@ export default function KnowledgeBaseAdmin() {
       {/* Files table */}
       {files.length > 0 && (
         <div className="card" style={{ padding: 24, marginTop: 20 }}>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 16px', fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
-            Indexed files
-            <CountBadge count={indexedFilesCount} title={`${indexedFilesCount.toLocaleString()} indexed files`} />
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0, fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
+              Indexed files
+              <CountBadge count={indexedFilesCount} title={`${indexedFilesCount.toLocaleString()} indexed files`} />
+            </h2>
+            {isAdmin && selectedFileIds.size > 0 && (
+              <button
+                className="btn-danger"
+                onClick={bulkDeleteFiles}
+                disabled={bulkDeletingFiles}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <Trash2 size={14} />
+                {bulkDeletingFiles ? 'Removing…' : `Remove selected (${selectedFileIds.size})`}
+              </button>
+            )}
+          </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)' }}>
+                  {isAdmin && (
+                    <th style={{ width: 40, padding: '10px 8px', textAlign: 'center', verticalAlign: 'middle' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFileIds.size > 0 && selectedFileIds.size === files.length}
+                        onChange={(e) => toggleAllFiles(e.target.checked)}
+                        aria-label="Select all files"
+                        style={{ cursor: 'pointer', width: 16, height: 16, margin: 0, verticalAlign: 'middle' }}
+                      />
+                    </th>
+                  )}
                   <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Sub-brand</th>
                   <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>File</th>
                   <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Folder path</th>
@@ -797,6 +1087,17 @@ export default function KnowledgeBaseAdmin() {
               <tbody>
                 {files.map((file) => (
                   <tr key={file.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    {isAdmin && (
+                      <td style={{ width: 40, padding: '10px 8px', textAlign: 'center', verticalAlign: 'middle' }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedFileIds.has(file.id)}
+                          onChange={() => toggleFileSelection(file.id)}
+                          aria-label={`Select file ${file.fileName}`}
+                          style={{ cursor: 'pointer', width: 16, height: 16, margin: 0, verticalAlign: 'middle' }}
+                        />
+                      </td>
+                    )}
                     <td style={{ padding: '10px 8px' }}>{SUB_BRAND_LABELS[file.subBrand] || file.subBrand}</td>
                     <td style={{ padding: '10px 8px' }}>
                       <a href={file.driveViewLink} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>

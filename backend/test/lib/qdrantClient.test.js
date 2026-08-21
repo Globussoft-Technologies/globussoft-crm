@@ -42,4 +42,27 @@ describe('qdrantClient — config surface', () => {
   test('VECTOR_SIZE matches OpenAI embedding dimensions', () => {
     expect(qdrantClient.VECTOR_SIZE).toBe(1536);
   });
+
+  test('collectionName keeps the legacy name for the OpenAI provider', () => {
+    delete process.env.QDRANT_COLLECTION;
+    expect(qdrantClient.collectionName('openai')).toBe('travel_knowledge');
+    expect(qdrantClient.collectionName()).toBe('travel_knowledge');
+  });
+
+  test('collectionName suffixes non-OpenAI providers', () => {
+    delete process.env.QDRANT_COLLECTION;
+    expect(qdrantClient.collectionName('gemini')).toBe('travel_knowledge_gemini');
+  });
+
+  test('collectionName uses custom base when QDRANT_COLLECTION is set', () => {
+    process.env.QDRANT_COLLECTION = 'kb';
+    expect(qdrantClient.collectionName('openai')).toBe('kb');
+    expect(qdrantClient.collectionName('gemini')).toBe('kb_gemini');
+  });
+
+  test('vectorSize returns provider-specific dimensions', () => {
+    expect(qdrantClient.vectorSize('openai')).toBe(1536);
+    expect(qdrantClient.vectorSize('gemini')).toBe(3072);
+    expect(qdrantClient.vectorSize()).toBe(1536);
+  });
 });

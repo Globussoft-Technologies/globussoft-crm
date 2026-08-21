@@ -54,12 +54,43 @@ const MODELS_FIXTURE = {
   ],
 };
 
+const EXISTING_BRAND_KITS_FIXTURE = {
+  brandKits: [
+    {
+      id: 42,
+      tenantId: 1,
+      subBrand: 'tmc',
+      version: 3,
+      isActive: true,
+      updatedAt: '2026-08-01T00:00:00Z',
+    },
+  ],
+};
+
+const BRAND_KIT_DETAIL_FIXTURE = {
+  brandKit: {
+    id: 42,
+    logoUrl: '/uploads/brand-kits/1/_default/logo.png',
+    primaryColor: '#265855',
+    secondaryColor: '#CD9481',
+    accentColor: '#0e6b4f',
+    bgColor: '#FAF6EE',
+    textColor: '#1A1A1A',
+    tagline: 'Crafted journeys',
+    supportPhone: '+91 98765 43210',
+    supportEmail: 'hello@agency.com',
+    socialLinksJson: '[{"network":"instagram","url":"https://ig"}]',
+  },
+};
+
 function wireFetch() {
   fetchApiMock.mockImplementation((url, opts) => {
     if (url === '/api/travel/brochures/sectors') {
       return Promise.resolve({ sectors: [{ key: 'travel', name: 'Travel Brochure', description: 'agency-grade', styles: ['tmc-press', 'editorial-sakura'] }] });
     }
     if (url === '/api/travel/brochures/models') return Promise.resolve(MODELS_FIXTURE);
+    if (url === '/api/brand-kits?fields=summary') return Promise.resolve(EXISTING_BRAND_KITS_FIXTURE);
+    if (url === '/api/brand-kits/42') return Promise.resolve(BRAND_KIT_DETAIL_FIXTURE);
     if (url === '/api/travel/brochures/runs' && opts?.method === 'POST') {
       return Promise.resolve({ runId: 'br_test123', brochureId: 7, status: 'running' });
     }
@@ -170,5 +201,72 @@ describe('BrochureEngine page', () => {
       expect(body.styleKey).toBe('editorial-sakura'); // always explicit, defaults to editorial-sakura
       expect(body.strategy).toBe('recommended');
     });
+  });
+
+  it('loads existing brand kits on mount and shows the selector', async () => {
+    renderPage();
+    fireEvent.click(screen.getByText(/Brand Kit/i));
+    const selector = await screen.findByTestId('existing-brand-kit');
+    expect(selector).toBeInTheDocument();
+    expect(within(selector).getByText('Custom brand kit')).toBeInTheDocument();
+    expect(within(selector).getByText('tmc — v3')).toBeInTheDocument();
+  });
+
+  it('selecting an existing brand kit loads its values and sends existingBrandKitId on generate', async () => {
+    renderPage();
+    await screen.findByTestId('cost-estimate');
+    fireEvent.click(screen.getByText(/Brand Kit/i));
+    const selector = await screen.findByTestId('existing-brand-kit');
+    fireEvent.change(selector, { target: { value: '42' } });
+
+    // Wait for the detail fetch + UI update.
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/brand-kits/42');
+    });
+
+    fireEvent.change(screen.getByTestId('brochure-goal'), { target: { value: '5-day Goa trip.' } });
+    fireEvent.click(screen.getByTestId('generate-brochure'));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find((c) => c[0] === '/api/travel/brochures/runs' && c[1]?.method === 'POST');
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.existingBrandKitId).toBe(42);
+      expect(body.brand.logoUrl).toBe('/uploads/brand-kits/1/_default/logo.png');
+      expect(body.brand.colors.accent).toBe('#0e6b4f');
+      expect(body.brand.contact).toContain('+91 98765 43210');
+      expect(body.brand.socials).toContain('instagram');
+    });
+  });
+
+  it('shows the full brand-kit colour palette and lets the user pick a different accent', async () => {
+    renderPage();
+    await screen.findByTestId('cost-estimate');
+    fireEvent.click(screen.getByText(/Brand Kit/i));
+    const selector = await screen.findByTestId('existing-brand-kit');
+    fireEvent.change(selector, { target: { value: '42' } });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Use Primary colour')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText('Use Primary colour'));
+    fireEvent.change(screen.getByTestId('brochure-goal'), { target: { value: '5-day Goa trip.' } });
+    fireEvent.click(screen.getByTestId('generate-brochure'));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find((c) => c[0] === '/api/travel/brochures/runs' && c[1]?.method === 'POST');
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.brand.colors.accent).toBe('#265855');
+    });
+  });
+
+  it('pastes the empty structured template when the Template chip is clicked', async () => {
+    renderPage();
+    await screen.findByTestId('cost-estimate');
+    fireEvent.click(screen.getByRole('button', { name: /^Template$/ }));
+    const goal = screen.getByTestId('brochure-goal');
+    expect(goal.value).toContain('AGENCY:');
+    expect(goal.value).toContain('[TYPE]');
+    expect(goal.value).toContain('DAY BY DAY:');
   });
 });

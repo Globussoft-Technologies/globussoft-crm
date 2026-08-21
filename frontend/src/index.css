@@ -24,6 +24,15 @@
   --info-bg: rgba(59, 130, 246, 0.12);
   --info-border: rgba(59, 130, 246, 0.35);
 
+  /* Warning callout surface (itinerary item pricing-preview "no cost
+     template" banner). Dark default: translucent amber tint that keeps
+     white --text-primary readable — mirrors --info-bg above. Previously
+     unset, so the banner always fell back to its light-mode literal
+     (#fff8e6) while its text color still flipped to white in dark mode,
+     producing near-unreadable white-on-pale-yellow. */
+  --warn-bg: rgba(245, 158, 11, 0.12);
+  --warn-border: rgba(245, 158, 11, 0.35);
+
   --border-color: rgba(255, 255, 255, 0.08);
 
   --font-family: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -93,6 +102,11 @@
   --info-bg: #eef6ff;
   --info-border: #bcd7f0;
 
+  /* Light theme: pale amber warning surface with dark --text-primary
+     (the value the banner's fallback already hardcoded). */
+  --warn-bg: #fff8e6;
+  --warn-border: #f0d080;
+
   --border-color: rgba(0, 0, 0, 0.1);
 
   --glass-bg: rgba(255, 255, 255, 0.5);
@@ -150,6 +164,10 @@
   /* Dark theme: translucent blue tint keeps white --text-primary readable. */
   --info-bg: rgba(59, 130, 246, 0.12);
   --info-border: rgba(59, 130, 246, 0.35);
+
+  /* Dark theme: translucent amber tint keeps white --text-primary readable. */
+  --warn-bg: rgba(245, 158, 11, 0.12);
+  --warn-border: rgba(245, 158, 11, 0.35);
 
   --border-color: rgba(255, 255, 255, 0.1);
 

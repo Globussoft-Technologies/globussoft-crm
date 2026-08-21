@@ -243,7 +243,11 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
   it('renders heading + sub-brand filter + classification filter + Refresh + add-diagnostic CTA', async () => {
     renderPage(REGULAR_USER);
     expect(screen.getByRole('heading', { name: /Diagnostics/i })).toBeInTheDocument();
-    expect(screen.getByTitle(/diagnostics/i)).toBeInTheDocument();
+    // Anchored to end-of-string: a second unrelated title ("...AI-powered
+    // diagnostics can recommend trips from your catalog", the Google Drive
+    // connect button) also contains "diagnostics" but doesn't END with it —
+    // only the count badge's "<N> diagnostics" title does.
+    expect(screen.getByTitle(/diagnostics$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();
@@ -265,6 +269,12 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalled();
     });
+  });
+
+  it('links to Travel Knowledge for brochure management', async () => {
+    renderPage(REGULAR_USER);
+    const link = await screen.findByRole('link', { name: /Manage brochure knowledge base/i });
+    expect(link.getAttribute('href')).toBe('/travel/trip-knowledge');
   });
 });
 
@@ -378,6 +388,44 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     renderPage();
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Failed to load diagnostics');
+    });
+  });
+
+  it('renders table columns in the order Submitted → Contact → Sub-brand → Classification → Tier → Score', async () => {
+    renderPage();
+    await screen.findByText('tmc');
+
+    const headerCells = screen.getAllByRole('columnheader');
+    // Skip the optional checkbox column (first when admin).
+    const labels = headerCells.map((th) => th.textContent.trim());
+    const dataLabels = labels.filter((label) => label !== '');
+    expect(dataLabels).toEqual([
+      'Submitted',
+      'Contact',
+      'Sub-brand',
+      'Classification',
+      'Tier',
+      'Score',
+    ]);
+  });
+
+  it('notifies when new diagnostic submissions appear after a refresh', async () => {
+    installFetchMock({ list: { diagnostics: [DIAGNOSTICS_DEFAULT[0]], total: 1 } });
+    renderPage();
+    await screen.findByText('tmc');
+
+    fetchApiMock.mockClear();
+    installFetchMock({
+      list: {
+        diagnostics: [DIAGNOSTICS_DEFAULT[0], makeDiagnostic({ id: 999, subBrand: 'rfu' })],
+        total: 2,
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Reload list/i }));
+
+    await waitFor(() => {
+      expect(notifyInfo).toHaveBeenCalledWith('1 new diagnostic submission');
     });
   });
 });
@@ -623,6 +671,26 @@ describe('<Diagnostics /> — row rendering (badges + scores + classification fa
     renderPage();
     const row = (await screen.findByText('rfu')).closest('tr');
     expect(within(row).getByText('noname@x.com')).toBeInTheDocument();
+  });
+
+  it('contact column links to /contacts/<contactId> when contactId is present', async () => {
+    installFetchMock({
+      list: {
+        diagnostics: [
+          makeDiagnostic({
+            id: 713,
+            subBrand: 'tmc',
+            contactId: 5003,
+            contact: { id: 5003, name: 'Ravi Kumar', email: 'ravi@x.com', phone: null },
+          }),
+        ],
+      },
+    });
+    renderPage();
+    const link = await screen.findByRole('link', { name: /Open contact #5003/i });
+    expect(link.getAttribute('href')).toBe('/contacts/5003');
+    expect(within(link).getByText('Ravi Kumar')).toBeInTheDocument();
+    expect(within(link).getByText('ravi@x.com')).toBeInTheDocument();
   });
 });
 

@@ -85,6 +85,44 @@ export async function geocode(query) {
 }
 
 /**
+ * Forward-geocode a free-text query to a short list of candidate places, for
+ * type-ahead/autocomplete UIs. Unlike geocode() (which returns only the top
+ * match), this returns up to `limit` candidates so the caller can render a
+ * dropdown of suggestions as the user types.
+ *
+ * @param {string} query — free-text partial place name
+ * @param {{limit?: number}} [options]
+ * @returns {Promise<Array<{lat:number, lng:number, display_name:string}>>}
+ */
+export async function geocodeSuggestions(query, { limit = 6 } = {}) {
+  const key = normalizeQuery(query);
+  if (!key) return [];
+
+  const cappedLimit = Math.min(Math.max(parseInt(limit, 10) || 1, 1), 5);
+  const cacheKey = `sugg:${cappedLimit}:${key}`;
+  const cached = lruGet(cacheKey);
+  if (cached !== undefined) return cached;
+
+  let results = [];
+  try {
+    const data = await fetchApi(
+      `/api/travel/pois/geocode?q=${encodeURIComponent(key)}&limit=${cappedLimit}`,
+      { silent: true },
+    );
+    if (Array.isArray(data?.results)) {
+      results = data.results.filter(
+        (r) => Number.isFinite(r?.lat) && Number.isFinite(r?.lng) && r?.display_name,
+      );
+    }
+  } catch (err) {
+    console.warn('[geocoder] suggestions proxy error:', err?.message || err);
+  }
+
+  lruSet(cacheKey, results);
+  return results;
+}
+
+/**
  * Reverse-geocode a lat/lng pair to a human-readable place name.
  * Also proxied through the backend for the same User-Agent reason.
  *

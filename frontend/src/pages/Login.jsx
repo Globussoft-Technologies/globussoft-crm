@@ -836,7 +836,7 @@ const Login = () => {
                 {
                   label: "Owner (Yasin)",
                   email: "yasin@travelstall.in",
-                  password: "password123",
+                  password: "yR9Q6&$vUFXKce-)W57",
                   color: "#a855f7",
                 },
                 {

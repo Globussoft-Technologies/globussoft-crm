@@ -150,4 +150,38 @@ function parseBank(questionsJson, scoringRulesJson) {
   };
 }
 
-module.exports = { scoreDiagnostic, parseBank };
+// PRD §3.5 — four school-readiness levels surfaced to customers.
+// Keep this as the single source of truth for level_1..level_4 →
+// human-readable names so scoring, RAG, PDFs, and reports stay consistent.
+const READINESS_LEVELS = Object.freeze([
+  null,
+  "Curriculum-Aligned & Outcome-Focused",
+  "Engagement-Focused & Experience-Driven",
+  "Exploration-Ready & Value-Conscious",
+  "Custom Support Recommended",
+]);
+
+function getReadinessLevel(classification) {
+  const n = Number(String(classification || "").replace(/^level_/, ""));
+  if (Number.isFinite(n) && n >= 1 && n <= 4) {
+    return { level: n, name: READINESS_LEVELS[n] };
+  }
+  return null;
+}
+
+function readinessLevelFromScore(score) {
+  if (!Number.isFinite(score)) return null;
+  // Map the legacy 0-10 score into the 4 customer-facing readiness levels.
+  if (score >= 7.5) return { level: 1, name: READINESS_LEVELS[1] };
+  if (score >= 5.5) return { level: 2, name: READINESS_LEVELS[2] };
+  if (score >= 3.5) return { level: 3, name: READINESS_LEVELS[3] };
+  return { level: 4, name: READINESS_LEVELS[4] };
+}
+
+module.exports = {
+  scoreDiagnostic,
+  parseBank,
+  READINESS_LEVELS,
+  getReadinessLevel,
+  readinessLevelFromScore,
+};

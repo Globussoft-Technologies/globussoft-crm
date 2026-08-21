@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, ClipboardCheck, Send, CheckCircle, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ClipboardCheck, Send, CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 
@@ -270,7 +270,16 @@ export default function DiagnosticWizard() {
             style={!isAnswered || submitting ? primaryBtnDisabled : primaryBtn}
             aria-label="Submit diagnostic"
           >
-            <Send size={16} aria-hidden /> {submitting ? 'Submitting…' : 'Submit'}
+            {submitting ? (
+              <>
+                <Loader2 size={16} aria-hidden style={{ animation: "spin 1s linear infinite" }} />
+                Analyzing your curriculum needs
+              </>
+            ) : (
+              <>
+                <Send size={16} aria-hidden /> Submit
+              </>
+            )}
           </button>
         ) : (
           <button

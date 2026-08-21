@@ -24,7 +24,7 @@ import { Link } from "react-router-dom";
 import {
   AlertCircle, BadgePercent, Calendar as CalendarIcon,
   ClipboardCheck, Compass, IndianRupee, FileText, Luggage,
-  Map as MapIcon, RefreshCw, Ticket, Users,
+  Map as MapIcon, RefreshCw, ShieldCheck, Ticket, Users, X,
 } from "lucide-react";
 import { AuthContext } from "../../App";
 import { fetchApi } from "../../utils/api";
@@ -42,6 +42,16 @@ export default function TravelDashboard() {
   // the endpoint 403s for USER role so we don't even fetch for them.
   const isManager = user?.role === "ADMIN" || user?.role === "MANAGER";
   const [workload, setWorkload] = useState(null);
+  // System readiness panel — shows which customer-connectable integrations
+  // are wired up (Gmail, Calendar, WhatsApp, Drive, AI, Razorpay).
+  const [readiness, setReadiness] = useState(null);
+  const [showReadiness, setShowReadiness] = useState(false);
+
+  const loadReadiness = () => {
+    fetchApi("/api/travel/dashboard/readiness")
+      .then(setReadiness)
+      .catch(() => setReadiness(null));
+  };
 
   const load = () => {
     setLoading(true);
@@ -63,6 +73,7 @@ export default function TravelDashboard() {
         .then(setWorkload)
         .catch(() => setWorkload(null));
     }
+    loadReadiness();
   };
   // Re-fetch on mount AND whenever the active sub-brand changes, so flipping
   // the switcher recomputes the KPI tiles instead of showing stale "All" data.
@@ -150,6 +161,24 @@ export default function TravelDashboard() {
               }
               footer={`${data.webCheckins?.done ?? 0} delivered · ${data.webCheckins?.pending ?? 0} pending · ${data.webCheckins?.missed ?? 0} missed`}
               link="/travel/web-checkins"
+            />
+            <Tile
+              icon={ShieldCheck}
+              label="System Readiness"
+              value={readiness ? `${readiness.readyCount}/${readiness.totalCount}` : "—"}
+              accent={
+                readiness && readiness.readyCount < readiness.totalCount ? (
+                  <span style={{ color: "var(--warning-color)", fontWeight: 600 }}>
+                    {readiness.totalCount - readiness.readyCount} items need attention
+                  </span>
+                ) : readiness ? (
+                  <span style={{ color: "var(--success-color)", fontWeight: 600 }}>
+                    All set
+                  </span>
+                ) : null
+              }
+              footer={readiness ? <ReadinessTileFooter checks={readiness.checks} /> : "Loading readiness…"}
+              onClick={() => setShowReadiness(true)}
             />
           </div>
 
@@ -252,6 +281,10 @@ export default function TravelDashboard() {
             <FileText size={12} aria-hidden style={{ marginRight: 4, verticalAlign: -1 }} />
             Sub-brand scope, RBAC, and PII gates apply server-side. Drill into the linked surfaces above to see participant-level detail.
           </p>
+
+          {showReadiness && (
+            <ReadinessModal readiness={readiness} onClose={() => setShowReadiness(false)} />
+          )}
         </>
       )}
     </div>
@@ -260,8 +293,9 @@ export default function TravelDashboard() {
 
 // ─── Building blocks ────────────────────────────────────────────────
 
-function Tile({ icon: Icon, label, value, footer, accent, link, style }) {
+function Tile({ icon: Icon, label, value, footer, accent, link, onClick, style }) {
   const [isHovered, setIsHovered] = useState(false);
+  const clickable = Boolean(onClick);
   const content = (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 13, fontWeight: 600 }}>
@@ -274,111 +308,115 @@ function Tile({ icon: Icon, label, value, footer, accent, link, style }) {
         <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{accent}</div>
       )}
     {footer && (
-  <div
-    style={{
-      borderTop: "1px solid var(--border-color)",
-      marginTop: 8,
-      paddingTop: 8,
-    }}
-  >
-    <div
-      style={{
-        fontSize: 12,
-        color: "var(--text-secondary)",
-        marginTop: 8,
-        lineHeight: 1.5,
-        display: "grid",
-        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-        columnGap: 0,
-        rowGap: 4,
-      }}
-    >
-      {String(footer)
-        .split(" · ")
-        .map((item, index) => {
-          let rawKey;
-          let value;
+      <div
+        style={{
+          borderTop: "1px solid var(--border-color)",
+          marginTop: 8,
+          paddingTop: 8,
+        }}
+      >
+        {typeof footer === "string" ? (
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--text-secondary)",
+              marginTop: 8,
+              lineHeight: 1.5,
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              columnGap: 0,
+              rowGap: 4,
+            }}
+          >
+            {String(footer)
+              .split(" · ")
+              .map((item, index) => {
+                let rawKey;
+                let value;
 
-          if (item.includes(":")) {
-            // Example: level_1: 123
-            const parts = item.split(":");
+                if (item.includes(":")) {
+                  // Example: level_1: 123
+                  const parts = item.split(":");
 
-            rawKey = parts[0].trim().toLowerCase();
-            value = parts.slice(1).join(":").trim();
-          } else {
-            // Example: 20 seasons / 1 pending
-            const match = item.trim().match(/^(\d+)\s+(.+)$/);
+                  rawKey = parts[0].trim().toLowerCase();
+                  value = parts.slice(1).join(":").trim();
+                } else {
+                  // Example: 20 seasons / 1 pending
+                  const match = item.trim().match(/^(\d+)\s+(.+)$/);
 
-            if (match) {
-              value = match[1];
-              rawKey = match[2].trim().toLowerCase();
-            } else {
-              rawKey = item.trim().toLowerCase();
-              value = "";
-            }
-          }
+                  if (match) {
+                    value = match[1];
+                    rawKey = match[2].trim().toLowerCase();
+                  } else {
+                    rawKey = item.trim().toLowerCase();
+                    value = "";
+                  }
+                }
 
-          const colorMap = {
-            // Trips
-            cancelled: "var(--danger-color)",
-            completed: "var(--success-color)",
-            confirmed: "var(--primary-color)",
-            "in-trip": "var(--warning-color)",
+                const colorMap = {
+                  // Trips
+                  cancelled: "var(--danger-color)",
+                  completed: "var(--success-color)",
+                  confirmed: "var(--primary-color)",
+                  "in-trip": "var(--warning-color)",
 
-            // Diagnostics
-            level_1: "var(--primary-color)",
-            level_2: "var(--warning-color)",
-            level_3: "var(--success-color)",
+                  // Diagnostics
+                  level_1: "var(--primary-color)",
+                  level_2: "var(--warning-color)",
+                  level_3: "var(--success-color)",
 
-            // Itineraries
-            accepted: "var(--success-color)",
-            advance_paid: "var(--primary-color)",
-            draft: "var(--warning-color)",
-            fully_paid: "var(--success-color)",
-            rejected: "var(--danger-color)",
-            revised: "var(--primary-color)",
-            sent: "var(--success-color)",
+                  // Itineraries
+                  accepted: "var(--success-color)",
+                  advance_paid: "var(--primary-color)",
+                  draft: "var(--warning-color)",
+                  fully_paid: "var(--success-color)",
+                  rejected: "var(--danger-color)",
+                  revised: "var(--primary-color)",
+                  sent: "var(--success-color)",
 
-            // Other cards
-            published: "var(--success-color)",
-            rfu: "var(--primary-color)",
-            tmc: "var(--success-color)",
-            seasons: "var(--primary-color)",
-            "markup rules": "var(--success-color)",
-            delivered: "var(--success-color)",
-            pending: "var(--warning-color)",
-            missed: "var(--danger-color)",
-          };
+                  // Other cards
+                  published: "var(--success-color)",
+                  rfu: "var(--primary-color)",
+                  tmc: "var(--success-color)",
+                  seasons: "var(--primary-color)",
+                  "markup rules": "var(--success-color)",
+                  delivered: "var(--success-color)",
+                  pending: "var(--warning-color)",
+                  missed: "var(--danger-color)",
+                };
 
-          const displayLabel =
-  rawKey === "rfu" || rawKey === "tmc"
-    ? rawKey.toUpperCase()
-    : rawKey
-        .replace(/_/g, " ")
-        .replace(/-/g, " ")
-        .replace(/\b\w/g, (char) => char.toUpperCase());
+                const displayLabel =
+                  rawKey === "rfu" || rawKey === "tmc"
+                    ? rawKey.toUpperCase()
+                    : rawKey
+                      .replace(/_/g, " ")
+                      .replace(/-/g, " ")
+                      .replace(/\b\w/g, (char) => char.toUpperCase());
 
-          return (
-            <span
-              key={index}
-              style={{
-                minWidth: 0,
-                overflowWrap: "anywhere",
-                color: colorMap[rawKey] || "var(--text-secondary)",
-                borderLeft:
-                  index % 2 === 1
-                    ? "1px solid var(--border-color)"
-                    : "none",
-                paddingLeft: index % 2 === 1 ? 10 : 0,
-              }}
-            >
-              {displayLabel}: {value}
-            </span>
-          );
-        })}
-    </div>
-  </div>
-)}
+                return (
+                  <span
+                    key={index}
+                    style={{
+                      minWidth: 0,
+                      overflowWrap: "anywhere",
+                      color: colorMap[rawKey] || "var(--text-secondary)",
+                      borderLeft:
+                        index % 2 === 1
+                          ? "1px solid var(--border-color)"
+                          : "none",
+                      paddingLeft: index % 2 === 1 ? 10 : 0,
+                    }}
+                  >
+                    {displayLabel}: {value}
+                  </span>
+                );
+              })}
+          </div>
+        ) : (
+          footer
+        )}
+      </div>
+    )}
     </>
   );
   if (link) {
@@ -400,6 +438,28 @@ function Tile({ icon: Icon, label, value, footer, accent, link, style }) {
       </Link>
     );
   }
+  if (clickable) {
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClick(e); }}
+        style={{
+          ...tileStyle,
+          ...style,
+          ...tileLinkStyle,
+          ...(isHovered ? tileLinkHoverStyle : {}),
+        }}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onFocus={() => setIsHovered(true)}
+        onBlur={() => setIsHovered(false)}
+      >
+        {content}
+      </div>
+    );
+  }
   return <div style={{ ...tileStyle, ...style }}>{content}</div>;
 }
 function byKeyFooter(obj) {
@@ -411,6 +471,152 @@ function byKeyFooter(obj) {
   return entries
     .map(([k, v]) => `${k}: ${v}`)
     .join(" · ");
+}
+
+function ReadinessTileFooter({ checks }) {
+  if (!Array.isArray(checks)) {
+    return <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>Loading readiness…</div>;
+  }
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        gap: "4px 12px",
+        fontSize: 12,
+      }}
+    >
+      {checks.map((check, index) => (
+        <div
+          key={check.id}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            minWidth: 0,
+            borderLeft: index % 2 === 1 ? "1px solid var(--border-color)" : "none",
+            paddingLeft: index % 2 === 1 ? 10 : 0,
+          }}
+          title={`${check.label}: ${check.ready ? "Connected" : "Needs attention"}`}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: check.ready ? "var(--success-color)" : "var(--warning-color)",
+              flexShrink: 0,
+            }}
+          />
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              color: "var(--text-secondary)",
+            }}
+          >
+            {check.label}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReadinessModal({ readiness, onClose }) {
+  if (!readiness) return null;
+  const { checks, readyCount, totalCount } = readiness;
+  const allReady = readyCount === totalCount;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="readiness-title"
+      style={modalOverlayStyle}
+      onClick={onClose}
+    >
+      <div
+        style={modalContentStyle}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <h2 id="readiness-title" style={{ margin: 0, fontSize: 18, display: "flex", alignItems: "center", gap: 8 }}>
+            <ShieldCheck size={22} aria-hidden /> System Readiness
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            style={modalCloseStyle}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div
+          style={{
+            ...modalBannerStyle,
+            background: allReady ? "rgba(47,122,77,0.12)" : "rgba(200,154,78,0.15)",
+            color: allReady ? "var(--success-color)" : "var(--warning-color)",
+          }}
+        >
+          {allReady
+            ? `All ${totalCount} readiness checks passed.`
+            : `${readyCount} of ${totalCount} checks ready · ${totalCount - readyCount} need attention`}
+        </div>
+
+        <div style={{ display: "grid", gap: 10 }}>
+          {checks.map((check) => (
+            <div
+              key={check.id}
+              style={{
+                ...modalRowStyle,
+                borderLeftColor: check.ready ? "var(--success-color)" : "var(--warning-color)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    background: check.ready ? "var(--success-color)" : "var(--warning-color)",
+                    flexShrink: 0,
+                  }}
+                />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: "var(--text-primary)" }}>{check.label}</div>
+                  {check.detail && (
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", overflowWrap: "anywhere" }}>
+                      {check.detail}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <Link
+                to={check.link}
+                onClick={onClose}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  textDecoration: "none",
+                  whiteSpace: "nowrap",
+                  background: check.ready ? "var(--subtle-bg)" : "var(--primary-color, var(--accent-color))",
+                  color: check.ready ? "var(--text-secondary)" : "#fff",
+                }}
+              >
+                {check.ready ? "Manage" : "Connect"}
+              </Link>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 function fmtDate(d) {
   if (!d) return "—";
@@ -526,4 +732,53 @@ const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const trStyle = { borderTop: "1px solid var(--border-light)" };
 const tripLink = {
   color: "var(--primary-color)", textDecoration: "none", fontWeight: 600,
+};
+const modalOverlayStyle = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.45)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+  padding: 16,
+};
+const modalContentStyle = {
+  background: "var(--surface-color)",
+  border: "1px solid var(--border-color)",
+  borderRadius: 14,
+  padding: 22,
+  width: "100%",
+  maxWidth: 520,
+  maxHeight: "80vh",
+  overflowY: "auto",
+  boxShadow: "var(--shadow-lg, 0 16px 48px rgba(0,0,0,0.2))",
+};
+const modalCloseStyle = {
+  background: "transparent",
+  border: "none",
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+  padding: 4,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+const modalBannerStyle = {
+  padding: "10px 14px",
+  borderRadius: 8,
+  fontSize: 13,
+  fontWeight: 600,
+  marginBottom: 16,
+};
+const modalRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  padding: "12px 14px",
+  borderRadius: 10,
+  border: "1px solid var(--border-color)",
+  borderLeft: "4px solid",
+  background: "var(--bg-color, var(--surface-color))",
 };

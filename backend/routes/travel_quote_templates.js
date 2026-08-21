@@ -48,6 +48,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { buildTravelAiErrorResponse } = require("../lib/travelAiError");
 const { requirePermission } = require("../middleware/requirePermission");
 const {
   requireTravelTenant,
@@ -715,6 +716,13 @@ Example output:
 
       res.json({ linesJson: JSON.stringify(sanitised, null, 2), stub: !!result.stub });
     } catch (err) {
+      const aiError = buildTravelAiErrorResponse(err, {
+        featureLabel: "Quote template AI generation",
+        modelLabel: "gemini-flash",
+      });
+      if (aiError) {
+        return res.status(aiError.status).json(aiError.body);
+      }
       if (err.code === "LLM_BUDGET_EXCEEDED") {
         return res.status(402).json({ error: "Monthly AI budget cap reached.", code: err.code });
       }

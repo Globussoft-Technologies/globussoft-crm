@@ -41,6 +41,7 @@ import {
   Copy as CopyIcon,
   ChevronDown,
   ChevronRight,
+  Info,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -102,6 +103,140 @@ const EMPTY_FORM = {
   supportPhone: "",
   socialLinksJson: "",
 };
+
+function googleFontUrl(family) {
+  const first = (family || "").split(",")[0].trim();
+  if (!first || first === "inherit") return "";
+  return `https://fonts.googleapis.com/css2?family=${encodeURIComponent(first)}:wght@400;500;600;700&display=swap`;
+}
+
+const COMMON_FONTS = [
+  "Inter, sans-serif",
+  "Poppins, sans-serif",
+  "Roboto, sans-serif",
+  "Open Sans, sans-serif",
+  "Lato, sans-serif",
+  "Montserrat, sans-serif",
+  "Playfair Display, serif",
+  "Lora, serif",
+  "Cardo, serif",
+  "Oswald, sans-serif",
+  "JetBrains Mono, monospace",
+];
+
+function HelpTip({ text }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      style={{ position: "relative", display: "inline-flex", marginLeft: 4, verticalAlign: "middle" }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      onFocus={() => setShow(true)}
+      onBlur={() => setShow(false)}
+      tabIndex={0}
+    >
+      <Info size={13} style={{ color: "var(--text-secondary)", cursor: "help" }} title={text} />
+      {show && (
+        <span
+          style={{
+            position: "absolute",
+            bottom: "120%",
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: 240,
+            padding: 8,
+            borderRadius: 6,
+            background: "var(--text-primary)",
+            color: "var(--bg-color)",
+            fontSize: 12,
+            zIndex: 100,
+            boxShadow: "0 4px 12px rgba(0,0,0,.25)",
+            lineHeight: 1.4,
+            pointerEvents: "none",
+          }}
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function LabelWithHelp({ htmlFor, label, tip }) {
+  return (
+    <label htmlFor={htmlFor} style={labelStyle}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        {label}
+        {tip && <HelpTip text={tip} />}
+      </span>
+    </label>
+  );
+}
+
+function FontField({ id, urlId, label, value, urlValue, onChange, onUrlChange, tip }) {
+  const isPreset = COMMON_FONTS.includes(value);
+  const handlePreset = (e) => {
+    const v = e.target.value;
+    if (v === "__custom__") return;
+    onChange(v);
+    const url = googleFontUrl(v);
+    if (url && urlId && !urlValue) onUrlChange(url);
+  };
+  return (
+    <div style={fieldRow}>
+      <LabelWithHelp htmlFor={id} label={label} tip={tip} />
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input
+          id={id}
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Inter, sans-serif"
+          autoComplete="off"
+          style={{ ...inputStyle, flex: 1 }}
+        />
+        <select
+          value={isPreset ? value : "__custom__"}
+          onChange={handlePreset}
+          style={{ ...selectStyle, width: "auto", minWidth: 150 }}
+          aria-label="Choose a preset"
+          title="Choose a common font or type a custom stack"
+        >
+          <option value="__custom__">Custom</option>
+          {COMMON_FONTS.map((f) => (
+            <option key={f} value={f}>
+              {f}
+            </option>
+          ))}
+        </select>
+      </div>
+      {urlId && (
+        <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+          <input
+            id={urlId}
+            type="url"
+            value={urlValue}
+            onChange={(e) => onUrlChange(e.target.value)}
+            placeholder="https://fonts.googleapis.com/css2?family=Inter"
+            autoComplete="off"
+            style={{ ...inputStyle, flex: 1 }}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              const url = googleFontUrl(value);
+              if (url) onUrlChange(url);
+            }}
+            style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}
+            title="Generate a Google Fonts CSS URL from the family above"
+          >
+            Auto-fill URL
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── W4.A G099 — WCAG contrast checker ──────────────────────────────────
 // Compute relative-luminance ratio between two hex colours per WCAG 2.1
@@ -661,7 +796,7 @@ export default function BrandKits() {
             <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {/* Sub-brand select (read-only on edit) */}
               <div style={fieldRow}>
-                <label htmlFor="bk-subbrand" style={labelStyle}>Sub-brand</label>
+                <LabelWithHelp htmlFor="bk-subbrand" label="Sub-brand" tip="Tenant-wide kits apply to every travel sub-brand; sub-brand kits override them for that brand only." />
                 <select
                   id="bk-subbrand"
                   value={form.subBrand}
@@ -691,6 +826,7 @@ export default function BrandKits() {
                 assetType="logo"
                 onUpload={(file) => handleUpload("logoUrl", "logo", file)}
                 fileInputRef={fileInputs}
+                tip="The main logo used on light/coloured backgrounds. PNG or SVG recommended."
               />
               <UploadableUrlField
                 id="bk-logo-dark"
@@ -701,9 +837,10 @@ export default function BrandKits() {
                 assetType="logo"
                 onUpload={(file) => handleUpload("logoDarkUrl", "logo", file)}
                 fileInputRef={fileInputs}
+                tip="A light-coloured version shown on dark cover/editorial backgrounds."
               />
               <div style={fieldRow}>
-                <label htmlFor="bk-favicon" style={labelStyle}>Favicon URL</label>
+                <LabelWithHelp htmlFor="bk-favicon" label="Favicon URL" tip="Browser tab icon used by portals, microsites and landing pages." />
                 <input
                   id="bk-favicon"
                   type="url"
@@ -717,7 +854,7 @@ export default function BrandKits() {
               {/* Color pickers — native input[type=color] is good enough for v1
                   (pre-WCAG-contrast-checker per DD-5.5e future-slice note). */}
               <div>
-                <label style={{ ...labelStyle, marginBottom: 6, display: "block" }}>Brand colors</label>
+                <LabelWithHelp htmlFor="bk-color-primaryColor" label="Brand colors" tip="Primary, secondary and accent are used across brochures, portals and invoices. Background/text are checked for contrast below." />
                 <div
                   style={{
                     display: "grid",
@@ -744,32 +881,20 @@ export default function BrandKits() {
               </div>
 
               {/* Font */}
-              <div style={fieldRow}>
-                <label htmlFor="bk-font-family" style={labelStyle}>Font family (CSS value)</label>
-                <input
-                  id="bk-font-family"
-                  type="text"
-                  placeholder="Inter, system-ui, sans-serif"
-                  value={form.fontFamily}
-                  onChange={(e) => setForm({ ...form, fontFamily: e.target.value })}
-                  style={inputStyle}
-                />
-              </div>
-              <div style={fieldRow}>
-                <label htmlFor="bk-font-url" style={labelStyle}>Font URL (CSS @import / WOFF2)</label>
-                <input
-                  id="bk-font-url"
-                  type="url"
-                  placeholder="https://fonts.googleapis.com/css2?family=Inter"
-                  value={form.fontUrl}
-                  onChange={(e) => setForm({ ...form, fontUrl: e.target.value })}
-                  style={inputStyle}
-                />
-              </div>
+              <FontField
+                id="bk-font-family"
+                urlId="bk-font-url"
+                label="Font family (CSS value)"
+                value={form.fontFamily}
+                urlValue={form.fontUrl}
+                onChange={(v) => setForm({ ...form, fontFamily: v })}
+                onUrlChange={(v) => setForm({ ...form, fontUrl: v })}
+                tip="The default typeface. Pick from the dropdown or type any CSS font stack. Auto-fill generates the matching Google Fonts CSS URL."
+              />
 
               {/* Tagline */}
               <div style={fieldRow}>
-                <label htmlFor="bk-tagline" style={labelStyle}>Tagline</label>
+                <LabelWithHelp htmlFor="bk-tagline" label="Tagline" tip="Shown under the agency name on the brochure cover and in the live preview." />
                 <textarea
                   id="bk-tagline"
                   rows={2}
@@ -829,6 +954,7 @@ export default function BrandKits() {
                       assetType="wordmark"
                       onUpload={(file) => handleUpload("wordmarkUrl", "wordmark", file)}
                       fileInputRef={fileInputs}
+                      tip="A text-only logotype variant for places where the full logo doesn't fit."
                     />
                     <UploadableUrlField
                       id="bk-hero"
@@ -839,6 +965,7 @@ export default function BrandKits() {
                       assetType="hero"
                       onUpload={(file) => handleUpload("heroUrl", "hero", file)}
                       fileInputRef={fileInputs}
+                      tip="Large banner image for landing pages, portals and microsites."
                     />
                     <UploadableUrlField
                       id="bk-header-image"
@@ -849,6 +976,7 @@ export default function BrandKits() {
                       assetType="headerImage"
                       onUpload={(file) => handleUpload("headerImageUrl", "headerImage", file)}
                       fileInputRef={fileInputs}
+                      tip="Letterhead image shown at the top of PDF invoices."
                     />
                     <UploadableUrlField
                       id="bk-stamp"
@@ -859,85 +987,86 @@ export default function BrandKits() {
                       assetType="stamp"
                       onUpload={(file) => handleUpload("invoiceStampUrl", "stamp", file)}
                       fileInputRef={fileInputs}
+                      tip="Authorised-signature or company stamp image for invoices."
                     />
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-success-badge" style={labelStyle}>Success badge (hex)</label>
+                        <LabelWithHelp htmlFor="bk-success-badge" label="Success badge (hex)" tip="Colour used for success states, paid badges and confirmation toasts." />
                         <input id="bk-success-badge" type="text" placeholder="#22c55e" value={form.successBadge} onChange={(e) => setForm({ ...form, successBadge: e.target.value })} style={inputStyle} maxLength={9} />
                       </div>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-warning-badge" style={labelStyle}>Warning badge (hex)</label>
+                        <LabelWithHelp htmlFor="bk-warning-badge" label="Warning badge (hex)" tip="Colour used for warnings, pending states and attention badges." />
                         <input id="bk-warning-badge" type="text" placeholder="#f59e0b" value={form.warningBadge} onChange={(e) => setForm({ ...form, warningBadge: e.target.value })} style={inputStyle} maxLength={9} />
                       </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-heading-font" style={labelStyle}>Heading font family</label>
+                        <LabelWithHelp htmlFor="bk-heading-font" label="Heading font family" tip="Typeface for headlines, brochure titles and section headings." />
                         <input id="bk-heading-font" type="text" placeholder="Cardo, serif" value={form.headingFontFamily} onChange={(e) => setForm({ ...form, headingFontFamily: e.target.value })} style={inputStyle} />
                       </div>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-heading-font-url" style={labelStyle}>Heading font URL</label>
+                        <LabelWithHelp htmlFor="bk-heading-font-url" label="Heading font URL" tip="Google Fonts CSS or self-hosted WOFF2 URL for the heading typeface." />
                         <input id="bk-heading-font-url" type="url" placeholder="https://fonts.googleapis.com/..." value={form.headingFontUrl} onChange={(e) => setForm({ ...form, headingFontUrl: e.target.value })} style={inputStyle} />
                       </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-body-font" style={labelStyle}>Body font family</label>
+                        <LabelWithHelp htmlFor="bk-body-font" label="Body font family" tip="Typeface for paragraphs and body copy." />
                         <input id="bk-body-font" type="text" placeholder="Inter, sans-serif" value={form.bodyFontFamily} onChange={(e) => setForm({ ...form, bodyFontFamily: e.target.value })} style={inputStyle} />
                       </div>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-body-font-url" style={labelStyle}>Body font URL</label>
+                        <LabelWithHelp htmlFor="bk-body-font-url" label="Body font URL" tip="Google Fonts CSS or self-hosted WOFF2 URL for the body typeface." />
                         <input id="bk-body-font-url" type="url" placeholder="https://fonts.googleapis.com/..." value={form.bodyFontUrl} onChange={(e) => setForm({ ...form, bodyFontUrl: e.target.value })} style={inputStyle} />
                       </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-code-font" style={labelStyle}>Code font family</label>
+                        <LabelWithHelp htmlFor="bk-code-font" label="Code font family" tip="Monospace font for code snippets or data tables." />
                         <input id="bk-code-font" type="text" placeholder="JetBrains Mono" value={form.codeFontFamily} onChange={(e) => setForm({ ...form, codeFontFamily: e.target.value })} style={inputStyle} />
                       </div>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-code-font-url" style={labelStyle}>Code font URL</label>
+                        <LabelWithHelp htmlFor="bk-code-font-url" label="Code font URL" tip="Google Fonts CSS or self-hosted WOFF2 URL for the monospace typeface." />
                         <input id="bk-code-font-url" type="url" placeholder="https://fonts.googleapis.com/..." value={form.codeFontUrl} onChange={(e) => setForm({ ...form, codeFontUrl: e.target.value })} style={inputStyle} />
                       </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-cmyk-primary" style={labelStyle}>CMYK primary</label>
+                        <LabelWithHelp htmlFor="bk-cmyk-primary" label="CMYK primary" tip="Print-spec colour for primary, e.g. 100,50,0,30." />
                         <input id="bk-cmyk-primary" type="text" placeholder="C,M,Y,K" value={form.cmykPrimary} onChange={(e) => setForm({ ...form, cmykPrimary: e.target.value })} style={inputStyle} />
                       </div>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-cmyk-secondary" style={labelStyle}>CMYK secondary</label>
+                        <LabelWithHelp htmlFor="bk-cmyk-secondary" label="CMYK secondary" tip="Print-spec colour for secondary." />
                         <input id="bk-cmyk-secondary" type="text" placeholder="C,M,Y,K" value={form.cmykSecondary} onChange={(e) => setForm({ ...form, cmykSecondary: e.target.value })} style={inputStyle} />
                       </div>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-cmyk-accent" style={labelStyle}>CMYK accent</label>
+                        <LabelWithHelp htmlFor="bk-cmyk-accent" label="CMYK accent" tip="Print-spec colour for accent." />
                         <input id="bk-cmyk-accent" type="text" placeholder="C,M,Y,K" value={form.cmykAccent} onChange={(e) => setForm({ ...form, cmykAccent: e.target.value })} style={inputStyle} />
                       </div>
                     </div>
                     <div style={fieldRow}>
-                      <label htmlFor="bk-signature-template" style={labelStyle}>Email signature template (HTML)</label>
+                      <LabelWithHelp htmlFor="bk-signature-template" label="Email signature template (HTML)" tip="HTML snippet for email signatures. Use {{name}}, {{email}}, {{phone}} placeholders if your renderer supports them." />
                       <textarea id="bk-signature-template" rows={3} placeholder="<p>--<br/>{{name}}<br/>{{email}}</p>" value={form.signatureTemplate} onChange={(e) => setForm({ ...form, signatureTemplate: e.target.value })} style={{ ...inputStyle, resize: "vertical", minHeight: 70, fontFamily: "monospace" }} />
                     </div>
                     <div style={fieldRow}>
-                      <label htmlFor="bk-footer-text" style={labelStyle}>Invoice / PDF footer text</label>
+                      <LabelWithHelp htmlFor="bk-footer-text" label="Invoice / PDF footer text" tip="Legal or company text printed at the bottom of invoices and PDFs." />
                       <textarea id="bk-footer-text" rows={2} placeholder="GST 27ABCDE1234F1Z5 · CIN U63040..." value={form.footerText} onChange={(e) => setForm({ ...form, footerText: e.target.value })} style={{ ...inputStyle, resize: "vertical", minHeight: 50 }} />
                     </div>
                     <div style={fieldRow}>
-                      <label htmlFor="bk-mission" style={labelStyle}>Mission statement (portal/microsite)</label>
+                      <LabelWithHelp htmlFor="bk-mission" label="Mission statement (portal/microsite)" tip="Short brand mission shown on customer portals and microsites." />
                       <textarea id="bk-mission" rows={2} placeholder="Empower curriculum-aligned learning journeys" value={form.missionStatement} onChange={(e) => setForm({ ...form, missionStatement: e.target.value })} style={{ ...inputStyle, resize: "vertical", minHeight: 50 }} />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-support-email" style={labelStyle}>Support email</label>
+                        <LabelWithHelp htmlFor="bk-support-email" label="Support email" tip="Public support email used in footers, contact bands and the brochure engine." />
                         <input id="bk-support-email" type="email" placeholder="support@example.com" value={form.supportEmail} onChange={(e) => setForm({ ...form, supportEmail: e.target.value })} style={inputStyle} />
                       </div>
                       <div style={fieldRow}>
-                        <label htmlFor="bk-support-phone" style={labelStyle}>Support phone</label>
+                        <LabelWithHelp htmlFor="bk-support-phone" label="Support phone" tip="Public support phone used in footers, contact bands and the brochure engine." />
                         <input id="bk-support-phone" type="tel" placeholder="+91-9999999999" value={form.supportPhone} onChange={(e) => setForm({ ...form, supportPhone: e.target.value })} style={inputStyle} />
                       </div>
                     </div>
                     <div style={fieldRow}>
-                      <label htmlFor="bk-social-links" style={labelStyle}>Social links JSON</label>
+                      <LabelWithHelp htmlFor="bk-social-links" label="Social links JSON" tip="Array of objects: [{ network: 'instagram', url: '...' }]. These networks are shown in the brochure engine contact band." />
                       <textarea id="bk-social-links" rows={2} placeholder='[{"network":"instagram","url":"https://ig/..."}]' value={form.socialLinksJson} onChange={(e) => setForm({ ...form, socialLinksJson: e.target.value })} style={{ ...inputStyle, resize: "vertical", minHeight: 50, fontFamily: "monospace" }} />
                     </div>
                   </div>
@@ -953,7 +1082,10 @@ export default function BrandKits() {
                   style={{ marginTop: 3 }}
                 />
                 <span>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>Active version</span>
+                  <span style={{ fontSize: 14, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    Active version
+                    <HelpTip text="Only one version per sub-brand can be active. Activating this kit automatically demotes the previous active version." />
+                  </span>
                   {form.isActive && (
                     <span style={{ display: "block", fontSize: 12, color: "var(--warning-color, #f59e0b)", marginTop: 2 }}>
                       Activating this version will demote the current active brand kit for this sub-brand.
@@ -1113,11 +1245,11 @@ export default function BrandKits() {
 
 // ── W4.A G099 — UI helper subcomponents ────────────────────────────────
 
-function UploadableUrlField({ id, label, placeholder, value, onChange, onUpload, fileInputRef }) {
+function UploadableUrlField({ id, label, placeholder, value, onChange, onUpload, fileInputRef, tip }) {
   const inputId = `${id}-file`;
   return (
     <div style={fieldRow}>
-      <label htmlFor={id} style={labelStyle}>{label}</label>
+      <LabelWithHelp htmlFor={id} label={label} tip={tip} />
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <input
           id={id}

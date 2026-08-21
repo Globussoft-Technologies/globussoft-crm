@@ -193,7 +193,7 @@ export default function QuoteTemplates() {
         body: JSON.stringify({ prompt: aiPrompt, category: form.category, currency: form.currency }),
       });
       setLines(parseLines(result.linesJson));
-      if (result.stub) notify.info("AI is in stub mode — these are sample lines. Add a GEMINI_API_KEY for real generation.");
+      if (result.stub) notify.info("AI keys are not configured for this travel feature. Set GEMINI_API_KEY to enable real generation.");
     } catch (err) {
       notify.error(err?.message || "Failed to generate lines");
     } finally {

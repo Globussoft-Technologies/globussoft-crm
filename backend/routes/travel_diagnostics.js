@@ -35,6 +35,7 @@ const {
 const pdfRenderer = require("../services/pdfRenderer");
 const { findDuplicateContactFull } = require("../utils/deduplication");
 const llmRouter = require("../lib/llmRouter");
+const { buildTravelAiErrorResponse } = require("../lib/travelAiError");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { sendEmail } = require("../lib/emailSender");
 const waWebClient = require("../services/whatsappWebClient");
@@ -80,6 +81,36 @@ function parseDateRangeBoundary(input, kind) {
   return parsed;
 }
 
+function defaultBankTemplateName(subBrand) {
+  return `${String(subBrand || "diagnostic").toUpperCase()} Template`;
+}
+
+function readBankTemplateName(bank) {
+  try {
+    const parsed = JSON.parse(bank?.questionsJson || "{}");
+    const raw =
+      (typeof parsed?.templateName === "string" && parsed.templateName) ||
+      (typeof parsed?.meta?.templateName === "string" && parsed.meta.templateName) ||
+      "";
+    const clean = sanitizeText(raw).slice(0, 120);
+    return clean || defaultBankTemplateName(bank?.subBrand);
+  } catch {
+    return defaultBankTemplateName(bank?.subBrand);
+  }
+}
+
+function withBankTemplateName(bank) {
+  if (!bank) return bank;
+  return { ...bank, templateName: readBankTemplateName(bank) };
+}
+
+function injectBankTemplateName(questionsJson, templateName) {
+  const parsed = JSON.parse(questionsJson || "{}");
+  parsed.meta = parsed.meta && typeof parsed.meta === "object" ? parsed.meta : {};
+  parsed.meta.templateName = templateName;
+  return JSON.stringify(parsed);
+}
+
 //  Question banks
 
 // GET /api/travel/diagnostic-banks?subBrand=tmc&active=true
@@ -112,7 +143,7 @@ router.get(
         orderBy: [{ subBrand: "asc" }, { version: "desc" }],
         take: 100,
       });
-      res.json({ banks });
+      res.json({ banks: banks.map(withBankTemplateName) });
     } catch (e) {
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
@@ -149,7 +180,7 @@ router.get(
           .status(403)
           .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
-      res.json(bank);
+      res.json(withBankTemplateName(bank));
     } catch (e) {
       console.error("[travel-diag] get bank error:", e.message);
       res.status(500).json({ error: "Failed to get bank" });
@@ -208,26 +239,134 @@ router.post(
       const latest = await prisma.travelDiagnosticQuestionBank.findFirst({
         where: { tenantId: req.travelTenant.id, subBrand },
         orderBy: { version: "desc" },
-        select: { version: true },
+        select: { version: true, questionsJson: true, subBrand: true },
       });
       const nextVersion = (latest?.version || 0) + 1;
+      const cleanTemplateName =
+        typeof req.body?.templateName === "string" && req.body.templateName.trim()
+          ? sanitizeText(req.body.templateName).slice(0, 120)
+          : (latest ? readBankTemplateName(latest) : defaultBankTemplateName(subBrand));
+      const questionsJsonWithTemplate = injectBankTemplateName(
+        questionsJson,
+        cleanTemplateName,
+      );
 
       const created = await prisma.travelDiagnosticQuestionBank.create({
         data: {
           tenantId: req.travelTenant.id,
           subBrand,
           version: nextVersion,
-          questionsJson,
+          questionsJson: questionsJsonWithTemplate,
           scoringRulesJson,
           isActive: isActive !== false,
         },
       });
-      res.status(201).json(created);
+      res.status(201).json(withBankTemplateName(created));
     } catch (e) {
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] create bank error:", e.message);
       res.status(500).json({ error: "Failed to create bank" });
+    }
+  },
+);
+
+router.patch(
+  "/diagnostic-banks/:id/template-name",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const templateName =
+        typeof req.body?.templateName === "string" ? sanitizeText(req.body.templateName).slice(0, 120) : "";
+      if (!templateName) {
+        return res.status(400).json({
+          error: "templateName is required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!bank) {
+        return res.status(404).json({ error: "Bank not found", code: "NOT_FOUND" });
+      }
+      const updated = await prisma.travelDiagnosticQuestionBank.update({
+        where: { id },
+        data: { questionsJson: injectBankTemplateName(bank.questionsJson, templateName) },
+      });
+      res.json(withBankTemplateName(updated));
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-diag] rename template error:", e.message);
+      res.status(500).json({ error: "Failed to rename diagnostic template" });
+    }
+  },
+);
+
+router.delete(
+  "/diagnostic-banks/:id",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!bank) {
+        return res.status(404).json({ error: "Bank not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, bank.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.travelDiagnosticQuestionBank.delete({ where: { id } });
+
+        if (bank.isActive) {
+          const fallback = await tx.travelDiagnosticQuestionBank.findFirst({
+            where: {
+              tenantId: req.travelTenant.id,
+              subBrand: bank.subBrand,
+            },
+            orderBy: { version: "desc" },
+          });
+          if (fallback) {
+            await tx.travelDiagnosticQuestionBank.update({
+              where: { id: fallback.id },
+              data: { isActive: true },
+            });
+          }
+        }
+      });
+
+      res.json({ ok: true });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-diag] delete bank error:", e.message);
+      res.status(500).json({ error: "Failed to delete diagnostic template" });
     }
   },
 );
@@ -2024,6 +2163,13 @@ router.post(
         talkingPoints: envelope,
       });
     } catch (e) {
+      const aiError = buildTravelAiErrorResponse(e, {
+        featureLabel: "Diagnostic talking-points AI generation",
+        modelLabel: "gemini-flash",
+      });
+      if (aiError) {
+        return res.status(aiError.status).json(aiError.body);
+      }
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] talking-points regen error:", e.message);
@@ -2233,6 +2379,13 @@ router.post(
         generatedAt,
       });
     } catch (e) {
+      const aiError = buildTravelAiErrorResponse(e, {
+        featureLabel: "Form-vs-call AI comparison",
+        modelLabel: "gemini-flash",
+      });
+      if (aiError) {
+        return res.status(aiError.status).json(aiError.body);
+      }
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] form-vs-call compare error:", e.message);

@@ -30,6 +30,8 @@ import prisma from '../../lib/prisma.js';
 prisma.llmCallLog = { findMany: vi.fn() };
 prisma.apiCallLog = { findMany: vi.fn() };
 prisma.systemSetting = { findUnique: vi.fn(), upsert: vi.fn() };
+prisma.aiSubscriptionPlan = { findMany: vi.fn() };
+prisma.aiTenantSubscription = { findMany: vi.fn() };
 
 const router = (await import('../../routes/super_admin_api_analytics.js')).default;
 
@@ -81,6 +83,7 @@ describe('GET /overview', () => {
   beforeEach(() => {
     prisma.llmCallLog.findMany.mockReset().mockResolvedValue([]);
     prisma.apiCallLog.findMany.mockReset().mockResolvedValue([]);
+    prisma.aiTenantSubscription.findMany.mockReset().mockResolvedValue([]);
     app = buildApp();
   });
 
@@ -141,6 +144,25 @@ describe('GET /overview', () => {
     expect(res.body.totals.failures).toBe(1);
     expect(res.body.totals.tokens).toBe(300); // 150 + 150 from the two llm rows, api rows contribute 0
     expect(res.body.totals.cost).toBeCloseTo(0.001 + 0.001 + 0.015, 6);
+  });
+
+  test('?planId scopes overview to tenants subscribed to that AI plan and excludes non-tenant API logs', async () => {
+    prisma.aiTenantSubscription.findMany.mockResolvedValueOnce([{ tenantId: 2 }, { tenantId: 5 }]);
+    prisma.llmCallLog.findMany.mockResolvedValueOnce([llmRow({ tenantId: 2, totalTokens: 200 })]);
+    prisma.apiCallLog.findMany.mockResolvedValueOnce([apiRow()]);
+
+    const res = await request(app).get('/api/super-admin/api-analytics/overview?planId=4');
+
+    expect(res.status).toBe(200);
+    expect(res.body.planId).toBe(4);
+    expect(prisma.llmCallLog.findMany.mock.calls[0][0].where.tenantId).toEqual({ in: [2, 5] });
+    expect(prisma.apiCallLog.findMany.mock.calls[0][0].where.id).toBe(-1);
+  });
+
+  test('invalid ?planId -> 400 INVALID_PLAN_ID', async () => {
+    const res = await request(app).get('/api/super-admin/api-analytics/overview?planId=nope');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_PLAN_ID');
   });
 
   test('stub LLM calls are EXCLUDED entirely from totals.calls/tokens/cost (never hit a real API, no real cost) and stubCalls is not a field on the response', async () => {
@@ -227,6 +249,8 @@ describe('GET /filters', () => {
   beforeEach(() => {
     prisma.llmCallLog.findMany.mockReset().mockResolvedValue([]);
     prisma.apiCallLog.findMany.mockReset().mockResolvedValue([]);
+    prisma.aiSubscriptionPlan.findMany.mockReset().mockResolvedValue([]);
+    prisma.aiTenantSubscription.findMany.mockReset().mockResolvedValue([]);
     app = buildApp();
   });
 
@@ -251,6 +275,18 @@ describe('GET /filters', () => {
     const res = await request(app).get('/api/super-admin/api-analytics/filters');
     expect(res.body.models).toEqual(['gemini-flash', 'gpt-4o']);
   });
+
+  test('returns AI subscription plans for the plan filter', async () => {
+    prisma.aiSubscriptionPlan.findMany.mockResolvedValue([{ id: 4, name: 'Silver', isActive: true }]);
+    const res = await request(app).get('/api/super-admin/api-analytics/filters');
+    expect(res.body.plans).toEqual([{ id: 4, name: 'Silver', isActive: true }]);
+    expect(prisma.aiSubscriptionPlan.findMany).toHaveBeenCalledWith({
+      orderBy: [{ displayOrder: 'asc' }, { price: 'asc' }],
+      take: 200,
+      select: { id: true, name: true, isActive: true },
+    });
+  });
+
 
   test('DB error surfaces as 500, does not leak internals', async () => {
     prisma.llmCallLog.findMany.mockRejectedValue(new Error('ECONNREFUSED 127.0.0.1:3307'));
@@ -293,6 +329,7 @@ describe('GET /calls', () => {
   beforeEach(() => {
     prisma.llmCallLog.findMany.mockReset().mockResolvedValue([]);
     prisma.apiCallLog.findMany.mockReset().mockResolvedValue([]);
+    prisma.aiTenantSubscription.findMany.mockReset().mockResolvedValue([]);
     app = buildApp();
   });
 
@@ -325,6 +362,19 @@ describe('GET /calls', () => {
     expect(prisma.llmCallLog.findMany.mock.calls[0][0].where.model).toBe('gemini-flash');
     expect(prisma.apiCallLog.findMany.mock.calls[0][0].where.model).toBeUndefined();
     expect(prisma.apiCallLog.findMany.mock.calls[0][0].where.id).toBe(-1);
+  });
+
+  test('?planId scopes call log to tenants subscribed to that AI plan and excludes non-tenant API logs', async () => {
+    prisma.aiTenantSubscription.findMany.mockResolvedValueOnce([{ tenantId: 7 }]);
+    await request(app).get('/api/super-admin/api-analytics/calls?planId=8');
+    expect(prisma.llmCallLog.findMany.mock.calls[0][0].where.tenantId).toEqual({ in: [7] });
+    expect(prisma.apiCallLog.findMany.mock.calls[0][0].where.id).toBe(-1);
+  });
+
+  test('invalid call-log ?planId -> 400 INVALID_PLAN_ID', async () => {
+    const res = await request(app).get('/api/super-admin/api-analytics/calls?planId=nope');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_PLAN_ID');
   });
 
   test('?status=failed filters both underlying queries', async () => {

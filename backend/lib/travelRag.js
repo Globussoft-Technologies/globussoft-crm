@@ -3,10 +3,12 @@
  *
  * After a TMC (school-trips) diagnostic is submitted, this module:
  *   1. Builds a query sentence from the user's answers.
- *   2. Embeds the query via OpenAI text-embedding-3-small.
- *   3. Searches Qdrant for the closest brochure chunks (tenant + subBrand = tmc).
- *   4. Asks the LLM router to generate a structured report:
- *        { readinessScore, recommendedTrips:[{name, driveLink, places:[{name, learnings:[]}]}] }
+ *   2. Embeds the query via the tenant's configured embedding provider
+ *      (OpenAI text-embedding-3-small or Gemini gemini-embedding-001).
+ *   3. Searches the provider-specific Qdrant collection for the closest brochure
+ *      chunks (tenant + subBrand = tmc).
+ *   4. Asks the LLM router to generate a structured report using the tenant's
+ *      selected chat model.
  *   5. Persists the result in TravelDiagnosticRagResult.
  *
  * The module is entirely additive: a failure at any step logs and returns null,
@@ -15,9 +17,10 @@
 
 const prisma = require("./prisma");
 const qdrant = require("./qdrantClient");
-const embedClient = require("./openAIEmbedClient");
+const embedClient = require("./embedClient");
 const llmRouter = require("./llmRouter");
 const { sanitizeJsonForStringColumn } = require("./sanitizeJson");
+const { READINESS_LEVELS, readinessLevelFromScore } = require("./travelDiagnosticScoring");
 
 const RAG_TOP_K = 15;
 const RAG_SUB_BRAND = "tmc";
@@ -80,13 +83,15 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     console.log("[travelRag] Qdrant not configured; skipping RAG");
     return null;
   }
-  if (!embedClient.isEnabled()) {
-    console.log("[travelRag] OpenAI embeddings not configured; skipping RAG");
+
+  const embedConfig = await embedClient.resolveEmbedConfig(tenantId);
+  if (!embedConfig) {
+    console.log("[travelRag] No supported embedding provider configured; skipping RAG");
     return null;
   }
 
   const queryText = buildQueryText(answers, subBrand, bank);
-  const queryVector = await embedClient.embedText(queryText);
+  const queryVector = await embedConfig.client.embedText(queryText, embedConfig);
   if (!queryVector) {
     console.warn("[travelRag] query embedding failed");
     return null;
@@ -96,6 +101,7 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     vector: queryVector,
     tenantId,
     subBrand,
+    providerId: embedConfig.providerId,
     limit: RAG_TOP_K,
   });
   if (!chunks.length) {
@@ -223,10 +229,49 @@ function isPolicyOrAdminText(text) {
 
 function validateAndNormalise(parsed) {
   if (!parsed || typeof parsed !== "object") return null;
-  const out = { readinessScore: null, summary: "", recommendedTrips: [] };
+  const out = {
+    readinessScore: null,
+    readinessLevel: null,
+    readinessName: null,
+    summary: "",
+    recommendedTrips: [],
+  };
+
+  // Prefer the new 1-4 level + name; fall back to the legacy 0-10 score.
+  const level = Number(parsed.readiness_level);
+  if (Number.isFinite(level) && level >= 1 && level <= 4) {
+    out.readinessLevel = Math.round(level);
+    out.readinessName = READINESS_LEVELS[out.readinessLevel];
+  }
 
   const score = Number(parsed.readinessScore);
-  out.readinessScore = Number.isFinite(score) ? Math.min(10, Math.max(0, Math.round(score))) : null;
+  if (Number.isFinite(score)) {
+    out.readinessScore = Math.min(10, Math.max(0, Math.round(score)));
+  }
+
+  // If the LLM gave a score but no level, derive the customer-facing level.
+  if (!out.readinessLevel && out.readinessScore !== null) {
+    const derived = readinessLevelFromScore(out.readinessScore);
+    if (derived) {
+      out.readinessLevel = derived.level;
+      out.readinessName = derived.name;
+    }
+  }
+
+  // If the LLM gave a level but no score, derive a representative score.
+  if (out.readinessLevel && out.readinessScore === null) {
+    const derivedScores = [null, 8, 6, 4, 2];
+    out.readinessScore = derivedScores[out.readinessLevel];
+  }
+
+  // Accept an explicit name only if it matches one of the canonical labels.
+  if (parsed.readiness_name && typeof parsed.readiness_name === "string") {
+    const canonical = READINESS_LEVELS.slice(1).find(
+      (n) => n.toLowerCase() === String(parsed.readiness_name).trim().toLowerCase(),
+    );
+    if (canonical) out.readinessName = canonical;
+  }
+
   out.summary = String(parsed.summary || "").trim();
 
   const trips = Array.isArray(parsed.recommendedTrips) ? parsed.recommendedTrips : [];

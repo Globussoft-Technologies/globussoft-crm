@@ -250,6 +250,16 @@ const NON_TENANT_MODELS = new Set([
   // written only by super-admin plan management; tenant queries read the
   // catalog through their own AiTenantSubscription.planId join.
   'AiSubscriptionPlan',
+  // Super-admin-managed AI provider API keys (Gemini/OpenAI/Claude/etc.),
+  // attached to AiSubscriptionPlan rows above. Same rationale: a single
+  // platform-wide key catalog, not per-tenant data — a key becomes
+  // available to a tenant only via their AiTenantSubscription -> plan ->
+  // AiSubscriptionPlanKey join, never queried by tenantId directly.
+  'AiManagedApiKey',
+  // Junction between AiSubscriptionPlan and AiManagedApiKey (which plan
+  // has which keys enabled). Both parents are platform-global per above;
+  // this table inherits the same non-tenant scope.
+  'AiSubscriptionPlanKey',
 ]);
 
 // ── Expected AuditLog shape ──────────────────────────────────────────

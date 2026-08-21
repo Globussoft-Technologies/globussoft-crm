@@ -38,6 +38,7 @@ const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { renderTravelStallPersonalisedPdf } = require("../services/pdfRenderer");
 const { requireTravelTenant } = require("../middleware/travelGuards");
+const { buildTravelAiErrorResponse } = require("../lib/travelAiError");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const llmRouter = require("../lib/llmRouter");
 
@@ -194,6 +195,13 @@ router.post(
         stub: Boolean(result.stub),
       });
     } catch (e) {
+      const aiError = buildTravelAiErrorResponse(e, {
+        featureLabel: "Travel Stall personalised PDF AI generation",
+        modelLabel: "gemini-flash",
+      });
+      if (aiError) {
+        return res.status(aiError.status).json(aiError.body);
+      }
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-travelstall] personalised-pdf regen error:", e.message);
       res

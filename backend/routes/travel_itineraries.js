@@ -121,6 +121,7 @@ const { sendEmail } = require("../lib/emailSender");
 // no-op. Best-effort; never blocks the response.
 const { notify: notifyUser } = require("../lib/notificationService");
 const llmRouter = require("../lib/llmRouter");
+const { buildTravelAiErrorResponse } = require("../lib/travelAiError");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 // Pricing engine — same module that backs the explicit POST /pricing/quote
 // route. The Add-item flow's preview-pricing endpoint reuses it so the
@@ -4084,6 +4085,13 @@ router.post(
           tenantId: req.travelTenant.id,
         });
       } catch (e) {
+        const aiError = buildTravelAiErrorResponse(e, {
+          featureLabel: "Itinerary AI suggestions",
+          modelLabel: "gemini-flash",
+        });
+        if (aiError) {
+          return res.status(aiError.status).json(aiError.body);
+        }
         if (e.code === "LLM_BUDGET_EXCEEDED") {
           return res.status(429).json({
             error: "Monthly AI budget reached for this tenant.",
@@ -4249,6 +4257,13 @@ router.post(
         generatedAt,
       });
     } catch (e) {
+      const aiError = buildTravelAiErrorResponse(e, {
+        featureLabel: "Itinerary draft AI regeneration",
+        modelLabel: "gemini-flash",
+      });
+      if (aiError) {
+        return res.status(aiError.status).json(aiError.body);
+      }
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-itin] draft regen error:", e.message);
       res.status(500).json({ error: "Failed to regenerate draft summary" });

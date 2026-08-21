@@ -76,6 +76,16 @@ const prismaMock = vi.hoisted(() => {
       findUnique: vi.fn().mockResolvedValue(null),
       create: vi.fn().mockResolvedValue({ id: 1 }),
     },
+    // managedCandidatesForTenant (lib/aiProviderManagement.js) reads a
+    // funded subscription's attached keys here. Empty by default — these
+    // tests exercise the legacy env-var/BYOK real-mode path, not CRM-
+    // managed keys, so "no keys attached to this plan" is the correct
+    // default rather than leaving it unmocked (which crashes with
+    // "Cannot read properties of undefined (reading 'findMany')" the
+    // moment a test seeds an active subscription).
+    aiSubscriptionPlanKey: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     $transaction: vi.fn(async (arg) => (Array.isArray(arg) ? Promise.all(arg) : arg(mock))),
   };
   const Module = require('node:module');

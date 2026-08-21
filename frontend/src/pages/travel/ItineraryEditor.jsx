@@ -84,7 +84,13 @@ import {
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { geocode } from "../../lib/geocoder";
+import {
+  buildItineraryGeocodeQuery,
+  deriveItineraryItemLocation,
+  shouldReplaceSuspiciousCoordinates,
+} from "../../lib/travelLocationResolver";
 import PoiPicker from "../../components/PoiPicker";
+import LocationAutocomplete from "../../components/travel/LocationAutocomplete";
 import TopScrollSync from "../../components/TopScrollSync";
 
 // Converts a free-text destination name to a URL-safe slug for PoiPicker.
@@ -234,6 +240,7 @@ export default function ItineraryEditor() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [destCenter, setDestCenter] = useState(null); // [lat, lng] geocoded from destination
+  const [displayMapItems, setDisplayMapItems] = useState([]);
   const [extraDays, setExtraDays] = useState(0); // local "+ Add day" beyond derived count
   const [dragId, setDragId] = useState(null);
   const [selectedId, setSelectedId] = useState(null); // item selected for "click map to place"
@@ -309,6 +316,10 @@ export default function ItineraryEditor() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    setDisplayMapItems(Array.isArray(itin?.items) ? itin.items : []);
+  }, [itin?.items]);
+
   // Geocode the trip destination so the map opens centred on it (e.g. Tokyo)
   // instead of falling back to the India midpoint when no items are pinned yet.
   useEffect(() => {
@@ -321,9 +332,11 @@ export default function ItineraryEditor() {
   }, [itin?.destination]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-geocode day-planner items that have a description but no saved
-  // coordinates. Runs once per itinerary (dep on itin.id). Each geocoded
-  // item calls setItemLatLng which optimistically updates local state AND
-  // PATCHes the backend — pins appear progressively and survive a reload.
+  // coordinates, and heal obviously-wrong AI-drafted coordinates that were
+  // persisted by older broad sentence-level geocoding. Runs once per
+  // itinerary (dep on itin.id). Each resolved item updates the display map
+  // immediately; missing/suspicious saved coords are patched back so the fix
+  // survives reload.
   //
   // Nominatim can't geocode activity sentences ("Day 1 — morning sightseeing
   // in Tokyo"). Extract the trailing capitalised place name after "in " so we
@@ -331,19 +344,14 @@ export default function ItineraryEditor() {
   // description for specific named places ("Visit Shinjuku Gyoen Garden").
   useEffect(() => {
     if (!itin?.id || !Array.isArray(itin.items)) return;
-    const needsGeocode = itin.items.filter(
-      (it) =>
-        it.description &&
-        (typeof it.latitude !== "number" || typeof it.longitude !== "number"),
-    );
-    if (needsGeocode.length === 0) return;
     let cancelled = false;
     // Destination as a disambiguation hint passed to Nominatim so that
     // short descriptions ("ISKCON Temple") resolve to the right city.
     const destHint = (itin?.destination || "").toLowerCase().trim().replace(/\s+/g, " ");
     (async () => {
-      for (const it of needsGeocode) {
+      for (const it of itin.items) {
         if (cancelled) break;
+        if (!it.description) continue;
         // Priority order for query extraction:
         // 1. "...in Tokyo" / "...in Paris, France"   → "Tokyo" / "Paris, France"
         // 2. "...to ISKCON Temple, Rajajinagar."      → "ISKCON Temple, Rajajinagar"
@@ -351,16 +359,39 @@ export default function ItineraryEditor() {
         const inMatch  = it.description.match(/\bin\s+([A-Z][^,.]+(?:,\s*[A-Z][^,.]+)?)\s*[.,]?\s*$/);
         const toMatch  = it.description.match(/\bto\s+([A-Z][^,.]+(?:,\s*[A-Z][^,.]+)?)\s*[.,]?\s*$/);
         let query;
-        if (inMatch)     query = inMatch[1].trim();
+        if (inMatch) query = inMatch[1].trim();
         else if (toMatch) query = toMatch[1].trim();
-        else              query = destHint ? `${it.description} ${destHint}` : it.description;
+        else query = buildItineraryGeocodeQuery(it, itin.destination);
 
         let r = await geocode(query).catch(() => null);
-        // If the hint-augmented query failed, retry with the bare description.
-        if (!r && !inMatch && !toMatch && destHint) {
-          r = await geocode(it.description).catch(() => null);
+        // If the extracted location failed, retry with a destination-hinted query
+        // only when we still have a concrete sentence to refine.
+        if (!r && !inMatch && !toMatch && destHint && it.description) {
+          r = await geocode(`${it.description} ${destHint}`).catch(() => null);
         }
-        if (!cancelled && r) setItemLatLng(it.id, r.lat, r.lng);
+        if (cancelled || !r) continue;
+
+        setDisplayMapItems((prev) =>
+          prev.map((row) =>
+            row.id === it.id
+              ? { ...row, latitude: r.lat, longitude: r.lng }
+              : row,
+          ),
+        );
+
+        const hasSavedCoords =
+          typeof it.latitude === "number" && typeof it.longitude === "number";
+        if (!hasSavedCoords) {
+          setItemLatLng(it.id, r.lat, r.lng);
+          continue;
+        }
+
+        if (
+          it.draftedByAi &&
+          shouldReplaceSuspiciousCoordinates(it.latitude, it.longitude, r.lat, r.lng)
+        ) {
+          setItemLatLng(it.id, r.lat, r.lng);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -439,14 +470,14 @@ export default function ItineraryEditor() {
   // Map points in day order (then position) — only items with numeric coords.
   const mapItems = useMemo(
     () =>
-      items
+      displayMapItems
         .filter((it) => typeof it.latitude === "number" && typeof it.longitude === "number")
         .sort(
           (a, b) =>
             (a.dayNumber ?? 999) - (b.dayNumber ?? 999) ||
             (a.position ?? 0) - (b.position ?? 0),
         ),
-    [items],
+    [displayMapItems],
   );
   const routeLine = useMemo(() => mapItems.map((it) => [it.latitude, it.longitude]), [mapItems]);
 
@@ -1646,13 +1677,24 @@ function AddPoiModal({ destinationSlug, initialName, onClose, onCreated }) {
             </span>
             {/* Search location — can differ from POI name */}
             <div style={{ display: "flex", gap: "0.4rem" }}>
-              <input
-                value={locationSearch}
-                onChange={(e) => setLocationSearch(e.target.value)}
-                placeholder="Search location (e.g. ISKCON Temple Rajajinagar Bangalore)"
-                aria-label="Search location"
-                style={{ flex: 1, padding: "0.32rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.78rem" }}
-              />
+              <div style={{ flex: 1 }}>
+                <LocationAutocomplete
+                  value={locationSearch}
+                  onChange={setLocationSearch}
+                  onSelect={(suggestion) => {
+                    // Picking a suggestion already carries resolved coords —
+                    // fill them in directly so reps don't also need to hit
+                    // the "Locate" button for the common case.
+                    setLatitude(suggestion.lat.toFixed(6));
+                    setLongitude(suggestion.lng.toFixed(6));
+                  }}
+                  inputProps={{
+                    placeholder: "Search location (e.g. ISKCON Temple Rajajinagar Bangalore)",
+                    "aria-label": "Search location",
+                  }}
+                  style={{ width: "100%", padding: "0.32rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.78rem", boxSizing: "border-box" }}
+                />
+              </div>
               <button
                 type="button"
                 onClick={handleLocate}

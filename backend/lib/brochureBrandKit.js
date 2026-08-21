@@ -28,6 +28,8 @@
 'use strict';
 
 const zlib = require('node:zlib');
+const fs = require('node:fs');
+const path = require('node:path');
 const s3Service = require('../services/s3Service');
 
 const MAX_LOGO_BYTES = 10 * 1024 * 1024; // 10MB inlined cap (large logos bloat the PDF — keep reasonable)
@@ -192,8 +194,43 @@ function isOwnS3ImageUrl(input) {
   );
 }
 
-/** Validate + normalise an uploaded logo. Accepts legacy base64 data: URIs and
- *  S3 URLs that belong to this app's bucket (uploaded via the brand-image endpoint).
+/**
+ * Resolve a local /uploads/brand-kits/... URL (or /api/uploads/brand-kits/...) to
+ * an inline data: URI so the engine subprocess can render it without needing the
+ * CRM static server. Validates the path shape, resolves it under backend/uploads,
+ * sniffs magic bytes, and rejects anything outside the brand-kits directory.
+ */
+function resolveLocalUploadUrl(input) {
+  if (typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  const m = trimmed.match(/^\/(?:api\/)?uploads\/(brand-kits\/.+)$/);
+  if (!m) return null;
+  const rel = m[1].split('?')[0];
+  // Reject any path that tries to escape the uploads tree. URLs use '/' regardless
+  // of platform, so normalize with path.posix before comparing.
+  const normalizedRel = path.posix.normalize(rel);
+  if (normalizedRel.startsWith('..') || normalizedRel.includes('/../') || normalizedRel !== rel) return null;
+  // Convert URL separators to platform separators for the filesystem lookup.
+  const fsRel = rel.replace(/\//g, path.sep);
+  const abs = path.join(__dirname, '..', 'uploads', fsRel);
+  // Final safety: the resolved path must still live inside backend/uploads.
+  const uploadsRoot = path.resolve(__dirname, '..', 'uploads');
+  if (!abs.startsWith(uploadsRoot + path.sep) && abs !== uploadsRoot) return null;
+  let buf;
+  try {
+    buf = fs.readFileSync(abs);
+  } catch {
+    return null;
+  }
+  if (!buf.length || buf.length > MAX_LOGO_BYTES) return null;
+  const mime = sniffImage(new Uint8Array(buf));
+  if (!mime) return null;
+  return { url: `data:${mime};base64,${buf.toString('base64')}`, treatment: analyzeLogoTreatment(buf, mime) };
+}
+
+/** Validate + normalise an uploaded logo. Accepts legacy base64 data: URIs,
+ *  S3 URLs that belong to this app's bucket (uploaded via the brand-image endpoint),
+ *  and local /uploads/brand-kits/... paths written by the BrandKit admin UI.
  *  Empty url when invalid. For S3-hosted logos we cannot decode the bytes here
  *  without a network round-trip, so treatment is left null → the engine falls
  *  back to its safe plate default (the placer's explicit backing toggle still wins).
@@ -201,6 +238,11 @@ function isOwnS3ImageUrl(input) {
 function sanitizeLogo(input) {
   if (typeof input !== 'string') return { url: '', treatment: null };
   const trimmed = input.trim();
+
+  // Local /uploads path from the BrandKit admin UI → inline it so the engine
+  // subprocess (different cwd) can render it without proxying the CRM static route.
+  const local = resolveLocalUploadUrl(trimmed);
+  if (local) return local;
 
   // S3-hosted image uploaded by this tenant. We trust our own bucket and only
   // validate the URL shape; SSRF is avoided because the bucket/domain is fixed.

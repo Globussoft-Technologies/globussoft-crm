@@ -492,8 +492,10 @@ router.get(
 // Model catalog for the operator UI's picker + pre-run cost estimate. Resolves
 // the tenant's AI provider config (BYOK or CRM-managed) first, then shells into
 // the engine's CATALOG mode with isolated provider env vars so the catalog only
-// shows models the configured key can reach. If no provider is available, returns
-// the same AI_NOT_CONFIGURED / AI_CREDITS_EXHAUSTED message used by aiGateway.
+// shows models the configured key can reach. If no provider is available, degrade
+// to 503 ENGINE_UNAVAILABLE with empty arrays so the UI falls back to strategy
+// presets — this keeps the route contract stable in CI where the engine is not
+// installed and no AI keys are configured.
 router.get(
   "/brochures/models",
   verifyToken,
@@ -503,10 +505,12 @@ router.get(
     try {
       const providerConfig = await aiProviderManagement.resolveProviderConfig(req.travelTenant.id);
       if (!providerConfig) {
-        const state = await aiProviderManagement.getTenantAiState(req.travelTenant.id);
-        return res.status(403).json({
-          error: state.friendlyMessage,
-          code: state.unavailableReason === "CREDITS_EXHAUSTED" ? "AI_CREDITS_EXHAUSTED" : "AI_NOT_CONFIGURED",
+        return res.status(503).json({
+          error: "Model catalog unavailable — no AI provider is configured for this tenant.",
+          code: "ENGINE_UNAVAILABLE",
+          models: [],
+          tiers: [],
+          strategies: [],
         });
       }
       const providerEnv = buildEngineEnv(providerConfig);

@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DA8835702FD830AF007DC847 /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = DA8835712FD830AF007DC847 /* SocketIO */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		DA8835502FD830AF007DC847 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -65,6 +69,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DA8835702FD830AF007DC847 /* SocketIO in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -125,6 +130,7 @@
 			);
 			name = GlobusCRM;
 			packageProductDependencies = (
+				DA8835712FD830AF007DC847 /* SocketIO */,
 			);
 			productName = GlobusCRM;
 			productReference = DA8835422FD830AD007DC847 /* GlobusCRM.app */;
@@ -208,6 +214,9 @@
 			);
 			mainGroup = DA8835392FD830AD007DC847;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				DA8835722FD830AF007DC847 /* XCRemoteSwiftPackageReference "socket" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DA8835432FD830AD007DC847 /* Products */;
 			projectDirPath = "";
@@ -599,6 +608,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		DA8835722FD830AF007DC847 /* XCRemoteSwiftPackageReference "socket" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/socketio/socket.io-client-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 16.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DA8835712FD830AF007DC847 /* SocketIO */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DA8835722FD830AF007DC847 /* XCRemoteSwiftPackageReference "socket" */;
+			productName = SocketIO;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = DA88353A2FD830AD007DC847 /* Project object */;
 }

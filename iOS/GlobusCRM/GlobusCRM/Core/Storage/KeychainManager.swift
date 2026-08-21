@@ -12,7 +12,10 @@ final class KeychainManager {
     }
 
     // MARK: - Auth token
-    func saveToken(_ token: String) { save(key: Keys.token, value: token) }
+    func saveToken(_ token: String) {
+        save(key: Keys.token, value: token)
+        NotificationCenter.default.post(name: .authTokenDidChange, object: token)
+    }
     func getToken() -> String? { get(key: Keys.token) }
     func deleteToken() { delete(key: Keys.token) }
 
@@ -40,6 +43,7 @@ final class KeychainManager {
     func clearAll() {
         [Keys.token, Keys.patientId, Keys.patientName,
          Keys.patientEmail, Keys.patientPhone, Keys.apnsToken].forEach { delete(key: $0) }
+        NotificationCenter.default.post(name: .authTokenDidChange, object: nil)
     }
 
     // MARK: - Private Keychain helpers

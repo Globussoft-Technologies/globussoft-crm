@@ -12,6 +12,7 @@ final class AppContainer: ObservableObject {
     let appRouter: AppRouter
     let appState: AppState
     let apiClient: WellnessAPIClient
+    let wellnessSocketManager: WellnessSocketManager
 
     // MARK: - Feature containers (lazy — avoid allocation until first use)
     lazy var authContainer     = AuthFeatureContainer(container: self)
@@ -33,5 +34,9 @@ final class AppContainer: ObservableObject {
         self.appState = AppState(userDefaultsManager: userDefaultsManager)
         self.apiClient = WellnessAPIClient(keychainManager: keychainManager,
                                            sessionManager: sessionManager)
+        self.wellnessSocketManager = WellnessSocketManager(
+            keychain: keychainManager,
+            notificationDAO: NotificationDAO()
+        )
     }
 }

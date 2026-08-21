@@ -104,6 +104,7 @@ const {
   VALID_SUB_BRANDS,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
+const { buildTravelAiErrorResponse } = require("../lib/travelAiError");
 const { validateTemplate } = require("../lib/flyerTemplateValidator");
 const {
   hashTemplateShape,
@@ -319,6 +320,16 @@ router.post(
         themeJson: themeJson || null,
         targetAudience: audience,
       });
+      if (result.stub && !result.realModeError) {
+        const aiError = buildTravelAiErrorResponse(
+          { code: "AI_NOT_CONFIGURED" },
+          {
+            featureLabel: "Marketing flyer AI copy generation",
+            modelLabel: "gemini-flash",
+          },
+        );
+        return res.status(aiError.status).json(aiError.body);
+      }
       return res.status(200).json({
         headline: result.copyJson.headline,
         body: result.copyJson.body,
@@ -385,6 +396,16 @@ router.post(
         themeJson: themeJson || null,
         aspectRatio: typeof aspectRatio === "string" ? aspectRatio : undefined,
       });
+      if (result.stub && !result.realModeError) {
+        const aiError = buildTravelAiErrorResponse(
+          { code: "AI_NOT_CONFIGURED" },
+          {
+            featureLabel: "Marketing flyer AI image generation",
+            modelLabel: "dall-e-3",
+          },
+        );
+        return res.status(aiError.status).json(aiError.body);
+      }
       return res.status(200).json({
         imageUrl: result.imageUrl,
         source: result.source,

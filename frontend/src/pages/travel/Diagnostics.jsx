@@ -1,6 +1,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  Brain,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -37,6 +38,68 @@ function readPageParam(params) {
   return Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
 }
 
+function ContactCell({ contact, contactId }) {
+  const hasName = Boolean(contact?.name);
+  const hasEmail = Boolean(contact?.email);
+  const hasPhone = Boolean(contact?.phone);
+
+  let primary = null;
+  if (hasName) primary = contact.name;
+  else if (hasEmail) primary = contact.email;
+  else if (contactId) primary = `#${contactId}`;
+
+  let secondary = null;
+  if (hasName) {
+    secondary = contact.email || contact.phone || null;
+  } else if (hasEmail && (hasPhone || contactId)) {
+    secondary = contact.phone || `#${contactId}`;
+  }
+
+  if (!primary) {
+    return <span style={{ color: "var(--text-secondary)" }}>—</span>;
+  }
+
+  const content = (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 2,
+        minWidth: 0,
+      }}
+    >
+      <span
+        style={contactPrimaryStyle}
+        title={primary}
+      >
+        {primary}
+      </span>
+      {secondary && (
+        <span
+          style={contactSecondaryStyle}
+          title={secondary}
+        >
+          {secondary}
+        </span>
+      )}
+    </div>
+  );
+
+  if (contactId) {
+    return (
+      <Link
+        to={`/contacts/${contactId}`}
+        style={contactLinkStyle}
+        aria-label={`Open contact #${contactId}`}
+      >
+        {content}
+      </Link>
+    );
+  }
+
+  return content;
+}
+
 export default function Diagnostics() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
@@ -61,6 +124,8 @@ export default function Diagnostics() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const reqIdRef = useRef(0);
+  const seenDiagnosticIdsRef = useRef(new Set());
+  const initialLoadDoneRef = useRef(false);
 
   const updateParams = useCallback(
     (patch, options = {}) => {
@@ -105,6 +170,17 @@ export default function Diagnostics() {
         const res = await fetchApi(`/api/travel/diagnostics?${qs.toString()}`);
         if (myReqId !== reqIdRef.current) return;
         const rows = Array.isArray(res?.diagnostics) ? res.diagnostics : [];
+        const currentIds = new Set(rows.map((d) => d.id));
+        if (initialLoadDoneRef.current) {
+          const newIds = rows.filter((d) => !seenDiagnosticIdsRef.current.has(d.id));
+          if (newIds.length > 0) {
+            notify.info(
+              `${newIds.length} new diagnostic submission${newIds.length === 1 ? "" : "s"}`,
+            );
+          }
+        }
+        currentIds.forEach((id) => seenDiagnosticIdsRef.current.add(id));
+        initialLoadDoneRef.current = true;
         setDiagnostics(rows);
         setSelectedIds(new Set());
         setTotal(Number(res?.total) || 0);
@@ -126,6 +202,14 @@ export default function Diagnostics() {
   useEffect(() => {
     load({ reset: true });
   }, [load, reloadTick]);
+
+  useEffect(() => {
+    if (import.meta.env?.MODE === "test") return undefined;
+    const id = setInterval(() => {
+      load();
+    }, 30000);
+    return () => clearInterval(id);
+  }, [load]);
 
   useEffect(() => {
     if (total > 0 && page > pageCount) {
@@ -241,13 +325,21 @@ export default function Diagnostics() {
           <CountBadge count={total} title={`${total.toLocaleString()} diagnostics`} />
         </h1>
         <div style={{ display: "flex", gap: 8 }}>
+          <Link
+            to="/travel/trip-knowledge"
+            style={ctaSecondary}
+            aria-label="Manage brochure knowledge base"
+            title="Connect Google Drive and manage brochure PDFs so AI-powered diagnostics can recommend trips from your catalog"
+          >
+            <Brain size={16} aria-hidden /> Travel Knowledge
+          </Link>
           {isAdmin && (
             <Link
               to="/travel/diagnostics/banks/new"
               style={ctaSecondary}
               aria-label="Create new diagnostic bank (admin)"
             >
-              <Plus size={16} aria-hidden /> New bank
+              <Plus size={16} aria-hidden /> Diagnostic settings
             </Link>
           )}
           <Link
@@ -334,6 +426,28 @@ export default function Diagnostics() {
         >
           Refresh
         </button>
+        {(subBrand || classification || fromDate || toDate) && (
+          <button
+            type="button"
+            onClick={() => {
+              setSubBrand("");
+              setClassification("");
+              setFromDate("");
+              setToDate("");
+              updateParams({
+                subBrand: "",
+                classification: "",
+                fromDate: "",
+                toDate: "",
+                page: 1,
+              });
+            }}
+            style={refreshBtn}
+            aria-label="Clear filters"
+          >
+            Clear filters
+          </button>
+        )}
         {isAdmin && (
           <button
             type="button"
@@ -383,12 +497,12 @@ export default function Diagnostics() {
               >
                 <colgroup>
                   {isAdmin && <col style={{ width: "44px" }} />}
-                  <col style={{ width: "150px" }} />
-                  <col style={{ width: "120px" }} />
-                  <col style={{ width: "190px" }} />
-                  <col style={{ width: "90px" }} />
-                  <col style={{ width: "120px" }} />
-                  <col style={{ width: "90px" }} />
+                  <col style={{ width: "160px" }} />
+                  <col style={{ width: "260px" }} />
+                  <col style={{ width: "110px" }} />
+                  <col style={{ width: "140px" }} />
+                  <col style={{ width: "100px" }} />
+                  <col style={{ width: "80px" }} />
                 </colgroup>
                 <thead>
                   <tr>
@@ -403,11 +517,11 @@ export default function Diagnostics() {
                       </th>
                     )}
                     <th style={th}>Submitted</th>
-                    <th style={th}>Sub-brand</th>
                     <th style={th}>Contact</th>
-                    <th style={th}>Score</th>
+                    <th style={th}>Sub-brand</th>
                     <th style={th}>Classification</th>
                     <th style={th}>Tier</th>
+                    <th style={th}>Score</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -443,32 +557,10 @@ export default function Diagnostics() {
                           </Link>
                         </td>
                         <td style={td}>
+                          <ContactCell contact={d.contact} contactId={d.contactId} />
+                        </td>
+                        <td style={td}>
                           <span style={brandBadge}>{d.subBrand}</span>
-                        </td>
-                        <td style={td}>
-                          {d.contact?.name || d.contact?.email ? (
-                            <span>
-                              {d.contact.name || d.contact.email}
-                              {d.contact.name && d.contact.email && (
-                                <span
-                                  style={{
-                                    display: "block",
-                                    fontSize: 11,
-                                    color: "var(--text-secondary)",
-                                  }}
-                                >
-                                  {d.contact.email}
-                                </span>
-                              )}
-                            </span>
-                          ) : d.contactId ? (
-                            `#${d.contactId}`
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                        <td style={td}>
-                          {d.score !== null ? Number(d.score).toFixed(2) : "—"}
                         </td>
                         <td style={td}>
                           {d.classificationLabel || d.classification || "—"}
@@ -477,6 +569,9 @@ export default function Diagnostics() {
                           <span className={tierClass}>
                             {d.recommendedTier || "—"}
                           </span>
+                        </td>
+                        <td style={td}>
+                          {d.score !== null ? Number(d.score).toFixed(2) : "—"}
                         </td>
                       </tr>
                     );
@@ -827,17 +922,10 @@ const ctaPrimary = {
 };
 
 const ctaSecondary = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "8px 14px",
-  borderRadius: 8,
-  fontWeight: 600,
-  fontSize: 14,
+  ...ctaPrimary,
   background: "var(--surface-color)",
-  color: "var(--primary-color)",
-  textDecoration: "none",
-  border: "1px solid var(--primary-color)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-color)",
 };
 
 const selectStyle = {
@@ -907,6 +995,7 @@ const td = {
   fontSize: 14,
   color: "var(--text-primary)",
   minWidth: 0,
+  verticalAlign: "top",
 };
 
 const tdCheckbox = {
@@ -931,4 +1020,27 @@ const rowLink = {
   color: "var(--primary-color, var(--accent-color))",
   textDecoration: "none",
   fontWeight: 500,
+};
+
+const contactLinkStyle = {
+  color: "inherit",
+  textDecoration: "none",
+  display: "block",
+};
+
+const contactPrimaryStyle = {
+  fontWeight: 500,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  minWidth: 0,
+};
+
+const contactSecondaryStyle = {
+  fontSize: 12,
+  color: "var(--text-secondary)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  minWidth: 0,
 };

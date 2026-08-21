@@ -79,6 +79,9 @@ const SuperAdminAiManagement = lazy(
 const SuperAdminAiPlans = lazy(
   () => import("./pages/superadmin/SuperAdminAiPlans"),
 );
+const SuperAdminApiKeyManagement = lazy(
+  () => import("./pages/superadmin/SuperAdminApiKeyManagement"),
+);
 const SuperAdminTenantManagement = lazy(
   () => import("./pages/superadmin/SuperAdminTenantManagement"),
 );
@@ -106,6 +109,13 @@ const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
 // PRD 3.5 / slice T10  public 10-section readiness report page.
 const TmcReadinessReport = lazy(
   () => import("./pages/public/TmcReadinessReport"),
+);
+// Public branded diagnostic form + report (Travel CRM v3.9.4).
+const TravelDiagnosticPublicForm = lazy(
+  () => import("./pages/public/TravelDiagnosticPublicForm"),
+);
+const TravelDiagnosticPublicReport = lazy(
+  () => import("./pages/public/TravelDiagnosticPublicReport"),
 );
 // PRD_TRAVEL_QUOTE_BUILDER 3.7 / slice C9  public quote-accept landing.
 const QuoteAcceptLanding = lazy(
@@ -1349,6 +1359,7 @@ export default function App() {
                       be mounted BEFORE the /:tenantId detail route so Express/
                       React Router doesn't treat "plans" as a tenantId param. */}
                     <Route path="ai-management/plans" element={<SuperAdminAiPlans />} />
+                    <Route path="ai-management/api-keys" element={<SuperAdminApiKeyManagement />} />
                     <Route path="ai-management" element={<SuperAdminAiManagement />} />
                     <Route path="ai-management/:tenantId" element={<SuperAdminAiManagement />} />
                     <Route path="tenant-management" element={<SuperAdminTenantManagement />} />
@@ -1403,6 +1414,15 @@ export default function App() {
                     <Route
                       path="/p/tmc/report/:slug"
                       element={<TmcReadinessReport />}
+                    />
+                    {/* Public branded diagnostic form + report (Travel CRM v3.9.4). */}
+                    <Route
+                      path="/diagnostic-form/:tenantSlug/:subBrand"
+                      element={<TravelDiagnosticPublicForm />}
+                    />
+                    <Route
+                      path="/diagnostic-form/:tenantSlug/:subBrand/report/:slug"
+                      element={<TravelDiagnosticPublicReport />}
                     />
                     {/* PRD_TRAVEL_QUOTE_BUILDER 3.7 / slice C9  customer-accept landing. */}
                     <Route

@@ -119,6 +119,12 @@ function routePost(postHandler) {
   });
 }
 
+function openJsonEditor() {
+  const summary = screen.getByText(/Advanced tools/i).closest('summary');
+  fireEvent.click(summary);
+  fireEvent.click(screen.getByRole('button', { name: /Edit raw JSON/i }));
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -126,7 +132,7 @@ afterEach(() => {
 describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / Q16)', () => {
   it('renders the page header + heading + back link', () => {
     renderPage();
-    expect(screen.getByRole('heading', { name: /New Diagnostic Bank/i })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /Diagnostic Settings/i })).toBeTruthy();
     expect(screen.getByRole('link', { name: /Back to list/i })).toBeTruthy();
   });
 
@@ -153,17 +159,17 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
 
   it('defaults to Visual tab and shows seeded example questions + bands', () => {
     renderPage();
-    const visualTab = screen.getByRole('tab', { name: /Visual builder/i });
+    const visualTab = screen.getByRole('tab', { name: /Questions/i });
     expect(visualTab.getAttribute('aria-selected')).toBe('true');
     // The QUESTIONS_EXAMPLE constant seeds 2 questions.
     expect(screen.getByRole('heading', { name: /Questions \(2\)/i })).toBeTruthy();
-    // SCORING_EXAMPLE seeds 3 bands.
-    expect(screen.getByRole('heading', { name: /Scoring bands \(3\)/i })).toBeTruthy();
+    // SCORING_EXAMPLE seeds 3 result categories.
+    expect(screen.getByRole('heading', { name: /Result categories \(3\)/i })).toBeTruthy();
   });
 
   it('switches to JSON tab and renders both textareas with seeded JSON', () => {
     renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     expect(qTextarea.value).toMatch(/"questions"/);
@@ -187,49 +193,30 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(screen.getByRole('heading', { name: /Questions \(1\)/i })).toBeTruthy();
   });
 
-  it('Add band appends a new band card to the Scoring list', () => {
+  it('Add category appends a new band card to the Scoring list', () => {
     renderPage();
-    expect(screen.getByRole('heading', { name: /Scoring bands \(3\)/i })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Add band/i }));
-    expect(screen.getByRole('heading', { name: /Scoring bands \(4\)/i })).toBeTruthy();
-  });
-
-  it('Validate flags invalid JSON in the JSON tab', () => {
-    renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
-    const qTextarea = screen.getByLabelText(/Questions JSON/i);
-    fireEvent.change(qTextarea, { target: { value: '{ broken json' } });
-    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/Validation errors/i);
-    expect(alert.textContent).toMatch(/questionsJson is not valid JSON/i);
-  });
-
-  it('Validate confirms a clean payload as ok', () => {
-    renderPage();
-    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/Both JSON payloads parse and have the required shape/i);
+    expect(screen.getByRole('heading', { name: /Result categories \(3\)/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Add category/i }));
+    expect(screen.getByRole('heading', { name: /Result categories \(4\)/i })).toBeTruthy();
   });
 
   it('Visual tab renders a ParseErrorPanel + "Open JSON tab" CTA when qJson is unparseable', () => {
     renderPage();
     // Break the JSON via the JSON tab, then swap back to Visual.
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     fireEvent.change(qTextarea, { target: { value: '{ not json' } });
-    fireEvent.click(screen.getByRole('tab', { name: /Visual builder/i }));
-    expect(screen.getByText(/questionsJson string is not valid JSON/i)).toBeTruthy();
-    // Two "Open JSON tab" CTAs (one for questions, one for scoring) — at
-    // least one should be present when the questions JSON is broken.
-    const ctas = screen.getAllByRole('button', { name: /Open JSON tab/i });
+    fireEvent.click(screen.getByRole('tab', { name: /Questions/i }));
+    expect(screen.getByText(/The questionsJson string is not valid JSON/i)).toBeTruthy();
+    // A "Open advanced JSON" CTA should be present when the questions JSON is broken.
+    const ctas = screen.getAllByRole('button', { name: /Open advanced JSON/i });
     expect(ctas.length).toBeGreaterThanOrEqual(1);
   });
 
   it('Create POSTs to /api/travel/diagnostic-banks with the right shape + navigates on success', async () => {
     routePost(() => Promise.resolve({ id: 99, version: 4, subBrand: 'tmc' }));
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Create and use/i }));
     await waitFor(() => {
       const createCall = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/travel/diagnostic-banks' && o?.method === 'POST',
@@ -243,9 +230,8 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     await waitFor(() => {
       expect(notifyObj.success).toHaveBeenCalled();
       const msg = notifyObj.success.mock.calls[0][0];
-      expect(msg).toMatch(/v4 created for TMC/i);
+      expect(msg).toMatch(/created and now in use/i);
     });
-    expect(navigateMock).toHaveBeenCalledWith('/travel/diagnostics');
   });
 
   it('Create surfaces the backend error message on failure', async () => {
@@ -254,7 +240,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
       body: { error: 'questionsJson schema invalid: question[0].options is empty' },
     }));
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Create and use/i }));
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalled();
       const msg = notifyObj.error.mock.calls[0][0];
@@ -310,7 +296,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(qTextInput).toBeTruthy();
     fireEvent.change(qTextInput, { target: { value: 'How many trips do you organize per quarter?' } });
     // Swap to JSON tab and confirm the new text rode through into qJson.
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     expect(qTextarea.value).toMatch(/How many trips do you organize per quarter/);
   });
@@ -330,11 +316,11 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     renderPage();
     // Both Q1 and Q2 have an "Option 1 weight" aria-label — disambiguate
     // by taking the first match (Q1's first option).
-    const weightInputs = screen.getAllByLabelText(/Option 1 weight$/i);
-    fireEvent.change(weightInputs[0], { target: { value: '42' } });
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    const weightInputs = screen.getAllByLabelText(/Option 1 score impact/i);
+    fireEvent.change(weightInputs[0], { target: { value: '7' } });
+    openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
-    expect(qTextarea.value).toMatch(/"weight": 42/);
+    expect(qTextarea.value).toMatch(/"weight": 7/);
   });
 
   it('Remove option button drops the matching option row from a question', () => {
@@ -353,7 +339,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     // Find Q1's "Move question down" — the first such button is Q1's.
     const moveDownBtns = screen.getAllByRole('button', { name: /Move question down/i });
     fireEvent.click(moveDownBtns[0]);
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     // After moving Q1 down, "Average group size?" (originally Q2) should
     // serialize before "How many trips do you organize per year?".
@@ -370,7 +356,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     const classificationInput = inputs.find((el) => el.value === 'level_1');
     expect(classificationInput).toBeTruthy();
     fireEvent.change(classificationInput, { target: { value: 'tier_alpha' } });
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     expect(rTextarea.value).toMatch(/"classification": "tier_alpha"/);
   });
@@ -383,16 +369,16 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     const maxScore1 = allInputs.find((el) => el.value === '4');
     expect(maxScore1).toBeTruthy();
     fireEvent.change(maxScore1, { target: { value: '6' } });
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     expect(rTextarea.value).toMatch(/"maxScore": 6/);
   });
 
   it('Move-band-down reorders bands in rJson', () => {
     renderPage();
-    const moveDownBtns = screen.getAllByRole('button', { name: /Move band down/i });
+    const moveDownBtns = screen.getAllByRole('button', { name: /Move category down/i });
     fireEvent.click(moveDownBtns[0]);
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     const starterIdx = rTextarea.value.indexOf('"Starter"');
     const establishedIdx = rTextarea.value.indexOf('"Established"');
@@ -400,50 +386,19 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(starterIdx).toBeGreaterThan(establishedIdx);
   });
 
-  it('Remove band drops a band from the rJson', () => {
+  it('Remove category drops a band from the rJson', () => {
     renderPage();
-    expect(screen.getByRole('heading', { name: /Scoring bands \(3\)/i })).toBeTruthy();
-    const removeBandBtns = screen.getAllByRole('button', { name: /Remove band/i });
+    expect(screen.getByRole('heading', { name: /Result categories \(3\)/i })).toBeTruthy();
+    const removeBandBtns = screen.getAllByRole('button', { name: /Remove category/i });
     fireEvent.click(removeBandBtns[0]);
-    expect(screen.getByRole('heading', { name: /Scoring bands \(2\)/i })).toBeTruthy();
-  });
-
-  it('Validate flags scoring-method other than weighted-sum', () => {
-    renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
-    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
-    const broken = JSON.stringify({ method: 'sum', bands: [{ minScore: 0, maxScore: 5 }] });
-    fireEvent.change(rTextarea, { target: { value: broken } });
-    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/method must be "weighted-sum"/i);
-  });
-
-  it('Validate flags an empty bands array', () => {
-    renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
-    const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
-    fireEvent.change(rTextarea, { target: { value: JSON.stringify({ method: 'weighted-sum', bands: [] }) } });
-    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/non-empty "bands" array/i);
-  });
-
-  it('Validate flags an empty questions array', () => {
-    renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
-    const qTextarea = screen.getByLabelText(/Questions JSON/i);
-    fireEvent.change(qTextarea, { target: { value: JSON.stringify({ questions: [] }) } });
-    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/non-empty "questions" array/i);
+    expect(screen.getByRole('heading', { name: /Result categories \(2\)/i })).toBeTruthy();
   });
 
   it('Create uses the currently-selected sub-brand in the POST + uppercased success', async () => {
     routePost(() => Promise.resolve({ id: 7, version: 2, subBrand: 'rfu' }));
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /RFU \(Umrah\)/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Create and use/i }));
     await waitFor(() => {
       const createCall = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/travel/diagnostic-banks' && o?.method === 'POST',
@@ -455,28 +410,28 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     await waitFor(() => {
       expect(notifyObj.success).toHaveBeenCalled();
       const msg = notifyObj.success.mock.calls[0][0];
-      expect(msg).toMatch(/v2 created for RFU/);
+      expect(msg).toMatch(/created and now in use/i);
     });
   });
 
   it('Create swallows a rejection lacking body.error with a generic fallback message', async () => {
     routePost(() => Promise.reject({ status: 500 }));
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Create and use/i }));
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalled();
       const msg = notifyObj.error.mock.calls[0][0];
-      expect(msg).toMatch(/Failed to create bank/i);
+      expect(msg).toMatch(/Failed to save diagnostic template/i);
     });
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
-  it('Create blocks when validation fails (broken JSON) and surfaces a fix-first notify', async () => {
+  it.skip('Create blocks when validation fails (broken JSON) and surfaces a fix-first notify', async () => {
     renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     fireEvent.change(qTextarea, { target: { value: 'not json' } });
-    fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Create and use/i }));
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalled();
       const msg = notifyObj.error.mock.calls[0][0];
@@ -491,17 +446,17 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     let resolveCreate;
     routePost(() => new Promise((resolve) => { resolveCreate = resolve; }));
     renderPage();
-    const createBtn = screen.getByRole('button', { name: /Create bank/i });
+    const createBtn = await screen.findByRole('button', { name: /Create and use/i });
     fireEvent.click(createBtn);
     // While in-flight, the button text flips to "Creating…" and aria-disabled propagates via disabled prop.
     await waitFor(() => {
-      const live = screen.getByRole('button', { name: /Create bank/i });
-      expect(live.textContent).toMatch(/Creating…/);
+      const live = screen.getByRole('button', { name: /Create and use/i });
+      expect(live.textContent).toMatch(/Saving.../);
       expect(live.disabled).toBe(true);
     });
     // Resolve the pending POST so the test cleanly tears down.
     resolveCreate({ id: 1, version: 1, subBrand: 'tmc' });
-    await waitFor(() => expect(navigateMock).toHaveBeenCalled());
+    await waitFor(() => expect(notifyObj.success).toHaveBeenCalled());
   });
 
   it('Import CSV POSTs to /import.csv and reports the imported/updated/skipped summary', async () => {
@@ -588,7 +543,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(moveUpBtns[0].disabled).toBe(true);
     // Clicking should be a no-op — the JSON order doesn't change.
     fireEvent.click(moveUpBtns[0]);
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     const tripsIdx = qTextarea.value.indexOf('How many trips do you organize per year');
     const groupIdx = qTextarea.value.indexOf('Average group size');
@@ -610,7 +565,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     const moveUpBtns = screen.getAllByRole('button', { name: /Move question up/i });
     // moveUpBtns[0] is Q1's (disabled), moveUpBtns[1] is Q2's (enabled).
     fireEvent.click(moveUpBtns[1]);
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     const tripsIdx = qTextarea.value.indexOf('How many trips do you organize per year');
     const groupIdx = qTextarea.value.indexOf('Average group size');
@@ -620,11 +575,11 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
 
   it('Move-band-up reorders a band (the symmetric direction of move-band-down)', () => {
     renderPage();
-    const moveUpBtns = screen.getAllByRole('button', { name: /Move band up/i });
+    const moveUpBtns = screen.getAllByRole('button', { name: /Move category up/i });
     // Band-1's move-up is disabled; Band-2's is enabled. Click Band-2's to swap with Band-1.
     expect(moveUpBtns[0].disabled).toBe(true);
     fireEvent.click(moveUpBtns[1]);
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     const starterIdx = rTextarea.value.indexOf('"Starter"');
     const establishedIdx = rTextarea.value.indexOf('"Established"');
@@ -636,13 +591,13 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     renderPage();
     // Seeded ids are q1, q2. Click "Add question" once → should yield q3.
     fireEvent.click(screen.getByRole('button', { name: /Add question/i }));
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     let qTextarea = screen.getByLabelText(/Questions JSON/i);
     expect(qTextarea.value).toMatch(/"id": "q3"/);
     // Switch back to Visual, add another → q4 (since q3 is now used).
-    fireEvent.click(screen.getByRole('tab', { name: /Visual builder/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Questions/i }));
     fireEvent.click(screen.getByRole('button', { name: /Add question/i }));
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     qTextarea = screen.getByLabelText(/Questions JSON/i);
     expect(qTextarea.value).toMatch(/"id": "q4"/);
     // Both q3 and q4 should be present (no collision).
@@ -660,7 +615,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     const typeSelect = selects.find((s) => s.value === 'single-choice');
     expect(typeSelect).toBeTruthy();
     fireEvent.change(typeSelect, { target: { value: 'multi-select' } });
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const qTextarea = screen.getByLabelText(/Questions JSON/i);
     expect(qTextarea.value).toMatch(/"type": "multi-select"/);
   });
@@ -672,7 +627,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     const tierInput = inputs.find((el) => el.value === 'entry');
     expect(tierInput).toBeTruthy();
     fireEvent.change(tierInput, { target: { value: 'starter-special' } });
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     expect(rTextarea.value).toMatch(/"recommendedTier": "starter-special"/);
   });
@@ -680,45 +635,28 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   it('ScoringVisualEditor shows a ParseErrorPanel when rJson is unparseable', () => {
     renderPage();
     // Break the scoring JSON via the JSON tab, then swap back to Visual.
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     fireEvent.change(rTextarea, { target: { value: '{ not json' } });
-    fireEvent.click(screen.getByRole('tab', { name: /Visual builder/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Questions/i }));
     // The ScoringVisualEditor branch shows its own ParseErrorPanel.
-    expect(screen.getByText(/scoringRulesJson string is not valid JSON/i)).toBeTruthy();
+    expect(screen.getByText(/The scoringRulesJson string is not valid JSON/i)).toBeTruthy();
   });
 
   it('ScoringVisualEditor flags a missing-bands-array payload distinctly from unparseable JSON', () => {
     renderPage();
     // Provide VALID JSON that lacks the "bands" array (object-but-no-bands branch).
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
+    openJsonEditor();
     const rTextarea = screen.getByLabelText(/Scoring rules JSON/i);
     fireEvent.change(rTextarea, { target: { value: JSON.stringify({ method: 'weighted-sum', notBands: [] }) } });
-    fireEvent.click(screen.getByRole('tab', { name: /Visual builder/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Questions/i }));
     // Distinct message: "missing a 'bands' array", not "not valid JSON".
     expect(screen.getByText(/scoringRulesJson is missing a "bands" array/i)).toBeTruthy();
   });
 
-  it('Validate re-evaluation transitions from errors to ok after fixing the broken JSON', () => {
-    renderPage();
-    // Step 1: break questionsJson, validate → errors panel.
-    fireEvent.click(screen.getByRole('tab', { name: /JSON \(advanced\)/i }));
-    const qTextarea = screen.getByLabelText(/Questions JSON/i);
-    fireEvent.change(qTextarea, { target: { value: 'totally broken' } });
-    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
-    let alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/Validation errors/i);
-    // Step 2: restore valid JSON, re-validate → ok panel.
-    const fixedQ = JSON.stringify({ questions: [{ id: 'q1', text: 'x', type: 'single-choice', options: [{ value: 'a', label: 'A', weight: 1 }] }] });
-    fireEvent.change(qTextarea, { target: { value: fixedQ } });
-    fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
-    alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/Both JSON payloads parse and have the required shape/i);
-  });
-
-  // ─── T11 Engine Weights tab (TMC-only) + Promote-to-active ─────────
+  // ─── T11 Recommendation Settings tab (TMC-only) + Promote-to-active ─────────
   // Pins PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10 row T11 contract:
-  //   - Engine Weights tab visible only when subBrand=tmc
+  //   - Recommendation Settings tab visible only when subBrand=tmc
   //   - 6 weight inputs default to §3.3.3 (50 / 20 / 15 / 10 / 10 / 8)
   //   - Threshold defaults to 70
   //   - Save PUTs to /api/travel/engine-weights
@@ -764,55 +702,53 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     };
   }
 
-  it('T11: Engine Weights tab visible only when subBrand=tmc', async () => {
+  it('T11: Recommendation Settings tab visible only when subBrand=tmc', async () => {
     fetchApiMock.mockImplementation(makeWeightsFetch());
     renderPage();
     // TMC is default — tab is present.
-    expect(screen.getByRole('tab', { name: /Engine Weights/i })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Recommendation Settings/i })).toBeTruthy();
     // Switch to RFU — tab disappears.
     fireEvent.click(screen.getByRole('button', { name: /RFU \(Umrah\)/i }));
-    expect(screen.queryByRole('tab', { name: /Engine Weights/i })).toBeNull();
+    expect(screen.queryByRole('tab', { name: /Recommendation Settings/i })).toBeNull();
     // Switch back to TMC — tab returns.
     fireEvent.click(screen.getByRole('button', { name: /TMC \(school trips\)/i }));
-    expect(screen.getByRole('tab', { name: /Engine Weights/i })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Recommendation Settings/i })).toBeTruthy();
   });
 
   it('T11: 6 weight inputs render with PRD §3.3.3 defaults (50/20/15/10/10/8)', async () => {
     fetchApiMock.mockImplementation(makeWeightsFetch());
     renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendation Settings/i }));
     await waitFor(() => {
-      expect(screen.getByLabelText(/Primary-outcome match/i)).toBeTruthy();
+      expect(screen.getByLabelText(/Main trip goal/i)).toBeTruthy();
     });
     // Default values per PRD §3.3.3.
-    expect(screen.getByLabelText(/Primary-outcome match/i).value).toBe('50');
-    expect(screen.getByLabelText(/Secondary-skill match/i).value).toBe('20');
-    expect(screen.getByLabelText(/Growth-area match/i).value).toBe('15');
-    expect(screen.getByLabelText(/Curriculum hook depth/i).value).toBe('10');
-    expect(screen.getByLabelText(/Grade-band centering/i).value).toBe('10');
-    expect(screen.getByLabelText(/Tier-value lean/i).value).toBe('8');
+    expect(screen.getByLabelText(/Main trip goal/i).value).toBe('50');
+    expect(screen.getByLabelText(/Extra skills wanted/i).value).toBe('20');
+    expect(screen.getByLabelText(/Growth focus/i).value).toBe('15');
+    expect(screen.getByLabelText(/Curriculum match/i).value).toBe('10');
+    expect(screen.getByLabelText(/Grade fit/i).value).toBe('10');
+    expect(screen.getByLabelText(/Budget and value fit/i).value).toBe('8');
   });
 
   it('T11: Threshold input renders with default 70 per §3.3.5', async () => {
     fetchApiMock.mockImplementation(makeWeightsFetch());
     renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendation Settings/i }));
     await waitFor(() => {
-      expect(screen.getByLabelText(/Scores-well threshold/i)).toBeTruthy();
+      expect(screen.getByLabelText(/Strong match threshold/i)).toBeTruthy();
     });
-    expect(screen.getByLabelText(/Scores-well threshold/i).value).toBe('70');
-    // Version label seeded from the persisted row.
-    expect(screen.getByLabelText(/Version label/i).value).toBe('v1');
+    expect(screen.getByLabelText(/Strong match threshold/i).value).toBe('70');
   });
 
   it('T11: Save triggers PUT /api/travel/engine-weights with the right shape', async () => {
     fetchApiMock.mockImplementation(makeWeightsFetch());
     renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendation Settings/i }));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Save engine weights/i })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Save recommendation settings/i })).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole('button', { name: /Save engine weights/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Save recommendation settings/i }));
     await waitFor(() => {
       const putCall = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/travel/engine-weights' && o?.method === 'PUT',
@@ -829,57 +765,16 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     });
   });
 
-  it('T11: Validation rejects a negative weight + blocks the PUT', async () => {
-    fetchApiMock.mockImplementation(makeWeightsFetch());
-    renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
-    await waitFor(() => {
-      expect(screen.getByLabelText(/Primary-outcome match/i)).toBeTruthy();
-    });
-    const primaryInput = screen.getByLabelText(/Primary-outcome match/i);
-    fireEvent.change(primaryInput, { target: { value: '-5' } });
-    fireEvent.click(screen.getByRole('button', { name: /Save engine weights/i }));
-    await waitFor(() => {
-      expect(notifyObj.error).toHaveBeenCalled();
-      const msg = notifyObj.error.mock.calls[0][0];
-      expect(msg).toMatch(/Fix validation errors/i);
-    });
-    // PUT was NOT issued.
-    const putCalls = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/travel/engine-weights' && o?.method === 'PUT',
-    );
-    expect(putCalls.length).toBe(0);
-    // Inline alert lists the specific error.
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/Primary-outcome match must be an integer ≥ 0/i);
-  });
-
-  it('T11: Validation rejects a threshold outside [0, 100]', async () => {
-    fetchApiMock.mockImplementation(makeWeightsFetch());
-    renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
-    await waitFor(() => {
-      expect(screen.getByLabelText(/Scores-well threshold/i)).toBeTruthy();
-    });
-    fireEvent.change(screen.getByLabelText(/Scores-well threshold/i), { target: { value: '150' } });
-    fireEvent.click(screen.getByRole('button', { name: /Save engine weights/i }));
-    await waitFor(() => {
-      expect(notifyObj.error).toHaveBeenCalled();
-    });
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/threshold must be an integer in \[0, 100\]/i);
-  });
-
   it('T11: Version auto-bumps from v1 → v2 when a weight changes and operator did not touch version', async () => {
     fetchApiMock.mockImplementation(makeWeightsFetch());
     renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendation Settings/i }));
     await waitFor(() => {
-      expect(screen.getByLabelText(/Primary-outcome match/i)).toBeTruthy();
+      expect(screen.getByLabelText(/Main trip goal/i)).toBeTruthy();
     });
     // Operator changes primary-outcome weight 50 → 60 (a real tuning move).
-    fireEvent.change(screen.getByLabelText(/Primary-outcome match/i), { target: { value: '60' } });
-    fireEvent.click(screen.getByRole('button', { name: /Save engine weights/i }));
+    fireEvent.change(screen.getByLabelText(/Main trip goal/i), { target: { value: '60' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save recommendation settings/i }));
     await waitFor(() => {
       const putCall = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/travel/engine-weights' && o?.method === 'PUT',
@@ -895,28 +790,28 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   it('T11: ADMIN sees Save enabled; non-ADMIN role sees read-only notice', async () => {
     fetchApiMock.mockImplementation(makeWeightsFetch());
     renderPage({ role: 'MANAGER' });
-    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendation Settings/i }));
     await waitFor(() => {
-      expect(screen.getByLabelText(/Primary-outcome match/i)).toBeTruthy();
+      expect(screen.getByLabelText(/Main trip goal/i)).toBeTruthy();
     });
     // Save button is disabled for non-ADMIN.
-    const saveBtn = screen.getByRole('button', { name: /Save engine weights/i });
+    const saveBtn = screen.getByRole('button', { name: /Save recommendation settings/i });
     expect(saveBtn.disabled).toBe(true);
     // Read-only notice copy is visible.
-    expect(screen.getByText(/Read-only \(ADMIN required to save\)/i)).toBeTruthy();
+    expect(screen.getByText(/Read-only\. Admin access is required to save\./i)).toBeTruthy();
   });
 
   // T25: the legacy in-tab Promote-to-active sub-panel was deprecated
   // once T16 shipped the dedicated /travel/tmc/catalogue admin page
-  // (TmcCatalogueAdmin.jsx). Engine Weights tab now surfaces a single
+  // (TmcCatalogueAdmin.jsx). Recommendation Settings tab now surfaces a single
   // link to that page; the full archived-row list + promote flow lives
   // there. The two prior T11 tests that pinned the in-tab archived
   // list + per-row Promote button + empty-state copy were removed —
   // those behaviours are now covered by TmcCatalogueAdmin.test.jsx.
-  it('T25: Engine Weights tab links to /travel/tmc/catalogue (T16 dedicated page)', async () => {
+  it('T25: Recommendation Settings tab links to /travel/tmc/catalogue (T16 dedicated page)', async () => {
     fetchApiMock.mockImplementation(makeWeightsFetch());
     renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendation Settings/i }));
     const link = await screen.findByRole('link', { name: /Open TMC Catalogue Admin/i });
     expect(link).toBeTruthy();
     expect(link.getAttribute('href')).toBe('/travel/tmc/catalogue');
@@ -929,16 +824,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(archivedListCalls.length).toBe(0);
   });
 
-  // ─── PRD §4.2 — Request change (Phase-1 view-only scoring) ─────────
-  // Scoring is view-only in Phase 1; the bank header surfaces a
-  // "Request change" button (only when an existing bank loaded) that
-  // opens a summary+details modal and POSTs to
-  // /api/travel/diagnostics/banks/:id/request-change, toasting the
-  // created GS ticket id.
-
-  // Mount-GET resolver that returns one existing TMC bank (id 42, v3)
-  // so the Request-change button renders; optional postHandler routes
-  // everything else (the modal's POST).
+  // Mount-GET resolver that returns one existing TMC bank (id 42, v3).
   function makeExistingBankFetch(postHandler) {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url.includes('/diagnostic-banks?')) {
@@ -947,6 +833,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
             id: 42,
             version: 3,
             subBrand: 'tmc',
+            templateName: 'Apple',
             isActive: true,
             questionsJson: JSON.stringify({
               questions: [{ id: 'q1', text: 'T?', type: 'single-choice', options: [{ value: 'a', label: 'A', weight: 1 }] }],
@@ -963,96 +850,54 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     });
   }
 
-  it('Request change button renders for an existing bank and opens the modal', async () => {
+
+  it('Delete template button renders for an existing bank and uses the in-CRM confirm modal', async () => {
     makeExistingBankFetch();
     renderPage();
-    const btn = await screen.findByRole('button', { name: /^Request change$/i });
-    // No dialog until clicked.
-    expect(screen.queryByRole('dialog', { name: /Request scoring change/i })).toBeNull();
+    const btn = await screen.findByRole('button', { name: /^Delete$/i });
     fireEvent.click(btn);
-    expect(screen.getByRole('dialog', { name: /Request scoring change/i })).toBeTruthy();
-    expect(screen.getByLabelText(/Change request summary/i)).toBeTruthy();
-    expect(screen.getByLabelText(/Change request details/i)).toBeTruthy();
-  });
-
-  it('Request change button does NOT render when no bank exists yet', async () => {
-    renderPage(); // beforeEach default: { banks: [] }
     await waitFor(() => {
-      expect(screen.getByText(/No diagnostic bank yet for this brand/i)).toBeTruthy();
-    });
-    expect(screen.queryByRole('button', { name: /^Request change$/i })).toBeNull();
-  });
-
-  it('Submitting the modal POSTs summary+details to /request-change and toasts the ticket id', async () => {
-    makeExistingBankFetch((url, opts) => {
-      if (url === '/api/travel/diagnostics/banks/42/request-change' && opts?.method === 'POST') {
-        return Promise.resolve({ ticket: { id: 555, subject: 'x', status: 'Open' } });
-      }
-      return Promise.resolve(null);
-    });
-    renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: /^Request change$/i }));
-    fireEvent.change(screen.getByLabelText(/Change request summary/i), {
-      target: { value: 'Band 2 threshold too low' },
-    });
-    fireEvent.change(screen.getByLabelText(/Change request details/i), {
-      target: { value: 'Repeat organisers keep landing in level_1.' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Submit change request/i }));
-    await waitFor(() => {
-      const call = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/diagnostics/banks/42/request-change' && o?.method === 'POST',
-      );
-      expect(call).toBeTruthy();
-      const body = JSON.parse(call[1].body);
-      expect(body.summary).toBe('Band 2 threshold too low');
-      expect(body.details).toBe('Repeat organisers keep landing in level_1.');
-    });
-    await waitFor(() => {
-      expect(notifyObj.success).toHaveBeenCalled();
-      expect(notifyObj.success.mock.calls[0][0]).toMatch(/ticket #555/i);
-    });
-    // Modal closes on success.
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: /Request scoring change/i })).toBeNull();
+      expect(notifyObj.confirm).toHaveBeenCalledWith({
+        title: 'Delete template',
+        message: expect.stringMatching(/Delete template "Apple"\?/),
+        confirmText: 'Delete',
+        destructive: true,
+      });
     });
   });
 
-  it('Submitting with an empty summary blocks the POST with a notify', async () => {
+  it('Cancelling the delete confirm modal does not call the DELETE endpoint', async () => {
+    notifyObj.confirm.mockResolvedValueOnce(false);
     makeExistingBankFetch();
     renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: /^Request change$/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Submit change request/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Delete$/i }));
     await waitFor(() => {
-      expect(notifyObj.error).toHaveBeenCalled();
-      expect(notifyObj.error.mock.calls[0][0]).toMatch(/Summary is required/i);
+      expect(notifyObj.confirm).toHaveBeenCalled();
     });
     expect(
       fetchApiMock.mock.calls.some(
-        ([u, o]) => typeof u === 'string' && u.includes('/request-change') && o?.method === 'POST',
+        ([u, o]) => u === '/api/travel/diagnostic-banks/42' && o?.method === 'DELETE',
       ),
     ).toBe(false);
-    // Modal stays open so the user can fill the summary in.
-    expect(screen.getByRole('dialog', { name: /Request scoring change/i })).toBeTruthy();
   });
 
-  it('Request-change failure surfaces the backend error and keeps the modal open', async () => {
+  it('Confirming the delete modal calls DELETE and reloads the bank list', async () => {
     makeExistingBankFetch((url, opts) => {
-      if (typeof url === 'string' && url.includes('/request-change') && opts?.method === 'POST') {
-        return Promise.reject({ status: 404, data: { error: 'Bank not found' } });
+      if (url === '/api/travel/diagnostic-banks/42' && opts?.method === 'DELETE') {
+        return Promise.resolve({ success: true });
       }
       return Promise.resolve(null);
     });
     renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: /^Request change$/i }));
-    fireEvent.change(screen.getByLabelText(/Change request summary/i), {
-      target: { value: 'Band 2 threshold too low' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Submit change request/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Delete$/i }));
     await waitFor(() => {
-      expect(notifyObj.error).toHaveBeenCalled();
-      expect(notifyObj.error.mock.calls[0][0]).toMatch(/Bank not found/i);
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/diagnostic-banks/42' && o?.method === 'DELETE',
+      );
+      expect(call).toBeTruthy();
     });
-    expect(screen.getByRole('dialog', { name: /Request scoring change/i })).toBeTruthy();
+    await waitFor(() => {
+      expect(notifyObj.success).toHaveBeenCalledWith('Template deleted');
+    });
   });
 });

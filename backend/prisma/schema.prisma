@@ -191,6 +191,7 @@ model Tenant {
   // cascade behavior lives on each child via @relation onDelete).
   travelDiagnostics                   TravelDiagnostic[]
   travelDiagQuestionBanks             TravelDiagnosticQuestionBank[]
+  travelDiagnosticPublicForms       TravelDiagnosticPublicForm[]
   itineraries                         Itinerary[]
   // #907 slice 4 — Itinerary template library (Pre-loaded ~50, expand over time).
   // Subsequent slices: CRUD route + admin library UI + "Create from template" hook.
@@ -2250,7 +2251,6 @@ model WhatsAppMessage {
   direction     String    @default("OUTBOUND")
   status        String    @default("QUEUED") // QUEUED, SENT, DELIVERED, READ, FAILED
   providerMsgId String?
-  templateName  String?
   errorMessage  String?
   read          Boolean   @default(false)
   // Soft-delete for "Delete for me" — hides the message from the
@@ -5890,8 +5890,44 @@ model AiSubscriptionPlan {
 
   tenantSubscriptions AiTenantSubscription[]
   creditOrders        AiCreditOrder[]
+  planKeys            AiSubscriptionPlanKey[]
 
   @@index([isActive, displayOrder])
+}
+
+// CRM-managed AI provider keys configured by the super admin. These keys can
+// be attached to one or more AiSubscriptionPlan rows and are only used for
+// tenants on a subscription that includes them.
+model AiManagedApiKey {
+  id             Int      @id @default(autoincrement())
+  providerId     String   // gemini | openai | groq | moonshot | ...
+  label          String   // human-readable name shown to super admin
+  apiKey         String   @db.Text // encrypted at application layer
+  baseUrl        String?  @db.Text // null = use provider default
+  model          String?  @db.Text // optional override; null = provider default model
+  isEnabled      Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  planKeys       AiSubscriptionPlanKey[]
+
+  @@index([providerId, isEnabled])
+}
+
+// Many-to-many join between subscription plans and managed API keys, with a
+// per-plan enable/disable toggle so a key can be active globally but excluded
+// from a specific plan.
+model AiSubscriptionPlanKey {
+  planId     Int
+  plan       AiSubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  keyId      Int
+  apiKey     AiManagedApiKey      @relation(fields: [keyId], references: [id], onDelete: Cascade)
+  isEnabled  Boolean @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([planId, keyId])
+  @@index([planId, isEnabled])
 }
 
 model AiTenantSubscription {
@@ -6274,18 +6310,30 @@ model TravelDiagnostic {
   curriculumFitJson      String? @db.Text
 
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  // Public-form provenance (additive). Values: "public_form", "portal",
+  // "manual", "tmc_public". Nullable so legacy rows remain untouched.
+  source              String?   @db.VarChar(50)
+  // Random token (16 hex chars) minted when a public diagnostic-form report
+  // slug is issued (see travel_diagnostics_public.js buildReportSlug). The
+  // public report endpoint requires the full slug (id + this token) to
+  // match before returning the report, so a diagnostic id alone can't be
+  // enumerated to read someone else's report. Null when no public-form
+  // report link has been generated for this diagnostic.
+  reportSlugToken     String?   @db.VarChar(32)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([tenantId, subBrand, contactId])
   @@index([tenantId, subBrand, classification])
   @@index([tenantId, subBrand, engineState])
+  @@index([tenantId, source])
 }
 
 model TravelDiagnosticQuestionBank {
   id               Int      @id @default(autoincrement())
   tenantId         Int      @default(1)
   subBrand         String
+  templateName     String?  @db.VarChar(120)
   version          Int      @default(1)
   questionsJson    String   @db.Text // ordered Qs + weights + branching rules
   scoringRulesJson String   @db.Text // band thresholds + classification labels
@@ -6298,7 +6346,54 @@ model TravelDiagnosticQuestionBank {
   @@index([tenantId, subBrand, isActive])
 }
 
-// ── Itinerary (multi-product trips: RFU + Travel Stall) ──────────────
+// Public diagnostic form configuration (Travel CRM). One active published form
+// per (tenant, sub-brand). Stores styling + brand-kit link + identity-field
+// flags so the public URL can render a branded, responsive form without auth.
+model TravelDiagnosticPublicForm {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subBrand          String   @db.VarChar(50)
+  // Snapshot of the active question-bank id at publish time. The public endpoint
+  // always resolves the latest active bank, but this column records intent.
+  bankId            Int?
+  // Linked BrandKit for logo/colors/fonts. Kept as an Int reference so existing
+  // BrandKit rows are not disturbed.
+  brandKitId        Int?
+  isActive          Boolean  @default(false)
+  isPublished       Boolean  @default(false)
+  title             String?  @db.VarChar(200)
+  subtitle          String?  @db.Text
+  headerHtml        String?  @db.Text
+  footerHtml        String?  @db.Text
+  thankYouMessage   String?  @db.Text
+  primaryColor      String?  @db.VarChar(20)
+  bgColor           String?  @db.VarChar(20)
+  textColor         String?  @db.VarChar(20)
+  fontFamily        String?  @db.VarChar(100)
+  logoUrl           String?  @db.VarChar(500)
+  // top-center | top-left | top-right | inline
+  logoPlacement     String?  @db.VarChar(20)
+  coverImageUrl     String?  @db.VarChar(500)
+  // Catch-all for future styling knobs (margins, border radius, button shape, etc.)
+  stylingConfigJson String?  @db.Text
+  // Identity fields shown to public submitters by default; can be toggled off.
+  includeName       Boolean  @default(true)
+  includeEmail      Boolean  @default(true)
+  includePhone      Boolean  @default(true)
+  nameRequired      Boolean  @default(true)
+  emailRequired     Boolean  @default(true)
+  phoneRequired     Boolean  @default(false)
+  // Optional custom slug suffix for future vanity URLs; unused in v1.
+  publicSlug        String?  @db.VarChar(100)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([tenantId, subBrand])
+  @@index([tenantId, subBrand, isPublished])
+}
+
+// Itinerary (multi-product trips: RFU + Travel Stall)
 model Itinerary {
   id                      Int             @id @default(autoincrement())
   tenantId                Int             @default(1)
@@ -8703,6 +8798,10 @@ model TravelCurriculumMapping {
   mappingSource       String   @default("manual") @db.VarChar(32)
   // Advisor's free-text explanation of why this destination fits this outcome.
   fitRationale        String?  @db.Text
+  // Optional public brochure PDF for this mapped destination/outcome. When a
+  // diagnostic matches the row, the generated report can surface a download
+  // link on the curriculum-fit recommendation.
+  brochurePdfUrl      String?  @db.VarChar(512)
   // Soft-disable a mapping without deleting (preserves history).
   isActive            Boolean  @default(true)
   // Review metadata populated when a proposal becomes an approved mapping.

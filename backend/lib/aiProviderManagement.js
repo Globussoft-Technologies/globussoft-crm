@@ -6,6 +6,7 @@ const { encrypt, decrypt } = require("./fieldEncryption");
 const { writeAudit } = require("./audit");
 const { inferProvider } = require("./apiPricing");
 const aiCreditLedger = require("./aiCreditLedger");
+const { pdfBufferToImageParts } = require("./pdfToImages");
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
@@ -312,6 +313,51 @@ function isValidContent(content) {
   return typeof content === "string" || isMultimodalContent(content);
 }
 
+// Gemini natively supports application/pdf inline_data. OpenAI-compatible and
+// Anthropic vision APIs only accept true image mimetypes, so convert any PDF
+// part to PNG page images before sending to those families. This keeps every
+// AI feature usable regardless of which provider key the tenant (or their
+// subscription plan) happens to have configured.
+async function convertPdfPartsForProvider(family, content) {
+  if (!Array.isArray(content)) return content;
+  const out = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    if (part.type === "image" && part.mimeType === "application/pdf" && typeof part.data === "string") {
+      if (family === "gemini") {
+        out.push(part);
+        continue;
+      }
+      const images = await pdfBufferToImageParts(Buffer.from(part.data, "base64"), { maxPages: 5 });
+      if (images.length) {
+        out.push(...images);
+      } else {
+        out.push({ type: "text", text: "[PDF attachment could not be converted to images]" });
+      }
+      continue;
+    }
+    out.push(part);
+  }
+  return out;
+}
+
+async function normalizeMessagesForProvider(family, messages) {
+  if (family === "gemini") return messages;
+  const normalized = [];
+  for (const m of messages || []) {
+    if (!m) {
+      normalized.push(m);
+      continue;
+    }
+    if (isMultimodalContent(m.content)) {
+      normalized.push({ ...m, content: await convertPdfPartsForProvider(family, m.content) });
+    } else {
+      normalized.push(m);
+    }
+  }
+  return normalized;
+}
+
 function toOpenAIMessages(messages) {
   return (messages || [])
     .filter((m) => m && isValidContent(m.content))
@@ -479,7 +525,10 @@ async function callGemini(
       source: config.source,
     },
   );
-  const model = config.model || DEFAULT_GEMINI_MODEL;
+  const model = String(config.model || DEFAULT_GEMINI_MODEL).replace(
+    /^models\//,
+    "",
+  );
   const url = `${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const { systemInstruction, contents } = toGeminiContents(messages);
   const body = { contents };
@@ -490,7 +539,7 @@ async function callGemini(
     thinkingConfig: { thinkingBudget: 512 },
   };
 
-  const res = await fetchFn(url, {
+  const res = await fetchFn(url.toString(), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -610,16 +659,14 @@ async function generateChatCompletion(config, payload, fetchImpl) {
 
   for (const attempt of attempts) {
     try {
-      if (attempt.family === "gemini")
-        return await callGemini(attempt, payload, fetchImpl);
+      const normalizedMessages = await normalizeMessagesForProvider(attempt.family, payload.messages);
+      const normalizedPayload = { ...payload, messages: normalizedMessages };
+      if (attempt.family === "gemini") return await callGemini(attempt, normalizedPayload, fetchImpl);
       if (attempt.family === "openai-compatible") {
-        return await callOpenAICompatible(attempt, payload, fetchImpl);
+        return await callOpenAICompatible(attempt, normalizedPayload, fetchImpl);
       }
-      if (attempt.family === "anthropic")
-        return await callAnthropic(attempt, payload, fetchImpl);
-      const err = new Error(
-        `Unsupported AI provider family: ${attempt.family}`,
-      );
+      if (attempt.family === "anthropic") return await callAnthropic(attempt, normalizedPayload, fetchImpl);
+      const err = new Error(`Unsupported AI provider family: ${attempt.family}`);
       err.code = "AI_PROVIDER_UNSUPPORTED";
       throw err;
     } catch (err) {
@@ -757,6 +804,38 @@ function publicUnavailableReason(walletState) {
   return "NO_CONFIGURATION";
 }
 
+// Build CRM-managed provider candidates from the active subscription plan's
+// attached keys. Falls back to legacy env-var keys when no plan has keys.
+async function managedCandidatesForTenant(tenantId, { preferredFamily = null } = {}) {
+  const state = await aiCreditLedger.getWalletState(tenantId);
+  if (!state.activeSubscription) return { all: [], preferred: [] };
+  const planId = state.activeSubscription.planId;
+  const planKeys = await prisma.aiSubscriptionPlanKey.findMany({
+    where: { planId, isEnabled: true },
+    include: { apiKey: true },
+  });
+  const enabled = planKeys
+    .filter((pk) => pk.apiKey && pk.apiKey.isEnabled)
+    .map((pk) => {
+      const meta = getProviderMeta(pk.apiKey.providerId);
+      if (!meta) return null;
+      return {
+        providerId: meta.id,
+        providerLabel: meta.label,
+        family: meta.family,
+        apiKey: decrypt(pk.apiKey.apiKey),
+        model: pk.apiKey.model || defaultModelForProvider(meta.id),
+        baseUrl: validateProviderBaseUrl(meta.id, pk.apiKey.baseUrl, { source: "internal" }),
+        source: "internal",
+      };
+    })
+    .filter(Boolean);
+  const preferred = preferredFamily
+    ? enabled.filter((c) => c.family === preferredFamily)
+    : enabled;
+  return { all: enabled, preferred };
+}
+
 // Resolver priority:
 //   1. Tenant's own BYOK credentials (unchanged, highest priority).
 //   2. CRM-managed AI — only if the tenant has an ACTIVE AiTenantSubscription
@@ -791,6 +870,23 @@ async function resolveProviderConfig(
   const preferredFamily = requestedModelLabel
     ? requestedFamilyForLabel(requestedModelLabel)
     : "openai-compatible";
+
+  // First try keys attached to the tenant's active subscription plan.
+  const managed = await managedCandidatesForTenant(tenantId, { preferredFamily });
+  if (managed.all.length > 0) {
+    const primary = managed.preferred[0] || managed.all[0];
+    const fallbacks = managed.all.filter(
+      (candidate) => candidate.providerId !== primary.providerId || candidate.model !== primary.model,
+    );
+    return {
+      ...primary,
+      source: "internal",
+      accessType: "crm-managed",
+      fallbacks: fallbacks.map((candidate) => ({ ...candidate, accessType: "crm-managed" })),
+    };
+  }
+
+  // Legacy env-var fallback for plans without attached keys.
   const primary = internalCandidatesForFamily(preferredFamily)[0];
   const fallbacks = [
     ...internalCandidatesForFamily("openai-compatible"),

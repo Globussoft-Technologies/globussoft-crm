@@ -4,6 +4,7 @@
  * contract: drop-don't-reject, raster-only logos, clamped custom placement.
  */
 // globals: true in vitest.config.js — describe/it/expect are ambient.
+const fs = require('node:fs');
 const { sanitizeBrandKit } = require('../../lib/brochureBrandKit');
 const s3Service = require('../../services/s3Service');
 
@@ -60,6 +61,30 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
       expect(kit.logoUrl).toBeUndefined();
     } finally {
       s3Service.S3_BASE_URL = originalBase;
+    }
+  });
+
+  it('inlines a local /uploads/brand-kits/ URL and emits a data: URI logo', () => {
+    const originalRead = fs.readFileSync;
+    const pngBytes = Buffer.from(PNG_1x1.replace(/^data:image\/png;base64,/, ''), 'base64');
+    fs.readFileSync = () => pngBytes;
+    try {
+      const kit = sanitizeBrandKit({ logoUrl: '/uploads/brand-kits/1/_default/logo-abc.png', name: 'Acme' });
+      expect(kit.logoUrl).toMatch(/^data:image\/png;base64,/);
+      expect(kit.name).toBe('Acme');
+    } finally {
+      fs.readFileSync = originalRead;
+    }
+  });
+
+  it('rejects local upload paths outside the brand-kits directory', () => {
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = () => Buffer.from('evil');
+    try {
+      const kit = sanitizeBrandKit({ logoUrl: '/uploads/brand-kits/../etc/passwd', name: 'Acme' });
+      expect(kit.logoUrl).toBeUndefined();
+    } finally {
+      fs.readFileSync = originalRead;
     }
   });
 

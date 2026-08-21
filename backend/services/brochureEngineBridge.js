@@ -70,6 +70,9 @@ const GENERATED_DIR = process.env.GENERATED_DIR
  *                                    models), e.g. { reasoning, balanced, fast, writing }.
  * @param {string} [args.strategy]    Optional preset ('recommended'|'cheapest'|'smartest'),
  *                                    applied only when `models` is absent.
+ * @param {object} [args.providerEnv]  Optional env vars to inject into the engine
+ *                                      subprocess (e.g. isolated tenant AI provider
+ *                                      credentials). Merged with process.env.
  * @param {(e: object) => void} [args.onEvent]  Called for each engine event.
  * @returns {Promise<{ runId: string, result: unknown, billedUsd: number, pdfUrl: string | null }>}
  */
@@ -128,7 +131,7 @@ function killTree(child, { force = false } = {}) {
   }
 }
 
-function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, strategy, onEvent }) {
+function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, strategy, onEvent, providerEnv }) {
   // Concurrency gate — reject fast rather than stacking subprocesses + Chromes.
   if (RUNNING_CHILDREN.size >= MAX_CONCURRENT_RUNS) {
     return Promise.reject(
@@ -141,7 +144,7 @@ function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, s
     const brief = JSON.stringify({ runId, sectorKey, goal, styleKey, brand, models, strategy });
     const child = spawn(process.execPath, [TSX_CLI, BRIDGE_SCRIPT], {
       cwd: ENGINE_ROOT,
-      env: { ...process.env, BROCHURE_BRIEF: brief },
+      env: { ...process.env, ...(providerEnv || {}), BROCHURE_BRIEF: brief },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       // Own process group on POSIX so killTree can signal the group (child +
@@ -311,15 +314,17 @@ function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, s
  * LLM call, no event streaming. Reads the single final JSON object from the LAST
  * non-empty stdout line and resolves it.
  *
+ * @param {object} [providerEnv] - optional env vars to inject (e.g. isolated AI
+ *                                 provider credentials from tenant AI settings).
  * @returns {Promise<{ tiers: string[], strategies: string[], defaults: object,
  *                     models: Array<{ id, label, provider, available, intelligence,
  *                     costEff, inputPer1M, outputPer1M, blurb }> }>}
  */
-function listModels() {
+function listModels(providerEnv) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [TSX_CLI, BRIDGE_SCRIPT], {
       cwd: ENGINE_ROOT,
-      env: { ...process.env, BROCHURE_MODE: "catalog" },
+      env: { ...process.env, ...(providerEnv || {}), BROCHURE_MODE: "catalog" },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });

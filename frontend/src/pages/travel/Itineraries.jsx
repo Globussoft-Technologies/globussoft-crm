@@ -58,6 +58,8 @@ import {
 // rows without lat/lng — so a partially-geocoded itinerary still maps the
 // rows that do have coordinates.
 import MapPreview from "../../components/MapPreview";
+import { destinationGeoQueries } from "../../lib/travelLocationResolver";
+import LocationAutocomplete from "../../components/travel/LocationAutocomplete";
 import TripPager from "./TripPager";
 import SearchHighlight from "../../components/ui/SearchHighlight";
 
@@ -413,11 +415,9 @@ export default function Itineraries() {
       setMapItems(raw);
       return;
     }
-    // Parse destination into city words and geocode each via Nominatim.
-    const words = selectedItinerary.destination
-      .split(/[_\s/,;-]+/)
-      .map((w) => w.trim())
-      .filter(Boolean);
+    // Parse destination into real place tokens only. Splitting into single words
+    // produced nonsense world-map pins for multi-word destinations.
+    const words = destinationGeoQueries(selectedItinerary.destination);
     let cancelled = false;
     (async () => {
       const synth = [];
@@ -1654,15 +1654,14 @@ export default function Itineraries() {
               </label>
               <label style={fieldLabel}>
                 Destination
-                <input
-                  required
-                  type="text"
+                <LocationAutocomplete
                   value={form.destination}
-                  onChange={(e) =>
-                    setForm({ ...form, destination: e.target.value })
-                  }
+                  onChange={(text) => setForm({ ...form, destination: text })}
                   style={inputStyle}
-                  placeholder='e.g. "Andaman Islands"'
+                  inputProps={{
+                    required: true,
+                    placeholder: 'e.g. "Andaman Islands"',
+                  }}
                 />
               </label>
               <div
@@ -1862,25 +1861,22 @@ export default function Itineraries() {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <label style={fieldLabel}>
                 Destination
-                <input
-                  type="text"
+                <LocationAutocomplete
                   value={suggestForm.destination}
-                  onChange={(e) =>
+                  onChange={(text) =>
                     setSuggestForm({
                       ...suggestForm,
-                      destination: e.target.value,
+                      destination: text,
                     })
                   }
                   style={inputStyle}
-                  placeholder='e.g. "Goa", "Paris", "Kyoto"'
-                  aria-invalid={
-                    suggestFieldErrors.destination ? "true" : "false"
-                  }
-                  aria-describedby={
-                    suggestFieldErrors.destination
+                  inputProps={{
+                    placeholder: 'e.g. "Goa", "Paris", "Kyoto"',
+                    "aria-invalid": suggestFieldErrors.destination ? "true" : "false",
+                    "aria-describedby": suggestFieldErrors.destination
                       ? "suggest-dest-error"
-                      : undefined
-                  }
+                      : undefined,
+                  }}
                 />
                 {suggestFieldErrors.destination && (
                   <span id="suggest-dest-error" style={errorTextStyle}>
@@ -1897,18 +1893,19 @@ export default function Itineraries() {
               >
                 <label style={fieldLabel}>
                   Departure city (optional)
-                  <input
-                    type="text"
+                  <LocationAutocomplete
                     value={suggestForm.departureCity}
-                    onChange={(e) =>
+                    onChange={(text) =>
                       setSuggestForm({
                         ...suggestForm,
-                        departureCity: e.target.value,
+                        departureCity: text,
                       })
                     }
                     style={inputStyle}
-                    placeholder='e.g. "Mumbai", "Delhi"'
-                    aria-label="Departure / pickup city"
+                    inputProps={{
+                      placeholder: 'e.g. "Mumbai", "Delhi"',
+                      "aria-label": "Departure / pickup city",
+                    }}
                   />
                 </label>
                 <label style={fieldLabel}>

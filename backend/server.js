@@ -742,6 +742,8 @@ const emailThreadingRoutes = require("./routes/email_threading");
 // Hosts TMC (school trips), RFU (Umrah), Travel Stall, Visa Sure sub-brands.
 const travelRoutes = require("./routes/travel");
 const travelDiagnosticsRoutes = require("./routes/travel_diagnostics");
+const travelDiagnosticsPublicRoutes = require("./routes/travel_diagnostics_public");
+const diagnosticPagesPublicRoutes = require("./routes/diagnostic_pages_public");
 const travelKnowledgeBaseRoutes = require("./routes/travel_knowledge_base");
 const travelVisaAnalyticsRoutes = require("./routes/travel_visa_analytics");
 const travelVisaRoutes = require("./routes/travel_visa");
@@ -965,6 +967,7 @@ app.use("/api", (req, res, next) => {
     "/attendance/biometric/webhook",
     "/travel/microsites/public",
     "/travel/diagnostics/public",
+    "/diagnostic-pages/public",
     "/travel/itineraries/public",
     "/travel/payment-portal",
     "/travel/destination-photos/public",
@@ -1322,6 +1325,8 @@ app.use("/api/travel", travelCsvIoRoutes);
 app.use("/api/travel", travelDashboardRoutes);
 app.use("/api/travel", travelReportsRoutes);
 app.use("/api/travel", travelDiagnosticsRoutes);
+app.use("/api/travel", travelDiagnosticsPublicRoutes);
+app.use("/api/diagnostic-pages", diagnosticPagesPublicRoutes);
 app.use("/api/travel/knowledge-base", travelKnowledgeBaseRoutes);
 app.use("/api/travel/visa/analytics", travelVisaAnalyticsRoutes);
 app.use("/api/travel/visa", travelVisaRoutes);
@@ -1615,6 +1620,64 @@ app.get("/trips", async (req, res, next) => {
 //   - AFTER `/p` public landing-page route (rendered HTML must win)
 //   - AFTER `/legal` public Markdown pages
 //   - BEFORE the final SPA catch-all/static fallback (so we substitute nonce)
+
+// Travel CRM — public diagnostic-form embed iframe-ancestors override.
+//
+// The published branded diagnostic form (/diagnostic-form/:tenantSlug/:subBrand
+// and its /report/:slug sibling) is an SPA route with no dedicated Express
+// handler — it's served by cspNonceStaticMiddleware just below, which sends
+// the same global CSP that every other app page gets: frame-ancestors 'none'
+// + X-Frame-Options: DENY (S4, commit 6561bdc). That's correct for the app
+// itself but wrong for this ONE route: it's meant to be iframed into a
+// tenant's own external site via the standalone embed HTML
+// (frontend/public/embed/diagnostic-page.html) exactly like the existing
+// /embed/lead-form.html widget below. Verified locally (2026-08-20): without
+// this override, a client-hosted embed page gets a hard
+// ERR_BLOCKED_BY_RESPONSE on the iframe navigation — the JSON describer call
+// succeeds (CORS is a separate concern, handled in diagnostic_pages_public.js)
+// but the actual form never renders.
+//
+// Reuses the SAME per-tenant Tenant.embedAllowlistJson column + admin UI
+// (frontend/src/pages/admin/EmbedAllowlist.jsx) already built for the
+// lead-form widget below — a tenant self-services which of their OWN domains
+// may frame their public content, no server code change/deploy needed per
+// new client site. Unlike the lead-form mount's back-compat wildcard
+// default, this is a brand-new surface with nothing depending on open-by-
+// default behaviour, so an unconfigured tenant defaults to `'self'` (i.e.
+// not embeddable anywhere external) until they explicitly add a domain via
+// that admin page.
+//
+// Must run BEFORE cspNonceStaticMiddleware — that middleware terminates the
+// response (res.send) for any SPA-shell path, so header mutations have to
+// land first. Resolving the tenant from the :tenantSlug path segment (unlike
+// /embed/*'s ?key= indirection) because this URL always carries it already.
+app.use("/diagnostic-form/:tenantSlug", async (req, res, next) => {
+  let allowList = ["'self'"];
+  try {
+    const tenantSlug = req.params.tenantSlug;
+    if (tenantSlug) {
+      const prismaClient = require("./lib/prisma");
+      const tenant = await prismaClient.tenant.findFirst({
+        where: { slug: tenantSlug, vertical: "travel", isActive: true },
+        select: { id: true },
+      });
+      if (tenant) {
+        const perTenant = await readTenantEmbedAllowlist(prismaClient, tenant.id);
+        if (Array.isArray(perTenant) && perTenant.length > 0) {
+          allowList = perTenant;
+        }
+      }
+    }
+  } catch (e) {
+    // Fail-soft, matching the /embed/* mount below: a lookup error must
+    // never turn into a 500 on a public, unauthenticated route. Falls back
+    // to the 'self' default rather than the /embed mount's wildcard — this
+    // route has no existing consumers to preserve back-compat for.
+    console.warn("[diagnostic-form] embed allowlist lookup failed:", e.message);
+  }
+  return allowIframeEmbedding({ allowList })(req, res, next);
+});
+
 app.use(cspNonceStaticMiddleware);
 
 // #921 slice S38 → S66 → S129 — wire the iframe-embedding override on /embed/*

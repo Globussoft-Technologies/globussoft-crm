@@ -46,11 +46,33 @@ function toNum(dec) {
   return Number(dec) || 0;
 }
 
+function parsePlanId(value) {
+  if (!value) return null;
+  const planId = Number(value);
+  if (!Number.isInteger(planId) || planId <= 0) {
+    const err = new Error("invalid `planId`");
+    err.code = "INVALID_PLAN_ID";
+    throw err;
+  }
+  return planId;
+}
+
+async function tenantIdsForPlan(planId) {
+  if (!planId) return null;
+  const rows = await prisma.aiTenantSubscription.findMany({
+    where: { planId },
+    select: { tenantId: true },
+    distinct: ["tenantId"],
+  });
+  return rows.map((row) => row.tenantId);
+}
+
 // ── Overview (charts) ───────────────────────────────────────────────────
 
 router.get("/overview", async (req, res) => {
   try {
     const { provider, model, from, to } = req.query;
+    const planId = parsePlanId(req.query.planId);
 
     // An explicit ?from/?to date (or single-date) always overrides the
     // day-count preset — the UI's custom date picker replaces the dropdown
@@ -105,11 +127,18 @@ router.get("/overview", async (req, res) => {
     // chart's own LLM-only scope rather than silently ignoring the filter.
     if (model) apiWhere.id = -1; // unsatisfiable — excludes all ApiCallLog rows
 
+    const planTenantIds = await tenantIdsForPlan(planId);
+    if (planTenantIds) {
+      llmWhere.tenantId = { in: planTenantIds };
+      apiWhere.id = -1;
+    }
+
     const [llmLogs, apiLogs] = await Promise.all([
       prisma.llmCallLog.findMany({
         where: llmWhere,
         select: {
           provider: true,
+          tenantId: true,
           model: true,
           task: true,
           status: true,
@@ -141,6 +170,7 @@ router.get("/overview", async (req, res) => {
     const mergedAll = [
       ...llmLogs.map((l) => ({
         provider: l.provider || "unknown",
+        tenantId: l.tenantId,
         model: l.model,
         status: l.status,
         tokens: l.totalTokens || 0,
@@ -259,8 +289,12 @@ router.get("/overview", async (req, res) => {
       byProvider,
       byModel,
       recentFailures,
+      planId,
     });
   } catch (e) {
+    if (e.code === "INVALID_PLAN_ID") {
+      return res.status(400).json({ error: e.message, code: e.code });
+    }
     console.error("[super-admin-api-analytics] GET /overview failed:", e.message);
     res.status(500).json({ error: "Failed to load API analytics" });
   }
@@ -283,14 +317,19 @@ router.get("/filters", async (req, res) => {
     const modelWhere = { stub: false };
     if (provider) modelWhere.provider = provider;
 
-    const [llmProviders, apiProviders, models] = await Promise.all([
+    const [llmProviders, apiProviders, models, plans] = await Promise.all([
       prisma.llmCallLog.findMany({ where: { stub: false }, distinct: ["provider"], select: { provider: true } }),
       prisma.apiCallLog.findMany({ distinct: ["provider"], select: { provider: true } }),
       prisma.llmCallLog.findMany({ where: modelWhere, distinct: ["model"], select: { model: true } }),
+      prisma.aiSubscriptionPlan.findMany({
+        orderBy: [{ displayOrder: "asc" }, { price: "asc" }],
+        take: 200,
+        select: { id: true, name: true, isActive: true },
+      }),
     ]);
     const providers = [...new Set([...llmProviders, ...apiProviders].map((r) => r.provider))].sort((a, b) => a.localeCompare(b));
     const modelList = [...new Set(models.map((r) => r.model))].sort((a, b) => a.localeCompare(b));
-    res.json({ providers, models: modelList });
+    res.json({ providers, models: modelList, plans });
   } catch (e) {
     console.error("[super-admin-api-analytics] GET /filters failed:", e.message);
     res.status(500).json({ error: "Failed to load filter options" });
@@ -304,6 +343,7 @@ router.get("/calls", async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 25));
     const { provider, model, status, search, from, to } = req.query;
+    const planId = parsePlanId(req.query.planId);
 
     const where = {};
     if (provider) where.provider = provider;
@@ -334,6 +374,11 @@ router.get("/calls", async (req, res) => {
       ];
     }
 
+    const planTenantIds = await tenantIdsForPlan(planId);
+    if (planTenantIds) {
+      where.tenantId = { in: planTenantIds };
+    }
+
     // LlmCallLog and ApiCallLog are separate tables with no shared PK space,
     // so true cross-table pagination would require a UNION the ORM doesn't
     // expose cleanly. Pragmatic approach: fetch both filtered sets bounded
@@ -348,6 +393,7 @@ router.get("/calls", async (req, res) => {
     // search's OR narrows to the fields ApiCallLog actually has.
     delete apiWhere.model;
     if (model) apiWhere.id = -1; // unsatisfiable — excludes all ApiCallLog rows
+    if (planTenantIds) apiWhere.id = -1; // ApiCallLog has no tenant/plan context.
     if (apiWhere.OR) {
       apiWhere.OR = [
         { endpoint: { contains: search } },
@@ -364,6 +410,7 @@ router.get("/calls", async (req, res) => {
       ...llmRows.map((l) => ({
         id: `llm-${l.id}`,
         source: "llm",
+        tenantId: l.tenantId,
         provider: l.provider,
         model: l.model,
         task: l.task,
@@ -379,6 +426,7 @@ router.get("/calls", async (req, res) => {
       ...apiRows.map((a) => ({
         id: `api-${a.id}`,
         source: "api",
+        tenantId: null,
         provider: a.provider,
         model: a.endpoint,
         task: null,
@@ -397,8 +445,11 @@ router.get("/calls", async (req, res) => {
     const startIdx = (page - 1) * pageSize;
     const pageRows = merged.slice(startIdx, startIdx + pageSize);
 
-    res.json({ calls: pageRows, total, page, pageSize, truncated: total >= FETCH_CAP * 2 });
+    res.json({ calls: pageRows, total, page, pageSize, truncated: total >= FETCH_CAP * 2, planId });
   } catch (e) {
+    if (e.code === "INVALID_PLAN_ID") {
+      return res.status(400).json({ error: e.message, code: e.code });
+    }
     console.error("[super-admin-api-analytics] GET /calls failed:", e.message);
     res.status(500).json({ error: "Failed to list API calls" });
   }

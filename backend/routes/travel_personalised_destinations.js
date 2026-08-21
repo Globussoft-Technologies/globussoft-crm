@@ -46,6 +46,7 @@ const { requirePermission } = require("../middleware/requirePermission");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const prisma = require("../lib/prisma");
 const llmRouter = require("../lib/llmRouter");
+const { buildTravelAiErrorResponse } = require("../lib/travelAiError");
 
 // Defensive budget cap so a typo / malicious caller can't trigger
 // an unbounded prompt size. INR 1 crore is comfortably above any
@@ -219,6 +220,13 @@ router.post(
         destinations: null,
       });
     } catch (e) {
+      const aiError = buildTravelAiErrorResponse(e, {
+        featureLabel: "Personalised destination AI recommendations",
+        modelLabel: "gemini-flash",
+      });
+      if (aiError) {
+        return res.status(aiError.status).json(aiError.body);
+      }
       if (e && e.code === "LLM_BUDGET_EXCEEDED") {
         return res.status(429).json({
           error: e.message,

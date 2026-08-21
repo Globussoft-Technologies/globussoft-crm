@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CreditCard, Edit2, Plus, Save, Trash2, X } from "lucide-react";
+import { BarChart3, CreditCard, Edit2, Plus, Save, Trash2, Users, X } from "lucide-react";
 import { superAdminFetch } from "../../utils/superAdminApi";
 import { creditsToTokens, tokensToCredits } from "../../utils/aiCredits";
 
@@ -15,9 +15,11 @@ const EMPTY_FORM = {
   validityDays: "",
   displayOrder: "0",
   isActive: true,
+  apiKeys: [],
 };
 
-function toFormState(plan) {
+function toFormState(plan, availableKeys = []) {
+  const attached = Array.isArray(plan.apiKeys) ? plan.apiKeys : [];
   return {
     name: plan.name || "",
     description: plan.description || "",
@@ -33,6 +35,12 @@ function toFormState(plan) {
     validityDays: plan.validityDays != null ? String(plan.validityDays) : "",
     displayOrder: String(plan.displayOrder ?? 0),
     isActive: plan.isActive !== false,
+    apiKeys: availableKeys
+      .filter((k) => k.isEnabled)
+      .map((k) => {
+        const match = attached.find((a) => a.keyId === k.id);
+        return { keyId: k.id, providerId: k.providerId, label: k.label, model: k.model, isEnabled: match ? match.isEnabled !== false : false };
+      }),
   };
 }
 
@@ -52,23 +60,43 @@ function toPayload(form) {
     validityDays: form.validityDays === "" ? null : Number(form.validityDays),
     displayOrder: Number(form.displayOrder) || 0,
     isActive: form.isActive,
+    apiKeys: Array.isArray(form.apiKeys)
+      ? form.apiKeys.filter((k) => k.isEnabled).map(({ keyId, isEnabled }) => ({ keyId, isEnabled }))
+      : [],
   };
+}
+
+function formatDate(value) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString();
+}
+
+function formatCost(value) {
+  return `$${Number(value || 0).toFixed(Number(value || 0) < 1 ? 6 : 2)}`;
 }
 
 export default function SuperAdminAiPlans() {
   const [plans, setPlans] = useState([]);
+  const [availableKeys, setAvailableKeys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [editingId, setEditingId] = useState(null); // 'new' | plan.id | null
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [expandedPlanId, setExpandedPlanId] = useState(null);
+  const [subscriberAnalytics, setSubscriberAnalytics] = useState({});
+  const [loadingSubscribersFor, setLoadingSubscribersFor] = useState(null);
 
   const load = async () => {
     setLoading(true);
     setMessage("");
     try {
-      const res = await superAdminFetch("/ai-management/plans");
-      setPlans(Array.isArray(res?.plans) ? res.plans : []);
+      const [plansRes, keysRes] = await Promise.all([
+        superAdminFetch("/ai-management/plans"),
+        superAdminFetch("/ai-management/api-keys"),
+      ]);
+      setPlans(Array.isArray(plansRes?.plans) ? plansRes.plans : []);
+      setAvailableKeys(Array.isArray(keysRes?.keys) ? keysRes.keys : []);
     } catch (err) {
       setMessage(err.message || "Failed to load AI subscription plans.");
     } finally {
@@ -80,13 +108,18 @@ export default function SuperAdminAiPlans() {
     load();
   }, []);
 
+  const keysForForm = () =>
+    availableKeys
+      .filter((k) => k.isEnabled)
+      .map((k) => ({ keyId: k.id, providerId: k.providerId, label: k.label, model: k.model, isEnabled: false }));
+
   const startCreate = () => {
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, apiKeys: keysForForm() });
     setEditingId("new");
   };
 
   const startEdit = (plan) => {
-    setForm(toFormState(plan));
+    setForm(toFormState(plan, availableKeys));
     setEditingId(plan.id);
   };
 
@@ -131,6 +164,25 @@ export default function SuperAdminAiPlans() {
       await load();
     } catch (err) {
       setMessage(err.message || "Failed to deactivate plan.");
+    }
+  };
+
+  const loadSubscribers = async (plan) => {
+    if (expandedPlanId === plan.id) {
+      setExpandedPlanId(null);
+      return;
+    }
+    setExpandedPlanId(plan.id);
+    if (subscriberAnalytics[plan.id]) return;
+    setLoadingSubscribersFor(plan.id);
+    setMessage("");
+    try {
+      const res = await superAdminFetch(`/ai-management/plans/${plan.id}/subscribers`);
+      setSubscriberAnalytics((prev) => ({ ...prev, [plan.id]: res }));
+    } catch (err) {
+      setMessage(err.message || "Failed to load plan subscribers.");
+    } finally {
+      setLoadingSubscribersFor(null);
     }
   };
 
@@ -185,6 +237,49 @@ export default function SuperAdminAiPlans() {
             value={form.featureRestrictions}
             onChange={(e) => setForm((p) => ({ ...p, featureRestrictions: e.target.value }))}
           />
+
+          <div>
+            <div style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.4rem" }}>Attached API keys</div>
+            {form.apiKeys.length === 0 ? (
+              <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                No enabled CRM-managed API keys available. Add and enable keys in API Key Management first.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.5rem" }}>
+                {form.apiKeys.map((k) => (
+                  <label
+                    key={k.keyId}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.5rem",
+                      padding: "0.55rem 0.7rem",
+                      borderRadius: 8,
+                      border: "1px solid var(--border-color, rgba(255,255,255,0.08))",
+                      fontSize: "0.85rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={k.isEnabled}
+                      onChange={(e) =>
+                        setForm((p) => ({
+                          ...p,
+                          apiKeys: p.apiKeys.map((item) =>
+                            item.keyId === k.keyId ? { ...item, isEnabled: e.target.checked } : item
+                          ),
+                        }))
+                      }
+                    />
+                    <span style={{ fontWeight: 500 }}>{k.label}</span>
+                    <span style={{ color: "var(--text-secondary)", fontSize: "0.75rem" }}>({k.providerId} · {k.model || "default model"})</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div style={{ display: "flex", gap: "0.6rem" }}>
             <button className="btn-primary" onClick={handleSave} disabled={saving} style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}>
               <Save size={15} /> {saving ? "Saving..." : "Save Plan"}
@@ -222,7 +317,10 @@ export default function SuperAdminAiPlans() {
                     {plan.validityDays ? ` · valid ${plan.validityDays}d` : ""}
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <button className="btn-secondary" onClick={() => loadSubscribers(plan)} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                    <Users size={14} /> {expandedPlanId === plan.id ? "Hide Usage" : "Subscribers"}
+                  </button>
                   <button className="btn-secondary" onClick={() => startEdit(plan)} style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
                     <Edit2 size={14} /> Edit
                   </button>
@@ -246,9 +344,111 @@ export default function SuperAdminAiPlans() {
                 </div>
               </div>
               {plan.description && <div style={{ fontSize: "0.85rem" }}>{plan.description}</div>}
+              {Array.isArray(plan.apiKeys) && plan.apiKeys.length > 0 && (
+                <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", gap: "0.35rem", alignItems: "center" }}>
+                  <span>Keys:</span>
+                  {plan.apiKeys.map((k) => (
+                    <span
+                      key={k.keyId}
+                      style={{
+                        padding: "0.15rem 0.45rem",
+                        borderRadius: 999,
+                        background: k.isEnabled ? "rgba(34,197,94,0.12)" : "rgba(148,163,184,0.12)",
+                        color: k.isEnabled ? "#22c55e" : "#94a3b8",
+                      }}
+                    >
+                      {k.label} ({k.providerId} · {k.model || "default model"})
+                    </span>
+                  ))}
+                </div>
+              )}
+              {expandedPlanId === plan.id && (
+                <div style={{ borderTop: "1px solid var(--border-color, rgba(255,255,255,0.08))", paddingTop: "0.85rem", marginTop: "0.35rem" }}>
+                  {loadingSubscribersFor === plan.id ? (
+                    <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Loading subscribers...</div>
+                  ) : !subscriberAnalytics[plan.id] ? (
+                    <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>No subscriber analytics loaded.</div>
+                  ) : (
+                    <PlanSubscriberAnalytics data={subscriberAnalytics[plan.id]} />
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+function PlanSubscriberAnalytics({ data }) {
+  const subscribers = Array.isArray(data?.subscribers) ? data.subscribers : [];
+  const totals = data?.totals || {};
+  return (
+    <div style={{ display: "grid", gap: "0.85rem" }}>
+      <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", fontSize: "0.82rem" }}>
+        <strong style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+          <BarChart3 size={14} /> {totals.subscribers || 0} subscribers
+        </strong>
+        <span>{totals.activeSubscribers || 0} active</span>
+        <span>{Number(totals.calls || 0).toLocaleString()} calls</span>
+        <span>{tokensToCredits(totals.tokens || 0).toLocaleString()} credits used</span>
+        <span>{formatCost(totals.cost)}</span>
+      </div>
+
+      {subscribers.length === 0 ? (
+        <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>No tenants have purchased this plan yet.</div>
+      ) : (
+        <div style={{ overflowX: "auto", border: "1px solid var(--border-color, rgba(255,255,255,0.08))", borderRadius: 8 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", minWidth: 920 }}>
+            <thead style={{ background: "rgba(107,114,128,0.08)" }}>
+              <tr>
+                {["Client", "Emails", "Subscription", "Purchases", "Remaining", "Used", "Calls", "Failures", "Cost", "Last activity"].map((h) => (
+                  <th key={h} style={{ padding: "0.5rem 0.6rem", textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {subscribers.map((subscriber) => (
+                <tr key={subscriber.tenantId} style={{ borderTop: "1px solid var(--border-color, rgba(255,255,255,0.08))" }}>
+                  <td style={{ padding: "0.5rem 0.6rem", fontWeight: 700 }}>
+                    {subscriber.organization}
+                    <div style={{ color: "var(--text-secondary)", fontWeight: 400, fontSize: "0.72rem" }}>{subscriber.slug || `Tenant #${subscriber.tenantId}`}</div>
+                  </td>
+                  <td style={{ padding: "0.5rem 0.6rem", maxWidth: 260 }}>
+                    {(subscriber.clientEmails || []).join(", ") || "-"}
+                  </td>
+                  <td style={{ padding: "0.5rem 0.6rem" }}>
+                    {subscriber.subscription?.status || "-"}
+                    <div style={{ color: "var(--text-secondary)", fontSize: "0.72rem" }}>
+                      {formatDate(subscriber.subscription?.startDate)}
+                    </div>
+                  </td>
+                  <td style={{ padding: "0.5rem 0.6rem" }}>
+                    {subscriber.purchaseCount || 0}
+                    <div style={{ color: "var(--text-secondary)", fontSize: "0.72rem" }}>
+                      {subscriber.currency} {Number(subscriber.revenue || 0).toLocaleString()}
+                    </div>
+                  </td>
+                  <td style={{ padding: "0.5rem 0.6rem" }}>
+                    {tokensToCredits(subscriber.credits?.balanceTokens || 0).toLocaleString()}
+                    <div style={{ color: "var(--text-secondary)", fontSize: "0.72rem" }}>{subscriber.credits?.percentRemaining || 0}%</div>
+                  </td>
+                  <td style={{ padding: "0.5rem 0.6rem" }}>{tokensToCredits(subscriber.credits?.totalUsedTokens || 0).toLocaleString()}</td>
+                  <td style={{ padding: "0.5rem 0.6rem" }}>{Number(subscriber.usage?.calls || 0).toLocaleString()}</td>
+                  <td style={{ padding: "0.5rem 0.6rem", color: subscriber.usage?.failures ? "#ef4444" : "inherit" }}>
+                    {subscriber.usage?.failures || 0}
+                  </td>
+                  <td style={{ padding: "0.5rem 0.6rem" }}>{formatCost(subscriber.usage?.cost)}</td>
+                  <td style={{ padding: "0.5rem 0.6rem", whiteSpace: "nowrap" }}>{formatDate(subscriber.usage?.lastActivityAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {data?.appliedFilters?.attribution && (
+        <div style={{ color: "var(--text-secondary)", fontSize: "0.75rem" }}>{data.appliedFilters.attribution}</div>
       )}
     </div>
   );

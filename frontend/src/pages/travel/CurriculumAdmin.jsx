@@ -53,7 +53,7 @@
  * Sure).
  */
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { GraduationCap, Plus, Edit2, Trash2, X, AlertTriangle, Sparkles } from 'lucide-react';
+import { GraduationCap, Plus, Edit2, Trash2, X, AlertTriangle, Sparkles, Upload } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
@@ -85,6 +85,7 @@ const EMPTY_FORM = {
   learningOutcome: '',
   destinationId: '',
   destinationLabel: '',
+  brochurePdfUrl: '',
   fitScore: 50,
   confidenceScore: 50,
   fitRationale: '',
@@ -184,6 +185,7 @@ export default function CurriculumAdmin() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [brochureUploading, setBrochureUploading] = useState(false);
   const listRef = useRef(null);
   const mappingsRef = useRef([]);
   const loadingRef = useRef(true);
@@ -315,6 +317,7 @@ export default function CurriculumAdmin() {
       learningOutcome: m.learningOutcome || '',
       destinationId: m.destinationId == null ? '' : String(m.destinationId),
       destinationLabel: m.destinationLabel || '',
+      brochurePdfUrl: m.brochurePdfUrl || '',
       fitScore: m.fitScore == null ? 50 : m.fitScore,
       confidenceScore: m.confidenceScore == null ? 50 : m.confidenceScore,
       fitRationale: m.fitRationale || '',
@@ -327,6 +330,31 @@ export default function CurriculumAdmin() {
   const closeModal = () => {
     setModalOpen(false);
     setFormError(null);
+  };
+
+  const uploadBrochurePdf = async (file) => {
+    if (!file) return;
+    if (file.type && file.type !== 'application/pdf') {
+      notify.error('Only PDF brochures can be uploaded');
+      return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    setBrochureUploading(true);
+    try {
+      const res = await fetchApi('/api/travel-curriculum/brochure/upload', {
+        method: 'POST',
+        body: formData,
+        silent: true,
+      });
+      if (!res?.url) throw new Error('Upload did not return a brochure URL');
+      setForm((prev) => ({ ...prev, brochurePdfUrl: res.url }));
+      notify.success('Brochure PDF uploaded');
+    } catch (err) {
+      notify.error(err?.data?.error || err?.message || 'Failed to upload brochure PDF');
+    } finally {
+      setBrochureUploading(false);
+    }
   };
 
   const submit = async (e) => {
@@ -402,6 +430,7 @@ export default function CurriculumAdmin() {
       learningOutcome: learningOutcome || null,
       destinationId,
       destinationLabel: (form.destinationLabel || '').trim() || null,
+      brochurePdfUrl: (form.brochurePdfUrl || '').trim() || null,
       fitScore: fitScoreNum,
       confidenceScore: confidenceScoreNum,
       fitRationale: (form.fitRationale || '').trim() || null,
@@ -1196,6 +1225,43 @@ export default function CurriculumAdmin() {
                 )}
               </label>
 
+              <div style={fieldLabel}>
+                <span>Brochure PDF</span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={form.brochurePdfUrl}
+                    onChange={(e) => setForm({ ...form, brochurePdfUrl: e.target.value })}
+                    placeholder="Upload a PDF or paste a brochure URL"
+                    style={{ ...inputStyle, flex: 1 }}
+                    data-testid="curriculum-form-brochure-url"
+                  />
+                  <label style={{ ...refreshBtn, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: brochureUploading ? 'wait' : 'pointer' }}>
+                    <Upload size={14} />
+                    {brochureUploading ? 'Uploading...' : 'Upload'}
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      disabled={brochureUploading}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        uploadBrochurePdf(file);
+                      }}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                </div>
+                <span style={fieldHintText}>
+                  When this mapping is recommended, the diagnostic PDF will show a brochure download link.
+                </span>
+                {form.brochurePdfUrl && (
+                  <a href={form.brochurePdfUrl} target="_blank" rel="noreferrer" style={linkStyle}>
+                    Open uploaded brochure
+                  </a>
+                )}
+              </div>
+
               <label style={fieldLabel}>
                 Fit score (1-100)
                 <input
@@ -1386,6 +1452,14 @@ const fieldHintText = {
   fontSize: 11,
   marginTop: 2,
   fontStyle: 'italic',
+};
+
+const linkStyle = {
+  color: 'var(--primary-color, var(--accent-color))',
+  fontSize: 12,
+  fontWeight: 600,
+  textDecoration: 'none',
+  width: 'fit-content',
 };
 
 const empty = {

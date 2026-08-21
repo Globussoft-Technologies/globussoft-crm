@@ -955,7 +955,12 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
     fireEvent.click(screen.getByRole("button", { name: /Save item|Resolving location/i }));
 
     await waitFor(() => {
-      expect(geocodeMock).toHaveBeenCalledWith("Goa beach");
+      // buildItineraryGeocodeQuery appends the trip destination as a
+      // disambiguation hint whenever the extracted location doesn't
+      // already contain it — "Goa beach" doesn't textually contain the
+      // full "Goa school trip Jan 2026" destination string, so it's
+      // appended. Verified directly against lib/travelLocationResolver.js.
+      expect(geocodeMock).toHaveBeenCalledWith("Goa beach Goa school trip Jan 2026");
     });
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(
@@ -965,6 +970,8 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
       const body = JSON.parse(post[1].body);
       expect(body.latitude).toBeCloseTo(15.4909, 4);
       expect(body.longitude).toBeCloseTo(73.8278, 4);
+      // The raw user-typed description is posted as-is — separate from
+      // (and unaffected by) the geocode query built above.
       expect(body.description).toBe("Goa beach");
     });
   });
@@ -1027,7 +1034,12 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
     fireEvent.click(screen.getByRole("button", { name: /Save item|Resolving location/i }));
 
     await waitFor(() => {
-      expect(geocodeMock).toHaveBeenCalledWith("Some unmatchable place name xyz123");
+      // No sentence in "Some unmatchable place name xyz123" reads as a
+      // real place (no strong place-type keyword, not title-cased), so
+      // deriveItineraryItemLocation falls back to the trip destination
+      // itself rather than geocoding the raw noise text. Verified directly
+      // against lib/travelLocationResolver.js.
+      expect(geocodeMock).toHaveBeenCalledWith("Goa school trip Jan 2026");
     });
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(

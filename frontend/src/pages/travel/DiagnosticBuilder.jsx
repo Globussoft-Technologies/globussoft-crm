@@ -5,7 +5,7 @@
 //     with add / remove / reorder controls. Phase 1.5 polish item from
 //     the 2026-05-20 PM handoff (replaces the JSON-paste anti-pattern
 //     for in-app authoring).
-//   - JSON (advanced) — the two textareas verbatim. Preserves Yasin's
+//   - Advanced tools — raw JSON textareas for support and recovery.
 //     Q13 deliverable workflow: Q-sets land as authored documents and
 //     paste-and-validate keeps the source of truth in the document the
 //     brand team controls.
@@ -16,19 +16,21 @@
 // unparseable the Visual tab shows an inline "fix the JSON first" panel
 // rather than guessing at a repair.
 //
-// POST shape unchanged: { subBrand, questionsJson, scoringRulesJson }
+// POST shape unchanged apart from additive templateName support:
+// { subBrand, templateName, questionsJson, scoringRulesJson }
 // goes to /api/travel/diagnostic-banks; backend revalidates server-side
 // and creates v(N+1). Per Q16, existing banks are not mutated.
 
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
-  Upload, Download, FileJson, Plus, Save, Send, Settings, Trash2,
+  Download, FileJson, Info, Plus, Save, Send, Settings, Trash2, Upload,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
+import DiagnosticPublicFormPanel from './DiagnosticPublicFormPanel';
 
 const SUB_BRANDS = [
   { value: 'tmc', label: 'TMC (school trips)' },
@@ -38,8 +40,8 @@ const SUB_BRANDS = [
 ];
 
 const QUESTION_TYPES = [
-  { value: 'single-choice', label: 'single-choice' },
-  { value: 'multi-select', label: 'multi-select' },
+  { value: 'single-choice', label: 'Single choice' },
+  { value: 'multi-select', label: 'Multiple select' },
 ];
 
 const QUESTIONS_EXAMPLE = JSON.stringify(
@@ -86,7 +88,6 @@ const SCORING_EXAMPLE = JSON.stringify(
 
 export default function DiagnosticBuilder() {
   const notify = useNotify();
-  const navigate = useNavigate();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
 
@@ -94,16 +95,75 @@ export default function DiagnosticBuilder() {
   const [subBrand, setSubBrand] = useState('tmc');
   const [qJson, setQJson] = useState(QUESTIONS_EXAMPLE);
   const [rJson, setRJson] = useState(SCORING_EXAMPLE);
-  const [validation, setValidation] = useState(null);
   const [saving, setSaving] = useState(false);
-  // Current active bank for the selected sub-brand (so switching brand shows
-  // THAT brand's existing questions to edit, not a static template).
   const [loadingBank, setLoadingBank] = useState(true);
-  const [bankInfo, setBankInfo] = useState(null); // { existing, id?, version? } | null
-  // PRD §4.2 — Phase-1 scoring is view-only; "Request change" files a GS ticket.
-  const [showRequestChange, setShowRequestChange] = useState(false);
+  const [bankInfo, setBankInfo] = useState(null); // { existing, id?, version?, templateName? } | null
+  const [banks, setBanks] = useState([]);
+  const [selectedBankId, setSelectedBankId] = useState('');
+  const [templateName, setTemplateName] = useState('');
+  const [renamingTemplate, setRenamingTemplate] = useState(false);
+  const [deletingTemplate, setDeletingTemplate] = useState(false);
+  const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const [templateSearch, setTemplateSearch] = useState('');
   const fileRef = useRef(null);
-  const firstLoad = useRef(true);
+
+  const defaultTemplateName = useCallback(
+    () => `${SUB_BRANDS.find((item) => item.value === subBrand)?.label || subBrand.toUpperCase()} Template`,
+    [subBrand],
+  );
+
+  const loadTemplateIntoEditor = useCallback((bank) => {
+    if (!bank) return;
+    setQJson(prettyJson(bank.questionsJson, QUESTIONS_EXAMPLE));
+    setRJson(prettyJson(bank.scoringRulesJson, SCORING_EXAMPLE));
+    setSelectedBankId(String(bank.id));
+    setTemplateName(bank.templateName || defaultTemplateName());
+    setBankInfo({
+      existing: true,
+      id: bank.id,
+      version: bank.version,
+      templateName: bank.templateName || defaultTemplateName(),
+      isActive: bank.isActive !== false,
+    });
+    setIsCreatingTemplate(false);
+    setTemplatePickerOpen(false);
+    setTemplateSearch('');
+  }, [defaultTemplateName]);
+
+  const beginTemplateDraft = useCallback(() => {
+    const fallbackName = defaultTemplateName();
+    setQJson(QUESTIONS_EXAMPLE);
+    setRJson(SCORING_EXAMPLE);
+    setSelectedBankId('');
+    setTemplateName(fallbackName);
+    setBankInfo({ existing: false, templateName: fallbackName });
+    setIsCreatingTemplate(true);
+  }, [defaultTemplateName]);
+
+  const loadBanks = useCallback(async (preferredId = null) => {
+    setLoadingBank(true);
+    try {
+      const res = await fetchApi(`/api/travel/diagnostic-banks?subBrand=${encodeURIComponent(subBrand)}`);
+      const rows = Array.isArray(res?.banks) ? res.banks : [];
+      setBanks(rows);
+      if (!rows.length) {
+        beginTemplateDraft();
+        return;
+      }
+      const picked =
+        rows.find((row) => String(row.id) === String(preferredId || '')) ||
+        rows.find((row) => row.isActive) ||
+        rows[0];
+      loadTemplateIntoEditor(picked);
+    } catch (_e) {
+      setBanks([]);
+      beginTemplateDraft();
+    } finally {
+      setLoadingBank(false);
+    }
+  }, [beginTemplateDraft, loadTemplateIntoEditor, subBrand]);
 
   // Load the selected sub-brand's current active bank whenever it changes.
   // Existing bank → pre-fill the editors with its questions + scoring (so
@@ -112,36 +172,8 @@ export default function DiagnosticBuilder() {
   // first mount with no bank we leave the initial template untouched (so a
   // late-resolving fetch can't wipe edits the admin already started).
   useEffect(() => {
-    let cancelled = false;
-    setLoadingBank(true);
-    setValidation(null);
-    fetchApi(`/api/travel/diagnostic-banks?subBrand=${encodeURIComponent(subBrand)}&active=true`)
-      .then((res) => {
-        if (cancelled) return;
-        const bank = Array.isArray(res?.banks) ? res.banks[0] : null;
-        if (bank) {
-          setQJson(prettyJson(bank.questionsJson, QUESTIONS_EXAMPLE));
-          setRJson(prettyJson(bank.scoringRulesJson, SCORING_EXAMPLE));
-          setBankInfo({ existing: true, id: bank.id, version: bank.version });
-        } else {
-          if (!firstLoad.current) {
-            setQJson(QUESTIONS_EXAMPLE);
-            setRJson(SCORING_EXAMPLE);
-          }
-          setBankInfo({ existing: false });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setBankInfo({ existing: false });
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingBank(false);
-          firstLoad.current = false;
-        }
-      });
-    return () => { cancelled = true; };
-  }, [subBrand]);
+    loadBanks();
+  }, [loadBanks]);
 
   const exportCsv = async () => {
     try {
@@ -217,13 +249,18 @@ export default function DiagnosticBuilder() {
     } catch (e) {
       errors.push(`scoringRulesJson is not valid JSON: ${e.message}`);
     }
-    setValidation({ errors, ok: errors.length === 0 });
-    return errors.length === 0;
+    return { ok: errors.length === 0, errors };
   };
 
-  const onCreate = async () => {
-    if (!validate()) {
-      notify.error('Fix validation errors before creating');
+  const onSaveAndUse = async () => {
+    const result = validate();
+    if (!result.ok) {
+      notify.error(result.errors[0] || 'Fix validation errors before saving');
+      return;
+    }
+    const cleanTemplateName = String(templateName || '').trim();
+    if (!cleanTemplateName) {
+      notify.error('Template name is required');
       return;
     }
     setSaving(true);
@@ -232,25 +269,77 @@ export default function DiagnosticBuilder() {
         method: 'POST',
         body: JSON.stringify({
           subBrand,
+          templateName: cleanTemplateName,
           questionsJson: qJson,
           scoringRulesJson: rJson,
         }),
       });
-      notify.success(`Bank v${created.version} created for ${subBrand.toUpperCase()}.`);
-      navigate('/travel/diagnostics');
+      notify.success(
+        isCreatingTemplate
+          ? `Template "${cleanTemplateName}" created and now in use.`
+          : `Template "${cleanTemplateName}" saved and now in use.`,
+      );
+      await loadBanks(created.id);
     } catch (e) {
-      const msg = e?.body?.error || 'Failed to create bank';
+      const msg = e?.body?.error || 'Failed to save diagnostic template';
       notify.error(msg);
     } finally {
       setSaving(false);
     }
   };
 
+  const onRenameTemplate = async () => {
+    if (!bankInfo?.existing || !bankInfo?.id) return;
+    const cleanTemplateName = String(templateName || '').trim();
+    if (!cleanTemplateName) {
+      notify.error('Template name is required');
+      return;
+    }
+    setRenamingTemplate(true);
+    try {
+      await fetchApi(`/api/travel/diagnostic-banks/${bankInfo.id}/template-name`, {
+        method: 'PATCH',
+        body: JSON.stringify({ templateName: cleanTemplateName }),
+      });
+      notify.success('Template renamed');
+      await loadBanks(bankInfo.id);
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to rename template');
+    } finally {
+      setRenamingTemplate(false);
+    }
+  };
+
+  const onDeleteTemplate = async () => {
+    if (!bankInfo?.existing || !bankInfo?.id) return;
+    const label = bankInfo.templateName || templateName || 'this template';
+    const ok = await notify.confirm({
+      title: 'Delete template',
+      message: `Delete template "${label}"? This cannot be undone.`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
+    setDeletingTemplate(true);
+    try {
+      await fetchApi(`/api/travel/diagnostic-banks/${bankInfo.id}`, {
+        method: 'DELETE',
+      });
+      notify.success('Template deleted');
+      await loadBanks();
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to delete template');
+    } finally {
+      setDeletingTemplate(false);
+    }
+  };
+
   return (
-    <div style={{ padding: 24, maxWidth: 1000, margin: '0 auto' }}>
+    <div style={{ padding: 24, maxWidth: mode === 'publicForm' ? 1760 : 1000, margin: '0 auto' }}>
+      <style>{diagnosticBuilderCss}</style>
       <header style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
-          <FileJson size={28} aria-hidden /> New Diagnostic Bank
+          <FileJson size={28} aria-hidden /> Diagnostic Settings
         </h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
@@ -278,9 +367,7 @@ export default function DiagnosticBuilder() {
         </div>
       </header>
       <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
-        Admin-only. Author in the Visual tab or paste pre-prepared JSON in the
-        JSON (advanced) tab — either way the same payload ships. Per Q16 (view-only
-        scoring in Phase 1), existing banks are not mutated; this form ships a new version.
+        Create reusable diagnostic templates, edit questions, and publish the active form for each travel brand.
       </p>
 
       <section style={card}>
@@ -298,43 +385,87 @@ export default function DiagnosticBuilder() {
             </button>
           ))}
         </div>
+        <div style={{ ...fieldGrid, marginTop: 16 }}>
+          <Field label="Active template" info="Choose the saved diagnostic template to edit and use for this travel brand.">
+            <TemplatePicker
+              banks={banks}
+              loading={loadingBank}
+              selectedBankId={selectedBankId}
+              search={templateSearch}
+              open={templatePickerOpen}
+              onSearchChange={setTemplateSearch}
+              onOpenChange={setTemplatePickerOpen}
+              onPick={(bank) => {
+                setSelectedBankId(String(bank.id));
+                loadTemplateIntoEditor(bank);
+              }}
+            />
+          </Field>
+          <Field label="Template name" info="Use a clear name so your team can recognize this template later.">
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                style={{ ...input, flex: '1 1 240px' }}
+                placeholder="Template name"
+              />
+              {bankInfo?.existing && !isCreatingTemplate && (
+                <button
+                  type="button"
+                  onClick={onRenameTemplate}
+                  disabled={renamingTemplate}
+                  style={renamingTemplate ? primaryBtnDisabled : secondaryBtn}
+                >
+                  {renamingTemplate ? 'Renaming...' : 'Rename'}
+                </button>
+              )}
+              {bankInfo?.existing && !isCreatingTemplate && (
+                <button
+                  type="button"
+                  onClick={onDeleteTemplate}
+                  disabled={deletingTemplate}
+                  style={deletingTemplate ? primaryBtnDisabled : dangerBtn}
+                >
+                  {deletingTemplate ? 'Deleting...' : 'Delete'}
+                </button>
+              )}
+              <button type="button" onClick={beginTemplateDraft} style={secondaryBtn}>
+                Create template
+              </button>
+            </div>
+          </Field>
+        </div>
         <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '10px 0 0' }}>
           {loadingBank
-            ? 'Loading this brand’s current questions…'
-            : bankInfo?.existing
-              ? `Editing a copy of v${bankInfo.version}. Saving ships v${bankInfo.version + 1} for this brand.`
-              : 'No diagnostic bank yet for this brand — starting from a template. Saving ships v1.'}
+            ? 'Loading this brand’s current templates…'
+            : isCreatingTemplate
+              ? 'You are creating a fresh template. Saving will create it and make it the one in use for this sub-brand.'
+              : bankInfo?.existing
+                ? `Editing template "${bankInfo.templateName || templateName}".`
+                : 'No diagnostic template exists for this brand yet — starting from a fresh template.'}
         </p>
-        {!loadingBank && bankInfo?.existing && (
-          <div style={{ marginTop: 10 }}>
-            <button
-              type="button"
-              onClick={() => setShowRequestChange(true)}
-              style={secondaryBtn}
-              title="Scoring is view-only in Phase 1 — this routes a change-request ticket to GS."
-              aria-label="Request change"
-            >
-              <Send size={14} aria-hidden style={{ verticalAlign: -2, marginRight: 6 }} />
-              Request change
-            </button>
-            <span style={{ color: 'var(--text-secondary)', fontSize: 12, marginLeft: 8 }}>
-              Scoring is view-only in Phase 1 — file a change request and GS will pick it up.
-            </span>
-          </div>
-        )}
       </section>
 
-      {showRequestChange && bankInfo?.existing && (
-        <RequestChangeModal
-          bankId={bankInfo.id}
-          subBrand={subBrand}
-          version={bankInfo.version}
-          notify={notify}
-          onClose={() => setShowRequestChange(false)}
-        />
-      )}
-
       <ModeTabs mode={mode} onChange={setMode} subBrand={subBrand} />
+
+      <details
+        open={advancedOpen || mode === 'json'}
+        onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+        style={advancedTools}
+      >
+        <summary style={advancedSummary}>
+          <FileJson size={14} aria-hidden /> Advanced tools
+        </summary>
+        <div style={advancedBody}>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+            Raw JSON is for support, bulk edits, and recovery. Most changes should be made in the visual editor.
+          </span>
+          <button type="button" onClick={() => setMode('json')} style={mode === 'json' ? primaryBtn : secondaryBtn}>
+            Edit raw JSON
+          </button>
+        </div>
+      </details>
 
       {mode === 'visual' && (
         <>
@@ -375,6 +506,14 @@ export default function DiagnosticBuilder() {
           </section>
         </>
       )}
+      {mode === 'publicForm' && (
+        <DiagnosticPublicFormPanel
+          subBrand={subBrand}
+          bankInfo={bankInfo}
+          questionsJson={qJson}
+          notify={notify}
+        />
+      )}
       {mode === 'engineWeights' && subBrand === 'tmc' && (
         <EngineWeightsPanel notify={notify} isAdmin={isAdmin} />
       )}
@@ -395,45 +534,15 @@ export default function DiagnosticBuilder() {
         </div>
       )}
 
-      {validation && (
-        <section
-          role="alert"
-          style={{
-            ...card,
-            borderLeft: validation.ok
-              ? '4px solid var(--success-color)'
-              : '4px solid var(--danger-color)',
-          }}
-        >
-          {validation.ok ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--success-color)' }}>
-              <CheckCircle size={18} aria-hidden /> Both JSON payloads parse and have the required shape.
-            </div>
-          ) : (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger-color)', marginBottom: 6 }}>
-                <AlertTriangle size={18} aria-hidden /> Validation errors
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 20, color: 'var(--text-secondary)', fontSize: 13 }}>
-                {validation.errors.map((e, i) => <li key={i}>{e}</li>)}
-              </ul>
-            </>
-          )}
-        </section>
-      )}
-
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
-        <button type="button" onClick={validate} style={secondaryBtn} aria-label="Validate JSON locally">
-          Validate
-        </button>
         <button
           type="button"
-          onClick={onCreate}
+          onClick={onSaveAndUse}
           disabled={saving}
           style={saving ? primaryBtnDisabled : primaryBtn}
-          aria-label="Create bank"
+          aria-label={isCreatingTemplate ? 'Create and use template' : 'Save and use template'}
         >
-          <Save size={16} aria-hidden /> {saving ? 'Creating…' : 'Create bank'}
+          <Save size={16} aria-hidden /> {saving ? 'Saving...' : isCreatingTemplate ? 'Create and use' : 'Save and use'}
         </button>
       </div>
     </div>
@@ -443,7 +552,7 @@ export default function DiagnosticBuilder() {
 // ─── Mode tabs ────────────────────────────────────────────────────────
 
 function ModeTabs({ mode, onChange, subBrand }) {
-  // Engine Weights tab is TMC-only — the §3.3 deterministic 6-signal
+  // Recommendation Settings is TMC-only; the deterministic recommendation
   // engine is a TMC-specific contract; other sub-brands continue to use
   // the generic weighted-sum scorer with no weight knobs to expose.
   const showEngineWeights = subBrand === 'tmc';
@@ -456,16 +565,7 @@ function ModeTabs({ mode, onChange, subBrand }) {
         onClick={() => onChange('visual')}
         style={mode === 'visual' ? tabActive : tabIdle}
       >
-        Visual builder
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={mode === 'json'}
-        onClick={() => onChange('json')}
-        style={mode === 'json' ? tabActive : tabIdle}
-      >
-        JSON (advanced)
+        Questions
       </button>
       {showEngineWeights && (
         <button
@@ -475,9 +575,18 @@ function ModeTabs({ mode, onChange, subBrand }) {
           onClick={() => onChange('engineWeights')}
           style={mode === 'engineWeights' ? tabActive : tabIdle}
         >
-          Engine Weights
+          Recommendation Settings
         </button>
       )}
+      <button
+        type="button"
+        role="tab"
+        aria-selected={mode === 'publicForm'}
+        onClick={() => onChange('publicForm')}
+        style={mode === 'publicForm' ? tabActive : tabIdle}
+      >
+        Public form
+      </button>
     </div>
   );
 }
@@ -501,15 +610,12 @@ function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
   const questions = parsed.questions;
 
   const writeQuestions = (next) =>
-    onChange(JSON.stringify({ ...parsed, questions: next }, null, 2));
+    onChange(JSON.stringify({ ...parsed, questions: normalizeQuestions(next) }, null, 2));
 
   const addQuestion = () => {
-    const used = new Set(questions.map((q) => q.id).filter(Boolean));
-    let n = questions.length + 1;
-    while (used.has(`q${n}`)) n++;
     writeQuestions([
       ...questions,
-      { id: `q${n}`, text: '', type: 'single-choice', options: [] },
+      { id: '', text: '', type: 'single-choice', options: [] },
     ]);
   };
 
@@ -562,10 +668,7 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
     onChange({ options: opts.map((o, j) => (j === i ? { ...o, ...patch } : o)) });
 
   const addOption = () => {
-    const used = new Set(opts.map((o) => o.value));
-    let n = opts.length + 1;
-    while (used.has(`opt${n}`)) n++;
-    onChange({ options: [...opts, { value: `opt${n}`, label: '', weight: 0 }] });
+    onChange({ options: [...opts, { value: '', label: '', weight: 0 }] });
   };
 
   const removeOption = (i) =>
@@ -574,7 +677,10 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
   return (
     <div style={subCard}>
       <div style={subCardHeader}>
-        <span style={{ fontWeight: 600 }}>Question {index + 1}</span>
+        <div>
+          <span style={{ fontWeight: 700 }}>Question {index + 1}</span>
+          <div style={microHint}>This is what the customer will answer on the public diagnostic form.</div>
+        </div>
         <div style={{ display: 'flex', gap: 4 }}>
           <IconBtn onClick={onMoveUp} disabled={index === 0} title="Move up" aria-label="Move question up">
             <ChevronUp size={14} aria-hidden />
@@ -588,16 +694,11 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
         </div>
       </div>
 
-      <div style={fieldGrid}>
-        <Field label="id (machine identifier, no spaces)">
-          <input
-            type="text"
-            value={question.id || ''}
-            onChange={(e) => onChange({ id: e.target.value })}
-            style={input}
-          />
-        </Field>
-        <Field label="type">
+      <div className="diagnostic-question-layout" style={questionSetupGrid}>
+        <Field
+          label="Answer type"
+          info="Single choice lets the customer pick one option. Multiple select lets them pick more than one."
+        >
           <select
             value={question.type || 'single-choice'}
             onChange={(e) => onChange({ type: e.target.value })}
@@ -608,20 +709,36 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
             ))}
           </select>
         </Field>
+        <Field
+          label="Question shown on form"
+          info="Write the exact question the customer should see."
+        >
+          <input
+            type="text"
+            placeholder="Example: What type of school trip are you planning?"
+            value={question.text || ''}
+            onChange={(e) => {
+              const text = e.target.value;
+              const shouldRefreshId =
+                !question.id ||
+                question.id === buildQuestionId(question.text, index) ||
+                (!question.text && /^q\d+$/i.test(String(question.id)));
+              onChange({
+                text,
+                id: shouldRefreshId ? buildQuestionId(text, index) : question.id,
+              });
+            }}
+            style={input}
+          />
+        </Field>
       </div>
-
-      <Field label="question text">
-        <input
-          type="text"
-          value={question.text || ''}
-          onChange={(e) => onChange({ text: e.target.value })}
-          style={input}
-        />
-      </Field>
 
       <div style={{ marginTop: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <strong style={{ fontSize: 13 }}>Options ({opts.length})</strong>
+          <div>
+            <strong style={{ fontSize: 13 }}>Answer options ({opts.length})</strong>
+            <div style={microHint}>Each option has customer text and a score impact used by the diagnostic result.</div>
+          </div>
           <button type="button" onClick={addOption} style={addBtnSmall}>
             <Plus size={12} aria-hidden /> Add option
           </button>
@@ -629,44 +746,116 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
         {opts.length === 0 ? (
           <p style={{ ...emptyHint, fontSize: 12 }}>No options yet.</p>
         ) : (
-          opts.map((o, i) => (
-            <div key={i} style={optRow}>
-              <input
-                type="text"
-                placeholder="value"
-                value={o.value || ''}
-                onChange={(e) => updateOption(i, { value: e.target.value })}
-                style={{ ...input, flex: '1 1 120px' }}
-                aria-label={`Option ${i + 1} value`}
-              />
-              <input
-                type="text"
-                placeholder="label"
-                value={o.label || ''}
-                onChange={(e) => updateOption(i, { label: e.target.value })}
-                style={{ ...input, flex: '2 1 200px' }}
-                aria-label={`Option ${i + 1} label`}
-              />
-              <input
-                type="number"
-                placeholder="weight"
-                value={o.weight ?? ''}
-                onChange={(e) => updateOption(i, { weight: e.target.value === '' ? 0 : Number(e.target.value) })}
-                style={{ ...input, width: 90, flex: '0 0 90px' }}
-                aria-label={`Option ${i + 1} weight`}
-              />
-              <IconBtn onClick={() => removeOption(i)} title="Remove option" aria-label={`Remove option ${i + 1}`} danger>
-                <Trash2 size={14} aria-hidden />
-              </IconBtn>
+          <div style={optionList}>
+            <div className="diagnostic-option-layout" style={optionHeaderRow}>
+              <span>Option text shown to customer</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                Score impact
+                <InfoHint text="How much this answer adds to the diagnostic score, out of 10. Use 0 for no impact, low numbers for weaker signals, and 10 for the strongest signal." />
+              </span>
+              <span />
             </div>
-          ))
+            {opts.map((o, i) => (
+              <div key={i} className="diagnostic-option-layout" style={optionEditorRow}>
+                <input
+                  type="text"
+                  placeholder={`Option ${i + 1}`}
+                  value={o.label || ''}
+                  onChange={(e) => {
+                    const label = e.target.value;
+                    const shouldRefreshValue =
+                      !o.value ||
+                      o.value === buildOptionValue(o.label, i) ||
+                      (!o.label && /^option_\d+$/i.test(String(o.value)));
+                    updateOption(i, {
+                      label,
+                      value: shouldRefreshValue ? buildOptionValue(label, i) : o.value,
+                    });
+                  }}
+                  style={input}
+                  aria-label={`Option ${i + 1} text shown to customer`}
+                />
+                <input
+                  type="number"
+                  placeholder="0"
+                  value={o.weight ?? ''}
+                  min={0}
+                  max={10}
+                  step={1}
+                  onChange={(e) => updateOption(i, { weight: clampScoreImpact(e.target.value) })}
+                  style={{ ...input, textAlign: 'center', fontWeight: 700 }}
+                  aria-label={`Option ${i + 1} score impact`}
+                />
+                <IconBtn onClick={() => removeOption(i)} title="Remove option" aria-label={`Remove option ${i + 1}`} danger>
+                  <Trash2 size={14} aria-hidden />
+                </IconBtn>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-// ─── Scoring bands visual editor ──────────────────────────────────────
+// ─── Result categories visual editor ──────────────────────────────────
+
+function normalizeQuestions(questions) {
+  const usedQuestionIds = new Set();
+  return questions.map((question, index) => {
+    let id = String(question.id || '').trim();
+    if (!id) id = uniqueKey(buildQuestionId(question.text, index), usedQuestionIds);
+    usedQuestionIds.add(id);
+
+    const usedOptionValues = new Set();
+    const options = Array.isArray(question.options)
+      ? question.options.map((option, optionIndex) => {
+        let value = String(option.value || '').trim();
+        if (!value) value = uniqueKey(buildOptionValue(option.label, optionIndex), usedOptionValues);
+        usedOptionValues.add(value);
+        return { ...option, value };
+      })
+      : [];
+
+    return { ...question, id, options };
+  });
+}
+
+function buildQuestionId(text, index) {
+  const raw = String(text || '').toLowerCase();
+  if (/\bcurriculum\b|\bboard\b/.test(raw)) return 'curriculum';
+  if (/\bgrade\b|\bclass\b|\bstandard\b/.test(raw)) return 'grade';
+  if (/\bsubject\b/.test(raw)) return 'subject';
+  return slugKey(text) || `q${index + 1}`;
+}
+
+function buildOptionValue(label, index) {
+  return slugKey(label) || `option_${index + 1}`;
+}
+
+function clampScoreImpact(value) {
+  if (value === '') return 0;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(10, Math.round(parsed)));
+}
+
+function slugKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+}
+
+function uniqueKey(base, used) {
+  const clean = slugKey(base) || 'item';
+  if (!used.has(clean)) return clean;
+  let n = 2;
+  while (used.has(`${clean}_${n}`)) n++;
+  return `${clean}_${n}`;
+}
 
 function ScoringVisualEditor({ json, onChange, onSwitchToJson }) {
   const parsed = tryParse(json);
@@ -683,7 +872,7 @@ function ScoringVisualEditor({ json, onChange, onSwitchToJson }) {
   if (!parsed || !Array.isArray(parsed.bands)) {
     return (
       <ParseErrorPanel
-        title="Scoring bands"
+        title="Result categories"
         message={parsed === null
           ? 'The scoringRulesJson string is not valid JSON. Fix it in the JSON tab.'
           : 'scoringRulesJson is missing a "bands" array. Fix it in the JSON tab.'}
@@ -721,18 +910,15 @@ function ScoringVisualEditor({ json, onChange, onSwitchToJson }) {
   return (
     <section style={card}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h2 style={{ ...cardTitle, marginBottom: 0 }}>Scoring bands ({bands.length})</h2>
+        <h2 style={{ ...cardTitle, marginBottom: 0 }}>Result categories ({bands.length})</h2>
         <button type="button" onClick={addBand} style={addBtn}>
-          <Plus size={14} aria-hidden /> Add band
+          <Plus size={14} aria-hidden /> Add category
         </button>
       </div>
       <p style={{ color: 'var(--text-secondary)', marginTop: 0, fontSize: 12 }}>
-        Method: <code>{method}</code> — Phase 1 only supports <code>weighted-sum</code>.
-        The first band whose <code>[minScore, maxScore]</code> contains the computed
-        score wins; bands are checked in declared order.
-      </p>
-      {bands.length === 0 ? (
-        <p style={emptyHint}>No bands yet — click <em>Add band</em> to start.</p>
+        Use these ranges to decide what result the customer sees after submitting the diagnostic.
+      </p>      {bands.length === 0 ? (
+        <p style={emptyHint}>No result categories yet. Add one to define what customers see after submitting.</p>
       ) : (
         bands.map((b, idx) => (
           <ScoringBandCard
@@ -755,21 +941,21 @@ function ScoringBandCard({ band, index, total, onChange, onRemove, onMoveUp, onM
   return (
     <div style={subCard}>
       <div style={subCardHeader}>
-        <span style={{ fontWeight: 600 }}>Band {index + 1}</span>
+        <span style={{ fontWeight: 600 }}>Result category {index + 1}</span>
         <div style={{ display: 'flex', gap: 4 }}>
-          <IconBtn onClick={onMoveUp} disabled={index === 0} title="Move up" aria-label="Move band up">
+          <IconBtn onClick={onMoveUp} disabled={index === 0} title="Move up" aria-label="Move category up">
             <ChevronUp size={14} aria-hidden />
           </IconBtn>
-          <IconBtn onClick={onMoveDown} disabled={index === total - 1} title="Move down" aria-label="Move band down">
+          <IconBtn onClick={onMoveDown} disabled={index === total - 1} title="Move down" aria-label="Move category down">
             <ChevronDown size={14} aria-hidden />
           </IconBtn>
-          <IconBtn onClick={onRemove} title="Remove band" aria-label="Remove band" danger>
+          <IconBtn onClick={onRemove} title="Remove category" aria-label="Remove category" danger>
             <Trash2 size={14} aria-hidden />
           </IconBtn>
         </div>
       </div>
       <div style={fieldGrid}>
-        <Field label="minScore">
+        <Field label="Score from" info="Lowest score that should use this result category.">
           <input
             type="number"
             value={band.minScore ?? ''}
@@ -777,7 +963,7 @@ function ScoringBandCard({ band, index, total, onChange, onRemove, onMoveUp, onM
             style={input}
           />
         </Field>
-        <Field label="maxScore">
+        <Field label="Score to" info="Highest score that should use this result category.">
           <input
             type="number"
             value={band.maxScore ?? ''}
@@ -785,7 +971,7 @@ function ScoringBandCard({ band, index, total, onChange, onRemove, onMoveUp, onM
             style={input}
           />
         </Field>
-        <Field label="classification (e.g. level_1)">
+        <Field label="Result name" info="Internal short name for this category. Keep it simple, like starter, ready, or premium.">
           <input
             type="text"
             value={band.classification || ''}
@@ -793,7 +979,7 @@ function ScoringBandCard({ band, index, total, onChange, onRemove, onMoveUp, onM
             style={input}
           />
         </Field>
-        <Field label="label (display name)">
+        <Field label="Shown label" info="Customer-facing result text shown in the CRM and PDF.">
           <input
             type="text"
             value={band.label || ''}
@@ -801,7 +987,7 @@ function ScoringBandCard({ band, index, total, onChange, onRemove, onMoveUp, onM
             style={input}
           />
         </Field>
-        <Field label="recommendedTier (e.g. entry / primary / premium)">
+        <Field label="Recommended tier" info="Suggested service or package level for customers in this score range.">
           <input
             type="text"
             value={band.recommendedTier || ''}
@@ -814,103 +1000,120 @@ function ScoringBandCard({ band, index, total, onChange, onRemove, onMoveUp, onM
   );
 }
 
-// ─── Request-change modal (PRD §4.2 — Phase-1 view-only scoring) ──────
-//
-// Scoring rules can't be edited in place during Phase 1 (protects the
-// 90-day analytics baseline). This modal files a change-request ticket
-// to GS via POST /api/travel/diagnostics/banks/:id/request-change and
-// toasts the created ticket id.
-
-function RequestChangeModal({ bankId, subBrand, version, notify, onClose }) {
-  const [summary, setSummary] = useState('');
-  const [details, setDetails] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const onSubmit = async () => {
-    if (!summary.trim()) {
-      notify.error('Summary is required.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await fetchApi(`/api/travel/diagnostics/banks/${bankId}/request-change`, {
-        method: 'POST',
-        body: JSON.stringify({
-          summary: summary.trim(),
-          details: details.trim() || undefined,
-        }),
-      });
-      notify.success(`Change request submitted — ticket #${res?.ticket?.id} routed to GS.`);
-      onClose();
-    } catch (e) {
-      notify.error(e?.data?.error || e?.message || 'Failed to submit change request');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div role="dialog" aria-modal="true" aria-label="Request scoring change" style={modalOverlay}>
-      <div style={modalCard}>
-        <h2 style={{ ...cardTitle, marginBottom: 4 }}>Request change</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 0 }}>
-          Scoring is view-only in Phase 1. This files a ticket to GS against the{' '}
-          {String(subBrand).toUpperCase()} bank v{version}.
-        </p>
-        <Field label="Summary (required)">
-          <input
-            type="text"
-            value={summary}
-            onChange={(e) => setSummary(e.target.value)}
-            style={input}
-            maxLength={140}
-            placeholder="e.g. Band 2 threshold feels too low for repeat organisers"
-            aria-label="Change request summary"
-          />
-        </Field>
-        <div style={{ marginTop: 10 }}>
-          <Field label="Details (optional)">
-            <textarea
-              value={details}
-              onChange={(e) => setDetails(e.target.value)}
-              rows={5}
-              style={{ ...textareaStyle, fontFamily: 'inherit' }}
-              placeholder="What should change, and why?"
-              aria-label="Change request details"
-            />
-          </Field>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-          <button type="button" onClick={onClose} style={secondaryBtn} disabled={submitting}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onSubmit}
-            disabled={submitting}
-            style={submitting ? primaryBtnDisabled : primaryBtn}
-            aria-label="Submit change request"
-          >
-            <Send size={14} aria-hidden /> {submitting ? 'Submitting…' : 'Submit request'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Small helpers ────────────────────────────────────────────────────
-
-function Field({ label, children }) {
+function Field({ label, info, children }) {
   return (
     <label style={fieldLabelWrap}>
-      <span style={fieldLabel}>{label}</span>
+      <span style={fieldLabel}>
+        {label}
+        {info && <InfoHint text={info} />}
+      </span>
       {children}
     </label>
   );
 }
 
-function IconBtn({ onClick, disabled, title, danger, children, ...rest }) {
+function TemplatePicker({
+  banks,
+  loading,
+  selectedBankId,
+  search,
+  open,
+  onSearchChange,
+  onOpenChange,
+  onPick,
+}) {
+  const selected = banks.find((row) => String(row.id) === String(selectedBankId));
+  const selectedLabel = selected
+    ? selected.templateName || `${String(selected.subBrand || '').toUpperCase()} Template`
+    : '';
+  const query = String(search || '').trim().toLowerCase();
+  const visibleBanks = query
+    ? banks.filter((row) => {
+      const label = row.templateName || `${String(row.subBrand || '').toUpperCase()} Template`;
+      return label.toLowerCase().includes(query);
+    })
+    : banks;
+
+  return (
+    <div style={templatePickerWrap}>
+      <input
+        type="text"
+        value={open ? search : selectedLabel}
+        onChange={(e) => {
+          onSearchChange(e.target.value);
+          onOpenChange(true);
+        }}
+        onFocus={() => onOpenChange(true)}
+        placeholder={loading ? 'Loading templates...' : banks.length ? 'Search templates...' : 'No saved templates yet'}
+        disabled={loading || banks.length === 0}
+        style={{ ...input, paddingRight: 38, width: '100%' }}
+        aria-label="Search active templates"
+      />
+      <button
+        type="button"
+        onClick={() => {
+          if (loading || banks.length === 0) return;
+          onSearchChange('');
+          onOpenChange(!open);
+        }}
+        style={templatePickerToggle}
+        aria-label={open ? 'Close template list' : 'Open template list'}
+        disabled={loading || banks.length === 0}
+      >
+        <ChevronDown size={16} aria-hidden />
+      </button>
+      {open && !loading && banks.length > 0 && (
+        <div style={templatePickerMenu}>
+          {visibleBanks.length === 0 ? (
+            <div style={templatePickerEmpty}>No templates match this search.</div>
+          ) : (
+            visibleBanks.map((row) => {
+              const label = row.templateName || `${String(row.subBrand || '').toUpperCase()} Template`;
+              const active = String(row.id) === String(selectedBankId);
+              return (
+                <button
+                  key={row.id}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => onPick(row)}
+                  style={active ? templatePickerOptionActive : templatePickerOption}
+                >
+                  {label}
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InfoHint({ text }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-label={text}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+      style={infoHintWrap}
+    >
+      <Info size={13} aria-hidden style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+      {open && (
+        <span style={infoTooltip}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function IconBtn({ children, onClick, disabled, title, danger = false, ...rest }) {
   return (
     <button
       type="button"
@@ -919,8 +1122,9 @@ function IconBtn({ onClick, disabled, title, danger, children, ...rest }) {
       title={title}
       style={{
         ...iconBtn,
-        ...(danger ? { color: 'var(--danger-color)' } : {}),
-        ...(disabled ? { opacity: 0.35, cursor: 'not-allowed' } : {}),
+        color: danger ? 'var(--danger-color)' : iconBtn.color,
+        opacity: disabled ? 0.45 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
       }}
       {...rest}
     >
@@ -933,11 +1137,11 @@ function ParseErrorPanel({ title, message, onSwitchToJson }) {
   return (
     <section style={{ ...card, borderLeft: '4px solid var(--danger-color)' }}>
       <h2 style={cardTitle}>{title}</h2>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger-color)', marginBottom: 8 }}>
+      <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger-color)', fontSize: 13 }}>
         <AlertTriangle size={16} aria-hidden /> {message}
       </div>
-      <button type="button" onClick={onSwitchToJson} style={secondaryBtn}>
-        Open JSON tab
+      <button type="button" onClick={onSwitchToJson} style={{ ...secondaryBtn, marginTop: 12 }}>
+        Open advanced JSON
       </button>
     </section>
   );
@@ -961,7 +1165,7 @@ function prettyJson(s, fallback) {
   }
 }
 
-// ─── Engine Weights panel (TMC) ───────────────────────────────────────
+// ─── Recommendation Settings panel (TMC) ──────────────────────────────
 //
 // PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.3.3 + §3.3.7 + §3.8.
 // Six weight knobs + scoresWellThreshold + version label, sourced from
@@ -988,12 +1192,12 @@ const DEFAULT_TMC_WEIGHTS = {
 };
 
 const WEIGHT_FIELDS = [
-  { key: 'weightPrimaryOutcome',  label: 'Primary-outcome match',  defaultValue: 50, hint: 'Q1 primary-outcome match. PRD §3.3.3 default 50.' },
-  { key: 'weightSecondarySkill',  label: 'Secondary-skill match',  defaultValue: 20, hint: 'Per Q2 match, capped at 40 (max 2 secondaries). PRD §3.3.3 default 20.' },
-  { key: 'weightGrowthArea',      label: 'Growth-area match',      defaultValue: 15, hint: 'Awarded once; 0 if duplicates a Q2 pick. PRD §3.3.3 default 15.' },
-  { key: 'weightCurriculumHook',  label: 'Curriculum hook depth',  defaultValue: 10, hint: 'Trip has a curriculum_hooks entry matching school board × grade. PRD §3.3.3 default 10.' },
-  { key: 'weightGradeBandCenter', label: 'Grade-band centering',   defaultValue: 10, hint: 'School band at/above trip range midpoint ceiling. PRD §3.3.3 default 10.' },
-  { key: 'weightTierValueLean',   label: 'Tier-value lean',        defaultValue:  8, hint: 'Only when geo_preference=open. Prefer higher affordable tier. PRD §3.3.3 default 8.' },
+  { key: 'weightPrimaryOutcome',  label: 'Main trip goal',          defaultValue: 50, max: 100, hint: 'How much the main selected goal should influence the recommended trip.' },
+  { key: 'weightSecondarySkill',  label: 'Extra skills wanted',     defaultValue: 20, max: 60,  hint: 'How much additional learning or skill preferences should influence the match.' },
+  { key: 'weightGrowthArea',      label: 'Growth focus',            defaultValue: 15, max: 60,  hint: 'How much the chosen student-growth area should influence recommendations.' },
+  { key: 'weightCurriculumHook',  label: 'Curriculum match',        defaultValue: 10, max: 60,  hint: 'How strongly curriculum, board, grade, or subject fit should influence recommendations.' },
+  { key: 'weightGradeBandCenter', label: 'Grade fit',               defaultValue: 10, max: 60,  hint: 'How much the student grade range should affect the recommended trip.' },
+  { key: 'weightTierValueLean',   label: 'Budget and value fit',    defaultValue:  8, max: 60,  hint: 'How much budget/value preference should influence the final recommendation.' },
 ];
 
 function validateWeights(weights) {
@@ -1081,7 +1285,7 @@ function EngineWeightsPanel({ notify, isAdmin }) {
 
   const onSave = async () => {
     if (!isAdmin) {
-      notify.error('Engine Weights save is ADMIN-only.');
+      notify.error('Recommendation settings are ADMIN-only.');
       return;
     }
     const v = validateWeights(weights);
@@ -1109,9 +1313,9 @@ function EngineWeightsPanel({ notify, isAdmin }) {
       const merged = { ...DEFAULT_TMC_WEIGHTS, ...row };
       setWeights(merged);
       setBaseline(merged);
-      notify.success(`Engine weights saved (version ${merged.version}).`);
+      notify.success(`Recommendation settings saved (version ${merged.version}).`);
     } catch (e) {
-      notify.error(e?.body?.error || e?.message || 'Failed to save engine weights');
+      notify.error(e?.body?.error || e?.message || 'Failed to save recommendation settings');
     } finally {
       setSaving(false);
     }
@@ -1121,9 +1325,9 @@ function EngineWeightsPanel({ notify, isAdmin }) {
     return (
       <section style={card} aria-busy="true">
         <h2 style={cardTitle}>
-          <Settings size={18} aria-hidden /> Engine Weights (TMC)
+          <Settings size={18} aria-hidden /> Recommendation Settings
         </h2>
-        <p style={{ color: 'var(--text-secondary)' }}>Loading current weights&hellip;</p>
+        <p style={{ color: 'var(--text-secondary)' }}>Loading recommendation settings...</p>
       </section>
     );
   }
@@ -1132,7 +1336,7 @@ function EngineWeightsPanel({ notify, isAdmin }) {
     return (
       <section style={{ ...card, borderLeft: '4px solid var(--danger-color)' }}>
         <h2 style={cardTitle}>
-          <Settings size={18} aria-hidden /> Engine Weights (TMC)
+          <Settings size={18} aria-hidden /> Recommendation Settings
         </h2>
         <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger-color)' }}>
           <AlertTriangle size={16} aria-hidden /> {loadError}
@@ -1145,66 +1349,56 @@ function EngineWeightsPanel({ notify, isAdmin }) {
   }
 
   return (
-    <section style={card} aria-label="Engine Weights">
+    <section style={card} aria-label="Recommendation Settings">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
         <h2 style={{ ...cardTitle, margin: 0 }}>
-          <Settings size={18} aria-hidden /> Engine Weights (TMC)
+          <Settings size={18} aria-hidden /> Recommendation Settings
         </h2>
-        <span style={versionPill} aria-label="Current version">
-          version: <strong style={{ marginLeft: 4 }}>{baseline.version}</strong>
-        </span>
       </div>
       <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 12px' }}>
-        Per PRD §3.3.3 the six weights below + the §3.3.5 "scores-well" threshold drive the
-        deterministic 6-signal engine. Tuning here is config; the engine reads
-        the live row at submission time (§3.3.7). Changing any weight auto-bumps
-        the version so each scored submission's <code>weightsVersion</code> stays replayable.
+        Adjust how strongly each answer affects the recommended trip result.
       </p>
 
       <div style={fieldGrid}>
         {WEIGHT_FIELDS.map((f) => (
-          <Field key={f.key} label={f.label}>
-            <input
-              type="number"
-              value={weights[f.key]}
-              onChange={(e) => updateField(f.key, e.target.value)}
-              style={input}
-              aria-label={f.label}
-              min={0}
-              step={1}
-            />
+          <Field key={f.key} label={f.label} info={f.hint}>
+            <div style={sliderControl}>
+              <input
+                type="range"
+                value={weights[f.key]}
+                onChange={(e) => updateField(f.key, e.target.value)}
+                style={rangeInput}
+                className="diagnostic-weight-range"
+                aria-label={f.label}
+                min={0}
+                max={f.max || 100}
+                step={1}
+              />
+              <span style={sliderValue}>{weights[f.key]}</span>
+            </div>
             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{f.hint}</span>
           </Field>
         ))}
-        <Field label="Scores-well threshold (0-100)">
-          <input
-            type="number"
-            value={weights.scoresWellThreshold}
-            onChange={(e) => updateField('scoresWellThreshold', e.target.value)}
-            style={input}
-            aria-label="Scores-well threshold"
-            min={0}
-            max={100}
-            step={1}
-          />
+        <Field label="Strong match threshold" info="Trips scoring at or above this value are treated as strong matches by the recommendation engine.">
+          <div style={sliderControl}>
+            <input
+              type="range"
+              value={weights.scoresWellThreshold}
+              onChange={(e) => updateField('scoresWellThreshold', e.target.value)}
+              style={rangeInput}
+              className="diagnostic-weight-range"
+              aria-label="Strong match threshold"
+              min={0}
+              max={100}
+              step={1}
+            />
+            <span style={sliderValue}>{weights.scoresWellThreshold}</span>
+          </div>
           <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-            PRD §3.3.5 "scores well" floor. Default 70.
-          </span>
-        </Field>
-        <Field label="Version label">
-          <input
-            type="text"
-            value={weights.version}
-            onChange={(e) => updateField('version', e.target.value)}
-            style={input}
-            aria-label="Version label"
-          />
-          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-            Auto-bumps when weights change (vN → v(N+1)). Override freely if needed.
+            Minimum score needed for the system to treat a trip as a strong recommendation.
           </span>
         </Field>
       </div>
-
       {errors.length > 0 && (
         <div
           role="alert"
@@ -1225,7 +1419,7 @@ function EngineWeightsPanel({ notify, isAdmin }) {
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
         {!isAdmin && (
           <span style={{ color: 'var(--text-secondary)', fontSize: 12, alignSelf: 'center' }}>
-            Read-only (ADMIN required to save).
+            Read-only. Admin access is required to save.
           </span>
         )}
         <button
@@ -1233,9 +1427,9 @@ function EngineWeightsPanel({ notify, isAdmin }) {
           onClick={onSave}
           disabled={saving || !isAdmin}
           style={saving || !isAdmin ? primaryBtnDisabled : primaryBtn}
-          aria-label="Save engine weights"
+          aria-label="Save recommendation settings"
         >
-          <Save size={14} aria-hidden /> {saving ? 'Saving…' : 'Save engine weights'}
+          <Save size={14} aria-hidden /> {saving ? 'Saving...' : 'Save recommendation settings'}
         </button>
       </div>
     </section>
@@ -1270,6 +1464,30 @@ const tabActive = {
   ...tabIdle,
   color: 'var(--primary-color)',
   borderBottom: '2px solid var(--primary-color)',
+};
+const advancedTools = {
+  margin: '0 0 12px',
+  padding: '10px 12px',
+  borderRadius: 8,
+  border: '1px solid var(--border-color)',
+  background: 'var(--surface-color)',
+};
+const advancedSummary = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  cursor: 'pointer',
+  fontWeight: 600,
+  fontSize: 13,
+  color: 'var(--text-primary)',
+};
+const advancedBody = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  flexWrap: 'wrap',
+  marginTop: 10,
 };
 const backLink = {
   display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -1308,6 +1526,12 @@ const secondaryBtn = {
   background: 'var(--surface-color)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', cursor: 'pointer',
 };
+const dangerBtn = {
+  ...secondaryBtn,
+  color: 'var(--danger-color)',
+  border: '1px solid rgba(220, 38, 38, 0.35)',
+  background: 'rgba(220, 38, 38, 0.08)',
+};
 const addBtn = {
   display: 'inline-flex', alignItems: 'center', gap: 4,
   padding: '6px 12px', borderRadius: 6, fontWeight: 600, fontSize: 13,
@@ -1331,35 +1555,219 @@ const input = {
   fontFamily: 'inherit',
 };
 const fieldGrid = {
-  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
-  gap: 10, marginTop: 6,
+  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
+  gap: 16, marginTop: 6,
+};
+const questionSetupGrid = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(180px, 260px) minmax(280px, 1fr)',
+  gap: 12,
+  marginTop: 12,
+};
+const microHint = {
+  color: 'var(--text-secondary)',
+  fontSize: 11,
+  lineHeight: 1.4,
+  marginTop: 3,
+};
+const optionList = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+};
+const optionHeaderRow = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(220px, 1fr) 112px 28px',
+  gap: 8,
+  color: 'var(--text-secondary)',
+  fontSize: 11,
+  fontWeight: 700,
+  padding: '0 0 2px',
+};
+const optionEditorRow = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(220px, 1fr) 112px 28px',
+  gap: 8,
+  alignItems: 'center',
+};
+const sliderControl = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(170px, 1fr) 58px',
+  gap: 12,
+  alignItems: 'center',
+};
+const rangeInput = {
+  width: '100%',
+  height: 28,
+  accentColor: 'var(--primary-color)',
+};
+const sliderValue = {
+  minWidth: 58,
+  padding: '7px 10px',
+  borderRadius: 8,
+  background: 'var(--subtle-bg, rgba(91, 110, 248, 0.10))',
+  border: '1px solid var(--border-color)',
+  color: 'var(--text-primary)',
+  fontSize: 13,
+  fontWeight: 700,
+  textAlign: 'center',
 };
 const fieldLabelWrap = {
   display: 'flex', flexDirection: 'column', gap: 4,
 };
 const fieldLabel = {
+  display: 'inline-flex', alignItems: 'center', gap: 4,
   fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500,
 };
-const optRow = {
-  display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap',
+const infoHintWrap = {
+  position: 'relative',
+  display: 'inline-flex',
+  alignItems: 'center',
+  cursor: 'help',
+  lineHeight: 1,
+  zIndex: 30,
 };
+const infoTooltip = {
+  position: 'absolute',
+  left: 18,
+  top: '50%',
+  transform: 'translateY(-50%)',
+  zIndex: 2147483647,
+  width: 260,
+  maxWidth: 'calc(100vw - 24px)',
+  padding: '8px 10px',
+  borderRadius: 8,
+  border: '1px solid var(--border-color)',
+  background: '#ffffff',
+  color: '#111827',
+  boxShadow: '0 16px 40px rgba(15, 23, 42, 0.28)',
+  fontSize: 12,
+  fontWeight: 500,
+  lineHeight: 1.45,
+  whiteSpace: 'normal',
+  pointerEvents: 'none',
+  opacity: 1,
+};
+const templatePickerWrap = {
+  position: 'relative',
+  width: '100%',
+  zIndex: 40,
+};
+const templatePickerToggle = {
+  position: 'absolute',
+  right: 4,
+  top: 4,
+  width: 28,
+  height: 28,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: 'none',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  cursor: 'pointer',
+};
+const templatePickerMenu = {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  top: 'calc(100% + 6px)',
+  zIndex: 2147483646,
+  maxHeight: 260,
+  overflowY: 'auto',
+  padding: 6,
+  borderRadius: 8,
+  border: '1px solid var(--border-color)',
+  background: 'var(--bg-color)',
+  boxShadow: '0 18px 44px rgba(15, 23, 42, 0.34), inset 0 0 0 999px var(--bg-color)',
+  opacity: 1,
+};
+const templatePickerOption = {
+  width: '100%',
+  display: 'block',
+  padding: '8px 10px',
+  border: 'none',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--text-primary)',
+  textAlign: 'left',
+  fontFamily: 'inherit',
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: 'pointer',
+};
+const templatePickerOptionActive = {
+  ...templatePickerOption,
+  background: 'var(--primary-color)',
+  color: '#fff',
+};
+const templatePickerEmpty = {
+  padding: '10px',
+  color: 'var(--text-secondary)',
+  fontSize: 13,
+};
+const diagnosticBuilderCss = `
+  @media (max-width: 760px) {
+    .diagnostic-question-layout {
+      grid-template-columns: 1fr !important;
+    }
+
+    .diagnostic-option-layout {
+      grid-template-columns: 1fr 96px 28px !important;
+    }
+  }
+
+  .diagnostic-weight-range {
+    appearance: none;
+    -webkit-appearance: none;
+    height: 28px;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .diagnostic-weight-range::-webkit-slider-runnable-track {
+    height: 10px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--primary-color, #4f46e5), var(--accent-color, #6d5dfc));
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.16);
+  }
+
+  .diagnostic-weight-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 22px;
+    height: 22px;
+    margin-top: -7px;
+    border-radius: 999px;
+    border: 3px solid #ffffff;
+    background: var(--primary-color, #4f46e5);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.28);
+  }
+
+  .diagnostic-weight-range:focus-visible {
+    outline: 2px solid var(--primary-color, #4f46e5);
+    outline-offset: 4px;
+    border-radius: 999px;
+  }
+
+  .diagnostic-weight-range::-moz-range-track {
+    height: 10px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--primary-color, #4f46e5), var(--accent-color, #6d5dfc));
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.16);
+  }
+
+  .diagnostic-weight-range::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    border: 3px solid #ffffff;
+    background: var(--primary-color, #4f46e5);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.28);
+  }
+`;
 const emptyHint = {
   color: 'var(--text-secondary)', fontSize: 13, fontStyle: 'italic', margin: '4px 0',
-};
-const versionPill = {
-  display: 'inline-flex', alignItems: 'center',
-  padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 500,
-  background: 'var(--subtle-bg)', color: 'var(--text-primary)',
-  border: '1px solid var(--border-color)',
-};
-const modalOverlay = {
-  position: 'fixed', inset: 0, zIndex: 1000,
-  background: 'rgba(0, 0, 0, 0.45)',
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  padding: 16,
-};
-const modalCard = {
-  ...card,
-  width: 'min(520px, 100%)', marginBottom: 0,
-  maxHeight: '90vh', overflowY: 'auto',
 };

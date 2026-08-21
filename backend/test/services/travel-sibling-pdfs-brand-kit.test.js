@@ -119,6 +119,45 @@ function pdfContainsHexColor(buf, hex) {
   const haystack = inflated || str;
   return haystack.includes(r) && haystack.includes(g) && haystack.includes(b);
 }
+/** Extract readable text from a pdfkit PDF buffer for order assertions. */
+function extractPdfText(buf) {
+  const zlib = require('node:zlib');
+  const str = buf.toString('latin1');
+  let allOps = '';
+  const lenRe = /\/Length\s+(\d+)\b[^>]*>>\s*stream\r?\n/g;
+  let m;
+  while ((m = lenRe.exec(str)) !== null) {
+    const len = parseInt(m[1], 10);
+    const start = lenRe.lastIndex;
+    const raw = buf.subarray(start, start + len);
+    try {
+      allOps += zlib.inflateSync(raw).toString('latin1');
+    } catch (_e) {
+      allOps += raw.toString('latin1');
+    }
+  }
+  if (!allOps) return '';
+  let out = '';
+  const tjArrayRe = /\[([^\]]*)\]\s*TJ/g;
+  let s;
+  while ((s = tjArrayRe.exec(allOps)) !== null) {
+    const inner = s[1];
+    const hexRe = /<([0-9a-fA-F\s]+)>/g;
+    let h;
+    while ((h = hexRe.exec(inner)) !== null) {
+      const hex = h[1].replace(/\s+/g, '');
+      for (let i = 0; i + 1 < hex.length; i += 2) {
+        out += String.fromCharCode(parseInt(hex.substr(i, 2), 16));
+      }
+    }
+    out += ' ';
+  }
+  const tjLiteralRe = /\(((?:[^()\\]|\\.)*)\)\s*Tj/g;
+  while ((s = tjLiteralRe.exec(allOps)) !== null) {
+    out += s[1].replace(/\\(.)/g, '$1') + ' ';
+  }
+  return out;
+}
 
 // ── Fixtures ───────────────────────────────────────────────────────────
 
@@ -311,11 +350,10 @@ describe('renderTravelItineraryPdf — S52 brand-kit selector', () => {
     const buf = await renderTravelItineraryPdf(itineraryFixture({ subBrand: 'tmc' }), contactFixture());
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(buf.slice(0, 4).toString()).toBe('%PDF');
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
     // Pre-S52 legacy SUB_BRAND_ACCENT.tmc (#0B4F6C) must NOT appear
+    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(false);
     expect(pdfContainsHexColor(buf, '#0B4F6C')).toBe(false);
-    // RFU's distinctive green is NOT in a TMC itinerary
-    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(false);
   });
 
   test('RFU sub-brand + no tenant → RFU fallback header (#0B5345)', async () => {
@@ -410,7 +448,9 @@ describe('renderTravelDiagnosticPdf — S52 brand-kit selector', () => {
       bankFixture(),
     );
     expect(pdfContainsHexColor(buf, '#283747')).toBe(true);
-    // Pre-S52 SUB_BRAND_ACCENT.visasure (#7A2F5C) must NOT appear
+    // Pre-S52 SUB_BRAND_ACCENT.visasure (#7A2F5C) must NOT appear, and the
+    // rfu fallback green (#0B5345) is not used for visasure diagnostics.
+    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(false);
     expect(pdfContainsHexColor(buf, '#7A2F5C')).toBe(false);
   });
 
@@ -421,11 +461,13 @@ describe('renderTravelDiagnosticPdf — S52 brand-kit selector', () => {
       bankFixture(),
     );
     expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
-    // Pre-S52 SUB_BRAND_ACCENT.tmc (#0B4F6C) must NOT appear
+    // Pre-S52 SUB_BRAND_ACCENT.tmc (#0B4F6C) must NOT appear, and the
+    // rfu fallback green (#0B5345) is not used for tmc diagnostics.
+    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(false);
     expect(pdfContainsHexColor(buf, '#0B4F6C')).toBe(false);
   });
 
-  test('explicit tenant cascade overrides fallback for diagnostic header', async () => {
+  test('diagnostic header uses tenant branding override when supplied', async () => {
     const tenant = {
       subBrandConfigJson: JSON.stringify({ visasure: { headerColor: '#445566' } }),
     };
@@ -437,6 +479,7 @@ describe('renderTravelDiagnosticPdf — S52 brand-kit selector', () => {
     );
     expect(pdfContainsHexColor(buf, '#445566')).toBe(true);
     expect(pdfContainsHexColor(buf, '#283747')).toBe(false);
+    expect(pdfContainsHexColor(buf, '#7A2F5C')).toBe(false);
   });
 
   test('legacy three-arg call (no opts) still renders cleanly — back-compat', async () => {
@@ -514,6 +557,16 @@ describe('renderTmcReadinessReport — S52 brand-kit selector', () => {
     expect(buf.length).toBeGreaterThan(2000);
   });
 
+
+  test('closing CTA renders as plain text without the old teal card box', async () => {
+    const buf = await renderTmcReadinessReport(tmcReadinessPayloadFixture());
+    const text = extractPdfText(buf);
+    expect(text).toContain('How TMC works');
+    expect(text).toContain('Your students are ready.');
+    expect(text).toContain('Book your slot: https://meet.google.com/abc-defg-hij');
+    expect(text.indexOf('How TMC works')).toBeLessThan(text.indexOf('Your students are ready.'));
+    expect(pdfContainsHexColor(buf, '#E8F2EE')).toBe(false);
+  });
   test('malformed subBrandConfigJson on tenant → silent fall-through (no throw)', async () => {
     const tenant = { subBrandConfigJson: '{this-is-not-json' };
     const buf = await renderTmcReadinessReport({

@@ -262,17 +262,22 @@ describe('GET /api/calendar/google/connect', () => {
 
   test('500s when GOOGLE_CLIENT_ID/SECRET missing on the server', async () => {
     // The route captures GOOGLE_CLIENT_ID into a module-load-time const
-    // (line 12), so testing the missing-creds 500 branch requires a
-    // fresh require with the env cleared. We do this with the CJS
-    // require cache: drop the route from cache, clear the env, re-
-    // require, mount on a one-shot app. The router we cached at the
-    // top of this file remains unaffected for every other test.
-    const origId = process.env.GOOGLE_CLIENT_ID;
-    const origSecret = process.env.GOOGLE_CLIENT_SECRET;
-    delete process.env.GOOGLE_CLIENT_ID;
-    delete process.env.GOOGLE_CLIENT_SECRET;
-    delete process.env.GOOGLE_OAUTH_CLIENT_ID;
-    delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    // (line 15), so testing the missing-creds 500 branch requires a fresh
+    // require with the env cleared. The route also calls dotenv.config at
+    // the top with override:true, which would reload backend/.env values
+    // and defeat the test. We temporarily make dotenv.config a no-op and
+    // clear the env vars before re-requiring the route.
+    const dotenv = requireCJS('dotenv');
+    const origDotenvConfig = dotenv.config;
+    dotenv.config = () => ({});
+    const origClientId = process.env.GOOGLE_CLIENT_ID;
+    const origClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const origOAuthId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+    const origOAuthSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    process.env.GOOGLE_CLIENT_ID = '';
+    process.env.GOOGLE_CLIENT_SECRET = '';
+    process.env.GOOGLE_OAUTH_CLIENT_ID = '';
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET = '';
     try {
       const routePath = requireCJS.resolve('../../routes/calendar_google');
       delete requireCJS.cache[routePath];
@@ -289,9 +294,13 @@ describe('GET /api/calendar/google/connect', () => {
       expect(res.body.error).toMatch(/credentials not configured/i);
       expect(oauth2State.generateAuthUrl).not.toHaveBeenCalled();
     } finally {
-      process.env.GOOGLE_CLIENT_ID = origId;
-      process.env.GOOGLE_CLIENT_SECRET = origSecret;
-      // Restore the warm-cached router for any subsequent test in this file.
+      // Restore dotenv and env vars, then re-require the warm-cached
+      // router with real credentials for any subsequent test in this file.
+      dotenv.config = origDotenvConfig;
+      process.env.GOOGLE_CLIENT_ID = origClientId;
+      process.env.GOOGLE_CLIENT_SECRET = origClientSecret;
+      process.env.GOOGLE_OAUTH_CLIENT_ID = origOAuthId;
+      process.env.GOOGLE_OAUTH_CLIENT_SECRET = origOAuthSecret;
       const routePath = requireCJS.resolve('../../routes/calendar_google');
       delete requireCJS.cache[routePath];
       requireCJS('../../routes/calendar_google');

@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const prisma = require('../lib/prisma');
 const { verifyToken } = require('../middleware/auth');
 const { snapshotSafe, VERSION_SOURCES } = require('../lib/landingPageVersions');
@@ -8,6 +8,30 @@ const { normalizeSectorKey, SECTORS } = require('../services/landingSitePrompts'
 const router = express.Router();
 const GENERIC_PREFIX = 'generic-site-';
 
+
+function landingSiteVerticalWhere(vertical) {
+  const key = String(vertical || "").trim().toLowerCase();
+  if (key === "generic") {
+    return {
+      templateType: { startsWith: GENERIC_PREFIX },
+      NOT: [
+        { templateType: { startsWith: "generic-site-health" } },
+        { templateType: { startsWith: "generic-site-hospital" } },
+        { templateType: { startsWith: "generic-site-fitness" } },
+      ],
+    };
+  }
+  if (key === "wellness") {
+    return {
+      OR: [
+        { templateType: { startsWith: "generic-site-health" } },
+        { templateType: { startsWith: "generic-site-hospital" } },
+        { templateType: { startsWith: "generic-site-fitness" } },
+      ],
+    };
+  }
+  return { templateType: { startsWith: GENERIC_PREFIX } };
+}
 function isGenericPage(page) {
   return Boolean(page && typeof page.templateType === 'string' && page.templateType.startsWith(GENERIC_PREFIX));
 }
@@ -26,18 +50,88 @@ function slugify(value, fallback = 'landing-site') {
   return String(value || fallback).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 50) || fallback;
 }
 
+function mapLandingSiteRow(page) {
+  if (!page) return null;
+  return {
+    ...page,
+    sectorKey: sectorKeyFromTemplateType(page.templateType),
+    sectorLabel: sectorLabelFromTemplateType(page.templateType),
+  };
+}
+
 router.get('/', verifyToken, async (req, res) => {
   try {
-    const pages = await prisma.landingPage.findMany({
-      where: { tenantId: req.user.tenantId, templateType: { startsWith: GENERIC_PREFIX } },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, description: true, createdAt: true, updatedAt: true, publishedAt: true, isFeatured: true },
+    const pageParam = Number.parseInt(req.query.page, 10);
+    const limitParam = Number.parseInt(req.query.limit, 10);
+    const paginated = Number.isFinite(pageParam) || Number.isFinite(limitParam);
+    const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
+    const limit = Math.min(Math.max(Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 12, 1), 50);
+    const createdAfter = req.query.createdAfter ? new Date(String(req.query.createdAfter)) : null;
+    const createdBefore = req.query.createdBefore ? new Date(String(req.query.createdBefore)) : null;
+    const createdAt = {};
+    if (createdAfter && !Number.isNaN(createdAfter.getTime())) createdAt.gte = createdAfter;
+    if (createdBefore && !Number.isNaN(createdBefore.getTime())) createdAt.lte = createdBefore;
+
+    const baseWhere = {
+      tenantId: req.user.tenantId,
+      templateType: { startsWith: GENERIC_PREFIX },
+      ...(Object.keys(createdAt).length ? { createdAt } : {}),
+    };
+    const select = {
+      id: true,
+      title: true,
+      slug: true,
+      status: true,
+      visits: true,
+      submissions: true,
+      templateType: true,
+      description: true,
+      createdAt: true,
+      updatedAt: true,
+      publishedAt: true,
+      isFeatured: true,
+    };
+
+    const pinnedRow = await prisma.landingPage.findFirst({
+      where: { ...baseWhere, status: 'PUBLISHED' },
+      orderBy: [{ publishedAt: 'desc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
+      select,
     });
-    res.json(pages.map((page) => ({
-      ...page,
-      sectorKey: sectorKeyFromTemplateType(page.templateType),
-      sectorLabel: sectorLabelFromTemplateType(page.templateType),
-    })));
+
+    if (!paginated) {
+      const pages = await prisma.landingPage.findMany({
+        where: baseWhere,
+        orderBy: { createdAt: 'desc' },
+        select,
+      });
+      const list = pinnedRow ? pages.filter((pageRow) => pageRow.id !== pinnedRow.id) : pages;
+      const ordered = pinnedRow ? [pinnedRow, ...list] : list;
+      return res.json(ordered.map(mapLandingSiteRow));
+    }
+
+    const listWhere = pinnedRow
+      ? { ...baseWhere, id: { not: pinnedRow.id } }
+      : baseWhere;
+    const skip = (page - 1) * limit;
+    const [total, pages] = await Promise.all([
+      prisma.landingPage.count({ where: listWhere }),
+      prisma.landingPage.findMany({
+        where: listWhere,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select,
+      }),
+    ]);
+
+    return res.json({
+      pages: pages.map(mapLandingSiteRow),
+      pinnedPage: mapLandingSiteRow(pinnedRow),
+      page,
+      limit,
+      total,
+      hasMore: skip + pages.length < total,
+    });
   } catch (err) {
     console.error('[landing-sites] list failed:', err);
     res.status(500).json({ error: 'Failed to fetch landing sites' });
@@ -66,10 +160,11 @@ router.get('/sectors', verifyToken, async (_req, res) => {
 
 router.post('/generate', verifyToken, async (req, res) => {
   try {
-    const { sectorKey, sectorLabel, campaignName, campaignGoal, businessName, audience, location, tone, ctaText, imageMode, autoCreate = true } = req.body || {};
+    const { sectorKey, sectorLabel, campaignName, campaignGoal, businessName, audience, location, eventDate, eventTime, eventLocation, tone, ctaText, imageMode, autoCreate = true } = req.body || {};
     const normalizedSector = normalizeSectorKey(sectorKey);
     const result = await generateLandingSiteContent({
       tenantId: req.user.tenantId,
+      userId: req.user.userId,
       sectorKey: normalizedSector,
       sectorLabel: sectorLabel || (SECTORS[normalizedSector] && SECTORS[normalizedSector].label) || 'General',
       campaignName,
@@ -77,6 +172,9 @@ router.post('/generate', verifyToken, async (req, res) => {
       businessName,
       audience,
       location,
+      eventDate,
+      eventTime,
+      eventLocation,
       tone,
       ctaText,
       imageMode,
@@ -127,7 +225,7 @@ router.get('/public/:slug', async (req, res) => {
   try {
     const slug = String(req.params.slug || '').trim();
     if (!slug) return res.status(400).json({ error: 'Slug is required' });
-    const page = await prisma.landingPage.findFirst({ where: { slug, status: 'PUBLISHED', templateType: { startsWith: GENERIC_PREFIX } } });
+    const page = await prisma.landingPage.findFirst({ where: { slug, status: 'PUBLISHED', ...landingSiteVerticalWhere(req.query.vertical) } });
     if (!page) return res.status(404).json({ error: 'Landing site not found', code: 'LANDING_SITE_NOT_FOUND' });
     res.json(page);
   } catch (err) {

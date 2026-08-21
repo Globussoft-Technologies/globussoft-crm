@@ -19,7 +19,8 @@
  *       paid).
  */
 
-import { useContext, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ShoppingBag, Gift, CreditCard, Search, X, User } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -51,6 +52,8 @@ export default function BuyGiftCardsPage() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const myName = user?.name || user?.email || 'me';
+  const [searchParams] = useSearchParams();
+  const preselectedGiftCardId = searchParams.get('giftCardId');
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null); // gift card chosen for purchase
@@ -65,7 +68,7 @@ export default function BuyGiftCardsPage() {
   const [paying, setPaying] = useState(false);
   const [successCard, setSuccessCard] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const j = await fetchApi('/api/wellness/giftcards/storefront');
@@ -75,9 +78,9 @@ export default function BuyGiftCardsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [notify]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   // Debounced patient lookup — by phone (last-10) or name. Mirrors the
   // typeahead pattern PatientPicker uses elsewhere; kept inline so this
@@ -106,13 +109,24 @@ export default function BuyGiftCardsPage() {
     return () => { alive = false; clearTimeout(handle); };
   }, [patientQuery, selected, giftMode]);
 
-  const openPurchase = (card) => {
+  const openPurchase = useCallback((card) => {
     setSelected(card);
     setGiftMode(false);
     setRecipient(null);
     setPatientQuery('');
     setPatientResults([]);
-  };
+  }, []);
+
+  // Auto-open the purchase modal when the user arrives via a QR code or
+  // shared link that pins a specific gift card (e.g. ?giftCardId=42).
+  useEffect(() => {
+    if (loading || !preselectedGiftCardId || list.length === 0) return;
+    const id = Number(preselectedGiftCardId);
+    const card = list.find((c) => c.id === id);
+    if (card && !selected) {
+      openPurchase(card);
+    }
+  }, [loading, preselectedGiftCardId, list, selected, openPurchase]);
 
   const closePurchase = () => {
     if (paying) return;
@@ -227,7 +241,7 @@ export default function BuyGiftCardsPage() {
           <ShoppingBag size={24} /> Buy Gift Cards
         </h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Browse available gift cards and pay via Razorpay. The gift value is credited to the chosen patient's wallet on payment success.
+          Browse available gift cards and pay via Razorpay. The gift value is credited to the chosen patient&apos;s wallet on payment success.
         </p>
       </header>
 
@@ -416,7 +430,7 @@ export default function BuyGiftCardsPage() {
             </header>
 
             <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-              You'll pay <strong style={{ color: 'var(--text-primary)' }}>
+              You&apos;ll pay <strong style={{ color: 'var(--text-primary)' }}>
                 {formatMoney(selected.price, { currency: selected.currency })}
               </strong>. The wallet credit of{' '}
               <strong style={{ color: 'var(--text-primary)' }}>

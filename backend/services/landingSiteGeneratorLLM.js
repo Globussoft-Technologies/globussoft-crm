@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 if (process.env.NODE_ENV !== 'test') {
   const path = require('path');
@@ -6,18 +6,23 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 const llmRouter = require('../lib/llmRouter');
+const aiGateway = require('../lib/aiGateway');
 const destinationImageProvider = require('./destinationImageProvider');
+const { formatGeminiLimitMessage } = require('../lib/geminiErrors');
 const { getBudgetCap, evaluateCap } = require('../lib/tenantSettings');
 const {
   BASIC_BLOCK_TYPES,
   buildGenericLandingSitePrompt,
+  buildWellnessLandingSitePrompt,
   buildGenericFallback,
+  buildWellnessRegistrationBlocks,
+  isWellnessSector,
   normalizeSectorKey,
 } = require('./landingSitePrompts');
 
 const INTEGRATION = 'llm';
 const MODEL_PRIMARY = 'gemini-2.5-flash';
-const MODEL_FALLBACK = 'gemini-2.0-flash';
+const TASK_NAME = 'landing-site-generate';
 
 async function computeMonthlySpendCents(tenantId) {
   return llmRouter.computeMonthlySpendCents(tenantId);
@@ -52,25 +57,6 @@ function parseJson(raw) {
   return JSON.parse(cleaned);
 }
 
-async function callGeminiAttempt({ apiKey, modelName, prompt }, usageOut) {
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  const ai = new GoogleGenerativeAI(apiKey);
-  const model = ai.getGenerativeModel({
-    model: modelName,
-    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 },
-  });
-  const fullPrompt = `${prompt.system}\n\n${prompt.user}`;
-  const res = await model.generateContent(fullPrompt);
-  const text = res?.response?.text?.();
-  if (usageOut && typeof usageOut === 'object') {
-    const usage = (res && res.response && res.response.usageMetadata) || {};
-    usageOut.promptTokens = usage.promptTokenCount || 0;
-    usageOut.completionTokens = usage.candidatesTokenCount || 0;
-  }
-  if (!text) throw new Error('LLM returned an empty response');
-  return text;
-}
-
 function ensureBlockArray(blocks) {
   if (!Array.isArray(blocks)) return [];
   return blocks
@@ -84,17 +70,38 @@ function ensureBlockArray(blocks) {
     .filter(Boolean);
 }
 
+function collectBlocksByType(blocks, type) {
+  const found = [];
+  const visit = (items) => {
+    if (!Array.isArray(items)) return;
+    items.forEach((block) => {
+      if (!block || typeof block !== 'object') return;
+      if (block.type === type) found.push(block);
+      const columns = block.props && Array.isArray(block.props.columns) ? block.props.columns : [];
+      columns.forEach((column) => visit(column.components));
+    });
+  };
+  visit(blocks);
+  return found;
+}
+
 async function enrichWithImages(payload, input, options = {}) {
   const blocks = ensureBlockArray(payload.blocks);
   if (!blocks.length) return payload;
 
-  const imageBlocks = blocks.filter((block) => block.type === 'image');
+  const imageBlocks = collectBlocksByType(blocks, 'image');
   if (!imageBlocks.length) return { ...payload, blocks };
 
-  const queries = [
-    `${input.sectorLabel || input.sectorKey || 'business'} landing page`,
-    `${input.campaignName || input.businessName || input.sectorLabel || 'campaign'} marketing`,
-  ];
+  const wellnessPhotoQuery = [input.campaignName, input.campaignGoal, input.audience, input.location, input.sectorLabel || input.sectorKey, 'wellness healthcare community event'].filter(Boolean).join(' ');
+  const queries = isWellnessSector(input.sectorKey)
+    ? [
+        wellnessPhotoQuery,
+        [input.businessName, input.sectorLabel || input.sectorKey, 'wellness event registration'].filter(Boolean).join(' '),
+      ]
+    : [
+        `${input.sectorLabel || input.sectorKey || 'business'} landing page`,
+        `${input.campaignName || input.businessName || input.sectorLabel || 'campaign'} marketing`,
+      ];
 
   const fetched = [];
   for (const query of queries) {
@@ -126,30 +133,50 @@ async function enrichWithImages(payload, input, options = {}) {
 async function generateLandingSiteContent(input = {}, options = {}) {
   const tenantId = input.tenantId;
   const sectorKey = normalizeSectorKey(input.sectorKey);
-  const prompt = buildGenericLandingSitePrompt({ ...input, sectorKey });
+  const wellnessMode = isWellnessSector(sectorKey);
+  const prompt = wellnessMode
+    ? buildWellnessLandingSitePrompt({ ...input, sectorKey })
+    : buildGenericLandingSitePrompt({ ...input, sectorKey });
   await checkBudgetCap(tenantId);
 
-  const llmKey = tenantId ? await llmRouter.getLlmKey(tenantId, 'gemini-flash') : null;
-  const usageOut = {};
+  const userId = input.userId || options.userId || null;
+
   let rawJson = null;
   let modelUsed = null;
   let source = 'stub';
   let stub = true;
   let realModeError = null;
 
-  if (llmKey) {
-    const cascade = [process.env.LLM_MODEL_GEMINI || MODEL_PRIMARY, process.env.LLM_MODEL_GEMINI_FALLBACK || MODEL_FALLBACK, 'gemini-2.0-flash-lite'];
-    for (const modelName of cascade) {
-      try {
-        rawJson = await callGeminiAttempt({ apiKey: llmKey, modelName, prompt }, usageOut);
-        modelUsed = modelName;
-        source = 'gemini';
-        stub = false;
-        realModeError = null;
-        break;
-      } catch (err) {
-        realModeError = err.message || String(err);
-      }
+  // ONE call through aiGateway — it resolves BYOK (the tenant's single
+  // fixed provider, if configured — a per-attempt "try Gemini then OpenAI
+  // then Groq" loop doesn't apply to BYOK since resolveProviderConfig
+  // returns the same BYOK config regardless of the requested-model hint)
+  // or a funded CRM-managed subscription, whose own model-family cascade
+  // (Gemini → OpenAI-compatible → Anthropic, see
+  // lib/aiProviderManagement.resolveProviderConfig's `fallbacks`) is
+  // walked automatically inside generateChatCompletion on failure. A
+  // "friendly" blocked-access error (no BYOK, no funded subscription)
+  // falls through to the deterministic stub, same as before.
+  try {
+    const resp = await aiGateway.runAiRequest({
+      tenantId,
+      userId,
+      task: TASK_NAME,
+      surface: 'landingSiteGeneratorLLM',
+      requestedModelLabel: 'gemini-flash',
+      messages: [
+        { role: 'system', content: prompt.system },
+        { role: 'user', content: prompt.user },
+      ],
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 },
+    });
+    rawJson = resp.text;
+    modelUsed = resp.model;
+    source = resp.provider || 'gemini';
+    stub = false;
+  } catch (err) {
+    if (!err.friendly) {
+      realModeError = formatGeminiLimitMessage(err) || err.message || String(err);
     }
   }
 
@@ -169,21 +196,34 @@ async function generateLandingSiteContent(input = {}, options = {}) {
   }
 
   const fallback = buildGenericFallback(input);
-  if (!payload.suggestedTitle) payload.suggestedTitle = fallback.suggestedTitle;
-  if (!payload.suggestedSlug) payload.suggestedSlug = fallback.suggestedSlug;
-  if (!payload.description) payload.description = fallback.description;
-  if (!payload.seoMeta || typeof payload.seoMeta !== 'object') payload.seoMeta = fallback.seoMeta;
-  payload.blocks = ensureBlockArray(payload.blocks);
-  if (!payload.blocks.length) payload = fallback;
+  if (wellnessMode) {
+    const wellnessContent = payload && typeof payload.content === 'object' && !Array.isArray(payload.content) ? payload.content : {};
+    const wellnessInput = { ...input, ...wellnessContent, sectorKey, sectorLabel: input.sectorLabel || fallback.seoMeta.metaTitle?.split(' | ')[1] || input.sectorLabel };
+    if (!payload.suggestedTitle) payload.suggestedTitle = wellnessContent.suggestedTitle || fallback.suggestedTitle;
+    if (!payload.suggestedSlug) payload.suggestedSlug = wellnessContent.suggestedSlug || fallback.suggestedSlug;
+    if (!payload.description) payload.description = wellnessContent.description || fallback.description;
+    if (!payload.seoMeta || typeof payload.seoMeta !== 'object') payload.seoMeta = fallback.seoMeta;
+    payload.blocks = buildWellnessRegistrationBlocks(wellnessInput, { ...payload, description: payload.description });
+  } else {
+    if (!payload.suggestedTitle) payload.suggestedTitle = fallback.suggestedTitle;
+    if (!payload.suggestedSlug) payload.suggestedSlug = fallback.suggestedSlug;
+    if (!payload.description) payload.description = fallback.description;
+    if (!payload.seoMeta || typeof payload.seoMeta !== 'object') payload.seoMeta = fallback.seoMeta;
+    payload.blocks = ensureBlockArray(payload.blocks);
+    if (!payload.blocks.length) {
+      payload.blocks = fallback.blocks;
+    }
+  }
 
-  payload.blocks = ensureBlockArray(payload.blocks);
-  payload = await enrichWithImages(payload, { ...input, sectorKey }, options);
+  payload = await enrichWithImages({ ...payload, blocks: ensureBlockArray(payload.blocks) }, { ...input, sectorKey }, options);
+
+  payload = await enrichWithImages({ ...payload, blocks: ensureBlockArray(payload.blocks) }, { ...input, sectorKey }, options);
   payload.blocks = ensureBlockArray(payload.blocks);
 
   return {
     ...payload,
     source,
-    model: modelUsed || (llmKey ? process.env.LLM_MODEL_GEMINI || MODEL_PRIMARY : 'stub'),
+    model: modelUsed || (source === 'stub' ? 'stub' : process.env.LLM_MODEL_GEMINI || MODEL_PRIMARY),
     stub,
     verdict: stub ? 'fallback' : 'passed',
     guardrailIssues: [],

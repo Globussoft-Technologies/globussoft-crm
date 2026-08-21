@@ -25,6 +25,7 @@ const prisma = require("../lib/prisma");
 // practice but the historical contract returned 400 on unknown values,
 // which we preserve for back-compat.
 const { isCatalogedKey } = require("../lib/wellnessRoleTypes");
+const { parseSubBrandScope } = require("../lib/rbacScope");
 const {
   syncWellnessRoleFromRbacRoles,
   syncRbacRoleFromWellnessRole,
@@ -296,7 +297,7 @@ router.get("/", async (req, res) => {
         select: {
           roleId: true,
           role: {
-            select: { id: true, key: true, name: true, landingPath: true },
+            select: { id: true, key: true, name: true, landingPath: true, dataScope: true, subBrandScopeJson: true },
           },
         },
       },
@@ -311,24 +312,14 @@ router.get("/", async (req, res) => {
       createdAt: true,
       deactivatedAt: true,
     };
-    // Staff directory = EMPLOYEES only. Exclude userType='CUSTOMER' so
-    // self-registered customers / patients (who get a User row when they sign
-    // up via /auth/customer/register, e.g. to buy a gift card or view their
-    // own transactions) never appear in the staff list, role assignment
-    // pickers, or the wellness Doctor/Professional dropdowns that read this
-    // endpoint. What remains is everyone who works at / is paid by the clinic
-    // — userType STAFF (doctors, professionals, telecallers, helpers, admins,
-    // managers) and OWNER. Filtering on `not CUSTOMER` (rather than an
-    // allow-list) keeps any legacy rows whose userType predates the column.
+    // Staff directory = EMPLOYEES only. Restrict to the explicit staff-side
+    // user types so assignment pickers never surface tenant customers or any
+    // other non-staff account shapes. OWNER stays included because those rows
+    // are valid internal operators for directory / assignment purposes.
     const users = await prisma.user.findMany({
       where: {
         tenantId: req.user.tenantId,
-        // Exclude customers on BOTH dimensions a self-registered customer
-        // carries (userType='CUSTOMER' AND role='CUSTOMER' — set together in
-        // /auth/customer/register). Either flag alone is enough to hide the
-        // row, so a mis-provisioned account can't leak. role='USER' staff
-        // (low-privilege employees) are NOT customers and stay visible.
-        userType: { not: "CUSTOMER" },
+        userType: { in: ["STAFF", "OWNER"] },
         role: { not: "CUSTOMER" },
       },
       select: isSummary ? slimSelect : fullSelect,
@@ -345,6 +336,8 @@ router.get("/", async (req, res) => {
               key: u.userRoles[0].role.key,
               name: u.userRoles[0].role.name,
               landingPath: u.userRoles[0].role.landingPath || null,
+              dataScope: u.userRoles[0].role.dataScope || "ALL",
+              subBrandScope: parseSubBrandScope(u.userRoles[0].role.subBrandScopeJson),
             }
           : null;
       delete u.userRoles;
@@ -1038,7 +1031,7 @@ router.patch("/:id", verifyRole(["ADMIN"]), async (req, res) => {
 
     const user = await prisma.user.update({
       where: { id: target.id },
-      data: { deactivatedAt: active ? null : new Date() },
+      data: { deactivatedAt: active ? null : new Date(), sessionVersion: { increment: 1 } },
       select: {
         id: true,
         email: true,
@@ -1048,6 +1041,7 @@ router.patch("/:id", verifyRole(["ADMIN"]), async (req, res) => {
         commissionProfileId: true,
         createdAt: true,
         deactivatedAt: true,
+        sessionVersion: true,
       },
     });
 
@@ -1090,6 +1084,10 @@ router.post("/:id/reset-password", verifyRole(["ADMIN"]), async (req, res) => {
     if (!target) return res.status(404).json({ error: "User not found." });
 
     const token = crypto.randomBytes(32).toString("hex");
+    await prisma.user.update({
+      where: { id: target.id },
+      data: { sessionVersion: { increment: 1 } },
+    });
     // Persist to the SHARED DB store (consumed by /api/auth/reset-password) +
     // keep the legacy Map for __testHooks.
     await persistAdminToken(token, target.id, new Date(Date.now() + 3600000), adminResetTokens);

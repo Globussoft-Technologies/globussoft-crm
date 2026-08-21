@@ -17,6 +17,7 @@ const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const { requireTravelTenant, getSubBrandAccessSet, canAccessSubBrand } = require("../middleware/travelGuards");
 const { buildForm, validateSubmission } = require("../lib/travelReviewQuestions");
+const { buildExternalReviewCta } = require("../lib/travelReviewExternal");
 
 // ── PUBLIC — fetch the form (by review token) ────────────────────────
 router.get("/reviews/public/:token", async (req, res) => {
@@ -62,11 +63,22 @@ router.post("/reviews/public/:token/submit", async (req, res) => {
     const { ok, errors, overallRating, clean } = validateSubmission(req.body && req.body.answers);
     if (!ok) return res.status(400).json({ error: "Some answers need attention", code: "INVALID_ANSWERS", errors });
 
-    await prisma.travelTripReview.update({
+    const reviewRow = await prisma.travelTripReview.update({
       where: { id: review.id },
       data: { status: "submitted", overallRating, answersJson: JSON.stringify(clean), submittedAt: new Date() },
+      select: { tenantId: true, itineraryId: true },
     });
-    res.status(201).json({ ok: true, overallRating });
+    const itin = await prisma.itinerary.findUnique({
+      where: { id: reviewRow.itineraryId },
+      select: { destination: true },
+    });
+    const externalReview = await buildExternalReviewCta({
+      tenantId: reviewRow.tenantId,
+      destination: itin?.destination || "your trip",
+      overallRating,
+      answers: clean,
+    });
+    res.status(201).json({ ok: true, overallRating, externalReview });
   } catch (e) {
     console.error("[travel-reviews] public submit error:", e.message);
     res.status(500).json({ error: "Failed to submit review" });
@@ -119,3 +131,6 @@ router.get("/reviews", verifyToken, requireTravelTenant, async (req, res) => {
 });
 
 module.exports = router;
+
+
+

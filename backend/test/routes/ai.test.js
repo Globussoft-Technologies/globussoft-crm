@@ -7,21 +7,31 @@
  *      contactId / recipientEmail enrichment pulls a tenant-scoped
  *      Contact (with deals + activities) into the prompt context.
  *      Tone defaults to "professional yet warm"; explicit tone is passed
- *      to Gemini verbatim. Gemini errors fall through to a template
- *      generator (generateFallbackDraft) and return `model:
- *      "fallback-on-error"`.
+ *      to Gemini verbatim. A blocked-access error (no BYOK, no funded CRM
+ *      subscription) falls through to a template generator
+ *      (generateFallbackDraft) and returns `model: "template-fallback"`.
+ *      Any OTHER error falls through to `model: "fallback-on-error"`.
  *
  *   2. POST /reply          — originalEmail → reply draft. Body of the
  *      original email is truncated to 2000 chars before being inlined
- *      into the prompt (DOS prevention — bounds the upstream Gemini
- *      payload). Gemini errors return a fixed canned reply with
+ *      into the prompt (DOS prevention — bounds the upstream provider
+ *      payload). A blocked/other error returns a fixed canned reply with
  *      `model: "fallback"`.
  *
  *   3. POST /subject-lines  — context → array of N candidate subjects
- *      (default N=5). Gemini output is split by newline, trimmed,
- *      filtered for empty lines, then sliced to N. Gemini errors
- *      return a templated 2-item fallback array using the supplied
+ *      (default N=5). Provider output is split by newline, trimmed,
+ *      filtered for empty lines, then sliced to N. A blocked/other error
+ *      returns a templated 2-item fallback array using the supplied
  *      context.
+ *
+ * All three routes now go through lib/aiGateway.runAiRequest — the
+ * mandatory resolve/gate/log/deduct entry point every AI feature in the
+ * CRM shares (BYOK first, then a funded CRM-managed subscription). This
+ * suite mocks aiGateway.runAiRequest directly rather than the Gemini SDK
+ * (the route no longer touches the SDK — resolveProviderConfig/
+ * generateChatCompletion inside aiGateway do, and those already have
+ * their own dedicated unit coverage in test/lib/aiProviderManagement*
+ * and test/lib/aiGateway*).
  *
  * Pinned contracts (regression bait):
  *   - 400 envelope: { error: "Please provide a subject or context." }
@@ -36,42 +46,17 @@
  *     the route uses contactId and never falls into the recipientEmail
  *     else-if branch.
  *   - /reply truncates originalEmail to 2000 chars before prompt
- *     interpolation. Pinned via a 5000-char payload assertion that the
- *     prompt as inspected via the mock's call args is ≤ a sane upper bound.
+ *     interpolation.
  *   - /subject-lines slice cap respects body.count when provided, falls
- *     back to 5 when absent. Empty lines in the Gemini response are
+ *     back to 5 when absent. Empty lines in the provider response are
  *     filtered out BEFORE the slice (so a noisy reply still produces N
  *     usable suggestions).
- *   - On Gemini error, /draft returns model="fallback-on-error", /reply
- *     returns model="fallback", /subject-lines returns 2-item array
- *     without a model field. These distinct envelopes let the frontend
- *     tell whether the AI ran or was bypassed.
- *
- * Pattern reference: backend/test/routes/ai-scoring.test.js for the
- * prisma singleton patch + req.user injection middleware; and
- * backend/test/cron/sentimentEngine.test.js for the Gemini hoisted
- * monkey-patch on @google/generative-ai (CJS require-cache + non-arrow
- * constructor — the engine does `new GoogleGenerativeAI(key)` so the
- * mock MUST be constructable).
- *
- * Mocking strategy:
- *   - @google/generative-ai: hoisted vi.hoisted() block that sets
- *     GEMINI_API_KEY BEFORE the route is required (the route's top-level
- *     `if (GEMINI_KEY) { genAI = new GoogleGenerativeAI(GEMINI_KEY); ... }`
- *     captures `model` ONCE at module load — without the key set BEFORE
- *     import, `model` stays null forever and every test falls through to
- *     the template fallback, defeating the Gemini-path coverage). Then
- *     monkey-patch the CJS export so `new GoogleGenerativeAI(...)` returns
- *     a stub whose `getGenerativeModel().generateContent` is a vi.fn() we
- *     swap per-test.
- *   - prisma: singleton patch on prisma.contact.findFirst BEFORE the
- *     router is required, same as ai-scoring.test.js. The route's
- *     top-level `require('../lib/prisma')` resolves to the same singleton
- *     because vitest.config.js inlines backend/routes/ via
- *     server.deps.inline.
- *   - verifyToken: bypassed by injecting req.user via a fake middleware
- *     before the router mounts; revokedToken.findUnique stubbed to
- *     resolve null defensively.
+ *   - On a "friendly" blocked-access error, /draft returns
+ *     model="template-fallback", /reply returns model="fallback",
+ *     /subject-lines returns a 2-item array without a model field.
+ *   - On a Gemini-limit error, all three return 429 with
+ *     code=GEMINI_LIMIT_EXHAUSTED.
+ *   - On any OTHER thrown error, /draft returns model="fallback-on-error".
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
@@ -83,97 +68,71 @@ prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn().mockResolvedValue(null);
+// verifyToken's live-session-state check (middleware/auth.js) reads
+// prisma.user on every authenticated request.
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue({ deactivatedAt: null, sessionVersion: null });
 
-// ─── Gemini SDK monkey-patch (must hoist BEFORE the route is required) ───
-// See sentimentEngine.test.js for the canonical pattern + commit history.
-// Critical asymmetries this block defends against:
-//   (a) GEMINI_API_KEY must be truthy AT THE MOMENT the route module is
-//       evaluated, because the route captures `model` ONCE at top-level.
-//       In CI's unit_tests job no GEMINI_API_KEY is set in the env, so
-//       we set it here unconditionally (the engine only checks truthiness;
-//       our mock SDK ignores the value entirely).
-//   (b) The SDK is consumed via CJS `require("@google/generative-ai")`
-//       inside routes/ai.js. ESM `vi.mock('@google/generative-ai')` factories
-//       do NOT intercept that require chain under this vitest setup
-//       (server.deps.inline transforms routes/ via ESM but the SDK is
-//       still resolved through CJS require-cache). Workaround: monkey-patch
-//       the cached CJS export's GoogleGenerativeAI constructor via
-//       createRequire inside vi.hoisted().
-//   (c) The constructor must be a regular `function` (NOT an arrow) because
-//       the route calls `new GoogleGenerativeAI(GEMINI_KEY)`. Arrow
-//       functions throw TypeError on `new`, which the route's try/catch
-//       would silently swallow — but the route's init is OUTSIDE the
-//       try-catch (top-level module load), so an arrow-stub would crash
-//       the entire test file at import time. Use a real function.
-const { mockGenerateContent } = vi.hoisted(() => {
-  process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-fake-key-ai-route';
-
-  const { createRequire } = require('node:module');
-  const requireCJS = createRequire(__filename || process.cwd() + '/');
-  const genAIModule = requireCJS('@google/generative-ai');
-
-  const fn = vi.fn();
-
-  function MockGoogleGenerativeAI() {
-    this.getGenerativeModel = function () {
-      return { generateContent: fn };
-    };
-  }
-  genAIModule.GoogleGenerativeAI = MockGoogleGenerativeAI;
-  return { mockGenerateContent: fn };
-});
+// ─── aiGateway mock (must hoist BEFORE the route is required) ────────────
+const { mockRunAiRequest } = vi.hoisted(() => ({ mockRunAiRequest: vi.fn() }));
+vi.mock('../../lib/aiGateway', () => ({
+  default: { runAiRequest: mockRunAiRequest },
+  runAiRequest: mockRunAiRequest,
+}));
 
 import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+// The route requires aiGateway via CJS; make the CJS cache resolve to the
+// same mock object vi.mock's ESM-level factory installed, mirroring the
+// Module._cache injection pattern used across this test suite for CJS
+// modules that vitest's ESM-level vi.mock can't otherwise intercept.
+const aiGatewayPath = requireCJS.resolve('../../lib/aiGateway');
+require('node:module')._cache[aiGatewayPath] = {
+  id: aiGatewayPath,
+  filename: aiGatewayPath,
+  loaded: true,
+  exports: { runAiRequest: mockRunAiRequest },
+  children: [],
+  paths: [],
+};
+
 const aiRouter = requireCJS('../../routes/ai');
 
-function makeApp({ tenantId = 1, userId = 7 } = {}) {
+function makeApp() {
   const app = express();
   app.use(express.json());
-  // Bypass verifyToken by injecting req.user up-front. The route's
-  // verifyToken middleware will still execute (it's wired inside the
-  // router) but since the global guard isn't installed and we never
-  // send a token, the test would 401 — instead we mount the router
-  // through a wrapper that pre-populates req.user AND skips the token
-  // check. Cleanest path: wire a fake auth middleware that mirrors what
-  // verifyToken does on success and lets every request through.
-  //
-  // The route's actual `verifyToken` reads Bearer tokens; we just need
-  // req.user.tenantId populated before the handler body runs. The
-  // simplest approach is to mount the router AFTER our middleware and
-  // rely on supertest sending no auth header — the real verifyToken
-  // will 401. So instead: stub verifyToken via require-cache so its
-  // export becomes a passthrough.
-  app.use((req, _res, next) => {
-    req.user = { userId, tenantId, role: 'ADMIN' };
-    next();
-  });
   app.use('/api/ai', aiRouter);
   return app;
 }
 
-// The route's verifyToken middleware enforces Bearer-token presence;
-// since our test app injects req.user without a token, we need to make
-// verifyToken a passthrough. The router was already required (with the
-// real verifyToken bound inside its handler registrations), so we can't
-// undo that binding. Workaround: stub revokedToken.findUnique to resolve
-// null and provide a valid JWT in the Authorization header. We sign with
-// the same JWT_SECRET the route's verifyToken resolves to.
 import jwt from 'jsonwebtoken';
 const { JWT_SECRET } = requireCJS('../../config/secrets');
 function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
   return 'Bearer ' + jwt.sign({ userId, tenantId, role }, JWT_SECRET, { expiresIn: '1h' });
 }
 
+function friendlyBlockedError() {
+  const err = new Error('Your organization has not configured an AI provider yet.');
+  err.friendly = true;
+  err.code = 'AI_NOT_CONFIGURED';
+  return err;
+}
+
 beforeEach(() => {
   prisma.contact.findFirst.mockReset();
-  mockGenerateContent.mockReset();
+  mockRunAiRequest.mockReset();
   // Sensible default — most tests override this.
-  mockGenerateContent.mockResolvedValue({
-    response: { text: () => 'Mocked Gemini reply body.' },
+  mockRunAiRequest.mockResolvedValue({
+    text: 'Mocked provider reply body.',
+    model: 'gemini-2.5-flash-lite',
+    provider: 'gemini',
+    accessType: 'byok',
+    usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
   });
 });
 
@@ -188,15 +147,19 @@ describe('POST /draft — AI email draft', () => {
       .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Please provide a subject or context.');
-    // No Gemini call should have fired.
-    expect(mockGenerateContent).not.toHaveBeenCalled();
+    // No provider call should have fired.
+    expect(mockRunAiRequest).not.toHaveBeenCalled();
     // No contact lookup either.
     expect(prisma.contact.findFirst).not.toHaveBeenCalled();
   });
 
   test('happy path with no contactId/recipientEmail: prompt contains context + tone instruction', async () => {
-    mockGenerateContent.mockResolvedValue({
-      response: { text: () => 'Hello,\n\nGenerated body.\n\nBest regards,' },
+    mockRunAiRequest.mockResolvedValue({
+      text: 'Hello,\n\nGenerated body.\n\nBest regards,',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 10, totalTokens: 15 },
     });
     const app = makeApp();
     const res = await request(app)
@@ -206,11 +169,15 @@ describe('POST /draft — AI email draft', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.draft).toContain('Generated body.');
-    expect(res.body.model).toBe('gemini-2.5-flash');
+    expect(res.body.model).toBe('gemini-2.5-flash-lite');
 
-    // Gemini invoked once; the prompt carries context + tone.
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
-    const prompt = mockGenerateContent.mock.calls[0][0];
+    // aiGateway invoked once; the prompt carries context + tone.
+    expect(mockRunAiRequest).toHaveBeenCalledTimes(1);
+    const call = mockRunAiRequest.mock.calls[0][0];
+    expect(call.task).toBe('email-draft');
+    expect(call.tenantId).toBe(1);
+    expect(call.userId).toBe(7);
+    const prompt = call.messages[0].content;
     expect(prompt).toContain('Q4 renewal follow-up');
     expect(prompt).toContain('Write in a formal tone.');
     // No CRM enrichment fired because no contactId/recipientEmail.
@@ -232,17 +199,21 @@ describe('POST /draft — AI email draft', () => {
         { type: 'Call', description: 'Discussed renewal terms with Sarah from Acme' },
       ],
     });
-    mockGenerateContent.mockResolvedValue({
-      response: { text: () => 'Personalized body.' },
+    mockRunAiRequest.mockResolvedValue({
+      text: 'Personalized body.',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 10, totalTokens: 15 },
     });
-    const app = makeApp({ tenantId: 9 });
+    const app = makeApp();
     const res = await request(app)
       .post('/api/ai/draft')
       .set('Authorization', makeBearer({ tenantId: 9 }))
       .send({ context: 'Renewal proposal', contactId: 42 });
 
     expect(res.status).toBe(200);
-    expect(res.body.model).toBe('gemini-2.5-flash');
+    expect(res.body.model).toBe('gemini-2.5-flash-lite');
 
     // Tenant scoping: where-clause must carry tenantId AND id.
     expect(prisma.contact.findFirst).toHaveBeenCalledTimes(1);
@@ -254,7 +225,7 @@ describe('POST /draft — AI email draft', () => {
     expect(args.include.activities).toBeTruthy();
 
     // Prompt enrichment surfaced the CRM profile.
-    const prompt = mockGenerateContent.mock.calls[0][0];
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
     expect(prompt).toContain('Acme Industries');
     expect(prompt).toContain('Acme Co');
     expect(prompt).toContain('CFO');
@@ -270,10 +241,14 @@ describe('POST /draft — AI email draft', () => {
       status: 'Customer',
       aiScore: 67,
     });
-    mockGenerateContent.mockResolvedValue({
-      response: { text: () => 'Follow-up body.' },
+    mockRunAiRequest.mockResolvedValue({
+      text: 'Follow-up body.',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 10, totalTokens: 15 },
     });
-    const app = makeApp({ tenantId: 3 });
+    const app = makeApp();
     const res = await request(app)
       .post('/api/ai/draft')
       .set('Authorization', makeBearer({ tenantId: 3 }))
@@ -289,7 +264,7 @@ describe('POST /draft — AI email draft', () => {
     // no deals/activities expansion) — pinned by absence of include.
     expect(args.include).toBeUndefined();
 
-    const prompt = mockGenerateContent.mock.calls[0][0];
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
     expect(prompt).toContain('Jordan Lee');
     expect(prompt).toContain('Northbeam');
   });
@@ -324,8 +299,24 @@ describe('POST /draft — AI email draft', () => {
     expect(args.where.email).toBeUndefined();
   });
 
-  test('Gemini throws → fallback-on-error envelope, template draft body', async () => {
-    mockGenerateContent.mockRejectedValue(new Error('Gemini down'));
+  test('blocked access (no BYOK, no funded subscription) → template-fallback envelope', async () => {
+    mockRunAiRequest.mockRejectedValue(friendlyBlockedError());
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/ai/draft')
+      .set('Authorization', makeBearer())
+      .send({ context: 'Quick check-in', tone: 'casual' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.model).toBe('template-fallback');
+    // Casual tone surfaces a casual greeting in the template.
+    expect(res.body.draft).toContain('Hey there,');
+    // The context is interpolated into the fallback body.
+    expect(res.body.draft).toContain('Quick check-in');
+  });
+
+  test('non-friendly provider error → fallback-on-error envelope, template draft body', async () => {
+    mockRunAiRequest.mockRejectedValue(new Error('Provider down'));
     const app = makeApp();
     const res = await request(app)
       .post('/api/ai/draft')
@@ -334,23 +325,33 @@ describe('POST /draft — AI email draft', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.model).toBe('fallback-on-error');
-    // Casual tone surfaces a casual greeting in the template.
     expect(res.body.draft).toContain('Hey there,');
-    // The context is interpolated into the fallback body.
     expect(res.body.draft).toContain('Quick check-in');
   });
 
-  test('default tone (no body.tone) uses professional-yet-warm instruction', async () => {
-    mockGenerateContent.mockResolvedValue({
-      response: { text: () => 'Body.' },
+  test('provider quota exhaustion surfaces a friendly 429', async () => {
+    mockRunAiRequest.mockRejectedValue(new Error('429 quota exceeded'));
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/ai/draft')
+      .set('Authorization', makeBearer())
+      .send({ context: 'Quick check-in' });
+
+    expect(res.status).toBe(429);
+    expect(res.body).toMatchObject({
+      code: 'GEMINI_LIMIT_EXHAUSTED',
+      error: 'Gemini limit has been exhausted. Please try again later.',
     });
+  });
+
+  test('default tone (no body.tone) uses professional-yet-warm instruction', async () => {
     const app = makeApp();
     await request(app)
       .post('/api/ai/draft')
       .set('Authorization', makeBearer())
       .send({ context: 'Anything' });
 
-    const prompt = mockGenerateContent.mock.calls[0][0];
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
     expect(prompt).toContain('professional yet warm tone');
   });
 });
@@ -366,12 +367,16 @@ describe('POST /reply — AI reply suggestion', () => {
       .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Original email content required.');
-    expect(mockGenerateContent).not.toHaveBeenCalled();
+    expect(mockRunAiRequest).not.toHaveBeenCalled();
   });
 
-  test('happy path: Gemini reply text returned with model=gemini-2.5-flash', async () => {
-    mockGenerateContent.mockResolvedValue({
-      response: { text: () => 'Thanks for the note. Yes, Tuesday works.\n\nBest,' },
+  test('happy path: provider reply text returned with resolved model', async () => {
+    mockRunAiRequest.mockResolvedValue({
+      text: 'Thanks for the note. Yes, Tuesday works.\n\nBest,',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 10, totalTokens: 15 },
     });
     const app = makeApp();
     const res = await request(app)
@@ -381,17 +386,14 @@ describe('POST /reply — AI reply suggestion', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.draft).toContain('Tuesday works');
-    expect(res.body.model).toBe('gemini-2.5-flash');
+    expect(res.body.model).toBe('gemini-2.5-flash-lite');
 
-    const prompt = mockGenerateContent.mock.calls[0][0];
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
     expect(prompt).toContain('Can we meet Tuesday?');
     expect(prompt).toContain('Write in a friendly tone.');
   });
 
   test('originalEmail truncated to 2000 chars before prompt interpolation (DOS guard)', async () => {
-    mockGenerateContent.mockResolvedValue({
-      response: { text: () => 'Reply.' },
-    });
     // 5000-char payload — the route slices to 2000 before inlining.
     const huge = 'A'.repeat(5000);
     const app = makeApp();
@@ -401,17 +403,14 @@ describe('POST /reply — AI reply suggestion', () => {
       .send({ originalEmail: huge });
 
     expect(res.status).toBe(200);
-    const prompt = mockGenerateContent.mock.calls[0][0];
-    // The interpolated payload inside the prompt must be exactly 2000 A's,
-    // NOT 5000. Counting all A's in the prompt — the prompt body itself
-    // has no other 'A' runs of this length, so a simple regex count works.
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
     const aRuns = prompt.match(/A+/g) || [];
     const longestARun = Math.max(...aRuns.map((s) => s.length));
     expect(longestARun).toBe(2000);
   });
 
-  test('Gemini throws → fallback envelope with canned reply, model=fallback', async () => {
-    mockGenerateContent.mockRejectedValue(new Error('Gemini down'));
+  test('blocked/error → fallback envelope with canned reply, model=fallback', async () => {
+    mockRunAiRequest.mockRejectedValue(friendlyBlockedError());
     const app = makeApp();
     const res = await request(app)
       .post('/api/ai/reply')
@@ -421,7 +420,19 @@ describe('POST /reply — AI reply suggestion', () => {
     expect(res.status).toBe(200);
     expect(res.body.model).toBe('fallback');
     expect(res.body.draft).toContain('Thank you for your email');
-    expect(res.body.draft).toContain("I'll");
+  });
+
+  test('non-friendly provider error (outer catch) → different canned reply, model=fallback', async () => {
+    mockRunAiRequest.mockRejectedValue(new Error('Provider down'));
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/ai/reply')
+      .set('Authorization', makeBearer())
+      .send({ originalEmail: 'Anything' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.model).toBe('fallback');
+    expect(res.body.draft).toContain("I'll review and get back to you shortly");
   });
 });
 
@@ -436,17 +447,18 @@ describe('POST /subject-lines — AI subject suggestions', () => {
       .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('Context required.');
-    expect(mockGenerateContent).not.toHaveBeenCalled();
+    expect(mockRunAiRequest).not.toHaveBeenCalled();
   });
 
-  test('Gemini happy path: splits newlines, filters empty, slices to count (default 5)', async () => {
+  test('happy path: splits newlines, filters empty, slices to count (default 5)', async () => {
     // Note the empty / whitespace lines — the route must filter them out
     // BEFORE the slice, otherwise the caller gets <5 usable subjects.
-    mockGenerateContent.mockResolvedValue({
-      response: {
-        text: () =>
-          'Subject A\n\nSubject B\n   \nSubject C\nSubject D\nSubject E\nSubject F',
-      },
+    mockRunAiRequest.mockResolvedValue({
+      text: 'Subject A\n\nSubject B\n   \nSubject C\nSubject D\nSubject E\nSubject F',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 10, totalTokens: 15 },
     });
     const app = makeApp();
     const res = await request(app)
@@ -465,17 +477,19 @@ describe('POST /subject-lines — AI subject suggestions', () => {
     expect(res.body.subjects[4]).toBe('Subject E');
     // 'Subject F' was sliced off because count=5.
 
-    // The Gemini prompt requested 5 lines explicitly.
-    const prompt = mockGenerateContent.mock.calls[0][0];
+    // The prompt requested 5 lines explicitly.
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
     expect(prompt).toContain('Generate 5 email subject lines');
     expect(prompt).toContain('Renewal email');
   });
 
   test('explicit count=3 caps the slice', async () => {
-    mockGenerateContent.mockResolvedValue({
-      response: {
-        text: () => 'Line 1\nLine 2\nLine 3\nLine 4\nLine 5',
-      },
+    mockRunAiRequest.mockResolvedValue({
+      text: 'Line 1\nLine 2\nLine 3\nLine 4\nLine 5',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 10, totalTokens: 15 },
     });
     const app = makeApp();
     const res = await request(app)
@@ -486,12 +500,12 @@ describe('POST /subject-lines — AI subject suggestions', () => {
     expect(res.status).toBe(200);
     expect(res.body.subjects).toHaveLength(3);
     expect(res.body.subjects).toEqual(['Line 1', 'Line 2', 'Line 3']);
-    const prompt = mockGenerateContent.mock.calls[0][0];
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
     expect(prompt).toContain('Generate 3 email subject lines');
   });
 
-  test('Gemini throws → 2-item templated fallback array (no model field)', async () => {
-    mockGenerateContent.mockRejectedValue(new Error('Gemini down'));
+  test('blocked access (no BYOK, no funded subscription) → 5-item templated fallback array', async () => {
+    mockRunAiRequest.mockRejectedValue(friendlyBlockedError());
     const app = makeApp();
     const res = await request(app)
       .post('/api/ai/subject-lines')
@@ -499,7 +513,23 @@ describe('POST /subject-lines — AI subject suggestions', () => {
       .send({ context: 'Demo follow-up' });
 
     expect(res.status).toBe(200);
-    // The catch branch returns a 2-item array (one "Follow up:" + one "RE:").
+    expect(res.body.subjects).toHaveLength(5);
+    expect(res.body.subjects[0]).toBe('Follow up: Demo follow-up');
+    expect(res.body.subjects[2]).toBe('RE: Demo follow-up');
+    // No model field on this envelope.
+    expect(res.body.model).toBeUndefined();
+  });
+
+  test('non-friendly provider error (outer catch) → 2-item templated fallback array', async () => {
+    mockRunAiRequest.mockRejectedValue(new Error('Provider down'));
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/ai/subject-lines')
+      .set('Authorization', makeBearer())
+      .send({ context: 'Demo follow-up' });
+
+    expect(res.status).toBe(200);
+    // The OUTER catch branch returns a 2-item array (one "Follow up:" + one "RE:").
     expect(res.body.subjects).toHaveLength(2);
     expect(res.body.subjects[0]).toBe('Follow up: Demo follow-up');
     expect(res.body.subjects[1]).toBe('RE: Demo follow-up');

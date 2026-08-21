@@ -29,6 +29,13 @@ const BASE_URL = process.env.BASE_URL || "https://crm.globusdemos.com";
 const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_TRAVEL_TRIP_${Date.now()}`;
 
+// Always use future dates so the spec does not fail when CI runs a few
+// days after the dates were originally written. The route treats the
+// values as dates in the server's local timezone.
+const FUTURE_DEPART = new Date(Date.now() + 30 * 86400000).toISOString();
+const FUTURE_RETURN = new Date(Date.now() + 37 * 86400000).toISOString();
+const FUTURE_LATER = new Date(Date.now() + 40 * 86400000).toISOString();
+
 let travelAdminToken = null;
 let genericAdminToken = null;
 let schoolContactId = null;
@@ -146,8 +153,8 @@ test.describe("Travel trips API — trip CRUD", () => {
       tripCode,
       schoolContactId,
       destination: `${RUN_TAG} Bali Educational Tour`,
-      departDate: "2026-08-15",
-      returnDate: "2026-08-25",
+      departDate: FUTURE_DEPART,
+      returnDate: FUTURE_RETURN,
       pricePerStudent: 45000,
     });
     expect(res.status(), `create: ${await res.text()}`).toBe(201);
@@ -166,8 +173,8 @@ test.describe("Travel trips API — trip CRUD", () => {
       tripCode, // same code
       schoolContactId,
       destination: "x",
-      departDate: "2026-08-15",
-      returnDate: "2026-08-25",
+      departDate: FUTURE_DEPART,
+      returnDate: FUTURE_RETURN,
     });
     expect(res.status()).toBe(409);
     expect((await res.json()).code).toBe("DUPLICATE_TRIP_CODE");
@@ -188,8 +195,8 @@ test.describe("Travel trips API — trip CRUD", () => {
       tripCode: `${RUN_TAG}_inverted`,
       schoolContactId,
       destination: "x",
-      departDate: "2026-09-10",
-      returnDate: "2026-09-01",
+      departDate: FUTURE_LATER,
+      returnDate: FUTURE_DEPART,
     });
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe("INVERTED_DATES");

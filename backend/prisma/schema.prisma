@@ -97,6 +97,16 @@ model Tenant {
   // Null = no fallback configured; resolver behaviour unchanged (subBrand=null
   // bucket wins). Validated against VALID_SUB_BRANDS at write time.
   defaultSubBrand    String?   @db.VarChar(50)
+  // Round-robin pointer for auto-assigning hot leads to staff users.
+  // Stores the last user id that was auto-assigned a hot lead so the next
+  // hot lead gets the following user in the staff list. When
+  // callifiedLastHotAssignedCount reaches the configured leads-per-user cap,
+  // the pointer advances to the next staff member.
+  callifiedLastHotAssignedUserId Int?
+  callifiedLastHotAssignedCount  Int?      @default(0)
+  // Default Callified campaign to auto-assign to every new Lead created in
+  // the tenant. NULL means auto-assign is turned off.
+  callifiedAutoCampaignId Int?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -130,6 +140,10 @@ model Tenant {
   notifications         Notification[]
   auditLogs             AuditLog[]
   llmCalls              LlmCallLog[]
+  aiTenantSubscriptions AiTenantSubscription[]
+  aiCreditWallet        AiCreditWallet?
+  aiCreditTransactions  AiCreditTransaction[]
+  aiCreditOrders        AiCreditOrder[]
   pipelineStages        PipelineStage[]
   emailTemplates        EmailTemplate[]
   reportSchedules       ReportSchedule[]
@@ -197,10 +211,14 @@ model Tenant {
   travelPortalNotifications           TravelPortalNotification[]
   supplierCredentials                 SupplierCredential[]
   visaApplications                    VisaApplication[]
+  visaLetterTemplates                 VisaLetterTemplate[]
+  visaLetterGenerations               VisaLetterGeneration[]
+  visaLetterDocuments                 VisaLetterDocument[]
   // G107 — RejectionRecoveryProgram back-relation (PRD_VISA_SURE_PHASE_3 §FR-7).
   rejectionRecoveryPrograms           RejectionRecoveryProgram[]
   embassyRules                        EmbassyRule[]
   rfuLeadProfiles                     RfuLeadProfile[]
+  passportIdentities                  PassportIdentity[]
   religiousGuidancePackets            ReligiousGuidancePacket[]
   tripMicrosites                      TripMicrosite[]
   // Travel-vertical financial fork (PRD_TRAVEL_{QUOTE_BUILDER,BILLING,
@@ -246,6 +264,7 @@ model Tenant {
   // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
   // team validates + extends over 6-week window.
   curriculumMappings                  TravelCurriculumMapping[]
+  curriculumMappingProposals           TravelCurriculumProposal[]
   // TMC school term/holiday/exam windows for trip scheduling. Baseline seeded;
   // each school's actual dates captured by asking them (no public API exists).
   travelSchoolTerms                   TravelSchoolTerm[]
@@ -351,6 +370,8 @@ model Tenant {
   // model comment above LeadCustomFieldDefinition for why.
   leadCustomFieldDefinitions LeadCustomFieldDefinition[]
   leadCustomFieldValues      LeadCustomFieldValue[]
+  webForms                   WebForm[]
+  webFormSubmissions         WebFormSubmission[]
   // Generic-vertical-only "Customize table" column-visibility picker.
   tableColumnPreferences     TableColumnPreference[]
   // Generic-vertical-only Contacts "Saved Views" (named fixed contact lists).
@@ -552,6 +573,9 @@ model User {
   // in the Staff Directory; cleared back to null on Reactivate. Reversible
   // alternative to DELETE so the row stays in the directory + audit trail.
   deactivatedAt DateTime?
+  // Session invalidation counter. Increment when an admin deactivates a user
+  // or resets a password so old JWTs stop working on the next request.
+  sessionVersion Int @default(0)
 
   // PRD_TRAVEL_MULTICHANNEL_LEADS G008 (FR-3.3.5) — soft "step away" flag
   // that the lead-router consults before assigning an inbound lead. Defaults
@@ -573,7 +597,6 @@ model User {
   // RBAC Hardening Phase 4 — back-reference for permission-history
   // attribution. SetNull on delete preserves the version row even if
   // the changer's account is later removed (audit trail integrity).
-  rolePermissionChanges RolePermissionVersion[]
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -653,10 +676,12 @@ model User {
 
   // Travel vertical — Visa Sure embassy-rule authorship (PC-3 RESOLVED 2026-05-24).
   embassyRulesCreated EmbassyRule[] @relation("EmbassyRuleCreator")
+  passportIdentitiesVerified PassportIdentity[] @relation("PassportIdentityVerifiedBy")
 
   // Travel vertical — TMC curriculum-mapping advisor authorship
   // (PRD_TMC_CURRICULUM_MAPPING PC-1 RESOLVED 2026-05-24).
   curriculumMappingsCreated TravelCurriculumMapping[] @relation("CurriculumMappingCreator")
+  assignedTravelQuotes TravelQuote[] @relation("TravelQuoteAssignee")
 
   // Generic-vertical-only "Customize table" column-visibility picker —
   // personal per-user preference, not shared with teammates.
@@ -665,6 +690,7 @@ model User {
   // views themselves are tenant-shared/readable, but only the creator (or
   // an ADMIN) may edit/delete them, enforced in routes/contact_views.js.
   createdContactViews    SavedContactView[]
+  createdWebForms        WebForm[]
 
   // Email is unique within a tenant, not globally — see the comment on the
   // email field. Lets the same email register/log in across multiple orgs.
@@ -682,6 +708,10 @@ model Contact {
   title                 String?
   status                String    @default("Lead") // Lead, Prospect, Customer, Churned
   source                String?   @default("Organic")
+  /// JSON-encoded array of free-text tags for lead/contact segmentation.
+  /// Route layer exposes this as `tags: string[]`, sanitizes each value, and
+  /// stores null when no tags are selected.
+  tagsJson              String?   @db.Text
   // Travel vertical sub-brand tag — nullable so generic + wellness Contacts
   // ignore it. Set to "tmc" | "rfu" | "travelstall" | "visasure" when the
   // Contact entered through a travel-vertical funnel. Drives analytics
@@ -694,6 +724,24 @@ model Contact {
   /// this, every tick re-scored every contact (#421 gap 2). Nullable so
   /// pre-existing rows backfill on first tick.
   aiScoreLastComputedAt DateTime?
+
+  // Callified AI calling campaign assigned to this lead. Campaigns live in
+  // Callified, so this is just the remote campaign id stored on the CRM contact
+  // to enable per-lead assignment and bulk campaign dialing.
+  callifiedCampaignId   Int?
+
+  // Callified lead status derived from AI call transcript analysis (Gemini)
+  // or fallback rules (score + appointment). Manual override supported.
+  callifiedLeadStatus         String?
+  callifiedLeadStatusSource   String?
+  callifiedLeadStatusReason   String?
+  callifiedLeadStatusUpdatedAt DateTime?
+
+  // DNP retry state for the Callified auto-dial retry engine.
+  // Tracks how many automatic retries have been attempted for the current
+  // DNP streak and when the next retry is due.
+  callifiedDnpRetryCount  Int       @default(0)
+  callifiedDnpNextRetryAt DateTime?
 
   // Data enrichment
   industry       String?
@@ -831,6 +879,12 @@ model Contact {
   // backend/lib/leadConversationSummary.js.
   description String? @db.Text
 
+  // Raw external intake snapshot (JSON string). Stores the full partner
+  // payload so arbitrary keys survive even when they do not map to a native
+  // Contact column or a defined lead custom field. Kept separate from
+  // description because this is structured intake data, not a narrative.
+  externalPayloadJson String? @db.LongText
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
@@ -879,12 +933,14 @@ model Contact {
   itineraries               Itinerary[]
   // Generic-vertical admin-configurable Lead custom fields.
   leadCustomFieldValues     LeadCustomFieldValue[]
+  webFormSubmissions        WebFormSubmission[]
   // Generic-vertical-only Contacts "Saved Views" membership rows this
   // contact belongs to.
   savedViewMemberships      SavedContactViewMember[]
   // Customer-facing travel quotes. This relation lets quote lists load the
   // customer's display name without a separate contact-list request.
   travelQuotes              TravelQuote[]
+  passportIdentities        PassportIdentity[]
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
@@ -984,6 +1040,62 @@ model LeadCustomFieldValue {
   /// One value row per (contact, field) — updating a lead's custom field value upserts this row rather than accumulating history rows.
   @@unique([contactId, fieldId])
   @@index([tenantId, fieldId])
+}
+
+
+// Generic-vertical "Web Forms" builder. The form definition is stored as
+// JSON so the CRM can support arbitrary field order, hidden fields, choice
+// options, and style settings without a migration for every new control.
+model WebForm {
+  id        Int      @id @default(autoincrement())
+  name      String
+  slug      String   @unique
+  description String? @db.Text
+  isActive  Boolean  @default(true)
+
+  // JSON blobs:
+  //   fieldsJson  - ordered field array used by the public embed renderer
+  //   styleJson   - colors, font, logo, and label styling
+  //   settingsJson - submit action, contact/deal toggles, notifications
+  fieldsJson   String @db.LongText
+  styleJson    String @db.LongText
+  settingsJson  String @db.LongText
+
+  createdByUserId Int?
+  createdBy       User? @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  submissions WebFormSubmission[]
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, isActive])
+}
+
+// One row per public form submit. Stores the raw payload snapshot for the
+// form builder, plus a link to the CRM Contact created from the submission.
+model WebFormSubmission {
+  id        Int      @id @default(autoincrement())
+  webFormId Int
+  webForm   WebForm  @relation(fields: [webFormId], references: [id], onDelete: Cascade)
+
+  contactId Int?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  payloadJson String @db.LongText
+  filesJson   String? @db.LongText
+  sourceUrl   String? @db.Text
+  submittedAt DateTime @default(now())
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, webFormId])
+  @@index([tenantId, submittedAt])
 }
 
 // ── Table Column Visibility Preference (generic vertical only) ──────
@@ -1198,7 +1310,15 @@ model AutomationRule {
   name        String
   triggerType String
   actionType  String
-  targetState String?
+  // targetState holds the ENTIRE workflow-builder state as one JSON blob —
+  // module, execution mode, description, and the full actions[] array with
+  // each action's config (email bodies, webhook URLs + headers, ...). Before
+  // this was `@db.Text` it mapped to MySQL varchar(191), so every save of a
+  // non-trivial workflow died with Prisma P2000 ("value too long for the
+  // column") and surfaced as a bare HTTP 500 in the builder UI. A minimal
+  // skeleton is ~102 chars; a single email action with to/subject/body is
+  // already ~233. Text, not varchar.
+  targetState String? @db.Text
   // #20: optional JSON-encoded array of clauses, AND-joined.
   // Format: [{"field":"deal.amount","op":"gt","value":50000}, ...]
   // Operators: eq, neq, gt, gte, lt, lte, in, nin, contains, startsWith.
@@ -1251,7 +1371,7 @@ model EmailMessage {
 model CallLog {
   id             Int      @id @default(autoincrement())
   duration       Int // seconds
-  notes          String?
+  notes          String?  @db.Text
   direction      String   @default("OUTBOUND")
   recordingUrl   String?
   provider       String? // "myoperator", "knowlarity", "twilio", "webrtc"
@@ -1655,10 +1775,21 @@ model Task {
   dueDate   DateTime?
   status    String    @default("Pending") // Pending, Completed
   priority  String    @default("Medium") // Low, Medium, High, Critical
-  notes     String?
+  notes     String?   @db.LongText
   createdAt DateTime  @default(now())
   // #167: soft-delete column (see Contact).
   deletedAt DateTime?
+
+  // Lead Reports cluster — activity kind + result of a scheduled meeting or
+  // site visit. Both nullable and additive: every pre-existing Task row keeps
+  // working unchanged, and routes/lead_reports.js falls back to a title
+  // keyword probe (lib/leadReportMetrics.js `isVisitTask`) for rows written
+  // before these columns existed.
+  //   type    — "Task" | "Call" | "Meeting" | "Site Visit" | "Follow Up"
+  //   outcome — "booked" | "interested" | "not_interested" | "reschedule" |
+  //             "no_show" | "pending"; only meaningful once status=Completed.
+  type      String?
+  outcome   String?
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3981,6 +4112,11 @@ model Visit {
   photosBefore  String?  @db.Text // JSON array of URLs
   photosAfter   String?  @db.Text // JSON array of URLs
   amountCharged Float?
+  // Coupon / locking-fee billing breakdown stored when a visit is completed
+  // with a coupon applied. JSON: { baseAmount, discount, lockingFee, balance,
+  // couponCode, excess }. Persisted so the Completed Visits UI can show the
+  // adjusted balance and so regenerating the payment link uses the same amount.
+  couponBreakdown String? @db.Text
 
   // Payment link generated when a visit is completed with a charge. Stored on
   // the visit so the front-end can render a "copy link" action without joining
@@ -5718,6 +5854,140 @@ model Subscription {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// AI Subscription & Credit Management — CRM-managed AI billing.
+//
+// Replaces the earlier manual "Request CRM AI Access" approval workflow
+// (TenantSetting key ai.crmAccess.state, backend/lib/aiProviderManagement.js)
+// with reusable Super-Admin-authored plans purchased via the platform's own
+// Razorpay keys (services/razorpayService.js — same instance subscriptions.js
+// uses; NOT lib/tenantPaymentGateway.js, which is reserved for tenant-BYOK
+// customer-facing payments).
+//
+// Ledger design mirrors Wallet/WalletTransaction (see above): AiCreditWallet
+// holds the live balance; AiCreditTransaction is the immutable, append-only
+// audit trail. Every deduction happens inside a single Prisma
+// $transaction alongside the balance decrement (see lib/aiCreditLedger.js)
+// so concurrent requests cannot double-spend the same credits. Idempotency
+// is enforced via requestId's unique constraint on AiCreditTransaction —
+// a retried/duplicated deduction for the same requestId is a no-op.
+// ───────────────────────────────────────────────────────────────────────────
+
+model AiSubscriptionPlan {
+  id             Int      @id @default(autoincrement())
+  name           String
+  description    String?  @db.Text
+  price          Decimal  @db.Decimal(12, 2)
+  currency       String   @default("INR")
+  billingCycle   String   @default("monthly") // monthly | one_time
+  creditTokens   Int // total AI credits/tokens granted per purchase
+  fairUsagePolicy String? @db.Text
+  featureRestrictions String? @db.Text // JSON array of feature keys this plan allows; null = all features
+  validityDays   Int? // null = follows billingCycle (30d for monthly); set for fixed-term one-time packs
+  isActive       Boolean  @default(true)
+  displayOrder   Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenantSubscriptions AiTenantSubscription[]
+  creditOrders        AiCreditOrder[]
+
+  @@index([isActive, displayOrder])
+}
+
+model AiTenantSubscription {
+  id               Int       @id @default(autoincrement())
+  tenantId         Int
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  planId           Int
+  plan             AiSubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  planNameSnapshot String // plan name at purchase time — survives later plan edits/renames
+  status           String    @default("ACTIVE") // ACTIVE | EXPIRED | CANCELLED
+  startDate        DateTime  @default(now())
+  endDate          DateTime? // null = no expiry (rare; one_time packs without validityDays)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, endDate])
+}
+
+// One row per tenant — the live CRM-managed AI credit balance. A tenant
+// only has one wallet; each purchased plan tops it up (AiCreditTransaction
+// type=PURCHASE) rather than creating a separate balance.
+model AiCreditWallet {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @unique
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  balanceTokens    Int      @default(0)
+  totalPurchasedTokens Int  @default(0) // lifetime credits granted — denominator for "Usage %" on the dashboard
+  totalUsedTokens  Int      @default(0) // lifetime credits consumed
+  lastAlertPercent Int? // last low-balance threshold (25/10/5) already notified, to avoid re-alerting every request
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  transactions AiCreditTransaction[]
+}
+
+// Immutable append-only ledger. type=PURCHASE (credit) or type=USAGE (debit).
+// requestId is the idempotency key for USAGE rows — a retried deduction for
+// the same AI request is rejected by the unique constraint rather than
+// double-charging the tenant.
+model AiCreditTransaction {
+  id             Int      @id @default(autoincrement())
+  tenantId       Int
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  walletId       Int
+  wallet         AiCreditWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type           String // PURCHASE | USAGE | ADJUSTMENT | REFUND
+  tokens         Int // positive for PURCHASE/REFUND/ADJUSTMENT(+), negative for USAGE/ADJUSTMENT(-)
+  balanceAfter   Int
+  // USAGE rows only — actual provider-reported consumption, never estimated.
+  promptTokens     Int?
+  completionTokens Int?
+  provider         String? // gemini | openai | anthropic | groq | ...
+  model            String?
+  surface          String? // free-form caller tag, e.g. "lead-scoring", "deal-insights"
+  requestId        String? @unique // idempotency key for USAGE rows; also links to LlmCallLog for the raw call record
+  llmCallLogId     Int? // optional FK-by-value to LlmCallLog.id (no formal relation — LlmCallLog predates this table)
+  // PURCHASE rows only
+  orderId        Int? // AiCreditOrder.id
+  // ADJUSTMENT rows only — Super Admin manual credit grants/corrections
+  performedBySuperAdmin String?
+  reason         String? @db.Text
+  createdAt      DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, type, createdAt])
+  @@index([walletId, createdAt])
+}
+
+// One row per Razorpay checkout attempt for an AI subscription plan.
+// Mirrors the Subscription model's order-create/verify-payment shape
+// (routes/subscriptions.js) but scoped to AI credit purchases so the two
+// billing lines (platform subscription vs AI credits) stay independently
+// auditable.
+model AiCreditOrder {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  planId            Int
+  plan              AiSubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  purchasedByUserId Int
+  amount            Decimal  @db.Decimal(12, 2)
+  currency          String   @default("INR")
+  creditTokens      Int // snapshot of plan.creditTokens at purchase time
+  status            String   @default("PENDING") // PENDING | PAID | FAILED | CANCELLED
+  razorpayOrderId   String?  @unique
+  razorpayPaymentId String?
+  failureReason     String?  @db.Text
+  createdAt         DateTime @default(now())
+  paidAt            DateTime?
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // RBAC Models — Enterprise Role-Based Access Control System
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -5731,6 +6001,12 @@ model Role {
   isSystem    Boolean  @default(false) // ADMIN, CUSTOMER, OWNER — immutable key
   isActive    Boolean  @default(true)
   userType    String   @default("STAFF") // which user type this role applies to
+  // Role-level data scope for routes that distinguish own/team/all data.
+  dataScope   String   @default("ALL") // OWN | TEAM | ALL
+  // Travel vertical only: JSON array of sub-brand codes this role can act on.
+  // Null means unrestricted, [] means deny-all, and role assignment unions
+  // the scopes across all roles the user holds.
+  subBrandScopeJson String? @db.Text
   // Post-login landing route for users with this role. Null falls back to
   // tenant-vertical default (/wellness or /dashboard). Set per-role from the
   // Roles & Permissions admin UI so adding a new role becomes a config
@@ -5742,7 +6018,6 @@ model Role {
   permissions        RolePermission[]
   userRoles          UserRole[]
   widgets            RoleWidget[]
-  permissionVersions RolePermissionVersion[]
 
   @@unique([tenantId, key])
   @@index([tenantId, isActive])
@@ -5768,7 +6043,6 @@ model Role {
 model RolePermissionVersion {
   id                    Int      @id @default(autoincrement())
   roleId                Int
-  role                  Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
   // Monotonic per-role version number, starting at 1. Versions are
   // never reused — a restore appends a fresh max+1 row pointing back
   // at the source version's permissionsJson.
@@ -5783,7 +6057,6 @@ model RolePermissionVersion {
   // "Restored from v7" provenance.
   restoredFromVersionId Int?
   changedById           Int?
-  changedBy             User?    @relation(fields: [changedById], references: [id], onDelete: SetNull)
   changedAt             DateTime @default(now())
   // Optional context (e.g. "Lockout-prevented retry"). Free-form,
   // bounded at 500 chars by the route layer.
@@ -6106,6 +6379,7 @@ model Itinerary {
   // layer — analytics queries read by templateId index instead.
   clonedFromTemplateId    Int?
   items                   ItineraryItem[]
+  cancellationPolicies     CancellationPolicy[]
   contact                 Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
   tenant                  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt               DateTime        @default(now())
@@ -6201,6 +6475,8 @@ model TravelSightseeing {
   name                String // POI name e.g. "Eiffel Tower"
   description         String?  @db.Text // 1-2 paragraphs
   imageUrl            String?  @db.Text // thumbnail / hero image
+  latitude            Float? // optional manual/master place pin for itinerary maps
+  longitude           Float? // optional manual/master place pin for itinerary maps
   durationMinutes     Int? // typical visit time
   priceReferenceMinor Int? // INR minor units, indicative entry/ticket
   currency            String?  @db.VarChar(3) // ISO 4217; nullable, defaults to tenant default at call site
@@ -6294,6 +6570,13 @@ model ItineraryTemplate {
   version              Int       @default(1)
   isLatest             Boolean   @default(true)
   archivedAt           DateTime?
+  // G115 — PDF-based itinerary template underprint. Stores an uploaded
+  // reference PDF used as the rendered itinerary background, plus overlay
+  // regions for blanking/re-filling dynamic content. isPdfTemplate lets the
+  // UI badge templates that carry a stored underprint.
+  pdfTemplateUrl       String?   @db.Text
+  pdfTemplateRegions   String?   @db.LongText
+  isPdfTemplate        Boolean   @default(false)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -6449,6 +6732,9 @@ model TmcTrip {
   status               String                    @default("confirmed") // confirmed | in-trip | completed | cancelled
   driveFolderId        String?
   participants         TripParticipant[]
+  visaApplications     VisaApplication[]
+  visaLetterGenerations VisaLetterGeneration[]
+  visaLetterDocuments   VisaLetterDocument[]
   rooming              RoomingAssignment[]
   paymentPlan          TripPaymentPlan?
   documentRequirements TripDocumentRequirement[]
@@ -6485,6 +6771,8 @@ model TripParticipant {
   passportVerifiedAt     DateTime?
   passportVerifiedById   Int?
   passportRejectedAt     DateTime?
+  passportIdentityId     Int?
+  passportIdentity       PassportIdentity?        @relation(fields: [passportIdentityId], references: [id], onDelete: SetNull)
   aadhaarLast4           String?
   aadhaarTokenId         String? // DigiLocker token, encrypted
   // Physical Aadhaar scan uploaded via the public microsite (fallback when
@@ -6509,6 +6797,9 @@ model TripParticipant {
   reviewedById           Int?
   reviewNotes            String?                  @db.Text
   trip                   TmcTrip                  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  visaApplications       VisaApplication[]
+  visaLetterGenerations  VisaLetterGeneration[]
+  visaLetterDocuments    VisaLetterDocument[]
   digilockerSessions     DigilockerSession[]
   // Back-reference to the staging row that produced this participant
   // (hybrid landing-page → microsite OTP → operator-approve flow).
@@ -6522,6 +6813,7 @@ model TripParticipant {
 
   @@index([tripId])
   @@index([tripId, applicationStatus])
+  @@index([passportIdentityId])
 }
 
 // ── Hybrid landing-page → microsite registration staging ────────────────
@@ -6658,11 +6950,14 @@ model CustomerTraveller {
   passportVerifiedAt     DateTime?
   passportVerifiedById   Int?
   passportRejectedAt     DateTime?
+  passportIdentityId     Int?
+  passportIdentity       PassportIdentity? @relation(fields: [passportIdentityId], references: [id], onDelete: SetNull)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
   @@index([tenantId, contactId])
   @@index([tenantId, passportVerifiedAt])
+  @@index([passportIdentityId])
 }
 
 // PRD §4.5 + §4.7 — DigiLocker OAuth flow state. Created on /initiate
@@ -6783,7 +7078,7 @@ model WebCheckin {
   passengerName      String
   seatPref           String?
   mealPref           String?
-  status             String    @default("pending") // pending | reminded | in-progress | done | fallback-agent | failed
+  status             String    @default("pending") // pending | done
   attemptsJson       String?   @db.Text // [{at, result, errorReason}]
   // Customer-facing web check-in reminder EMAILS sent by cron/webCheckinEngine.js
   // (2026-06-16) — distinct from the scheduler's WhatsApp/status lifecycle.
@@ -6939,7 +7234,19 @@ model VisaApplication {
   priorApplicationId   Int?
   priorApplication     VisaApplication?            @relation("PriorRejection", fields: [priorApplicationId], references: [id], onDelete: SetNull)
   recoveryApplications VisaApplication[]           @relation("PriorRejection")
+    passportIdentityId   Int?
+  passportIdentity     PassportIdentity?              @relation(fields: [passportIdentityId], references: [id], onDelete: SetNull)
+  tripId                Int?
+  trip                  TmcTrip?                    @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  participantId         Int?
+  participant           TripParticipant?            @relation(fields: [participantId], references: [id], onDelete: SetNull)
+  checklistSnapshotId  Int?
+  checklistSnapshot    VisaChecklistSnapshot?      @relation(fields: [checklistSnapshotId], references: [id], onDelete: SetNull)
+  checklistSnapshotVersion Int?
+  checklistSnapshotJson String?                    @db.LongText
   documentChecklist    VisaDocumentChecklistItem[]
+  visaLetterGenerations VisaLetterGeneration[]
+  visaLetterDocuments   VisaLetterDocument[]
   tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                    @default(now())
   updatedAt            DateTime                    @updatedAt
@@ -6948,6 +7255,9 @@ model VisaApplication {
   @@index([tenantId, contactId])
   @@index([priorApplicationId])
   @@index([recoveryProgramId])
+  @@index([passportIdentityId])
+  @@index([tripId])
+  @@index([participantId])
 }
 
 /// G107 — RejectionRecoveryProgram (PRD_VISA_SURE_PHASE_3 §FR-7).
@@ -7005,6 +7315,92 @@ model VisaDocumentChecklistItem {
 /// /travel/visa/checklists; consumed by GET /checklists/template?applicationType=
 /// &destinationCountry= to seed a new application's VisaDocumentChecklistItem rows.
 /// Standalone reference data — no FK to applications.
+model VisaLetterTemplate {
+  id                 Int      @id @default(autoincrement())
+  tenantId           Int      @default(1)
+  code               String
+  name               String
+  documentType       String
+  version            Int
+  contentHtml        String   @db.LongText
+  requiredFieldsJson String   @db.Text
+  isActive           Boolean  @default(true)
+  createdById        Int?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  documents          VisaLetterDocument[]
+
+  @@unique([tenantId, code, version])
+  @@index([tenantId, code, isActive])
+}
+
+model VisaLetterGeneration {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int      @default(1)
+  visaApplicationId Int
+  tripId            Int
+  participantId     Int
+  status            String   @default("GENERATED") // GENERATED | SENT | PARTIALLY_SIGNED | SIGNED_COMPLETE
+  generatedById     Int?
+  generatedAt       DateTime @default(now())
+  sentAt            DateTime?
+  dataSnapshotJson  String   @db.LongText
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  visaApplication   VisaApplication @relation(fields: [visaApplicationId], references: [id], onDelete: Cascade)
+  trip              TmcTrip         @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  participant       TripParticipant @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  documents         VisaLetterDocument[]
+
+  @@index([tenantId, visaApplicationId, createdAt])
+  @@index([tenantId, participantId])
+}
+
+model VisaLetterDocument {
+  id                        Int      @id @default(autoincrement())
+  tenantId                  Int      @default(1)
+  generationId              Int
+  visaApplicationId         Int
+  tripId                    Int
+  participantId             Int
+  templateId                Int
+  templateCode              String
+  templateVersion           Int
+  documentType              String
+  status                    String   @default("GENERATED") // GENERATED | SENT | SIGNED_UPLOADED | REJECTED
+  generatedFileUrl          String   @db.Text
+  generatedFileKey          String
+  generatedFileStorage      String
+  generatedFileName         String
+  signedFileUrl             String?  @db.Text
+  signedFileKey             String?
+  signedFileStorage         String?
+  signedFileName            String?
+  generatedDataSnapshotJson String   @db.LongText
+  generatedAt               DateTime @default(now())
+  sentAt                    DateTime?
+  signedUploadedAt          DateTime?
+  signedUploadedByContactId Int?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  tenant                    Tenant               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  generation                VisaLetterGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  visaApplication           VisaApplication      @relation(fields: [visaApplicationId], references: [id], onDelete: Cascade)
+  trip                      TmcTrip              @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  participant               TripParticipant      @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  template                  VisaLetterTemplate   @relation(fields: [templateId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, visaApplicationId, status])
+  @@index([generationId])
+  @@index([participantId])
+  @@index([templateId])
+}
+
 model VisaChecklistTemplate {
   id                 Int      @id @default(autoincrement())
   tenantId           Int
@@ -7017,6 +7413,51 @@ model VisaChecklistTemplate {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
+  @@index([tenantId, applicationType, destinationCountry])
+}
+
+/// Source-library entries for Visa Sure checklist research.
+/// Each row records one URL or PDF/image source for a visa type + country.
+model VisaChecklistSource {
+  id                 Int      @id @default(autoincrement())
+  tenantId           Int
+  applicationType    String
+  destinationCountry String
+  sourceName         String
+  sourceUrl          String   @db.Text
+  sourceKind         String   @default("consulate") // consulate | vfs | pdf | image | manual | other
+  notes              String?  @db.Text
+  isActive           Boolean  @default(true)
+  lastFetchedAt      DateTime?
+  lastFetchedHash    String?  @db.VarChar(64)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  snapshots          VisaChecklistSnapshot[]
+
+  @@index([tenantId, applicationType, destinationCountry, isActive])
+}
+
+/// Immutable checklist snapshots used to lock an application's intake.
+/// Applications point at one of these rows so later checklist edits never
+/// rewrite the exact set used at intake time.
+model VisaChecklistSnapshot {
+  id                 Int      @id @default(autoincrement())
+  tenantId           Int
+  applicationType    String
+  destinationCountry String
+  versionNumber      Int
+  snapshotHash       String   @db.VarChar(64)
+  itemsJson          String   @db.LongText
+  sourceListJson     String?  @db.LongText
+  sourceId           Int?
+  source             VisaChecklistSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  createdById        Int?
+  createdAt          DateTime @default(now())
+
+  applications       VisaApplication[]
+
+  @@unique([tenantId, applicationType, destinationCountry, versionNumber])
   @@index([tenantId, applicationType, destinationCountry])
 }
 
@@ -7300,6 +7741,10 @@ model TravelQuote {
   totalAmount          Decimal?              @db.Decimal(15, 2)
   currency             String                @default("INR")
   validUntil           DateTime?
+  // Issue 11 — trip date for season-aware pricing breakdown.
+  // Nullable: existing quotes keep working; new quotes can set it to anchor
+  // TravelSeasonCalendar multiplier selection.
+  tripDate             DateTime?
   // S47 — FX-lock dedicated columns. Populated at customer-accept time
   // by routes/travel_quotes_public.js (mirrors the fxLock block also
   // persisted in TravelQuoteSnapshot.snapshotJson for forensic history /
@@ -7331,6 +7776,8 @@ model TravelQuote {
   // unmarked clones (or non-clone source quotes) leave them null.
   clonedFromQuoteId    Int?
   appliedMarkupPercent Decimal?              @db.Decimal(5, 2)
+  assignedToUserId     Int?
+  assignedToUser       User?                 @relation("TravelQuoteAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
   // Advance payment transaction references — stored for refund tracking.
   //   advancePlinkId:   Razorpay payment-link ID (plink_XXXX) created on quote accept.
   //   advancePaymentId: Razorpay payment ID (pay_XXXX) populated when the customer pays.
@@ -7345,6 +7792,7 @@ model TravelQuote {
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
+  @@index([tenantId, assignedToUserId])
 }
 
 // Slice C9 — TravelQuoteSnapshot — immutable version history rows.
@@ -7656,17 +8104,21 @@ model CancellationPolicy {
   tenantId    Int             @default(1)
   name        String          @db.VarChar(255) // e.g. "TMC Default" / "RFU Default"
   subBrand    String? // tmc | rfu | travelstall | visasure | null (tenant-wide)
+  itineraryId Int? // optional attach to a trip/itinerary
   description String?         @db.Text
   tiersJson   String          @db.LongText // JSON array; see model docs above
   isActive    Boolean         @default(true)
   invoices    TravelInvoice[]
+  itinerary   Itinerary?      @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
   tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
   @@unique([tenantId, name])
+  @@unique([tenantId, itineraryId])
   @@index([tenantId, isActive])
   @@index([tenantId, subBrand, isActive])
+  @@index([tenantId, itineraryId])
 }
 
 // PRD_TRAVEL_BILLING FR-3.1.a — line-item composition under TravelInvoice.
@@ -8202,60 +8654,108 @@ model BrandKit {
 /// free-text destinationLabel fallback for advisor-suggested destinations not
 /// yet in the catalogue.
 model TravelCurriculumMapping {
-  id               Int     @id @default(autoincrement())
-  tenantId         Int
-  // Curriculum standard: 'CBSE' | 'ICSE' | 'IB' | 'Cambridge' (PC-2 — V1
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int
+  // Academic-year versioning (e.g. "2026-27"). Nullable so legacy rows keep
+  // working unchanged and remain eligible as a fallback when a tenant has not
+  // versioned its library yet.
+  academicYear        String?  @db.VarChar(32)
+  // Curriculum standard: 'CBSE' | 'ICSE' | 'IB' | 'Cambridge' (PC-2 ? V1
   // ships CBSE + ICSE only; IB + Cambridge enabled but rows unseeded).
-  // VarChar(32) tightened from default(191) for MySQL key-byte budget — see
+  // VarChar(32) tightened from default(191) for MySQL key-byte budget ? see
   // @@unique key-budget note below.
-  curriculum       String  @db.VarChar(32)
-  // Grade level — free-text since formats differ across curricula:
+  curriculum          String   @db.VarChar(32)
+  // Grade level ? free-text since formats differ across curricula:
   // CBSE/ICSE use 'Class 9', 'Class 10'; IB uses 'IB Year 1', 'IB Year 2';
   // Cambridge uses 'IGCSE Year 10', etc. VarChar(32) for key-byte budget.
-  grade            String  @db.VarChar(32)
-  // Subject — e.g. 'Geography', 'History', 'Biology', 'Physics'.
+  grade               String   @db.VarChar(32)
+  // Subject ? e.g. 'Geography', 'History', 'Biology', 'Physics'.
   // VarChar(64) for key-byte budget.
-  subject          String  @db.VarChar(64)
-  // Specific learning outcome the trip teaches (PC-3 — fine grain). Bounded
+  subject             String   @db.VarChar(64)
+  // Optional curriculum-library code / strand identifier from the board's own
+  // taxonomy, e.g. "CBSE-HIS-9-3" or an internal learning-outcome code.
+  learningOutcomeCode String?  @db.VarChar(64)
+  // Specific learning outcome the trip teaches (PC-3 ? fine grain). Bounded
   // VARCHAR (not Text) so it can participate in the composite @@unique below;
   // 300 chars is enough for a concise outcome statement like "Plate tectonics
   // + landform formation". Use fitRationale (@db.Text) for long-form notes.
-  // Tightened from 500 → 300 for MySQL key-byte budget (see @@unique below).
-  learningOutcome  String? @db.VarChar(300)
-  // PC-5 — optional FK to TMC's TravelTrip catalogue (TmcTrip). When the
+  learningOutcome     String?  @db.VarChar(300)
+  // PC-5 ? optional FK to TMC's TravelTrip catalogue (TmcTrip). When the
   // recommended destination exists as a trip template, link to it. Otherwise
   // leave null and use destinationLabel as a free-text fallback. FK omitted
   // here (Int? only, no @relation) to keep the model unbound from cascade
-  // semantics — the route layer resolves TmcTrip on read.
-  destinationId    Int?
-  // PC-5 — free-text destination fallback (e.g. "Italy + Iceland", "Mussoorie
+  // semantics ? the route layer resolves TmcTrip on read.
+  destinationId       Int?
+  // PC-5 ? free-text destination fallback (e.g. "Italy + Iceland", "Mussoorie
   // + Dehradun"). Required when destinationId is null.
-  destinationLabel String?
-  // PC-4 — human-judged 1-100 fit score for V1 (50 = no opinion yet).
+  destinationLabel    String?
+  // Normalized destination identity used for many-to-many uniqueness across
+  // academic years. Filled by the route layer from destinationId/label.
+  destinationKey      String   @default("") @db.VarChar(191)
+  // PC-4 ? human-judged 1-100 fit score for V1 (50 = no opinion yet).
   // Rule-based pre-filter scoring is Phase 2.
-  fitScore         Int?    @default(50)
+  fitScore            Int?     @default(50)
+  // Confidence carried over from AI / heuristic proposal generation or manual
+  // reviewer judgement. Nullable to preserve legacy rows verbatim.
+  confidenceScore     Int?     @default(50)
+  // Origin marker ? manual / heuristic / ai / imported. Keeps the review flow
+  // additive and auditable without changing the diagnostic engine contract.
+  mappingSource       String   @default("manual") @db.VarChar(32)
   // Advisor's free-text explanation of why this destination fits this outcome.
-  fitRationale     String? @db.Text
+  fitRationale        String?  @db.Text
   // Soft-disable a mapping without deleting (preserves history).
-  isActive         Boolean @default(true)
+  isActive            Boolean  @default(true)
+  // Review metadata populated when a proposal becomes an approved mapping.
+  approvedAt          DateTime?
+  approvedById        Int?
   // Authoring advisor (academic-team member or GS template author).
-  createdById      Int?
-  createdBy        User?   @relation("CurriculumMappingCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById         Int?
+  createdBy           User?    @relation("CurriculumMappingCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Block duplicate rows for the same (tenant, curriculum, grade, subject,
-  // outcome) combination — advisors should edit existing rows, not duplicate.
-  // Key-byte budget: 8 (Int) + 32*4 + 32*4 + 64*4 + 300*4 = 1720 bytes,
-  // well under MySQL's 3072-byte utf8mb4 limit. Tick #178's 500-char
-  // learningOutcome overflowed the budget (4300 bytes) — tick #179 triage.
-  @@unique([tenantId, curriculum, grade, subject, learningOutcome])
+  // Many-to-many support: the same learning outcome can now map to multiple
+  // destinations, versioned per academic year. destinationKey makes the tuple
+  // deterministic whether the row references a TmcTrip id or only a label.
+  @@unique([tenantId, academicYear, curriculum, grade, subject, learningOutcome, destinationKey])
   // Diagnostic-engine lookup path: "given a student's curriculum+grade+subject,
   // surface candidate destinations sorted by fitScore."
   @@index([curriculum, grade, subject])
-  @@index([tenantId, isActive])
+  @@index([tenantId, academicYear, isActive])
+}
+
+model TravelCurriculumProposal {
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int
+  academicYear        String?  @db.VarChar(32)
+  curriculum          String   @db.VarChar(32)
+  grade               String   @db.VarChar(32)
+  subject             String   @db.VarChar(64)
+  learningOutcomeCode String?  @db.VarChar(64)
+  learningOutcome     String   @db.VarChar(300)
+  destinationId       Int?
+  destinationLabel    String?
+  destinationKey      String   @default("") @db.VarChar(191)
+  confidenceScore     Int      @default(50)
+  fitScore            Int?     @default(50)
+  fitRationale        String?  @db.Text
+  proposalSource      String   @default("heuristic") @db.VarChar(32)
+  reviewStatus        String   @default("pending") @db.VarChar(32)
+  reviewNotes         String?  @db.Text
+  approvedMappingId   Int?
+  createdById         Int?
+  reviewedById        Int?
+  reviewedAt          DateTime?
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, academicYear, curriculum, grade, subject, learningOutcome, destinationKey])
+  @@index([tenantId, reviewStatus, confidenceScore])
+  @@index([tenantId, academicYear, curriculum, grade, subject])
 }
 
 model PatientTag {
@@ -8300,6 +8800,19 @@ model TravelCommissionProfile {
   tenantId    Int      @default(1)
   name        String // operator-facing label, e.g. "Standard 5%"
   subBrand    String? // optional sub-brand restriction (tmc/rfu/travelstall/visasure)
+  // Free-form travel category scope (e.g. "Umrah" / "Family" / "Visa").
+  // Nullable = applies across all categories.
+  category    String?
+  // Optional assignee scope. When set, this profile is intended for deals /
+  // contacts owned by that staff user (mirrors Contact.assignedToId).
+  agentUserId Int?
+  // Optional validity window. Null bounds mean open-ended.
+  validFrom   DateTime?
+  validTo     DateTime?
+  // Configurable commission release timing for the ledger surface.
+  // on_booking         -> release when the deal is won / booked.
+  // on_trip_completion -> release only after the trip completes.
+  releaseMode String   @default("on_booking")
   profileType String // flat_percent | tiered | per_pax_flat | hybrid
   profileJson String   @db.Text // JSON serialization of profile shape
   isActive    Boolean  @default(true)
@@ -8310,6 +8823,10 @@ model TravelCommissionProfile {
 
   @@index([tenantId])
   @@index([tenantId, subBrand])
+  @@index([tenantId, category])
+  @@index([tenantId, agentUserId])
+  @@index([tenantId, validFrom, validTo])
+  @@index([tenantId, releaseMode])
   @@index([tenantId, isActive])
 }
 
@@ -9076,4 +9593,136 @@ model StatusDailySnapshot {
 
   @@unique([componentId, date])
   @@index([componentId, date])
+}
+
+// Wellness QR Generator — events and their generated QR configurations.
+// Both tables are tenant-scoped and record the creating user. QrCode rows
+// cascade-delete with their parent QrEvent.
+model QrEvent {
+  id        Int      @id @default(autoincrement())
+  name      String
+  tenantId  Int      @default(1)
+  createdBy Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  qrs QrCode[]
+
+  @@index([tenantId, createdAt])
+}
+
+model QrCode {
+  id         Int     @id @default(autoincrement())
+  eventId    Int
+  event      QrEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name       String
+  text       String
+  size       Int
+  fgColor    String
+  bgColor    String
+  errorLevel String
+  tenantId   Int     @default(1)
+  createdBy  Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([eventId])
+  @@index([tenantId])
+}
+
+// Canonical verified passport/person identity used to link one traveller across
+// customer portal travellers, TMC trip participants, visa applications, ticket
+// prefill, and generated document packages. Passport scans remain in the
+// existing upload stores; this table stores text metadata only.
+model PassportIdentity {
+  id                       Int      @id @default(autoincrement())
+  tenantId                 Int      @default(1)
+  contactId                Int?
+  normalizedPassportNumber String?
+  passportNumber           String?
+  fullName                 String?
+  normalizedFullName       String?
+  dateOfBirth              DateTime?
+  phoneNormalized          String?
+  nationality              String?
+  passportExpiry           DateTime?
+  confidenceJson           String?  @db.Text
+  sourceType               String // customer_traveller | trip_participant | manual | backfill
+  sourceId                 Int
+  verifiedAt               DateTime?
+  verifiedById             Int?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact            Contact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  verifiedBy         User?               @relation("PassportIdentityVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  customerTravellers CustomerTraveller[]
+  tripParticipants   TripParticipant[]
+  visaApplications   VisaApplication[]
+
+  @@unique([tenantId, normalizedPassportNumber])
+  @@index([tenantId, contactId])
+  @@index([tenantId, normalizedFullName, dateOfBirth, phoneNormalized])
+  @@index([verifiedById])
+}
+
+// ── Travel CRM — RAG Knowledge Base sidecar ─────────────────────────────────
+// Metadata for indexed Drive PDFs and LLM-generated RAG reports. These
+// tables are additive to the existing diagnostic engine and do NOT alter
+// the TravelDiagnostic model. They are scoped per tenant and sub-brand.
+// No foreign keys to existing tables are declared, so this stays a true
+// sidecar that can be dropped without affecting core CRM data.
+
+model TravelKnowledgeBaseFile {
+  id            Int      @id @default(autoincrement())
+  tenantId      Int      @default(1)
+  subBrand      String
+  driveFileId   String
+  driveViewLink String
+  fileName      String
+  folderPath    String   @db.Text
+  fileSize      Int?
+  mimeType      String
+  sha256        String
+  indexedAt     DateTime @default(now())
+  syncJobId     Int?
+  status        String   @default("active") // active | failed | deleted
+  failureReason String?  @db.Text
+
+  @@unique([tenantId, subBrand, driveFileId])
+  @@index([tenantId, subBrand, status])
+  @@index([tenantId, syncJobId])
+}
+
+model TravelKnowledgeBaseSyncJob {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int      @default(1)
+  rootFolderId    String
+  status          String   @default("running") // running | completed | failed
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  filesDiscovered Int      @default(0)
+  filesIndexed    Int      @default(0)
+  filesFailed     Int      @default(0)
+  errorMessage    String?  @db.Text
+
+  @@index([tenantId, status])
+  @@index([tenantId, startedAt])
+}
+
+model TravelDiagnosticRagResult {
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int      @default(1)
+  diagnosticId        Int      @unique
+  subBrand            String
+  readinessScore      Int?     // 0-10 score generated by the LLM
+  recommendationsJson String   @db.Text // structured trip/place/learnings payload
+  topChunkIdsJson     String?  @db.Text // Qdrant point IDs used for audit
+  generatedAt         DateTime @default(now())
+  model               String?
+  stub                Boolean  @default(false)
+
+  @@index([tenantId, subBrand])
+  @@index([tenantId, diagnosticId])
 }

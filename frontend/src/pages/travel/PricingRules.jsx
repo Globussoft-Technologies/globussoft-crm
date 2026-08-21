@@ -29,13 +29,13 @@
 import { useContext, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  CalendarRange, ChevronLeft, Download, Edit2, Filter,
-  Percent, Plus, Save, ToggleLeft, ToggleRight, Trash2, Upload, X,
+  CalendarRange, ChevronLeft, Upload, Download, Edit2, Filter,
+  Percent, Plus, Save, ToggleLeft, ToggleRight, Trash2, X,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import { AuthContext } from "../../App";
-import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
   accessibleSubBrands,
@@ -88,6 +88,47 @@ async function uploadCsv(notify, url, file, onDone) {
   onDone?.();
 }
 
+function downloadBlob(blob, filename) {
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objUrl);
+}
+
+function csvCell(value) {
+  const str = value == null ? "" : String(value);
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function downloadCsvTemplate(filename, headers, rows) {
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+  downloadBlob(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }), filename);
+}
+
+async function downloadXlsxTemplate(filename, sheetName, headers, rows) {
+  const XLSX = await import("xlsx");
+  const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+  const buffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), filename);
+}
+
+const SEASON_TEMPLATE_HEADERS = ["subBrand", "seasonName", "startDate", "endDate", "multiplier"];
+const SEASON_TEMPLATE_ROWS = [
+  ["tmc", "summer-peak", "2026-05-01", "2026-06-15", "1.25"],
+  ["rfu", "ramadan-peak", "2026-03-01", "2026-04-15", "2.00"],
+];
+const MARKUP_TEMPLATE_HEADERS = ["subBrand", "scope", "matchKeyJson", "markupPct", "markupFlat", "priority", "isActive"];
+const MARKUP_TEMPLATE_ROWS = [
+  ["rfu", "hotel", '{"destination":"Dubai"}', "0.15", "", "10", "true"],
+  ["tmc", "transport", '{"vehicleType":"coach"}', "", "500", "20", "true"],
+];
+
 const SUB_BRANDS = [
   { value: "tmc", label: "TMC" },
   { value: "rfu", label: "RFU" },
@@ -100,6 +141,7 @@ const SCOPES = [
   { value: "transport", label: "Transport" },
   { value: "package", label: "Package" },
 ];
+const PAGE_SIZE = 50;
 
 // Render a date column as YYYY-MM-DD without the time noise.
 function fmtDate(d) {
@@ -111,7 +153,7 @@ function fmtDate(d) {
 
 export default function PricingRules() {
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
@@ -145,24 +187,84 @@ function SeasonsSection() {
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [seasons, setSeasons] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [filterSubBrand, setFilterSubBrand] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const blankForm = { subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), seasonName: "", startDate: "", endDate: "", multiplier: "" };
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
+  const seasonsRef = useRef([]);
+  const offsetRef = useRef(0);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
 
-  const load = () => {
-    setLoading(true);
+  const load = ({ reset = true } = {}) => {
+    if (reset) {
+      offsetRef.current = 0;
+      seasonsRef.current = [];
+      hasMoreRef.current = true;
+      setSeasons([]);
+      setHasMore(true);
+      setLoading(true);
+      loadingRef.current = true;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+      loadingMoreRef.current = true;
+    }
     const qs = new URLSearchParams();
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    const startOffset = reset ? 0 : offsetRef.current;
+    if (startOffset > 0) {
+      qs.set("limit", String(PAGE_SIZE));
+      qs.set("offset", String(startOffset));
+    }
     fetchApi(`/api/travel/seasons?${qs.toString()}`)
-      .then((res) => setSeasons(Array.isArray(res?.seasons) ? res.seasons : []))
-      .catch((e) => { notify.error(e?.body?.error || "Failed to load seasons"); setSeasons([]); })
-      .finally(() => setLoading(false));
+      .then((res) => {
+        const rows = Array.isArray(res?.seasons) ? res.seasons : [];
+        const nextRows = reset ? rows : [...seasonsRef.current, ...rows];
+        const totalRows = Number.isFinite(res?.total) ? res.total : nextRows.length;
+        seasonsRef.current = nextRows;
+        offsetRef.current = startOffset + rows.length;
+        hasMoreRef.current = offsetRef.current < totalRows;
+        setSeasons(nextRows);
+        setTotal(totalRows);
+        setHasMore(hasMoreRef.current);
+      })
+      .catch((e) => {
+        if (reset) {
+          seasonsRef.current = [];
+          offsetRef.current = 0;
+          hasMoreRef.current = false;
+          setSeasons([]);
+          setTotal(0);
+          setHasMore(false);
+        }
+        notify.error(e?.body?.error || "Failed to load seasons");
+      })
+      .finally(() => {
+        if (reset) {
+          setLoading(false);
+          loadingRef.current = false;
+        } else {
+          setLoadingMore(false);
+          loadingMoreRef.current = false;
+        }
+      });
   };
-  useEffect(load, [filterSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load({ reset: true }); }, [filterSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleTableScroll = (e) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) {
+      load({ reset: false });
+    }
+  };
 
   const startEdit = (s) => {
     setEditingId(s.id);
@@ -227,6 +329,20 @@ function SeasonsSection() {
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     return downloadCsv(notify, `/api/travel/seasons/export.csv?${qs.toString()}`, "travel-seasons.csv");
   };
+  const downloadSeasonTemplate = async (format) => {
+    try {
+      if (format === "xlsx") {
+        await downloadXlsxTemplate("travel-seasons-template.xlsx", "Seasons", SEASON_TEMPLATE_HEADERS, SEASON_TEMPLATE_ROWS);
+      } else {
+        downloadCsvTemplate("travel-seasons-template.csv", SEASON_TEMPLATE_HEADERS, SEASON_TEMPLATE_ROWS);
+      }
+      notify.success(`Downloaded season template (${format.toUpperCase()})`);
+    } catch (e) {
+      notify.error(e?.message || "Failed to download season template");
+    }
+  };
+
+
   const importCsv = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -245,11 +361,17 @@ function SeasonsSection() {
         <h2 style={sectionTitle}>
           <CalendarRange size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Seasons
-          <span style={countBadge}>{seasons.length}</span>
+            <CountBadge count={total || seasons.length} title={`${(total || seasons.length).toLocaleString()} seasons`} />
         </h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
+          </button>
+          <button type="button" onClick={() => downloadSeasonTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} /> Download CSV Template
+          </button>
+          <button type="button" onClick={() => downloadSeasonTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} /> Download Excel Template
           </button>
           <button
             type="button"
@@ -257,7 +379,7 @@ function SeasonsSection() {
             style={secondaryBtn}
             title="Bulk-upload seasons (CSV or Excel). Columns: subBrand, seasonName, startDate, endDate, multiplier."
           >
-            <Upload size={14} /> Import CSV/Excel
+            <Download size={14} /> Import CSV/Excel
           </button>
           <input
             ref={fileRef}
@@ -352,14 +474,21 @@ function SeasonsSection() {
         </div>
       )}
 
-      <div style={tableWrap}>
-        {loading ? (
+      <div style={tableWrap} onScroll={handleTableScroll}>
+        {loading && seasons.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : seasons.length === 0 ? (
           <div style={empty}>No seasons yet. Add one above.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={tableStyle}>
+            <colgroup>
+              <col style={{ width: "18%" }} />
+              <col style={{ width: "32%" }} />
+              <col style={{ width: "16%" }} />
+              <col style={{ width: "16%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "8%" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
@@ -378,7 +507,7 @@ function SeasonsSection() {
                   <td style={td}>{fmtDate(s.startDate)}</td>
                   <td style={td}>{fmtDate(s.endDate)}</td>
                   <td style={td}>{s.multiplier != null ? `×${Number(s.multiplier).toFixed(2)}` : <span style={{ color: "var(--text-secondary)" }}>—</span>}</td>
-                  <td style={td}>
+                  <td style={actionsTd}>
                     <button type="button" onClick={() => startEdit(s)} style={iconBtn} aria-label={`Edit ${s.seasonName}`}>
                       <Edit2 size={16} />
                     </button>
@@ -389,10 +518,24 @@ function SeasonsSection() {
                 </tr>
               ))}
             </tbody>
+            {loadingMore && (
+              <tfoot>
+                <tr>
+                  <td colSpan={6} style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}>
+                    Loading more&hellip;
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
-          </TopScrollSync>
         )}
       </div>
+      {total > 0 && (
+        <div style={tableCount}>
+          Showing {Math.min(seasons.length, total).toLocaleString()} of {total.toLocaleString()}
+          {!hasMore ? " - end of table" : ""}
+        </div>
+      )}
     </section>
   );
 }
@@ -408,53 +551,150 @@ function MarkupRulesSection() {
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [rules, setRules] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [filterSubBrand, setFilterSubBrand] = useState("");
   const [filterScope, setFilterScope] = useState("");
   const [filterActive, setFilterActive] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const blankForm = {
-    subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), scope: "hotel", matchKeyJson: "{}",
-    markupType: "pct", markupValue: "", priority: "100",
+    subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), scope: "hotel", matchField: "city", matchValue: "",
+    markupType: "pct", markupValue: "", priority: "",
   };
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
+  const [suppliers, setSuppliers] = useState([]);
+  const rulesRef = useRef([]);
+  const offsetRef = useRef(0);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
 
-  const load = () => {
-    setLoading(true);
+  // Fetch supplier names when the markup-rule form is open and the match
+  // field is "supplier". Used to populate the match-value dropdown.
+  useEffect(() => {
+    if (!adding && editingId == null) return;
+    if (form.matchField !== "supplier" || !form.subBrand) {
+      setSuppliers([]);
+      return;
+    }
+    let cancelled = false;
+    fetchApi(`/api/travel/suppliers?fields=summary&subBrand=${encodeURIComponent(form.subBrand)}`)
+      .then((res) => {
+        if (!cancelled) setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          notify.error(e?.body?.error || "Failed to load suppliers");
+          setSuppliers([]);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [adding, editingId, form.matchField, form.subBrand]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const load = ({ reset = true } = {}) => {
+    if (reset) {
+      offsetRef.current = 0;
+      rulesRef.current = [];
+      hasMoreRef.current = true;
+      setRules([]);
+      setHasMore(true);
+      setLoading(true);
+      loadingRef.current = true;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+      loadingMoreRef.current = true;
+    }
     const qs = new URLSearchParams();
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     if (filterScope) qs.set("scope", filterScope);
     if (filterActive) qs.set("active", filterActive);
+    const startOffset = reset ? 0 : offsetRef.current;
+    if (startOffset > 0) {
+      qs.set("limit", String(PAGE_SIZE));
+      qs.set("offset", String(startOffset));
+    }
     fetchApi(`/api/travel/markup-rules?${qs.toString()}`)
-      .then((res) => setRules(Array.isArray(res?.rules) ? res.rules : []))
-      .catch((e) => { notify.error(e?.body?.error || "Failed to load markup rules"); setRules([]); })
-      .finally(() => setLoading(false));
+      .then((res) => {
+        const rows = Array.isArray(res?.rules) ? res.rules : [];
+        const nextRows = reset ? rows : [...rulesRef.current, ...rows];
+        const totalRows = Number.isFinite(res?.total) ? res.total : nextRows.length;
+        rulesRef.current = nextRows;
+        offsetRef.current = startOffset + rows.length;
+        hasMoreRef.current = offsetRef.current < totalRows;
+        setRules(nextRows);
+        setTotal(totalRows);
+        setHasMore(hasMoreRef.current);
+      })
+      .catch((e) => {
+        if (reset) {
+          rulesRef.current = [];
+          offsetRef.current = 0;
+          hasMoreRef.current = false;
+          setRules([]);
+          setTotal(0);
+          setHasMore(false);
+        }
+        notify.error(e?.body?.error || "Failed to load markup rules");
+      })
+      .finally(() => {
+        if (reset) {
+          setLoading(false);
+          loadingRef.current = false;
+        } else {
+          setLoadingMore(false);
+          loadingMoreRef.current = false;
+        }
+      });
   };
-  useEffect(load, [filterSubBrand, filterScope, filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load({ reset: true }); }, [filterSubBrand, filterScope, filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleTableScroll = (e) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) {
+      load({ reset: false });
+    }
+  };
+
+  const parseMatchKey = (json) => {
+    try {
+      const obj = JSON.parse(json || "{}");
+      const keys = Object.keys(obj);
+      if (keys.length === 1) {
+        const key = keys[0];
+        return { matchField: key, matchValue: String(obj[key]) };
+      }
+    } catch { /* fall through */ }
+    return { matchField: "", matchValue: "" };
+  };
 
   const startEdit = (r) => {
     setEditingId(r.id);
     setAdding(false);
+    const { matchField, matchValue } = parseMatchKey(r.matchKeyJson);
     setForm({
       subBrand: r.subBrand,
       scope: r.scope,
-      matchKeyJson: r.matchKeyJson || "{}",
+      matchField,
+      matchValue,
       markupType: r.markupPct != null ? "pct" : "flat",
       markupValue: r.markupPct != null ? String(r.markupPct) : (r.markupFlat != null ? String(r.markupFlat) : ""),
-      priority: String(r.priority ?? 100),
+      priority: String(r.priority ?? ""),
     });
   };
   const cancelEdit = () => { setEditingId(null); setAdding(false); setForm(blankForm); };
 
   const save = async () => {
-    if (!form.matchKeyJson.trim() || !form.markupValue) {
-      notify.error("matchKeyJson and markup value required");
+    const matchField = (form.matchField || "").trim();
+    const matchValue = (form.matchValue || "").trim();
+    if (!matchField || !matchValue || !form.markupValue) {
+      notify.error("match key and markup value required");
       return;
     }
-    try { JSON.parse(form.matchKeyJson); }
-    catch { notify.error("matchKeyJson is not valid JSON"); return; }
 
     const n = Number(form.markupValue);
     if (!Number.isFinite(n) || n < 0) {
@@ -462,9 +702,11 @@ function MarkupRulesSection() {
       return;
     }
 
+    const matchKeyJson = JSON.stringify({ [matchField]: matchValue });
+
     const body = {
       scope: form.scope,
-      matchKeyJson: form.matchKeyJson,
+      matchKeyJson,
       priority: parseInt(form.priority || "100", 10),
       // backend enforces "exactly one of markupPct / markupFlat" — send the
       // chosen field set + the other explicitly nulled so editing one to the
@@ -506,7 +748,13 @@ function MarkupRulesSection() {
   };
 
   const remove = async (r) => {
-    if (!window.confirm(`Delete markup rule (${r.scope} / ${r.subBrand}, priority ${r.priority})?`)) return;
+    const ok = await notify.confirm({
+      title: "Delete markup rule",
+      message: `Delete markup rule (${r.scope} / ${r.subBrand}, priority ${r.priority})?`,
+      confirmText: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/travel/markup-rules/${r.id}`, { method: "DELETE" });
       notify.success("Markup rule deleted");
@@ -522,6 +770,16 @@ function MarkupRulesSection() {
     return "—";
   };
 
+  const formatMatchKey = (json) => {
+    const { matchField, matchValue } = parseMatchKey(json);
+    if (matchField) return `${matchField}: ${matchValue}`;
+    try {
+      const obj = JSON.parse(json || "{}");
+      if (Object.keys(obj).length === 0) return "{}";
+    } catch { /* fall through */ }
+    return json || "";
+  };
+
   const showForm = adding || editingId != null;
 
   const exportCsv = () => {
@@ -529,6 +787,18 @@ function MarkupRulesSection() {
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     if (filterScope) qs.set("scope", filterScope);
     return downloadCsv(notify, `/api/travel/markup-rules/export.csv?${qs.toString()}`, "travel-markup-rules.csv");
+  };
+  const downloadMarkupTemplate = async (format) => {
+    try {
+      if (format === "xlsx") {
+        await downloadXlsxTemplate("travel-markup-rules-template.xlsx", "Markup Rules", MARKUP_TEMPLATE_HEADERS, MARKUP_TEMPLATE_ROWS);
+      } else {
+        downloadCsvTemplate("travel-markup-rules-template.csv", MARKUP_TEMPLATE_HEADERS, MARKUP_TEMPLATE_ROWS);
+      }
+      notify.success(`Downloaded markup template (${format.toUpperCase()})`);
+    } catch (e) {
+      notify.error(e?.message || "Failed to download markup template");
+    }
   };
   const importCsv = async (e) => {
     const file = e.target.files?.[0];
@@ -548,11 +818,17 @@ function MarkupRulesSection() {
         <h2 style={sectionTitle}>
           <Percent size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Markup Rules
-          <span style={countBadge}>{rules.length}</span>
+            <CountBadge count={total || rules.length} title={`${(total || rules.length).toLocaleString()} markup rules`} />
         </h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
+          </button>
+          <button type="button" onClick={() => downloadMarkupTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} /> Download CSV Template
+          </button>
+          <button type="button" onClick={() => downloadMarkupTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} /> Download Excel Template
           </button>
           <button
             type="button"
@@ -560,7 +836,7 @@ function MarkupRulesSection() {
             style={secondaryBtn}
             title="Bulk-upload markup rules (CSV or Excel). Columns: subBrand, scope, matchKeyJson, markupPct OR markupFlat, priority, isActive."
           >
-            <Upload size={14} /> Import CSV/Excel
+            <Download size={14} /> Import CSV/Excel
           </button>
           <input
             ref={fileRef}
@@ -655,14 +931,39 @@ function MarkupRulesSection() {
               aria-label="Priority"
             />
           </div>
-          <textarea
-            placeholder='matchKeyJson — e.g. {"city":"Makkah"} or {"route":"DEL-JED"}'
-            value={form.matchKeyJson}
-            onChange={(e) => setForm({ ...form, matchKeyJson: e.target.value })}
-            style={{ ...input, marginTop: 8, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, minHeight: 60 }}
-            aria-label="Match key JSON"
-            spellCheck={false}
-          />
+          <div style={{ display: "grid", gap: 8, marginTop: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
+            <select
+              value={form.matchField}
+              onChange={(e) => setForm({ ...form, matchField: e.target.value, matchValue: "" })}
+              style={input}
+              aria-label="Match field"
+            >
+              <option value="city">City</option>
+              <option value="route">Route</option>
+              <option value="supplier">Supplier</option>
+              <option value="destination">Destination</option>
+              <option value="vehicleType">Vehicle type</option>
+            </select>
+            {form.matchField === "supplier" ? (
+              <select
+                value={form.matchValue}
+                onChange={(e) => setForm({ ...form, matchValue: e.target.value })}
+                style={input}
+                aria-label="Match supplier"
+              >
+                <option value="">Select supplier</option>
+                {suppliers.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+            ) : (
+              <input
+                placeholder="Match value"
+                value={form.matchValue}
+                onChange={(e) => setForm({ ...form, matchValue: e.target.value })}
+                style={input}
+                aria-label="Match value"
+              />
+            )}
+          </div>
           <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
             <button type="button" onClick={save} style={primaryBtn}>
               <Save size={14} /> {editingId ? "Save changes" : "Create"}
@@ -674,14 +975,22 @@ function MarkupRulesSection() {
         </div>
       )}
 
-      <div style={tableWrap}>
-        {loading ? (
+      <div style={tableWrap} onScroll={handleTableScroll}>
+        {loading && rules.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : rules.length === 0 ? (
           <div style={empty}>No markup rules yet. Add one above.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={tableStyle}>
+            <colgroup>
+              <col style={{ width: "15%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "31%" }} />
+              <col style={{ width: "13%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "10%" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
@@ -698,7 +1007,7 @@ function MarkupRulesSection() {
                 <tr key={r.id} style={{ ...trStyle, opacity: r.isActive ? 1 : 0.5 }}>
                   <td style={td}><span style={brandBadge}>{r.subBrand}</span></td>
                   <td style={td}>{r.scope}</td>
-                  <td style={td}><code style={{ fontSize: 11 }}>{r.matchKeyJson}</code></td>
+                  <td style={td}>{formatMatchKey(r.matchKeyJson)}</td>
                   <td style={td}>{formatMarkup(r)}</td>
                   <td style={td}>{r.priority}</td>
                   <td style={td}>
@@ -708,7 +1017,7 @@ function MarkupRulesSection() {
                         : <ToggleLeft size={20} />}
                     </button>
                   </td>
-                  <td style={td}>
+                  <td style={actionsTd}>
                     <button type="button" onClick={() => startEdit(r)} style={iconBtn} aria-label={`Edit rule ${r.id}`}>
                       <Edit2 size={16} />
                     </button>
@@ -719,10 +1028,24 @@ function MarkupRulesSection() {
                 </tr>
               ))}
             </tbody>
+            {loadingMore && (
+              <tfoot>
+                <tr>
+                  <td colSpan={7} style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}>
+                    Loading more&hellip;
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
-          </TopScrollSync>
         )}
       </div>
+      {total > 0 && (
+        <div style={tableCount}>
+          Showing {Math.min(rules.length, total).toLocaleString()} of {total.toLocaleString()}
+          {!hasMore ? " - end of table" : ""}
+        </div>
+      )}
     </section>
   );
 }
@@ -739,11 +1062,6 @@ const sectionHeader = {
   display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12,
 };
 const sectionTitle = { margin: 0, fontSize: 18, display: "flex", alignItems: "center" };
-const countBadge = {
-  marginLeft: 8, padding: "2px 8px", borderRadius: 10,
-  fontSize: 11, fontWeight: 600,
-  background: "var(--subtle-bg)", color: "var(--text-secondary)",
-};
 const filterRow = {
   display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center",
   padding: 12, marginBottom: 12,
@@ -756,7 +1074,20 @@ const formBox = {
 };
 const tableWrap = {
   background: "var(--surface-color)", borderRadius: 8,
-  border: "1px solid var(--border-color)", overflow: "visible",
+  border: "1px solid var(--border-color)", overflowY: "auto", overflowX: "hidden",
+  height: "calc((100vh - 360px) / 2)",
+  minHeight: 320,
+  maxHeight: 460,
+};
+const tableStyle = {
+  width: "100%",
+  tableLayout: "fixed",
+  borderCollapse: "collapse",
+};
+const tableCount = {
+  marginTop: 8,
+  color: "var(--text-secondary)",
+  fontSize: 13,
 };
 const selectStyle = {
   padding: "6px 10px", borderRadius: 6,
@@ -774,9 +1105,15 @@ const th = {
   textAlign: "left", padding: "10px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
+  background: "var(--modal-bg, var(--bg-color))",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
+  overflowWrap: "anywhere",
 };
-const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
+const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)", overflowWrap: "anywhere" };
+const actionsTd = { ...td, whiteSpace: "nowrap" };
 const trStyle = { borderTop: "1px solid var(--border-light)" };
 const brandBadge = {
   padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,

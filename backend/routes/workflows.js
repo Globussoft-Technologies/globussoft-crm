@@ -1,13 +1,93 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
 const { ensureEnum } = require("../lib/validators");
+const { resolveConfiguredWebhookUrl } = require("../lib/webhookDelivery");
+const { encryptCredential, looksLikeMaskedSentinel, maskCredential } = require("../lib/credentialMasking");
 
 const router = express.Router();
+
+function parseTargetState(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object") return structuredClone(raw);
+  try { return JSON.parse(raw); } catch (_error) { throw new Error("targetState is not valid JSON"); }
+}
+
+function webhookConfigs(target, actionType) {
+  if (Array.isArray(target.actions)) {
+    return target.actions.flatMap((action, index) => action?.type === "send_webhook" ? [{ config: action.config || {}, index }] : []);
+  }
+  return actionType === "send_webhook" ? [{ config: target, index: null }] : [];
+}
+
+function validateWebhookConfig(config) {
+  resolveConfiguredWebhookUrl(config?.url);
+  if (!["POST", "PUT", "PATCH"].includes(String(config?.method || "POST").toUpperCase())) {
+    throw new Error("Webhook method must be POST, PUT, or PATCH");
+  }
+  if (!["json", "form", "xml"].includes(String(config?.encoding || "json").toLowerCase())) {
+    throw new Error("Webhook encoding must be JSON, form, or XML");
+  }
+  const headers = Array.isArray(config?.headers) ? config.headers : [];
+  if (headers.length > 20) throw new Error("A webhook can have at most 20 custom headers");
+  for (const header of headers) {
+    const key = String(header?.key || "").trim();
+    if (key && !/^[A-Za-z0-9-]+$/.test(key)) throw new Error(`Invalid webhook header name: ${key}`);
+    if (["host", "content-length", "connection", "transfer-encoding"].includes(key.toLowerCase())) {
+      throw new Error(`Webhook header ${key} is managed by the CRM`);
+    }
+  }
+  if (config?.bodyMode === "advanced" && typeof config.bodyTemplate === "string" && config.bodyTemplate.trim()) {
+    try { JSON.parse(config.bodyTemplate); } catch (_error) { throw new Error("Advanced webhook body must be valid JSON"); }
+  }
+}
+
+function secureWebhookConfig(config, previousConfig = {}) {
+  validateWebhookConfig(config);
+  const previousHeaders = Array.isArray(previousConfig.headers) ? previousConfig.headers : [];
+  return {
+    ...config,
+    method: String(config.method || "POST").toUpperCase(),
+    encoding: String(config.encoding || "json").toLowerCase(),
+    headers: (Array.isArray(config.headers) ? config.headers : []).map((header) => {
+      if (!header?.secret) return header;
+      const previous = previousHeaders.find((item) => String(item?.key || "").toLowerCase() === String(header.key || "").toLowerCase());
+      const value = looksLikeMaskedSentinel(header.value) && previous ? previous.value : encryptCredential(String(header.value || ""));
+      return { ...header, value };
+    }),
+  };
+}
+
+function prepareTargetState(raw, actionType, previousRaw) {
+  const target = parseTargetState(raw);
+  const previous = parseTargetState(previousRaw);
+  if (Array.isArray(target.actions)) {
+    target.actions = target.actions.map((action, index) => action?.type === "send_webhook"
+      ? { ...action, config: secureWebhookConfig(action.config || {}, previous.actions?.[index]?.config || {}) }
+      : action);
+  } else if (actionType === "send_webhook") {
+    return secureWebhookConfig(target, previous);
+  }
+  return target;
+}
+
+function maskWorkflowSecrets(rule) {
+  if (!rule?.targetState) return rule;
+  let target;
+  try { target = parseTargetState(rule.targetState); } catch (_error) { return rule; }
+  for (const { config } of webhookConfigs(target, rule.actionType)) {
+    if (!Array.isArray(config.headers)) continue;
+    config.headers = config.headers.map((header) => header?.secret
+      ? { ...header, value: maskCredential(header.value) || "****" }
+      : header);
+  }
+  return { ...rule, targetState: JSON.stringify(target) };
+}
 
 // Supported trigger types
 const TRIGGER_TYPES = [
   { value: "contact.created", label: "Contact Created", description: "Fires when a new contact is added" },
   { value: "contact.updated", label: "Contact Updated", description: "Fires when a contact is modified" },
+  { value: "contact.created_or_updated", label: "Contact Created or Updated", description: "Fires when a contact is added or modified" },
   { value: "deal.created", label: "Deal Created", description: "Fires when a new deal is created" },
   { value: "deal.updated", label: "Deal Updated", description: "Fires whenever a deal is updated via PUT /api/deals/:id" },
   { value: "deal.stage_changed", label: "Deal Stage Changed", description: "Fires when a deal moves pipeline stages" },
@@ -23,6 +103,7 @@ const TRIGGER_TYPES = [
   { value: "invoice.refunded", label: "Invoice Refunded", description: "Fires when a PAID invoice is refunded" },
   { value: "invoice.overdue", label: "Invoice Overdue", description: "Fires when an invoice passes its due date" },
   { value: "payment.collected", label: "Payment Collected", description: "Fires when payment is captured (gateway success or manual mark-paid)" },
+  { value: "task.created", label: "Task Created", description: "Fires when a task is created" },
   { value: "task.completed", label: "Task Completed", description: "Fires when a task is marked complete" },
   { value: "lead.converted", label: "Lead Converted", description: "Fires when a lead becomes a customer" },
   // PRD Gap §13 wave-6a — wallet / cashback / gift-card / membership / attendance.
@@ -96,7 +177,7 @@ router.get("/history", async (req, res) => {
       where: {
         tenantId: req.user.tenantId,
         entity: "AutomationRule",
-        action: "WORKFLOW",
+        action: { in: ["WORKFLOW", "WORKFLOW_FAILED"] },
       },
       orderBy: { createdAt: "desc" },
       take: limit,
@@ -107,14 +188,14 @@ router.get("/history", async (req, res) => {
       where: {
         tenantId: req.user.tenantId,
         entity: "AutomationRule",
-        action: "WORKFLOW",
+        action: { in: ["WORKFLOW", "WORKFLOW_FAILED"] },
       },
     });
 
     res.json({ logs, total, limit, offset });
   } catch (error) {
     console.error("[Workflows] History error:", error.message);
-    res.status(500).json({ error: "Failed to fetch workflow history" });
+    res.status(500).json({ error: "Failed to fetch workflow history", code: "WORKFLOW_HISTORY_FAILED" });
   }
 });
 
@@ -145,15 +226,100 @@ router.get("/", async (req, res) => {
     const findArgs = { where: { tenantId: req.user.tenantId } };
     if (isSummary) findArgs.select = slimSelect;
     const rules = await prisma.automationRule.findMany(findArgs);
-    res.json(rules);
-  } catch (_error) {
-    res.status(500).json({ error: "Failed to fetch workflows" });
+    res.json(isSummary ? rules : rules.map(maskWorkflowSecrets));
+  } catch (error) {
+    console.error("[Workflows] List error:", error.message);
+    res.status(500).json({ error: "Failed to fetch workflows", code: "WORKFLOW_LIST_FAILED" });
   }
 });
 
 // GET /:id — fetch a single automation rule by id (tenant-scoped).
 // #418: brings workflows in line with sequences/contacts/deals/etc., where
 // every resource exposes a direct GET /:id rather than forcing a list-scan.
+// PUT /order - persist the execution order for the current tenant.
+// The order is stored inside targetState to avoid changing the existing schema.
+router.put("/order", async (req, res) => {
+  try {
+    const workflowIds = req.body?.workflowIds;
+    if (!Array.isArray(workflowIds) || workflowIds.length === 0 || workflowIds.some((id) => !Number.isInteger(Number(id)) || Number(id) < 1)) {
+      return res.status(400).json({ error: "workflowIds must be a non-empty array of positive integers" });
+    }
+    const ids = workflowIds.map((id) => Number(id));
+    if (new Set(ids).size !== ids.length) return res.status(400).json({ error: "workflowIds must not contain duplicates" });
+    const rules = await prisma.automationRule.findMany({ where: { tenantId: req.user.tenantId } });
+    if (rules.length !== ids.length || rules.some((rule) => !ids.includes(rule.id))) {
+      return res.status(400).json({ error: "workflowIds must include every workflow in the tenant" });
+    }
+    await prisma.$transaction(ids.map((id, order) => {
+      const rule = rules.find((item) => item.id === id);
+      let targetState = {};
+      try { targetState = rule.targetState ? JSON.parse(rule.targetState) : {}; } catch (_error) { targetState = {}; }
+      return prisma.automationRule.update({ where: { id: rule.id }, data: { targetState: JSON.stringify({ ...targetState, order }) } });
+    }));
+    res.json({ success: true, workflowIds: ids });
+  } catch (error) {
+    console.error("[Workflows] Order update error:", error.message);
+    res.status(500).json({ error: "Failed to save workflow order", code: "WORKFLOW_ORDER_FAILED" });
+  }
+});
+
+// GET /stats/actions - successful action counts per workflow for the last seven days.
+router.get("/stats/actions", async (req, res) => {
+  try {
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const grouped = await prisma.auditLog.groupBy({
+      by: ["entityId"],
+      where: {
+        tenantId: req.user.tenantId,
+        entity: "AutomationRule",
+        action: "WORKFLOW",
+        createdAt: { gte: since },
+      },
+      _count: { _all: true },
+    });
+    res.json(Object.fromEntries(grouped.map((item) => [String(item.entityId), item._count._all])));
+  } catch (error) {
+    console.error("[Workflows] Stats error:", error.message);
+    res.status(500).json({ error: "Failed to fetch workflow statistics", code: "WORKFLOW_STATS_FAILED" });
+  }
+});
+
+// POST /test-webhook - test settings before saving a workflow.
+router.post("/test-webhook", async (req, res) => {
+  try {
+    let config = req.body?.config || {};
+    const workflowId = Number(req.body?.workflowId);
+    if (Number.isInteger(workflowId) && workflowId > 0) {
+      const existing = await prisma.automationRule.findFirst({ where: { id: workflowId, tenantId: req.user.tenantId } });
+      if (!existing) return res.status(404).json({ error: "Workflow not found" });
+      const previousTarget = parseTargetState(existing.targetState);
+      const previousConfig = webhookConfigs(previousTarget, existing.actionType)[0]?.config || {};
+      config = secureWebhookConfig(config, previousConfig);
+    } else {
+      validateWebhookConfig(config);
+    }
+    const { deliverConfiguredWebhook } = require("../lib/webhookDelivery");
+    const { resolveTenantWebhookSecret } = require("../lib/webhookEntitlement");
+    const { secret } = await resolveTenantWebhookSecret(req.user.tenantId);
+    const payload = req.body?.payload || {
+      contactId: 0,
+      name: "Workflow test lead",
+      email: req.user.email || "test@example.com",
+      phone: "",
+      status: "Test",
+      source: "Meta",
+      tags: ["TEST"],
+      tenantId: req.user.tenantId,
+      _test: true,
+    };
+    const result = await deliverConfiguredWebhook(config, req.body?.event || "contact.updated", payload, req.user.tenantId, secret);
+    res.json({ success: true, result });
+  } catch (error) {
+    const status = /invalid|must|cannot|at most|valid JSON|required/i.test(error.message) ? 400 : 502;
+    res.status(status).json({ error: error.message, result: error.webhookResult });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -164,11 +330,26 @@ router.get("/:id", async (req, res) => {
       where: { id, tenantId: req.user.tenantId },
     });
     if (!wf) return res.status(404).json({ error: "Workflow not found" });
-    res.json(wf);
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to fetch workflow" });
+    res.json(maskWorkflowSecrets(wf));
+  } catch (error) {
+    console.error("[Workflows] Fetch error:", error.message);
+    res.status(500).json({ error: "Failed to fetch workflow", code: "WORKFLOW_FETCH_FAILED" });
   }
 });
+
+// Prisma P2000 = "value too long for the column". This used to reach the caller
+// as a bare HTTP 500: AutomationRule.targetState was varchar(191) while the
+// builder writes the whole workflow JSON into it, so every non-trivial save
+// failed with an untraceable "something went wrong" toast. targetState is now
+// @db.Text, but `name` is still varchar(191) — surface that class of failure as
+// a 400 the user can actually act on instead of a generic server error.
+function writeFailure(res, error, fallbackMessage, fallbackCode) {
+  if (error?.code === "P2000") {
+    const column = error?.meta?.column_name || error?.meta?.target || "a field";
+    return res.status(400).json({ error: `Value too long for ${column} — please shorten it.`, code: "VALUE_TOO_LONG" });
+  }
+  return res.status(500).json({ error: fallbackMessage, code: fallbackCode });
+}
 
 // Helper: validate that a triggerType / actionType is in the supported whitelist.
 // #18: previously accepted any string; engine would silently log "Unknown actionType"
@@ -191,11 +372,12 @@ function validateTriggerAction({ triggerType, actionType }) {
 // #20 — validate the optional `condition` JSON before persisting. Accepts:
 //   - undefined / null / "" → no condition (always-fire, returns {ok:true,value:null})
 //   - JSON-encoded array string of clauses {field,op,value}
+//   - JSON-encoded workflow groups {groups:[{match,clauses:[...]}]}
 //   - already-an-array (frontend may send the parsed shape)
 // Returns {ok:true,value:<canonical-string-or-null>} or
 //         {ok:false,status,error,code:"INVALID_CONDITION"}.
 const VALID_CONDITION_OPS = new Set([
-  "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith",
+  "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "icontains", "startsWith", "exists",
 ]);
 
 function validateCondition(raw) {
@@ -212,10 +394,23 @@ function validateCondition(raw) {
   } else {
     parsed = raw;
   }
-  if (!Array.isArray(parsed)) {
-    return { ok: false, status: 400, error: "condition must be an array of clauses", code: "INVALID_CONDITION" };
+  const groups = Array.isArray(parsed)
+    ? [{ match: "all", clauses: parsed }]
+    : parsed && Array.isArray(parsed.groups)
+      ? parsed.groups
+      : null;
+  if (!groups) {
+    return { ok: false, status: 400, error: "condition must be an array of clauses or grouped conditions", code: "INVALID_CONDITION" };
   }
-  for (const clause of parsed) {
+  for (const group of groups) {
+    if (!group || typeof group !== "object" || !Array.isArray(group.clauses)) {
+      return { ok: false, status: 400, error: "each condition group must contain a clauses array", code: "INVALID_CONDITION" };
+    }
+    if (group.match !== undefined && !["all", "any"].includes(group.match)) {
+      return { ok: false, status: 400, error: "condition group match must be all or any", code: "INVALID_CONDITION" };
+    }
+  }
+  for (const clause of groups.flatMap((group) => group.clauses)) {
     if (!clause || typeof clause !== "object" || Array.isArray(clause)) {
       return { ok: false, status: 400, error: "each condition clause must be an object", code: "INVALID_CONDITION" };
     }
@@ -240,7 +435,7 @@ function validateCondition(raw) {
 // POST / — create a new automation rule
 router.post("/", async (req, res) => {
   try {
-    const { name, triggerType, actionType, targetState, condition } = req.body;
+    const { name, triggerType, actionType, targetState, condition, isActive } = req.body;
 
     if (!name || !triggerType || !actionType) {
       return res.status(400).json({ error: "name, triggerType, and actionType are required" });
@@ -254,20 +449,25 @@ router.post("/", async (req, res) => {
       return res.status(condCheck.status).json({ error: condCheck.error, code: condCheck.code });
     }
 
+    let preparedTarget;
+    try { preparedTarget = prepareTargetState(targetState || {}, actionType); }
+    catch (error) { return res.status(400).json({ error: error.message, code: "INVALID_WEBHOOK_CONFIG" }); }
+
     const newRule = await prisma.automationRule.create({
       data: {
         name,
         triggerType,
         actionType,
-        targetState: typeof targetState === "object" ? JSON.stringify(targetState) : targetState || "{}",
+        targetState: JSON.stringify(preparedTarget),
         condition: condCheck.value,
+        isActive: isActive === undefined ? true : !!isActive,
         tenantId: req.user.tenantId,
       },
     });
-    res.status(201).json(newRule);
+    res.status(201).json(maskWorkflowSecrets(newRule));
   } catch (error) {
     console.error("[Workflows] Create error:", error.message);
-    res.status(500).json({ error: "Failed to save workflow" });
+    writeFailure(res, error, "Failed to save workflow", "WORKFLOW_CREATE_FAILED");
   }
 });
 
@@ -291,7 +491,8 @@ router.put("/:id", async (req, res) => {
     if (triggerType !== undefined) data.triggerType = triggerType;
     if (actionType !== undefined) data.actionType = actionType;
     if (targetState !== undefined) {
-      data.targetState = typeof targetState === "object" ? JSON.stringify(targetState) : targetState;
+      try { data.targetState = JSON.stringify(prepareTargetState(targetState, actionType || existing.actionType, existing.targetState)); }
+      catch (error) { return res.status(400).json({ error: error.message, code: "INVALID_WEBHOOK_CONFIG" }); }
     }
     // #20 — validate + persist condition. Allow explicit clear via null/"".
     if (condition !== undefined) {
@@ -309,10 +510,10 @@ router.put("/:id", async (req, res) => {
       where: { id: existing.id },
       data,
     });
-    res.json(updated);
+    res.json(maskWorkflowSecrets(updated));
   } catch (error) {
     console.error("[Workflows] Update error:", error.message);
-    res.status(500).json({ error: "Failed to update workflow" });
+    writeFailure(res, error, "Failed to update workflow", "WORKFLOW_UPDATE_FAILED");
   }
 });
 
@@ -327,8 +528,9 @@ router.delete("/:id", async (req, res) => {
 
     await prisma.automationRule.delete({ where: { id: existing.id } });
     res.json({ success: true });
-  } catch (_error) {
-    res.status(500).json({ error: "Failed to delete workflow" });
+  } catch (error) {
+    console.error("[Workflows] Delete error:", error.message);
+    res.status(500).json({ error: "Failed to delete workflow", code: "WORKFLOW_DELETE_FAILED" });
   }
 });
 
@@ -345,9 +547,10 @@ router.put("/:id/toggle", async (req, res) => {
       where: { id: existing.id },
       data: { isActive: !existing.isActive },
     });
-    res.json(rule);
-  } catch (_error) {
-    res.status(500).json({ error: "Failed to toggle workflow" });
+    res.json(maskWorkflowSecrets(rule));
+  } catch (error) {
+    console.error("[Workflows] Toggle error:", error.message);
+    res.status(500).json({ error: "Failed to toggle workflow", code: "WORKFLOW_TOGGLE_FAILED" });
   }
 });
 
@@ -360,24 +563,51 @@ router.post("/:id/test", async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Workflow not found" });
 
-    const { emitEvent } = require("../lib/eventBus");
+    const { testRule } = require("../lib/eventBus");
 
-    // Build mock payload from request body or generate defaults
-    const mockPayload = req.body.payload || {
+    let targetState = {};
+    try { targetState = existing.targetState ? JSON.parse(existing.targetState) : {}; } catch (_error) { targetState = {}; }
+    const module = targetState.module || existing.triggerType.split(".")[0];
+    const moduleConfig = {
+      contact: { model: "contact", idKey: "contactId" },
+      deal: { model: "deal", idKey: "dealId" },
+      task: { model: "task", idKey: "taskId" },
+      ticket: { model: "ticket", idKey: "ticketId" },
+    }[module];
+    let recordPayload = {};
+    if (!req.body.payload && moduleConfig && prisma[moduleConfig.model]) {
+      const requestedId = Number(req.body[moduleConfig.idKey]);
+      const where = { tenantId: req.user.tenantId };
+      if (Number.isInteger(requestedId) && requestedId > 0) where.id = requestedId;
+      const record = await prisma[moduleConfig.model].findFirst({
+        where,
+        ...(!where.id ? { orderBy: { createdAt: "desc" } } : {}),
+      });
+      if (record) recordPayload = { ...record, [moduleConfig.idKey]: record.id };
+    }
+
+    const mockPayload = {
       userId: req.user.userId,
       tenantId: req.user.tenantId,
-      contactId: req.body.contactId || null,
-      dealId: req.body.dealId || null,
       email: req.body.email || req.user.email,
+      phone: req.body.phone || null,
+      ...recordPayload,
+      ...(req.body.payload || {}),
       _test: true,
     };
 
-    await emitEvent(existing.triggerType, mockPayload, req.user.tenantId, req.app.get("io"));
+    const result = await testRule(existing, mockPayload, req.user.tenantId, req.app.get("io"));
 
-    res.json({ success: true, message: `Test fired for rule "${existing.name}" (trigger: ${existing.triggerType})` });
+    res.json({
+      success: result.failed === 0,
+      result,
+      message: result.conditionsMatched
+        ? `Test fired for rule "${existing.name}" with trigger ${existing.triggerType}`
+        : `Test payload did not match the conditions for rule "${existing.name}" with trigger ${existing.triggerType}`,
+    });
   } catch (error) {
     console.error("[Workflows] Test error:", error.message);
-    res.status(500).json({ error: "Failed to test workflow" });
+    res.status(500).json({ error: "Failed to test workflow", code: "WORKFLOW_TEST_FAILED" });
   }
 });
 

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Sparkles, Clock, MapPin, IndianRupee, CheckCircle2, Home, Video, Phone, Building2 } from 'lucide-react';
+import { Sparkles, Clock, MapPin, IndianRupee, CheckCircle2, Home, Video, Phone, Building2, Download, CreditCard } from 'lucide-react';
 import { useFormAutosave } from '../../utils/useFormAutosave';
+import { loadRazorpaySdk } from './memberships/RazorpayCheckout';
 
 const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
+const BOOKING_LOCKING_FEE_INR = 200;
 
 const INITIAL_FORM = {
   name: '', phone: '', email: '', notes: '', preferredSlot: '',
@@ -38,8 +40,10 @@ export default function PublicBooking() {
   // #239 — partial form state must survive a mid-form refresh. Keying the
   // autosave by tenant slug keeps drafts from leaking between clinics.
   const [form, setForm, , clearDraft] = useFormAutosave(`public-booking.${slug || 'default'}`, INITIAL_FORM);
-  const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(null);
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState('');
+  const [receiptUrl, setReceiptUrl] = useState('');
   // Wave 2 Agent LL — UTM capture from the URL on mount. Hidden form fields,
   // no UI surface (the patient doesn't need to know we're capturing them).
   // Each utm_* search-param maps 1:1 onto the API's utm.* object key. The
@@ -85,63 +89,116 @@ export default function PublicBooking() {
     }
   }, []);
 
-  const submit = async (e) => {
+  const submit = (e) => {
     e.preventDefault();
     const phone = (form.phone || '').trim();
     if (!PHONE_RE.test(phone)) {
       setError('Enter a valid phone number (e.g. +91 98765 43210)');
       return;
     }
-    setSubmitting(true);
     setError('');
-    try {
-      // Wave 2 Agent LL — build the request body with bookingType + at-home
-      // fields gated on the chosen channel. Sending atHomeAddress on a
-      // CLINIC_VISIT booking is harmless (the server just ignores it
-      // outside IN_HOME), but keeping the payload tight makes the network
-      // tab easier to debug and shrinks the rate-limited body size.
-      const payload = {
-        tenantSlug: slug,
-        serviceId: picked.service.id,
-        locationId: picked.location?.id || null,
-        name: form.name,
-        phone: form.phone,
-        email: form.email,
-        notes: form.notes,
-        preferredSlot: form.preferredSlot,
-        bookingType: form.bookingType || 'CLINIC_VISIT',
-      };
-      if (form.bookingType === 'IN_HOME') {
-        payload.atHomeAddress = form.atHomeAddress;
-        payload.atHomeCity = form.atHomeCity;
-        payload.atHomePincode = form.atHomePincode;
-      }
-      // Wave 8b — only attach resourceId on CLINIC_VISIT bookings (rooms
-      // / chairs only matter when the patient comes to the clinic). Empty
-      // string → server stores null.
-      if (form.bookingType === 'CLINIC_VISIT' && form.resourceId) {
-        payload.resourceId = parseInt(form.resourceId, 10);
-      }
-      // Attach UTM only when at least one field is populated — keeps the
-      // organic-traffic payload identical to pre-Wave-2 shape.
-      if (Object.values(utm).some(Boolean)) payload.utm = utm;
-      if (referrer) payload.referrer = referrer;
+    setStep('payment');
+  };
 
-      const res = await fetch('/api/wellness/public/book', {
+  const buildPayload = () => {
+    const payload = {
+      tenantSlug: slug,
+      serviceId: picked.service.id,
+      locationId: picked.location?.id || null,
+      name: form.name,
+      phone: form.phone,
+      email: form.email,
+      notes: form.notes,
+      preferredSlot: form.preferredSlot,
+      bookingType: form.bookingType || 'CLINIC_VISIT',
+    };
+    if (form.bookingType === 'IN_HOME') {
+      payload.atHomeAddress = form.atHomeAddress;
+      payload.atHomeCity = form.atHomeCity;
+      payload.atHomePincode = form.atHomePincode;
+    }
+    if (form.bookingType === 'CLINIC_VISIT' && form.resourceId) {
+      payload.resourceId = parseInt(form.resourceId, 10);
+    }
+    if (Object.values(utm).some(Boolean)) payload.utm = utm;
+    if (referrer) payload.referrer = referrer;
+    return payload;
+  };
+
+  const startPayment = async () => {
+    const phone = (form.phone || '').trim();
+    if (!PHONE_RE.test(phone)) {
+      setPayError('Enter a valid phone number (e.g. +91 98765 43210)');
+      return;
+    }
+    setPaying(true);
+    setPayError('');
+    try {
+      let Razorpay = await loadRazorpaySdk();
+      if (!Razorpay) throw new Error('Could not load Razorpay checkout');
+
+      const orderRes = await fetch('/api/wellness/public/book/order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(buildPayload()),
       });
-      const data = await res.json();
-      if (res.ok) {
-        setDone(data);
-        // #239 — booking succeeded, drop the autosaved draft so a future
-        // visit to the same clinic on this device starts clean.
-        clearDraft();
+      const orderData = await orderRes.json().catch(() => ({}));
+      if (!orderRes.ok) {
+        throw new Error(orderData.error || 'Could not start payment. Please try again.');
       }
-      else setError(data.error || 'Booking failed');
-    } catch (err) { setError('Network error.'); }
-    setSubmitting(false);
+
+      await new Promise((resolve, reject) => {
+        const rzp = new Razorpay({
+          key: orderData.key,
+          amount: orderData.amount,
+          currency: orderData.currency,
+          order_id: orderData.orderId,
+          name: profile.tenant.name || 'Wellness Clinic',
+          description: orderData.receiptDescription || 'Appointment booking fee',
+          prefill: {
+            name: form.name,
+            email: form.email || undefined,
+            contact: phone,
+          },
+          theme: { color: '#265855' },
+          handler: async (resp) => {
+            try {
+              const confirmRes = await fetch('/api/wellness/public/book/confirm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  paymentId: orderData.paymentId,
+                  razorpay_order_id: resp.razorpay_order_id,
+                  razorpay_payment_id: resp.razorpay_payment_id,
+                  razorpay_signature: resp.razorpay_signature,
+                }),
+              });
+              const confirmData = await confirmRes.json().catch(() => ({}));
+              if (!confirmRes.ok) {
+                throw new Error(confirmData.error || 'Payment verification failed');
+              }
+              setReceiptUrl(confirmData.receiptUrl || `/api/wellness/public/book/receipt?paymentId=${orderData.paymentId}`);
+              setDone(confirmData);
+              clearDraft();
+              resolve();
+            } catch (err) { reject(err); }
+          },
+          modal: {
+            ondismiss: () => {
+              setPaying(false);
+              resolve();
+            },
+          },
+        });
+        rzp.on('payment.failed', (response) => {
+          reject(new Error(response?.error?.description || 'Payment failed'));
+        });
+        rzp.open();
+      });
+    } catch (err) {
+      setPayError(err.message || 'Payment could not be started. Please try again.');
+    }
+    setPaying(false);
   };
 
   if (loading) return <FullPage>Loading…</FullPage>;
@@ -154,11 +211,31 @@ export default function PublicBooking() {
           <CheckCircle2 size={48} color="var(--success-color)" style={{ marginBottom: '1rem' }} />
           <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>Booking confirmed</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-            Hi {done.patient?.name}, your appointment for <strong>{picked.service.name}</strong> is provisionally booked. Our team will call you on <strong>{form.phone}</strong> to confirm the slot.
+            Hi {done.patient?.name}, your appointment for <strong>{picked.service.name}</strong> is confirmed. We&apos;ve received your booking fee of <strong>₹{BOOKING_LOCKING_FEE_INR}</strong>.
           </p>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
             Reference: visit #{done.visit?.id}
           </div>
+          {receiptUrl && (
+            <a
+              href={receiptUrl}
+              download
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.6rem 1rem',
+                background: 'var(--primary-color, var(--accent-color))',
+                color: '#fff',
+                borderRadius: 8,
+                textDecoration: 'none',
+                fontWeight: 500,
+                fontSize: '0.9rem',
+              }}
+            >
+              <Download size={16} /> Download receipt
+            </a>
+          )}
         </div>
       </FullPage>
     );
@@ -378,11 +455,63 @@ export default function PublicBooking() {
           {error && <div style={{ color: 'var(--danger-color)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>{error}</div>}
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'space-between' }}>
             <button type="button" onClick={() => setStep('location')} style={{ padding: '0.55rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer' }}>&larr; Back</button>
-            <button type="submit" disabled={submitting} style={{ padding: '0.55rem 1.5rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 500 }}>
-              {submitting ? 'Booking…' : 'Confirm booking'}
+            <button type="submit" style={{ padding: '0.55rem 1.5rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 500 }}>
+              Proceed to payment
             </button>
           </div>
         </form>
+      )}
+
+      {step === 'payment' && (
+        <div className="glass" style={{ padding: '1.5rem', maxWidth: '520px', margin: '0 auto' }}>
+          <h3 style={sectionH}>4. Confirm &amp; pay booking fee</h3>
+          <div style={{ background: 'rgba(38,88,85,0.06)', border: `1px solid ${PUB_BORDER}`, padding: '0.75rem', borderRadius: 8, marginBottom: '1rem', fontSize: '0.85rem' }}>
+            <div><strong>{picked.service.name}</strong></div>
+            <div style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+              {picked.location?.name} &middot; {form.name} &middot; {form.phone}
+            </div>
+            {form.preferredSlot && (
+              <div style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                Preferred: {new Date(form.preferredSlot).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: PUB_CARD_BG, border: `1px solid ${PUB_BORDER}`, borderRadius: 8, marginBottom: '1rem' }}>
+            <div>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Non-refundable booking fee</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>This secures your slot and is separate from the treatment bill.</div>
+            </div>
+            <div style={{ fontSize: '1.25rem', fontWeight: 600 }}>₹{BOOKING_LOCKING_FEE_INR}</div>
+          </div>
+
+          {payError && <div style={{ color: 'var(--danger-color)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>{payError}</div>}
+
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'space-between' }}>
+            <button type="button" onClick={() => setStep('details')} style={{ padding: '0.55rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, cursor: 'pointer' }}>&larr; Back</button>
+            <button
+              type="button"
+              onClick={startPayment}
+              disabled={paying}
+              style={{
+                padding: '0.55rem 1.5rem',
+                background: 'var(--primary-color, var(--accent-color))',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                cursor: paying ? 'not-allowed' : 'pointer',
+                fontWeight: 500,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                opacity: paying ? 0.7 : 1,
+              }}
+            >
+              <CreditCard size={16} />
+              {paying ? 'Opening Razorpay…' : 'Pay ₹200 & confirm'}
+            </button>
+          </div>
+        </div>
       )}
     </FullPage>
   );

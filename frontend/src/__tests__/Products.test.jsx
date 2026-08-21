@@ -116,9 +116,17 @@ function installFetchApiMock({
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
-    if (url === '/api/wellness/products' && method === 'GET') {
+    if (typeof url === 'string' && url.startsWith('/api/wellness/products?') && method === 'GET') {
       if (productsPromise) return productsPromise;
-      return Promise.resolve(products);
+      return Promise.resolve({
+        items: products,
+        pagination: {
+          total: products.length,
+          page: 1,
+          limit: 10,
+          pages: 1,
+        },
+      });
     }
     if (url === '/api/wellness/product-categories' && method === 'GET') {
       return Promise.resolve(categories);
@@ -177,7 +185,7 @@ describe('<Products /> — mount fetch + list render', () => {
     installFetchApiMock();
     renderPage();
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products');
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products?paginate=true&page=1&limit=10');
     });
     expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/product-categories');
 
@@ -350,7 +358,7 @@ describe('<Products /> — create happy path', () => {
     // List re-fetches → ≥2 GETs to /api/wellness/products.
     const getCalls = fetchApiMock.mock.calls.filter(
       ([u, opts]) =>
-        u === '/api/wellness/products' && (opts?.method || 'GET') === 'GET',
+        typeof u === 'string' && u.startsWith('/api/wellness/products?') && (opts?.method || 'GET') === 'GET',
     );
     expect(getCalls.length).toBeGreaterThanOrEqual(2);
   });

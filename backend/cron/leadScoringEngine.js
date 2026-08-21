@@ -1,43 +1,15 @@
 const cronRegistry = require('../lib/cronRegistry');
 const prisma = require("../lib/prisma");
-const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { estimateLlmCost } = require("../lib/apiPricing");
-
-// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
-// persistLlmCallLog helper so this direct Gemini call is visible to the
-// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
-// lead-score recomputation, hence the nested try/catch and the un-awaited
-// .catch() on the create.
-function persistLlmCallLog(data) {
-  try {
-    const prismaClient = require("../lib/prisma");
-    prismaClient.llmCallLog.create({ data }).catch((e) =>
-      console.error(`[LeadScoringEngine] LlmCallLog persist failed (non-fatal): ${e.message}`),
-    );
-  } catch (e) {
-    console.error(`[LeadScoringEngine] LlmCallLog require failed (non-fatal): ${e.message}`);
-  }
-}
-
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
-let aiModel = null;
-if (GEMINI_KEY) {
-  try {
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    aiModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    console.log("[LeadScoringEngine] Gemini initialized");
-  } catch (err) {
-    console.warn("[LeadScoringEngine] Gemini init failed:", err.message);
-  }
-}
+const aiGateway = require("../lib/aiGateway");
 
 /**
- * Use Gemini AI to score a lead based on its profile and engagement data.
+ * Use AI to score a lead based on its profile and engagement data. Goes
+ * through aiGateway (BYOK or a funded CRM-managed subscription); returns
+ * null when the tenant has neither (or the call otherwise fails), letting
+ * the caller fall back to the deterministic computeScore() formula.
  */
 async function scoreWithGemini(contact) {
-  if (!aiModel) return null;
+  if (!contact || !contact.tenantId) return null;
 
   try {
     const deals = contact.deals || [];
@@ -74,50 +46,24 @@ Scoring guidance:
 
 Provide ONLY a single integer score from 1-99. No explanation.`;
 
-    const result = await aiModel.generateContent(prompt);
-    const scoreText = result.response.text().trim();
-    const score = parseInt(scoreText);
-    const usage = result.response.usageMetadata || {};
-    const promptTokens = usage.promptTokenCount || 0;
-    const completionTokens = usage.candidatesTokenCount || 0;
-    persistLlmCallLog({
-      tenantId: contact.tenantId || 1,
+    const resp = await aiGateway.runAiRequest({
+      tenantId: contact.tenantId,
       task: "lead-scoring",
-      model: "gemini-2.5-flash",
-      provider: "gemini",
-      reason: null,
-      promptTokens,
-      completionTokens,
-      totalTokens: promptTokens + completionTokens,
-      costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
-      stub: false,
-      userId: null,
       surface: "leadScoringEngine",
-      status: "success",
+      requestedModelLabel: "gemini-flash",
+      messages: [{ role: "user", content: prompt }],
     });
+    const score = parseInt((resp.text || "").trim());
 
     if (!isNaN(score) && score >= 1 && score <= 99) {
-      console.log(`[LeadScoringEngine] Gemini scored ${contact.name}: ${score}`);
+      console.log(`[LeadScoringEngine] AI scored ${contact.name}: ${score}`);
       return score;
     }
   } catch (err) {
-    persistLlmCallLog({
-      tenantId: (contact && contact.tenantId) || 1,
-      task: "lead-scoring",
-      model: "gemini-2.5-flash",
-      provider: "gemini",
-      reason: null,
-      promptTokens: 0,
-      completionTokens: 0,
-      totalTokens: 0,
-      costEstimate: 0,
-      stub: false,
-      userId: null,
-      surface: "leadScoringEngine",
-      status: "failed",
-      errorMessage: err.message,
-    });
-    console.warn("[LeadScoringEngine] Gemini scoring failed:", err.message);
+    if (!err.friendly) {
+      console.warn("[LeadScoringEngine] AI scoring failed:", err.message);
+    }
+    // friendly (no BYOK, no funded subscription) — silently fall through.
   }
 
   return null;
@@ -387,6 +333,75 @@ function computeScore(contact) {
 const RECOMPUTE_WINDOW_HOURS = 24;
 
 /**
+ * Score a specific list of contacts sequentially.
+ *
+ * Used by the generic CRM Leads page Refresh action. Sequential updates
+ * avoid the connection-pool saturation that the old cron caused when it
+ * fired one update per contact in parallel across every active tenant.
+ */
+async function scoreContactsByIds(tenantId, contactIds, io) {
+  if (!tenantId || !Array.isArray(contactIds) || contactIds.length === 0) {
+    return { scored: 0, errors: 0 };
+  }
+
+  const ids = [...new Set(contactIds.map((id) => Number(id)).filter(Number.isFinite))].slice(0, 100);
+  if (ids.length === 0) {
+    return { scored: 0, errors: 0 };
+  }
+
+  const contacts = await prisma.contact.findMany({
+    where: {
+      tenantId,
+      id: { in: ids },
+    },
+    include: {
+      deals: true,
+      activities: true,
+      sequenceEnrollments: true,
+      emails: { select: { direction: true, sentimentScore: true, createdAt: true } },
+      callLogs: { select: { createdAt: true } },
+      touchpoints: { select: { channel: true } },
+      whatsappMessages: { select: { direction: true, status: true, createdAt: true } },
+    },
+  });
+
+  const tickStart = new Date();
+  let scored = 0;
+  let errors = 0;
+
+  for (const contact of contacts) {
+    try {
+      // scoreWithGemini self-gates (returns null when the tenant has no
+      // BYOK/funded subscription, or on any AI failure) — always attempt
+      // it and fall back to the deterministic formula.
+      let newScore = await scoreWithGemini(contact);
+      if (newScore === null) {
+        newScore = computeScore(contact);
+      }
+      await prisma.contact.update({
+        where: { id: contact.id },
+        data: {
+          aiScore: newScore,
+          aiScoreLastComputedAt: tickStart,
+        },
+      });
+      scored += 1;
+    } catch (err) {
+      console.error(`[LeadScoring] scoreContactsByIds update failed for contact ${contact.id}: ${err.message}`);
+      errors += 1;
+    }
+  }
+
+  console.log(`[LeadScoring] scoreContactsByIds: scored=${scored}, errors=${errors} for tenant=${tenantId}`);
+
+  if (io && scored > 0) {
+    io.emit('lead_scores_updated', { count: scored, ts: new Date() });
+  }
+
+  return { scored, errors };
+}
+
+/**
  * Core scoring tick — called by cron and by the debug endpoint.
  *
  * #421 — three architectural fixes vs the original sweep:
@@ -453,12 +468,9 @@ async function tickLeadScoringEngine(io) {
       // in `updates` is a Promise (already in flight), and
       // Promise.allSettled below tolerates partial failure.
       const updates = contacts.map(async (contact) => {
-        // Try Gemini AI first, fall back to algorithm if Gemini unavailable.
-        let newScore = null;
-        if (aiModel) {
-          newScore = await scoreWithGemini(contact);
-        }
-        // Fallback to algorithm if Gemini failed or unavailable.
+        // Try AI first (self-gates on BYOK/funded subscription), fall back
+        // to the deterministic algorithm if AI is unavailable or fails.
+        let newScore = await scoreWithGemini(contact);
         if (newScore === null) {
           newScore = computeScore(contact);
         }
@@ -514,18 +526,15 @@ async function tickLeadScoringEngine(io) {
  * take effect without a server restart. `io` is captured by closure since
  * cronRegistry's tickFn contract takes no arguments. runImmediately
  * reproduces the historical "run once at startup" behavior.
+ *
+ * #<new> — automatic cron registration is disabled. The old background sweep
+ * was saturating the Prisma connection pool by parallelising updates across
+ * all tenants. aiScore is now recomputed on demand via the generic CRM
+ * Leads page Refresh action (POST /api/ai_scoring/contacts), which uses
+ * scoreContactsByIds and updates contacts sequentially.
  */
-function initLeadScoringCron(io) {
-  cronRegistry.register({
-    name: 'leadScoringEngine',
-    description: 'Recomputes Contact.aiScore for stale/unscored contacts (multi-factor formula + Gemini)',
-    defaultSchedule: '*/10 * * * *',
-    runImmediately: true,
-    tickFn: () => {
-      console.log('[LeadScoring] Cron tick — rescoring all contacts...');
-      return tickLeadScoringEngine(io);
-    },
-  }).catch((e) => console.error('[LeadScoring] cronRegistry registration failed:', e.message));
+function initLeadScoringCron(_io) {
+  console.log('[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts');
 }
 
-module.exports = { initLeadScoringCron, tickLeadScoringEngine, computeScore };
+module.exports = { initLeadScoringCron, tickLeadScoringEngine, computeScore, scoreContactsByIds };

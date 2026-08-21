@@ -41,6 +41,7 @@ import {
 } from "../../utils/travelSubBrand";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
+import CountBadge from "../../components/CountBadge";
 import TopScrollSync from "../../components/TopScrollSync";
 
 const SUB_BRANDS = [
@@ -286,7 +287,7 @@ export default function QuoteTemplates() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       <header
         style={{
@@ -299,12 +300,12 @@ export default function QuoteTemplates() {
         }}
       >
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+          <h1 style={{ display: "flex", alignItems: "center", gap: 12, margin: 0, fontSize: "1.75rem", fontWeight: 600, lineHeight: 1.15, flexWrap: "wrap" }}>
             <FileText size={26} aria-hidden /> Quote Templates
+            <CountBadge count={total} title={`${total.toLocaleString()} templates`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
             Pre-filled line sets for common itineraries — Umrah / India / Visa / etc.
-            {" "}{total.toLocaleString()} template{total === 1 ? "" : "s"}.
           </p>
         </div>
         {canWrite && (

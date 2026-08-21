@@ -33,10 +33,16 @@ HOST = e.get("DEPLOY_HOST")
 USER = e.get("DEPLOY_USER")
 PW = e.get("DEPLOY_PASSWORD") or e.get("DEPLOY_PASS")
 PORT = int(e.get("DEPLOY_PORT", "22"))
+KEY_PATH = e.get("DEPLOY_KEY_PATH") or (
+    "empcloud-development.pem" if os.path.exists("empcloud-development.pem") else None
+)
 
-missing = [k for k, v in [("DEPLOY_HOST", HOST), ("DEPLOY_USER", USER), ("DEPLOY_PASSWORD", PW)] if not v]
+missing = [k for k, v in [("DEPLOY_HOST", HOST), ("DEPLOY_USER", USER)] if not v]
 if missing:
     print(f"Missing .env values: {missing}")
+    sys.exit(1)
+if not PW and not KEY_PATH:
+    print("Missing .env value: DEPLOY_PASSWORD or DEPLOY_KEY_PATH")
     sys.exit(1)
 
 NODE_BIN = "$HOME/.nvm/versions/node/v24.14.0/bin"
@@ -46,7 +52,23 @@ ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
 print(f"[connect] {USER}@{HOST}:{PORT}")
-ssh.connect(HOST, port=PORT, username=USER, password=PW, timeout=20, banner_timeout=30)
+connect_kwargs = {"hostname": HOST, "port": PORT, "username": USER, "timeout": 20, "banner_timeout": 30}
+if KEY_PATH and os.path.exists(KEY_PATH):
+    print(f"[connect] using key {KEY_PATH}")
+    pkey = None
+    for cls in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+        try:
+            pkey = cls.from_private_key_file(KEY_PATH)
+            break
+        except Exception:
+            continue
+    if pkey is None:
+        print("[fail] could not load private key")
+        sys.exit(1)
+    connect_kwargs["pkey"] = pkey
+else:
+    connect_kwargs["password"] = PW
+ssh.connect(**connect_kwargs)
 print("[connect] OK")
 
 

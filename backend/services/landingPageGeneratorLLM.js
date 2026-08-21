@@ -41,34 +41,23 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
+const { formatGeminiLimitMessage } = require('../lib/geminiErrors');
 const { buildDestinationLandingPagePrompt } = require('./landingPagePrompts');
 const { guardLandingPageOutput, buildDeterministicFallback } = require('../lib/landingPageGuard');
 const { estimateLlmCost } = require('../lib/apiPricing');
+const aiGateway = require('../lib/aiGateway');
 
 void KEYS;
 
 const INTEGRATION = 'llm';
 const TASK_NAME = 'landing-page-generate';
 const MODEL_PRIMARY = 'gemini-2.5-flash';
-const MODEL_PRIMARY_FALLBACK = 'gemini-2.0-flash';
-const GEMINI_KEY_ENV = 'GEMINI_API_KEY';
-// Cross-provider fallback. When the entire Gemini cascade fails (every
-// model returns 503 / 429 / model-gone) we try OpenAI before bailing to
-// the deterministic stub — Gemini's transient 503 / quota windows
-// shouldn't drop demos and UAT to the [REVIEW] stub when the operator
-// has paid OpenAI credit ready to spend. JSON-mode keeps the response
-// shape compatible with the guardrail.
-const MODEL_OPENAI_FALLBACK = 'gpt-4o-mini';
-const OPENAI_KEY_ENV = 'OPENAI_API_KEY';
-// Groq promoted to PRIMARY (2026-06-23) — Llama-3.3-70B JSON-mode is
-// notably faster + cheaper than Gemini Flash for the long-context
-// landing-page schema, and Groq's JSON-mode is more reliable than
-// Gemini's transient 503 / 429 windows during demos. Cascade is now
-// Groq → Gemini → OpenAI → deterministic stub. Empty GROQ_API_KEY
-// skips Groq cleanly (env-key probe), so existing tenants without
-// a Groq key keep working through Gemini.
-const MODEL_GROQ_PRIMARY = 'llama-3.3-70b-versatile';
-const GROQ_KEY_ENV = 'GROQ_API_KEY';
+// Cross-provider cascade is now Groq → Gemini → OpenAI → deterministic
+// stub, each gated on the shared AI Subscription & Credit Management
+// resolver (lib/aiProviderManagement.resolveProviderConfig via
+// lib/aiGateway) instead of a bare per-provider env-key probe. Per-model
+// quota/model-gone cascading within a family lives inside the resolver's
+// config.fallbacks, walked automatically by generateChatCompletion.
 
 /**
  * Pre-call budget cap. Mirrors marketingFlyerCopyLLM pattern — calls
@@ -109,13 +98,24 @@ async function computeMonthlySpendCents(tenantId) {
 }
 
 /**
- * Whether the real Gemini call should fire. Wraps the key probe so
+ * Whether the real Gemini call should fire. Wraps the resolver probe so
  * vitest can mock it without setting the env directly.
+ *
+ * Delegates to lib/aiProviderManagement.resolveProviderConfig — the SAME
+ * AI Subscription & Credit Management gate every AI feature shares (BYOK
+ * first, then a funded CRM-managed subscription). Replaces a narrower
+ * llmRouter.getLlmKey() probe that treated the bare platform env var as
+ * sufficient for ANY tenant regardless of subscription state.
+ *
+ * Disabled under NODE_ENV=test so unit suites stay offline and
+ * deterministic even when a key/subscription happens to resolve.
  */
 async function realModeEnabled(tenantId) {
-  const llmRouter = require('../lib/llmRouter');
-  const key = await llmRouter.getLlmKey(tenantId, 'gemini-flash');
-  return Boolean(key);
+  if (process.env.NODE_ENV === 'test') return false;
+  if (!tenantId) return false;
+  const { resolveProviderConfig } = require('../lib/aiProviderManagement');
+  const config = await resolveProviderConfig(tenantId, { requestedModelLabel: 'gemini-flash' });
+  return Boolean(config);
 }
 
 /**
@@ -148,105 +148,40 @@ function parseGeminiJson(raw) {
 }
 
 /**
- * Single Gemini attempt against the supplied model name. Multi-model
- * cascade lives in the caller. Pure — no retries here.
+ * Real-mode Gemini call via the mandatory aiGateway entry point — resolves
+ * BYOK vs CRM-managed access, logs LlmCallLog, and deducts credits
+ * (crm-managed only) using ACTUAL usage. The model-quota/model-gone
+ * cascade (gemini-2.5-flash → 2.0-flash → ...) now lives inside
+ * lib/aiProviderManagement's resolver (config.fallbacks), which
+ * generateChatCompletion walks automatically — no duplicate cascade
+ * logic needed here.
  *
- * maxOutputTokens was bumped to 8192 in PR-C — the richer 9-block prompt
- * (added safetyFeatures + contactFooter + expanded FAQ + longer city
- * bodies + longer highlight bodies) produces significantly more tokens
- * than the 7-block PR-B version. 4096 truncated mid-JSON on several
- * destinations during the quality-validation sweep.
+ * Returns { rawJson, modelUsed, promptTokens, completionTokens}.
+ * Throws on failure — the caller decides whether to fall through to
+ * OpenAI/Groq or to the deterministic stub.
  */
-async function callGeminiAttempt({ apiKey, modelName, prompt }, _usageOut) {
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  const ai = new GoogleGenerativeAI(apiKey);
-  const model = ai.getGenerativeModel({
-    model: modelName,
-    generationConfig: {
-      responseMimeType: 'application/json',
-      maxOutputTokens: 8192,
-    },
-  });
-  // Pass system as the first part of the user message so the structured-
-  // output enforcement (responseMimeType) applies to the entire request.
-  // Gemini's systemInstruction is supported via separate field, but
-  // putting both in a single user turn produces more reliable JSON in
-  // testing.
-  const fullPrompt = `${prompt.system}\n\n${prompt.user}`;
-  const res = await model.generateContent(fullPrompt);
-  const text = res?.response?.text?.();
-  // Optional out-parameter — callers that want real token usage (for
-  // LlmCallLog cost estimation) pass a plain object here; we mutate it
-  // in place so callGeminiAttempt's return contract (a bare string) stays
-  // unchanged for existing callers (callGeminiForTee et al).
-  if (_usageOut && typeof _usageOut === 'object') {
-    const usage = (res && res.response && res.response.usageMetadata) || {};
-    _usageOut.promptTokens = usage.promptTokenCount || 0;
-    _usageOut.completionTokens = usage.candidatesTokenCount || 0;
-  }
-  if (!text) throw new Error('Gemini returned an empty response');
-  return text;
-}
-
-/**
- * Real-mode Gemini call with quota / model-gone cascade.
- *
- * Cascade order matches marketingFlyerCopyLLM:
- *   gemini-2.5-flash → gemini-2.0-flash → gemini-2.0-flash-lite → gemini-2.5-flash-lite
- *
- * Returns { rawJson, modelUsed } when ANY cascade step succeeds.
- * Throws on full-cascade exhaustion — the caller decides whether to
- * fall through to OpenAI or to the deterministic stub.
- */
-async function callGemini({ destination, durationDays, audience, subBrand, tenantId }) {
-  const llmRouter = require('../lib/llmRouter');
-  const apiKey = await llmRouter.getLlmKey(tenantId, 'gemini-flash');
-  if (!apiKey) {
-    throw new Error(`landingPageGeneratorLLM: ${GEMINI_KEY_ENV} not set`);
-  }
+async function callGemini({ destination, durationDays, audience, subBrand, tenantId, userId }) {
   const prompt = buildDestinationLandingPagePrompt({ destination, durationDays, audience, subBrand });
+  const fullPrompt = `${prompt.system}\n\n${prompt.user}`;
 
-  const cascade = Array.from(new Set([
-    process.env.LLM_MODEL_GEMINI || MODEL_PRIMARY,
-    process.env.LLM_MODEL_GEMINI_FALLBACK || MODEL_PRIMARY_FALLBACK,
-    'gemini-2.0-flash-lite',
-    'gemini-2.5-flash-lite',
-  ]));
-
-  let raw;
-  let modelUsed;
-  let lastError;
-  const usageOut = {};
-  for (const modelName of cascade) {
-    try {
-      raw = await callGeminiAttempt({ apiKey, modelName, prompt }, usageOut);
-      modelUsed = modelName;
-      lastError = null;
-      break;
-    } catch (e) {
-      lastError = e;
-      const msg = e.message || '';
-      const isQuota = /429|Too Many Requests|exceeded.*quota|Quota exceeded/i.test(msg);
-      const isModelGone = /404.*Not Found|is not found for API version|is not supported for generateContent/i.test(msg);
-      // 503 (Service Unavailable / high demand) is a transient capacity
-      // signal — fall through to the next model rather than failing the
-      // whole generation. Each Gemini model has its own capacity pool,
-      // so the next model in the cascade usually serves cleanly.
-      const isTransient = /503|Service Unavailable|high demand|currently unavailable/i.test(msg);
-      if (!isQuota && !isModelGone && !isTransient) throw e;
-      const reason = isQuota ? 'hit quota' : isModelGone ? 'model unavailable' : 'transient 503';
-      console.warn(
-        `[landingPageGeneratorLLM] '${modelName}' ${reason} — falling through cascade`,
-      );
-    }
-  }
-  if (raw === undefined) throw lastError;
+  const resp = await aiGateway.runAiRequest({
+    tenantId,
+    userId,
+    task: TASK_NAME,
+    surface: 'landingPageGeneratorLLM',
+    requestedModelLabel: 'gemini-flash',
+    messages: [{ role: 'user', content: fullPrompt }],
+    // maxOutputTokens 8192 (PR-C): the richer 9-block prompt produces
+    // significantly more tokens than earlier revisions; 4096 truncated
+    // mid-JSON on several destinations during the quality-validation sweep.
+    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192 },
+  });
 
   return {
-    rawJson: parseGeminiJson(raw),
-    modelUsed,
-    promptTokens: usageOut.promptTokens || 0,
-    completionTokens: usageOut.completionTokens || 0,
+    rawJson: parseGeminiJson(resp.text),
+    modelUsed: resp.model,
+    promptTokens: resp.usage.promptTokens,
+    completionTokens: resp.usage.completionTokens,
   };
 }
 
@@ -261,65 +196,49 @@ async function callGemini({ destination, durationDays, audience, subBrand, tenan
  * Model defaults to gpt-4o-mini (cheap + fast + reliable JSON-mode).
  * Override via env LLM_MODEL_OPENAI_LANDING for cost/quality tuning.
  */
-async function callOpenAI({ destination, durationDays, audience, subBrand }) {
-  const apiKey = process.env[OPENAI_KEY_ENV];
-  if (!apiKey) {
-    throw new Error(`landingPageGeneratorLLM: ${OPENAI_KEY_ENV} not set`);
-  }
-  const modelName = process.env.LLM_MODEL_OPENAI_LANDING || MODEL_OPENAI_FALLBACK;
+async function callOpenAI({ destination, durationDays, audience, subBrand, tenantId, userId }) {
   const prompt = buildDestinationLandingPagePrompt({ destination, durationDays, audience, subBrand });
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: modelName,
-      // JSON-mode: forces a single valid JSON object — eliminates the
-      // markdown-fence / surrounding-prose edge cases the Gemini path
-      // handles via parseGeminiJson.
-      response_format: { type: 'json_object' },
-      max_tokens: 8192,
-      messages: [
-        { role: 'system', content: prompt.system },
-        { role: 'user', content: prompt.user },
-      ],
-    }),
+  const resp = await aiGateway.runAiRequest({
+    tenantId,
+    userId,
+    task: TASK_NAME,
+    surface: 'landingPageGeneratorLLM',
+    requestedModelLabel: 'gpt-4',
+    messages: [
+      { role: 'system', content: prompt.system },
+      { role: 'user', content: prompt.user },
+    ],
   });
-
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => '');
-    throw new Error(`OpenAI ${res.status}: ${errBody.slice(0, 240)}`);
-  }
-  const body = await res.json();
-  const raw = body?.choices?.[0]?.message?.content;
-  if (!raw) throw new Error('OpenAI returned an empty response');
 
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(resp.text);
   } catch (e) {
+    const raw = resp.text || '';
     const preview = raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
     throw new Error(`OpenAI JSON parse failed: ${e.message}. Raw: ${preview}`);
   }
-  return { rawJson: parsed, modelUsed: modelName };
+  return { rawJson: parsed, modelUsed: resp.model };
 }
 
 /**
- * Whether the OpenAI cross-provider fallback is configured. ENV-only —
- * OpenAI keys live in process.env (not per-tenant SupplierCredential)
- * because the fallback is shared infrastructure, not customer-billable.
+ * Whether the OpenAI cross-provider fallback is authorized. Delegates to
+ * the shared AI Subscription & Credit Management resolver (BYOK or a
+ * funded CRM-managed subscription) — same gate as realModeEnabled, just
+ * probed with an OpenAI-family model hint.
  *
  * Disabled under NODE_ENV=test by default so unit suites stay offline
  * and deterministic; the OpenAI-fallback-path tests in
  * landingPageGeneratorLLM.test.js use vi.spyOn(...).mockReturnValue(true)
  * to opt in for that specific branch.
  */
-function openAiFallbackEnabled() {
+async function openAiFallbackEnabled(tenantId) {
   if (process.env.NODE_ENV === 'test') return false;
-  return Boolean(process.env[OPENAI_KEY_ENV]);
+  if (!tenantId) return false;
+  const { resolveProviderConfig } = require('../lib/aiProviderManagement');
+  const config = await resolveProviderConfig(tenantId, { requestedModelLabel: 'gpt-4' });
+  return Boolean(config);
 }
 
 /**
@@ -335,60 +254,46 @@ function openAiFallbackEnabled() {
  * Returns { rawJson, modelUsed }. Throws on auth / network / quota failure
  * so the caller can fall through to Gemini → OpenAI → stub.
  */
-async function callGroq({ destination, durationDays, audience, subBrand }) {
-  const apiKey = process.env[GROQ_KEY_ENV];
-  if (!apiKey) {
-    throw new Error(`landingPageGeneratorLLM: ${GROQ_KEY_ENV} not set`);
-  }
-  const modelName = process.env.GROQ_MODEL || MODEL_GROQ_PRIMARY;
+async function callGroq({ destination, durationDays, audience, subBrand, tenantId, userId }) {
   const prompt = buildDestinationLandingPagePrompt({ destination, durationDays, audience, subBrand });
 
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: modelName,
-      response_format: { type: 'json_object' },
-      max_tokens: 8192,
-      // Llama 3.3-70B is happiest with a touch more creativity for
-      // marketing-copy tasks while staying inside the JSON envelope.
-      temperature: 0.6,
-      messages: [
-        { role: 'system', content: prompt.system },
-        { role: 'user', content: prompt.user },
-      ],
-    }),
+  const resp = await aiGateway.runAiRequest({
+    tenantId,
+    userId,
+    task: TASK_NAME,
+    surface: 'landingPageGeneratorLLM',
+    requestedModelLabel: 'groq-llama',
+    messages: [
+      { role: 'system', content: prompt.system },
+      { role: 'user', content: prompt.user },
+    ],
   });
-
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => '');
-    throw new Error(`Groq ${res.status}: ${errBody.slice(0, 240)}`);
-  }
-  const body = await res.json();
-  const raw = body?.choices?.[0]?.message?.content;
-  if (!raw) throw new Error('Groq returned an empty response');
 
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(resp.text);
   } catch (e) {
+    const raw = resp.text || '';
     const preview = raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
     throw new Error(`Groq JSON parse failed: ${e.message}. Raw: ${preview}`);
   }
-  return { rawJson: parsed, modelUsed: modelName };
+  return { rawJson: parsed, modelUsed: resp.model };
 }
 
 /**
- * Whether the Groq primary path is configured. ENV-only — same shared-
- * infrastructure model as OpenAI. Disabled under NODE_ENV=test so the
- * existing unit-test mocks don't have to rewire for the new path.
+ * Whether the Groq primary path is authorized. Delegates to the shared
+ * AI Subscription & Credit Management resolver (BYOK or a funded
+ * CRM-managed subscription) — same gate as realModeEnabled /
+ * openAiFallbackEnabled, probed with a Groq-family model hint. Disabled
+ * under NODE_ENV=test so the existing unit-test mocks don't have to
+ * rewire for this path.
  */
-function groqEnabled() {
+async function groqEnabled(tenantId) {
   if (process.env.NODE_ENV === 'test') return false;
-  return Boolean(process.env[GROQ_KEY_ENV]);
+  if (!tenantId) return false;
+  const { resolveProviderConfig } = require('../lib/aiProviderManagement');
+  const config = await resolveProviderConfig(tenantId, { requestedModelLabel: 'groq-llama' });
+  return Boolean(config);
 }
 
 /**
@@ -462,20 +367,22 @@ async function generateLandingPageContent(args = {}) {
   await module.exports.checkBudgetCap(tenantId);
 
   const input = { destination, durationDays, audience, subBrand };
+  const callInput = { ...input, tenantId, userId: __userId };
   const inputSize = JSON.stringify(input).length;
 
   // Real-mode dispatch — cascade is Groq → Gemini → OpenAI → stub.
   // Groq (Llama-3.3-70B JSON-mode) is the new PRIMARY (2026-06-23):
   // faster, cheaper, and free of Gemini's transient 503/429 windows
   // that dropped UAT demos to the [REVIEW] stub. Skipped cleanly when
-  // GROQ_API_KEY is unset. The guardrail (Layer 3) wraps ALL providers
-  // so callers see one consistent shape regardless of which path served.
+  // the tenant has no BYOK/funded subscription. The guardrail (Layer 3)
+  // wraps ALL providers so callers see one consistent shape regardless
+  // of which path served.
   let realModeError = null;
   let groqError = null;
   let geminiError = null;
-  if (module.exports.groqEnabled()) {
+  if (await module.exports.groqEnabled(tenantId)) {
     try {
-      const { rawJson, modelUsed } = await module.exports.callGroq(input);
+      const { rawJson, modelUsed } = await module.exports.callGroq(callInput);
       const guardResult = guardLandingPageOutput(rawJson, input);
       const outputSize = JSON.stringify(guardResult.output).length;
       persistCallLog({
@@ -506,7 +413,7 @@ async function generateLandingPageContent(args = {}) {
 
   if (await module.exports.realModeEnabled(tenantId)) {
     try {
-      const { rawJson, modelUsed, promptTokens, completionTokens } = await module.exports.callGemini({ ...input, tenantId });
+      const { rawJson, modelUsed, promptTokens, completionTokens } = await module.exports.callGemini(callInput);
       const guardResult = guardLandingPageOutput(rawJson, input);
       const outputSize = JSON.stringify(guardResult.output).length;
       persistCallLog({
@@ -559,15 +466,15 @@ async function generateLandingPageContent(args = {}) {
   // OR exhausted — covers the "Gemini 503 + 429 storm" case from the
   // 2026-06-22 UAT report. Keeps real-mode output instead of dropping
   // to [REVIEW] stubs when the operator has OpenAI credit available.
-  if (module.exports.openAiFallbackEnabled()) {
+  if (await module.exports.openAiFallbackEnabled(tenantId)) {
     try {
-      const { rawJson, modelUsed } = await module.exports.callOpenAI(input);
+      const { rawJson, modelUsed } = await module.exports.callOpenAI(callInput);
       const guardResult = guardLandingPageOutput(rawJson, input);
       const outputSize = JSON.stringify(guardResult.output).length;
       persistCallLog({
         tenantId,
         stub: false,
-        realModeError: geminiError,
+        realModeError: formatGeminiLimitMessage(geminiError) || geminiError,
         inputSize,
         outputSize,
         model: modelUsed,
@@ -583,7 +490,7 @@ async function generateLandingPageContent(args = {}) {
         guardrailIssues: guardResult.issues,
         // Surface the upstream Gemini failure so the operator can see
         // why the fallback fired (or null when Gemini was simply absent).
-        realModeError: geminiError,
+        realModeError: formatGeminiLimitMessage(geminiError) || geminiError,
       };
     } catch (e) {
       realModeError = `Groq: ${groqError || 'n/a'}; Gemini: ${geminiError || 'n/a'}; OpenAI: ${e.message || String(e)}`;
@@ -596,7 +503,7 @@ async function generateLandingPageContent(args = {}) {
     // No OpenAI key configured — surface the upstream failures (Groq +
     // Gemini, whichever fired) so the operator can see why we landed in
     // the stub.
-    realModeError = [groqError && `Groq: ${groqError}`, geminiError && `Gemini: ${geminiError}`]
+    realModeError = [groqError && `Groq: ${groqError}`, geminiError && `Gemini: ${formatGeminiLimitMessage(geminiError) || geminiError}`]
       .filter(Boolean)
       .join('; ') || null;
   }
@@ -642,36 +549,21 @@ const REGISTRY_BY_FAMILY = {
   luxury: 'luxury-tour-v1',
 };
 
-async function callGeminiForTee({ system, user, apiKey, modelName }) {
-  // The existing callGeminiAttempt expects a single combined prompt.
-  // For TEE we concatenate system + user with a separator.
+async function callGeminiTeeCascade({ system, user, tenantId, userId }) {
+  // Model-quota cascade now lives inside lib/aiProviderManagement's
+  // resolver (config.fallbacks) — aiGateway.runAiRequest walks it
+  // automatically, same as the non-TEE callGemini above.
   const combined = `${system}\n\n──────────────────────────\nUSER REQUEST:\n${user}`;
-  return callGeminiAttempt({ apiKey, modelName, prompt: combined });
-}
-
-async function callGeminiTeeCascade({ system, user, tenantId }) {
-  let apiKey = process.env[GEMINI_KEY_ENV];
-  try {
-    const { getLlmKey } = require('../lib/llmRouter');
-    if (typeof getLlmKey === 'function') {
-      apiKey = (await getLlmKey(tenantId, MODEL_PRIMARY)) || apiKey;
-    }
-  } catch (_e) { /* not available; use env */ }
-  if (!apiKey) {
-    throw new Error('Gemini API key missing');
-  }
-  const models = [MODEL_PRIMARY, MODEL_PRIMARY_FALLBACK];
-  let lastErr;
-  for (const modelName of models) {
-    try {
-      const { rawJson } = await callGeminiForTee({ system, user, apiKey, modelName });
-      return { rawJson, modelUsed: modelName };
-    } catch (e) {
-      lastErr = e;
-      console.warn(`[landingPageGeneratorLLM-TEE] Gemini model=${modelName} failed: ${e && e.message}`);
-    }
-  }
-  throw lastErr || new Error('Gemini TEE cascade exhausted');
+  const resp = await aiGateway.runAiRequest({
+    tenantId,
+    userId,
+    task: TASK_NAME,
+    surface: 'landingPageGeneratorLLM-TEE',
+    requestedModelLabel: 'gemini-flash',
+    messages: [{ role: 'user', content: combined }],
+    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192 },
+  });
+  return { rawJson: parseGeminiJson(resp.text), modelUsed: resp.model };
 }
 
 /**
@@ -740,16 +632,16 @@ async function generateLandingPageContentWithTee(input = {}, options = {}) {
   let source = null;
   if (await module.exports.realModeEnabled(tenantId)) {
     try {
-      const r = await callGeminiTeeCascade({ system, user, tenantId });
+      const r = await callGeminiTeeCascade({ system, user, tenantId, userId: __userId });
       rawJson = r.rawJson;
       modelUsed = r.modelUsed;
       source = 'gemini';
     } catch (geminiErr) {
       console.error(`[landingPageGeneratorLLM-TEE] Gemini cascade exhausted: ${geminiErr && geminiErr.message}`);
-      if (module.exports.openAiFallbackEnabled()) {
+      if (await module.exports.openAiFallbackEnabled(tenantId)) {
         try {
           // OpenAI fallback also accepts the TEE prompt — same shape.
-          const openaiInput = { ...input, __teeSystem: system, __teeUser: user };
+          const openaiInput = { ...input, tenantId, userId: __userId, __teeSystem: system, __teeUser: user };
           const r = await module.exports.callOpenAI(openaiInput);
           rawJson = r.rawJson;
           modelUsed = r.modelUsed;
@@ -758,9 +650,9 @@ async function generateLandingPageContentWithTee(input = {}, options = {}) {
           console.error(`[landingPageGeneratorLLM-TEE] OpenAI fallback failed: ${openAiErr && openAiErr.message}`);
         }
       }
-      if (!rawJson && module.exports.groqEnabled()) {
+      if (!rawJson && await module.exports.groqEnabled(tenantId)) {
         try {
-          const r = await module.exports.callGroq(input);
+          const r = await module.exports.callGroq({ ...input, tenantId, userId: __userId });
           rawJson = r.rawJson;
           modelUsed = r.modelUsed;
           source = 'groq';

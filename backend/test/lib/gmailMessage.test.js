@@ -9,6 +9,7 @@ import {
   headerValue,
   parseGmailMessage,
   extractEmailAddress,
+  extractAttachments,
 } from "../../lib/gmailMessage.js";
 
 // Decode a base64url raw message back to its RFC-822 string + split the
@@ -192,5 +193,63 @@ describe("extractEmailAddress", () => {
     expect(extractEmailAddress("not an email")).toBeNull();
     expect(extractEmailAddress("")).toBeNull();
     expect(extractEmailAddress(null)).toBeNull();
+  });
+});
+
+describe("extractAttachments", () => {
+  it("collects attachment metadata from a multipart/mixed payload", () => {
+    const payload = {
+      mimeType: "multipart/mixed",
+      parts: [
+        { mimeType: "text/plain", body: { data: "dGV4dA" } },
+        {
+          mimeType: "application/pdf",
+          filename: "ticket.pdf",
+          body: { attachmentId: "att1", size: 12345 },
+        },
+        {
+          mimeType: "image/png",
+          filename: "boarding-pass.png",
+          body: { attachmentId: "att2", size: 67890 },
+        },
+      ],
+    };
+    const atts = extractAttachments(payload);
+    expect(atts).toHaveLength(2);
+    expect(atts[0]).toEqual({ filename: "ticket.pdf", mimeType: "application/pdf", size: 12345, attachmentId: "att1" });
+    expect(atts[1]).toEqual({ filename: "boarding-pass.png", mimeType: "image/png", size: 67890, attachmentId: "att2" });
+  });
+
+  it("returns an empty array when there are no attachments", () => {
+    expect(extractAttachments({ mimeType: "text/plain", body: { data: "dGV4dA" } })).toEqual([]);
+    expect(extractAttachments(null)).toEqual([]);
+  });
+
+  it("deduplicates by filename+attachmentId", () => {
+    const payload = {
+      parts: [
+        { mimeType: "application/pdf", filename: "x.pdf", body: { attachmentId: "a1", size: 1 } },
+        { mimeType: "application/pdf", filename: "x.pdf", body: { attachmentId: "a1", size: 1 } },
+      ],
+    };
+    expect(extractAttachments(payload)).toHaveLength(1);
+  });
+});
+
+describe("parseGmailMessage attachments", () => {
+  it("includes attachment metadata on the parsed message", () => {
+    const msg = parseGmailMessage({
+      id: "m5",
+      payload: {
+        mimeType: "multipart/mixed",
+        headers: [{ name: "Subject", value: "Ticket" }],
+        parts: [
+          { mimeType: "text/plain", body: { data: Buffer.from("body", "utf8").toString("base64url") } },
+          { mimeType: "application/pdf", filename: "ticket.pdf", body: { attachmentId: "att1", size: 100 } },
+        ],
+      },
+    });
+    expect(msg.attachments).toHaveLength(1);
+    expect(msg.attachments[0].attachmentId).toBe("att1");
   });
 });

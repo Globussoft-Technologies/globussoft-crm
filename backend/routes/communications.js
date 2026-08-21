@@ -178,13 +178,38 @@ router.get("/inbox", async (req, res) => {
     const where = { tenantId: req.user.tenantId };
     if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
     else if (req.query.folder === 'inbox') where.direction = 'INBOUND';
-    const emails = await prisma.emailMessage.findMany({
-      where,
-      include: { contact: true },
-      orderBy: { createdAt: 'desc' },
-      take: 50
+
+    const page = Number.parseInt(req.query.page, 10);
+    const limit = Number.parseInt(req.query.limit, 10);
+    const wantsPagination = Number.isFinite(page) && page > 0 && Number.isFinite(limit) && limit > 0;
+    const skip = wantsPagination ? (page - 1) * limit : 0;
+    const take = wantsPagination ? limit : 50;
+
+    const [emails, total] = await Promise.all([
+      prisma.emailMessage.findMany({
+        where,
+        include: { contact: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      wantsPagination ? prisma.emailMessage.count({ where }) : Promise.resolve(null),
+    ]);
+
+    if (!wantsPagination) {
+      return res.json(emails);
+    }
+
+    res.json({
+      emails,
+      pagination: {
+        total,
+        page,
+        limit: take,
+        pages: Math.max(1, Math.ceil(total / take)),
+        hasMore: skip + emails.length < total,
+      },
     });
-    res.json(emails);
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch inbox load" });
   }
@@ -446,13 +471,37 @@ router.get("/calls", async (req, res) => {
   }
 
   try {
-    const calls = await prisma.callLog.findMany({
-      where: { tenantId: req.user.tenantId },
-      include: { contact: true },
-      orderBy: { createdAt: 'desc' },
-      take: 200,
+    const page = Number.parseInt(req.query.page, 10);
+    const limit = Number.parseInt(req.query.limit, 10);
+    const wantsPagination = Number.isFinite(page) && page > 0 && Number.isFinite(limit) && limit > 0;
+    const skip = wantsPagination ? (page - 1) * limit : 0;
+    const take = wantsPagination ? limit : 200;
+
+    const [calls, total] = await Promise.all([
+      prisma.callLog.findMany({
+        where: { tenantId: req.user.tenantId },
+        include: { contact: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      wantsPagination ? prisma.callLog.count({ where: { tenantId: req.user.tenantId } }) : Promise.resolve(null),
+    ]);
+
+    if (!wantsPagination) {
+      return res.json(calls);
+    }
+
+    res.json({
+      calls,
+      pagination: {
+        total,
+        page,
+        limit: take,
+        pages: Math.max(1, Math.ceil(total / take)),
+        hasMore: skip + calls.length < total,
+      },
     });
-    res.json(calls);
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch call history" });
   }

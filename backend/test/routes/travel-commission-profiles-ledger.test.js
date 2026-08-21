@@ -175,8 +175,10 @@ describe('GET /api/travel/commission-profiles/:id/ledger', () => {
       profileId: 42,
       profileName: 'Standard 5%',
       profileType: 'flat_percent',
+      releaseMode: 'on_booking',
       totalEntries: 3,
-      totalCommission: 17500, // 5% of (100000 + 200000 + 50000)
+      totalCommission: 15000, // 5% of released won deals (100000 + 200000)
+      pendingCommission: 2500, // 5% of proposal deal (50000)
       limit: 50,
       offset: 0,
     });
@@ -223,6 +225,7 @@ describe('GET /api/travel/commission-profiles/:id/ledger', () => {
       profileId: 42,
       totalEntries: 0,
       totalCommission: 0,
+      pendingCommission: 0,
     });
     expect(res.body.entries).toEqual([]);
   });
@@ -240,6 +243,7 @@ describe('GET /api/travel/commission-profiles/:id/ledger', () => {
     expect(res.body.totalEntries).toBe(2);
     // Won-only commission: 5% of (100000 + 200000) = 15000.
     expect(res.body.totalCommission).toBe(15000);
+    expect(res.body.pendingCommission).toBe(0);
     expect(prisma.deal.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ stage: 'won' }),
@@ -307,6 +311,7 @@ describe('GET /api/travel/commission-profiles/:id/ledger', () => {
     });
     expect(res.body.entries[0].breakdown).toMatch(/malformed profileJson/);
     expect(res.body.totalCommission).toBe(0);
+    expect(res.body.pendingCommission).toBe(0);
   });
 
   test('invalid :id segment (non-numeric) returns 400 INVALID_ID', async () => {

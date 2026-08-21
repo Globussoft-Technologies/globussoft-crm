@@ -108,10 +108,12 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
 
   it('2. quote envelope loads → renders id + customer + lines + total', async () => {
     renderPage();
+    // Wait for a loaded-state marker. "Your quote" is intentionally avoided
+    // because the loading spinner contains "Loading your quote…", so a regex
+    // match on /Your quote/i can succeed before the fetch resolves.
     await waitFor(() =>
-      expect(screen.getByText(/Your quote/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Quote #42/i)).toBeInTheDocument(),
     );
-    expect(screen.getByText(/Quote #42/i)).toBeInTheDocument();
     expect(screen.getByText(/Aisha Khan/i)).toBeInTheDocument();
     expect(screen.getByText(/Hotel — 3 nights/i)).toBeInTheDocument();
     expect(screen.getByText(/Coach transfer/i)).toBeInTheDocument();
@@ -122,8 +124,38 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
       /50,000/.test(content) || /50000/.test(content),
     );
     expect(totalNode).toBeInTheDocument();
+    expect(screen.getByText(/per night/i)).toBeInTheDocument();
+    expect(screen.getByText(/per item/i)).toBeInTheDocument();
   });
 
+  it('2b. hides internal pricing breakdown even when the public envelope includes it', async () => {
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(makeEnvelope({
+          breakdown: {
+            baseSubtotal: 42000,
+            seasonMultiplier: 0.9,
+            matchedSeasonName: 'lean',
+            subtotal: 37800,
+            markupApplied: [{ ruleId: 1, ruleName: 'Supplier markup', amount: 5000 }],
+            total: 50000,
+          },
+        })),
+      }),
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByText(/Quote #42/i)).toBeInTheDocument(),
+    );
+
+    expect(screen.queryByText(/How your quote is calculated/i)).toBeNull();
+    expect(screen.queryByText(/Base subtotal/i)).toBeNull();
+    expect(screen.queryByText(/Season/i)).toBeNull();
+    expect(screen.queryByText(/Markups/i)).toBeNull();
+    expect(screen.queryByText(/Total with markup/i)).toBeNull();
+  });
   it('3. 404 → friendly "expired or no longer available" message', async () => {
     fetchSpy.mockImplementation(() =>
       Promise.resolve({
@@ -154,7 +186,7 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
 
   it('5. accept happy path → confirmation form → POST → thank-you', async () => {
     renderPage();
-    await waitFor(() => screen.getByText(/Your quote/i));
+    await waitFor(() => screen.getByText(/Your trip includes/i));
 
     fireEvent.click(screen.getByRole('button', { name: /Accept this quote/i }));
     await waitFor(() =>
@@ -185,7 +217,7 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
 
   it('6. reject requires reason — empty submit surfaces validation', async () => {
     renderPage();
-    await waitFor(() => screen.getByText(/Your quote/i));
+    await waitFor(() => screen.getByText(/Your trip includes/i));
 
     fireEvent.click(screen.getByRole('button', { name: /Decline/i }));
     await waitFor(() =>
@@ -202,7 +234,7 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
 
   it('7. 409 ALREADY_ACTIONED on accept → friendly message', async () => {
     renderPage();
-    await waitFor(() => screen.getByText(/Your quote/i));
+    await waitFor(() => screen.getByText(/Your trip includes/i));
 
     fireEvent.click(screen.getByRole('button', { name: /Accept this quote/i }));
     await waitFor(() =>

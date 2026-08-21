@@ -49,6 +49,14 @@ const HOTEL_ATTRIBUTES = Object.freeze({
   floorLevel: Object.freeze(["low", "mid", "high"]),
 });
 
+const CATEGORY_TO_SUPPLIER_CATEGORY = Object.freeze({
+  hotel: "hotel",
+  flight: "flight",
+  transport: "transport",
+  visa: "visa-consul",
+  insurance: "other",
+});
+
 function attributesError(message) {
   const err = new Error(message);
   err.status = 400;
@@ -110,6 +118,30 @@ function withAttributes(row) {
   return { ...row, attributes: parseAttributes(row.attributesJson) };
 }
 
+async function decorateRates(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const supplierIds = [...new Set(list.map((row) => row.supplierId).filter((id) => id != null))];
+  const seasonIds = [...new Set(list.map((row) => row.seasonId).filter((id) => id != null))];
+
+  const [suppliers, seasons] = await Promise.all([
+    supplierIds.length
+      ? prisma.travelSupplier.findMany({ where: { id: { in: supplierIds } }, select: { id: true, name: true } })
+      : Promise.resolve([]),
+    seasonIds.length
+      ? prisma.travelSeasonCalendar.findMany({ where: { id: { in: seasonIds } }, select: { id: true, seasonName: true } })
+      : Promise.resolve([]),
+  ]);
+
+  const supplierById = new Map(suppliers.map((row) => [row.id, row.name]));
+  const seasonById = new Map(seasons.map((row) => [row.id, row.seasonName]));
+
+  return list.map((row) => ({
+    ...withAttributes(row),
+    supplierName: row.supplierId != null ? supplierById.get(row.supplierId) || null : null,
+    seasonName: row.seasonId != null ? seasonById.get(row.seasonId) || null : null,
+  }));
+}
+
 function naturalWhereFor(row, tenantId = row.tenantId) {
   return {
     tenantId,
@@ -117,6 +149,84 @@ function naturalWhereFor(row, tenantId = row.tenantId) {
     category: row.category,
     routeOrSku: row.routeOrSku,
   };
+}
+
+function parseOptionalDate(value, fieldName) {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const err = new Error(`${fieldName} must be a valid date`);
+    err.status = 400;
+    err.code = "INVALID_DATE";
+    throw err;
+  }
+  return date;
+}
+
+async function resolveSupplierId({ tenantId, subBrand, category, supplierId, supplierName }) {
+  if (supplierName != null && String(supplierName).trim()) {
+    const trimmedName = String(supplierName).trim();
+    const existing = await prisma.travelSupplier.findFirst({
+      where: { tenantId, subBrand, name: trimmedName },
+      orderBy: [{ isActive: "desc" }, { id: "asc" }],
+    });
+    if (existing) return existing.id;
+
+    const created = await prisma.travelSupplier.create({
+      data: {
+        tenantId,
+        subBrand,
+        name: trimmedName,
+        supplierCategory: CATEGORY_TO_SUPPLIER_CATEGORY[category] || "other",
+      },
+    });
+    return created.id;
+  }
+
+  if (supplierId === undefined) return undefined;
+  if (supplierId === null || supplierId === "") return null;
+  const parsed = parseInt(supplierId, 10);
+  if (!Number.isFinite(parsed)) {
+    const err = new Error("supplierId must be a number");
+    err.status = 400;
+    err.code = "INVALID_SUPPLIER";
+    throw err;
+  }
+  return parsed;
+}
+
+async function resolveSeasonId({ tenantId, subBrand, seasonId, seasonName, validFrom, validTo }) {
+  if (seasonName != null && String(seasonName).trim()) {
+    const trimmedName = String(seasonName).trim();
+    const existing = await prisma.travelSeasonCalendar.findFirst({
+      where: { tenantId, subBrand, seasonName: trimmedName },
+      orderBy: [{ startDate: "asc" }, { id: "asc" }],
+    });
+    if (existing) return existing.id;
+    const fallbackDate = new Date();
+    const created = await prisma.travelSeasonCalendar.create({
+      data: {
+        tenantId,
+        subBrand,
+        seasonName: trimmedName,
+        startDate: validFrom || fallbackDate,
+        endDate: validTo || validFrom || fallbackDate,
+      },
+    });
+    return created.id;
+  }
+
+  if (seasonId === undefined) return undefined;
+  if (seasonId === null || seasonId === "") return null;
+  const parsed = parseInt(seasonId, 10);
+  if (!Number.isFinite(parsed)) {
+    const err = new Error("seasonId must be a number");
+    err.status = 400;
+    err.code = "INVALID_SEASON";
+    throw err;
+  }
+  return parsed;
 }
 
 function assertValidCategory(c) {
@@ -195,7 +305,7 @@ router.get("/cost-master", verifyToken, requireTravelTenant, async (req, res) =>
         }
         return true;
       });
-      const paged = matched.slice(skip, skip + take).map(withAttributes);
+      const paged = await decorateRates(matched.slice(skip, skip + take));
       return res.json({ rates: paged, total: matched.length, limit: take, offset: skip });
     }
 
@@ -208,7 +318,7 @@ router.get("/cost-master", verifyToken, requireTravelTenant, async (req, res) =>
       }),
       prisma.travelCostMaster.count({ where }),
     ]);
-    res.json({ rates: rates.map(withAttributes), total, limit: take, offset: skip });
+    res.json({ rates: await decorateRates(rates), total, limit: take, offset: skip });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-cost] list error:", e.message);
@@ -226,8 +336,8 @@ router.post(
     try {
       const {
         subBrand, category, routeOrSku, baseRate,
-        supplierId, attributesJson, attributes, currency,
-        seasonId, validFrom, validTo, isActive,
+        supplierId, supplierName, attributesJson, attributes, currency,
+        seasonId, seasonName, validFrom, validTo, isActive,
       } = req.body || {};
 
       if (!subBrand || !category || !routeOrSku || baseRate == null) {
@@ -257,6 +367,26 @@ router.post(
       const storedAttributesJson = normalizedAttrs
         ? sanitizeJsonForStringColumn(normalizedAttrs)
         : (attributesJson ? String(attributesJson) : null);
+      const parsedValidFrom = parseOptionalDate(validFrom, "validFrom");
+      const parsedValidTo = parseOptionalDate(validTo, "validTo");
+      if (parsedValidFrom && parsedValidTo && parsedValidTo < parsedValidFrom) {
+        return res.status(400).json({ error: "validTo must be on or after validFrom", code: "INVERTED_DATES" });
+      }
+      const resolvedSupplierId = await resolveSupplierId({
+        tenantId: req.travelTenant.id,
+        subBrand,
+        category,
+        supplierId,
+        supplierName,
+      });
+      const resolvedSeasonId = await resolveSeasonId({
+        tenantId: req.travelTenant.id,
+        subBrand,
+        seasonId,
+        seasonName,
+        validFrom: parsedValidFrom,
+        validTo: parsedValidTo,
+      });
 
       const created = await prisma.travelCostMaster.create({
         data: {
@@ -265,12 +395,12 @@ router.post(
           category,
           routeOrSku: String(routeOrSku),
           baseRate: rate,
-          supplierId: supplierId ? parseInt(supplierId, 10) : null,
+          supplierId: resolvedSupplierId === undefined ? null : resolvedSupplierId,
           attributesJson: storedAttributesJson,
           currency: currency || "INR",
-          seasonId: seasonId ? parseInt(seasonId, 10) : null,
-          validFrom: validFrom ? new Date(validFrom) : null,
-          validTo: validTo ? new Date(validTo) : null,
+          seasonId: resolvedSeasonId === undefined ? null : resolvedSeasonId,
+          validFrom: parsedValidFrom ?? null,
+          validTo: parsedValidTo ?? null,
           isActive: isActive !== false,
         },
       });
@@ -706,7 +836,6 @@ router.patch(
         }
         data.baseRate = rate;
       }
-      if (body.supplierId !== undefined) data.supplierId = body.supplierId ? parseInt(body.supplierId, 10) : null;
       if (body.attributesJson !== undefined) data.attributesJson = body.attributesJson ? String(body.attributesJson) : null;
       if (body.attributes !== undefined) {
         // Structured attributes win over raw attributesJson when both sent.
@@ -715,9 +844,38 @@ router.patch(
         data.attributesJson = normalizedAttrs ? sanitizeJsonForStringColumn(normalizedAttrs) : null;
       }
       if (body.currency !== undefined) data.currency = body.currency || "INR";
-      if (body.seasonId !== undefined) data.seasonId = body.seasonId ? parseInt(body.seasonId, 10) : null;
-      if (body.validFrom !== undefined) data.validFrom = body.validFrom ? new Date(body.validFrom) : null;
-      if (body.validTo !== undefined) data.validTo = body.validTo ? new Date(body.validTo) : null;
+      const nextValidFrom = parseOptionalDate(
+        body.validFrom !== undefined ? body.validFrom : existing.validFrom,
+        "validFrom",
+      );
+      const nextValidTo = parseOptionalDate(
+        body.validTo !== undefined ? body.validTo : existing.validTo,
+        "validTo",
+      );
+      if (nextValidFrom && nextValidTo && nextValidTo < nextValidFrom) {
+        return res.status(400).json({ error: "validTo must be on or after validFrom", code: "INVERTED_DATES" });
+      }
+      if (body.validFrom !== undefined) data.validFrom = nextValidFrom;
+      if (body.validTo !== undefined) data.validTo = nextValidTo;
+      if (body.supplierId !== undefined || body.supplierName !== undefined) {
+        data.supplierId = await resolveSupplierId({
+          tenantId: req.travelTenant.id,
+          subBrand: existing.subBrand,
+          category: data.category !== undefined ? data.category : existing.category,
+          supplierId: body.supplierId,
+          supplierName: body.supplierName,
+        });
+      }
+      if (body.seasonId !== undefined || body.seasonName !== undefined) {
+        data.seasonId = await resolveSeasonId({
+          tenantId: req.travelTenant.id,
+          subBrand: existing.subBrand,
+          seasonId: body.seasonId,
+          seasonName: body.seasonName,
+          validFrom: nextValidFrom,
+          validTo: nextValidTo,
+        });
+      }
       if (body.isActive !== undefined) data.isActive = !!body.isActive;
 
       if (Object.keys(data).length === 0) {

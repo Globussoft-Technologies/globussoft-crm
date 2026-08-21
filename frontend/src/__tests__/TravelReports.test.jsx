@@ -139,6 +139,10 @@ vi.mock('../utils/notify', () => ({
 
 import TravelReports from '../pages/travel/Reports';
 
+function renderTravelReports() {
+  return render(<TravelReports />);
+}
+
 // Canonical populated responses.
 const TMC_POPULATED = {
   revenue: {
@@ -146,6 +150,10 @@ const TMC_POPULATED = {
     topDestinations: [
       { destination: 'Goa', revenue: 500000 },
       { destination: 'Manali', revenue: 300000 },
+    ],
+    rows: [
+      { id: 101, tripCode: 'tmc-goa-2026', destination: 'Goa', schoolName: 'Bharat Public School', schoolId: 501, status: 'confirmed', pax: 25, pricePerStudent: 20000, revenue: 500000, departDate: '2026-03-28T00:00:00.000Z', returnDate: '2026-04-04T00:00:00.000Z' },
+      { id: 102, tripCode: 'tmc-manali-2026', destination: 'Manali', schoolName: 'Bharat Public School', schoolId: 501, status: 'completed', pax: 15, pricePerStudent: 20000, revenue: 300000, departDate: '2026-05-10T00:00:00.000Z', returnDate: '2026-05-15T00:00:00.000Z' },
     ],
   },
   trips: {
@@ -164,7 +172,7 @@ const TMC_POPULATED = {
 };
 
 const TMC_EMPTY = {
-  revenue: { total: 0, topDestinations: [] },
+  revenue: { total: 0, topDestinations: [], rows: [] },
   trips: { total: 0, active: 0, byStatus: {} },
   schools: { unique: 0, repeat: 0, repeatRatePct: 0 },
   deals: { byStage: {}, amountByStage: {} },
@@ -180,11 +188,22 @@ const RFU_POPULATED = {
   customers: { unique: 7, repeat: 2, repeatRatePct: 28.6 },
   diagnostics: {
     byTier: { tier_1: 3, tier_2: 4, tier_3: 1 },
-    byClassification: { ready: 5, blocked: 2 },
+    byClassification: { level_1: 1, level_2: 2, level_3: 3 },
   },
   deals: {
     byStage: { Discovery: 1, Closed_Won: 2 },
     amountByStage: { Discovery: 30000, Closed_Won: 600000 },
+  },
+  quotes: {
+    byStatus: { Accepted: 4, advance_paid: 1, Draft: 1, Sent: 1 },
+    amountByStatus: { Accepted: 1949543.2, advance_paid: 198257.15, Draft: 225523.13, Sent: 256352.65 },
+  },
+  revenueRows: [
+    { id: 301, destination: 'Dubai Umrah support', status: 'advance_paid', amount: 198257.15, currency: 'INR', pax: 2, contactName: 'Mohit', updatedAt: '2026-08-03T08:00:00.000Z' },
+  ],
+  agentProductivity: {
+    agents: [{ userId: 44, name: 'RFU Advisor', totalActions: 7, createdQuotes: 2, sentQuotes: 2, acceptedQuotes: 1, declinedQuotes: 0, updatedQuotes: 1, paidQuotes: 1, paymentAmount: 98257.15 }],
+    payments: [{ paymentId: 9001, userId: 44, agentName: 'RFU Advisor', quoteId: 21, quoteStatus: 'advance_paid', quoteTotal: 198257.15, amount: 98257.15, paidAt: '2026-08-03T08:00:00.000Z' }],
   },
 };
 
@@ -193,6 +212,9 @@ const RFU_EMPTY = {
   customers: { unique: 0, repeat: 0, repeatRatePct: 0 },
   diagnostics: { byTier: {}, byClassification: {} },
   deals: { byStage: {}, amountByStage: {} },
+  quotes: { byStatus: {}, amountByStatus: {} },
+  revenueRows: [],
+  agentProductivity: { agents: [], payments: [] },
 };
 
 const CROSS_BRAND_POPULATED = {
@@ -205,12 +227,28 @@ const CROSS_BRAND_POPULATED = {
 
 const CROSS_BRAND_EMPTY = { subBrands: {} };
 
+const SUMMARY_POPULATED = {
+  tmc: { trips: { total: 12, active: 4 }, revenue: { total: 1234567, currency: 'INR' }, schools: { unique: 8, repeat: 3, repeatRatePct: 37.5 } },
+  rfu: { itineraries: { total: 9, revenue: 655000 }, customers: { unique: 7, repeat: 2, repeatRatePct: 28.6 }, currency: 'INR' },
+  crossBrand: { subBrandCount: 3, totalWon: 16, totalLost: 9, totalWonRevenue: 1984567, conversionPct: 64, currency: 'INR' },
+  salesFunnel: { total: 25, accepted: 16, rejected: 9, conversionPct: 64, byStatus: { Accepted: 16, Rejected: 9 }, bySubBrand: {}, currency: 'INR' },
+  agentProductivity: { agents: [{ userId: 10, name: 'Asha Advisor', totalActions: 8, createdQuotes: 2, sentQuotes: 1, acceptedQuotes: 4, declinedQuotes: 0, updatedQuotes: 0, paidQuotes: 1, paymentAmount: 100000, byAction: { CREATE: 2, QUOTE_SHARE: 1, TRAVEL_QUOTE_ACCEPTED: 4, TRAVEL_QUOTE_PAYMENT_COLLECTED: 1 } }] },
+  subBrandPnl: { rows: { tmc: { revenue: 500000, capturedCost: 320000, grossProfit: 180000, marginPct: 36, invoiceCount: 2 } }, currency: 'INR' },
+  visaApproval: { total: 10, approved: 7, rejected: 3, decided: 10, approvalRatePct: 70, byStatus: { approved: 7, rejected: 3 } },
+  checkinMiss: { total: 12, completed: 10, missed: 2, missRatePct: 16.67, byStatus: { done: 10, failed: 1, 'fallback-agent': 1 } },
+  generatedAt: '2026-07-31T08:00:00.000Z',
+};
+
 function installFetchMock({
   tmc = TMC_POPULATED,
   rfu = RFU_POPULATED,
   crossBrand = CROSS_BRAND_POPULATED,
+  summary = SUMMARY_POPULATED,
 } = {}) {
   fetchApiMock.mockImplementation((url) => {
+    if (url === '/api/travel/reports/summary') {
+      return summary instanceof Error ? Promise.reject(summary) : Promise.resolve(summary);
+    }
     if (url === '/api/travel/reports/tmc') {
       return tmc instanceof Error ? Promise.reject(tmc) : Promise.resolve(tmc);
     }
@@ -242,13 +280,19 @@ describe('<TravelReports /> — page chrome + tabs', () => {
     expect(
       screen.getByRole('heading', { name: /Travel Reports/i }),
     ).toBeInTheDocument();
-    // All three tabs render as role=tab.
+    // All report tabs render as role=tab.
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(3);
+    expect(tabs).toHaveLength(7);
     expect(tabs.map((t) => t.textContent.trim())).toEqual(
-      expect.arrayContaining([expect.stringContaining('TMC'),
+      expect.arrayContaining([
+        expect.stringContaining('Overview'),
+        expect.stringContaining('TMC'),
         expect.stringContaining('RFU'),
-        expect.stringContaining('Cross-brand')]),
+        expect.stringContaining('Cross-brand'),
+        expect.stringContaining('Brand tours'),
+        expect.stringContaining('Agents'),
+        expect.stringContaining('Leads'),
+      ]),
     );
     // Let the mount-time GET settle.
     await waitFor(() => {
@@ -256,12 +300,12 @@ describe('<TravelReports /> — page chrome + tabs', () => {
     });
   });
 
-  it('defaults to TMC tab selected (aria-selected=true)', async () => {
-    render(<TravelReports />);
+  it('defaults to Overview tab selected (aria-selected=true)', async () => {
+    renderTravelReports();
+    const overviewTab = screen.getByRole('tab', { name: /Overview/i });
+    expect(overviewTab.getAttribute('aria-selected')).toBe('true');
     const tmcTab = screen.getByRole('tab', { name: /TMC/i });
-    expect(tmcTab.getAttribute('aria-selected')).toBe('true');
-    const rfuTab = screen.getByRole('tab', { name: /RFU/i });
-    expect(rfuTab.getAttribute('aria-selected')).toBe('false');
+    expect(tmcTab.getAttribute('aria-selected')).toBe('false');
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalled();
     });
@@ -269,12 +313,12 @@ describe('<TravelReports /> — page chrome + tabs', () => {
 });
 
 describe('<TravelReports /> — mount + lazy-per-tab fetching', () => {
-  it('fires GET /api/travel/reports/tmc on mount (initial tab is TMC) and does NOT pre-fetch other tabs', async () => {
-    render(<TravelReports />);
+  it('fires GET /api/travel/reports/summary on mount (initial tab is Overview) and does NOT pre-fetch detail tabs', async () => {
+    renderTravelReports();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
     });
-    expect(fetchApiMock.mock.calls[0][0]).toBe('/api/travel/reports/tmc');
+    expect(fetchApiMock.mock.calls[0][0]).toBe('/api/travel/reports/summary');
   });
 
   it('shows "Loading report…" while the TMC GET is in flight', async () => {
@@ -287,7 +331,7 @@ describe('<TravelReports /> — mount + lazy-per-tab fetching', () => {
     // The SUT uses an HTML entity for the ellipsis (&hellip;) which RTL
     // resolves to the literal "…" character. Use the prefix substring.
     expect(screen.getByText(/Loading report/i)).toBeInTheDocument();
-    resolveTmc(TMC_POPULATED);
+    resolveTmc(SUMMARY_POPULATED);
     await waitFor(() => {
       expect(screen.queryByText(/Loading report/i)).toBeNull();
     });
@@ -319,9 +363,25 @@ describe('<TravelReports /> — mount + lazy-per-tab fetching', () => {
   });
 });
 
+
+describe('<TravelReports /> - overview baseline cards', () => {
+  it('renders complete overview baseline report cards', async () => {
+    renderTravelReports();
+    expect(await screen.findByText(/Sales funnel/i)).toBeInTheDocument();
+    expect(screen.getByText(/Agent productivity/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sub-brand P&L/i)).toBeInTheDocument();
+    expect(screen.getByText(/Visa approval rate/i)).toBeInTheDocument();
+    expect(screen.getByText(/Check-in miss rate/i)).toBeInTheDocument();
+    expect(screen.getByText(/64% quote conversion/i)).toBeInTheDocument();
+    expect(screen.getByText(/Asha Advisor: 8 actions \(2 created, 1 sent, 4 accepted, 1 paid, .*1,00,000.* collected\)/i)).toBeInTheDocument();
+  });
+});
+
 describe('<TravelReports /> — TMC tab content', () => {
   it('renders TMC KPI tiles + cards with populated data', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
+    await screen.findByText(/Sales funnel/i);
+    fireEvent.click(screen.getByRole('tab', { name: /TMC/i }));
     // KPI tile labels.
     expect(
       await screen.findByText(/Total revenue \(active trips\)/i),
@@ -331,7 +391,7 @@ describe('<TravelReports /> — TMC tab content', () => {
     expect(screen.getByText(/Trip status/i)).toBeInTheDocument();
     expect(screen.getByText(/Deal funnel/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/Diagnostics by classification/i),
+      screen.getByText(/Diagnostics by lead type/i),
     ).toBeInTheDocument();
     // Top destinations card title includes the dynamic top-N count.
     expect(
@@ -348,6 +408,8 @@ describe('<TravelReports /> — TMC tab content', () => {
     // The value appears in BOTH the KPI tile (Total revenue) AND the
     // Closed_Won row of the Deal funnel — use findAllByText per the
     // RTL standing rule (label appears in multiple chrome layers).
+    await screen.findByText(/Sales funnel/i);
+    fireEvent.click(screen.getByRole('tab', { name: /TMC/i }));
     await screen.findByText(/Total revenue/i);
     const matches = await screen.findAllByText(/₹12,34,567/);
     expect(matches.length).toBeGreaterThanOrEqual(1);
@@ -355,7 +417,9 @@ describe('<TravelReports /> — TMC tab content', () => {
 
   it('renders TMC empty-state copy when no revenue / no schools', async () => {
     installFetchMock({ tmc: TMC_EMPTY });
-    render(<TravelReports />);
+    renderTravelReports();
+    await screen.findByText(/Sales funnel/i);
+    fireEvent.click(screen.getByRole('tab', { name: /TMC/i }));
     // Top destinations card → empty card copy.
     expect(
       await screen.findByText(/No revenue recorded yet\./i),
@@ -377,14 +441,39 @@ describe('<TravelReports /> — RFU tab content', () => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
     });
     fireEvent.click(screen.getByRole('tab', { name: /RFU/i }));
-    // RFU-specific labels.
-    expect(await screen.findByText(/^Itineraries$/i)).toBeInTheDocument();
-    expect(screen.getByText(/Diagnostic tier mix/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/Itinerary revenue by status/i),
-    ).toBeInTheDocument();
-    // RFU customers footer (7 customers · 2 repeat (28.6%)).
+    // RFU-specific analytics.
+    expect(await screen.findByText(/RFU itinerary revenue/i)).toBeInTheDocument();
+    expect(screen.getByText(/Advisor activity/i)).toBeInTheDocument();
+    expect(screen.getByText(/Revenue health/i)).toBeInTheDocument();
+    expect(screen.getByText(/Diagnostics intelligence/i)).toBeInTheDocument();
+    expect(screen.getByText(/Diagnostics by lead type/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Standard readiness/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Confident readiness/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Premium readiness/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/level_1/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/RFU Advisor/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/7 actions/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 paid, .*98,257.15.* collected/i)).toBeInTheDocument();
     expect(screen.getByText(/7 customers/i)).toBeInTheDocument();
+  });
+
+  it('opens RFU report-native revenue and advisor drilldowns', async () => {
+    renderTravelReports();
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledTimes(1);
+    });
+    fireEvent.click(screen.getByRole('tab', { name: /RFU/i }));
+
+    fireEvent.click(await screen.findByRole('button', { name: /Revenue health - View revenue detail/i }));
+    expect(screen.getByText(/RFU revenue source detail/i)).toBeInTheDocument();
+    expect(screen.getByText(/Itinerary #301/i)).toBeInTheDocument();
+    expect(screen.getByText(/Dubai Umrah support/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Quote #21/i).length).toBeGreaterThanOrEqual(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Advisor activity - View advisor detail/i }));
+    expect(screen.getByText(/RFU advisor deal and collection detail/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/RFU Advisor/i).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(/INR 98,257.15/i).length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders RFU empty-state copy when no itineraries / no customers', async () => {
@@ -398,8 +487,7 @@ describe('<TravelReports /> — RFU tab content', () => {
     expect(
       await screen.findByText(/No itineraries yet\./i),
     ).toBeInTheDocument();
-    // No customers → "no customers yet" footer.
-    expect(screen.getByText(/no customers yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/0 repeat from 0 customers/i)).toBeInTheDocument();
     // No diagnostics → "no diagnostics" copy renders in BOTH the tier-mix
     // tile footer AND the byClassification KeyValueList empty (slightly
     // different copy: "no diagnostics yet" tile footer vs "No diagnostics
@@ -416,24 +504,22 @@ describe('<TravelReports /> — Cross-brand tab content', () => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
     });
     fireEvent.click(screen.getByRole('tab', { name: /Cross-brand/i }));
-    // Card title is rendered.
-    expect(
-      await screen.findByText(/Won-revenue \+ conversion by sub-brand/i),
-    ).toBeInTheDocument();
-    // Each brand renders a badge with the brand string verbatim.
-    // "TMC" + "RFU" ALSO appear as tab labels — use findAllByText per
-    // the RTL standing rule (label appears in multiple chrome layers),
-    // and assert at least 2 matches for those (tab + badge), exactly 1
-    // for TRAVEL_STALL (badge only).
-    const tmcMatches = screen.getAllByText('TMC');
-    expect(tmcMatches.length).toBeGreaterThanOrEqual(2);
-    const rfuMatches = screen.getAllByText('RFU');
-    expect(rfuMatches.length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('TRAVEL_STALL')).toBeInTheDocument();
-    // Conversion % values render as "<n>%".
-    expect(screen.getByText('80%')).toBeInTheDocument();
-    expect(screen.getByText('62%')).toBeInTheDocument();
-    expect(screen.getByText('43%')).toBeInTheDocument();
+    expect(await screen.findByText(/Brand comparison/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sub-brands active/i)).toBeInTheDocument();
+    expect(screen.getByText(/Accepted quotes/i)).toBeInTheDocument();
+    expect(screen.getByText(/Raw brand metrics/i)).toBeInTheDocument();
+
+    // Each brand renders a badge with the brand string verbatim. TMC + RFU
+    // also appear as tabs/details, so assert at least one visible match.
+    expect(screen.getAllByText('TMC').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('RFU').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('TRAVEL_STALL').length).toBeGreaterThanOrEqual(1);
+
+    expect(screen.getByText(/TMC detailed view/i)).toBeInTheDocument();
+    expect(screen.getByText(/Quote acceptance/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /RFU.*accepted/i }));
+    expect(screen.getByText(/RFU detailed view/i)).toBeInTheDocument();
+    expect(screen.getByText(/62%/i)).toBeInTheDocument();
   });
 
   it('renders Cross-brand empty-state when no sub-brand activity', async () => {
@@ -457,7 +543,9 @@ describe('<TravelReports /> — error chrome + 403 quiet path', () => {
     err.body = { error: 'TMC report service unavailable' };
     err.status = 500;
     installFetchMock({ tmc: err });
-    render(<TravelReports />);
+    renderTravelReports();
+    await screen.findByText(/Sales funnel/i);
+    fireEvent.click(screen.getByRole('tab', { name: /TMC/i }));
     // Inline error chrome surfaces.
     expect(
       await screen.findByText(/TMC report service unavailable/i),

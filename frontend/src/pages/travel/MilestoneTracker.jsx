@@ -16,9 +16,10 @@
 //
 // Filter surface mirrors the backend's query-param contract:
 //   - status (pending|partial|paid|overdue|waived) — filter chip strip.
-//   - within (positive int, presets 7|14|30|60|90 days) — window dropdown.
+//   - within / allDates — date dropdown.
 //   - subBrand (tmc|rfu|travelstall|visasure) — dropdown.
-//   - overdueOnly (boolean) — toggle; overrides ?within when truthy.
+//   - overdueOnly (boolean) — toggle; overrides ?within when truthy and
+//     represents past-due unsettled milestones.
 //
 // Decisions:
 //   - Status chips include "All" + the 5 enum values. Clicking "All" clears
@@ -38,12 +39,12 @@
 //     unambiguous feedback (the toast from fetchApi may be deduped within
 //     1.5s if the user clicks twice fast).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bell, CalendarClock, AlertTriangle, CheckCircle2, Clock, Send } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
-import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 
 // Sub-brand selector — mirror of the four canonical travel sub-brands.
 // Keep in lockstep with the backend's VALID_SUB_BRANDS list; mismatch
@@ -56,10 +57,10 @@ const SUB_BRANDS = [
   { value: "visasure", label: "Visa Sure" },
 ];
 
-// Window presets — backend accepts any positive integer; the prompt named
-// 7 / 14 / 30 / 60 / 90 day presets and we expose those (default 30, the
-// backend's DEFAULT_WITHIN_DAYS).
+// Date presets — "All dates" plus the 7 / 14 / 30 / 60 / 90 day windows
+// (default All dates on the frontend).
 const WINDOWS = [
+  { value: "all", label: "All dates" },
   { value: 7, label: "Next 7 days" },
   { value: 14, label: "Next 14 days" },
   { value: 30, label: "Next 30 days" },
@@ -128,34 +129,67 @@ export default function MilestoneTracker() {
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState({ byStatus: {}, totalExpected: "0.00", totalReceived: "0.00", currencyBreakdown: {} });
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
 
   const [status, setStatus] = useState("");
-  const [within, setWithin] = useState(30);
+  const [within, setWithin] = useState("all");
   const [subBrand, setSubBrand] = useState("");
   const [overdueOnly, setOverdueOnly] = useState(false);
-  const [offset, setOffset] = useState(0);
+  const milestonesRef = useRef([]);
+  const offsetRef = useRef(0);
+  const requestIdRef = useRef(0);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
   // Per-row "Notify" in-flight + just-sent markers, keyed by milestone id.
   const [notifying, setNotifying] = useState({});
   const [notified, setNotified] = useState({});
 
-  const load = () => {
-    setLoading(true);
+  const load = ({ reset = false, targetOffset = null } = {}) => {
+    const requestId = ++requestIdRef.current;
+    if (reset) {
+      offsetRef.current = 0;
+      milestonesRef.current = [];
+      setMilestones([]);
+      setTotal(0);
+      setHasMore(false);
+      setLoading(true);
+      loadingRef.current = true;
+      loadingMoreRef.current = false;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current) return;
+      setLoadingMore(true);
+      loadingMoreRef.current = true;
+    }
+
+    const nextOffset = targetOffset != null ? targetOffset : (reset ? 0 : offsetRef.current + PAGE_SIZE);
+
+    const isOverdueFilter = status === "overdue" || overdueOnly;
     const qs = new URLSearchParams();
-    if (status) qs.set("status", status);
+    if (status && status !== "overdue") qs.set("status", status);
     if (subBrand) qs.set("subBrand", subBrand);
-    if (overdueOnly) {
+    if (isOverdueFilter) {
       qs.set("overdueOnly", "true");
+    } else if (within === "all") {
+      qs.set("allDates", "true");
     } else {
       qs.set("within", String(within));
     }
     qs.set("limit", String(PAGE_SIZE));
-    qs.set("offset", String(offset));
+    qs.set("offset", String(nextOffset));
     const url = `/api/travel/payment-schedules/upcoming?${qs.toString()}`;
     fetchApi(url)
       .then((d) => {
+        if (requestId !== requestIdRef.current) return;
         const rows = Array.isArray(d?.milestones) ? d.milestones : [];
-        setMilestones(rows);
-        setTotal(Number.isFinite(d?.total) ? d.total : 0);
+        const totalRows = Number.isFinite(d?.total) ? d.total : rows.length;
+        offsetRef.current = nextOffset;
+        milestonesRef.current = reset ? rows : [...milestonesRef.current, ...rows];
+        hasMoreRef.current = nextOffset + rows.length < totalRows;
+        setMilestones(milestonesRef.current);
+        setTotal(totalRows);
+        setHasMore(hasMoreRef.current);
         setSummary({
           byStatus: d?.summary?.byStatus || {},
           totalExpected: d?.summary?.totalExpected || "0.00",
@@ -164,9 +198,16 @@ export default function MilestoneTracker() {
         });
       })
       .catch((err) => {
-        setMilestones([]);
-        setTotal(0);
-        setSummary({ byStatus: {}, totalExpected: "0.00", totalReceived: "0.00", currencyBreakdown: {} });
+        if (requestId !== requestIdRef.current) return;
+        if (reset) {
+          milestonesRef.current = [];
+          offsetRef.current = 0;
+          hasMoreRef.current = false;
+          setMilestones([]);
+          setTotal(0);
+          setHasMore(false);
+          setSummary({ byStatus: {}, totalExpected: "0.00", totalReceived: "0.00", currencyBreakdown: {} });
+        }
         // fetchApi auto-toasts; for 5xx surface an explicit notify.error so
         // the operator gets unambiguous feedback (dedup window means the
         // duplicate is dropped if the global toast already fired).
@@ -174,19 +215,31 @@ export default function MilestoneTracker() {
           notify.error("Failed to load milestones — please try again.");
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (requestId !== requestIdRef.current) return;
+        if (reset) {
+          setLoading(false);
+          loadingRef.current = false;
+        } else {
+          setLoadingMore(false);
+          loadingMoreRef.current = false;
+        }
+      });
   };
 
-  // Re-fetch whenever any filter or pagination input changes. Offset resets
-  // to 0 on filter change so the page doesn't desync (next-page button is
-  // the only thing that increments offset).
-  useEffect(load, [status, within, subBrand, overdueOnly, offset]);
-
-  // Filter changes other than offset reset offset to 0 so a /page=5 view
-  // doesn't survive a status flip (which would return empty).
   useEffect(() => {
-    setOffset(0);
+    load({ reset: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, within, subBrand, overdueOnly]);
+
+  const handleTableScroll = (e) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 180) {
+      if (!loadingRef.current && !loadingMoreRef.current && hasMoreRef.current) {
+        load({ reset: false });
+      }
+    }
+  };
 
   // Operator "Notify" — send an on-demand payment reminder to the customer
   // behind this milestone (email + WhatsApp, best-effort, server-side). Only
@@ -226,28 +279,20 @@ export default function MilestoneTracker() {
       });
   };
 
-  const handleNext = () => {
-    if (offset + PAGE_SIZE >= total) return;
-    setOffset(offset + PAGE_SIZE);
-  };
-  const handlePrev = () => {
-    if (offset <= 0) return;
-    setOffset(Math.max(0, offset - PAGE_SIZE));
-  };
-
   const pendingCount = summary.byStatus.pending || 0;
   const partialCount = summary.byStatus.partial || 0;
   const paidCount = summary.byStatus.paid || 0;
   const overdueCount = summary.byStatus.overdue || 0;
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <header style={{ marginBottom: 16 }}>
-        <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+        <h1 style={{ display: "flex", alignItems: "center", gap: 12, margin: 0, fontSize: "1.75rem", fontWeight: 600, lineHeight: 1.15, flexWrap: "wrap" }}>
           <CalendarClock size={26} aria-hidden /> Milestone Tracker
+          <CountBadge count={total} title={`${total.toLocaleString()} milestones`} />
         </h1>
         <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-          Cross-invoice payment milestones — pending, partial, paid, overdue. {total.toLocaleString()} milestone{total === 1 ? "" : "s"} match.
+          Cross-invoice payment milestones — pending, partial, paid, overdue.
         </p>
       </header>
 
@@ -305,7 +350,12 @@ export default function MilestoneTracker() {
               <button
                 key={c.value || "all"}
                 type="button"
-                onClick={() => setStatus(c.value)}
+                onClick={() => {
+                  setStatus(c.value);
+                  if (c.value) {
+                    setOverdueOnly(false);
+                  }
+                }}
                 aria-pressed={active}
                 aria-label={`Filter by status: ${c.label}`}
                 style={{
@@ -323,11 +373,11 @@ export default function MilestoneTracker() {
 
         <select
           value={within}
-          onChange={(e) => setWithin(parseInt(e.target.value, 10))}
+          onChange={(e) => setWithin(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
           style={selectStyle}
           aria-label="Window (days from now)"
-          disabled={overdueOnly}
-          title={overdueOnly ? "Window disabled while 'Overdue only' is active" : "Window (days from now)"}
+          disabled={status === "overdue" || overdueOnly}
+          title={status === "overdue" || overdueOnly ? "Window disabled while overdue filtering is active" : "Window (days from now)"}
         >
           {WINDOWS.map((w) => (
             <option key={w.value} value={w.value}>{w.label}</option>
@@ -358,7 +408,13 @@ export default function MilestoneTracker() {
           <input
             type="checkbox"
             checked={overdueOnly}
-            onChange={(e) => setOverdueOnly(e.target.checked)}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setOverdueOnly(checked);
+              if (checked) {
+                setStatus("");
+              }
+            }}
             aria-label="Overdue only"
           />
           Overdue only
@@ -366,14 +422,13 @@ export default function MilestoneTracker() {
       </div>
 
       {/* Table */}
-      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
-        {loading ? (
+      <div className="glass" onScroll={handleTableScroll} style={tableFrame}>
+        {loading && milestones.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : milestones.length === 0 ? (
           <div style={empty}>No upcoming milestones in this window.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={th}>Invoice #</th>
@@ -394,12 +449,12 @@ export default function MilestoneTracker() {
                     {m.invoiceNum || `#${m.invoiceId}`}
                   </td>
                   <td style={td}>{m.subBrand || "—"}</td>
-                  <td style={td}>
+                  <td style={{ ...td, overflow: "hidden", verticalAlign: "top" }}>
                     {m.contactName || m.contactPhone || m.contactEmail ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        <span style={{ fontWeight: 600 }}>{m.contactName || "Unnamed"}</span>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                        <span style={{ fontWeight: 600, overflowWrap: "anywhere" }}>{m.contactName || "Unnamed"}</span>
                         {(m.contactPhone || m.contactEmail) && (
-                          <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                          <span style={{ fontSize: 12, color: "var(--text-secondary)", overflowWrap: "anywhere" }}>
                             {m.contactPhone || m.contactEmail}
                           </span>
                         )}
@@ -451,8 +506,16 @@ export default function MilestoneTracker() {
                 </tr>
               ))}
             </tbody>
+            {loadingMore && (
+              <tfoot>
+                <tr>
+                  <td colSpan={9} style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}>
+                    Loading more&hellip;
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
-          </TopScrollSync>
         )}
       </div>
 
@@ -480,7 +543,6 @@ export default function MilestoneTracker() {
         </div>
       )}
 
-      {/* Pagination */}
       <div
         style={{
           marginTop: 12,
@@ -488,31 +550,14 @@ export default function MilestoneTracker() {
           alignItems: "center",
           justifyContent: "space-between",
           gap: 12,
+          flexWrap: "wrap",
         }}
       >
-        <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-          {total > 0 ? `Showing ${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} of ${total.toLocaleString()}` : "No milestones to show"}
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            type="button"
-            onClick={handlePrev}
-            disabled={offset <= 0}
-            style={offset <= 0 ? secondaryBtnDisabled : secondaryBtn}
-            aria-label="Previous page"
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            onClick={handleNext}
-            disabled={offset + PAGE_SIZE >= total}
-            style={offset + PAGE_SIZE >= total ? secondaryBtnDisabled : secondaryBtn}
-            aria-label="Next page"
-          >
-            Next
-          </button>
-        </div>
+        {total === 0 && (
+          <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+            No milestones to show
+          </div>
+        )}
       </div>
     </div>
   );
@@ -565,10 +610,22 @@ const th = {
   letterSpacing: 0.5,
   color: "var(--text-secondary)",
   borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
+  background: "var(--modal-bg, var(--bg-color))",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
   fontWeight: 600,
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
+const tableFrame = {
+  padding: 0,
+  overflowX: "hidden",
+  overflowY: "auto",
+  height: "calc(100vh - 360px)",
+  minHeight: 520,
+  maxHeight: 760,
+};
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const selectStyle = {
   padding: "6px 10px",
@@ -586,24 +643,6 @@ const chipStyle = {
   fontSize: 12,
   fontWeight: 600,
   cursor: "pointer",
-};
-const secondaryBtn = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "6px 14px",
-  borderRadius: 6,
-  fontWeight: 600,
-  fontSize: 13,
-  background: "var(--surface-color)",
-  color: "var(--text-primary)",
-  border: "1px solid var(--border-color)",
-  cursor: "pointer",
-};
-const secondaryBtnDisabled = {
-  ...secondaryBtn,
-  opacity: 0.4,
-  cursor: "not-allowed",
 };
 const statusBadge = {
   display: "inline-block",

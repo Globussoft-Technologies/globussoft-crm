@@ -19,6 +19,58 @@ const GENERIC_SLOTS = (() => {
   return out;
 })();
 
+const BOOKING_PANEL_STYLE = {
+  padding: "1.5rem",
+  background: "var(--surface-color)",
+  borderRadius: 12,
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "var(--border-color)",
+  boxShadow: "var(--shadow-sm)",
+};
+
+const INFO_CALLOUT_STYLE = {
+  marginTop: "0.5rem",
+  padding: "0.5rem 0.7rem",
+  background: "var(--info-bg)",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "var(--info-border)",
+  borderRadius: 6,
+  fontSize: "0.78rem",
+  color: "var(--text-secondary)",
+  display: "flex",
+  alignItems: "flex-start",
+  gap: "0.4rem",
+};
+
+const EMPTY_STATE_STYLE = {
+  textAlign: "center",
+  padding: "2rem 1rem",
+  color: "var(--text-secondary)",
+  background: "var(--subtle-bg)",
+  borderRadius: 8,
+  borderWidth: "1px",
+  borderStyle: "dashed",
+  borderColor: "var(--border-color)",
+};
+
+const APPOINTMENT_CARD_STYLE = {
+  padding: "1rem",
+  background: "var(--subtle-bg)",
+  borderRadius: 8,
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "var(--border-color)",
+  borderLeftWidth: "4px",
+  borderLeftStyle: "solid",
+  borderLeftColor: "var(--accent-color)",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "start",
+  gap: "1rem",
+};
+
 // Today's date as YYYY-MM-DD in the browser's local timezone (not UTC), so the
 // min-date constraint and slot filtering are correct for IST and other UTC+
 // timezones where midnight local ≠ midnight UTC.
@@ -112,14 +164,14 @@ export default function BookAppointment() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Diagnostic: log when services arrive so we can confirm whether the URL
   // serviceId is actually in this tenant's catalog.
   useEffect(() => {
     if (!urlServiceId || services.length === 0) return;
     const match = services.find((s) => String(s.id) === String(urlServiceId));
-    console.log(
+    console.warn(
       "[BookAppointment handoff] services loaded:",
       services.length,
       "— urlServiceId",
@@ -455,11 +507,9 @@ export default function BookAppointment() {
       >
         {/* Booking Form */}
         <div
+          data-testid="book-appointment-form-card"
           style={{
-            padding: "1.5rem",
-            background: "rgba(255,255,255,0.02)",
-            borderRadius: 12,
-            border: "1px solid rgba(255,255,255,0.08)",
+            ...BOOKING_PANEL_STYLE,
           }}
         >
           <h2
@@ -568,20 +618,7 @@ export default function BookAppointment() {
                 })}
               </select>
               {!formData.doctorId && (
-                <div
-                  style={{
-                    marginTop: "0.5rem",
-                    padding: "0.5rem 0.7rem",
-                    background: "rgba(59,130,246,0.08)",
-                    border: "1px solid rgba(59,130,246,0.2)",
-                    borderRadius: 6,
-                    fontSize: "0.78rem",
-                    color: "var(--text-secondary)",
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: "0.4rem",
-                  }}
-                >
+                <div style={INFO_CALLOUT_STYLE}>
                   <Info size={13} style={{ marginTop: 2, flexShrink: 0 }} />
                   <span>
                     Our team will assign a doctor based on the reason you
@@ -1000,11 +1037,9 @@ export default function BookAppointment() {
 
         {/* My Appointments */}
         <div
+          data-testid="book-appointment-list-card"
           style={{
-            padding: "1.5rem",
-            background: "rgba(255,255,255,0.02)",
-            borderRadius: 12,
-            border: "1px solid rgba(255,255,255,0.08)",
+            ...BOOKING_PANEL_STYLE,
           }}
         >
           <h2
@@ -1022,13 +1057,9 @@ export default function BookAppointment() {
 
           {myAppointments.length === 0 ? (
             <div
+              data-testid="book-appointment-empty-state"
               style={{
-                textAlign: "center",
-                padding: "2rem 1rem",
-                color: "var(--text-secondary)",
-                background: "rgba(255,255,255,0.02)",
-                borderRadius: 8,
-                border: "1px dashed rgba(255,255,255,0.1)",
+                ...EMPTY_STATE_STYLE,
               }}
             >
               <Calendar
@@ -1060,21 +1091,16 @@ export default function BookAppointment() {
                 // shift between scrollable / non-scrollable states.
                 paddingRight: "0.5rem",
                 scrollbarWidth: "thin",
-                scrollbarColor: "rgba(255,255,255,0.25) transparent",
+                scrollbarColor: "var(--border-color) transparent",
                 scrollbarGutter: "stable",
               }}
             >
               {myAppointments.map((apt) => (
                 <div
                   key={apt.id}
+                  data-testid={`book-appointment-item-${apt.id}`}
                   style={{
-                    padding: "1rem",
-                    background: "rgba(99,102,241,0.1)",
-                    borderRadius: 8,
-                    border: "1px solid rgba(99,102,241,0.2)",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "start",
+                    ...APPOINTMENT_CARD_STYLE,
                   }}
                 >
                   <div>

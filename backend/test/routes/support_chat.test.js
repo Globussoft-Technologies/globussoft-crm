@@ -41,6 +41,25 @@ prisma.auditLog = {
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 prisma.tenant = { ...(prisma.tenant || {}), findUnique: vi.fn() };
+// verifyToken's live-session-state check (middleware/auth.js) reads
+// prisma.user on EVERY authenticated request — every route test needs
+// this mocked or every request 401s before reaching the route handler.
+// deactivatedAt/sessionVersion null = "active user, no forced-logout
+// version bump", matching a normal live account.
+prisma.user = {
+  ...(prisma.user || {}),
+  findUnique: vi.fn().mockResolvedValue({ deactivatedAt: null, sessionVersion: null }),
+};
+// The support chatbot now routes every LLM call through lib/aiGateway.js,
+// which consults the AI Subscription & Credit Management resolver
+// (lib/aiCreditLedger.js) as the CRM-managed fallback when BYOK is absent.
+// Default: no active subscription, so canUseManagedAi() resolves
+// allowed:false without throwing — tests below exercise BYOK (already
+// covered via prisma.tenantSetting) or the "no BYOK → blocked" path
+// exactly as the pre-existing test expectations describe.
+prisma.aiTenantSubscription = { findFirst: vi.fn().mockResolvedValue(null) };
+prisma.aiCreditWallet = { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 1, tenantId: 1, balanceTokens: 0, totalPurchasedTokens: 0, totalUsedTokens: 0 }) };
+prisma.aiCreditTransaction = { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 1 }) };
 
 import express from 'express';
 import request from 'supertest';
@@ -52,8 +71,12 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const supportChatRouter = requireCJS('../../routes/support_chat');
 
 const BYOK_KEY = 'sk-byok-test-key-000111222';
+// Shape matches lib/aiProviderManagement.js's readByokConfig() contract
+// (providerId + apiKey required; apiKey is encrypted at rest via
+// lib/fieldEncryption, which no-ops to plaintext passthrough when
+// WELLNESS_FIELD_KEY is unset — the default in this test environment).
 const BYOK_BLOB = JSON.stringify({
-  provider: 'gemini',
+  providerId: 'gemini',
   apiKey: BYOK_KEY,
   model: 'gemini-2.5-flash-lite',
   baseUrl: 'https://generativelanguage.googleapis.com',
@@ -186,7 +209,6 @@ describe('POST /api/support-chat/message', () => {
     expect(url).toBe(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
     );
-    expect(init.headers.Authorization).toBe(`Bearer ${BYOK_KEY}`);
     expect(init.headers['x-goog-api-key']).toBe(BYOK_KEY);
 
     // The KB search ran tenant-scoped + published-only.
@@ -221,7 +243,13 @@ describe('POST /api/support-chat/message', () => {
       .send({ message: 'hello' });
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('AI_PROVIDER_NOT_CONFIGURED');
-    expect(res.body.error).toMatch(/Settings/);
+    // Message now comes from the shared AI Subscription & Credit
+    // Management gate (lib/aiProviderManagement.getTenantAiState), which
+    // uses the product-spec wording ("Your organization has not
+    // configured an AI provider yet.") rather than a chatbot-specific
+    // "check Settings" string — same friendly-blocked contract every
+    // other AI feature in the CRM now shares via lib/aiGateway.
+    expect(res.body.error).toMatch(/organization has not configured an AI provider/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

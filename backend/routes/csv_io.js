@@ -22,7 +22,7 @@
 //
 // The import endpoints return a JSON body { imported, updated, skipped,
 // errors: [{rowNumber, reason}] } so the frontend can render a per-row
-// summary. A separate `?errorReport=csv` query flag returns the error rows
+// summary. A separate `errorReport=csv` query flag returns the error rows
 // as a CSV body instead (Content-Disposition: attachment) for re-upload
 // after fixes — matches the existing contacts.js import semantics.
 
@@ -37,6 +37,8 @@ const {
   buildErrorReport,
   setCsvDownloadHeaders,
 } = require("../lib/csvHelpers");
+const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
+const { normalizePhoneValue } = require("../lib/phoneFormatting");
 
 const router = express.Router();
 
@@ -47,6 +49,7 @@ const upload = multer({
 });
 
 const MAX_IMPORT_ROWS = 5000;
+const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
 // Body parser for raw text/csv + text/plain bodies — Express's default
@@ -78,8 +81,20 @@ function writeImportAudit(req, entity, summary) {
   });
 }
 
+function getSpreadsheetValue(row, aliases) {
+  if (!row || typeof row !== "object") return "";
+  const lookup = new Map(Object.entries(row).map(([key, value]) => [String(key).toLowerCase(), value]));
+  for (const alias of aliases) {
+    const value = lookup.get(String(alias).toLowerCase());
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return "";
+}
+
 // Generic CRM Contacts
-const CONTACT_COLS = [
+const CONTACT_EXPORT_COLS = [
   { key: "id", header: "id" },
   { key: "name", header: "name" },
   { key: "email", header: "email" },
@@ -91,6 +106,27 @@ const CONTACT_COLS = [
   { key: "createdAt", header: "createdAt", render: (r) => r.createdAt ? new Date(r.createdAt).toISOString() : "" },
 ];
 
+const CONTACT_IMPORT_COLS = [
+  { key: "name", header: "name" },
+  { key: "email", header: "email" },
+  { key: "phone", header: "phone" },
+  { key: "company", header: "company" },
+  { key: "title", header: "title" },
+  { key: "status", header: "status" },
+  { key: "source", header: "source" },
+];
+
+const CONTACT_TEMPLATE_SAMPLE = {
+  name: "Jane Doe",
+  email: "jane@example.com",
+  phone: "+919876543210",
+  company: "Acme Health",
+  title: "Owner",
+  status: "Lead",
+  source: "website",
+};
+
+const CONTACT_COLS = CONTACT_EXPORT_COLS;
 const ALLOWED_CONTACT_STATUSES = new Set(["Lead", "Prospect", "Customer", "Churned", "Junk"]);
 const CONTACT_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
 const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
@@ -100,28 +136,129 @@ function sanitizeCellForExport(v) {
   return FORMULA_INJECTION_RE.test(v) ? `'${v}` : v;
 }
 
+function setXlsxDownloadHeaders(res, filename) {
+  res.setHeader("Content-Type", XLSX_CONTENT_TYPE);
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+}
+
+function resolveExportFormat(req) {
+  return String(req.query.format || "csv").toLowerCase() === "xlsx" ? "xlsx" : "csv";
+}
+
+function readUploadedContactRows(req) {
+  if (req.file && req.file.buffer) {
+    const isXlsx = String(req.file.originalname || "").toLowerCase().endsWith(".xlsx")
+      || String(req.file.mimetype || "").toLowerCase() === XLSX_CONTENT_TYPE
+      || String(req.file.mimetype || "").toLowerCase() === "application/vnd.ms-excel";
+    return isXlsx ? parseXlsxBuffer(req.file.buffer) : parseCsv(req.file.buffer.toString("utf8"));
+  }
+  const csvText = readUploadedCsv(req);
+  if (!csvText) return null;
+  return parseCsv(csvText);
+}
+
+function normalizeQueryValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function matchesContactExportFilter(contact, req) {
+  const status = normalizeQueryValue(req.query.status);
+  if (status && normalizeQueryValue(contact.status) !== status) return false;
+
+  const source = normalizeQueryValue(req.query.source);
+  if (source && normalizeQueryValue(contact.source) !== source) return false;
+
+  const assignedToId = String(req.query.assignedToId || "").trim();
+  if (assignedToId && String(contact.assignedToId || "") !== assignedToId) return false;
+  if (req.query.unassigned === "true" && contact.assignedToId) return false;
+
+  const campaignId = String(req.query.campaignId || "").trim();
+  if (campaignId && String(contact.callifiedCampaignId || "") !== campaignId) return false;
+
+  const leadStatus = normalizeQueryValue(req.query.leadStatus);
+  if (leadStatus && normalizeQueryValue(contact.callifiedLeadStatus) !== leadStatus) return false;
+
+  const subBrand = normalizeQueryValue(req.query.subBrand);
+  if (subBrand && normalizeQueryValue(contact.subBrand) !== subBrand) return false;
+
+  const q = normalizeQueryValue(req.query.q);
+  if (q) {
+    const haystack = [
+      contact.name,
+      contact.email,
+      contact.phone,
+      contact.company,
+      contact.title,
+      contact.source,
+      contact.callifiedLeadStatus,
+      contact.assignedTo.name,
+      contact.assignedTo.email,
+    ].map((v) => String(v || "").toLowerCase()).join(" ");
+    if (!haystack.includes(q)) return false;
+  }
+
+  return true;
+}
+
+router.get("/contacts", async (req, res) => {
+  res.json({
+    entity: "contacts",
+    headers: CONTACT_IMPORT_COLS.map((c) => c.header),
+    sample: CONTACT_TEMPLATE_SAMPLE,
+    thresholds: { rows: MAX_IMPORT_ROWS, bytes: 5 * 1024 * 1024 },
+  });
+});
+
 router.get("/contacts/export.csv", async (req, res) => {
   try {
     const contacts = await prisma.contact.findMany({
       where: tenantWhere(req, { deletedAt: null }),
       orderBy: { createdAt: "desc" },
       take: 10000,
+      include: {
+        assignedTo: { select: { id: true, name: true, email: true } },
+      },
     });
-    const csv = serializeRows(CONTACT_COLS, contacts);
-    setCsvDownloadHeaders(res, "contacts-export.csv");
-    res.send(csv);
+    const filtered = contacts.filter((contact) => matchesContactExportFilter(contact, req));
+    const format = resolveExportFormat(req);
+    const stamp = new Date().toISOString().slice(0, 10);
+    if (format === "xlsx") {
+      const buf = toXlsxBuffer(CONTACT_EXPORT_COLS.map((c) => c.header), filtered, "Contacts Export");
+      setXlsxDownloadHeaders(res, `contacts-export-${stamp}.xlsx`);
+      return res.send(buf);
+    }
+    const csv = serializeRows(CONTACT_EXPORT_COLS, filtered);
+    setCsvDownloadHeaders(res, `contacts-export-${stamp}.csv`);
+    return res.send(csv);
   } catch (e) {
     console.error("[csv] contacts export error:", e.message);
     res.status(500).json({ error: "Failed to export contacts" });
   }
 });
 
+router.get("/contacts/template.csv", async (req, res) => {
+  try {
+    const format = resolveExportFormat(req);
+    if (format === "xlsx") {
+      const buf = toXlsxBuffer(CONTACT_IMPORT_COLS.map((c) => c.header), [CONTACT_TEMPLATE_SAMPLE], "Contacts Template");
+      setXlsxDownloadHeaders(res, "contacts-template.xlsx");
+      return res.send(buf);
+    }
+    const csv = serializeRows(CONTACT_IMPORT_COLS, [CONTACT_TEMPLATE_SAMPLE]);
+    setCsvDownloadHeaders(res, "contacts-template.csv");
+    return res.send(csv);
+  } catch (e) {
+    console.error("[csv] contacts template error:", e.message);
+    res.status(500).json({ error: "Failed to build contacts template" });
+  }
+});
+
 router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
   try {
-    const csvText = readUploadedCsv(req);
-    if (!csvText) return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
+    const parsed = readUploadedContactRows(req);
+    if (!parsed) return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
 
-    const { rows } = parseCsv(csvText);
+    const { rows } = parsed;
     if (rows.length === 0) return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
     if (rows.length > MAX_IMPORT_ROWS) {
       return res.status(413).json({ error: `Too many rows. Max ${MAX_IMPORT_ROWS}`, code: "TOO_MANY_ROWS" });
@@ -136,9 +273,10 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
       const row = rows[i];
       const rowNumber = i + 2;
       try {
-        const name = String(row.name || row.Name || "").trim();
-        const email = String(row.email || row.Email || "").trim();
-        const status = String(row.status || row.Status || "Lead").trim();
+        const name = String(getSpreadsheetValue(row, ["name", "Name"])).trim();
+        const email = String(getSpreadsheetValue(row, ["email", "Email"])).trim();
+        const rawStatus = getSpreadsheetValue(row, ["status", "Status"]);
+        const status = String(rawStatus || "Lead").trim();
 
         if (!email) {
           errors.push({ rowNumber, reason: "missing email" });
@@ -156,24 +294,40 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           continue;
         }
 
-        const data = {
+        const phone = normalizePhoneValue(
+          getSpreadsheetValue(row, ["phone", "phone_number", "phoneNumber", "sms_number", "smsNumber"]),
+        );
+        const company = String(getSpreadsheetValue(row, ["company", "Company"])).trim();
+        const title = String(getSpreadsheetValue(row, ["title", "Title"])).trim();
+        const source = String(getSpreadsheetValue(row, ["source", "Source", "lead_source", "leadSource", "Lead Source"])).trim();
+        const createData = {
           name: sanitizeCellForExport(name),
           email,
-          phone: String(row.phone || row.Phone || "").trim(),
-          company: sanitizeCellForExport(String(row.company || row.Company || "").trim()),
-          title: String(row.title || row.Title || "").trim(),
+          phone: phone || null,
+          company: sanitizeCellForExport(company),
+          title,
           status,
-          source: String(row.source || row.Source || "").trim() || null,
+          source: source || null,
         };
+        const updateData = { email, deletedAt: null };
+        if (name) updateData.name = sanitizeCellForExport(name);
+        if (phone) updateData.phone = phone;
+        if (company) updateData.company = sanitizeCellForExport(company);
+        if (title) updateData.title = title;
+        if (rawStatus) updateData.status = status;
+        if (source) updateData.source = source;
 
-        const existing = await prisma.contact.findFirst({ where: { email, tenantId: req.user.tenantId, deletedAt: null } });
-        if (existing) {
-          await prisma.contact.update({ where: { id: existing.id }, data });
-          updated++;
-        } else {
-          await prisma.contact.create({ data: { ...data, tenantId: req.user.tenantId } });
-          imported++;
-        }
+        const existing = await prisma.contact.findFirst({
+          where: { email, tenantId: req.user.tenantId },
+          select: { id: true },
+        });
+        await prisma.contact.upsert({
+          where: { email_tenantId: { email, tenantId: req.user.tenantId } },
+          update: updateData,
+          create: { ...createData, tenantId: req.user.tenantId },
+        });
+        if (existing) updated++;
+        else imported++;
       } catch (rowErr) {
         errors.push({ rowNumber, reason: rowErr.message });
         skipped++;
@@ -629,5 +783,6 @@ router.get("/:entity", (req, res) => {
   });
 });
 module.exports = router;
+
 
 

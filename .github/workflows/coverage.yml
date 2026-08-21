@@ -231,6 +231,7 @@ jobs:
             tests/auth-security-regression-api.spec.js \
             tests/audit-coverage-api.spec.js \
             tests/public-booking-api.spec.js \
+            tests/wellness-public-enquiry-api.spec.js \
             tests/services-api.spec.js \
             tests/sequences-authoring-api.spec.js \
             tests/orchestrator-api.spec.js \
@@ -312,6 +313,7 @@ jobs:
             tests/wellness-role-types-api.spec.js \
             tests/subscriptions-api.spec.js \
             tests/funnel-api.spec.js \
+            tests/lead-reports-api.spec.js \
             tests/win-loss-api.spec.js \
             tests/marketplace-leads-api.spec.js \
             tests/approvals-api.spec.js \
@@ -342,6 +344,7 @@ jobs:
             tests/gmail-api.spec.js \
             tests/travel-brochures-models-api.spec.js \
             tests/teardown-completeness.spec.js \
+            tests/callified-campaign-api.spec.js \
             tests/demo-hygiene-api.spec.js
 
       - name: Stop backend (SIGTERM → c8 flushes coverage data)

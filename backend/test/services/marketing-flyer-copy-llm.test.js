@@ -53,12 +53,30 @@ const prismaMock = vi.hoisted(() => {
     tenantSetting: {
       findUnique: vi.fn().mockResolvedValue(null), // default → DEFAULTS fallback
     },
-    // S45: realModeEnabled delegates to lib/llmRouter.getLlmKey which
-    // checks SupplierCredential first then process.env. Default null →
-    // DB miss → ENV fallback.
+    // Legacy per-tenant key store — still probed by some callers but no
+    // longer part of realModeEnabled's authorization path (see below).
     supplierCredential: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
+    // realModeEnabled/callGemini now delegate to lib/aiProviderManagement's
+    // resolveProviderConfig (the AI Subscription & Credit Management gate)
+    // via lib/aiGateway — BYOK (TenantSetting) first, then a funded,
+    // ACTIVE AiTenantSubscription + positive AiCreditWallet balance.
+    // Default: no subscription → real mode is OFF unless a test explicitly
+    // seeds BYOK (via tenantSetting) or a funded subscription below.
+    aiTenantSubscription: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
+    aiCreditWallet: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 1, tenantId: 1, balanceTokens: 0, totalPurchasedTokens: 0, totalUsedTokens: 0 }),
+      update: vi.fn().mockResolvedValue({ id: 1, tenantId: 1, balanceTokens: 0, totalPurchasedTokens: 0, totalUsedTokens: 0 }),
+    },
+    aiCreditTransaction: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 1 }),
+    },
+    $transaction: vi.fn(async (arg) => (Array.isArray(arg) ? Promise.all(arg) : arg(mock))),
   };
   const Module = require('node:module');
   const requireFromCwd = Module.createRequire(process.cwd() + '/');
@@ -94,7 +112,30 @@ afterEach(() => {
   prismaMock.tenantSetting.findUnique.mockResolvedValue(null);
   prismaMock.supplierCredential.findFirst.mockReset();
   prismaMock.supplierCredential.findFirst.mockResolvedValue(null);
+  prismaMock.aiTenantSubscription.findFirst.mockReset();
+  prismaMock.aiTenantSubscription.findFirst.mockResolvedValue(null);
+  prismaMock.aiCreditWallet.findUnique.mockReset();
+  prismaMock.aiCreditWallet.findUnique.mockResolvedValue(null);
 });
+
+// Seeds a funded, ACTIVE CRM-managed subscription so
+// resolveProviderConfig()/realModeEnabled() authorize a real call without
+// BYOK — the standard "tenant bought AI credits" fixture for this suite.
+function seedFundedSubscription(tenantId = 1) {
+  // resolveProviderConfig needs at least one platform AI key available so
+  // it can build an internal candidate for the crm-managed path. CI does not
+  // expose real keys to unit tests, so provide a fake key for the scope of
+  // this fixture; afterEach restores the original value.
+  if (!process.env.GEMINI_API_KEY) {
+    process.env.GEMINI_API_KEY = 'fake-test-key-for-real-mode-fixture';
+  }
+  prismaMock.aiTenantSubscription.findFirst.mockResolvedValue({
+    id: 1, tenantId, planId: 1, planNameSnapshot: 'Test Plan', status: 'ACTIVE', startDate: new Date(), endDate: null,
+  });
+  prismaMock.aiCreditWallet.findUnique.mockResolvedValue({
+    id: 1, tenantId, balanceTokens: 5000, totalPurchasedTokens: 5000, totalUsedTokens: 0, lastAlertPercent: null,
+  });
+}
 
 function loadClient() {
   // Reload fresh between tests so the spend-stub mock + module state are
@@ -121,7 +162,6 @@ describe('marketingFlyerCopyLLM — module shape', () => {
     expect(c.INTEGRATION).toBe('llm');
     expect(c.TASK_NAME).toBe('marketing-flyer-copy');
     expect(c.MODEL_PRIMARY).toBe('gemini-2.5-flash');
-    expect(c.GEMINI_KEY_ENV).toBe('GEMINI_API_KEY');
   });
 });
 
@@ -213,7 +253,7 @@ describe('generateFlyerCopy — STUB mode (default; no Gemini key)', () => {
 // ── 3. Real-mode swap path ───────────────────────────────────────────
 
 describe('generateFlyerCopy — REAL mode swap', () => {
-  test('GEMINI_API_KEY absent → realModeEnabled false → stub path', async () => {
+  test('no BYOK, no funded subscription → realModeEnabled false → stub path', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     delete process.env.GEMINI_API_KEY;
 
@@ -234,10 +274,10 @@ describe('generateFlyerCopy — REAL mode swap', () => {
     logSpy.mockRestore();
   });
 
-  test('GEMINI_API_KEY present + callGemini throws → falls back to stub (fail-soft)', async () => {
+  test('funded CRM subscription + callGemini throws → falls back to stub (fail-soft)', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    process.env.GEMINI_API_KEY = 'test-key-value';
+    seedFundedSubscription(1);
 
     const c = loadClient();
     expect(await c.realModeEnabled(1)).toBe(true);
@@ -264,9 +304,9 @@ describe('generateFlyerCopy — REAL mode swap', () => {
     errSpy.mockRestore();
   });
 
-  test('GEMINI_API_KEY present + callGemini succeeds → returns source=gemini', async () => {
+  test('funded CRM subscription + callGemini succeeds → returns source=gemini', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    process.env.GEMINI_API_KEY = 'test-key-value';
+    seedFundedSubscription(1);
 
     const c = loadClient();
     const fakeJson = {
@@ -297,14 +337,19 @@ describe('generateFlyerCopy — REAL mode swap', () => {
     logSpy.mockRestore();
   });
 
-  test('callGemini throws when GEMINI_API_KEY is absent (real-mode wired but no key)', async () => {
+  test('callGemini throws the friendly blocked-access error when the tenant has no BYOK and no funded subscription', async () => {
     const c = loadClient();
-    // S71 real-mode wire-in landed — callGemini now invokes the SDK when
-    // the key is present. Tests that exercise the real-mode SUCCESS path
-    // continue to mock callGemini directly (see test #5 above) to avoid
-    // hitting the network. Here we only assert the no-key guard.
+    // callGemini now routes through lib/aiGateway.runAiRequest — the
+    // mandatory resolve/gate/log/deduct entry point every AI feature
+    // shares. With no BYOK and no funded subscription for tenant 1,
+    // the gateway throws the Step-9 friendly blocked message rather than
+    // a raw "key not set" string. Tests that exercise the real-mode
+    // SUCCESS path mock callGemini directly (see test above) to avoid a
+    // live network call.
     delete process.env.GEMINI_API_KEY;
-    await expect(c.callGemini({ destination: 'X' })).rejects.toThrow(/GEMINI_API_KEY not set/);
+    await expect(c.callGemini({ destination: 'X', tenantId: 1 })).rejects.toThrow(
+      /organization has not configured an AI provider/i,
+    );
   });
 });
 
@@ -479,56 +524,52 @@ describe('CJS self-mocking seam (regression-pin)', () => {
   });
 });
 
-// ── 7. realModeEnabled env probe + per-tenant SupplierCredential ────
+// ── 7. realModeEnabled — AI Subscription & Credit Management gate ───
+//
+// realModeEnabled delegates to lib/aiProviderManagement.resolveProviderConfig
+// (via aiGateway) — the SAME BYOK-then-funded-CRM-subscription gate every
+// AI feature in the CRM shares. A bare platform GEMINI_API_KEY env var, or
+// a legacy per-tenant SupplierCredential row, is NOT sufficient on its own
+// (that was the pre-credit-system contract this suite used to pin — see
+// git history for the superseded env/SupplierCredential-only assertions).
 
 describe('realModeEnabled', () => {
-  test('returns false when GEMINI_API_KEY is unset (no tenantId)', async () => {
-    delete process.env.GEMINI_API_KEY;
-    const c = loadClient();
-    expect(await c.realModeEnabled()).toBe(false);
-  });
-
-  test('returns true when GEMINI_API_KEY is set to a truthy value', async () => {
+  test('returns false when tenantId is omitted (no bare-env fallback for a tenant-facing feature)', async () => {
     process.env.GEMINI_API_KEY = 'AIza...fake';
     const c = loadClient();
-    expect(await c.realModeEnabled()).toBe(true);
-  });
-
-  test('returns false when GEMINI_API_KEY is set to empty string', async () => {
-    process.env.GEMINI_API_KEY = '';
-    const c = loadClient();
     expect(await c.realModeEnabled()).toBe(false);
   });
 
-  test('returns true when SupplierCredential row present (no ENV needed)', async () => {
+  test('returns false when the tenant has no BYOK and no funded CRM subscription (even with a platform env key set)', async () => {
+    process.env.GEMINI_API_KEY = 'AIza...fake';
+    const c = loadClient();
+    expect(await c.realModeEnabled(42)).toBe(false);
+  });
+
+  test('returns true when the tenant has BYOK configured (TenantSetting)', async () => {
     delete process.env.GEMINI_API_KEY;
-    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce({
-      passwordEncrypted: 'tenant-42-gemini-key',
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({
+      value: JSON.stringify({ providerId: 'gemini', apiKey: 'byok-key', model: 'gemini-2.5-flash-lite' }),
     });
     const c = loadClient();
     expect(await c.realModeEnabled(42)).toBe(true);
   });
 
-  test('SupplierCredential row takes precedence over ENV', async () => {
-    process.env.GEMINI_API_KEY = 'ENV-key-also-set';
-    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce({
-      passwordEncrypted: 'tenant-specific-overrides-env',
-    });
+  test('returns true when the tenant has a funded, ACTIVE CRM-managed subscription', async () => {
+    delete process.env.GEMINI_API_KEY;
+    seedFundedSubscription(42);
     const c = loadClient();
     expect(await c.realModeEnabled(42)).toBe(true);
-    expect(prismaMock.supplierCredential.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          tenantId: 42,
-          category: 'llm-key',
-        }),
-      }),
-    );
   });
 
-  test('no SupplierCredential row + no ENV + tenantId passed → false', async () => {
+  test('returns false when the subscription exists but the credit balance is exhausted', async () => {
     delete process.env.GEMINI_API_KEY;
-    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce(null);
+    prismaMock.aiTenantSubscription.findFirst.mockResolvedValue({
+      id: 1, tenantId: 42, planId: 1, planNameSnapshot: 'Test Plan', status: 'ACTIVE', startDate: new Date(), endDate: null,
+    });
+    prismaMock.aiCreditWallet.findUnique.mockResolvedValue({
+      id: 1, tenantId: 42, balanceTokens: 0, totalPurchasedTokens: 5000, totalUsedTokens: 5000, lastAlertPercent: null,
+    });
     const c = loadClient();
     expect(await c.realModeEnabled(42)).toBe(false);
   });

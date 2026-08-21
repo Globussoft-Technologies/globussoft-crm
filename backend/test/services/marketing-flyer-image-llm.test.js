@@ -1,58 +1,39 @@
 // Unit tests for backend/services/marketingFlyerImageLLM.js
 //
 // What this module does:
-//   Stub-mode wrapper for the `marketing-flyer-image` LLM task class
-//   (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3). Real DALL-E 3 (OpenAI) /
-//   Stability AI XL call lands when Q-MF-2 key drops. Exports:
+//   DALL-E 3 / gpt-image-1 flyer-image generator for the `marketing-flyer-image`
+//   task class (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3). Provider access now
+//   resolves through lib/aiGateway (BYOK or a funded CRM-managed subscription)
+//   rather than a bare OPENAI_API_KEY/STABILITY_API_KEY env-var check — same
+//   mandatory resolve/gate/log/deduct entry point every AI feature in the CRM
+//   shares. Stability AI was never implemented as a real provider (the
+//   original code threw "not implemented" for it too) and remains
+//   unreachable; only the resolved provider's family (openai-compatible)
+//   determines whether real-mode fires. Exports:
 //     - INTEGRATION                 — short token 'image-llm' (S73 split —
 //                                      separate envelope from the text-LLM
 //                                      'llm' cap so a DALL-E 3 HD burst
 //                                      doesn't silently exhaust text-LLM budget)
 //     - TASK_NAME                   — 'marketing-flyer-image' (matches llmRouter TASK_ROUTING)
 //     - MODEL_PRIMARY               — 'dall-e-3' per FR-3.6.3 + S16 spec
-//     - MODEL_FALLBACK              — 'stability-xl'
-//     - OPENAI_KEY_ENV              — 'OPENAI_API_KEY' env-var for DALL-E
-//     - STABILITY_KEY_ENV           — 'STABILITY_API_KEY' env-var for Stability XL
+//     - MODEL_FALLBACK              — 'stability-xl' (name-only; never wired)
+//     - OPENAI_KEY_ENV / STABILITY_KEY_ENV — legacy env-var name constants,
+//                                      still exported for llmRouter's ENV_FOR_MODEL map
 //     - ALLOWED_ASPECT_RATIOS       — ['1:1', '9:16', '16:9']
 //     - DEFAULT_ASPECT_RATIO        — '1:1'
 //     - generateFlyerImage({...}, {prisma}) — primary surface
 //     - checkBudgetCap(tenantId)    — pre-call cap check
 //     - computeMonthlySpendCents(t) — stub returns 0 (real sums LlmCallLog)
-//     - resolveProvider(tenantId)   — picks dalle / stability / null
-//     - realModeEnabled(tenantId)   — async key probe (ENV today, SupplierCredential later)
-//     - callImageProvider({...})    — real-mode swap point (throws today)
+//     - resolveProvider(tenantId)   — aiGateway-backed: dalle | null
+//     - realModeEnabled(tenantId)   — async access probe (via resolveProvider)
+//     - callImageProvider({...})    — routes through aiGateway.runNonTokenAiRequest
+//     - callOpenAIImageGeneration({...}) — the raw OpenAI HTTP call (mockable)
 //     - buildStubImageUrl({...})    — deterministic stub URL shape
 //     - slugify(s)                  — internal URL-safe slug helper
-//
-// Surface area covered (mirrors S15 marketing-flyer-copy test coverage):
-//   1. Module shape pin (exports + constants)
-//   2. Stub mode returns canned imageUrl shape per slice spec
-//   3. Real-mode flagged + key absent → falls back to stub
-//   4. Real-mode flagged + key PRESENT + callImageProvider errors → falls back to stub
-//   5. Real-mode flagged + key PRESENT + callImageProvider succeeds → returns 'dalle' source
-//   6. Provider priority: DALL-E (OpenAI) wins when both keys present
-//   7. Stability fallback when only STABILITY_API_KEY is set
-//   8. generateFlyerImage throws when tenantId missing (before budget check)
-//   9. generateFlyerImage throws when destination missing/blank
-//  10. Budget cap throws MARKETING_FLYER_IMAGE_BUDGET_EXCEEDED when spend ≥ cap
-//  11. Budget cap returns alertThreshold:true at 80%+
-//  12. Budget cap silently passes under 80% (no warn emitted)
-//  13. CJS self-mocking seam — checkBudgetCap calls computeMonthlySpendCents
-//      via module.exports indirection
-//  14. CJS self-mocking seam — generateFlyerImage calls checkBudgetCap via
-//      module.exports indirection
-//  15. CJS self-mocking seam — generateFlyerImage calls realModeEnabled via
-//      module.exports indirection
-//  16. realModeEnabled() async ENV-only path
-//  17. llmRouter.TASK_ROUTING registers 'marketing-flyer-image' to dall-e-3
-//  18. Deterministic stub: same inputs → identical output
-//  19. Aspect-ratio fallback to default for unrecognised values
-//  20. Stub URL slugifies destination + theme
 //
 // Pin the contract that S17 (PDF/PNG render) + S20 (canvas editor) MUST
 // be able to consume regardless of source — stub and real-mode return
 // the SAME { imageUrl, source, model, stub } envelope.
-
 import { describe, test, expect, afterEach, beforeEach, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
@@ -68,7 +49,6 @@ const prismaMock = vi.hoisted(() => {
     tenantSetting: {
       findUnique: vi.fn().mockResolvedValue(null), // default → DEFAULTS fallback
     },
-    // Reserved for future S45-style per-tenant resolveProvider lookup.
     supplierCredential: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
@@ -87,29 +67,14 @@ const prismaMock = vi.hoisted(() => {
   return mock;
 });
 
-// Capture + restore both provider keys so real-mode tests flip
-// deterministically without poisoning siblings.
-let originalOpenaiKey;
-let originalStabilityKey;
-
 beforeEach(() => {
-  originalOpenaiKey = process.env.OPENAI_API_KEY;
-  originalStabilityKey = process.env.STABILITY_API_KEY;
   delete process.env.OPENAI_API_KEY;
   delete process.env.STABILITY_API_KEY;
 });
 
 afterEach(() => {
-  if (originalOpenaiKey === undefined) {
-    delete process.env.OPENAI_API_KEY;
-  } else {
-    process.env.OPENAI_API_KEY = originalOpenaiKey;
-  }
-  if (originalStabilityKey === undefined) {
-    delete process.env.STABILITY_API_KEY;
-  } else {
-    process.env.STABILITY_API_KEY = originalStabilityKey;
-  }
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.STABILITY_API_KEY;
   vi.restoreAllMocks();
   prismaMock.tenantSetting.findUnique.mockReset();
   prismaMock.tenantSetting.findUnique.mockResolvedValue(null);
@@ -136,6 +101,7 @@ describe('marketingFlyerImageLLM — module shape', () => {
     expect(typeof c.realModeEnabled).toBe('function');
     expect(typeof c.resolveProvider).toBe('function');
     expect(typeof c.callImageProvider).toBe('function');
+    expect(typeof c.callOpenAIImageGeneration).toBe('function');
     expect(typeof c.buildStubImageUrl).toBe('function');
     expect(typeof c.slugify).toBe('function');
     // S73: distinct INTEGRATION token ('image-llm') so the cap envelope
@@ -153,7 +119,7 @@ describe('marketingFlyerImageLLM — module shape', () => {
 
 // ── 2. Stub-mode canned shape ────────────────────────────────────────
 
-describe('generateFlyerImage — STUB mode (default; no provider keys)', () => {
+describe('generateFlyerImage — STUB mode (default; no tenant AI access)', () => {
   test('returns canned { imageUrl, source, model, stub } shape', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
@@ -252,12 +218,11 @@ describe('generateFlyerImage — STUB mode (default; no provider keys)', () => {
 // ── 3. Real-mode swap path ───────────────────────────────────────────
 
 describe('generateFlyerImage — REAL mode swap', () => {
-  test('both provider keys absent → realModeEnabled false → stub path', async () => {
+  test('no tenant AI access → realModeEnabled false → stub path', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.STABILITY_API_KEY;
 
     const c = loadClient();
+    const resolveSpy = vi.spyOn(c, 'resolveProvider').mockResolvedValue(null);
     expect(await c.realModeEnabled(1)).toBe(false);
 
     // callImageProvider spy MUST NOT fire when realModeEnabled() false.
@@ -271,15 +236,16 @@ describe('generateFlyerImage — REAL mode swap', () => {
     expect(providerSpy).not.toHaveBeenCalled();
 
     providerSpy.mockRestore();
+    resolveSpy.mockRestore();
     logSpy.mockRestore();
   });
 
-  test('OPENAI_API_KEY present + callImageProvider throws → falls back to stub (fail-soft)', async () => {
+  test('tenant has resolvable AI access + callImageProvider throws → falls back to stub (fail-soft)', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    process.env.OPENAI_API_KEY = 'sk-test-value';
 
     const c = loadClient();
+    const resolveSpy = vi.spyOn(c, 'resolveProvider').mockResolvedValue({ provider: 'dalle', model: 'dall-e-3' });
     expect(await c.realModeEnabled(1)).toBe(true);
 
     const providerSpy = vi.spyOn(c, 'callImageProvider').mockRejectedValue(new Error('synthetic dalle 500'));
@@ -300,15 +266,16 @@ describe('generateFlyerImage — REAL mode swap', () => {
     expect(errMsgs).toMatch(/real-mode call failed/);
 
     providerSpy.mockRestore();
+    resolveSpy.mockRestore();
     logSpy.mockRestore();
     errSpy.mockRestore();
   });
 
-  test('OPENAI_API_KEY present + callImageProvider succeeds → returns source=dalle', async () => {
+  test('tenant has resolvable AI access + callImageProvider succeeds → returns source=dalle', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    process.env.OPENAI_API_KEY = 'sk-test-value';
 
     const c = loadClient();
+    const resolveSpy = vi.spyOn(c, 'resolveProvider').mockResolvedValue({ provider: 'dalle', model: 'dall-e-3' });
     const providerSpy = vi.spyOn(c, 'callImageProvider').mockResolvedValue({
       imageUrl: 'https://cdn.openai.com/dalle/real-image.jpg',
       provider: 'dalle',
@@ -332,116 +299,146 @@ describe('generateFlyerImage — REAL mode swap', () => {
     });
 
     providerSpy.mockRestore();
+    resolveSpy.mockRestore();
     logSpy.mockRestore();
   });
 
-  test('STABILITY_API_KEY present (no OPENAI) + callImageProvider succeeds → returns source=stability', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    delete process.env.OPENAI_API_KEY;
-    process.env.STABILITY_API_KEY = 'sk-stability-test';
-
+  test('callImageProvider throws for non-dalle provider (Stability was never wired)', async () => {
     const c = loadClient();
-    const providerSpy = vi.spyOn(c, 'callImageProvider').mockResolvedValue({
-      imageUrl: 'https://cdn.stability.ai/stable-diffusion/real-image.png',
-      provider: 'stability',
-      model: 'stability-xl',
-    });
-
-    const out = await c.generateFlyerImage({
-      tenantId: 1,
-      destination: 'Mecca',
-    });
-    expect(out.source).toBe('stability');
-    expect(out.stub).toBe(false);
-    expect(out.model).toBe('stability-xl');
-    expect(providerSpy).toHaveBeenCalledTimes(1);
-    expect(providerSpy.mock.calls[0][0]).toMatchObject({
-      provider: 'stability',
-      model: 'stability-xl',
-    });
-
-    providerSpy.mockRestore();
-    logSpy.mockRestore();
-  });
-
-  test('callImageProvider throws when OPENAI_API_KEY is absent (real-mode wired but no key)', async () => {
-    const c = loadClient();
-    // S72 real-mode wire-in landed — callImageProvider now invokes the
-    // DALL-E HTTP API when the key is present. Tests that exercise the
-    // real-mode SUCCESS path mock callImageProvider directly (see test
-    // #5 above) to avoid hitting the network. Here we only assert the
-    // no-key guard.
-    delete process.env.OPENAI_API_KEY;
-    await expect(
-      c.callImageProvider({
-        destination: 'X',
-        provider: 'dalle',
-        model: 'dall-e-3',
-      }),
-    ).rejects.toThrow(/OPENAI_API_KEY not set/);
-  });
-
-  test('callImageProvider throws for non-dalle provider (Stability not yet wired)', async () => {
-    const c = loadClient();
-    process.env.OPENAI_API_KEY = 'sk-fake';
     await expect(
       c.callImageProvider({
         destination: 'X',
         provider: 'stability',
         model: 'stability-xl',
+        tenantId: 1,
       }),
     ).rejects.toThrow(/provider 'stability' not implemented/);
   });
 });
 
-// ── 4. Provider priority ─────────────────────────────────────────────
+// ── 3b. callImageProvider — aiGateway routing ────────────────────────
+
+describe('callImageProvider — routes through aiGateway.runNonTokenAiRequest', () => {
+  test('resolved family is openai-compatible → calls callOpenAIImageGeneration with the resolved apiKey, deducts via costUsd', async () => {
+    const c = loadClient();
+
+    const aiGateway = requireCjs('../../lib/aiGateway.js');
+    const runSpy = vi.spyOn(aiGateway, 'runNonTokenAiRequest').mockImplementation(async ({ runFn }) => {
+      const result = await runFn({ family: 'openai-compatible', providerId: 'openai', apiKey: 'sk-resolved-test' });
+      return { result: result.result, costUsd: result.costUsd, provider: result.provider, model: result.model };
+    });
+    const genSpy = vi.spyOn(c, 'callOpenAIImageGeneration').mockResolvedValue({
+      imageUrl: 'https://cdn.openai.com/dalle/x.jpg',
+      model: 'dall-e-3',
+    });
+
+    const out = await c.callImageProvider({
+      destination: 'Dubai', subBrand: 'tmc', themeJson: { luxury: true }, aspectRatio: '1:1',
+      provider: 'dalle', model: 'dall-e-3', tenantId: 7,
+    });
+
+    expect(out.imageUrl).toBe('https://cdn.openai.com/dalle/x.jpg');
+    expect(out.provider).toBe('dalle');
+    expect(genSpy).toHaveBeenCalledTimes(1);
+    expect(genSpy.mock.calls[0][0].apiKey).toBe('sk-resolved-test');
+    expect(runSpy.mock.calls[0][0].tenantId).toBe(7);
+    expect(runSpy.mock.calls[0][0].task).toBe('marketing-flyer-image');
+
+    runSpy.mockRestore();
+    genSpy.mockRestore();
+  });
+
+  test('resolved family is NOT openai-compatible (e.g. BYOK is Claude) → friendly error, image gen never attempted', async () => {
+    const c = loadClient();
+    const aiGateway = requireCjs('../../lib/aiGateway.js');
+    const runSpy = vi.spyOn(aiGateway, 'runNonTokenAiRequest').mockImplementation(async ({ runFn }) => {
+      return runFn({ family: 'anthropic', providerId: 'claude', apiKey: 'sk-ant-test' });
+    });
+    const genSpy = vi.spyOn(c, 'callOpenAIImageGeneration');
+
+    await expect(
+      c.callImageProvider({ destination: 'X', provider: 'dalle', model: 'dall-e-3', tenantId: 1 }),
+    ).rejects.toMatchObject({ friendly: true, code: 'AI_PROVIDER_NO_IMAGE_SUPPORT' });
+    expect(genSpy).not.toHaveBeenCalled();
+
+    runSpy.mockRestore();
+    genSpy.mockRestore();
+  });
+
+  test('friendly access-blocked error from aiGateway (no BYOK, no funded subscription) propagates through callImageProvider', async () => {
+    const c = loadClient();
+    const aiGateway = requireCjs('../../lib/aiGateway.js');
+    const blocked = new Error('Your organization has not configured an AI provider yet.');
+    blocked.friendly = true;
+    blocked.code = 'AI_NOT_CONFIGURED';
+    const runSpy = vi.spyOn(aiGateway, 'runNonTokenAiRequest').mockRejectedValue(blocked);
+
+    await expect(
+      c.callImageProvider({ destination: 'X', provider: 'dalle', model: 'dall-e-3', tenantId: 1 }),
+    ).rejects.toMatchObject({ friendly: true, code: 'AI_NOT_CONFIGURED' });
+
+    runSpy.mockRestore();
+  });
+});
+
+// ── 4. resolveProvider — aiGateway-backed ────────────────────────────
 
 describe('resolveProvider', () => {
-  test('returns null when both provider keys are absent', async () => {
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.STABILITY_API_KEY;
+  test('returns null when tenantId is missing', async () => {
     const c = loadClient();
+    expect(await c.resolveProvider(undefined)).toBeNull();
+    expect(await c.resolveProvider(null)).toBeNull();
+  });
+
+  test('returns null when aiGateway.assertAccessOrThrow throws (no BYOK, no funded subscription)', async () => {
+    const c = loadClient();
+    const aiGateway = requireCjs('../../lib/aiGateway.js');
+    const err = new Error('Your organization has not configured an AI provider yet.');
+    err.friendly = true;
+    const assertSpy = vi.spyOn(aiGateway, 'assertAccessOrThrow').mockRejectedValue(err);
+
     expect(await c.resolveProvider(1)).toBeNull();
+
+    assertSpy.mockRestore();
   });
 
-  test('returns dalle when only OPENAI_API_KEY is set', async () => {
-    process.env.OPENAI_API_KEY = 'sk-openai';
-    delete process.env.STABILITY_API_KEY;
+  test('returns { provider: dalle, model: dall-e-3 } when resolved access family is openai-compatible', async () => {
     const c = loadClient();
-    const resolved = await c.resolveProvider(1);
-    expect(resolved).toEqual({
-      provider: 'dalle',
-      model: 'dall-e-3',
-      keySource: 'env',
+    const aiGateway = requireCjs('../../lib/aiGateway.js');
+    const assertSpy = vi.spyOn(aiGateway, 'assertAccessOrThrow').mockResolvedValue({
+      providerId: 'openai', family: 'openai-compatible', apiKey: 'sk-test', model: 'gpt-4o', accessType: 'byok',
     });
+
+    const resolved = await c.resolveProvider(1);
+    expect(resolved).toEqual({ provider: 'dalle', model: 'dall-e-3' });
+
+    assertSpy.mockRestore();
   });
 
-  test('returns stability when only STABILITY_API_KEY is set', async () => {
-    delete process.env.OPENAI_API_KEY;
-    process.env.STABILITY_API_KEY = 'sk-stability';
+  test('returns null when resolved access family is NOT openai-compatible (e.g. Gemini or Claude BYOK)', async () => {
     const c = loadClient();
-    const resolved = await c.resolveProvider(1);
-    expect(resolved).toEqual({
-      provider: 'stability',
-      model: 'stability-xl',
-      keySource: 'env',
+    const aiGateway = requireCjs('../../lib/aiGateway.js');
+    const assertSpy = vi.spyOn(aiGateway, 'assertAccessOrThrow').mockResolvedValue({
+      providerId: 'gemini', family: 'gemini', apiKey: 'g-test', model: 'gemini-2.5-flash', accessType: 'byok',
     });
-  });
 
-  test('DALL-E wins when both keys present (PRD §9.1 primary preference)', async () => {
-    process.env.OPENAI_API_KEY = 'sk-openai';
-    process.env.STABILITY_API_KEY = 'sk-stability';
-    const c = loadClient();
-    const resolved = await c.resolveProvider(1);
-    expect(resolved.provider).toBe('dalle');
-    expect(resolved.model).toBe('dall-e-3');
-  });
-
-  test('returns null when OPENAI_API_KEY is empty string', async () => {
-    process.env.OPENAI_API_KEY = '';
-    delete process.env.STABILITY_API_KEY;
-    const c = loadClient();
     expect(await c.resolveProvider(1)).toBeNull();
+
+    assertSpy.mockRestore();
+  });
+
+  test('passes requestedModelLabel=MODEL_PRIMARY through to assertAccessOrThrow', async () => {
+    const c = loadClient();
+    const aiGateway = requireCjs('../../lib/aiGateway.js');
+    const assertSpy = vi.spyOn(aiGateway, 'assertAccessOrThrow').mockResolvedValue({
+      providerId: 'openai', family: 'openai-compatible', apiKey: 'sk-test', accessType: 'crm-managed',
+    });
+
+    await c.resolveProvider(9);
+
+    expect(assertSpy).toHaveBeenCalledWith(9, 'dall-e-3');
+
+    assertSpy.mockRestore();
   });
 });
 
@@ -709,7 +706,6 @@ describe('CJS self-mocking seam (regression-pin)', () => {
     const providerSpy = vi.spyOn(c, 'resolveProvider').mockResolvedValue({
       provider: 'dalle',
       model: 'dall-e-3',
-      keySource: 'env',
     });
     const callSpy = vi.spyOn(c, 'callImageProvider').mockResolvedValue({
       imageUrl: 'https://x/y.jpg',
@@ -729,35 +725,26 @@ describe('CJS self-mocking seam (regression-pin)', () => {
   });
 });
 
-// ── 8. realModeEnabled env probe ─────────────────────────────────────
+// ── 8. realModeEnabled probe ─────────────────────────────────────────
 
 describe('realModeEnabled', () => {
-  test('returns false when both keys are unset', async () => {
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.STABILITY_API_KEY;
+  test('returns false when resolveProvider resolves null (no tenant AI access)', async () => {
     const c = loadClient();
-    expect(await c.realModeEnabled()).toBe(false);
+    const resolveSpy = vi.spyOn(c, 'resolveProvider').mockResolvedValue(null);
+    expect(await c.realModeEnabled(1)).toBe(false);
+    resolveSpy.mockRestore();
   });
 
-  test('returns true when OPENAI_API_KEY is set to a truthy value', async () => {
-    process.env.OPENAI_API_KEY = 'sk-...fake';
-    delete process.env.STABILITY_API_KEY;
+  test('returns true when resolveProvider resolves a provider', async () => {
     const c = loadClient();
-    expect(await c.realModeEnabled()).toBe(true);
+    const resolveSpy = vi.spyOn(c, 'resolveProvider').mockResolvedValue({ provider: 'dalle', model: 'dall-e-3' });
+    expect(await c.realModeEnabled(1)).toBe(true);
+    resolveSpy.mockRestore();
   });
 
-  test('returns true when STABILITY_API_KEY is set (no OPENAI)', async () => {
-    delete process.env.OPENAI_API_KEY;
-    process.env.STABILITY_API_KEY = 'sk-stability';
+  test('returns false with no tenantId (resolveProvider short-circuits to null)', async () => {
     const c = loadClient();
-    expect(await c.realModeEnabled()).toBe(true);
-  });
-
-  test('returns false when OPENAI_API_KEY is set to empty string', async () => {
-    process.env.OPENAI_API_KEY = '';
-    delete process.env.STABILITY_API_KEY;
-    const c = loadClient();
-    expect(await c.realModeEnabled()).toBe(false);
+    expect(await c.realModeEnabled(undefined)).toBe(false);
   });
 });
 

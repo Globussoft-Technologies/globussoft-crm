@@ -8,13 +8,13 @@
 //   Microsite — preview + admin link + publicUuid copy
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useLocation, useParams, Link } from "react-router-dom";
 import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
   Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye, Download, Upload,
   MapPin, IndianRupee, FileText, CheckCircle2, AlertCircle, Clock, TrendingUp,
-  Sparkles, ArrowRight, RotateCcw,
+  Sparkles, ArrowRight, RotateCcw, X,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -34,6 +34,24 @@ const TABS = [
   // operational portal). Tab key stays "microsite" for URL back-compat.
   { key: "microsite", label: "Public Experience", icon: Globe },
 ];
+
+function buildLandingPagesReturnState(trip, tripState = {}) {
+  return {
+    returnTo: { label: "TMC Trips", path: `/travel/trips/${trip.id}?tab=overview` },
+    currentLabel: "Public experience",
+    currentPath: `/travel/trips/${trip.id}?tab=microsite`,
+    backTo: tripState.backTo || "/travel/trips",
+    backLabel: tripState.backLabel || "Trips",
+    tripContext: {
+      tripId: trip.id,
+      tripCode: trip.tripCode,
+      destination: trip.destination || "",
+      durationDays: tripDurationDays(trip),
+      audience: "School students",
+      subBrand: "tmc",
+    },
+  };
+}
 
 function fmt(d) {
   if (!d) return "—";
@@ -68,25 +86,42 @@ function toDateInput(d) {
 
 export default function TripDetail() {
   const { id } = useParams();
+  const location = useLocation();
   const notify = useNotify();
-  const [tab, setTab] = useState("overview");
+  const requestedTab = location.state?.tab || new URLSearchParams(location.search).get("tab") || "overview";
+  const [tab, setTab] = useState(() => requestedTab);
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
+  const backTo = location.state?.backTo || "/travel/trips";
+  const backLabel = location.state?.backLabel || "Trips";
 
   const load = useCallback(() => {
-    setLoading(true);
+    // Keep the current trip visible on refreshes so tab-local state
+    // (like the participants bulk-import summary) survives the refetch.
+    if (!hasLoadedRef.current) setLoading(true);
     fetchApi(`/api/travel/trips/${id}`)
       .then(setTrip)
       .catch((e) => notify.error(e?.body?.error || "Failed to load trip"))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        hasLoadedRef.current = true;
+        setLoading(false);
+      });
   }, [id, notify]);
 
+  useEffect(() => {
+    hasLoadedRef.current = false;
+  }, [id]);
   useEffect(load, [load]);
+  useEffect(() => {
+    setTab(requestedTab);
+  }, [requestedTab]);
+
 
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
   if (!trip) return (
     <div style={{ padding: 24 }}>
-      <Link to="/travel/trips" style={backLink}><ChevronLeft size={16} /> Back to trips</Link>
+      <Link to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
       <p style={{ color: "var(--text-secondary)" }}>Trip not found.</p>
     </div>
   );
@@ -95,7 +130,7 @@ export default function TripDetail() {
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <Link to="/travel/trips" style={backLink}><ChevronLeft size={16} /> Trips</Link>
+          <Link to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: "8px 0 4px" }}>
             <Luggage size={28} aria-hidden /> {trip.tripCode}
           </h1>
@@ -175,7 +210,7 @@ function OverviewTab({ trip, onJump }) {
     <div style={{ display: "grid", gap: 16 }}>
       {/* Hero band — destination + dates + readiness gauge */}
       <div style={{
-        background: "var(--surface-color)", border: "1px solid var(--border-color)",
+        background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
         borderRadius: 12, padding: 20,
         display: "grid", gap: 16,
         gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
@@ -326,7 +361,7 @@ function ReadinessGauge({ score, components }) {
       }}>
         <div style={{
           position: "absolute", inset: 6, borderRadius: "50%",
-          background: "var(--surface-color)",
+          background: "var(--bg-color, #111318)",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
         }}>
           <div style={{ fontSize: 22, fontWeight: 700, color, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
@@ -384,7 +419,7 @@ function KpiCard({ icon: Icon, label, value, hint, onClick, tone }) {
       disabled={!interactive}
       style={{
         textAlign: "left", width: "100%",
-        background: "var(--surface-color)", border: "1px solid var(--border-color)",
+        background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
         borderRadius: 10, padding: 14,
         cursor: interactive ? "pointer" : "default",
         transition: "border-color 120ms, transform 120ms",
@@ -426,7 +461,7 @@ function SummaryBand({ icon: Icon, title, status, statusTone, children, onClick 
       tabIndex={interactive ? 0 : undefined}
       onKeyDown={interactive ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
       style={{
-        background: "var(--surface-color)", border: "1px solid var(--border-color)",
+        background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
         borderRadius: 10, padding: 14,
         cursor: interactive ? "pointer" : "default",
         transition: "border-color 120ms",
@@ -479,7 +514,7 @@ function PayChip({ icon: Icon, count, label, color }) {
       display: "inline-flex", alignItems: "center", gap: 4,
       padding: "3px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600,
       border: `1px solid ${color}`, color,
-      background: "var(--surface-color)",
+      background: "var(--bg-color, #111318)",
     }}>
       <Icon size={11} aria-hidden /> {count} {label}
     </span>
@@ -562,6 +597,11 @@ function ParticipantsTab({ trip, onChange, notify }) {
   // an autoincrement keyspace.
   const [pendingRegs, setPendingRegs] = useState([]);
   const [decidingRegId, setDecidingRegId] = useState(null);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkImportResult, setBulkImportResult] = useState(null);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
+  const importInputRef = useRef(null);
 
   const loadPendingRegs = useCallback(async () => {
     try {
@@ -576,6 +616,46 @@ function ParticipantsTab({ trip, onChange, notify }) {
   useEffect(() => {
     loadPendingRegs();
   }, [loadPendingRegs]);
+
+  const openBulkImportModal = () => {
+    setBulkImportModalOpen(true);
+  };
+
+  const closeBulkImportModal = () => {
+    setBulkImportModalOpen(false);
+    setBulkFile(null);
+    if (importInputRef.current) importInputRef.current.value = "";
+  };
+
+  const bulkImport = async () => {
+    if (!bulkFile) {
+      notify.error("Choose a CSV or XLSX file first");
+      return;
+    }
+    const fd = new FormData();
+    fd.append("file", bulkFile);
+    setBulkImporting(true);
+    try {
+      const token = getAuthToken();
+      const resp = await fetch(`/api/travel/trips/${trip.id}/participants/import`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        throw Object.assign(new Error(data?.error || "Failed to import participants"), { body: data, status: resp.status });
+      }
+      setBulkImportResult(data || null);
+      closeBulkImportModal();
+      notify.success(`Imported ${data?.inserted || 0}, updated ${data?.updated || 0}`);
+      onChange();
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Failed to import participants");
+    } finally {
+      setBulkImporting(false);
+    }
+  };
 
   const add = async () => {
     if (!form.fullName.trim()) {
@@ -754,8 +834,119 @@ function ParticipantsTab({ trip, onChange, notify }) {
         )}
       </div>
 
+      <div className="glass" data-testid="participant-bulk-import" style={{ padding: 14, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Bulk import participants</div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Upload a CSV or XLSX file. Existing rows are updated additively, and blank cells never clear data already stored in CRM.
+            </div>
+          </div>
+          <button type="button" onClick={openBulkImportModal} style={{ ...secondaryBtn, alignSelf: "center" }}>
+            <Download size={14} /> Import file
+          </button>
+        </div>
+        {bulkImportResult && (
+          <div style={{ marginTop: 10, display: "grid", gap: 6 }} data-testid="participant-bulk-import-result">
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Imported {bulkImportResult.inserted || 0}, updated {bulkImportResult.updated || 0}, skipped {bulkImportResult.skipped || 0}, errors {bulkImportResult.errors?.length || 0}.
+            </div>
+            {Array.isArray(bulkImportResult.errors) && bulkImportResult.errors.length > 0 && (
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                First issue: row {bulkImportResult.errors[0].row || "?"} - {bulkImportResult.errors[0].reason || "Unknown error"}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {bulkImportModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="participant-bulk-import-modal-title"
+          data-testid="participant-bulk-import-modal"
+          onClick={closeBulkImportModal}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(6, 10, 18, 0.9)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(760px, 100%)",
+              background: "var(--bg-color, #111318)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 16,
+              boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+              padding: 20,
+              display: "grid",
+              gap: 16,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <h2 id="participant-bulk-import-modal-title" style={{ margin: 0, fontSize: 20 }}>
+                  Import Participants from CSV / Excel
+                </h2>
+                <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
+                  Upload a CSV or Excel (XLSX) file with columns like fullName and parentPhone.
+                  Existing rows are updated additively and blank cells never clear stored data.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeBulkImportModal}
+                style={iconBtn}
+                aria-label="Close import modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              <label style={{ color: "var(--text-secondary)", fontSize: 13, fontWeight: 500 }}>
+                Choose file
+              </label>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(e) => setBulkFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
+                aria-label="Bulk import participants file"
+                style={{ width: "100%" }}
+              />
+              <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                Selected file: <strong>{bulkFile ? bulkFile.name : "No file chosen"}</strong>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={closeBulkImportModal} style={secondaryBtn}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={bulkImport}
+                disabled={bulkImporting || !bulkFile}
+                style={bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn}
+              >
+                {bulkImporting ? "Importing..." : "Confirm import"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {adding && (
-        <div style={{ background: "var(--surface-color)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 12 }}>
+        <div style={{ background: "var(--bg-color, #111318)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 12 }}>
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))" }}>
             <input placeholder="Full name *" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} style={input} />
             <input placeholder="Parent name" value={form.parentName} onChange={(e) => setForm({ ...form, parentName: e.target.value })} style={input} />
@@ -1278,6 +1469,7 @@ function RoomingTab({ trip, notify }) {
 
   useEffect(load, [load]);
 
+
   const participants = Array.isArray(trip.participants) ? trip.participants : [];
 
   // Live unassigned count — derived from current edit buffers + the
@@ -1431,7 +1623,7 @@ function RoomingTab({ trip, notify }) {
           zIndex: 1000,
         }} onClick={() => setShowAutoAllocateDialog(false)}>
           <div style={{
-            background: "var(--surface-color)", borderRadius: 12, padding: 24, maxWidth: 400,
+            background: "var(--bg-color, #111318)", borderRadius: 12, padding: 24, maxWidth: 400,
             boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
           }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 12px 0" }}>Auto-allocate rooms</h3>
@@ -1569,7 +1761,7 @@ function RoomingTab({ trip, notify }) {
 
               return (
                 <div key={room.id} style={{
-                  background: "var(--surface-color)", border: "1px solid var(--border-color)",
+                  background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
                   borderRadius: 8, padding: 14, display: "flex", justifyContent: "space-between",
                   alignItems: "flex-start", gap: 12,
                 }}>
@@ -1771,7 +1963,7 @@ function RoomCard({
                   type="button"
                   onClick={() => onToggleParticipant(p.id)}
                   style={{
-                    textAlign: "left", padding: "8px 10px", background: "var(--surface-color)",
+                    textAlign: "left", padding: "8px 10px", background: "var(--bg-color, #111318)",
                     border: "1px solid var(--border-color)", borderRadius: 4,
                     cursor: "pointer", fontSize: 13, color: "var(--text-primary)",
                     transition: "all 0.15s",
@@ -1815,8 +2007,6 @@ function PaymentTab({ trip, notify }) {
   const [editingInstalment, setEditingInstalment] = useState(null);
   const [instalmentEdit, setInstalmentEdit] = useState({});
   const [expandedParticipant, setExpandedParticipant] = useState(null);
-  // Payment link state — keyed by instalment id: { url, generating }
-  const [paymentLinks, setPaymentLinks] = useState({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1830,12 +2020,6 @@ function PaymentTab({ trip, notify }) {
       .then(([p, ins]) => {
         setPlan(p);
         setInstalments(ins);
-        // Seed payment link state from any previously generated URLs stored on rows
-        const seeded = {};
-        for (const row of ins) {
-          if (row.paymentLinkUrl) seeded[row.id] = { url: row.paymentLinkUrl, generating: false };
-        }
-        setPaymentLinks(seeded);
         if (p) {
           setGraceDays(p.graceDays ?? 0);
           let parsed = [];
@@ -1851,6 +2035,16 @@ function PaymentTab({ trip, notify }) {
 
   useEffect(load, [load]);
 
+
+  const buildInstalmentPortalUrl = (instalmentNumber) => (
+    `${window.location.origin}/pay/trip/${trip.id}/installment/${instalmentNumber}`
+  );
+
+  const onCopyPortalLink = (url) => {
+    navigator.clipboard?.writeText(url)
+      .then(() => notify.success("Payment portal link copied"))
+      .catch(() => notify.error("Copy failed - select the link manually"));
+  };
   const addInstalment = () => {
     setEditInstalments([
       ...editInstalments,
@@ -1973,42 +2167,6 @@ function PaymentTab({ trip, notify }) {
     }
   };
 
-  const onGeneratePaymentLink = async (ins) => {
-    setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], generating: true } }));
-    try {
-      const result = await fetchApi(`/api/travel/trips/${trip.id}/instalments/${ins.id}/payment-link`, {
-        method: "POST",
-      });
-      setPaymentLinks((prev) => ({ ...prev, [ins.id]: { url: result.url, generating: false } }));
-    } catch (e) {
-      setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], generating: false } }));
-      notify.error(e?.body?.error || "Failed to generate payment link");
-    }
-  };
-
-  const onCopyPaymentLink = (url) => {
-    navigator.clipboard?.writeText(url)
-      .then(() => notify.success("Payment link copied"))
-      .catch(() => notify.error("Copy failed — select the link manually"));
-  };
-
-  const onSyncPayment = async (ins) => {
-    setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], syncing: true } }));
-    try {
-      const result = await fetchApi(`/api/travel/trips/${trip.id}/instalments/${ins.id}/sync-payment`, { method: "POST" });
-      if (result.synced) {
-        notify.success("Payment synced — instalment marked " + result.status);
-        load();
-      } else {
-        notify.info(result.reason === "already_paid" ? "Already paid" : "No completed payment found for this link yet");
-      }
-    } catch (e) {
-      notify.error(e?.body?.error || "Sync failed");
-    } finally {
-      setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], syncing: false } }));
-    }
-  };
-
   const total = editInstalments.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
 
   if (loading) return <div style={empty}>Loading&hellip;</div>;
@@ -2049,7 +2207,7 @@ function PaymentTab({ trip, notify }) {
               {/* Column header row — only shown when instalments exist. */}
               <div style={{
                 display: "grid",
-                gridTemplateColumns: "32px 1fr 1fr 130px 90px",
+                gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 84px 90px",
                 gap: 8,
                 padding: "8px 14px",
                 fontSize: 10,
@@ -2063,12 +2221,13 @@ function PaymentTab({ trip, notify }) {
                 <span>Due date</span>
                 <span>Amount (₹)</span>
                 <span>Reminder (days)</span>
+                <span style={{ textAlign: "center" }}>Payment link</span>
                 <span style={{ textAlign: "right" }}>Actions</span>
               </div>
               {editInstalments.map((ins, idx) => (
                 <div key={idx} style={{
                   display: "grid",
-                  gridTemplateColumns: "32px 1fr 1fr 130px 90px",
+                  gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 84px 90px",
                   gap: 8,
                   padding: "10px 14px",
                   alignItems: "center",
@@ -2102,6 +2261,17 @@ function PaymentTab({ trip, notify }) {
                     aria-label={`Instalment ${idx + 1} reminder days before due`}
                     title="Days before dueDate to fire reminder (blank = no reminder)"
                   />
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minWidth: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => onCopyPortalLink(buildInstalmentPortalUrl(idx + 1))}
+                      style={{ ...secondaryBtn, padding: "5px 8px", fontSize: 11, flexShrink: 0, minWidth: 58, justifyContent: "center" }}
+                      title={buildInstalmentPortalUrl(idx + 1)}
+                      aria-label={`Copy instalment ${idx + 1} payment link`}
+                    >
+                      <Link2 size={12} aria-hidden /> Link
+                    </button>
+                  </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 2 }}>
                     <button
                       type="button"
@@ -2225,7 +2395,7 @@ function PaymentTab({ trip, notify }) {
             // Calculate totals for this participant
             const totalDue = participantInstalments.reduce((sum, i) => sum + Number(i.amount), 0);
             const totalPaid = participantInstalments.reduce((sum, i) => sum + Number(i.paidAmount || 0), 0);
-            const pendingCount = participantInstalments.filter((i) => i.status === "pending" || i.status === "partial").length;
+            const pendingCount = participantInstalments.filter((i) => i.status === "pending" || i.status === "partial" || i.status === "pending_verification").length;
 
             return (
               <div key={participantId} style={{ borderBottom: "1px solid var(--border-color)" }}>
@@ -2278,7 +2448,7 @@ function PaymentTab({ trip, notify }) {
 
                         if (isEditing) {
                           return (
-                            <div key={i.id} style={{ background: "var(--surface-color)", padding: 12, borderRadius: 6, marginTop: 10, flexDirection: "column", gap: 12, display: "flex" }}>
+                            <div key={i.id} style={{ background: "var(--bg-color, #111318)", padding: 12, borderRadius: 6, marginTop: 10, flexDirection: "column", gap: 12, display: "flex" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                                 <strong style={{ fontSize: 13 }}>Due {fmt(i.dueDate)} · ₹{Number(i.amount).toLocaleString()}</strong>
                               </div>
@@ -2337,15 +2507,11 @@ function PaymentTab({ trip, notify }) {
                           );
                         }
 
-                        const linkState = paymentLinks[i.id] || {};
-                        const hasLink = !!linkState.url;
-                        const isGenerating = !!linkState.generating;
-
                         return (
                           <div key={i.id} style={{ marginTop: 10 }}>
                             <div
                               style={{
-                                background: statusBg, padding: 10, borderRadius: hasLink ? "6px 6px 0 0" : 6,
+                                background: statusBg, padding: 10, borderRadius: 6,
                                 display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
                               }}
                             >
@@ -2365,32 +2531,7 @@ function PaymentTab({ trip, notify }) {
                                   }}
                                 >
                                   {i.status}
-                                </span>
-                                {i.status !== "paid" && hasLink && (
-                                  <button
-                                    type="button"
-                                    onClick={() => onSyncPayment(i)}
-                                    disabled={!!(paymentLinks[i.id] || {}).syncing}
-                                    style={{ ...iconBtn, padding: "4px", opacity: (paymentLinks[i.id] || {}).syncing ? 0.5 : 1 }}
-                                    title="Sync payment status from gateway"
-                                    aria-label="Sync payment status"
-                                  >
-                                    <RotateCcw size={12} aria-hidden />
-                                  </button>
-                                )}
-                                {i.status !== "paid" && (
-                                  <button
-                                    type="button"
-                                    onClick={() => onGeneratePaymentLink(i)}
-                                    disabled={isGenerating}
-                                    style={{ ...iconBtn, padding: "4px", opacity: isGenerating ? 0.5 : 1 }}
-                                    title={hasLink ? "Regenerate payment link" : "Generate payment link"}
-                                    aria-label={hasLink ? "Regenerate payment link" : "Generate payment link"}
-                                  >
-                                    <Link2 size={12} aria-hidden />
-                                  </button>
-                                )}
-                                <button
+                                </span>                                <button
                                   type="button"
                                   onClick={() => onEditInstalment(i)}
                                   style={{ ...iconBtn, padding: "4px" }}
@@ -2401,25 +2542,6 @@ function PaymentTab({ trip, notify }) {
                                 </button>
                               </div>
                             </div>
-                            {hasLink && (
-                              <div style={{
-                                background: "var(--surface-color)", borderTop: "1px solid var(--border-color)",
-                                borderRadius: "0 0 6px 6px", padding: "8px 10px",
-                                display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-                              }}>
-                                <Link2 size={12} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))", flexShrink: 0 }} />
-                                <code style={{ fontSize: 11, wordBreak: "break-all", flex: 1, minWidth: 0, color: "var(--text-secondary)" }}>
-                                  {linkState.url}
-                                </code>
-                                <button
-                                  type="button"
-                                  onClick={() => onCopyPaymentLink(linkState.url)}
-                                  style={{ ...secondaryBtn, padding: "4px 10px", fontSize: 11, flexShrink: 0 }}
-                                >
-                                  <Copy size={11} aria-hidden /> Copy
-                                </button>
-                              </div>
-                            )}
                           </div>
                         );
                       })}
@@ -2592,8 +2714,10 @@ function MicrositeCard({ trip, onChange, notify }) {
 // registration-draft branch fire — without it the wizard submission
 // falls back to the legacy lead-capture path.
 function LandingPageCard({ trip, notify }) {
+  const location = useLocation();
   const [page, setPage] = useState(null);
   const [loading, setLoading] = useState(true);
+  const landingPagesReturnState = buildLandingPagesReturnState(trip, location.state || {});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2645,6 +2769,7 @@ function LandingPageCard({ trip, notify }) {
           </div>
           <Link
             to="/landing-pages"
+            state={landingPagesReturnState}
             data-testid="goto-landing-pages-link"
             style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
           >
@@ -2654,7 +2779,7 @@ function LandingPageCard({ trip, notify }) {
       ) : (
         <div style={{
           border: "1px solid var(--border-color)", borderRadius: 10, padding: 14,
-          background: "var(--surface-color)",
+          background: "var(--bg-color, #111318)",
           display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
         }}>
           <div style={{ minWidth: 0, flex: 1 }}>
@@ -2669,6 +2794,7 @@ function LandingPageCard({ trip, notify }) {
           </div>
           <Link
             to={`/landing-pages/builder/${page.id}`}
+            state={landingPagesReturnState}
             data-testid="manage-landing-page-link"
             style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
           >
@@ -2738,7 +2864,7 @@ function MicrositeCreate({ trip, onChange, notify }) {
   };
 
   return (
-    <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
+    <div style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
         <div style={{
           width: 40, height: 40, borderRadius: 10,
@@ -2874,7 +3000,7 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
   };
 
   return (
-    <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
+    <div style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
       {/* Live-link hero: promotes the public URL and hosts the primary
           action buttons (Save / Unpublish / AI Generate) at the TOP of the
           card so operators don't have to scroll to the bottom to act. */}
@@ -2950,7 +3076,7 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
       {previewing ? (
         <div
           style={{
-            background: "var(--surface-color)", border: "1px solid var(--border-color)",
+            background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
             borderRadius: 8, padding: 16, maxHeight: 500, overflow: "auto", fontSize: 14,
           }}
           // itineraryHtml is admin-authored; sanitization happens at the route's
@@ -3078,7 +3204,7 @@ function RichTextEditor({ value, onChange, tripId, notify }) {
   };
 
   return (
-    <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 8, overflow: "hidden" }}>
+    <div style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 8, overflow: "hidden" }}>
       <div style={toolbar} role="toolbar" aria-label="Formatting toolbar">
         <ToolButton onClick={() => exec("bold")} label="Bold (Ctrl+B)"><Bold size={14} /></ToolButton>
         <ToolButton onClick={() => exec("italic")} label="Italic (Ctrl+I)"><Italic size={14} /></ToolButton>
@@ -3163,7 +3289,7 @@ const primaryBtnDisabled = {
 const dangerBtn = {
   display: "inline-flex", alignItems: "center", gap: 6,
   padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
-  background: "var(--surface-color)", color: "var(--danger-color)",
+  background: "var(--bg-color, #111318)", color: "var(--danger-color)",
   border: "1px solid var(--danger-color)", cursor: "pointer",
 };
 
@@ -3175,7 +3301,7 @@ const backLink = {
   padding: "4px 8px", borderRadius: 4,
 };
 const listShell = {
-  background: "var(--surface-color)", borderRadius: 8,
+  background: "var(--bg-color, #111318)", borderRadius: 8,
   border: "1px solid var(--border-color)", overflow: "hidden",
 };
 const row = {
@@ -3199,7 +3325,7 @@ const primaryBtn = {
 const secondaryBtn = {
   display: "inline-flex", alignItems: "center", gap: 6,
   padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
-  background: "var(--surface-color)", color: "var(--text-primary)",
+  background: "var(--bg-color, #111318)", color: "var(--text-primary)",
   border: "1px solid var(--border-color)", cursor: "pointer",
 };
 const addBtn = {

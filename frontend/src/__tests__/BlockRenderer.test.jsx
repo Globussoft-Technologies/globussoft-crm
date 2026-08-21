@@ -18,7 +18,7 @@
  * Pattern: vitest + React Testing Library with mocked Image constructor
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import BlockRenderer from '../components/landing-page-renderers/BlockRenderer';
 
@@ -230,6 +230,35 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     expect(img.src).toBe('https://example.com/image.jpg');
   });
 
+  test('wellness event images stretch to their column and keep auto height', () => {
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          id: 222,
+          slug: 'wellness-page',
+          title: 'Wellness Page',
+          content: [
+            {
+              id: 'img2',
+              type: 'image',
+              props: {
+                src: 'https://example.com/wellness.jpg',
+                alt: 'Wellness image',
+                variant: 'wellness-event-image',
+                maxWidth: '420px',
+              },
+            },
+          ],
+        }} />
+      </MemoryRouter>
+    );
+
+    const img = screen.getByAltText('Wellness image');
+    expect(img).toBeInTheDocument();
+    expect(img.style.width).toBe('100%');
+    expect(img.style.maxWidth).toBe('100%');
+    expect(img.style.height).toBe('360px');
+  });
   test('renders button block with link', () => {
     const pageWithButton = {
       id: 222,
@@ -257,6 +286,60 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     const link = screen.getByRole('link', { name: /Click me/i });
     expect(link).toBeInTheDocument();
     expect(link.href).toBe('https://example.com/');
+  });
+
+  test('routes wellness CTA buttons to the lead capture form', () => {
+    const pageWithButton = {
+      id: 223,
+      slug: 'wellness-button-page',
+      title: 'Wellness Button Page',
+      content: [
+        {
+          id: 'btn-wellness',
+          type: 'button',
+          props: {
+            text: 'Get Started',
+            url: '#event-details',
+            bgColor: '#b31d15',
+          },
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={pageWithButton} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('link', { name: /Get Started/i })).toHaveAttribute('href', '#lead-form');
+  });
+
+  test('renders wellness consultation form with the lead-form anchor target', () => {
+    const pageWithForm = {
+      id: 224,
+      slug: 'wellness-form-page',
+      title: 'Wellness Form Page',
+      content: [
+        {
+          id: 'lead-form',
+          type: 'form',
+          props: {
+            variant: 'wellness-consultation',
+            title: 'Register',
+            fields: [],
+          },
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={pageWithForm} />
+      </MemoryRouter>
+    );
+
+    expect(document.getElementById('lead-form')).toBeInTheDocument();
   });
 
   test('renders video block with iframe for embed URL', () => {
@@ -400,6 +483,42 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     // Unknown block should not render, no error thrown
   });
 
+  test('public landing-site forms submit through public API endpoint', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, message: 'OK' }),
+    });
+
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={{
+          id: 456,
+          slug: 'public-site',
+          title: 'Public Site',
+          publicSubmit: true,
+          content: [
+            {
+              id: 'form1',
+              type: 'form',
+              props: {
+                fields: [{ name: 'email', label: 'Email', type: 'email' }],
+                submitText: 'Send',
+              },
+            },
+          ],
+        }} />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Send/i }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/pages/public-site/submit', expect.any(Object));
+    });
+    global.fetch = originalFetch;
+  });
+
   test('pageId null falls back gracefully (old HTML renderer compatibility)', () => {
     const pageNoId = {
       id: null,
@@ -513,3 +632,4 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     expect(mainElement).toBeInTheDocument();
   });
 });
+

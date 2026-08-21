@@ -22,6 +22,16 @@ const externalAuth = require("../middleware/externalAuth");
 const { classifyLead } = require("../lib/leadJunkFilter");
 const { pickAssignee } = require("../lib/leadAutoRouter");
 const { computeFirstResponseDueAt } = require("../lib/leadSla");
+const { writeLeadCustomFieldValues } = require("../lib/leadCustomFieldValues");
+const {
+  isEmbedOriginAllowed,
+  notifyAdminsOfBlockedLeadOrigin,
+  notifyAdminsOfNewLead,
+  normalizeEmbedOrigin,
+} = require("../lib/leadNotifications");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
+const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
+const { normalizeMetaLeadPayload } = require("../lib/inboundLeadVerification");
 
 const router = express.Router();
 
@@ -58,9 +68,105 @@ const phoneMatches = (input) => {
   if (!suf) return null;
   return { contains: suf };
 };
-
 const parseLimit = (v, def = 50, max = 200) => Math.min(parseInt(v) || def, max);
 const parseOffset = (v) => parseInt(v) || 0;
+
+const LEAD_BODY_KEYS = new Set([
+  "name", "phone", "email", "source", "submitSource", "submittedSource",
+  "submit_source", "leadSource", "lead_source", "note", "utm",
+  "externalId", "callifiedCampaignId", "customFields",
+]);
+const CUSTOM_FIELD_PREFIX = "cf_";
+
+function normalizeSubmittedSource(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text ? text.slice(0, 128) : null;
+}
+
+function resolveSubmittedSource(body) {
+  if (!body || typeof body !== "object") return null;
+  return normalizeSubmittedSource(body.source)
+    || normalizeSubmittedSource(body.submitSource)
+    || normalizeSubmittedSource(body.submittedSource)
+    || normalizeSubmittedSource(body.submit_source)
+    || normalizeSubmittedSource(body.leadSource)
+    || normalizeSubmittedSource(body.lead_source)
+    || normalizeSubmittedSource(body.utm?.source)
+    || normalizeSubmittedSource(body.utm?.utm_source);
+}
+
+function resolvePartnerOrigin(body) {
+  if (!body || typeof body !== "object") return null;
+  return normalizeEmbedOrigin(
+    body.partnerOrigin
+      || body.embedOrigin
+      || body.origin
+      || body.referrerOrigin
+      || body.parentOrigin,
+  );
+}
+
+function resolveRequestOrigin(req) {
+  // Browser-controlled headers are trusted first. Body fields are only used
+  // as a fallback because the embed snippet's query parameter can be forged by
+  // a malicious site embedding the widget.
+  const headerOrigin = normalizeEmbedOrigin(req?.headers?.origin || req?.headers?.Origin);
+  if (headerOrigin) return headerOrigin;
+
+  const referer = req?.headers?.referer || req?.headers?.referrer;
+  if (referer) {
+    try {
+      const refererOrigin = normalizeEmbedOrigin(new URL(referer).origin);
+      if (refererOrigin) return refererOrigin;
+    } catch (_err) {
+      // ignore malformed referer
+    }
+  }
+
+  return resolvePartnerOrigin(req?.body);
+}
+
+function hasConfiguredEmbedAllowlist(allowlistJson) {
+  if (!allowlistJson) return false;
+
+  let allowlist = allowlistJson;
+  if (typeof allowlistJson === "string") {
+    try {
+      allowlist = JSON.parse(allowlistJson);
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  return Array.isArray(allowlist) && allowlist.length > 0;
+}
+
+function splitCustomLeadFields(body) {
+  if (!body || typeof body !== "object") return { rawCustomFields: {}, storageCustomFields: {} };
+  const rawCustomFields = {};
+  const storageCustomFields = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (LEAD_BODY_KEYS.has(key)) continue;
+    rawCustomFields[key] = value;
+    const storageKey = key.startsWith(CUSTOM_FIELD_PREFIX) ? key.slice(CUSTOM_FIELD_PREFIX.length) : key;
+    if (storageKey) storageCustomFields[storageKey] = value;
+  }
+  return { rawCustomFields, storageCustomFields };
+}
+
+const EXTERNAL_CONTACT_FIELD_KEYS = ["company", "title", "industry", "companySize", "linkedin", "website", "treatmentOfInterest", "stateCode", "billingStateCode"];
+function extractExternalContactFieldUpdates(body) {
+  const updates = {};
+  for (const key of EXTERNAL_CONTACT_FIELD_KEYS) {
+    if (body && body[key] !== undefined && body[key] !== null && body[key] !== "") {
+      updates[key] = body[key];
+    }
+  }
+  return updates;
+}
+
+// ── Tenant info ──────────────────────────────────────────────────
 
 // ── Tenant info ────────────────────────────────────────────────────
 
@@ -263,23 +369,66 @@ router.get("/leads", async (req, res) => {
 
 router.post("/leads", async (req, res) => {
   try {
-    const { name, phone, email, source, note, utm, externalId } = req.body;
+    // Meta Lead Ads can arrive as field_data. Normalize that shape before
+    // junk classification so the classifier sees the real name/email/phone
+    // and the leadgen_id can participate in idempotent ingestion.
+    req.body = normalizeMetaLeadPayload(req.body);
+    const { name, phone, email, note, utm } = req.body;
+    const metaLeadgenId = req.body.leadgen_id || req.body.metaJson?.leadgen_id;
+    const externalId = req.body.externalId || (metaLeadgenId ? `meta:${String(metaLeadgenId)}` : null);
+    const submittedSource = resolveSubmittedSource(req.body);
+    const { rawCustomFields, storageCustomFields } = splitCustomLeadFields(req.body);
+    const externalPayloadJson = JSON.stringify(req.body);
+    const contactFieldUpdates = extractExternalContactFieldUpdates(req.body);
     if (!name && !phone && !email) {
       return res.status(400).json({ error: "name, phone, or email required", code: "INSUFFICIENT_IDENTITY" });
+    }
+
+    let tenantCfg = null;
+    try {
+      tenantCfg = await prisma.tenant.findUnique({
+        where: { id: req.tenantId },
+        select: { vertical: true, callifiedAutoCampaignId: true, embedAllowlistJson: true },
+      });
+    } catch (e) {
+      console.error("[external] tenant config lookup failed:", e.message);
+    }
+    const isGenericLeadAwaitingCall = (tenantCfg?.vertical || "generic") === "generic";
+    const partnerOrigin = resolveRequestOrigin(req);
+    const hasEmbedAllowlist = hasConfiguredEmbedAllowlist(tenantCfg?.embedAllowlistJson);
+
+    if (hasEmbedAllowlist && !partnerOrigin) {
+      return res.status(403).json({
+        error: "Partner origin is required",
+        code: "ORIGIN_REQUIRED",
+      });
+    }
+
+    if (partnerOrigin && !isEmbedOriginAllowed(partnerOrigin, tenantCfg?.embedAllowlistJson)) {
+      await notifyAdminsOfBlockedLeadOrigin({
+        tenantId: req.tenantId,
+        origin: partnerOrigin,
+        io: req.io || null,
+      });
+      return res.status(403).json({
+        error: "Partner origin is not allowed",
+        code: "ORIGIN_NOT_ALLOWED",
+      });
     }
 
     // Run the junk filter before persisting (rules + optional Gemini AI)
     const verdict = await classifyLead({
       tenantId: req.tenantId,
-      name, phone, email, source,
+      name, phone, email, source: submittedSource,
     });
 
-    // Auto-route to a specialist / telecaller (skip junk leads — they go nowhere)
-    let assignee = { userId: null, reason: "junk skipped routing" };
-    if (!verdict.isJunk) {
+    // Generic CRM Callified leads stay unassigned until a call result marks them hot.
+    // Wellness/travel routing keeps the existing intake-time behavior.
+    let assignee = { userId: null, reason: verdict.isJunk ? "junk skipped routing" : "awaiting_call_status" };
+    if (!verdict.isJunk && !isGenericLeadAwaitingCall) {
       assignee = await pickAssignee({
         tenantId: req.tenantId,
-        name, phone, email, source, note,
+        name, phone, email, source: submittedSource, note,
       });
     }
 
@@ -288,7 +437,7 @@ router.post("/leads", async (req, res) => {
     // → SLA minutes is hardcoded in lib/leadSla.js. Junk leads still get a
     // due date — it's harmless (cron won't notify on Junk-status rows because
     // the breach query gates on status='Lead').
-    const slaText = [name, source, note].filter(Boolean).join(" ");
+    const slaText = [name, submittedSource, note].filter(Boolean).join(" ");
     let firstResponseDueAt = null;
     let slaMeta = null;
     try {
@@ -311,9 +460,18 @@ router.post("/leads", async (req, res) => {
       name: name || (phone ? `Caller ${phone}` : "Unknown caller"),
       email: resolvedEmail,
       phone: phone || null,
+      company: req.body.company || null,
+      title: req.body.title || null,
+      industry: req.body.industry || null,
+      companySize: req.body.companySize || null,
+      linkedin: req.body.linkedin || null,
+      website: req.body.website || null,
+      treatmentOfInterest: req.body.treatmentOfInterest || null,
+      stateCode: req.body.stateCode || null,
+      billingStateCode: req.body.billingStateCode || null,
       status: verdict.isJunk ? "Junk" : "Lead",
-      source: source || "callified",
-      firstTouchSource: source || "callified",
+      source: submittedSource,
+      firstTouchSource: submittedSource,
       aiScore: verdict.score,
       assignedToId: assignee.userId,
       firstResponseDueAt,
@@ -322,6 +480,24 @@ router.post("/leads", async (req, res) => {
       externalId: externalId ? String(externalId) : null,
       tenantId: req.tenantId,
     };
+
+    // Auto-assign new Leads to a matching Callified campaign based on the
+    // tenant's rule configuration when no campaign was supplied explicitly.
+    // Mirrors the logic in contacts.js so external API leads are dialable by
+    // Callified just like manually added leads.
+    if (contactData.status === "Lead" && req.body.callifiedCampaignId == null) {
+      try {
+        const matchedCampaignId = await evaluateAutoCampaignRules(req.tenantId, contactData, storageCustomFields);
+        if (matchedCampaignId) {
+          contactData.callifiedCampaignId = matchedCampaignId;
+        }
+      } catch (e) {
+        console.error("[external] auto-campaign rule evaluation failed:", e.message);
+      }
+    } else if (req.body.callifiedCampaignId != null) {
+      contactData.callifiedCampaignId = Number(req.body.callifiedCampaignId);
+    }
+
     let contact;
     let deduped = false;
     // [GP-CRM integration] Dedup priority: externalId first (most specific —
@@ -346,8 +522,85 @@ router.post("/leads", async (req, res) => {
         deduped = true;
       }
     }
-    if (!contact) {
-      contact = await prisma.contact.create({ data: contactData });
+    if (contact) {
+      if (contact.deletedAt) {
+        const restoreData = { ...contactData, ...contactFieldUpdates, externalPayloadJson, deletedAt: null };
+        if (!email) delete restoreData.email;
+        contact = await prisma.contact.update({ where: { id: contact.id }, data: restoreData });
+      } else {
+        const dedupeUpdates = { externalPayloadJson };
+        for (const [key, value] of Object.entries(contactFieldUpdates)) {
+          if (contact[key] == null || contact[key] === "") {
+            dedupeUpdates[key] = value;
+          }
+        }
+        // Backfill Callified campaign on existing leads when an inbound retry
+        // now matches an auto-campaign rule (e.g. partner re-posts a lead that
+        // was created before the rule existed).
+        if (contact.callifiedCampaignId == null && contactData.callifiedCampaignId != null) {
+          dedupeUpdates.callifiedCampaignId = contactData.callifiedCampaignId;
+        }
+        if (Object.keys(dedupeUpdates).length > 1) {
+          contact = await prisma.contact.update({ where: { id: contact.id }, data: dedupeUpdates });
+        }
+      }
+    } else {
+      contact = await prisma.contact.create({ data: { ...contactData, ...contactFieldUpdates, externalPayloadJson } });
+    }
+    if (Object.keys(storageCustomFields).length) {
+      await writeLeadCustomFieldValues(contact.id, req.tenantId, storageCustomFields);
+    }
+    if (contact.status === "Lead") {
+      await notifyAdminsOfNewLead({ tenantId: req.tenantId, contact, io: req.io });
+    }
+
+    // Workflow automation must observe the same ingestion result that the
+    // lead-junk filter used. This is intentionally tenant-scoped and does not
+    // change the existing partner webhook stream above.
+    try {
+      const { emitEvent } = require("../lib/eventBus");
+      await emitEvent(deduped ? "contact.updated" : "contact.created", {
+        contactId: contact.id,
+        name: contact.name,
+        email: contact.email,
+        phone: contact.phone,
+        company: contact.company,
+        title: contact.title,
+        status: contact.status,
+        source: contact.source,
+        aiScore: contact.aiScore,
+        assignedToId: contact.assignedToId,
+        metaLeadgenId: metaLeadgenId || null,
+        externalId: contact.externalId || externalId || null,
+        metaSignal: contact.status === "Junk" ? "junk" : ["Prospect", "Customer"].includes(contact.status) ? "qualified" : null,
+        metaIsJunk: contact.status === "Junk",
+        metaIsQualified: ["Prospect", "Customer"].includes(contact.status),
+        userId: null,
+        tenantId: req.tenantId,
+      }, req.tenantId, req.io);
+    } catch (workflowError) {
+      console.error("[external] lead workflow event failed:", workflowError.message);
+    }
+
+    // Auto-dial newly-created external Leads that have a Callified campaign + phone.
+    // Mirrors the manual-create path in contacts.js.
+    if (contact.status === "Lead" && contact.callifiedCampaignId && contact.phone) {
+      try {
+        const autoDialEnabled = await getSetting(contact.tenantId, KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED, {
+          coerce: (v) => String(v).toLowerCase() !== "false",
+        });
+        if (autoDialEnabled) {
+          const { enqueue } = require('../lib/callifiedAutoDialQueue');
+          enqueue({
+            tenantId: contact.tenantId,
+            contactId: contact.id,
+            campaignId: contact.callifiedCampaignId,
+            userId: null,
+          });
+        }
+      } catch (_e) {
+        console.error('[external] auto-dial enqueue failed:', _e && _e.message);
+      }
     }
 
     // Attach an activity so the CRM's inbox shows the origin + junk verdict.
@@ -358,6 +611,7 @@ router.post("/leads", async (req, res) => {
     const activityBits = [
       note,
       utm && `utm=${JSON.stringify(utm)}`,
+      Object.keys(rawCustomFields).length ? `customFields=${JSON.stringify(rawCustomFields)}` : null,
       verdict.reasons.length && `junk-filter: ${verdict.reasons.join("; ")}`,
     ].filter(Boolean);
     if (activityBits.length) {
@@ -371,11 +625,13 @@ router.post("/leads", async (req, res) => {
       });
     }
 
+    const { externalPayloadJson: _externalPayloadJson, ...publicContact } = contact;
     res.status(deduped ? 200 : 201).json({
-      ...contact,
+      ...publicContact,
       _verdict: verdict,
       _routing: assignee,
       _sla: slaMeta,
+      ...(Object.keys(rawCustomFields).length ? { _customFields: rawCustomFields } : {}),
       ...(deduped ? { _deduped: true } : {}),
     });
   } catch (e) {
@@ -386,7 +642,17 @@ router.post("/leads", async (req, res) => {
       const existing = await prisma.contact.findFirst({
         where: tenantWhere(req, { email: req.body.email }),
       });
-      if (existing) return res.status(200).json({ ...existing, _deduped: true });
+      if (existing) {
+        const { rawCustomFields, storageCustomFields } = splitCustomLeadFields(req.body);
+        if (Object.keys(storageCustomFields).length) {
+          await writeLeadCustomFieldValues(existing.id, req.tenantId, storageCustomFields);
+        }
+        return res.status(200).json({
+          ...existing,
+          _deduped: true,
+          ...(Object.keys(rawCustomFields).length ? { _customFields: rawCustomFields } : {}),
+        });
+      }
     }
     res.status(500).json({ error: "Failed to create lead" });
   }
@@ -456,6 +722,26 @@ router.patch("/leads/:id/stage", async (req, res) => {
           tenantId: req.tenantId,
         }, req.tenantId);
       } catch (_e) { /* fire-and-forget */ }
+      try {
+        const { emitEvent } = require("../lib/eventBus");
+        await emitEvent("contact.updated", {
+          contactId: contact.id,
+          name: contact.name,
+          email: contact.email,
+          phone: contact.phone,
+          status: contact.status,
+          previousStatus: existing.status,
+          assignedToId: contact.assignedToId,
+          externalId: contact.externalId || null,
+          metaLeadgenId: typeof contact.externalId === "string" && contact.externalId.startsWith("meta:") ? contact.externalId.slice(5) : null,
+          metaSignal: contact.status === "Junk" ? "junk" : ["Prospect", "Customer"].includes(contact.status) ? "qualified" : null,
+          metaIsJunk: contact.status === "Junk",
+          metaIsQualified: ["Prospect", "Customer"].includes(contact.status),
+          tenantId: req.tenantId,
+        }, req.tenantId, req.io);
+      } catch (workflowError) {
+        console.error("[external] stage workflow event failed:", workflowError.message);
+      }
     }
 
     res.json(contact);

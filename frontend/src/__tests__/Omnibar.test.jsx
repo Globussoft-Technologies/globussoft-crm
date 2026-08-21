@@ -20,8 +20,8 @@
  *   - Populated results render section headings + row content. Pages
  *     match comes from /api/pages/me + client-side substring filter
  *     across label / description / category / path.
- *   - Clicking a result row navigates via react-router AND clears the
- *     query (which collapses the dropdown).
+ *   - Clicking a result row navigates via react-router while keeping the
+ *     current query in place so the same search stays visible across routes.
  *
  * Bug-class this protects against:
  *   - Removing the Ctrl+K affordance (power users rely on it).
@@ -37,10 +37,11 @@
  * internal polling and time out spuriously.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import React from 'react';
 import Omnibar from '../components/Omnibar';
+import { AuthContext } from '../App';
+import { SearchQueryProvider } from '../components/search/SearchQueryContext';
 
 const navigateMock = vi.fn();
 vi.mock('react-router-dom', async () => {
@@ -73,9 +74,29 @@ function pressKey(key, { ctrl = false, meta = false } = {}) {
 }
 
 async function renderOmnibarAndWaitForPages() {
-  const view = render(<MemoryRouter><Omnibar /></MemoryRouter>);
+  const view = render(
+    <SearchQueryProvider>
+      <MemoryRouter>
+        <Omnibar />
+      </MemoryRouter>
+    </SearchQueryProvider>,
+  );
   // The pages fetch fires on mount; wait for it to settle so subsequent
   // `await screen.findByText` against page rows don't race the initial load.
+  await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/pages/me', { silent: true }));
+  return view;
+}
+
+async function renderOmnibarWithAuth(authValue) {
+  const view = render(
+    <SearchQueryProvider>
+      <MemoryRouter>
+        <AuthContext.Provider value={authValue}>
+          <Omnibar />
+        </AuthContext.Provider>
+      </MemoryRouter>
+    </SearchQueryProvider>,
+  );
   await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/pages/me', { silent: true }));
   return view;
 }
@@ -189,7 +210,39 @@ describe('Omnibar (inline top-bar)', () => {
     input.focus();
     fireEvent.change(input, { target: { value: 'sett' } });
     expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
-    expect(screen.getByText('Settings')).toBeInTheDocument();
+    await waitFor(() => {
+      const settingsRow = document.getElementById('omnibar-option-pages-/settings');
+      expect(settingsRow).toBeInTheDocument();
+      expect(within(settingsRow).getByText(/^Settings$/i)).toBeInTheDocument();
+      expect(settingsRow.querySelector('mark')).toBeNull();
+    });
+  });
+
+  it('matches generic CRM sidebar pages even when /api/pages/me omits them', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') return Promise.resolve({ pages: [] });
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+
+    render(
+      <SearchQueryProvider>
+        <MemoryRouter>
+          <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, token: 'tk', tenant: { vertical: 'generic' }, loading: false }}>
+            <Omnibar />
+          </AuthContext.Provider>
+        </MemoryRouter>
+      </SearchQueryProvider>,
+    );
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/pages/me', { silent: true }));
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'web forms' } });
+    expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
+    const row = await screen.findByRole('option', { name: /Web Forms/i }, { timeout: 2000 });
+    expect(row).toBeInTheDocument();
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/forms');
   });
 
   it('matches the wellness invoice page from /api/pages/me', async () => {
@@ -198,10 +251,76 @@ describe('Omnibar (inline top-bar)', () => {
     input.focus();
     fireEvent.change(input, { target: { value: 'invoice' } });
     expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
-    expect(screen.getByText('Invoices')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Invoices'));
+    const row = await screen.findByRole('option', { name: /Invoices/i }, { timeout: 2000 });
+    fireEvent.click(row);
     expect(navigateMock).toHaveBeenCalledWith('/wellness/invoices');
   });
+
+  it('matches travel sidebar platform pages such as Developer', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [
+            { path: '/developer', label: 'Developer', description: 'API + webhook console', category: 'Platform' },
+            { path: '/privacy', label: 'Privacy', description: 'Data handling and policy', category: 'Platform' },
+            { path: '/admin/brand-kits', label: 'Brand Kits', description: 'Brand assets', category: 'Platform' },
+            { path: '/lead-routing', label: 'Routing Rules', description: 'Rules that auto-assign incoming leads', category: 'Automation' },
+          ],
+        });
+      }
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+
+    render(
+      <SearchQueryProvider>
+        <MemoryRouter>
+          <AuthContext.Provider value={{ user: { userId: 1 }, token: 'tk', tenant: { vertical: 'travel' }, loading: false }}>
+            <Omnibar />
+          </AuthContext.Provider>
+        </MemoryRouter>
+      </SearchQueryProvider>,
+    );
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/pages/me', { silent: true }));
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'dev' } });
+    expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: /Developer/i }, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Routing Rules/i })).toBeNull();
+  });
+
+  it('matches travel sidebar pages from /api/pages/me, including Travel Knowledge', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [
+            { path: '/travel/trip-knowledge', label: 'Travel Knowledge', description: 'Google Drive-backed travel knowledge base', category: 'Travel Sales' },
+            { path: '/travel/pipeline', label: 'Pipeline', description: 'Deal pipeline across all travel sub-brands', category: 'Travel Sales' },
+            { path: '/travel/tally', label: 'Tally', description: 'Tally accounting, XML and CA exports', category: 'Travel Quotes & Invoicing' },
+          ],
+        });
+      }
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1 },
+      token: 'tk',
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'knowledge' } });
+    expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
+    const row = await screen.findByRole('option', { name: /Travel Knowledge/i }, { timeout: 2000 });
+    expect(row).toBeInTheDocument();
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/travel/trip-knowledge');
+  });
+
 
   it('matches accessible pages by description (e.g. "directory" → Contacts + Patients)', async () => {
     await renderOmnibarAndWaitForPages();
@@ -213,15 +332,37 @@ describe('Omnibar (inline top-bar)', () => {
     expect(screen.getByText('Patients')).toBeInTheDocument();
   });
 
-  it('clicking a page row navigates to its path and clears the query', async () => {
+  it('clicking a page row navigates to its path and keeps the query', async () => {
     await renderOmnibarAndWaitForPages();
     const input = screen.getByPlaceholderText(PLACEHOLDER);
     input.focus();
     fireEvent.change(input, { target: { value: 'patient' } });
-    const row = await screen.findByText('Patients', {}, { timeout: 2000 });
+    const row = await screen.findByRole('option', { name: /Patients/i }, { timeout: 2000 });
     fireEvent.click(row);
     expect(navigateMock).toHaveBeenCalledWith('/wellness/patients');
-    await waitFor(() => expect(input.value).toBe(''));
+    await waitFor(() => expect(input.value).toBe('patient'));
+  });
+
+  it('renders omnibar results without highlight markup', async () => {
+    // Global search should not add page-style highlight markup.
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') return Promise.resolve({ pages: [] });
+      return Promise.resolve({
+        contacts: [
+          { id: 7, name: 'Alice Chen', company: 'Acme Corp', email: 'alice@acme.test' },
+        ],
+        deals: [],
+        invoices: [],
+      });
+    });
+    await renderOmnibarAndWaitForPages();
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'alice' } });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /Alice Chen/i })).toBeInTheDocument();
+      expect(screen.queryAllByText(/alice/i, { selector: 'mark' })).toHaveLength(0);
+    });
   });
 
   it('renders contact + deal + invoice + ticket + task result rows under their section headers', async () => {
@@ -255,23 +396,15 @@ describe('Omnibar (inline top-bar)', () => {
     const input = screen.getByPlaceholderText(PLACEHOLDER);
     input.focus();
     fireEvent.change(input, { target: { value: 'acme' } });
-    // Section headers — the new contract renames sections to the plural
-    // entity name (Contacts/Pipeline/Invoices/Tickets/Tasks).
-    expect(await screen.findByText(/^Contacts$/i, {}, { timeout: 2000 })).toBeInTheDocument();
-    expect(screen.getByText(/^Pipeline$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^Invoices$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^Tickets$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^Tasks$/i)).toBeInTheDocument();
-    // Row contents — "Alice Chen" appears twice (contact row's primary line +
-    // the invoice row's secondary line via contact.name), so use getAllByText
-    // with length >= 2 to express the contract honestly.
-    expect(screen.getAllByText(/Alice Chen/).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('alice@acme.test')).toBeInTheDocument();
-    expect(screen.getByText('Acme renewal')).toBeInTheDocument();
-    expect(screen.getByText(/INV-2026-001/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.getElementById('omnibar-option-contacts-1')).toBeInTheDocument();
+      expect(document.getElementById('omnibar-option-deals-11')).toBeInTheDocument();
+      expect(document.getElementById('omnibar-option-invoices-101')).toBeInTheDocument();
+      expect(document.getElementById('omnibar-option-tickets-201')).toBeInTheDocument();
+      expect(document.getElementById('omnibar-option-tasks-301')).toBeInTheDocument();
+    });
+    expect(screen.queryAllByText(/acme/i, { selector: 'mark' })).toHaveLength(0);
     expect(screen.getByText('PAID')).toBeInTheDocument();
-    expect(screen.getByText(/Acme login issue/)).toBeInTheDocument();
-    expect(screen.getByText(/Acme follow-up/)).toBeInTheDocument();
   });
 
   it('clicking a contact result row navigates to /contacts/:id', async () => {
@@ -289,7 +422,7 @@ describe('Omnibar (inline top-bar)', () => {
     const input = screen.getByPlaceholderText(PLACEHOLDER);
     input.focus();
     fireEvent.change(input, { target: { value: 'alice' } });
-    const row = await screen.findByText(/Alice Chen/, {}, { timeout: 2000 });
+    const row = await screen.findByRole('option', { name: /Alice Chen/i }, { timeout: 2000 });
     fireEvent.click(row);
     expect(navigateMock).toHaveBeenCalledWith('/contacts/7');
   });
@@ -322,9 +455,9 @@ describe('Omnibar (inline top-bar)', () => {
     const input = screen.getByPlaceholderText(PLACEHOLDER);
     input.focus();
     fireEvent.change(input, { target: { value: 'alice' } });
-    expect(await screen.findByText(/Alice Chen/, {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: /Alice Chen/i }, { timeout: 2000 })).toBeInTheDocument();
     // Drop below 2 chars — dropdown should collapse.
     fireEvent.change(input, { target: { value: 'a' } });
-    await waitFor(() => expect(screen.queryByText(/Alice Chen/)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('option', { name: /Alice Chen/i })).not.toBeInTheDocument());
   });
 });

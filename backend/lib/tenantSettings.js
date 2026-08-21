@@ -101,6 +101,21 @@ const KEYS = {
   // as a sensible starting point; ops can tune per-tenant.
   IMAGE_LLM_MONTHLY_CAP_USD_CENTS:       "budgetCap_image_llm_monthly_usd_cents",
   BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS: "budgetCap_booking_expedia_monthly_usd_cents",
+  // Generic CRM Leads page — AI transcript classification for Callified calls.
+  CALLIFIED_AI_TRANSCRIPT_ENABLED:       "feature.callified.ai_transcript.enabled",
+  // Generic CRM Leads page — auto-dial new leads toggle.
+  CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED:  "feature.callified.auto_dial_new_leads.enabled",
+  // Generic CRM Leads page — DNP retry scheduler settings.
+  CALLIFIED_DNP_RETRY_ENABLED:           "feature.callified.dnp_retry.enabled",
+  CALLIFIED_DNP_RETRY_MAX_RETRIES:       "feature.callified.dnp_retry.max_retries",
+  CALLIFIED_DNP_RETRY_INTERVAL_MINUTES:  "feature.callified.dnp_retry.interval_minutes",
+  // Generic CRM Leads page — auto-campaign assignment rules (replaces the
+  // single tenant.callifiedAutoCampaignId default). Each rule maps a lead
+  // column + normalised value to a Callified campaign id.
+  CALLIFIED_AUTO_CAMPAIGN_RULES:             "feature.callified.auto_campaign_rules",
+  CALLIFIED_ASSIGN_STAFF_ENABLED:          "feature.callified.assign_staff.enabled",
+  CALLIFIED_ASSIGN_STAFF_LOGIC:          "feature.callified.assign_staff.logic",
+  CALLIFIED_ASSIGN_STAFF_LEADS_PER_USER: "feature.callified.assign_staff.leads_per_user",
   // Cron / operational settings (§4.5 hardcoded-value fixes)
   ORCHESTRATOR_DEFAULT_WORKING_MINUTES:  "orchestrator.defaultWorkingMinutes",
   SMS_DEDUP_PHRASE_24H:                  "sms.dedupPhrase24h",
@@ -112,7 +127,12 @@ const KEYS = {
   // { provider, apiKey(encrypted via lib/fieldEncryption), model, baseUrl }
   // written exclusively by routes/wellness_ai_config.js — never set this
   // key with a plaintext apiKey through /api/tenant-settings.
+
   WELLNESS_AI_PROVIDER_CONFIG:           "wellness.aiProviderConfig",
+  // Central AI provider management: one tenant-wide BYOK record plus one
+  // CRM-managed access workflow state consumed by the shared resolver.
+  AI_PROVIDER_BYOK_CONFIG:              "ai.provider.byok",
+  AI_CRM_ACCESS_STATE:                  "ai.crmAccess.state",
   SLA_TERMINAL_STATUSES:                 "sla.terminalStatuses",
   EMAIL_FROM_ADDRESS:                    "email.fromAddress",
   INVENTORY_ALERT_ROLES:                 "inventory.alertRoles",
@@ -121,6 +141,7 @@ const KEYS = {
   REPORT_SMTP_SECURE:                    "report.smtpSecure",
   REPORT_SMTP_USER:                      "report.smtpUser",
   REPORT_SMTP_PASS:                      "report.smtpPass",
+  TRAVEL_EXTERNAL_REVIEW_URL:            "travel.externalReviewUrl",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
@@ -143,6 +164,20 @@ const DEFAULTS = {
     Number(process.env.IMAGE_LLM_MONTHLY_CAP_USD_CENTS ?? 10000),
   [KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS ?? 10000),
+  // Generic CRM Leads page — AI transcript classification enabled by default.
+  [KEYS.CALLIFIED_AI_TRANSCRIPT_ENABLED]: "true",
+  // Generic CRM Leads page — auto-dial new leads enabled by default.
+  [KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED]: "true",
+  // Generic CRM Leads page — DNP retry defaults.
+  [KEYS.CALLIFIED_DNP_RETRY_ENABLED]: "true",
+  [KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES]: 3,
+  [KEYS.CALLIFIED_DNP_RETRY_INTERVAL_MINUTES]: 60,
+  // Generic CRM Leads page — auto-campaign assignment rules default.
+  [KEYS.CALLIFIED_AUTO_CAMPAIGN_RULES]: JSON.stringify({ enabled: false, rules: [] }),
+  // Generic CRM Leads page — qualified lead auto-assignment defaults.
+  [KEYS.CALLIFIED_ASSIGN_STAFF_ENABLED]: "true",
+  [KEYS.CALLIFIED_ASSIGN_STAFF_LOGIC]: "round_robin",
+  [KEYS.CALLIFIED_ASSIGN_STAFF_LEADS_PER_USER]: 1,
   // Cron / operational defaults (§4.5 hardcoded-value fixes)
   [KEYS.ORCHESTRATOR_DEFAULT_WORKING_MINUTES]: 660,
   [KEYS.SMS_DEDUP_PHRASE_24H]: "tomorrow at",
@@ -159,11 +194,15 @@ const DEFAULTS = {
   [KEYS.REPORT_SMTP_SECURE]: process.env.SMTP_SECURE || "false",
   [KEYS.REPORT_SMTP_USER]: process.env.SMTP_USER || "",
   [KEYS.REPORT_SMTP_PASS]: process.env.SMTP_PASS || "",
+  [KEYS.TRAVEL_EXTERNAL_REVIEW_URL]: process.env.TRAVEL_EXTERNAL_REVIEW_URL || "",
   // Wellness Admin Support Chatbot BYOK default — empty JSON object when no
   // provider config has been saved yet. The actual value is a JSON blob written
   // by routes/wellness_ai_config.js; this default only prevents `getSetting`
   // from returning null for new tenants.
+
   [KEYS.WELLNESS_AI_PROVIDER_CONFIG]: process.env.WELLNESS_AI_PROVIDER_CONFIG || "{}",
+  [KEYS.AI_PROVIDER_BYOK_CONFIG]: process.env.AI_PROVIDER_BYOK_CONFIG || "{}",
+  [KEYS.AI_CRM_ACCESS_STATE]: process.env.AI_CRM_ACCESS_STATE || "{}",
 };
 
 /**
@@ -275,3 +314,6 @@ module.exports = {
   getBudgetCap,
   evaluateCap,
 };
+
+
+

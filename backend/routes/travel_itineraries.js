@@ -53,7 +53,36 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const axios = require("axios");
 const router = express.Router();
+const s3Service = require("../services/s3Service");
+
+// G115 — Fetch a PDF template buffer from its S3 URL. Best-effort: on any
+// failure (network, 404, oversized) we return null and the render falls back
+// to the standard PDFKit path so the download still works.
+async function fetchPdfTemplateBuffer(url, opts = {}) {
+  if (!url || typeof url !== "string") return null;
+  // Only fetch URLs that belong to the configured S3 bucket — the template
+  // table should only ever hold S3 URLs, but this prevents SSRF if a row is
+  // somehow poisoned.
+  if (!s3Service.extractKeyFromUrl(url)) return null;
+  const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : 15 * 1024 * 1024;
+  try {
+    const resp = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: typeof opts.timeout === "number" ? opts.timeout : 15000,
+      maxContentLength: maxBytes,
+      validateStatus: (s) => s >= 200 && s < 300,
+    });
+    if (!resp || !resp.data) return null;
+    const buf = Buffer.isBuffer(resp.data) ? resp.data : Buffer.from(resp.data);
+    if (buf.length === 0 || buf.length > maxBytes) return null;
+    return buf;
+  } catch (err) {
+    console.warn(`[travel-itin] PDF template fetch failed for ${url}: ${err && err.message ? err.message : err}`);
+    return null;
+  }
+}
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
@@ -426,6 +455,7 @@ function assertValidItemType(itemType) {
 router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const search = String(req.query.search || req.query.q || "").trim();
     if (req.query.subBrand) {
       assertValidSubBrand(String(req.query.subBrand));
       where.subBrand = String(req.query.subBrand);
@@ -440,12 +470,33 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
       const cid = parseInt(req.query.contactId, 10);
       if (Number.isFinite(cid)) where.contactId = cid;
     }
+    if (req.query.from || req.query.to) {
+      const from = req.query.from
+        ? new Date(`${String(req.query.from)}T00:00:00.000`)
+        : null;
+      const to = req.query.to
+        ? new Date(`${String(req.query.to)}T23:59:59.999`)
+        : null;
+      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime()))) {
+        return res.status(400).json({ error: "invalid date range", code: "INVALID_DATE_RANGE" });
+      }
+      where.createdAt = {
+        ...(from ? { gte: from } : {}),
+        ...(to ? { lte: to } : {}),
+      };
+    }
 
     const allowed = await getSubBrandAccessSet(req.user.userId);
     if (allowed) {
       where.subBrand = where.subBrand
         ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
         : { in: [...allowed] };
+    }
+    if (search) {
+      where.OR = [
+        { destination: { contains: search } },
+        { contact: { name: { contains: search } } },
+      ];
     }
 
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
@@ -690,16 +741,28 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
           const tplItems = Array.isArray(parsed.items) ? parsed.items : [];
           tplItems.forEach((it, i) => {
             if (!it || !it.itemType || !it.description) return;
-            const cost = it.estimatedCost != null ? Number(it.estimatedCost) : null;
+            const unitCost = it.unitCost != null && it.unitCost !== ""
+              ? Number(it.unitCost)
+              : (it.estimatedCost != null ? Number(it.estimatedCost) : null);
+            const markup = it.markup != null && it.markup !== "" ? Number(it.markup) : null;
+            const gstAmount = it.gstAmount != null && it.gstAmount !== "" ? Number(it.gstAmount) : null;
+            const quantity = it.quantity != null && it.quantity !== "" ? Number(it.quantity) : 1;
+            const templateTotal = it.totalPrice != null && it.totalPrice !== ""
+              ? Number(it.totalPrice)
+              : computeItemLineTotal({ unitCost, quantity, markup, gstAmount });
             templateItemRows.push({
               itemType: String(it.itemType),
-              position: i,
+              position: Number.isFinite(Number(it.position)) ? Number(it.position) : i,
               description: String(it.description),
-              detailsJson: it.locationName ? JSON.stringify({ locationName: it.locationName }) : null,
-              unitCost: cost,
-              totalPrice: cost,
-              unit: "per_person",
-              quantity: 1,
+              detailsJson: normalizeTemplateDetailsJson(it),
+              supplierId: it.supplierId != null && it.supplierId !== "" ? Number(it.supplierId) : null,
+              unitCost,
+              markup,
+              gstAmount,
+              totalPrice: Number.isFinite(templateTotal) ? templateTotal : null,
+              unit: it.unit ? String(it.unit) : "per_person",
+              quantity: Number.isFinite(quantity) && quantity >= 0 ? quantity : 1,
+              direction: it.direction ? String(it.direction) : null,
               dayNumber: it.dayNumber != null ? parseInt(it.dayNumber, 10) : null,
               latitude: it.latitude != null ? Number(it.latitude) : null,
               longitude: it.longitude != null ? Number(it.longitude) : null,
@@ -1858,10 +1921,11 @@ router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, r
 
 // GET /api/travel/itineraries/:id
 // Resolve the policy-driven refund context for a booking: which cancellation
-// policy applies (the one pinned to its TravelInvoice, else the active policy
-// for the sub-brand, else the tenant-wide default), how many days until the trip
-// starts, and the resulting refund % + amount of what's been paid. Best-effort;
-// returns computable:false when no policy/date so the advisor decides manually.
+// policy applies (trip-specific policy attached to this itinerary, else the one
+// pinned to its TravelInvoice, else the active policy for the sub-brand, else
+// the tenant-wide default), how many days until the trip starts, and the
+// resulting refund % + amount of what's been paid. Best-effort; returns
+// computable:false when no policy/date so the advisor decides manually.
 async function resolveCancellationRefund(itin) {
   const base = {
     policyId: null,
@@ -1877,18 +1941,26 @@ async function resolveCancellationRefund(itin) {
   try {
     const tenantId = itin.tenantId;
     let policy = null;
-    // 1. Policy the operator pinned to this booking's invoice.
-    const inv = await prisma.travelInvoice.findFirst({
-      where: { tenantId, itineraryId: itin.id, cancellationPolicyId: { not: null } },
-      select: { cancellationPolicyId: true },
-      orderBy: { id: "desc" },
+    // 1. Trip-specific policy attached directly to this itinerary.
+    policy = await prisma.cancellationPolicy.findFirst({
+      where: { tenantId, itineraryId: itin.id, isActive: true },
     }).catch(() => null);
-    if (inv && inv.cancellationPolicyId) {
-      policy = await prisma.cancellationPolicy.findFirst({
-        where: { id: inv.cancellationPolicyId, tenantId },
+
+    // 2. Else the operator-pinned policy on this booking's invoice.
+    if (!policy) {
+      const inv = await prisma.travelInvoice.findFirst({
+        where: { tenantId, itineraryId: itin.id, cancellationPolicyId: { not: null } },
+        select: { cancellationPolicyId: true },
+        orderBy: { id: "desc" },
       }).catch(() => null);
+      if (inv && inv.cancellationPolicyId) {
+        policy = await prisma.cancellationPolicy.findFirst({
+          where: { id: inv.cancellationPolicyId, tenantId, isActive: true },
+        }).catch(() => null);
+      }
     }
-    // 2. Else the active policy for the sub-brand (sub-brand-specific wins over
+
+    // 3. Else the active policy for the sub-brand (sub-brand-specific wins over
     //    the tenant-wide null default).
     if (!policy) {
       const policies = await prisma.cancellationPolicy.findMany({
@@ -1906,7 +1978,6 @@ async function resolveCancellationRefund(itin) {
     return base;
   }
 }
-
 router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -1915,7 +1986,10 @@ router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
     }
     const itin = await prisma.itinerary.findFirst({
       where: { id, tenantId: req.travelTenant.id },
-      include: { items: { orderBy: { position: "asc" } } },
+      include: {
+        items: { orderBy: { position: "asc" } },
+        contact: { select: { id: true, name: true, email: true, phone: true } },
+      },
     });
     if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
 
@@ -1923,11 +1997,109 @@ router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
     if (!canAccessSubBrand(allowed, itin.subBrand)) {
       return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
     }
+    const relatedContext = {
+      latestDiagnostic: null,
+      curriculumRecommendations: [],
+      relatedQuotes: [],
+      latestProposalQuote: null,
+      sightseeingSuggestions: [],
+    };
+
+    if (itin.contactId) {
+      const [latestDiagnostic, relatedQuotes] = await Promise.all([
+        prisma.travelDiagnostic.findFirst({
+          where: {
+            tenantId: req.travelTenant.id,
+            contactId: itin.contactId,
+            ...(itin.subBrand ? { subBrand: itin.subBrand } : {}),
+          },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            subBrand: true,
+            score: true,
+            classification: true,
+            classificationLabel: true,
+            recommendedTier: true,
+            curriculumFitJson: true,
+            reportPdfUrl: true,
+            engineState: true,
+            leadQuality: true,
+            createdAt: true,
+          },
+        }),
+        prisma.travelQuote.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            contactId: itin.contactId,
+            ...(itin.subBrand ? { subBrand: itin.subBrand } : {}),
+          },
+          orderBy: { createdAt: "desc" },
+          take: 5,
+          select: {
+            id: true,
+            subBrand: true,
+            status: true,
+            totalAmount: true,
+            currency: true,
+            validUntil: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        }),
+      ]);
+
+      if (latestDiagnostic) {
+        relatedContext.latestDiagnostic = latestDiagnostic;
+        if (latestDiagnostic.curriculumFitJson) {
+          try {
+            const parsed = JSON.parse(latestDiagnostic.curriculumFitJson);
+            relatedContext.curriculumRecommendations = Array.isArray(parsed)
+              ? parsed.slice(0, 5)
+              : [];
+          } catch {
+            relatedContext.curriculumRecommendations = [];
+          }
+        }
+      }
+
+      relatedContext.relatedQuotes = relatedQuotes;
+      relatedContext.latestProposalQuote =
+        relatedQuotes.find((q) => ["Sent", "Accepted", "Rejected"].includes(String(q.status || ""))) ||
+        null;
+    }
+
+    if (itin.destination) {
+      relatedContext.sightseeingSuggestions = await prisma.travelSightseeing.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          isActive: true,
+          destinationName: { contains: String(itin.destination).trim() },
+          OR: [
+            { subBrand: null },
+            ...(itin.subBrand ? [{ subBrand: itin.subBrand }] : []),
+          ],
+        },
+        orderBy: [{ destinationName: "asc" }, { name: "asc" }],
+        take: 6,
+        select: {
+          id: true,
+          destinationName: true,
+          name: true,
+          category: true,
+          subBrand: true,
+          durationMinutes: true,
+          priceReferenceMinor: true,
+          currency: true,
+        },
+      });
+    }
     // When a cancellation is in play, attach the policy-driven refund preview so
     // the advisor sees the exact refund due before approving.
     if (itin.cancellationStatus) {
       itin.cancellationRefund = await resolveCancellationRefund(itin);
     }
+    itin.relatedContext = relatedContext;
     res.json(itin);
   } catch (e) {
     console.error("[travel-itin] get error:", e.message);
@@ -2871,6 +3043,23 @@ function computeItemLineTotal({ unitCost, quantity, markup, gstAmount }) {
   const mk = markup != null && markup !== "" ? Number(markup) : 0;
   const gst = gstAmount != null && gstAmount !== "" ? Number(gstAmount) : 0;
   return Math.round((rate * qty + mk + gst) * 100) / 100;
+}
+
+function normalizeTemplateDetailsJson(item) {
+  if (item?.detailsJson && typeof item.detailsJson === "string") {
+    return item.detailsJson;
+  }
+  if (item?.detailsJson && typeof item.detailsJson === "object" && !Array.isArray(item.detailsJson)) {
+    try {
+      return JSON.stringify(item.detailsJson);
+    } catch (_e) {
+      return null;
+    }
+  }
+  if (item?.locationName != null && String(item.locationName).trim() !== "") {
+    return JSON.stringify({ locationName: String(item.locationName).trim() });
+  }
+  return null;
 }
 
 // After any item add/edit/delete: recompute the itinerary total from its line
@@ -4170,6 +4359,7 @@ router.post(
           position: true,
           description: true,
           detailsJson: true,
+          supplierId: true,
           unitCost: true,
           markup: true,
           gstAmount: true,
@@ -4234,6 +4424,7 @@ router.post(
         position: it.position,
         description: it.description,
         detailsJson: it.detailsJson,
+        supplierId: it.supplierId,
         unit: it.unit,
         quantity: it.quantity != null ? String(it.quantity) : null,
         unitCost: it.unitCost != null ? String(it.unitCost) : null,
@@ -4713,8 +4904,39 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
     // the PDF top. Best-effort — null on an offline/restricted server, in
     // which case the PDF renders without the banner. Never blocks the download.
     const heroBuffer = await fetchDestinationImageBuffer(full.destination);
+
+    // G115 — If this itinerary was cloned from a PDF-based template, fetch the
+    // stored underprint and overlay the dynamic data on top of it.
+    let pdfTemplateBuffer = null;
+    let pdfTemplateRegions = null;
+    if (full.clonedFromTemplateId) {
+      try {
+        const tpl = await prisma.itineraryTemplate.findFirst({
+          where: { id: full.clonedFromTemplateId, tenantId: req.travelTenant.id },
+          select: { pdfTemplateUrl: true, pdfTemplateRegions: true },
+        });
+        if (tpl && tpl.pdfTemplateUrl) {
+          pdfTemplateBuffer = await fetchPdfTemplateBuffer(tpl.pdfTemplateUrl);
+          pdfTemplateRegions = tpl.pdfTemplateRegions
+            ? (() => {
+                try {
+                  const parsed = JSON.parse(tpl.pdfTemplateRegions);
+                  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+                } catch (_e) {
+                  return null;
+                }
+              })()
+            : null;
+        }
+      } catch (tplErr) {
+        console.warn("[travel-itin] PDF template lookup failed:", tplErr.message);
+      }
+    }
+
     const pdfBuf = await renderTravelItineraryPdf(full, contact, {
       heroBuffer,
+      pdfTemplateBuffer,
+      regions: pdfTemplateRegions,
       viewerWatermark: {
         viewerName,
         viewerEmail,

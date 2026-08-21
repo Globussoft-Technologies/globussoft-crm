@@ -244,8 +244,19 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     const pages = getCatalogForVertical('travel');
     const paths = pages.map((p) => p.path);
     expect(paths).toContain('/travel');
+    expect(paths).toContain('/travel/pipeline');
     expect(paths).toContain('/travel/itineraries');
     expect(paths).toContain('/travel/suppliers-admin');
+    expect(paths).toContain('/travel/trip-knowledge');
+    expect(paths).toContain('/travel/tally');
+  });
+
+  it('travel vertical keeps only the travel commission profiles page', () => {
+    const pages = getCatalogForVertical('travel');
+    const paths = pages.map((p) => p.path);
+    expect(paths).toContain('/travel/commission-profiles');
+    expect(paths).not.toContain('/commission-profiles');
+    expect(paths).not.toContain('/travel/whatsapp');
   });
 
   it('wellness vertical excludes every /travel/* path', () => {
@@ -271,7 +282,18 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
       expect(p.startsWith('/wellness')).toBe(false);
       expect(p.startsWith('/travel')).toBe(false);
     }
+    expect(paths).toContain('/landing-sites');
     expect(paths).not.toContain('/landing-pages');
+  });
+
+  it('Channels stays generic-only and is excluded from wellness + travel catalogs', () => {
+    const generic = getCatalogForVertical('generic').map((p) => p.path);
+    const wellness = getCatalogForVertical('wellness').map((p) => p.path);
+    const travel = getCatalogForVertical('travel').map((p) => p.path);
+
+    expect(generic).toContain('/channels');
+    expect(wellness).not.toContain('/channels');
+    expect(travel).not.toContain('/channels');
   });
 
   it('every vertical includes the cross-vertical core (/home, /contacts, /tasks, /notification-settings)', () => {
@@ -301,7 +323,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(generic).not.toContain('/revenue-goals');
   });
 
-  it('Landing Pages is travel-only and stays out of generic/wellness catalogs', () => {
+  it('Landing Pages stays travel-only while Landing Sites is shared across generic + wellness', () => {
     const travel = getCatalogForVertical('travel').map((p) => p.path);
     const wellness = getCatalogForVertical('wellness').map((p) => p.path);
     const generic = getCatalogForVertical('generic').map((p) => p.path);
@@ -309,6 +331,10 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(travel).toContain('/landing-pages');
     expect(wellness).not.toContain('/landing-pages');
     expect(generic).not.toContain('/landing-pages');
+
+    expect(travel).not.toContain('/landing-sites');
+    expect(wellness).toContain('/landing-sites');
+    expect(generic).toContain('/landing-sites');
   });
 
   it('unknown / null vertical falls back to the cross-vertical core only', () => {
@@ -502,9 +528,12 @@ describe('Vertical isolation — getAccessiblePages with opts.vertical', () => {
   });
 
   it('travel: surfaces /travel/* pages when the role holds the matching perm', () => {
-    const perms = new Set(['itineraries.read']);
+    const perms = new Set(['itineraries.read', 'pipeline.read', 'diagnostics.write', 'invoices.export']);
     const onTravel = getAccessiblePages(perms, { vertical: 'travel' });
+    expect(onTravel.find((p) => p.path === '/travel/pipeline')).toBeDefined();
     expect(onTravel.find((p) => p.path === '/travel/itineraries')).toBeDefined();
+    expect(onTravel.find((p) => p.path === '/travel/trip-knowledge')).toBeDefined();
+    expect(onTravel.find((p) => p.path === '/travel/tally')).toBeDefined();
   });
 
   it('wellness: hides /travel/* pages even when the role holds the matching perm', () => {

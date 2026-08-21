@@ -8,7 +8,9 @@
  * Endpoints consumed:
  *   - GET    /api/contacts/:id              -> contact + nested deals + activities
  *   - GET    /api/contacts/:id/attachments  -> attachment list
- *   - POST   /api/contacts/:id/attachments  -> upload attachment
+ *   - POST   /api/uploads/images            -> batch image upload to S3
+ *   - POST   /api/uploads/documents         -> batch document upload to S3
+ *   - POST   /api/contacts/:id/attachments  -> persist uploaded attachment metadata
  *   - DELETE /api/contacts/attachments/:id  -> remove attachment
  *
  * Mock stability: fetchApi is a stable vi.fn() reference; the per-test
@@ -29,9 +31,9 @@
  *   8. "Back to Contacts" link points to /contacts.
  *   9. Empty attachments shows "No files attached." copy.
  *  10. Attachment list renders one row per attachment with delete button.
- *  11. Clicking the Add button opens the upload form; Cancel closes it.
- *  12. Submitting the upload form POSTs to the attachments endpoint with
- *      the JSON body and re-fetches the attachment list.
+ *  11. Clicking the Add button opens the upload picker; Cancel closes it.
+ *  12. Submitting selected files uploads them to the shared S3 endpoints,
+ *      then POSTs attachment metadata and re-fetches the attachment list.
  *  13. Clicking the trash button DELETEs the attachment and re-fetches.
  *  14. Empty activity timeline renders the "No activities recorded yet." copy.
  *  15. Activity timeline renders one row per activity with type chip.
@@ -92,6 +94,8 @@ function makeFetchImpl(overrides = {}) {
     contact: { kind: "ok", data: BASE_CONTACT },
     attachments: { kind: "ok", data: ATTACHMENTS },
     upload: { kind: "ok", data: { id: 999 } },
+    uploadDocuments: { kind: "ok", data: { success: true, count: 1, urls: [{ url: "https://s3.example.com/msa-2026.pdf", fileName: "msa-2026.pdf", size: 7 }] } },
+    uploadImages: { kind: "ok", data: { success: true, count: 1, urls: [{ url: "https://s3.example.com/screenshot.png", fileName: "screenshot.png", size: 9 }] } },
     delete: { kind: "ok", data: { ok: true } },
     ...overrides,
   };
@@ -103,6 +107,8 @@ function makeFetchImpl(overrides = {}) {
     const method = (opts && opts.method) || "GET";
     if (/^\/api\/contacts\/\d+$/.test(url) && method === "GET") return handle(o.contact);
     if (/^\/api\/contacts\/\d+\/attachments$/.test(url) && method === "GET") return handle(o.attachments);
+    if (url === "/api/uploads/documents" && method === "POST") return handle(o.uploadDocuments);
+    if (url === "/api/uploads/images" && method === "POST") return handle(o.uploadImages);
     if (/^\/api\/contacts\/\d+\/attachments$/.test(url) && method === "POST") return handle(o.upload);
     if (/^\/api\/contacts\/attachments\/\d+$/.test(url) && method === "DELETE") return handle(o.delete);
     return Promise.resolve({});
@@ -242,41 +248,49 @@ describe("ContactDetail — page contract", () => {
     expect(firstLink.getAttribute("href")).toBe("https://files.example.com/501");
   });
 
-  it("opens the upload form when Add is clicked and closes via Cancel", async () => {
+  it("opens the upload picker when Add is clicked and closes via Cancel", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     const user = userEvent.setup();
     renderPage();
     await screen.findByText(/Priya Sharma/);
 
-    // Form fields are absent before Add is clicked.
-    expect(screen.queryByPlaceholderText(/File name/)).toBeNull();
+    // Picker is absent before Add is clicked.
+    expect(screen.queryByLabelText(/Upload files/)).toBeNull();
 
     const addBtn = screen.getByRole("button", { name: /Add/ });
     await user.click(addBtn);
 
-    expect(await screen.findByPlaceholderText(/File name/)).toBeTruthy();
-    expect(screen.getByPlaceholderText(/File URL/)).toBeTruthy();
+    expect(await screen.findByLabelText(/Upload files/)).toBeTruthy();
 
     const cancelBtn = screen.getByRole("button", { name: /Cancel/ });
     await user.click(cancelBtn);
 
     await waitFor(() => {
-      expect(screen.queryByPlaceholderText(/File name/)).toBeNull();
+      expect(screen.queryByLabelText(/Upload files/)).toBeNull();
     });
   });
 
-  it("submitting the upload form POSTs to /api/contacts/:id/attachments and re-fetches the list", async () => {
+  it("submitting selected files uploads to S3, persists attachment metadata, and re-fetches the list", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     const user = userEvent.setup();
     renderPage();
     await screen.findByText(/Priya Sharma/);
 
     await user.click(screen.getByRole("button", { name: /Add/ }));
-    await user.type(await screen.findByPlaceholderText(/File name/), "msa-2026.pdf");
-    await user.type(screen.getByPlaceholderText(/File URL/), "https://files.example.com/new");
+    const input = await screen.findByLabelText(/Upload files/);
+    const file = new File(["1234567"], "msa-2026.pdf", { type: "application/pdf" });
+    await user.upload(input, file);
 
     const beforeCalls = fetchApiMock.mock.calls.length;
-    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await user.click(screen.getByRole("button", { name: /^Upload$/ }));
+
+    await waitFor(() => {
+      const uploadCall = fetchApiMock.mock.calls.find(
+        (c) => c[0] === "/api/uploads/documents" && c[1] && c[1].method === "POST",
+      );
+      expect(uploadCall).toBeTruthy();
+      expect(uploadCall[1].body).toBeInstanceOf(FormData);
+    });
 
     await waitFor(() => {
       const postCall = fetchApiMock.mock.calls.find(
@@ -285,10 +299,10 @@ describe("ContactDetail — page contract", () => {
       expect(postCall).toBeTruthy();
       const body = JSON.parse(postCall[1].body);
       expect(body.filename).toBe("msa-2026.pdf");
-      expect(body.fileUrl).toBe("https://files.example.com/new");
+      expect(body.fileUrl).toBe("https://s3.example.com/msa-2026.pdf");
+      expect(body.mimeType).toBe("application/pdf");
     });
 
-    // Re-fetch should have followed the upload.
     await waitFor(() => {
       const refetch = fetchApiMock.mock.calls
         .slice(beforeCalls)

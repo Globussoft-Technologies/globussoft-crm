@@ -45,6 +45,7 @@ import { AuthContext } from '../App';
 import CostMaster from '../pages/travel/CostMaster';
 
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
+const fetchMock = vi.fn();
 
 function makeRate(overrides = {}) {
   return {
@@ -92,12 +93,16 @@ function renderPage(user = ADMIN_USER) {
 
 beforeEach(() => {
   fetchApiMock.mockReset();
+  fetchMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
   installFetchMock();
+  global.fetch = fetchMock;
+  global.URL.createObjectURL = vi.fn(() => 'blob:cost-master');
+  global.URL.revokeObjectURL = vi.fn();
 });
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -111,6 +116,8 @@ describe('<CostMaster /> — page chrome', () => {
     expect(screen.getByLabelText(/^Category$/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Pricing rules/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Export CSV/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Download CSV Template/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Download Excel Template/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Import CSV/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Add rate/i })).toBeInTheDocument();
     await waitFor(() => {

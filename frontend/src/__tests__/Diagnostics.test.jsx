@@ -10,15 +10,15 @@
  *   - DiagnosticWizard.test.jsx (51afa31) → /new wizard
  *
  *   1. Page chrome: heading "Diagnostics" + sub-brand filter + classification
- *      filter + Refresh button + "Take diagnostic" CTA always present;
+ *      filter + Refresh button + "Add diagnostic entry" CTA always present;
  *      "New bank" CTA only renders for ADMIN role (SUT lines 74-82).
  *   2. Loading state: shows "Loading…" before first GET resolves
  *      (await findByText per CLAUDE.md tick #108 cron-learning).
- *   3. GET on mount: hits /api/travel/diagnostics?limit=100 with NO
- *      subBrand/classification query params when filters are blank
- *      (SUT lines 46-53: builds URLSearchParams; limit=100 always set).
+ *   3. GET on mount: hits /api/travel/diagnostics?limit=20&offset=0 with
+ *      NO subBrand/classification query params when filters are blank
+ *      (SUT lines 60-80: builds URLSearchParams; pagination is server-side).
  *   4. Empty-state: zero diagnostics → renders the "No diagnostics submitted
- *      yet." copy + the "Take diagnostic" hint (SUT lines 138-140).
+ *      yet." copy + the "Add diagnostic entry" hint.
  *   5. Sub-brand filter: selecting "rfu" re-fetches with ?subBrand=rfu
  *      (camelCase per SUT line 49 — pinned).
  *   6. Classification filter: selecting "level_2" re-fetches with
@@ -38,14 +38,14 @@
  *      (--subtle-bg-3 / --primary-color); we assert the uppercase text only.
  *  11. Navigation: clicking the row's created-at link navigates to
  *      /travel/diagnostics/:id via <Link to=`...`> (SUT lines 162-168).
- *  12. "Take diagnostic" CTA targets /travel/diagnostics/new (SUT line 84).
+ *  12. "Add diagnostic entry" CTA targets /travel/diagnostics/new.
  *  13. "New bank" CTA targets /travel/diagnostics/banks/new and is hidden
  *      for non-ADMIN roles.
  *  14. Error handling: GET rejection surfaces e.body.error via notify.error
  *      and clears the diagnostics list (SUT lines 56-60).
  *
  * Backend contract pinned (per backend/routes/travel_diagnostics.js):
- *   GET /api/travel/diagnostics[?subBrand=&classification=&limit=]
+ *   GET /api/travel/diagnostics[?subBrand=&classification=&limit=&offset=]
  *       → 200 { diagnostics: [...] }
  *       | 500 on error
  *
@@ -139,6 +139,22 @@ function makeDiagnostic(overrides = {}) {
   };
 }
 
+function makeDiagnosticPage(count, overrides = {}) {
+  return Array.from({ length: count }, (_, i) =>
+    makeDiagnostic({
+      id: 900 + i,
+      subBrand: i % 3 === 0 ? 'tmc' : i % 3 === 1 ? 'rfu' : 'visasure',
+      classification: i % 4 === 0 ? 'level_1' : i % 4 === 1 ? 'level_2' : i % 4 === 2 ? 'level_3' : 'level_4',
+      classificationLabel: `Row ${i + 1}`,
+      score: i + 0.25,
+      recommendedTier: i % 3 === 0 ? 'entry' : i % 3 === 1 ? 'primary' : 'premium',
+      contactId: 6000 + i,
+      createdAt: `2026-05-${String((i % 28) + 1).padStart(2, '0')}T10:00:00.000Z`,
+      ...overrides,
+    }),
+  );
+}
+
 const DIAGNOSTICS_DEFAULT = [
   makeDiagnostic({
     id: 701,
@@ -174,20 +190,34 @@ const DIAGNOSTICS_DEFAULT = [
 // surface they care about.
 function installFetchMock({
   list = { diagnostics: DIAGNOSTICS_DEFAULT },
+  bulkDelete = { deletedCount: 0, deletedIds: [] },
 } = {}) {
-  fetchApiMock.mockImplementation((url) => {
+  fetchApiMock.mockImplementation((url, options = {}) => {
+    if (
+      typeof url === 'string' &&
+      url === '/api/travel/diagnostics/bulk' &&
+      options.method === 'DELETE'
+    ) {
+      if (bulkDelete instanceof Error) return Promise.reject(bulkDelete);
+      return Promise.resolve(bulkDelete);
+    }
     if (typeof url === 'string' && url.startsWith('/api/travel/diagnostics')) {
       if (list instanceof Error) return Promise.reject(list);
-      return Promise.resolve(list);
+      return Promise.resolve({
+        diagnostics: list.diagnostics || [],
+        total: typeof list.total === 'number' ? list.total : (list.diagnostics || []).length,
+        limit: list.limit ?? 20,
+        offset: list.offset ?? 0,
+      });
     }
     return Promise.resolve(null);
   });
 }
 
-function renderPage(user = ADMIN_USER) {
+function renderPage(user = ADMIN_USER, initialEntries = ['/travel/diagnostics']) {
   const value = { user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false };
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={value}>
         <Diagnostics />
       </AuthContext.Provider>
@@ -210,14 +240,15 @@ afterEach(() => {
 });
 
 describe('<Diagnostics /> — page chrome + filter bar', () => {
-  it('renders heading + sub-brand filter + classification filter + Refresh + Take diagnostic CTA', async () => {
-    // "Take diagnostic" is shown to operators; admins see "New bank" instead.
+  it('renders heading + sub-brand filter + classification filter + Refresh + add-diagnostic CTA', async () => {
     renderPage(REGULAR_USER);
     expect(screen.getByRole('heading', { name: /Diagnostics/i })).toBeInTheDocument();
+    expect(screen.getByTitle(/diagnostics/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Take a diagnostic/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
     // Wait for the mount-time GET to settle.
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
@@ -227,9 +258,9 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     });
   });
 
-  it('Take diagnostic CTA targets /travel/diagnostics/new (SUT line 84)', async () => {
+  it('add-diagnostic CTA targets /travel/diagnostics/new', async () => {
     renderPage(REGULAR_USER);
-    const cta = screen.getByRole('link', { name: /Take a diagnostic/i });
+    const cta = screen.getByRole('link', { name: /Add new diagnostic entry/i });
     expect(cta.getAttribute('href')).toBe('/travel/diagnostics/new');
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalled();
@@ -245,11 +276,15 @@ describe('<Diagnostics /> — RBAC on "New bank" CTA (SUT lines 74-82)', () => {
     expect(newBank.getAttribute('href')).toBe('/travel/diagnostics/banks/new');
   });
 
+  it('ADMIN role also gets the add-diagnostic CTA', async () => {
+    renderPage(ADMIN_USER);
+    expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
+  });
+
   it('USER role: "New bank" CTA is hidden (admin-only mutation surface)', async () => {
     renderPage(REGULAR_USER);
     expect(screen.queryByRole('link', { name: /Create new diagnostic bank/i })).toBeNull();
-    // "Take diagnostic" CTA still renders for non-admin (SUT lines 83-89).
-    expect(screen.getByRole('link', { name: /Take a diagnostic/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
   });
 });
 
@@ -265,40 +300,65 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     renderPage();
     expect(await screen.findByText('Loading…')).toBeInTheDocument();
     resolveList({ diagnostics: DIAGNOSTICS_DEFAULT });
-    // After resolve, the table renders — the first row's "Submitted" link
-    // is rendered as a formatted local date string; assert by sub-brand text.
     await screen.findByText('tmc');
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
-  it('GETs /api/travel/diagnostics?limit=100 on mount with NO subBrand/classification query string', async () => {
+  it('GETs /api/travel/diagnostics?limit=20&offset=0 on mount with NO subBrand/classification query string', async () => {
     renderPage();
     await waitFor(() => {
       const listCall = fetchApiMock.mock.calls.find(([u]) =>
         typeof u === 'string' && u.startsWith('/api/travel/diagnostics'),
       );
       expect(listCall).toBeTruthy();
-      // limit=100 is always set by the SUT (line 51).
-      expect(listCall[0]).toContain('limit=100');
-      // No subBrand= / classification= when both filters are blank.
+      expect(listCall[0]).toContain('limit=20');
+      expect(listCall[0]).toContain('offset=0');
       expect(listCall[0]).not.toContain('subBrand=');
       expect(listCall[0]).not.toContain('classification=');
     });
-    // Renders one row per diagnostic (by sub-brand identifier text).
     expect(await screen.findByText('tmc')).toBeInTheDocument();
     expect(screen.getByText('rfu')).toBeInTheDocument();
     expect(screen.getByText('visasure')).toBeInTheDocument();
   });
 
+
+
+  it('keeps the diagnostics table full-width without a horizontal scroll wrapper', async () => {
+    const firstPage = Array.from({ length: 10 }, (_, i) =>
+      makeDiagnostic({
+        id: 801 + i,
+        subBrand: i === 0 ? 'tmc' : 'rfu',
+        classification: i === 0 ? 'level_1' : 'level_2',
+        classificationLabel: i === 0 ? 'School-Trip Standard' : 'Umrah Premium',
+        score: 1 + i,
+        recommendedTier: i === 0 ? 'entry' : 'primary',
+        contactId: 6000 + i,
+        createdAt: `2026-05-${String(20 + i).padStart(2, '0')}T10:00:00.000Z`,
+      }),
+    );
+
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url === 'string' && url.startsWith('/api/travel/diagnostics')) {
+        return Promise.resolve({ diagnostics: firstPage, total: 10, limit: 200, offset: 0 });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText('tmc');
+
+    const table = screen.getByRole('table', { name: /Diagnostics results/i });
+
+    expect(table.style.width).toBe('100%');
+    expect(table.style.tableLayout).toBe('fixed');
+    expect(table.querySelectorAll('col').length).toBe(7);
+    expect(screen.queryByTestId('diagnostics-table-scroll')).toBeNull();
+    expect(screen.queryByText('travelstall')).toBeNull();
+  });
   it('renders empty-state copy when diagnostics=[] (SUT lines 138-140)', async () => {
     installFetchMock({ list: { diagnostics: [] } });
-    // The "Click Take diagnostic" hint is only shown to non-admins.
     renderPage(REGULAR_USER);
-    expect(
-      await screen.findByText(/No diagnostics submitted yet\./i),
-    ).toBeInTheDocument();
-    // The "Take diagnostic" hint is embedded as <strong> inside the empty-
-    // state copy. Verify the surrounding text is rendered.
+    expect(await screen.findByText(/No diagnostics submitted yet./i)).toBeInTheDocument();
     expect(screen.getByText(/Click/i)).toBeInTheDocument();
   });
 
@@ -321,7 +381,6 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     });
   });
 });
-
 describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', () => {
   it('selecting sub-brand "rfu" re-fetches with ?subBrand=rfu in the URL', async () => {
     renderPage();
@@ -366,6 +425,105 @@ describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', (
         typeof u === 'string' && u.startsWith('/api/travel/diagnostics'),
       );
       expect(call).toBeTruthy();
+    });
+  });
+
+  it('reads a date range from the URL and re-fetches with fromDate and toDate query params', async () => {
+    renderPage(
+      ADMIN_USER,
+      ['/travel/diagnostics?fromDate=2026-06-17&toDate=2026-06-23'],
+    );
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' &&
+        u.includes('fromDate=2026-06-17') &&
+        u.includes('toDate=2026-06-23'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+});
+
+describe('<Diagnostics /> — admin bulk delete', () => {
+  it('renders selection controls for ADMIN users', async () => {
+    renderPage();
+    expect(await screen.findByLabelText(/Select all visible diagnostics/i)).toBeInTheDocument();
+  });
+
+  it('hides selection controls for non-admin users', async () => {
+    renderPage(REGULAR_USER);
+    await screen.findByText('tmc');
+    expect(screen.queryByLabelText(/Select all visible diagnostics/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Delete selected diagnostics/i })).toBeNull();
+  });
+
+  it('deletes selected diagnostics through the bulk endpoint and reloads the list', async () => {
+    installFetchMock({
+      bulkDelete: { deletedCount: 2, deletedIds: [701, 702] },
+    });
+    renderPage();
+    await screen.findByText('tmc');
+
+    fireEvent.click(screen.getByLabelText(/Select diagnostic #701/i));
+    fireEvent.click(screen.getByLabelText(/Select diagnostic #702/i));
+    fireEvent.click(screen.getByRole('button', { name: /Delete selected diagnostics/i }));
+
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled());
+    await waitFor(() => {
+      const deleteCall = fetchApiMock.mock.calls.find(
+        ([u, options]) =>
+          u === '/api/travel/diagnostics/bulk' && options?.method === 'DELETE',
+      );
+      expect(deleteCall).toBeTruthy();
+      expect(JSON.parse(deleteCall[1].body)).toEqual({ ids: [701, 702] });
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith('Deleted 2 diagnostics.');
+    });
+  });
+});
+
+describe('<Diagnostics /> — pagination footer', () => {
+  it('renders the wellness-style pager when total exceeds one page and requests the matching offset', async () => {
+    installFetchMock({ list: { diagnostics: makeDiagnosticPage(51), total: 51, limit: 20, offset: 0 } });
+    renderPage();
+
+    const pager = await screen.findByTestId('diagnostics-pager');
+    expect(pager.textContent).toContain('Showing');
+    expect(pager.textContent).toContain('20');
+    expect(pager.textContent).toContain('51');
+    expect(pager.textContent).toContain('diagnostics');
+    expect(screen.getByRole('button', { name: /Next page/i })).toBeInTheDocument();
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^2$/ }));
+
+    await waitFor(() => {
+      const pageTwoCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('limit=20') && u.includes('offset=20'),
+      );
+      expect(pageTwoCall).toBeTruthy();
+    });
+  });
+
+  it('changing page size via the pager resets back to page 1 and updates limit', async () => {
+    installFetchMock({ list: { diagnostics: makeDiagnosticPage(51), total: 51, limit: 20, offset: 0 } });
+    renderPage();
+
+    const pager = await screen.findByTestId('diagnostics-pager');
+    const pageSizeLabel = within(pager).getAllByText('20', { selector: 'span' })[0];
+    fireEvent.click(pageSizeLabel.closest('button'));
+    fireEvent.click(within(pager).getByRole('menuitem', { name: /Custom/i }));
+
+    const input = screen.getByRole('spinbutton');
+    fireEvent.change(input, { target: { value: '10' } });
+
+    await waitFor(() => {
+      const pageSizeCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('limit=10') && u.includes('offset=0'),
+      );
+      expect(pageSizeCall).toBeTruthy();
     });
   });
 });
@@ -480,3 +638,5 @@ describe('<Diagnostics /> — navigation (created-at cell → /travel/diagnostic
     expect(link703.getAttribute('href')).toBe('/travel/diagnostics/703');
   });
 });
+
+

@@ -49,6 +49,15 @@ const {
   looksLikeMaskedSentinel,
   maskConfigRow,
 } = require("../lib/credentialMasking");
+// Per-tenant manual Meta Cloud connect (validate-with-Meta-then-activate).
+// Companion to lib/whatsappOnboardingService.js, which owns the Embedded
+// Signup path that stays feature-flagged until Meta App Review clears.
+const {
+  META_CLOUD_PROVIDER,
+  validateAndConnect,
+  disconnect: waDisconnect,
+  getConnectionState,
+} = require("../lib/whatsappTenantConnect");
 // #681: Unified Inbox / WhatsApp threads expose lead `contactPhone` +
 // `contact.phone` + `contact.email` in list views. Mask for low-trust
 // viewers (USER role on generic / telecaller / helper on wellness).
@@ -1973,6 +1982,115 @@ router.post("/templates/:id/sync", verifyToken, async (req, res) => {
   }
 });
 
+// ─── Per-tenant Meta Cloud connect / disconnect / status ───────────────────
+//
+// The manual-credential counterpart to /onboard/* (Embedded Signup), which
+// stays gated behind WHATSAPP_EMBEDDED_SIGNUP_ENABLED until Meta App Review
+// clears. These three routes let a tenant admin paste their OWN Meta app
+// credentials in Settings and get validated against Graph before anything is
+// marked connected. Generic surface only — travel (Wati) and WhatsApp Web
+// (QR) transports are untouched.
+//
+// Registered BEFORE `GET /config` purely for readability; Express matches
+// `/config` and `/config/status` as distinct paths so order is not load-bearing.
+
+// GET /config/status — masked connection state + the values WE generate
+// (webhook callback URL, verify-token provenance) for the Settings card.
+router.get("/config/status", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const state = await getConnectionState({ tenantId: req.user.tenantId });
+    res.json(state);
+  } catch (err) {
+    console.error("WhatsApp config status error:", err.message);
+    res.status(500).json({ error: "Failed to read WhatsApp connection status" });
+  }
+});
+
+// POST /config/:provider/connect — validate with Meta, then persist + activate.
+// Non-meta_cloud providers have no Graph contract to validate against, so they
+// keep using PUT /config/:provider.
+router.post(
+  "/config/:provider/connect",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const { provider } = req.params;
+      if (provider !== META_CLOUD_PROVIDER) {
+        return res.status(400).json({
+          error: `Credential validation is only available for "${META_CLOUD_PROVIDER}". Use PUT /api/whatsapp/config/${provider} for other providers.`,
+          code: "PROVIDER_NOT_VALIDATABLE",
+        });
+      }
+
+      const result = await validateAndConnect({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        phoneNumberId: req.body.phoneNumberId,
+        businessAccountId: req.body.businessAccountId,
+        businessId: req.body.businessId,
+        accessToken: req.body.accessToken,
+        webhookVerifyToken: req.body.webhookVerifyToken,
+        subscribeWebhooks: req.body.subscribeWebhooks !== false,
+      });
+
+      if (!result.ok) {
+        // 422 = the credentials themselves are wrong (the admin can fix it by
+        // correcting a value); 409 = someone else owns this number.
+        const status = result.code === "PHONE_NUMBER_CLAIMED" ? 409 : 422;
+        return res.status(status).json({
+          error: result.error,
+          code: result.code,
+          ...(result.fields && { fields: result.fields }),
+        });
+      }
+
+      res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("WhatsApp connect error:", err.message);
+      if (err && err.code === "P2002") {
+        return res.status(409).json({
+          error:
+            "That phone number ID is already in use by another WhatsApp configuration.",
+          code: "PHONE_NUMBER_ID_TAKEN",
+        });
+      }
+      res.status(500).json({ error: "Failed to connect WhatsApp" });
+    }
+  },
+);
+
+// POST /config/:provider/disconnect — soft-disconnect; credentials + history
+// are preserved so reconnecting is a re-validate, not a re-setup.
+router.post(
+  "/config/:provider/disconnect",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const { provider } = req.params;
+      if (provider !== META_CLOUD_PROVIDER) {
+        return res.status(400).json({
+          error: `Disconnect is only available for "${META_CLOUD_PROVIDER}".`,
+          code: "PROVIDER_NOT_VALIDATABLE",
+        });
+      }
+      const result = await waDisconnect({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        unsubscribe: req.body?.unsubscribe !== false,
+      });
+      if (!result.ok) {
+        return res.status(404).json({ error: result.error, code: result.code });
+      }
+      res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("WhatsApp disconnect error:", err.message);
+      res.status(500).json({ error: "Failed to disconnect WhatsApp" });
+    }
+  },
+);
+
 // ─── Get WhatsApp Config (ADMIN only) ──────────────────────────────────────
 //
 // #651 — see routes/sms.js GET /config doc-comment. accessToken +
@@ -2006,6 +2124,29 @@ router.put(
     try {
       const { provider } = req.params;
       const { phoneNumberId, businessAccountId, isActive, settings } = req.body;
+
+      // Meta Cloud may only go ACTIVE through a successful Graph validation
+      // (POST /config/:provider/connect), never by a bare flag flip. Without
+      // this guard an admin could save unverified credentials and have the
+      // integration report "Connected" while every send failed at Meta.
+      // `onboardedAt` is the "has been validated at least once" marker — set
+      // by whatsappTenantConnect.validateAndConnect and by the embedded-signup
+      // finalize step. Other providers (twilio_whatsapp, gupshup) have no
+      // Graph contract to probe and keep their existing behaviour.
+      if (provider === META_CLOUD_PROVIDER) {
+        const current = await prisma.whatsAppConfig.findUnique({
+          where: { tenantId_provider: { tenantId: req.user.tenantId, provider } },
+          select: { onboardedAt: true },
+        });
+        if (isActive === true && !current?.onboardedAt) {
+          return res.status(409).json({
+            error:
+              "Validate your Meta credentials before activating WhatsApp. " +
+              "Use POST /api/whatsapp/config/meta_cloud/connect (Settings → WhatsApp / Meta Configuration → Validate & Connect).",
+            code: "WHATSAPP_NOT_VALIDATED",
+          });
+        }
+      }
 
       const rotatedFields = [];
       const cleanSecrets = {};
@@ -2050,7 +2191,13 @@ router.put(
             cleanSecrets.webhookVerifyToken !== undefined
               ? cleanSecrets.webhookVerifyToken
               : null,
-          isActive: isActive !== undefined ? isActive : true,
+          // Meta Cloud starts INACTIVE — activation requires a validated
+          // connect (guard above). Other providers keep the legacy
+          // active-on-create default.
+          isActive:
+            isActive !== undefined
+              ? isActive
+              : provider !== META_CLOUD_PROVIDER,
           settings: settings || null,
           tenantId: req.user.tenantId,
           ...(stampRotation && { lastRotatedAt: new Date() }),

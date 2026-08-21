@@ -47,6 +47,10 @@ prisma.travelInvoice = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.travelPaymentSchedule = prisma.travelPaymentSchedule || {};
+prisma.travelPaymentSchedule.findMany = vi.fn().mockResolvedValue([]);
+prisma.payment = prisma.payment || {};
+prisma.payment.findMany = vi.fn().mockResolvedValue([]);
 // $transaction is used by nextInvoiceNum — execute the callback against
 // the patched prisma client (the route's `tx` argument is just a proxy).
 prisma.$transaction = vi.fn(async (cb) => cb(prisma));
@@ -72,6 +76,7 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 // per-call to return null.
 prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn().mockResolvedValue({ id: 99, tenantId: 1 });
+prisma.contact.findMany = vi.fn().mockResolvedValue([{ id: 99, name: 'Acme School' }]);
 
 import express from 'express';
 import request from 'supertest';
@@ -79,6 +84,18 @@ import jwt from 'jsonwebtoken';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const createInvoicePaymentLinkMock = vi.fn().mockResolvedValue({
+  url: 'https://rzp.io/l/travel-outstanding',
+  gateway: 'razorpay',
+  paymentId: 9001,
+});
+const paymentLinkModulePath = requireCJS.resolve('../../lib/paymentLink');
+requireCJS.cache[paymentLinkModulePath] = {
+  id: paymentLinkModulePath,
+  filename: paymentLinkModulePath,
+  loaded: true,
+  exports: { createInvoicePaymentLink: createInvoicePaymentLinkMock },
+};
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const travelInvoicesRouter = requireCJS('../../routes/travel_invoices');
 
@@ -112,6 +129,13 @@ beforeEach(() => {
   prisma.travelInvoice.create.mockReset();
   prisma.travelInvoice.update.mockReset();
   prisma.travelInvoice.delete.mockReset();
+  prisma.travelPaymentSchedule.findMany.mockReset().mockResolvedValue([]);
+  prisma.payment.findMany.mockReset().mockResolvedValue([]);
+  createInvoicePaymentLinkMock.mockReset().mockResolvedValue({
+    url: 'https://rzp.io/l/travel-outstanding',
+    gateway: 'razorpay',
+    paymentId: 9001,
+  });
   prisma.$transaction.mockReset();
   prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
@@ -121,6 +145,7 @@ beforeEach(() => {
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 99, tenantId: 1 });
+  prisma.contact.findMany.mockReset().mockResolvedValue([{ id: 99, name: 'Acme School' }]);
 });
 
 describe('POST /api/travel/invoices', () => {
@@ -248,6 +273,71 @@ describe('POST /api/travel/invoices', () => {
       });
     expect(r2.status).toBe(201);
     expect(r2.body.invoiceNum).toBe(`TINV-${CURRENT_YEAR}-0002`);
+  });
+
+  test('POST /invoices/reconcile/excel-software returns mismatch summary without mutating DB', async () => {
+    prisma.travelInvoice.findMany.mockResolvedValue([
+      {
+        id: 1,
+        invoiceNum: `TINV-${CURRENT_YEAR}-0001`,
+        totalAmount: '100.00',
+        status: 'Issued',
+        subBrand: 'tmc',
+        contactId: 99,
+        createdAt: new Date('2026-05-20T00:00:00.000Z'),
+      },
+      {
+        id: 2,
+        invoiceNum: `TINV-${CURRENT_YEAR}-0002`,
+        totalAmount: '200.00',
+        status: 'Paid',
+        subBrand: 'tmc',
+        contactId: 99,
+        createdAt: new Date('2026-05-20T00:00:00.000Z'),
+      },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 99, name: 'Acme School' },
+    ]);
+
+    const csv = [
+      'Invoice Number,Invoice Date,Customer,Customer GSTIN,Sub-Brand,Legal Entity,Status,Taxable Value,CGST,SGST,IGST,TCS,Invoice Total',
+      `TINV-${CURRENT_YEAR}-0001,2026-05-20,Acme School,,tmc,tmc_nexus,Issued,100,0,0,0,0,100`,
+      `TINV-${CURRENT_YEAR}-0002,2026-05-20,Acme School,,tmc,tmc_nexus,Issued,200,0,0,0,0,250`,
+      'TOTAL,,,,,,,',
+    ].join('\n');
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/reconcile/excel-software')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from(csv, 'utf8'), 'travel-accounting.csv');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      totalRows: 2,
+      scannedInvoices: 2,
+      matchedRows: 2,
+      mismatchedRows: 1,
+      missingRows: 0,
+      discrepancyCount: 1,
+    });
+    expect(res.body.discrepancies[0]).toMatchObject({
+      invoiceNum: `TINV-${CURRENT_YEAR}-0002`,
+      issue: 'MISMATCH',
+    });
+    expect(prisma.travelInvoice.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.contact.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.travelInvoice.update).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.delete).not.toHaveBeenCalled();
+  });
+
+  test('POST /invoices/reconcile/excel-software without file returns FILE_REQUIRED', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/reconcile/excel-software')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'FILE_REQUIRED' });
   });
 
   // #996 — Contact existence + draft-dedup guards.
@@ -481,6 +571,55 @@ describe('GET /api/travel/invoices/:id (cross-tenant isolation)', () => {
     expect(prisma.travelInvoice.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ id: 9999, tenantId: 1 }),
+      }),
+    );
+  });
+});
+
+
+
+
+describe('POST /api/travel/invoices/:id/payment-link', () => {
+  test('generates the link for outstanding balance after successful partial payment without milestones', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue({
+      id: 18,
+      tenantId: 1,
+      invoiceNum: 'TINV-2026-0018',
+      contactId: 99,
+      subBrand: 'rfu',
+      status: 'Partial',
+      totalAmount: 76212.9,
+      currency: 'INR',
+    });
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
+    prisma.payment.findMany.mockResolvedValue([
+      {
+        id: 7001,
+        invoiceId: null,
+        amount: 40000,
+        status: 'SUCCESS',
+        metadata: JSON.stringify({ kind: 'travel-invoice', travelInvoiceId: 18 }),
+      },
+      {
+        id: 7002,
+        invoiceId: null,
+        amount: 76212.9,
+        status: 'PENDING',
+        metadata: JSON.stringify({ kind: 'travel-invoice', travelInvoiceId: 18 }),
+      },
+    ]);
+    prisma.contact.findFirst.mockResolvedValue({ id: 99, name: 'Harsha vardhan', email: 'h@test.local', phone: '9999999999' });
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/18/payment-link')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ amount: 36212.9, currency: 'INR', gateway: 'razorpay' });
+    expect(createInvoicePaymentLinkMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invoice: expect.objectContaining({ id: 18, invoiceNum: 'TINV-2026-0018', amount: 36212.9 }),
+        travelContext: { kind: 'travel-invoice', travelInvoiceId: 18 },
       }),
     );
   });

@@ -142,7 +142,7 @@ prisma.contact.findFirst = vi.fn();
 import express from 'express';
 import request from 'supertest';
 
-const smsRouter = requireCJS('../../routes/sms');
+const smsRouter = await import('../../routes/sms');
 
 function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
@@ -151,7 +151,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
     req.user = { userId, tenantId, role };
     next();
   });
-  app.use('/api/sms', smsRouter);
+  app.use('/api/sms', smsRouter.default);
   return app;
 }
 

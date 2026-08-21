@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { Briefcase, Plus, Download, Search, Filter, RefreshCw, Pencil, Trash2, X, Zap } from 'lucide-react';
+import { Briefcase, Plus, Upload, Search, Filter, RefreshCw, Pencil, Trash2, X, Zap } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
@@ -319,12 +319,8 @@ const Pipeline = () => {
           fontWeight: 600,
           cursor: updatingId === deal.id ? 'wait' : 'pointer',
           opacity: updatingId === deal.id ? 0.6 : 1,
-          appearance: 'none',
-          WebkitAppearance: 'none',
-          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='${encodeURIComponent(s.color)}'/%3E%3C/svg%3E")`,
-          backgroundRepeat: 'no-repeat',
-          backgroundPosition: 'right 6px center',
           minWidth: 110,
+          colorScheme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
         }}
       >
         {stageOptions.map((st) => (
@@ -364,7 +360,7 @@ const Pipeline = () => {
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button type="button" onClick={() => exportCsv(visible, stageOptions)} style={secondaryBtn} title="Export to CSV">
-            <Download size={14} /> Export
+            <Upload size={14} /> Export
           </button>
           <button type="button" onClick={openCreate} style={primaryBtn}>
             <Plus size={14} /> Add Deal

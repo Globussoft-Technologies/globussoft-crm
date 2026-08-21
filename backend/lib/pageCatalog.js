@@ -297,10 +297,22 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'whatsapp', action: 'read' }],
   },
   {
-    path: '/travel/whatsapp',
+    // Generic-vertical WhatsApp inbox (Meta Cloud API). The same agent-inbox
+    // UI the wellness entry above serves, but reachable by plain-CRM tenants:
+    // the backend /api/whatsapp/* surface has always been vertical-agnostic,
+    // while the only two UI mount points were prefix-scoped to /wellness/ and
+    // /travel/, so a generic tenant could configure WhatsApp in Settings and
+    // then had nowhere to read or reply to messages.
+    //
+    // `vertical: 'generic'` is load-bearing: without it, getCatalogForVertical's
+    // no-prefix fall-through (`return true`) would surface this for wellness and
+    // travel tenants too, giving them a second WhatsApp nav item alongside their
+    // own vertical's entry.
+    path: '/whatsapp',
     label: 'WhatsApp',
     description: 'Two-way WhatsApp conversations',
-    category: 'Communications',
+    category: 'Leads & Revenue',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'whatsapp', action: 'read' }],
   },
   {
@@ -474,6 +486,24 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
 
+  //  Events Management (Wellness vertical) 
+  {
+    path: '/wellness/qr-generator',
+    label: 'QR Generator',
+    description: 'Create downloadable QR codes for clinic events, services, and offers',
+    category: 'Events Management',
+    vertical: 'wellness',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
+  {
+    path: '/wellness/events-history',
+    label: 'History',
+    description: 'All QR codes organized by event',
+    category: 'Events Management',
+    vertical: 'wellness',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
+
   //  Marketing 
   {
     path: '/marketing',
@@ -505,10 +535,9 @@ const PAGE_CATALOG = [
     label: 'Landing Sites',
     description: 'Sector-aware landing site builder',
     category: 'Marketing',
-    vertical: 'generic',
+    vertical: ['generic', 'wellness'],
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
-
   //  Reports + analytics 
   {
     path: '/wellness/reports',
@@ -636,6 +665,10 @@ const PAGE_CATALOG = [
     label: 'Commission Profiles',
     description: 'Per-role / per-service commission rules',
     category: 'Admin',
+    // Wellness-only legacy admin surface. Travel has its own distinct
+    // `/travel/commission-profiles` page, so leaving this untagged makes
+    // the omnibar "Pages" section show BOTH results on travel tenants.
+    vertical: 'wellness',
     requiredPermissions: [{ module: 'staff', action: 'manage' }],
   },
   {
@@ -655,6 +688,11 @@ const PAGE_CATALOG = [
     label: 'Channels',
     description: 'SMS / WhatsApp / call channel config',
     category: 'Admin',
+    // Generic-only integrations hub. Travel and wellness use their own
+    // WhatsApp / channel surfaces, so keep this out of their page catalogs
+    // (which drive sidebar + omnibar search) to avoid exposing the wrong
+    // configuration flow.
+    vertical: 'generic',
     // .manage  channels is provider-keys config (SMS/WhatsApp/Telephony),
     // not just a comms view. Matches the admin-only RoleGuard on this
     // route in App.jsx. Manager has communications.read but not
@@ -798,6 +836,20 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'diagnostics', action: 'read' }],
   },
   {
+    path: '/travel/pipeline',
+    label: 'Pipeline',
+    description: 'Deal pipeline across all travel sub-brands',
+    category: 'Travel Sales',
+    requiredPermissions: [{ module: 'pipeline', action: 'read' }],
+  },
+  {
+    path: '/travel/trip-knowledge',
+    label: 'Travel Knowledge',
+    description: 'Google Drive-backed travel knowledge base',
+    category: 'Travel Sales',
+    requiredPermissions: [{ module: 'diagnostics', action: 'write' }],
+  },
+  {
     path: '/travel/itineraries',
     label: 'Itineraries',
     description: 'Day-by-day itinerary builder + library',
@@ -938,6 +990,13 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'invoices', action: 'read' }],
   },
   {
+    path: '/travel/tally',
+    label: 'Tally',
+    description: 'Tally accounting, XML and CA exports',
+    category: 'Travel Quotes & Invoicing',
+    requiredPermissions: [{ module: 'invoices', action: 'export' }],
+  },
+  {
     path: '/travel/visa',
     label: 'Visa Dashboard',
     description: 'Visa Sure sub-brand overview',
@@ -971,20 +1030,6 @@ const PAGE_CATALOG = [
     description: 'TMC school term + holiday windows',
     category: 'Travel Sub-brand',
     requiredPermissions: [{ module: 'school_terms', action: 'read' }],
-  },
-  {
-    path: '/travel/marketing/flyer-studio',
-    label: 'Flyer Studio',
-    description: 'Marketing flyer composer',
-    category: 'Travel Marketing',
-    requiredPermissions: [{ module: 'flyer_studio', action: 'read' }],
-  },
-  {
-    path: '/travel/flyer-templates',
-    label: 'Flyer Templates',
-    description: 'Reusable flyer designs library',
-    category: 'Travel Marketing',
-    requiredPermissions: [{ module: 'flyer_templates', action: 'read' }],
   },
   {
     path: '/travel/brochures',
@@ -1302,14 +1347,6 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'suppliers', action: 'read' }],
   },
   {
-    path: '/travel/flyer-share-admin',
-    label: 'Flyer Share Admin',
-    description: 'Manage flyer share links + analytics',
-    category: 'Travel Marketing',
-    vertical: 'travel',
-    requiredPermissions: [{ module: 'flyer_studio', action: 'read' }],
-  },
-  {
     path: '/travel/visa/checklists',
     label: 'Visa Checklists',
     description: 'Applicant visa document checklists',
@@ -1377,6 +1414,15 @@ const PAGE_CATALOG = [
     path: '/agent-reports',
     label: 'Agent Reports',
     description: 'Staff performance analytics',
+    category: 'Reports',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'reports', action: 'read' }],
+  },
+  {
+    path: '/lead-reports',
+    label: 'Lead Reports',
+    description:
+      'Productivity, lead quality, follow-up tracking, source analysis, lead-stage funnel, meetings & site visits',
     category: 'Reports',
     vertical: 'generic',
     requiredPermissions: [{ module: 'reports', action: 'read' }],
@@ -1458,7 +1504,7 @@ function getCatalog() {
  */
 function getCatalogForVertical(vertical) {
   return PAGE_CATALOG.filter((p) => {
-    if (p.vertical) return p.vertical === vertical;
+    if (p.vertical) return matchesVertical(p.vertical, vertical);
     const isWellness = p.path === '/wellness' || p.path.startsWith('/wellness/');
     if (isWellness) return vertical === 'wellness';
     const isTravel = p.path === '/travel' || p.path.startsWith('/travel/');
@@ -1476,6 +1522,13 @@ function getPage(path) {
 
 function isKnownPage(path) {
   return typeof path === 'string' && PAGES_BY_PATH.has(path);
+}
+
+function matchesVertical(pageVertical, vertical) {
+  if (Array.isArray(pageVertical)) {
+    return pageVertical.includes(vertical);
+  }
+  return pageVertical === vertical;
 }
 
 /**
@@ -1505,7 +1558,7 @@ function getAccessiblePages(permissionSet, opts = {}) {
   // full catalog (back-compat).
   const basePool = opts.vertical
     ? PAGE_CATALOG.filter((p) => {
-        if (p.vertical) return p.vertical === opts.vertical;
+        if (p.vertical) return matchesVertical(p.vertical, opts.vertical);
         const isWellness = p.path === '/wellness' || p.path.startsWith('/wellness/');
         if (isWellness) return opts.vertical === 'wellness';
         const isTravel = p.path === '/travel' || p.path.startsWith('/travel/');
@@ -1556,4 +1609,3 @@ module.exports = {
   getAccessiblePages,
   canAccessPath,
 };
-

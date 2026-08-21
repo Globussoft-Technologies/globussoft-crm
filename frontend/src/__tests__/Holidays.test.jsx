@@ -293,7 +293,7 @@ describe('<Holidays /> — add form', () => {
     const nameInput = screen.getByPlaceholderText(/Name — e\.g\. Diwali/i);
     fireEvent.change(nameInput, { target: { value: 'Dr Priya PTO' } });
     const dateInput = document.querySelector('input[type="date"]');
-    fireEvent.change(dateInput, { target: { value: '2026-08-15' } });
+    fireEvent.change(dateInput, { target: { value: '2027-01-26' } });
     // Pick practitioner from the second <select> (locationId first, doctorId second).
     const selects = document.querySelectorAll('select');
     expect(selects.length).toBe(2);

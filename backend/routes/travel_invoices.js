@@ -1,4 +1,4 @@
-﻿/**
+/**
  * /api/travel/invoices — TravelInvoice CRUD (PRD_TRAVEL_BILLING DD-5.1)
  *
  * Third in the Quote/Invoice/Supplier trio. Schema at commit fdb793e
@@ -18,6 +18,7 @@
  */
 
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
@@ -89,10 +90,20 @@ const {
   buildCaCsv: buildTravelCaCsv,
   buildAccountingXlsx: buildTravelAccountingXlsx,
 } = require("../lib/travelAccountingExport");
+const {
+  parseSpreadsheetBuffer: parseInvoiceReconciliationSpreadsheet,
+  reconcileRows: reconcileInvoiceRows,
+  normalizeHeader: normalizeInvoiceHeader,
+  normalizeText: normalizeInvoiceText,
+} = require("../lib/travelInvoiceReconciliation");
 // Sub-brand → legal-entity / GSTIN resolution (Q21 config blob on Tenant).
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
+const invoiceReconcileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 // Arc 2 #901 slice 11 — PRD_TRAVEL_BILLING FR-3.x doc-type taxonomy.
 // Travel verticals need to issue more than just a "TaxInvoice": Proforma
@@ -479,6 +490,99 @@ router.get(
       }
       console.error("[travel-invoices] list error:", e.message);
       res.status(500).json({ error: "Failed to list invoices" });
+    }
+  },
+);
+
+// POST /api/travel/invoices/reconcile/excel-software
+// Read-only reconciliation preview for workbook rows exported from the
+// accounting.xlsx bridge. The route never mutates CRM records; it only
+// compares uploaded rows against the current tenant invoices and returns a
+// discrepancy report so the operator can reconcile off-platform without any
+// DB risk.
+router.post(
+  "/invoices/reconcile/excel-software",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  invoiceReconcileUpload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+        return res.status(400).json({ error: "file field required (multipart)", code: "FILE_REQUIRED" });
+      }
+
+      let parsed;
+      try {
+        parsed = parseInvoiceReconciliationSpreadsheet(req.file.buffer, req.file);
+      } catch (parseErr) {
+        return res.status(400).json({ error: parseErr.message, code: "INVALID_FILE" });
+      }
+
+      const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "file is empty", code: "EMPTY_FILE" });
+      }
+
+      const invoiceNums = new Set();
+      for (const raw of rows) {
+        const mapped = {};
+        for (const [key, value] of Object.entries(raw || {})) {
+          mapped[normalizeInvoiceHeader(key)] = value;
+        }
+        const invoiceNum = normalizeInvoiceText(
+          mapped.invoicenumber ||
+          mapped.invoicenum ||
+          mapped.vouchernumber ||
+          mapped.invoiceid,
+        );
+        if (invoiceNum && invoiceNum.toLowerCase() !== "total") {
+          invoiceNums.add(invoiceNum.toUpperCase());
+        }
+      }
+      if (invoiceNums.size === 0) {
+        return res.status(400).json({ error: "No invoice numbers found in file", code: "MISSING_FIELDS" });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        invoiceNum: { in: Array.from(invoiceNums) },
+      };
+      if (req.query.subBrand) {
+        assertValidSubBrand(String(req.query.subBrand));
+        where.subBrand = String(req.query.subBrand);
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        select: {
+          id: true,
+          invoiceNum: true,
+          totalAmount: true,
+          status: true,
+          subBrand: true,
+          contactId: true,
+          createdAt: true,
+        },
+      });
+      const contactIds = [...new Set(invoices.map((inv) => inv.contactId).filter((id) => Number.isFinite(Number(id))))];
+      const contacts = contactIds.length > 0
+        ? await prisma.contact.findMany({
+            where: { tenantId: req.travelTenant.id, id: { in: contactIds.map((id) => Number(id)) } },
+            select: { id: true, name: true },
+          })
+        : [];
+      const contactsById = Object.fromEntries(contacts.map((c) => [c.id, c]));
+
+      const report = reconcileInvoiceRows({ rows, invoices, contactsById });
+      report.scannedInvoices = invoices.length;
+      report.subBrand = req.query.subBrand ? String(req.query.subBrand) : null;
+
+      res.status(200).json(report);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-invoices] excel-software reconciliation error:", e.message);
+      res.status(500).json({ error: "Failed to reconcile workbook" });
     }
   },
 );
@@ -6467,15 +6571,18 @@ router.post(
 //
 // Query params (all optional):
 //   ?status=pending|partial|paid|overdue|waived  — filter (default: all)
-//   ?within=7|14|30|60|90                        — dueDate within N days from
-//                                                  now (default: 30). Accepts
-//                                                  any positive integer; the
-//                                                  documented presets are
-//                                                  conveniences not constraints.
+//   ?allDates=true                               — no dueDate restriction.
+//   ?within=7|14|30|60|90                        — dueDate within N future
+//                                                  days from now (default: 30).
+//                                                  Accepts any positive
+//                                                  integer; the documented
+//                                                  presets are conveniences,
+//                                                  not constraints.
 //   ?subBrand=tmc|rfu|travelstall|visasure       — filter to one sub-brand
 //                                                  (within the caller's allowed
 //                                                  set; outside-allowed → empty).
-//   ?overdueOnly=true                            — dueDate < now (overrides
+//   ?overdueOnly=true                            — past-due unsettled
+//                                                  milestones (overrides
 //                                                  ?within when truthy).
 //   ?limit=N (default 100, clamped to [1, 500]).
 //   ?offset=N (default 0).
@@ -6503,10 +6610,9 @@ router.post(
 //     Negative ⇒ overdue. NULL dueDate ⇒ daysUntilDue is null. Also NULL for
 //     status paid/waived — a settled milestone's original dueDate would
 //     otherwise still read as "N days overdue" next to its own Paid badge.
-//   - summary is computed across the SAME page returned (post-limit/offset),
-//     not the full unpaginated set — operator pagers want the current-page
-//     totals. Callers wanting full-population totals should iterate pages
-//     or pass limit=500.
+//   - summary is computed across the FULL filtered set (pre-pagination) so
+//     the KPI cards stay stable while the operator scrolls through pages.
+//     The table itself still respects ?limit / ?offset.
 //   - totalExpected/totalReceived/currencyBreakdown emit as decimal STRINGS
 //     (toFixed(2)) for Prisma Decimal-string compatibility; JS Number
 //     precision would round 60000.005 + 0.005 silently. Mirrors the
@@ -6575,8 +6681,8 @@ router.get(
 
       const overdueOnly =
         req.query.overdueOnly === "true" || req.query.overdueOnly === true;
+      const allDates = req.query.allDates === "true" || req.query.allDates === true;
 
-      const withinDays = parseWithinDays(req.query.within);
       const limit = parseLimitForSummary(req.query.limit);
       const offset = parseOffsetForSummary(req.query.offset);
 
@@ -6584,12 +6690,20 @@ router.get(
       const where = { tenantId: req.travelTenant.id };
       if (status) where.status = status;
 
-      // Date window: overdueOnly overrides ?within.
+      // Date window: overdueOnly means "past-due unsettled milestones" and
+      // only widens to a settled-state exclusion when no explicit status is
+      // already supplied.
       if (overdueOnly) {
         where.dueDate = { lt: now };
+        if (!status) {
+          where.status = { notIn: ["paid", "waived"] };
+        }
+      } else if (allDates) {
+        // Intentionally no dueDate constraint.
       } else {
+        const withinDays = parseWithinDays(req.query.within);
         const upper = new Date(now.getTime() + withinDays * 86_400_000);
-        where.dueDate = { lte: upper };
+        where.dueDate = { gte: now, lte: upper };
       }
 
       // Sub-brand filtering joins through the parent invoice. Prisma can't
@@ -6616,7 +6730,7 @@ router.get(
         where.invoice = { is: invoiceFilter };
       }
 
-      const [rows, total] = await Promise.all([
+      const [rows, total, summaryRows] = await Promise.all([
         prisma.travelPaymentSchedule.findMany({
           where,
           include: {
@@ -6629,6 +6743,16 @@ router.get(
           skip: offset,
         }),
         prisma.travelPaymentSchedule.count({ where }),
+        prisma.travelPaymentSchedule.findMany({
+          where,
+          select: {
+            status: true,
+            dueDate: true,
+            expectedAmount: true,
+            receivedAmount: true,
+            expectedCurrency: true,
+          },
+        }),
       ]);
 
       const nowMs = now.getTime();
@@ -6699,13 +6823,28 @@ router.get(
         }
       }
 
-      // Summary aggregates — computed over the returned page (see header note).
+      // Summary aggregates — computed over the full filtered set so the KPI
+      // cards reflect the entire window, not just the current page.
       const byStatus = {};
       const currencyBreakdown = {};
       let totalExpected = "0.00";
       let totalReceived = "0.00";
-      for (const m of milestones) {
+      for (const m of summaryRows) {
         byStatus[m.status] = (byStatus[m.status] || 0) + 1;
+        const dueMs =
+          m.dueDate instanceof Date
+            ? m.dueDate.getTime()
+            : m.dueDate
+              ? new Date(m.dueDate).getTime()
+              : null;
+        const isSettled = m.status === "paid" || m.status === "waived";
+        // Past-due unsettled rows are additionally bucketed as overdue so the
+        // KPI surfaces them alongside explicit overdue-status rows. Rows that
+        // already carry status='overdue' are counted once (in the status bucket
+        // above), not double-counted here.
+        if (!isSettled && m.status !== "overdue" && dueMs != null && dueMs < nowMs) {
+          byStatus.overdue = (byStatus.overdue || 0) + 1;
+        }
         totalExpected = addDecimal(totalExpected, m.expectedAmount);
         totalReceived = addDecimal(totalReceived, m.receivedAmount);
         const cur = m.expectedCurrency || "INR";
@@ -6983,6 +7122,43 @@ router.post(
   },
 );
 
+function parsePaymentMetadata(metadata) {
+  try { return JSON.parse(metadata || "{}"); } catch (_e) { return {}; }
+}
+
+function isSuccessfulPaymentStatus(status) {
+  return ["SUCCESS", "PAID", "paid", "success"].includes(String(status || ""));
+}
+
+function isPaymentLinkedToTravelInvoice(payment, meta, invoiceId) {
+  return (
+    (meta.type === "travel-payment-schedule" && payment.invoiceId === invoiceId) ||
+    ((meta.kind === "travel-milestone" || meta.kind === "travel-invoice") && Number(meta.travelInvoiceId) === invoiceId) ||
+    (meta.type === "travel-quote-advance" && Number(meta.travelInvoiceId) === invoiceId)
+  );
+}
+
+async function successfulTravelInvoicePaymentTotal(tenantId, invoiceId) {
+  try {
+    const candidates = await prisma.payment.findMany({
+      where: {
+        tenantId,
+        OR: [
+          { invoiceId },
+          { metadata: { contains: `\"travelInvoiceId\":${invoiceId}` } },
+        ],
+      },
+      select: { id: true, invoiceId: true, amount: true, status: true, metadata: true },
+    });
+    return candidates
+      .map((pmt) => ({ pmt, meta: parsePaymentMetadata(pmt.metadata) }))
+      .filter(({ pmt, meta }) => isSuccessfulPaymentStatus(pmt.status) && isPaymentLinkedToTravelInvoice(pmt, meta, invoiceId))
+      .reduce((sum, { pmt }) => sum + Number(pmt.amount || 0), 0);
+  } catch (_e) {
+    return 0;
+  }
+}
+
 // ============================================================================
 // POST /api/travel/invoices/:id/payment-link — generate a hosted "click & pay"
 // link for the WHOLE travel invoice's outstanding balance. Parity with the
@@ -7011,24 +7187,30 @@ router.post(
           .json({ error: "Invoice has no payable amount.", code: "NO_AMOUNT" });
       }
 
-      // Outstanding = total − already-received across milestones (fail-soft to total).
+      // Outstanding = total minus money already captured for this travel invoice.
+      // Milestone rows are authoritative when present, but direct travel-invoice
+      // and quote-advance links may have no milestones at all, so also subtract
+      // successful Payment rows linked by travelInvoiceId. Use max() to avoid
+      // double-counting when a payment also updated a milestone row.
       let outstanding = total;
       try {
-        const schedules = await prisma.travelPaymentSchedule.findMany({
-          where: { invoiceId: invoice.id, tenantId: req.travelTenant.id },
-          select: { receivedAmount: true, status: true, expectedAmount: true },
-        });
-        if (schedules.length > 0) {
-          const received = schedules.reduce((sum, r) => {
-            const got = r.receivedAmount != null
-              ? Number(r.receivedAmount)
-              : r.status === "paid"
-                ? Number(r.expectedAmount || 0)
-                : 0;
-            return sum + got;
-          }, 0);
-          outstanding = Math.max(0, total - received);
-        }
+        const [schedules, paymentReceived] = await Promise.all([
+          prisma.travelPaymentSchedule.findMany({
+            where: { invoiceId: invoice.id, tenantId: req.travelTenant.id },
+            select: { receivedAmount: true, status: true, expectedAmount: true },
+          }),
+          successfulTravelInvoicePaymentTotal(req.travelTenant.id, invoice.id),
+        ]);
+        const scheduleReceived = schedules.reduce((sum, r) => {
+          const got = r.receivedAmount != null
+            ? Number(r.receivedAmount)
+            : r.status === "paid"
+              ? Number(r.expectedAmount || 0)
+              : 0;
+          return sum + got;
+        }, 0);
+        const alreadyReceived = Math.max(scheduleReceived, paymentReceived);
+        outstanding = round2(Math.max(0, total - alreadyReceived));
       } catch { /* fall back to full total */ }
 
       if (!(outstanding > 0)) {
@@ -7158,16 +7340,12 @@ router.get(
         });
         payments = candidates
           .map((p) => {
-            let m = {};
-            try { m = JSON.parse(p.metadata || "{}"); } catch { m = {}; }
+            const m = parsePaymentMetadata(p.metadata);
             return { p, m };
           })
           .filter(
             ({ p, m }) =>
-              (m.type === "travel-payment-schedule" && p.invoiceId === invoice.id) ||
-              ((m.kind === "travel-milestone" || m.kind === "travel-invoice") &&
-                Number(m.travelInvoiceId) === invoice.id) ||
-              (m.type === "travel-quote-advance" && Number(m.travelInvoiceId) === invoice.id),
+              isPaymentLinkedToTravelInvoice(p, m, invoice.id),
           )
           .map(({ p, m }) => ({
             id: p.id,
@@ -7185,7 +7363,7 @@ router.get(
 
       const total = Number(invoice.totalAmount || 0);
       const totalReceived = payments
-        .filter((p) => p.status === "SUCCESS")
+        .filter((p) => isSuccessfulPaymentStatus(p.status))
         .reduce((sum, p) => sum + Number(p.amount || 0), 0);
       const outstanding = Math.max(0, total - totalReceived);
 
@@ -9302,8 +9480,9 @@ router.get(
 //
 // Lookup precedence:
 //   1. invoice.cancellationPolicyId (operator-pinned at issue time).
-//   2. Active policy where subBrand === invoice.subBrand (sub-brand-specific).
-//   3. Active policy where subBrand IS NULL (tenant-wide default).
+//   2. invoice.itineraryId (trip-scoped policy for the booked itinerary).
+//   3. Active policy where subBrand === invoice.subBrand (sub-brand-specific).
+//   4. Active policy where subBrand IS NULL (tenant-wide default).
 //   First match wins; deterministic ordering by id ASC for repeatability.
 //
 // Tier-walking algorithm:
@@ -9314,7 +9493,7 @@ router.get(
 //     daysBeforeServiceStart <= daysBeforeStart. That tier's refundPercent
 //     drives the refund amount.
 //   - If daysBeforeStart < smallest threshold (e.g. all tiers say >= 7
-//     days but cancellation is today), no tier matches → refundPercent = 0.
+//     days but cancellation is today), no tier matches ? refundPercent = 0.
 //
 // refundAmount = invoice.totalAmount * (refundPercent / 100), rounded
 // to 2dp (matching the Decimal(15,2) column precision on TravelInvoice).
@@ -9326,6 +9505,15 @@ async function resolveCancellationOutcome(req, invoice) {
       where: {
         id: invoice.cancellationPolicyId,
         tenantId: req.travelTenant.id,
+        isActive: true,
+      },
+    });
+  }
+  if (!policy && invoice.itineraryId) {
+    policy = await prisma.cancellationPolicy.findFirst({
+      where: {
+        tenantId: req.travelTenant.id,
+        itineraryId: invoice.itineraryId,
         isActive: true,
       },
     });

@@ -101,6 +101,7 @@ prisma.product.findMany = vi.fn();
 prisma.product.findFirst = vi.fn();
 prisma.product.update = vi.fn();
 prisma.product.create = vi.fn();
+prisma.product.count = vi.fn();
 
 prisma.vendor = prisma.vendor || {};
 prisma.vendor.findMany = vi.fn();
@@ -202,6 +203,7 @@ beforeEach(() => {
   prisma.product.findFirst.mockReset();
   prisma.product.update.mockReset();
   prisma.product.create.mockReset();
+  prisma.product.count.mockReset();
   prisma.product.create.mockImplementation(async ({ data }) => ({ id: 500, ...data }));
 
   prisma.vendor.findMany.mockReset();
@@ -232,6 +234,7 @@ beforeEach(() => {
   prisma.productCategory.findFirst.mockResolvedValue(null);
   prisma.product.findMany.mockResolvedValue([]);
   prisma.product.findFirst.mockResolvedValue(null);
+  prisma.product.count.mockResolvedValue(0);
   prisma.vendor.findMany.mockResolvedValue([]);
   prisma.vendor.findFirst.mockResolvedValue(null);
   prisma.inventoryReceipt.findMany.mockResolvedValue([]);

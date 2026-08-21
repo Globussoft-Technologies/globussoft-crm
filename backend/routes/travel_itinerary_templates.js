@@ -44,7 +44,28 @@ const {
   getSubBrandAccessSet,
   canAccessSubBrand,
 } = require("../middleware/travelGuards");
-const { uploadImage } = require("../services/s3Service");
+const s3Service = require("../services/s3Service");
+const axios = require("axios");
+const { analyzePdfTemplate } = require("../lib/travelPdfTemplate");
+
+// G115 — Only accept PDF template URLs that were uploaded to this tenant's
+// configured S3 bucket. This closes an authenticated SSRF vector where a
+// caller passes an arbitrary URL in pdfTemplateUrl and the server fetches it.
+function isTrustedPdfTemplateUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  const base = s3Service.S3_BASE_URL;
+  if (!base) return false;
+  try {
+    const normalizedBase = base.replace(/\/$/, "");
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      (url === normalizedBase || url.startsWith(`${normalizedBase}/`))
+    );
+  } catch (_e) {
+    return false;
+  }
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -53,6 +74,17 @@ const upload = multer({
     const ok = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
     if (ok.includes(file.mimetype)) cb(null, true);
     else cb(new Error("Only image files are allowed (JPEG/PNG/WebP/GIF/SVG)"));
+  },
+});
+
+// G115 — PDF underprint upload. Separate memory-storage multer instance so
+// image validation above is not weakened.
+const pdfUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === "application/pdf") cb(null, true);
+    else cb(new Error("Only PDF files are allowed"));
   },
 });
 
@@ -85,6 +117,10 @@ const MUTABLE_FIELDS = [
   "templateJson",
   "llmGeneratedBy",
   "isActive",
+  // G115 — PDF-based itinerary template underprint fields.
+  "pdfTemplateUrl",
+  "pdfTemplateRegions",
+  "isPdfTemplate",
 ];
 
 // ---------------------------------------------------------------------------
@@ -264,6 +300,38 @@ function pickMutable(body) {
   return out;
 }
 
+// G115 — Default overlay regions for an A4 PDF underprint. Values are in PDF
+// points (1/72 inch) with origin at bottom-left. The regions are intentionally
+// conservative: white rectangles are drawn over these boxes to blank sample
+// text, then dynamic content is rendered inside them. Future versions can
+// persist custom regions per template.
+function defaultPdfTemplateRegions() {
+  return {
+    pageSize: { width: 595.28, height: 841.89 },
+    contentBox: { x: 50, y: 80, width: 495, height: 681.89 },
+    header: { x: 50, y: 770, width: 495, height: 50 },
+    customer: { x: 50, y: 690, width: 495, height: 60 },
+    tripSummary: { x: 50, y: 620, width: 495, height: 50 },
+    items: { x: 50, y: 330, width: 495, height: 270 },
+    totals: { x: 50, y: 220, width: 495, height: 90 },
+    footer: { x: 50, y: 50, width: 495, height: 50 },
+  };
+}
+
+function normalizePdfTemplateRegions(input) {
+  if (input === undefined || input === null || input === "") return null;
+  if (typeof input === "string") {
+    try {
+      const parsed = JSON.parse(input);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch (_e) {
+      return null;
+    }
+  }
+  if (input && typeof input === "object" && !Array.isArray(input)) return input;
+  return null;
+}
+
 function validateCurrency(currency) {
   if (currency == null) return null;
   if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) {
@@ -317,6 +385,18 @@ function budgetTierWhereClause(budgetTier) {
   return { basePriceMinor: range };
 }
 
+function visibilityClause(activeOnly, includeArchived) {
+  if (!includeArchived) {
+    return { archivedAt: null, isActive: activeOnly };
+  }
+  return {
+    OR: [
+      { archivedAt: { not: null } },
+      { archivedAt: null, isActive: activeOnly },
+    ],
+  };
+}
+
 // POST /api/travel/itinerary-templates/upload-image — S3 thumbnail upload.
 // MUST be declared before /:id so Express matches the literal path first.
 // Returns { success, url, filename } — same shape as /api/wellness/upload/service-image.
@@ -331,7 +411,7 @@ router.post(
       if (!req.file) {
         return res.status(400).json({ error: "file is required (multipart field 'file')" });
       }
-      const url = await uploadImage(
+      const url = await s3Service.uploadImage(
         req.file.buffer,
         req.file.originalname,
         req.file.mimetype,
@@ -348,6 +428,92 @@ router.post(
   }
 );
 
+// G115 — Multer error wrapper so wrong-mimetype / too-large errors surface
+// as 400 with a message instead of Express's default 500 handler.
+function wrapMulter(middleware) {
+  return (req, res, next) => {
+    middleware(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ error: err.message || "Invalid file upload" });
+      }
+      next();
+    });
+  };
+}
+
+// G115 — Convert an uploaded reference PDF into a blank brand template. The
+// original PDF is fetched, its variable content area is detected and blanked,
+// and the blanked PDF is uploaded back to S3. Returns the blanked URL and the
+// detected overlay regions. On failure, returns the original URL and fallback
+// regions so the feature degrades gracefully.
+async function processUploadedTemplatePdf(originalUrl) {
+  if (!isTrustedPdfTemplateUrl(originalUrl)) {
+    const err = new Error("pdfTemplateUrl must be a trusted S3 URL");
+    err.status = 400;
+    err.code = "INVALID_PDF_TEMPLATE_URL";
+    throw err;
+  }
+
+  let filename;
+  try {
+    const parsed = new URL(originalUrl);
+    filename = decodeURIComponent(parsed.pathname.split("/").pop()) || "";
+  } catch (_e) {
+    filename = "";
+  }
+
+  try {
+    const resp = await axios.get(originalUrl, {
+      responseType: "arraybuffer",
+      timeout: 30000,
+      maxContentLength: 15 * 1024 * 1024,
+    });
+    const pdfBuffer = Buffer.from(resp.data);
+    const { blankedBuffer, regions } = await analyzePdfTemplate(pdfBuffer);
+    const blankedFilename = filename
+      ? `${filename.replace(/\.pdf$/i, "")}-blanked.pdf`
+      : `template-blanked-${Date.now()}.pdf`;
+    const blankedUrl = await s3Service.uploadFile(
+      blankedBuffer,
+      blankedFilename,
+      "application/pdf",
+      "travel-itinerary-pdf-templates"
+    );
+    return { pdfTemplateUrl: blankedUrl, pdfTemplateRegions: JSON.stringify(regions) };
+  } catch (err) {
+    console.error("[travel/itinerary-templates] PDF template processing failed, using original:", err.message);
+    return { pdfTemplateUrl: originalUrl, pdfTemplateRegions: JSON.stringify(defaultPdfTemplateRegions()) };
+  }
+}
+
+// POST /api/travel/itinerary-templates/upload-pdf — G115 PDF underprint upload.
+// MUST be declared before /:id so Express matches the literal path first.
+// Returns { success, url, filename }.
+router.post(
+  "/upload-pdf",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("itinerary_templates", "write"),
+  wrapMulter(pdfUpload.single("file")),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "file is required (multipart field 'file')" });
+      }
+      const url = await s3Service.uploadFile(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        "travel-itinerary-pdf-templates"
+      );
+      res.status(201).json({ success: true, url, filename: req.file.originalname });
+    } catch (err) {
+      console.error("[itinerary-templates] PDF upload error:", err.message);
+      res.status(500).json({ error: "Failed to upload PDF" });
+    }
+  }
+);
+
 // GET /api/travel/itinerary-templates — list
 //
 // G048 — Default list filters to `isLatest=true AND archivedAt IS NULL` so
@@ -360,15 +526,16 @@ router.post(
 router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const destinationName = String(req.query.destinationName || "").trim();
+    const activeOnly = req.query.isActive === undefined
+      ? true
+      : String(req.query.isActive) === "true";
 
-    if (req.query.destinationName) {
-      where.destinationName = String(req.query.destinationName);
+    if (destinationName) {
+      where.destinationName = { contains: destinationName };
     }
     if (req.query.category) {
       where.category = String(req.query.category);
-    }
-    if (req.query.isActive !== undefined) {
-      where.isActive = String(req.query.isActive) === "true";
     }
 
     // G061 — Budget-tier facet (PRD FR-3.1.c). When ?budgetTier=budget|mid|
@@ -384,15 +551,19 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
     // G048 — version + archive filtering. String comparison against "true"
     // so undefined / any non-"true" value behaves as "filter on". The
     // default-filtered query passes BOTH predicates; ?includeArchived=true
-    // drops only the archivedAt predicate; ?includeAllVersions=true drops
-    // only the isLatest predicate.
+    // broadens visibility to archived rows while still respecting the
+    // active/inactive toggle; ?includeAllVersions=true drops only the
+    // isLatest predicate.
     const includeArchived = String(req.query.includeArchived) === "true";
     const includeAllVersions = String(req.query.includeAllVersions) === "true";
     if (!includeAllVersions) {
       where.isLatest = true;
     }
-    if (!includeArchived) {
-      where.archivedAt = null;
+    const vis = visibilityClause(activeOnly, includeArchived);
+    if (includeArchived) {
+      where.AND = [vis];
+    } else {
+      Object.assign(where, vis);
     }
 
     // Clamp pagination: limit ∈ [1, 200]; offset ≥ 0.
@@ -418,10 +589,17 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
         }
         where.subBrand = String(req.query.subBrand);
       } else {
-        where.OR = [
-          { subBrand: null },
-          { subBrand: { in: [...allowed] } },
-        ];
+        const brandClause = {
+          OR: [
+            { subBrand: null },
+            { subBrand: { in: [...allowed] } },
+          ],
+        };
+        if (includeArchived) {
+          where.AND = [...(where.AND || []), brandClause];
+        } else {
+          where.OR = brandClause.OR;
+        }
       }
     } else if (req.query.subBrand) {
       where.subBrand = String(req.query.subBrand);
@@ -530,7 +708,33 @@ router.post(
         llmGeneratedBy: body.llmGeneratedBy ?? null,
         isActive: body.isActive === false ? false : true,
         usageCount: 0,
+        // G115 — PDF underprint fields. pdfTemplateUrl presence flips the flag
+        // and seeds overlay regions. The reference PDF is converted into a blank
+        // brand template so the rendered itinerary keeps the design but not the
+        // sample content.
+        pdfTemplateUrl: body.pdfTemplateUrl ?? null,
+        pdfTemplateRegions: null,
+        isPdfTemplate: body.pdfTemplateUrl ? true : Boolean(body.isPdfTemplate),
       };
+
+      // G115 — convert the uploaded reference PDF into a blank template. If the
+      // processing fails, the helper falls back to the original URL and default
+      // regions so the template remains usable. Any caller-supplied overlay regions
+      // are merged on top so custom zones (e.g., header) are preserved.
+      if (createData.pdfTemplateUrl) {
+        if (!isTrustedPdfTemplateUrl(createData.pdfTemplateUrl)) {
+          return res.status(400).json({
+            error: "pdfTemplateUrl must be a trusted S3 URL",
+            code: "INVALID_PDF_TEMPLATE_URL",
+          });
+        }
+        const processed = await processUploadedTemplatePdf(createData.pdfTemplateUrl);
+        const processedRegions = normalizePdfTemplateRegions(processed.pdfTemplateRegions) || {};
+        const callerRegions = normalizePdfTemplateRegions(body.pdfTemplateRegions) || {};
+        createData.pdfTemplateUrl = processed.pdfTemplateUrl;
+        createData.pdfTemplateRegions = JSON.stringify({ ...processedRegions, ...callerRegions });
+      }
+
       applyBrandKitDefaults(createData, brandKitTenant, createData.subBrand);
 
       const created = await prisma.itineraryTemplate.create({ data: createData });
@@ -1404,14 +1608,20 @@ router.get(
   async (req, res) => {
     try {
       const where = { tenantId: req.travelTenant.id };
+      const activeOnly = req.query.isActive === undefined
+        ? true
+        : String(req.query.isActive) === "true";
 
       const includeArchived = String(req.query.includeArchived) === "true";
       const includeAllVersions = String(req.query.includeAllVersions) === "true";
       if (!includeAllVersions) {
         where.isLatest = true;
       }
-      if (!includeArchived) {
-        where.archivedAt = null;
+      const vis = visibilityClause(activeOnly, includeArchived);
+      if (includeArchived) {
+        where.AND = [vis];
+      } else {
+        Object.assign(where, vis);
       }
 
       // Sub-brand narrowing — empty access set → empty CSV (header only).
@@ -1421,10 +1631,17 @@ router.get(
       if (allowed instanceof Set && allowed.size === 0) {
         writeEmpty = true;
       } else if (allowed instanceof Set) {
-        where.OR = [
-          { subBrand: null },
-          { subBrand: { in: [...allowed] } },
-        ];
+        const brandClause = {
+          OR: [
+            { subBrand: null },
+            { subBrand: { in: [...allowed] } },
+          ],
+        };
+        if (includeArchived) {
+          where.AND = [...(where.AND || []), brandClause];
+        } else {
+          where.OR = brandClause.OR;
+        }
       }
 
       const HEADER = [
@@ -1665,11 +1882,47 @@ router.patch(
         "templateJson",
         "llmGeneratedBy",
         "isActive",
+        // G115 — PDF underprint fields carry forward to the new version.
+        "pdfTemplateUrl",
+        "pdfTemplateRegions",
+        "isPdfTemplate",
       ];
       const inherited = {};
       for (const f of inheritedFields) {
         inherited[f] = existing[f];
       }
+
+      // G115 — PDF underprint normalization on edit. If the caller uploads a
+      // new PDF, convert it into a blank template and detect regions. If they
+      // clear pdfTemplateUrl, clear the flag and regions too.
+      if (data.pdfTemplateUrl !== undefined) {
+        if (data.pdfTemplateUrl) {
+          if (!isTrustedPdfTemplateUrl(data.pdfTemplateUrl)) {
+            const err = new Error("pdfTemplateUrl must be a trusted S3 URL");
+            err.status = 400;
+            err.code = "INVALID_PDF_TEMPLATE_URL";
+            throw err;
+          }
+          data.isPdfTemplate = true;
+          if (data.pdfTemplateUrl !== existing.pdfTemplateUrl) {
+            const processed = await processUploadedTemplatePdf(data.pdfTemplateUrl);
+            const processedRegions = normalizePdfTemplateRegions(processed.pdfTemplateRegions) || {};
+            const callerRegions = normalizePdfTemplateRegions(data.pdfTemplateRegions) || {};
+            data.pdfTemplateUrl = processed.pdfTemplateUrl;
+            data.pdfTemplateRegions = JSON.stringify({ ...processedRegions, ...callerRegions });
+          }
+          // If the URL is unchanged, keep existing.pdfTemplateRegions.
+        } else {
+          data.isPdfTemplate = false;
+          data.pdfTemplateRegions = null;
+          data.pdfTemplateUrl = null;
+        }
+      }
+      if (data.pdfTemplateRegions !== undefined && data.pdfTemplateRegions !== null && data.pdfTemplateUrl === existing.pdfTemplateUrl) {
+        const normalized = normalizePdfTemplateRegions(data.pdfTemplateRegions);
+        data.pdfTemplateRegions = normalized ? JSON.stringify(normalized) : null;
+      }
+
       const newRowData = {
         ...inherited,
         ...data, // caller's patch fields override inherited

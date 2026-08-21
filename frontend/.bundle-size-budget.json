@@ -39,8 +39,8 @@
     },
     {
       "pattern": "index-*.js",
-      "maxKB": 260,
-      "comment": "Main SPA entry chunk. Critical-path; keep tight. Bumped 250→260 on 2026-07-23: PR #1251 added the open-source section + footer GitHub link to Landing.jsx, pushing the chunk 0.5 KB over the 250 KB cap."
+      "maxKB": 270,
+      "comment": "Main SPA entry chunk. Critical-path; keep tight. Bumped 250→260 on 2026-07-23: PR #1251 added the open-source section + footer GitHub link to Landing.jsx, pushing the chunk 0.5 KB over the 250 KB cap. Bumped 260→270 on 2026-08-12: PR #1319 added the Omnibar global search component and sidebarSearch utility to the header, pushing the index chunk to 262.1 KB."
     },
     {
       "pattern": "Dashboards-*.js",
@@ -49,14 +49,19 @@
     },
     {
       "pattern": "LandingPageBuilder-*.js",
-      "maxKB": 300,
-      "comment": "PR #1199 landing page builder + block renderer + travel block editor. Currently ~243 KB; lazy-loaded on the builder route only."
+      "maxKB": 320,
+      "comment": "PR #1199 landing page builder + block renderer + travel block editor. Currently ~243 KB baseline. Bumped 300→320 on 2026-07-30: PR #1260 added wellness landing-site editor, publish-gate workflow, and cancellation-policy UI wiring into the builder chunk, pushing it ~2 KB over the 300 KB cap."
+    },
+    {
+      "pattern": "GitHubCatIcon-*.js",
+      "maxKB": 350,
+      "comment": "PR #1249 added lottie-react + Lottie JSON for the GitHub icon on the landing page. Lazy-loaded from Landing.jsx but still counts toward total JS. Long-term: replace the Lottie animation with a lighter SVG to reclaim ~300 KB."
     }
   ],
 
   "totals": {
-    "all-js-maxKB": 6600,
+    "all-js-maxKB": 7200,
     "all-css-maxKB": 300,
-    "comment": "Whole frontend/dist/assets/ JS + CSS. Catches the case where a new chunk pops in without being budgeted explicitly. Bumped 6200→6600 on 2026-07-23: PR #1249 added lottie-react + Lottie JSON for the GitHub icon on the landing page; the new GitHubCatIcon chunk is ~337 KB and pushes total JS over the 6200 KB cap. Bumping by 400 KB restores headroom. Bumped 5700→6200 on 2026-07-21: PR #1233 added xlsx for CSV/Excel import; the xlsx chunk is ~419 KB and pushes total JS to ~5853 KB. Bumping by 500 KB restores ~140 KB headroom. Bumped 5200→5700 on 2026-07-06: PR #1199 React landing-page renderer..."
+    "comment": "Whole frontend/dist/assets/ JS + CSS. Catches the case where a new chunk pops in without being budgeted explicitly. Bumped 7100→7200 on 2026-08-18: PR #1355 added the Lead Reports feature (LeadReports page, metrics libraries, WhatsApp Meta config UI, and ReturnToBanner component) pushing total JS to ~7152 KB. Restoring ~48 KB headroom while the team evaluates further lazy-loading of the new report chunks. Bumped 6950→7100 on 2026-08-14: PR #1337 added AI subscription/credit management pages (AiSubscription, AiUsageDashboard, SuperAdminAiManagement, SuperAdminAiPlans, SuperAdminRevenue, OrganizationAiSettingsCard) plus supporting utilities, pushing total JS to ~6992 KB. Restoring ~108 KB headroom while the team evaluates lazy-loading the new admin AI chunks. Bumped 6900→6950 on 2026-08-13: PR #1322 rewrote the Leads table (tags, filtering, inline editing, drag/resize columns); total JS is now 6904.3 KB, exceeding the 6900 KB cap. Restoring ~45 KB headroom while the team evaluates lazy-loading the new Leads chunk. Bumped 6700→6800 on 2026-08-07: total JS is now 6753.5 KB, exceeding the 6700 KB cap following recent main merges. Restoring ~46 KB headroom while the team evaluates replacing the GitHubCatIcon Lottie animation with a lighter SVG. Bumped 6600→6700 on 2026-08-06: GitHubCatIcon lottie-react chunk is ~337 KB and the total JS is now 6657.8 KB, slightly over the 6600 KB cap. Restoring ~42 KB headroom while the team evaluates lazy-loading or replacing the Lottie animation with a lighter SVG. Bumped 6200→6600 on 2026-07-23: PR #1249 added lottie-react + Lottie JSON for the GitHub icon on the landing page; the new GitHubCatIcon chunk is ~337 KB and pushes total JS over the 6200 KB cap. Bumping by 400 KB restores headroom. Bumped 5700→6200 on 2026-07-21: PR #1233 added xlsx for CSV/Excel import; the xlsx chunk is ~419 KB and pushes total JS to ~5853 KB. Bumping by 500 KB restores ~140 KB headroom. Bumped 5200→5700 on 2026-07-06: PR #1199 React landing-page renderer..."
   }
 }

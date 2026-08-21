@@ -72,13 +72,55 @@ function emojiFor(category) {
 
 const DEBOUNCE_MS = 250;
 
+function buildSightseeingRows(rows, { country, destinationSlug, resolvedDestination }) {
+  return rows.map((row) => ({
+    id: `s-${row.id}`,
+    sightseeingId: row.id,
+    poiId: null,
+    sourceType: 'sightseeing',
+    name: row.name,
+    nameLocal: null,
+    category: row.category || null,
+    latitude: Number.isFinite(row.latitude) ? row.latitude : null,
+    longitude: Number.isFinite(row.longitude) ? row.longitude : null,
+    country: country || null,
+    destinationSlug,
+    destinationName: row.destinationName || resolvedDestination,
+    imageUrl: row.imageUrl || null,
+    descriptionShort: row.description || null,
+    notes: row.notes || null,
+  }));
+}
+
+function fallbackDestinationTerm(raw) {
+  const parts = String(raw || '')
+    .trim()
+    .split(/\s+/)
+    .filter((part) => part.length >= 4);
+  return parts[0] || '';
+}
+
+function mergeSightseeingRows(primaryRows, fallbackRows) {
+  const seen = new Set();
+  const merged = [];
+  for (const row of [...primaryRows, ...fallbackRows]) {
+    const key = `${String(row.destinationName || '').toLowerCase()}::${String(row.name || '').toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+  }
+  return merged;
+}
+
 export default function PoiPicker({
   value = null,
   onChange,
   destinationSlug,
+  destinationName = '',
+  subBrand = null,
   country = null,
   disabled = false,
-  placeholder = 'Search POIs by name…',
+  placeholder = 'Search approved sightseeing places…',
   maxResults = 50,
   onAddNew = null,   // (currentQuery: string) => void — when provided, shows "+ Add new POI" in empty state
 }) {
@@ -108,23 +150,47 @@ export default function PoiPicker({
 
   const runFetch = useCallback(
     async (q) => {
-      if (!destinationSlug) return;
+      const resolvedDestination = String(destinationName || '').trim() || destinationSlug;
+      if (!resolvedDestination) return;
       setLoading(true);
       setErrored(false);
       const seq = ++fetchSeqRef.current;
       try {
         const params = new URLSearchParams({
-          destinationSlug,
+          destinationName: resolvedDestination,
           limit: String(maxResults),
+          isActive: 'true',
         });
         if (q) params.set('q', q);
-        if (country) params.set('country', country);
-        const data = await fetchApi(`/api/travel/pois?${params.toString()}`, {
+        if (subBrand) {
+          params.set('subBrand', subBrand);
+          params.set('includeTenantWide', 'true');
+        }
+        let data = await fetchApi(`/api/travel/sightseeing?${params.toString()}`, {
           silent: true,
         });
+        let rows = Array.isArray(data?.items) ? data.items : [];
+        const fallbackTerm = fallbackDestinationTerm(resolvedDestination);
+        if (fallbackTerm && fallbackTerm !== resolvedDestination) {
+          const fallbackParams = new URLSearchParams({
+            destinationName: fallbackTerm,
+            limit: String(maxResults),
+            isActive: 'true',
+          });
+          if (q) fallbackParams.set('q', q);
+          if (subBrand) {
+            fallbackParams.set('subBrand', subBrand);
+            fallbackParams.set('includeTenantWide', 'true');
+          }
+          data = await fetchApi(`/api/travel/sightseeing?${fallbackParams.toString()}`, {
+            silent: true,
+          });
+          const fallbackRows = Array.isArray(data?.items) ? data.items : [];
+          rows = mergeSightseeingRows(rows, fallbackRows);
+        }
         // Drop stale results — only the most recent request wins.
         if (seq !== fetchSeqRef.current) return;
-        setItems(Array.isArray(data?.pois) ? data.pois : []);
+        setItems(buildSightseeingRows(rows, { country, destinationSlug, resolvedDestination }));
       } catch (_e) {
         if (seq !== fetchSeqRef.current) return;
         setErrored(true);
@@ -133,7 +199,7 @@ export default function PoiPicker({
         if (seq === fetchSeqRef.current) setLoading(false);
       }
     },
-    [destinationSlug, country, maxResults],
+    [destinationName, destinationSlug, country, maxResults, subBrand],
   );
 
   // Debounced re-fetch when the user types.
@@ -310,14 +376,14 @@ export default function PoiPicker({
               style={{ padding: '0.6rem 0.8rem', color: 'var(--danger-color, #b91c1c)' }}
               data-testid="poi-picker-error"
             >
-              Failed to load POIs. Please retry.
+              Failed to load approved sightseeing places. Please retry.
             </div>
           )}
 
           {!loading && !errored && items.length === 0 && (
             <div data-testid="poi-picker-empty">
               <div style={{ padding: '0.6rem 0.8rem', color: 'var(--text-secondary)' }}>
-                No POIs found for {destinationSlug}.
+                No approved sightseeing places found for {destinationSlug}.
               </div>
               {typeof onAddNew === 'function' && (
                 <button
@@ -340,7 +406,7 @@ export default function PoiPicker({
                     textAlign: 'left',
                   }}
                 >
-                  + Add new POI{query ? ` "${query}"` : ''}
+                  + Suggest new place{query ? ` "${query}"` : ''}
                 </button>
               )}
             </div>
@@ -417,6 +483,16 @@ export default function PoiPicker({
                       {poi.nameLocal}
                     </span>
                   )}
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      color: 'var(--text-secondary, #6b7280)',
+                    }}
+                  >
+                    {poi.sourceType === 'sightseeing'
+                      ? 'Sightseeing Master'
+                      : 'Approved POI catalog'}
+                  </span>
                 </span>
                 {poi.category && (
                   <span

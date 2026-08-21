@@ -5,7 +5,7 @@
  * PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md §10 row T16. Pins the page's
  * surface contract against backend/routes/travel_tmc_catalogue.js (T5):
  *
- *   GET    /api/travel-tmc-catalogue?status=active|archived → list
+ *   GET    /api/travel-tmc-catalogue?status=active|archived&limit=&offset= → list
  *   POST   /api/travel-tmc-catalogue            → create (always lands archived)
  *   PATCH  /api/travel-tmc-catalogue/:id        → update
  *   DELETE /api/travel-tmc-catalogue/:id        → soft-archive
@@ -37,14 +37,17 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
+const rawFetchMock = vi.fn();
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
   getAuthToken: () => 'test-token',
 }));
+
+vi.stubGlobal('fetch', (...args) => rawFetchMock(...args));
 
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
@@ -66,6 +69,7 @@ import TmcCatalogueAdmin from '../pages/travel/TmcCatalogueAdmin';
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'admin@x.com', role: 'ADMIN' };
 const MANAGER_USER = { userId: 2, name: 'Mgr', email: 'mgr@x.com', role: 'MANAGER' };
 const REGULAR_USER = { userId: 3, name: 'User', email: 'user@x.com', role: 'USER' };
+const OWNER_USER = { userId: 4, name: 'Owner', email: 'owner@x.com', role: 'OWNER' };
 
 function makeRow(overrides = {}) {
   return {
@@ -109,8 +113,8 @@ const ARCHIVED_ROWS = [
 ];
 
 function installFetchMock({
-  active = { catalogue: ACTIVE_ROWS, total: ACTIVE_ROWS.length, limit: 100, offset: 0 },
-  archived = { catalogue: ARCHIVED_ROWS, total: ARCHIVED_ROWS.length, limit: 100, offset: 0 },
+  active = { catalogue: ACTIVE_ROWS, total: ACTIVE_ROWS.length, limit: 10, offset: 0 },
+  archived = { catalogue: ARCHIVED_ROWS, total: ARCHIVED_ROWS.length, limit: 10, offset: 0 },
   create = null,
   patch = null,
   del = null,
@@ -118,11 +122,12 @@ function installFetchMock({
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
-    if (url.startsWith('/api/travel-tmc-catalogue?status=active') && method === 'GET') {
+    const parsed = new URL(String(url), 'http://localhost');
+    if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'active') {
       if (active instanceof Error) return Promise.reject(active);
       return Promise.resolve(active);
     }
-    if (url.startsWith('/api/travel-tmc-catalogue?status=archived') && method === 'GET') {
+    if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'archived') {
       if (archived instanceof Error) return Promise.reject(archived);
       return Promise.resolve(archived);
     }
@@ -165,12 +170,24 @@ function renderPage(user = ADMIN_USER) {
 
 beforeEach(() => {
   fetchApiMock.mockReset();
+  rawFetchMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
+  if (typeof window !== 'undefined' && window.URL) {
+    Object.defineProperty(window.URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:mock'),
+    });
+    Object.defineProperty(window.URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+  }
   installFetchMock();
+  vi.stubGlobal('fetch', (...args) => rawFetchMock(...args));
 });
 
 afterEach(() => {
@@ -188,6 +205,7 @@ describe('<TmcCatalogueAdmin /> — page chrome + initial load', () => {
     expect(
       screen.getByRole('heading', { name: /TMC Trip Catalogue/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/catalogue items/i)).toBeInTheDocument();
 
     expect(await screen.findByText('Golden Triangle Heritage Trail')).toBeInTheDocument();
     expect(screen.getByText('Madhya Pradesh Wildlife Trail')).toBeInTheDocument();
@@ -195,7 +213,7 @@ describe('<TmcCatalogueAdmin /> — page chrome + initial load', () => {
     const call = fetchApiMock.mock.calls.find(
       ([u, o]) =>
         typeof u === 'string'
-        && u.startsWith('/api/travel-tmc-catalogue?status=active')
+        && u.startsWith('/api/travel-tmc-catalogue?status=active&limit=10&offset=0')
         && (!o?.method || o.method === 'GET'),
     );
     expect(call).toBeTruthy();
@@ -215,7 +233,7 @@ describe('<TmcCatalogueAdmin /> — tab switching', () => {
       const call = fetchApiMock.mock.calls.find(
         ([u]) =>
           typeof u === 'string'
-          && u.startsWith('/api/travel-tmc-catalogue?status=archived'),
+          && u.startsWith('/api/travel-tmc-catalogue?status=archived&limit=10&offset=0'),
       );
       expect(call).toBeTruthy();
     });
@@ -226,7 +244,7 @@ describe('<TmcCatalogueAdmin /> — tab switching', () => {
 
 describe('<TmcCatalogueAdmin /> — empty states', () => {
   it('Active tab renders empty-state copy when API returns []', async () => {
-    installFetchMock({ active: { catalogue: [], total: 0, limit: 100, offset: 0 } });
+    installFetchMock({ active: { catalogue: [], total: 0, limit: 10, offset: 0 } });
     renderPage();
     expect(
       await screen.findByText(/No active catalogue entries/i),
@@ -234,13 +252,91 @@ describe('<TmcCatalogueAdmin /> — empty states', () => {
   });
 
   it('Archived tab renders empty-state copy when API returns []', async () => {
-    installFetchMock({ archived: { catalogue: [], total: 0, limit: 100, offset: 0 } });
+    installFetchMock({ archived: { catalogue: [], total: 0, limit: 10, offset: 0 } });
     renderPage();
     await screen.findByText('Golden Triangle Heritage Trail');
     fireEvent.click(screen.getByRole('tab', { name: /Archived/i }));
     expect(
       await screen.findByText(/No archived catalogue entries/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe('<TmcCatalogueAdmin /> — infinite scroll', () => {
+  it('requests the next slice when the list container scrolls to the bottom', async () => {
+    const activePage1 = Array.from({ length: 10 }, (_, idx) =>
+      makeRow({
+        id: 100 + idx,
+        tripId: `active-trip-${idx + 1}`,
+        title: `Active Trip ${idx + 1}`,
+        status: 'active',
+      }),
+    );
+    const activePage2 = [
+      makeRow({
+        id: 200,
+        tripId: 'active-trip-11',
+        title: 'Active Trip 11',
+        status: 'active',
+      }),
+      makeRow({
+        id: 201,
+        tripId: 'active-trip-12',
+        title: 'Active Trip 12',
+        status: 'active',
+      }),
+    ];
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      const parsed = new URL(String(url), 'http://localhost');
+      if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'active') {
+        const offset = Number(parsed.searchParams.get('offset') || 0);
+        if (offset === 10) {
+          return Promise.resolve({
+            catalogue: activePage2,
+            total: 12,
+            limit: 10,
+            offset: 10,
+          });
+        }
+        return Promise.resolve({
+          catalogue: activePage1,
+          total: 12,
+          limit: 10,
+          offset: 0,
+        });
+      }
+      if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'archived') {
+        return Promise.resolve({
+          catalogue: ARCHIVED_ROWS,
+          total: ARCHIVED_ROWS.length,
+          limit: 10,
+          offset: 0,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    expect(await screen.findByText('Active Trip 1')).toBeInTheDocument();
+
+    const list = screen.getByRole('list', { name: /active catalogue entries/i });
+    Object.defineProperties(list, {
+      scrollTop: { value: 1000, writable: true, configurable: true },
+      clientHeight: { value: 500, writable: true, configurable: true },
+      scrollHeight: { value: 1400, writable: true, configurable: true },
+    });
+    fireEvent.scroll(list);
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u]) => typeof u === 'string' && u.includes('status=active&limit=10&offset=10'),
+      );
+      expect(call).toBeTruthy();
+    });
+    expect(await screen.findByText('Active Trip 11')).toBeInTheDocument();
+    expect(screen.getByText('Active Trip 12')).toBeInTheDocument();
   });
 });
 
@@ -261,6 +357,15 @@ describe('<TmcCatalogueAdmin /> — promote-to-active visibility', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Promote Europe Heritage Loop to active/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('Promote-to-active button visible on archived rows for OWNER', async () => {
+    renderPage(OWNER_USER);
+    await screen.findByText('Golden Triangle Heritage Trail');
+    fireEvent.click(screen.getByRole('tab', { name: /Archived/i }));
+    expect(
+      await screen.findByRole('button', { name: /Promote USA STEM Immersion to active/i }),
     ).toBeInTheDocument();
   });
 
@@ -527,5 +632,143 @@ describe('<TmcCatalogueAdmin /> — theme + role gating', () => {
     expect(
       screen.queryByRole('button', { name: /Promote USA STEM Immersion to active/i }),
     ).toBeNull();
+  });
+
+  it('OWNER sees admin catalogue controls that manage the recommendation set', async () => {
+    renderPage(OWNER_USER);
+    await screen.findByText('Golden Triangle Heritage Trail');
+
+    expect(
+      screen.getByRole('button', { name: /Add catalogue entry/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /TMC configuration/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('tmc-catalogue-bulk-import')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Download CSV template/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Download XLSX template/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Import file/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Edit Golden Triangle Heritage Trail/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Archive Golden Triangle Heritage Trail/i }),
+    ).toBeInTheDocument();
+  });
+});
+
+
+describe('<TmcCatalogueAdmin /> - bulk import template + ingest flow', () => {
+  it('downloads the CSV template with bearer auth and triggers a file download', async () => {
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    rawFetchMock.mockImplementation(async (url) => {
+      if (String(url).includes('/api/travel-tmc-catalogue/import-template?format=csv')) {
+        return {
+          ok: true,
+          status: 200,
+          blob: async () => new Blob(['tripId,title'], { type: 'text/csv' }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    renderPage();
+    await screen.findByText('Golden Triangle Heritage Trail');
+
+    fireEvent.click(screen.getByRole('button', { name: /Download CSV template/i }));
+
+    await waitFor(() => {
+      expect(rawFetchMock).toHaveBeenCalled();
+    });
+
+    const [url, opts] = rawFetchMock.mock.calls[0];
+    expect(String(url)).toContain('/api/travel-tmc-catalogue/import-template?format=csv');
+    expect(opts?.headers).toMatchObject({ Authorization: 'Bearer test-token' });
+    expect(clickSpy).toHaveBeenCalled();
+    expect(window.URL.createObjectURL).toHaveBeenCalled();
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Downloaded CSV template/i));
+  });
+
+  it('opens the modal, uploads a spreadsheet, shows the ingest summary, and marks imported rows as pending review', async () => {
+    installFetchMock({
+      archived: {
+        catalogue: [
+          ...ARCHIVED_ROWS,
+          makeRow({
+            id: 303,
+            tripId: 'andaman-sea-explorer',
+            title: 'Andaman Sea Explorer',
+            status: 'archived',
+          }),
+        ],
+        total: ARCHIVED_ROWS.length + 1,
+        limit: 10,
+        offset: 0,
+      },
+    });
+
+    rawFetchMock.mockImplementation(async (url, opts) => {
+      if (String(url) === '/api/travel-tmc-catalogue/import') {
+        const body = opts?.body;
+        const entries = body ? Array.from(body.entries()) : [];
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            imported: 1,
+            updated: 1,
+            skipped: 0,
+            total: 2,
+            reviewLabel: 'AI-classified, pending review',
+            createdTripIds: ['andaman-sea-explorer'],
+            updatedTripIds: ['golden-triangle'],
+            errors: [],
+            _entries: entries,
+          }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    renderPage();
+    await screen.findByText('Golden Triangle Heritage Trail');
+    expect(screen.queryByLabelText('Bulk import file')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
+    expect(await screen.findByTestId('tmc-catalogue-import-modal')).toBeInTheDocument();
+
+    const file = new File(['tripId,title'], 'tmc-catalogue.csv', { type: 'text/csv' });
+    fireEvent.change(screen.getByLabelText('Bulk import file'), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: /Confirm import/i }));
+
+    await waitFor(() => {
+      expect(rawFetchMock).toHaveBeenCalledWith(
+        '/api/travel-tmc-catalogue/import',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    const importCall = rawFetchMock.mock.calls.find(([url]) => String(url) === '/api/travel-tmc-catalogue/import');
+    expect(importCall).toBeTruthy();
+    const [, importOpts] = importCall;
+    expect(importOpts?.headers).toMatchObject({ Authorization: 'Bearer test-token' });
+    const formEntries = Array.from(importOpts.body.entries());
+    expect(formEntries[0][0]).toBe('file');
+    expect(formEntries[0][1]).toBe(file);
+
+    expect(await screen.findByTestId('tmc-catalogue-bulk-import-result')).toBeInTheDocument();
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/AI-classified, pending review: 1 new, 1 updated/i),
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Archived/i }));
+    expect(await screen.findByText('Andaman Sea Explorer')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('tmc-pending-review-andaman-sea-explorer'),
+    ).toHaveTextContent(/AI-classified, pending review/i);
   });
 });

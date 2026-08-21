@@ -62,10 +62,10 @@ describe('CommandPalette', () => {
     openPalette();
     const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
     // Wait for deals + contacts fetched
-    await waitFor(() => expect(screen.queryByText(/Acme renewal/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText((_, element) => element?.textContent?.includes('Acme renewal'), { selector: 'p' })).toBeNull());
     fireEvent.change(input, { target: { value: 'Acme' } });
-    expect(await screen.findByText(/Acme renewal/)).toBeInTheDocument();
-    expect(screen.queryByText(/Globus pilot/)).not.toBeInTheDocument();
+    expect(await screen.findByText((_, element) => element?.textContent?.includes('Acme renewal'), { selector: 'p' })).toBeInTheDocument();
+    expect(screen.queryByText((_, element) => element?.textContent?.includes('Globus pilot'), { selector: 'p' })).not.toBeInTheDocument();
   });
 
   it('typing a non-matching query shows empty-state message', async () => {
@@ -140,8 +140,8 @@ describe('CommandPalette', () => {
     // 'Acme' matches both deal.title ("Acme renewal") AND deal.company ("Acme")
     // 'globus' (lowercase) tests case-insensitive company match exclusively
     fireEvent.change(input, { target: { value: 'globus' } });
-    expect(await screen.findByText(/Globus pilot/)).toBeInTheDocument();
-    expect(screen.queryByText(/Acme renewal/)).not.toBeInTheDocument();
+    expect(await screen.findByText((_, element) => element?.textContent?.includes('Globus pilot'), { selector: 'p' })).toBeInTheDocument();
+    expect(screen.queryByText((_, element) => element?.textContent?.includes('Acme renewal'), { selector: 'p' })).not.toBeInTheDocument();
   });
 
   it('filtering is case-insensitive on both fields', async () => {
@@ -149,7 +149,16 @@ describe('CommandPalette', () => {
     openPalette();
     const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
     fireEvent.change(input, { target: { value: 'ACME' } });
-    expect(await screen.findByText(/Acme renewal/)).toBeInTheDocument();
+    expect(await screen.findByText((_, element) => element?.textContent?.includes('Acme renewal'), { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('renders filtered results without highlight markup', async () => {
+    render(<MemoryRouter><CommandPalette /></MemoryRouter>);
+    openPalette();
+    const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
+    fireEvent.change(input, { target: { value: 'Acme' } });
+    await waitFor(() => expect(screen.getByText(/Acme renewal/i)).toBeInTheDocument());
+    expect(screen.queryAllByText(/Acme/i, { selector: 'mark' })).toHaveLength(0);
   });
 
   it('clicking a filtered deal result navigates to /pipeline and closes', async () => {
@@ -157,7 +166,7 @@ describe('CommandPalette', () => {
     openPalette();
     const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
     fireEvent.change(input, { target: { value: 'Acme' } });
-    const dealRow = await screen.findByText(/Acme renewal/);
+    const dealRow = await screen.findByText((_, element) => element?.textContent?.includes('Acme renewal'), { selector: 'p' });
     fireEvent.click(dealRow);
     expect(navigateMock).toHaveBeenCalledWith('/pipeline');
     await waitFor(() => expect(screen.queryByPlaceholderText(/Search deals, contacts/i)).not.toBeInTheDocument());
@@ -224,7 +233,7 @@ describe('CommandPalette', () => {
     openPalette();
     const input = await screen.findByPlaceholderText(/Search deals, contacts/i);
     fireEvent.change(input, { target: { value: 'Acme' } });
-    expect(await screen.findByText(/Acme renewal/)).toBeInTheDocument();
+    expect(await screen.findByText((_, element) => element?.textContent?.includes('Acme renewal'), { selector: 'p' })).toBeInTheDocument();
     // Stage rendered as visible badge text
     expect(screen.getByText('proposal')).toBeInTheDocument();
   });

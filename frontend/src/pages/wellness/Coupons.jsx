@@ -5,34 +5,52 @@
 //   • Preview — paste a code + base amount, see the discount math (does NOT
 //     redeem; safe for demo). Mirrors how the checkout would call the same
 //     endpoint pre-/api/wellness/coupons/apply.
-import { useEffect, useState } from 'react';
-import { TicketPercent, Plus, Pencil, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { TicketPercent, Plus, Pencil, Trash2, Copy } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import PageHeader from '../../components/PageHeader';
 import TopScrollSync from '../../components/TopScrollSync';
+import PatientPager from './patients/PatientPager';
 
 export default function CouponsPage() {
   const [coupons, setCoupons] = useState([]);
   const [editOpen, setEditOpen] = useState(null); // null | {} (new) | row
   const [previewOpen, setPreviewOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [isCustomPageSize, setIsCustomPageSize] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState('');
   const notify = useNotify();
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const j = await fetchApi('/api/wellness/coupons');
+      const params = new URLSearchParams();
+      if (statusFilter === 'true' || statusFilter === 'false') {
+        params.set('isActive', statusFilter);
+      }
+      params.set('limit', String(pageSize));
+      params.set('skip', String((page - 1) * pageSize));
+      const j = await fetchApi(
+        `/api/wellness/coupons${params.toString() ? `?${params.toString()}` : ''}`,
+      );
       setCoupons(j.coupons || []);
+      setTotal(j.total || 0);
     } catch (e) {
       notify.error(e.message || 'Failed to load coupons');
+      setCoupons([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
-  };
+  }, [statusFilter, page, pageSize, notify]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   const remove = async (id) => {
     const ok = await notify.confirm({
@@ -51,6 +69,15 @@ export default function CouponsPage() {
     }
   };
 
+  const copyCouponCode = async (code) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      notify.success('Coupon code copied');
+    } catch {
+      notify.error('Could not copy to clipboard');
+    }
+  };
+
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <PageHeader
@@ -58,8 +85,25 @@ export default function CouponsPage() {
         title="Coupons"
         description="Promotional discounts (PERCENT or FLAT). Apply at checkout to credit the bill."
       >
-        <button onClick={() => setPreviewOpen(true)} style={btnSecondary}>Preview a code</button>
-        <button onClick={() => setEditOpen({})} style={btnPrimary}><Plus size={14} /> New coupon</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <label style={filterLabel}>
+            <span style={{ marginRight: '0.4rem' }}>Status</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setPage(1);
+                setStatusFilter(e.target.value);
+              }}
+              style={filterSelect}
+            >
+              <option value="all">All</option>
+              <option value="true">Active</option>
+              <option value="false">Inactive</option>
+            </select>
+          </label>
+          <button onClick={() => setPreviewOpen(true)} style={btnSecondary}>Preview a code</button>
+          <button onClick={() => setEditOpen({})} style={btnPrimary}><Plus size={14} /> New coupon</button>
+        </div>
       </PageHeader>
 
       {loading ? (
@@ -82,7 +126,20 @@ export default function CouponsPage() {
           <tbody>
             {coupons.map((c) => (
               <tr key={c.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <td style={td}><code>{c.code}</code></td>
+                <td style={td}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <code>{c.code}</code>
+                    <button
+                      type="button"
+                      onClick={() => copyCouponCode(c.code)}
+                      title="Copy coupon code"
+                      aria-label={`Copy coupon code ${c.code}`}
+                      style={btnIconGhost}
+                    >
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                </td>
                 <td style={td}>{c.discountType === 'PERCENT' ? `${c.discountValue}%` : formatMoney(c.discountValue)}</td>
                 <td style={td}>{c.redemptionCount}{c.maxRedemptions ? ` / ${c.maxRedemptions}` : ''}</td>
                 <td style={td}>{validityLabel(c)}</td>
@@ -103,6 +160,22 @@ export default function CouponsPage() {
           row={editOpen}
           onSaved={() => { setEditOpen(null); load(); }}
           onCancel={() => setEditOpen(null)}
+        />
+      )}
+      {!loading && total > 0 && (
+        <PatientPager
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(next) => {
+            setPage(1);
+            setPageSize(next);
+          }}
+          isCustomPageSize={isCustomPageSize}
+          setIsCustomPageSize={setIsCustomPageSize}
+          customPageSize={customPageSize}
+          setCustomPageSize={setCustomPageSize}
         />
       )}
       {previewOpen && <PreviewModal onClose={() => setPreviewOpen(false)} />}
@@ -264,6 +337,19 @@ const td = { padding: '0.5rem', fontSize: '0.9rem' };
 const btnPrimary = { padding: '0.6rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' };
 const btnSecondary = { padding: '0.6rem 1rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer' };
 const iconBtn = { background: 'transparent', border: '1px solid var(--border-color)', padding: '0.3rem 0.5rem', borderRadius: 6, cursor: 'pointer', marginRight: '0.25rem' };
+const filterLabel = { display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.85rem', color: 'var(--text-secondary)' };
+const filterSelect = { padding: '0.5rem 0.7rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--subtle-bg-2)', color: 'inherit', fontSize: '0.85rem' };
+const btnIconGhost = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '0.2rem',
+  background: 'transparent',
+  border: '1px solid var(--border-color)',
+  borderRadius: 4,
+  cursor: 'pointer',
+  color: 'var(--text-secondary)',
+};
 const modalOverlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 };
 const modalCard = { background: 'var(--bg-color, #fff)', padding: '1.5rem', borderRadius: 12, minWidth: 360, maxWidth: 500 };
 const lbl = { display: 'block', marginBottom: '0.75rem', fontSize: '0.9rem' };

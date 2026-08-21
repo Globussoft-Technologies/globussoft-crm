@@ -6,29 +6,25 @@ const FormData = require("form-data");
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const { llmLimiter } = require("../middleware/apiRateLimiters");
+const { isGeminiLimitError, buildGeminiLimitError } = require("../lib/geminiErrors");
+const aiGateway = require("../lib/aiGateway");
+const aiProviderManagement = require("../lib/aiProviderManagement");
+const { estimateAudioCost } = require("../lib/apiPricing");
 
 const router = express.Router();
 
-// ── Lazy Gemini init ─────────────────────────────────────────────
-let genAI = null;
-let geminiTextModel = null;
-let geminiAudioModel = null;
-function ensureGemini() {
-  if (genAI) return genAI;
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) return null;
-  try {
-    const { GoogleGenerativeAI } = require("@google/generative-ai");
-    genAI = new GoogleGenerativeAI(key);
-    geminiTextModel = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-2.5-flash" });
-    // gemini-2.0-flash+ support audio inline_data (1.5-flash was deprecated April 2026).
-    geminiAudioModel = genAI.getGenerativeModel({ model: process.env.GEMINI_AUDIO_MODEL || "gemini-2.0-flash" });
-    console.log("[VoiceTranscription] Gemini initialized");
-    return genAI;
-  } catch (err) {
-    console.error("[VoiceTranscription] Gemini init failed:", err.message);
-    return null;
-  }
+// Whisper/Gemini audio APIs don't report exact duration back to us the way
+// token usage is reported for chat completions, and there's no audio-decoder
+// dependency in this codebase to measure it precisely. We approximate
+// duration from the compressed file size at a conservative ~24kbps blended
+// rate (typical for voice-call recordings, mp3/ogg/opus) purely to produce a
+// stable, non-zero cost estimate for credit deduction — NOT an exact billing
+// figure. Provider-reported usage is preferred everywhere else in the CRM;
+// this is the one exception, scoped to this file, because none of the
+// audio transcription providers return token/duration usage metadata here.
+const ASSUMED_AUDIO_BITRATE_BYTES_PER_SEC = 24_000 / 8;
+function estimateAudioDurationSeconds(byteLength) {
+  return Math.max(1, Math.round(byteLength / ASSUMED_AUDIO_BITRATE_BYTES_PER_SEC));
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -54,14 +50,13 @@ function guessFilenameFromUrl(url, contentType) {
   return "audio.wav";
 }
 
-async function transcribeWithWhisper(audioBuffer, contentType, filename) {
-  if (!process.env.OPENAI_API_KEY) return null;
+async function transcribeWithWhisper(config, audioBuffer, contentType, filename) {
   const fd = new FormData();
   fd.append("file", audioBuffer, { filename, contentType });
   fd.append("model", "whisper-1");
   const r = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
-    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, ...fd.getHeaders() },
+    headers: { Authorization: `Bearer ${config.apiKey}`, ...fd.getHeaders() },
     body: fd,
   });
   if (!r.ok) {
@@ -72,36 +67,113 @@ async function transcribeWithWhisper(audioBuffer, contentType, filename) {
   return data.text || null;
 }
 
-async function transcribeWithGemini(audioBuffer, contentType) {
-  ensureGemini();
-  if (!geminiAudioModel) return null;
-  // Gemini supports inline_data audio (mp3, wav, ogg, m4a, etc.) on v1beta
-  // Cap at ~20MB inline to be safe
+async function transcribeWithGemini(config, audioBuffer, contentType) {
+  // Gemini supports inline_data audio (mp3, wav, ogg, m4a, etc.) on v1beta.
+  // Cap at ~20MB inline to be safe.
   if (audioBuffer.length > 20 * 1024 * 1024) {
     throw new Error("Audio too large for inline Gemini (>20MB). Use Whisper or chunk the file.");
   }
   const mimeType = contentType.split(";")[0].trim() || "audio/mpeg";
-  const result = await geminiAudioModel.generateContent([
-    { inlineData: { mimeType, data: audioBuffer.toString("base64") } },
-    { text: "Transcribe this audio recording verbatim. Return only the spoken text, with no commentary." },
-  ]);
-  return result.response.text();
+  const base = config.baseUrl || "https://generativelanguage.googleapis.com";
+  const model = config.model || "gemini-2.0-flash";
+  const url = `${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.apiKey}`,
+      "x-goog-api-key": config.apiKey,
+    },
+    body: JSON.stringify({
+      contents: [{
+        role: "user",
+        parts: [
+          { inlineData: { mimeType, data: audioBuffer.toString("base64") } },
+          { text: "Transcribe this audio recording verbatim. Return only the spoken text, with no commentary." },
+        ],
+      }],
+    }),
+  });
+  if (!r.ok) {
+    const err = new Error(`gemini generateContent failed with status ${r.status}`);
+    err.status = r.status;
+    err.provider = "gemini";
+    throw err;
+  }
+  const data = await r.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  return parts.map((p) => p?.text || "").join("").trim() || null;
 }
 
-async function transcribeAudio(url) {
+// Resolves AI access once (BYOK or funded CRM-managed subscription) and
+// transcribes via whichever provider family was resolved — OpenAI-family
+// uses the Whisper endpoint, Gemini-family uses inline_data audio. Neither
+// endpoint reports token usage, so cost is estimated from file size (see
+// estimateAudioDurationSeconds) and routed through aiGateway.runNonTokenAiRequest
+// so gating/logging/credit-deduction stay centralized like every other AI
+// feature in the CRM.
+async function transcribeAudio(tenantId, url) {
   const { buffer, contentType } = await downloadAudio(url);
   const filename = guessFilenameFromUrl(url, contentType);
 
-  if (process.env.OPENAI_API_KEY) {
-    const text = await transcribeWithWhisper(buffer, contentType, filename);
-    return { transcript: text, provider: "whisper" };
+  if (!tenantId) {
+    return {
+      transcript: "[Transcription not configured — set OPENAI_API_KEY for Whisper or use AI summary via Gemini]",
+      provider: "stub",
+    };
   }
-  if (process.env.GEMINI_API_KEY) {
-    try {
-      const text = await transcribeWithGemini(buffer, contentType);
-      if (text) return { transcript: text, provider: "gemini" };
-    } catch (err) {
-      console.warn("[VoiceTranscription] Gemini transcription failed:", err.message);
+
+  try {
+    const gatewayResult = await aiGateway.runNonTokenAiRequest({
+      tenantId,
+      task: "voice-transcription",
+      surface: "voice_transcription",
+      requestedModelLabel: "gpt-4o",
+      runFn: async (config) => {
+        const durationSeconds = estimateAudioDurationSeconds(buffer.length);
+        if (config.family === "gemini") {
+          const text = await transcribeWithGemini(config, buffer, contentType);
+          return {
+            result: text,
+            costUsd: estimateAudioCost("gemini", durationSeconds),
+            model: config.model,
+            provider: "gemini",
+          };
+        }
+        if (config.family === "openai-compatible") {
+          const text = await transcribeWithWhisper(config, buffer, contentType, filename);
+          return {
+            result: text,
+            costUsd: estimateAudioCost("whisper-1", durationSeconds),
+            model: "whisper-1",
+            provider: config.providerId,
+          };
+        }
+        const err = new Error("Your organization's configured AI provider does not support audio transcription.");
+        err.friendly = true;
+        err.code = "AI_PROVIDER_NO_AUDIO_SUPPORT";
+        throw err;
+      },
+    });
+    if (gatewayResult.result) {
+      return { transcript: gatewayResult.result, provider: gatewayResult.provider };
+    }
+  } catch (err) {
+    if (err.friendly && err.unavailableReason === "RATE_LIMITED") {
+      // Distinct from "not configured" — access IS set up, but the
+      // provider (BYOK's own key or the CRM's shared key) is temporarily
+      // rate-limited. Surface this clearly rather than silently degrading
+      // to the stub transcript, which would read as "never configured".
+      throw err;
+    }
+    if (err.friendly) {
+      // No BYOK / no funded subscription / provider can't do audio —
+      // fall through to the stub transcript below, same graceful-degrade
+      // contract every other AI feature in the CRM follows.
+    } else if (isGeminiLimitError(err)) {
+      throw buildGeminiLimitError(err);
+    } else {
+      console.warn("[VoiceTranscription] AI transcription failed:", err.message);
     }
   }
   return {
@@ -110,9 +182,8 @@ async function transcribeAudio(url) {
   };
 }
 
-async function summarizeTranscript(transcript) {
-  ensureGemini();
-  if (!geminiTextModel) return null;
+async function summarizeTranscript(tenantId, transcript) {
+  if (!tenantId) return null;
   const prompt = `You are an assistant analyzing a phone call transcript. Read the transcript below and produce:
 1. A concise 2-sentence summary of what was discussed.
 2. A short bullet list of action items (or "None" if none).
@@ -129,18 +200,41 @@ SUMMARY:
 ACTION ITEMS:
 - <item 1>
 - <item 2>`;
-  const result = await geminiTextModel.generateContent(prompt);
-  return result.response.text();
+  try {
+    const resp = await aiGateway.runAiRequest({
+      tenantId,
+      task: "voice-transcript-summary",
+      surface: "voice_transcription",
+      requestedModelLabel: "gemini-flash",
+      messages: [{ role: "user", content: prompt }],
+    });
+    return resp.text || null;
+  } catch (err) {
+    if (err.friendly) return null;
+    if (isGeminiLimitError(err)) throw buildGeminiLimitError(err);
+    throw err;
+  }
 }
 
 // ── Routes ───────────────────────────────────────────────────────
 
-// GET /providers — show which providers are wired
-router.get("/providers", verifyToken, (req, res) => {
-  res.json({
-    whisper: !!process.env.OPENAI_API_KEY,
-    gemini: !!process.env.GEMINI_API_KEY,
-  });
+// GET /providers — show which AI access this tenant actually has (BYOK or a
+// funded CRM-managed subscription), not raw env-var presence.
+router.get("/providers", verifyToken, async (req, res) => {
+  try {
+    const state = await aiProviderManagement.getTenantAiState(req.user.tenantId);
+    const available = state.resolverAccess !== "none";
+    const family = state.byok
+      ? state.byok.providerId
+      : (available ? "crm-managed" : null);
+    res.json({
+      whisper: available && (family === "openai" || family === "crm-managed"),
+      gemini: available && (family === "gemini" || family === "crm-managed"),
+    });
+  } catch (err) {
+    console.error("[VoiceTranscription] providers error:", err);
+    res.status(500).json({ error: "Failed to resolve provider availability" });
+  }
 });
 
 // POST /transcribe-url — ad-hoc transcription, no save
@@ -148,10 +242,13 @@ router.post("/transcribe-url", verifyToken, llmLimiter, async (req, res) => {
   try {
     const { audioUrl } = req.body || {};
     if (!audioUrl) return res.status(400).json({ error: "audioUrl required" });
-    const result = await transcribeAudio(audioUrl);
+    const result = await transcribeAudio(req.user.tenantId, audioUrl);
     res.json(result);
   } catch (err) {
     console.error("[VoiceTranscription] transcribe-url error:", err);
+    if (isGeminiLimitError(err)) {
+      return res.status(429).json({ error: buildGeminiLimitError(err).message, code: "GEMINI_LIMIT_EXHAUSTED" });
+    }
     res.status(500).json({ error: err.message || "Transcription failed" });
   }
 });
@@ -167,7 +264,7 @@ router.post("/call/:callLogId", verifyToken, llmLimiter, async (req, res) => {
     if (!callLog) return res.status(404).json({ error: "Call log not found" });
     if (!callLog.recordingUrl) return res.status(400).json({ error: "Call log has no recordingUrl" });
 
-    const { transcript, provider } = await transcribeAudio(callLog.recordingUrl);
+    const { transcript, provider } = await transcribeAudio(tenantId, callLog.recordingUrl);
 
     // CallLog has only `notes` available — store transcript there (replace)
     const updated = await prisma.callLog.update({
@@ -178,6 +275,9 @@ router.post("/call/:callLogId", verifyToken, llmLimiter, async (req, res) => {
     res.json({ transcript, provider, callLogId: updated.id });
   } catch (err) {
     console.error("[VoiceTranscription] call transcribe error:", err);
+    if (isGeminiLimitError(err)) {
+      return res.status(429).json({ error: buildGeminiLimitError(err).message, code: "GEMINI_LIMIT_EXHAUSTED" });
+    }
     res.status(500).json({ error: err.message || "Transcription failed" });
   }
 });
@@ -192,7 +292,7 @@ router.post("/voice-session/:sessionId", verifyToken, llmLimiter, async (req, re
     if (!session) return res.status(404).json({ error: "Voice session not found" });
     if (!session.recordingUrl) return res.status(400).json({ error: "Voice session has no recordingUrl" });
 
-    const { transcript, provider } = await transcribeAudio(session.recordingUrl);
+    const { transcript, provider } = await transcribeAudio(tenantId, session.recordingUrl);
 
     const updated = await prisma.voiceSession.update({
       where: { id: session.id },
@@ -202,6 +302,9 @@ router.post("/voice-session/:sessionId", verifyToken, llmLimiter, async (req, re
     res.json({ transcript, provider, sessionId: updated.sessionId });
   } catch (err) {
     console.error("[VoiceTranscription] voice-session transcribe error:", err);
+    if (isGeminiLimitError(err)) {
+      return res.status(429).json({ error: buildGeminiLimitError(err).message, code: "GEMINI_LIMIT_EXHAUSTED" });
+    }
     res.status(500).json({ error: err.message || "Transcription failed" });
   }
 });
@@ -219,17 +322,13 @@ router.post("/summarize/:callLogId", verifyToken, llmLimiter, async (req, res) =
       return res.status(400).json({ error: "Call log has no transcript in notes — transcribe first" });
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    const summary = await summarizeTranscript(tenantId, callLog.notes);
+    if (!summary) {
       return res.json({
         transcript: callLog.notes,
         summary: null,
         message: "[Transcription not configured — set OPENAI_API_KEY for Whisper or use AI summary via Gemini]",
       });
-    }
-
-    const summary = await summarizeTranscript(callLog.notes);
-    if (!summary) {
-      return res.status(500).json({ error: "Gemini summary failed" });
     }
 
     const newNotes = `${callLog.notes}\n\n--- AI SUMMARY ---\n${summary}`;
@@ -241,6 +340,9 @@ router.post("/summarize/:callLogId", verifyToken, llmLimiter, async (req, res) =
     res.json({ summary, callLogId: updated.id });
   } catch (err) {
     console.error("[VoiceTranscription] summarize error:", err);
+    if (isGeminiLimitError(err)) {
+      return res.status(429).json({ error: buildGeminiLimitError(err).message, code: "GEMINI_LIMIT_EXHAUSTED" });
+    }
     res.status(500).json({ error: err.message || "Summarization failed" });
   }
 });

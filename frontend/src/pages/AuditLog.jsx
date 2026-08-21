@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useContext } from 're
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
-import { ScrollText, Filter, Download, ChevronDown, User, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react';
+import { ScrollText, Filter, Upload, ChevronDown, User, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react';
 import TopScrollSync from '../components/TopScrollSync';
 
 const ACTION_COLOR = {
@@ -692,7 +692,7 @@ export default function AuditLog() {
           onClick={handleExport}
           style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
         >
-          <Download size={16} /> Export CSV
+          <Upload size={16} /> Export CSV
         </button>
       </header>
 

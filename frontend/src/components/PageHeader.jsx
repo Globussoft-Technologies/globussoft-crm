@@ -1,4 +1,5 @@
 import React from 'react';
+import CountBadge from './CountBadge';
 
 /**
  * Shared page-header hero panel for wellness list/index pages.
@@ -112,20 +113,7 @@ const PageHeader = ({
             >
               {hasCount && (
                 <>
-                  <span
-                    style={{
-                      background: 'var(--page-header-count-bg, rgba(38, 88, 85, 0.14))',
-                      color: 'var(--page-header-count-text, var(--primary-color, var(--accent-color)))',
-                      border: '1px solid var(--page-header-count-border, transparent)',
-                      padding: '2px 10px',
-                      borderRadius: 999,
-                      fontSize: '0.72rem',
-                      fontWeight: 600,
-                      letterSpacing: '0.02em',
-                    }}
-                  >
-                    {count.toLocaleString()}
-                  </span>
+                  <CountBadge count={count} />
                   {/* Whitespace text node so textContent reads
                       "${count} ${description}" — flex gap is visual-only and
                       doesn't show up in DOM text aggregation, which a11y

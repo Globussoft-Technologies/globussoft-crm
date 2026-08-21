@@ -65,11 +65,11 @@
  *   - Beforeunload guard — JSDOM's beforeunload event semantics differ
  *     from real browsers; testing that is fragile.
  */
-import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { AuthContext } from "../App";
 
 const fetchApiMock = vi.fn();
 vi.mock("../utils/api", () => ({
@@ -130,13 +130,22 @@ function defaultFetch(url, opts) {
   return Promise.resolve([]);
 }
 
-function renderBuilder(initialPath = "/landing-pages/42") {
+function renderBuilder(initialPath = "/landing-pages/42", tenantVertical = "travel", initialState = null) {
+  const authValue = {
+    user: { tenant: { vertical: tenantVertical } },
+    tenant: { vertical: tenantVertical },
+    loading: false,
+  };
+  const initialEntry = initialState ? { pathname: initialPath, state: initialState } : initialPath;
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      <Routes>
-        <Route path="/landing-pages/:id" element={<LandingPageBuilder />} />
-      </Routes>
-    </MemoryRouter>,
+    <AuthContext.Provider value={authValue}>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/landing-pages/:id" element={<LandingPageBuilder />} />
+          <Route path="/landing-sites/builder/:id" element={<LandingPageBuilder />} />
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
   );
 }
 
@@ -193,6 +202,25 @@ describe("<LandingPageBuilder /> — page surface", () => {
     expect(routingFetch).toBe(true);
   });
 
+  it("generic tenants do not fetch /api/travel/trips or render the trip picker", async () => {
+    renderBuilder("/landing-pages/42", "generic");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Page title")).toBeInTheDocument();
+    });
+
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([url, opts]) =>
+          typeof url === "string" &&
+          url.startsWith("/api/travel/trips") &&
+          (!opts || !opts.method || opts.method === "GET"),
+      ),
+    ).toBe(false);
+    expect(
+      screen.queryByLabelText(/Link landing page to TMC trip/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders the top bar with title input + slug input + counter after load", async () => {
     renderBuilder();
     await waitFor(() =>
@@ -207,6 +235,21 @@ describe("<LandingPageBuilder /> — page surface", () => {
 
     // Slug counter: 13 of 50 - lowercase, digits, hyphens.
     expect(screen.getByText(/13 of 50/i)).toBeInTheDocument();
+  });
+
+  it("renders a back-track breadcrumb when opened from TMC Trips", async () => {
+    renderBuilder("/landing-pages/42", "travel", {
+      returnTo: { label: "TMC Trips", path: "/travel/trips/101?tab=overview" },
+      currentLabel: "Public experience",
+      currentPath: "/travel/trips/101?tab=microsite",
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Page title")).toBeInTheDocument(),
+    );
+
+    expect(screen.getByTitle("Back to TMC Trips")).toHaveAttribute("href", "/travel/trips/101?tab=overview");
+    expect(screen.getByRole("link", { name: "TMC Trips" })).toHaveAttribute("href", "/travel/trips/101?tab=overview");
+    expect(screen.getByRole("link", { name: "Public experience" })).toHaveAttribute("href", "/travel/trips/101?tab=microsite");
   });
 
   it("renders all 9 component-palette buttons in the left rail", async () => {
@@ -434,6 +477,36 @@ describe("<LandingPageBuilder /> — page surface", () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────
+  it("wellness tenants can still publish non-landing-site pages when another page is already live", async () => {
+    const livePage = {
+      ...samplePagePublished,
+      id: 44,
+      title: "Community Wellness Camp",
+      slug: "community-wellness-camp",
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || "GET";
+      if (url === "/api/landing-pages/42" && method === "GET") return Promise.resolve(samplePageDraft);
+      if (url === "/api/landing-pages" && method === "GET") return Promise.resolve([livePage, samplePageDraft]);
+      if (url === "/api/lead-routing" && method === "GET") return Promise.resolve(sampleRules);
+      if (url === "/api/landing-pages/42/publish" && method === "POST") {
+        return Promise.resolve({ ...samplePageDraft, status: "PUBLISHED", publishedAt: new Date().toISOString() });
+      }
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    renderBuilder("/landing-pages/42", "wellness");
+    await waitFor(() => expect(screen.getByLabelText("Page title")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /^Publish/ }));
+
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url, opts]) => url === "/api/landing-pages/42/publish" && opts?.method === "POST")).toBe(true));
+    expect(notifyInfo).not.toHaveBeenCalled();
+    await waitFor(() => expect(notifySuccess).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /Unpublish/i })).toBeInTheDocument());
+  });
+
   // EXTENSION cases — added 2026-05-26 to cover block library variety,
   // property-editor mutation, remove / reorder block controls, save-state
   // transitions, body-shape edge cases, and form-block routing rules.
@@ -917,8 +990,8 @@ describe("<LandingPageBuilder /> — VersionHistoryModal", () => {
 // ─────────────────────────────────────────────────────────────────────
 // TMC trip picker combobox — the <select> was replaced with a custom
 // searchable combobox (data-testid="link-to-tmc-trip-picker"). The
-// picker only renders when tmcTrips is non-empty, so the fetch mock
-// must return { trips: [...] } for /api/travel/trips?limit=200.
+// picker refreshes on open/search, so the fetch mock must return
+// { trips: [...] } for /api/travel/trips?... calls.
 // ─────────────────────────────────────────────────────────────────────
 describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
   const TMC_TRIPS = [
@@ -942,8 +1015,17 @@ describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
       return Promise.resolve(samplePageDraft);
     if (url === "/api/lead-routing" && method === "GET")
       return Promise.resolve(sampleRules);
-    if (url.startsWith("/api/travel/trips") && method === "GET")
-      return Promise.resolve({ trips: TMC_TRIPS });
+    if (url.startsWith("/api/travel/trips") && method === "GET") {
+      const parsed = new URL(url, "http://localhost");
+      const q = (parsed.searchParams.get("search") || "").toLowerCase();
+      const trips = q
+        ? TMC_TRIPS.filter((trip) =>
+            trip.tripCode.toLowerCase().includes(q) ||
+            trip.destination.toLowerCase().includes(q),
+          )
+        : TMC_TRIPS;
+      return Promise.resolve({ trips });
+    }
     if (url.startsWith("/api/landing-pages/") && method === "PUT")
       return Promise.resolve({ ...samplePageDraft, ...JSON.parse(opts.body) });
     return Promise.resolve([]);
@@ -973,6 +1055,61 @@ describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
     expect(screen.getByText(/Not linked to a trip/i)).toBeInTheDocument();
   });
 
+  it("keeps the picker visible for travel users when the first trip fetch is empty", async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || "GET";
+      if (url === "/api/landing-pages/42" && method === "GET")
+        return Promise.resolve(samplePageDraft);
+      if (url === "/api/lead-routing" && method === "GET")
+        return Promise.resolve(sampleRules);
+      if (url.startsWith("/api/travel/trips") && method === "GET")
+        return Promise.resolve({ trips: [] });
+      return Promise.resolve([]);
+    });
+
+    renderBuilder();
+    await waitFor(() =>
+      expect(screen.getByLabelText("Page title")).toBeInTheDocument(),
+    );
+
+    expect(
+      screen.getByLabelText(/Link landing page to TMC trip/i),
+    ).toBeInTheDocument();
+  });
+
+  it("refreshes trip options when the picker opens so newly created trips can appear", async () => {
+    const user = userEvent.setup();
+    let tripFetchCount = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || "GET";
+      if (url === "/api/landing-pages/42" && method === "GET")
+        return Promise.resolve(samplePageDraft);
+      if (url === "/api/lead-routing" && method === "GET")
+        return Promise.resolve(sampleRules);
+      if (url.startsWith("/api/travel/trips") && method === "GET") {
+        tripFetchCount += 1;
+        return Promise.resolve({
+          trips: tripFetchCount === 1
+            ? []
+            : [{ id: 12, tripCode: "MUMBAI-2026", destination: "Mumbai" }],
+        });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderBuilder();
+    await waitFor(() =>
+      expect(screen.getByLabelText("Page title")).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByLabelText(/Link landing page to TMC trip/i));
+
+    await waitFor(() => {
+      expect(screen.getByText("MUMBAI-2026")).toBeInTheDocument();
+    });
+    expect(tripFetchCount).toBeGreaterThanOrEqual(2);
+  });
+
   it("clicking the picker button opens the dropdown with a search input and all trips", async () => {
     const user = userEvent.setup();
     renderBuilder();
@@ -997,7 +1134,7 @@ describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
     expect(screen.getByText("TMC-GOA-2026-G8")).toBeInTheDocument();
   });
 
-  it("typing in the search input filters the trip list by trip code", async () => {
+  it("typing in the search input refreshes the trip list with server-side search", async () => {
     const user = userEvent.setup();
     renderBuilder();
     await waitFor(() =>
@@ -1013,8 +1150,21 @@ describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
 
     await user.type(screen.getByLabelText(/Search trips/i), "GOA");
 
-    expect(screen.getByText("TMC-GOA-2026-G8")).toBeInTheDocument();
-    expect(screen.queryByText("TMC-AND-2026-G7")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(
+          ([url, opts]) =>
+            typeof url === "string" &&
+            url.includes("/api/travel/trips?") &&
+            url.includes("search=GOA") &&
+            (!opts || !opts.method || opts.method === "GET"),
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.getByText("TMC-GOA-2026-G8")).toBeInTheDocument();
+      expect(screen.queryByText("TMC-AND-2026-G7")).not.toBeInTheDocument();
+    });
   });
 
   it('typing a non-matching query shows "No trips match" in the dropdown', async () => {
@@ -1032,7 +1182,9 @@ describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
     await user.click(screen.getByLabelText(/Link landing page to TMC trip/i));
     await user.type(screen.getByLabelText(/Search trips/i), "ZZZNOTEXIST");
 
-    expect(screen.getByText(/No trips match/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/No trips match/i)).toBeInTheDocument();
+    });
   });
 
   it("selecting a trip fires PUT with { tripId } and closes the dropdown", async () => {
@@ -1127,4 +1279,40 @@ describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
       expect.stringMatching(/Unlinked/i),
     );
   });
+
+  it('disables publish in the generic landing-site builder when another page is already live', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages/42' && method === 'GET') {
+        return Promise.resolve({ ...samplePageDraft, templateType: 'generic-site-wellness-v1' });
+      }
+      if (url === '/api/landing-pages' && method === 'GET') {
+        return Promise.resolve([
+          { id: 43, title: 'Hair Treatment Live', slug: 'hair-treatment-live', status: 'PUBLISHED', templateType: 'generic-site-wellness-v1' },
+          { id: 42, title: 'Spring Launch', slug: 'spring-launch', status: 'DRAFT', templateType: 'generic-site-wellness-v1' },
+        ]);
+      }
+      if (url === '/api/landing-pages/42/publish-check' && method === 'GET') return Promise.resolve({ ok: true, issues: [] });
+      if (url === '/api/lead-routing' && method === 'GET') return Promise.resolve(sampleRules);
+      return defaultFetch(url, opts);
+    });
+
+    const user = userEvent.setup();
+    renderBuilder('/landing-sites/builder/42', 'wellness');
+
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    const publishButton = screen.getByRole('button', { name: /^Publish$/i });
+    expect(publishButton).toBeDisabled();
+    expect(publishButton.title).toMatch(/only one published landing site/i);
+
+    await user.click(screen.getByRole('button', { name: /^Check$/i }));
+    await waitFor(() => {
+      const publishButtons = screen.getAllByRole('button', { name: /^Publish$/i });
+      const modalButton = publishButtons.find((btn) => btn !== publishButton);
+      expect(modalButton).toBeDisabled();
+      expect(modalButton.title).toMatch(/only one published landing site/i);
+    });
+  });
+
 });

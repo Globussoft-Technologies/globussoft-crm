@@ -82,6 +82,34 @@ const prismaMock = vi.hoisted(() => {
     supplierCredential: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
+    // aiCreditWallet/aiCreditTransaction/aiTenantSubscription back the AI
+    // Subscription & Credit Management resolver gate (lib/aiCreditLedger.js,
+    // called from aiProviderManagement.resolveProviderConfig on every
+    // getLlmKey/routeRequest call). Defaults: no wallet row, no active
+    // subscription → canUseManagedAi() resolves allowed:false without
+    // throwing, so these tests exercise the BYOK/legacy ENV fallback paths
+    // exactly as before credit management existed. Tests that need a
+    // funded managed-AI tenant override these per case.
+    aiCreditWallet: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 1, tenantId: 1, balanceTokens: 0, totalPurchasedTokens: 0, totalUsedTokens: 0 }),
+      update: vi.fn().mockResolvedValue({ id: 1, tenantId: 1, balanceTokens: 0, totalPurchasedTokens: 0, totalUsedTokens: 0 }),
+    },
+    aiCreditTransaction: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 1 }),
+    },
+    aiTenantSubscription: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
+    // aiCreditLedger.deductUsage/creditTokens/debitAdjustment run inside
+    // prisma.$transaction(async (tx) => {...}) — the mock just hands the
+    // callback the SAME mock object (tx.aiCreditWallet === mock.aiCreditWallet
+    // etc.), so tests can assert against the top-level mock either way.
+    $transaction: vi.fn(async (arg) => {
+      if (Array.isArray(arg)) return Promise.all(arg);
+      return arg(mock);
+    }),
   };
   const Module = require('node:module');
   const requireFromCwd = Module.createRequire(process.cwd() + '/');
@@ -107,6 +135,14 @@ const ORIGINAL_ENV = {
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   GEMINI_API_KEY: process.env.GEMINI_API_KEY,
 };
+
+// Restore a single env var to a snapshotted value. `process.env.X = undefined`
+// stores the STRING "undefined" (truthy), which leaks a bogus base URL into
+// every later test — delete instead when the snapshot was absent.
+function restoreEnv(key, prev) {
+  if (prev === undefined) delete process.env[key];
+  else process.env[key] = prev;
+}
 
 afterEach(() => {
   // Restore env between tests so llmEnabled() flip-flops cleanly.
@@ -165,6 +201,9 @@ describe('llmRouter — module shape', () => {
       "form-vs-call": { primary: "gemini-flash", fallback: "gpt-4" },
       "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
       "call-summary": { primary: "gemini-flash", fallback: null },
+      // Callified AI call transcript classification for CRM leads (2026-07-31).
+      // NOTE: gemini-2.5-flash-lite was retired by Google; use gemini-flash.
+      "callified-lead-status": { primary: "gemini-flash", fallback: "gpt-4" },
       "itinerary-suggest": { primary: "gemini-flash", fallback: "gpt-4" },
       // AI quote-template line-item JSON generation (PR #1178).
       "quote-template-generate": { primary: "gemini-flash", fallback: "gpt-4" },
@@ -192,6 +231,9 @@ describe('llmRouter — module shape', () => {
       "flight-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
       "hotel-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
       "transfer-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+      // Travel RAG knowledge-base brochure recommendation report (2026-08-04).
+      // gemini-flash primary / gpt-4o-mini fallback for structured JSON shape.
+      "travel-knowledge-rag": { primary: "gemini-flash", fallback: "gpt-4o-mini" },
       // Airport/city name → IATA resolver for the flight search box (2026-06-19;
       // 2026-06-23 primary gemini-flash → gpt-4 to match the search provider).
       "airport-iata": { primary: "gpt-4", fallback: "gemini-flash" },
@@ -211,8 +253,10 @@ describe('llmRouter — module shape', () => {
     // / 'transfer-search' + the 'airport-iata' name→code resolver +
     // 'landing-page-generate' (PR #1174) + 'quote-template-generate' (PR #1178) +
     // 'lead-conversation-summary' + 'lead-narrative-summary' (PR #1203) +
-    // 'lead-capture-consolidate' (PR #1210) = 22.
-    expect(r.VALID_TASKS).toHaveLength(22);
+    // 'lead-capture-consolidate' (PR #1210) +
+    // 'callified-lead-status' (Callified lead hot/cold classification) +
+    // 'travel-knowledge-rag' (RAG brochure recommendation report) = 24.
+    expect(r.VALID_TASKS).toHaveLength(24);
   });
 });
 
@@ -465,9 +509,9 @@ describe('routeRequest', () => {
         // can render line items without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();
         expect(Array.isArray(JSON.parse(out.text))).toBe(true);
-      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary' || task === 'lead-capture-consolidate') {
-        // Stub returns parseable JSON objects so lead summary consumers can
-        // render the summary without a live LLM key.
+      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary' || task === 'lead-capture-consolidate' || task === 'callified-lead-status' || task === 'travel-knowledge-rag') {
+        // Stub returns parseable JSON objects so lead summary consumers and the
+        // RAG report generator can render without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();
         expect(typeof JSON.parse(out.text)).toBe('object');
         expect(Array.isArray(JSON.parse(out.text))).toBe(false);
@@ -776,9 +820,11 @@ describe('routeRequest — per-tenant budget cap (2026-05-24 product-call)', () 
 // calls the real provider (no "swap the stub later" code change). Under test it
 // MUST still stub — so unit + e2e runs never make a live call.
 describe('routeRequest — real provider call (key present, not under test)', () => {
-  test('calls the real provider and returns stub:false when a key is set', async () => {
+  test('calls the real provider and returns stub:false when the tenant has a funded CRM subscription', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const prevNodeEnv = process.env.NODE_ENV;
+    const prevGeminiBaseUrl = process.env.GEMINI_BASE_URL;
+    const prevRagGeminiBaseUrl = process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL;
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -789,16 +835,104 @@ describe('routeRequest — real provider call (key present, not under test)', ()
     vi.stubGlobal('fetch', fetchMock);
     process.env.NODE_ENV = 'production';
     process.env.GEMINI_API_KEY = 'AIzaSy-real';
+    // This case pins the DEFAULT Google endpoint — make sure a custom
+    // base URL isn't leaking in from a sibling test.
+    delete process.env.GEMINI_BASE_URL;
+    delete process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL;
+    // A bare platform env key is NOT sufficient authorization on its own —
+    // the tenant must have BYOK or a funded, active CRM subscription (the
+    // AI Subscription & Credit Management gate). Seed a funded subscription
+    // so aiGateway's assertAccessOrThrow resolves to accessType:"crm-managed"
+    // instead of throwing the friendly blocked-access error.
+    prismaMock.aiTenantSubscription.findFirst.mockResolvedValueOnce({
+      id: 1, tenantId: 3, planId: 1, planNameSnapshot: 'Test Plan', status: 'ACTIVE', startDate: new Date(), endDate: null,
+    });
+    prismaMock.aiCreditWallet.findUnique.mockResolvedValueOnce({
+      id: 1, tenantId: 3, balanceTokens: 5000, totalPurchasedTokens: 5000, totalUsedTokens: 0, lastAlertPercent: null,
+    });
     try {
       const r = loadRouter();
       const out = await r.routeRequest({ task: 'talking-points', payload: { leadId: 7 }, tenantId: 3 });
       expect(out.stub).toBe(false);
       expect(out.text).toBe('REAL talking points from Gemini.');
-      expect(out.model).toBe('gemini-flash');
       expect(out.usage.promptTokens).toBe(12);
       expect(out.usage.completionTokens).toBe(34);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(String(fetchMock.mock.calls[0][0])).toContain('generativelanguage.googleapis.com');
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      restoreEnv('GEMINI_BASE_URL', prevGeminiBaseUrl);
+      restoreEnv('TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL', prevRagGeminiBaseUrl);
+      vi.unstubAllGlobals();
+      logSpy.mockRestore();
+    }
+  });
+
+  // GEMINI_BASE_URL / TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL are read by the
+  // router's OWN Gemini client (lib/llmRouter.js callGeminiOnce), which only
+  // runs on the SYSTEM path — routeRequest calls with no tenantId. Tenant-
+  // scoped calls now go through aiGateway → aiProviderManagement, which
+  // resolves its endpoint from the provider catalog (BYOK baseUrl or
+  // AI_CRM_GEMINI_BASE_URL) instead, so these two env vars deliberately do
+  // NOT apply there. Driving this case without a tenantId is what keeps it
+  // pinned to the code path that actually reads them.
+  test('travel-knowledge-rag uses TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL while other tasks use GEMINI_BASE_URL or default', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const prevNodeEnv = process.env.NODE_ENV;
+    const prevGeminiBaseUrl = process.env.GEMINI_BASE_URL;
+    const prevRagGeminiBaseUrl = process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: '{"readinessScore": 8, "summary": "s", "recommendedTrips": []}' }] } }],
+        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 20 },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.NODE_ENV = 'production';
+    process.env.GEMINI_API_KEY = 'AIzaSy-real';
+    // Drop the OpenAI key so both tasks' model chains are gemini-only
+    // (talking-points falls back to gpt-4, travel-knowledge-rag to
+    // gpt-4o-mini) — a live-looking fallback would muddy the URL assertion.
+    // afterEach restores it from ORIGINAL_ENV.
+    delete process.env.OPENAI_API_KEY;
+    process.env.GEMINI_BASE_URL = 'https://global-gemini.example.com/v1beta';
+    process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL = 'https://rag-gemini.example.com/v1beta';
+    try {
+      const r = loadRouter();
+
+      // Non-RAG task uses the global GEMINI_BASE_URL.
+      await r.routeRequest({ task: 'talking-points', payload: { leadId: 7 } });
+      expect(String(fetchMock.mock.calls[0][0])).toContain('global-gemini.example.com');
+
+      // travel-knowledge-rag uses the dedicated RAG base URL.
+      fetchMock.mockClear();
+      await r.routeRequest({ task: 'travel-knowledge-rag', payload: { queryText: 'test' } });
+      expect(String(fetchMock.mock.calls[0][0])).toContain('rag-gemini.example.com');
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      restoreEnv('GEMINI_BASE_URL', prevGeminiBaseUrl);
+      restoreEnv('TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL', prevRagGeminiBaseUrl);
+      vi.unstubAllGlobals();
+      logSpy.mockRestore();
+    }
+  });
+
+  test('blocks the real provider call (no stub fallback) when the tenant has no BYOK and no funded subscription', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const prevNodeEnv = process.env.NODE_ENV;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.NODE_ENV = 'production';
+    process.env.GEMINI_API_KEY = 'AIzaSy-real'; // platform key present, but that alone must not grant access
+    prismaMock.aiTenantSubscription.findFirst.mockResolvedValueOnce(null);
+    try {
+      const r = loadRouter();
+      await expect(r.routeRequest({ task: 'talking-points', payload: {}, tenantId: 3 }))
+        .rejects.toThrow(/AI provider|AI credits|not configured/i);
+      // Must NOT silently fall back to a live call OR the stub — a blocked
+      // tenant gets a clear error, not a fabricated-looking AI response.
+      expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       process.env.NODE_ENV = prevNodeEnv;
       vi.unstubAllGlobals();

@@ -30,7 +30,7 @@
 // isAdmin gates so non-write users see read-only chrome (no Create /
 // Edit / Delete / Promote buttons) but still browse the catalogue.
 
-import React, { useCallback, useContext, useEffect, useState } from "react";
+import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   Edit2,
   Plus,
@@ -40,9 +40,11 @@ import {
   X,
   Calendar,
   Settings,
+  Download,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import { AuthContext } from "../../App";
 
 // Server-side enum values per backend/routes/travel_tmc_catalogue.js
@@ -50,6 +52,7 @@ import { AuthContext } from "../../App";
 // router for tests).
 const STATUS_ACTIVE = "active";
 const STATUS_ARCHIVED = "archived";
+const PAGE_SIZE = 10;
 
 // Sub-set of TmcTripCatalogue fields surfaced in the create/edit form.
 // JSON array fields are surfaced as comma-separated strings for ease of
@@ -125,12 +128,16 @@ export default function TmcCatalogueAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const role = user?.role || "USER";
-  const isAdmin = role === "ADMIN";
+  const isAdmin = role === "ADMIN" || role === "OWNER";
   const canWrite = isAdmin || role === "MANAGER";
 
   const [tab, setTab] = useState(STATUS_ACTIVE); // active | archived
+  const [total, setTotal] = useState(0);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
   const [showForm, setShowForm] = useState(false);
@@ -139,34 +146,129 @@ export default function TmcCatalogueAdmin() {
   const [saving, setSaving] = useState(false);
   const [promotingId, setPromotingId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkImportResult, setBulkImportResult] = useState(null);
+  const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
+  const [pendingReviewTripIds, setPendingReviewTripIds] = useState(() => new Set());
+  const listContainerRef = useRef(null);
+  const requestSeqRef = useRef(0);
+  const bulkFileInputRef = useRef(null);
+  const rowsRef = useRef([]);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setLoadError(null);
-    fetchApi(`/api/travel-tmc-catalogue?status=${tab}`)
-      .then((res) => {
-        // Tolerate both shaped + bare list shapes (sibling pages do the
-        // same for resilience against future shape evolution).
-        const items = Array.isArray(res)
-          ? res
-          : Array.isArray(res?.catalogue)
-            ? res.catalogue
-            : Array.isArray(res?.items)
-              ? res.items
-              : [];
-        setRows(items);
-      })
-      .catch((e) => {
-        const msg = e?.body?.error || e?.message || "Failed to load catalogue";
-        setLoadError(msg);
-        notify.error(msg);
-        setRows([]);
-      })
-      .finally(() => setLoading(false));
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const requestSeq = ++requestSeqRef.current;
+    const startOffset = reset ? 0 : offsetRef.current;
+
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setLoadError(null);
+      setRows([]);
+      setTotal(0);
+      setOffset(0);
+      setHasMore(true);
+      rowsRef.current = [];
+      offsetRef.current = 0;
+      hasMoreRef.current = true;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
+
+    const params = new URLSearchParams();
+    params.set("status", tab);
+    params.set("limit", String(PAGE_SIZE));
+    params.set("offset", String(startOffset));
+
+    try {
+      const res = await fetchApi(`/api/travel-tmc-catalogue?${params.toString()}`);
+      if (requestSeq !== requestSeqRef.current) return;
+
+      // Tolerate both shaped + bare list shapes (sibling pages do the
+      // same for resilience against future shape evolution).
+      const items = Array.isArray(res)
+        ? res
+        : Array.isArray(res?.catalogue)
+          ? res.catalogue
+          : Array.isArray(res?.items)
+            ? res.items
+            : [];
+      const totalCount = Number.isFinite(Number(res?.total))
+        ? Number(res.total)
+        : items.length;
+      const nextRows = reset ? items : [...rowsRef.current, ...items];
+      const nextOffset = startOffset + items.length;
+      const nextHasMore = Number.isFinite(totalCount)
+        ? nextOffset < totalCount
+        : items.length === PAGE_SIZE;
+
+      rowsRef.current = nextRows;
+      offsetRef.current = nextOffset;
+      hasMoreRef.current = nextHasMore;
+
+      setRows(nextRows);
+      setTotal(totalCount);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+    } catch (e) {
+      if (requestSeq !== requestSeqRef.current) return;
+      const msg = e?.body?.error || e?.message || "Failed to load catalogue";
+      setLoadError(msg);
+      notify.error(msg);
+      setRows([]);
+      setTotal(0);
+      setHasMore(false);
+      rowsRef.current = [];
+      offsetRef.current = 0;
+      hasMoreRef.current = false;
+    } finally {
+      if (requestSeq === requestSeqRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    }
   }, [tab, notify]);
 
   useEffect(() => {
-    load();
+    load({ reset: true });
+  }, [load]);
+
+  const reload = useCallback(() => {
+    load({ reset: true });
+  }, [load]);
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      load({ reset: false });
+    }
   }, [load]);
 
   const resetForm = () => {
@@ -302,7 +404,7 @@ export default function TmcCatalogueAdmin() {
       if (!editingId && tab !== STATUS_ARCHIVED) {
         setTab(STATUS_ARCHIVED);
       } else {
-        load();
+        reload();
       }
     } catch (err) {
       notify.error(
@@ -328,7 +430,7 @@ export default function TmcCatalogueAdmin() {
         method: "DELETE",
       });
       notify.success("Catalogue entry archived");
-      load();
+      reload();
     } catch (err) {
       notify.error(
         err?.body?.error || err?.message || "Failed to archive entry",
@@ -353,6 +455,12 @@ export default function TmcCatalogueAdmin() {
       // Drop the promoted row from this tab's view; the user can flip to
       // Active to see it in its new home.
       setRows((prev) => prev.filter((r) => r.id !== row.id));
+      rowsRef.current = rowsRef.current.filter((r) => r.id !== row.id);
+      setPendingReviewTripIds((prev) => {
+        const next = new Set(prev);
+        next.delete(row.tripId);
+        return next;
+      });
     } catch (err) {
       notify.error(
         err?.body?.error || err?.message || "Failed to promote entry",
@@ -362,10 +470,122 @@ export default function TmcCatalogueAdmin() {
     }
   };
 
+  const handleBulkFileChange = (e) => {
+    const nextFile = e.target.files?.[0] || null;
+    setBulkFile(nextFile);
+  };
+
+  const openBulkImportModal = () => {
+    setBulkImportModalOpen(true);
+  };
+
+  const closeBulkImportModal = () => {
+    setBulkImportModalOpen(false);
+    setBulkFile(null);
+    if (bulkFileInputRef.current) {
+      bulkFileInputRef.current.value = "";
+    }
+  };
+
+  const downloadTemplate = async (format) => {
+    try {
+      const token = getAuthToken();
+      const response = await fetch(
+        `/api/travel-tmc-catalogue/import-template?format=${format}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        },
+      );
+      if (!response.ok) {
+        let message = "Failed to download template";
+        try {
+          const payload = await response.json();
+          message = payload?.error || message;
+        } catch {
+          // keep default copy
+        }
+        throw new Error(message);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download =
+        format === "xlsx" ? "tmc-catalogue-template.xlsx" : "tmc-catalogue-template.csv";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+      notify.success(`Downloaded ${format.toUpperCase()} template`);
+    } catch (err) {
+      notify.error(err?.message || "Failed to download template");
+    }
+  };
+
+  const handleBulkImport = async () => {
+    if (!canWrite) {
+      notify.error("Bulk import requires ADMIN or MANAGER role.");
+      return;
+    }
+    if (!bulkFile) {
+      notify.error("Choose a CSV or Excel file first.");
+      return;
+    }
+
+    setBulkImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", bulkFile);
+      const token = getAuthToken();
+      const response = await fetch("/api/travel-tmc-catalogue/import", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: formData,
+      });
+      if (!response.ok) {
+        let message = "Failed to import catalogue";
+        try {
+          const payload = await response.json();
+          message = payload?.error || message;
+        } catch {
+          // keep default copy
+        }
+        throw new Error(message);
+      }
+
+      const result = await response.json();
+      setBulkImportResult(result);
+      const createdTripIds = Array.isArray(result?.createdTripIds) ? result.createdTripIds : [];
+      if (createdTripIds.length > 0) {
+        setPendingReviewTripIds((prev) => {
+          const next = new Set(prev);
+          for (const tripId of createdTripIds) next.add(tripId);
+          return next;
+        });
+      }
+      closeBulkImportModal();
+      notify.success(
+        result?.reviewLabel
+          ? `${result.reviewLabel}: ${result.imported || 0} new, ${result.updated || 0} updated`
+          : `Imported ${result?.imported || 0} new and ${result?.updated || 0} updated rows`,
+      );
+      if (createdTripIds.length > 0 && tab !== STATUS_ARCHIVED) {
+        setTab(STATUS_ARCHIVED);
+      } else {
+        reload();
+      }
+    } catch (err) {
+      notify.error(err?.message || "Failed to import catalogue");
+    } finally {
+      setBulkImporting(false);
+    }
+  };
+
   // ── Render ───────────────────────────────────────────────────────────
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       {/* Heading + Add CTA */}
       <div
         style={{
@@ -382,12 +602,16 @@ export default function TmcCatalogueAdmin() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: 12,
               margin: 0,
               fontSize: 22,
+              fontWeight: 600,
+              lineHeight: 1.15,
+              flexWrap: "wrap",
             }}
           >
             <ShieldCheck size={26} aria-hidden /> TMC Trip Catalogue
+            <CountBadge count={total} title={`${total.toLocaleString()} catalogue items`} />
           </h1>
           <p
             style={{
@@ -421,13 +645,188 @@ export default function TmcCatalogueAdmin() {
           the booking-link save per backend gate). */}
       {canWrite && <TmcConfigPanel notify={notify} isAdmin={isAdmin} />}
 
+      {canWrite && (
+        <section
+          data-testid="tmc-catalogue-bulk-import"
+          style={{
+            background: "var(--bg-color, #111318)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 16,
+            display: "grid",
+            gap: 12,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>
+              Bulk import catalogue
+            </div>
+            <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+              Download the master template, fill it in, then upload CSV or XLSX.
+              New rows are ingested as <strong>AI-classified, pending review</strong>
+              and stay archived until an admin promotes them.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => downloadTemplate("csv")}
+              style={secondaryBtn}
+            >
+              Download CSV template
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadTemplate("xlsx")}
+              style={secondaryBtn}
+            >
+              Download XLSX template
+            </button>
+            <button
+              type="button"
+              onClick={openBulkImportModal}
+              style={secondaryBtn}
+            >
+              <Download size={14} /> Import file
+            </button>
+          </div>
+
+          {bulkImportResult && (
+            <div
+              data-testid="tmc-catalogue-bulk-import-result"
+              style={{
+                display: "grid",
+                gap: 6,
+                padding: 12,
+                borderRadius: 8,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-color)",
+                color: "var(--text-primary)",
+                fontSize: 13,
+              }}
+            >
+              <div style={{ fontWeight: 700 }}>{bulkImportResult.reviewLabel}</div>
+              <div>
+                Imported {bulkImportResult.imported || 0} new, updated {bulkImportResult.updated || 0},
+                skipped {bulkImportResult.skipped || 0} of {bulkImportResult.total || 0}
+              </div>
+              {(bulkImportResult.errors || []).length > 0 && (
+                <div style={{ color: "var(--text-secondary)" }}>
+                  {bulkImportResult.errors.length} row(s) need review.
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {bulkImportModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="tmc-catalogue-import-modal-title"
+          data-testid="tmc-catalogue-import-modal"
+          onClick={closeBulkImportModal}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(6, 10, 18, 0.9)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(720px, 100%)",
+              background: "var(--bg-color, #111318)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 16,
+              boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+              padding: 20,
+              display: "grid",
+              gap: 16,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <h2 id="tmc-catalogue-import-modal-title" style={{ margin: 0, fontSize: 20 }}>
+                  Import TMC catalogue from CSV / Excel
+                </h2>
+                <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
+                  Upload a CSV or Excel (XLSX) file with the catalogue columns from the template.
+                  Rows are validated before save, and new rows still land archived for review.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeBulkImportModal}
+                style={iconBtn}
+                aria-label="Close import modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              <label style={{ color: "var(--text-secondary)", fontSize: 13, fontWeight: 500 }}>
+                Choose file
+              </label>
+              <input
+                ref={bulkFileInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={handleBulkFileChange}
+                aria-label="Bulk import file"
+                style={{ width: "100%" }}
+              />
+              <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                Selected file: <strong>{bulkFile ? bulkFile.name : "No file chosen"}</strong>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={closeBulkImportModal} style={secondaryBtn}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkImport}
+                disabled={bulkImporting || !bulkFile}
+                style={bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn}
+              >
+                {bulkImporting ? "Importing..." : "Confirm import"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <section
+        style={{
+          background: "var(--bg-color, #111318)",
+          border: "1px solid var(--border-color)",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+          display: "grid",
+          gap: 16,
+        }}
+      >
       {/* Tabs */}
       <div role="tablist" aria-label="Catalogue status tabs" style={tabRow}>
         <button
           type="button"
           role="tab"
           aria-selected={tab === STATUS_ACTIVE}
-          onClick={() => setTab(STATUS_ACTIVE)}
+          onClick={() => {
+            setTab(STATUS_ACTIVE);
+          }}
           style={tab === STATUS_ACTIVE ? tabActive : tabIdle}
         >
           Active
@@ -436,7 +835,9 @@ export default function TmcCatalogueAdmin() {
           type="button"
           role="tab"
           aria-selected={tab === STATUS_ARCHIVED}
-          onClick={() => setTab(STATUS_ARCHIVED)}
+          onClick={() => {
+            setTab(STATUS_ARCHIVED);
+          }}
           style={tab === STATUS_ARCHIVED ? tabActive : tabIdle}
         >
           Archived
@@ -456,7 +857,7 @@ export default function TmcCatalogueAdmin() {
         <form
           onSubmit={handleSubmit}
           style={{
-            background: "var(--surface-color)",
+            background: "var(--bg-color, #111318)",
             padding: 16,
             borderRadius: 8,
             border: "1px solid var(--border-color)",
@@ -692,26 +1093,26 @@ export default function TmcCatalogueAdmin() {
                 style={{ ...inputStyle, resize: "vertical" }}
               />
             </Field>
-            <Field label="anchorExperiences (JSON or comma-separated)">
+            <Field label="anchorExperiences (comma-separated)">
               <textarea
                 rows={2}
                 value={form.anchorExperiencesJson}
                 onChange={(e) =>
                   setForm({ ...form, anchorExperiencesJson: e.target.value })
                 }
-                placeholder='[{"name":"Taj Mahal sunrise"}]'
+                placeholder="Taj Mahal sunrise, Qutub Minar walkthrough"
                 aria-label="anchorExperiencesJson"
                 style={{ ...inputStyle, resize: "vertical" }}
               />
             </Field>
-            <Field label="curriculumHooks (JSON or comma-separated)">
+            <Field label="curriculumHooks (comma-separated)">
               <textarea
                 rows={2}
                 value={form.curriculumHooksJson}
                 onChange={(e) =>
                   setForm({ ...form, curriculumHooksJson: e.target.value })
                 }
-                placeholder='[{"board":"CBSE","topic":"Mughal Empire"}]'
+                placeholder="CBSE: Mughal Empire, IGCSE: Ancient India"
                 aria-label="curriculumHooksJson"
                 style={{ ...inputStyle, resize: "vertical" }}
               />
@@ -777,7 +1178,7 @@ export default function TmcCatalogueAdmin() {
       )}
 
       {/* List */}
-      {loading ? (
+      {loading && rows.length === 0 ? (
         <div style={emptyStyle}>Loading&hellip;</div>
       ) : loadError ? (
         <div
@@ -794,8 +1195,18 @@ export default function TmcCatalogueAdmin() {
         </div>
       ) : (
         <div
+          ref={listContainerRef}
+          onScroll={handleListScroll}
           role="list"
           aria-label={`${tab} catalogue entries`}
+          style={{
+            maxHeight: "72vh",
+            overflowY: "auto",
+            paddingRight: 4,
+            scrollBehavior: "smooth",
+          }}
+        >
+        <div
           style={{
             display: "grid",
             gap: 12,
@@ -808,7 +1219,7 @@ export default function TmcCatalogueAdmin() {
               key={row.id}
               role="listitem"
               style={{
-                background: "var(--surface-color)",
+                background: "var(--bg-color, #111318)",
                 border: "1px solid var(--border-color)",
                 borderRadius: 8,
                 padding: 14,
@@ -818,8 +1229,28 @@ export default function TmcCatalogueAdmin() {
               }}
             >
               <div>
-                <div style={{ fontWeight: 600, fontSize: 15 }}>
-                  {row.title || row.tripId}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 600, fontSize: 15 }}>
+                    {row.title || row.tripId}
+                  </div>
+                  {pendingReviewTripIds.has(row.tripId) && (
+                    <span
+                      data-testid={`tmc-pending-review-${row.tripId}`}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        background: "rgba(245, 158, 11, 0.12)",
+                        color: "var(--warning-color)",
+                        border: "1px solid rgba(245, 158, 11, 0.3)",
+                      }}
+                    >
+                      AI-classified, pending review
+                    </span>
+                  )}
                 </div>
                 <div
                   style={{
@@ -907,7 +1338,33 @@ export default function TmcCatalogueAdmin() {
             </div>
           ))}
         </div>
+        <div style={{ paddingTop: 12 }}>
+          {loadingMore && (
+            <div style={{ ...emptyStyle, padding: 16 }}>Loading more&hellip;</div>
+          )}
+          {!loadingMore && hasMore && (
+            <div
+              aria-hidden="true"
+              style={{ height: 1 }}
+              data-testid="tmc-catalogue-scroll-sentinel"
+            />
+          )}
+          {!hasMore && total > 0 && (
+            <div
+              style={{
+                padding: "12px 0",
+                textAlign: "center",
+                color: "var(--text-secondary)",
+                fontSize: 12,
+              }}
+            >
+              You&apos;ve reached the end of the catalogue.
+            </div>
+          )}
+        </div>
+        </div>
       )}
+      </section>
     </div>
   );
 }
@@ -936,6 +1393,48 @@ function Field({ label, children }) {
 // G105: /api/travel/tmc/booking-link-config GET/PUT manages the URL stored
 // in tenant.subBrandConfigJson.tmc.bookingLinkUrl (admin-only PUT).
 // ────────────────────────────────────────────────────────────────────
+function humanizeFactKey(key) {
+  return String(key || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function humanizeFactValue(value) {
+  if (Array.isArray(value)) return value.join(", ");
+  if (value && typeof value === "object") {
+    return Object.entries(value)
+      .map(([key, nestedValue]) => `${humanizeFactKey(key)}: ${humanizeFactValue(nestedValue)}`)
+      .join("; ");
+  }
+  return String(value ?? "");
+}
+
+function factsJsonToPlainText(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === "string") return parsed;
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.plainText === "string") return parsed.plainText;
+      return Object.entries(parsed)
+        .filter(([, value]) => value != null && humanizeFactValue(value).trim())
+        .map(([key, value]) => `${humanizeFactKey(key)}: ${humanizeFactValue(value)}.`)
+        .join(" ");
+    }
+    return String(parsed ?? "");
+  } catch {
+    return trimmed;
+  }
+}
+
+function plainTextToFactsJson(text) {
+  const trimmed = String(text || "").trim();
+  return trimmed ? JSON.stringify({ plainText: trimmed }) : null;
+}
+
 function TmcConfigPanel({ notify, isAdmin }) {
   const [collapsed, setCollapsed] = useState(true);
   // G105
@@ -957,8 +1456,8 @@ function TmcConfigPanel({ notify, isAdmin }) {
     ]).then(([booking, ew]) => {
       if (cancelled) return;
       setBookingLinkUrl(booking?.bookingLinkUrl || "");
-      setAssuranceFactsJson(ew?.assuranceFactsJson || "");
-      setTrustFactsJson(ew?.trustFactsJson || "");
+      setAssuranceFactsJson(factsJsonToPlainText(ew?.assuranceFactsJson));
+      setTrustFactsJson(factsJsonToPlainText(ew?.trustFactsJson));
       setEwLoaded(true);
     });
     return () => {
@@ -993,21 +1492,6 @@ function TmcConfigPanel({ notify, isAdmin }) {
     e.preventDefault();
     setEwSaving(true);
     try {
-      // Validate both JSON inputs locally before round-tripping to the backend.
-      if (assuranceFactsJson.trim()) {
-        try {
-          JSON.parse(assuranceFactsJson);
-        } catch {
-          throw new Error("assuranceFactsJson must be valid JSON");
-        }
-      }
-      if (trustFactsJson.trim()) {
-        try {
-          JSON.parse(trustFactsJson);
-        } catch {
-          throw new Error("trustFactsJson must be valid JSON");
-        }
-      }
       // PUT requires the full 6-weight + threshold surface. Load existing
       // first so we don't truncate the row's other knobs.
       const current = await fetchApi("/api/travel/engine-weights");
@@ -1019,17 +1503,20 @@ function TmcConfigPanel({ notify, isAdmin }) {
         weightGradeBandCenter: current?.weightGradeBandCenter ?? 10,
         weightTierValueLean: current?.weightTierValueLean ?? 8,
         scoresWellThreshold: current?.scoresWellThreshold ?? 70,
-        assuranceFactsJson: assuranceFactsJson.trim() || null,
-        trustFactsJson: trustFactsJson.trim() || null,
+        assuranceFactsJson: plainTextToFactsJson(assuranceFactsJson),
+        trustFactsJson: plainTextToFactsJson(trustFactsJson),
       };
       await fetchApi("/api/travel/engine-weights", {
         method: "PUT",
         body: JSON.stringify(body),
       });
-      notify.success("Standing facts saved");
+      const latest = await fetchApi("/api/travel/engine-weights");
+      setAssuranceFactsJson(factsJsonToPlainText(latest?.assuranceFactsJson));
+      setTrustFactsJson(factsJsonToPlainText(latest?.trustFactsJson));
+      notify.success("Report details saved");
     } catch (err) {
       notify.error(
-        err?.body?.error || err?.message || "Failed to save standing facts",
+        err?.body?.error || err?.message || "Failed to save report details",
       );
     } finally {
       setEwSaving(false);
@@ -1040,7 +1527,7 @@ function TmcConfigPanel({ notify, isAdmin }) {
     <section
       aria-label="TMC configuration"
       style={{
-        background: "var(--surface-color)",
+        background: "var(--bg-color, #111318)",
         border: "1px solid var(--border-color)",
         borderRadius: 8,
         padding: 14,
@@ -1060,7 +1547,7 @@ function TmcConfigPanel({ notify, isAdmin }) {
       >
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <Settings size={14} aria-hidden /> TMC configuration (booking link +
-          standing facts)
+          report details)
         </span>
         <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
           {collapsed ? "Show" : "Hide"}
@@ -1085,7 +1572,7 @@ function TmcConfigPanel({ notify, isAdmin }) {
                 value={bookingLinkUrl}
                 onChange={(e) => setBookingLinkUrl(e.target.value)}
                 placeholder="https://calendly.com/tmc-team/30min"
-                aria-label="bookingLinkUrl"
+                aria-label="Calendar booking link"
                 style={{
                   padding: "8px 10px",
                   borderRadius: 6,
@@ -1140,46 +1627,46 @@ function TmcConfigPanel({ notify, isAdmin }) {
             onSubmit={saveStandingFacts}
             style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr" }}
           >
-            <Field label="Trust facts JSON override (renderer §3.5.5)">
+            <Field label="School trust details shown in reports">
               <textarea
                 rows={5}
                 value={trustFactsJson}
                 onChange={(e) => setTrustFactsJson(e.target.value)}
                 placeholder={
-                  '{ "schools_served_since_2015": "over 50", "students_moved_last_year": 14018 }'
+                  "Example: Schools served since 2015: over 50. Students travelled last year: 14,018."
                 }
-                aria-label="trustFactsJson"
+                aria-label="School trust details shown in reports"
                 style={{
                   padding: "8px 10px",
                   borderRadius: 6,
                   border: "1px solid var(--border-color)",
                   background: "var(--bg-color)",
                   color: "var(--text-primary)",
-                  fontSize: 12,
-                  fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                  fontSize: 13,
+                  fontFamily: "inherit",
                   resize: "vertical",
                   width: "100%",
                   boxSizing: "border-box",
                 }}
               />
             </Field>
-            <Field label="Assurance facts JSON override (renderer §3.5.5)">
+            <Field label="Safety and support details shown in reports">
               <textarea
                 rows={5}
                 value={assuranceFactsJson}
                 onChange={(e) => setAssuranceFactsJson(e.target.value)}
                 placeholder={
-                  '{ "supervision_ratio": "1 teacher per 15 students", "governance_pack": ["safety plan", "consent template"] }'
+                  "Example: Supervision: 1 teacher per 15 students. Includes safety plan and consent templates."
                 }
-                aria-label="assuranceFactsJson"
+                aria-label="Safety and support details shown in reports"
                 style={{
                   padding: "8px 10px",
                   borderRadius: 6,
                   border: "1px solid var(--border-color)",
                   background: "var(--bg-color)",
                   color: "var(--text-primary)",
-                  fontSize: 12,
-                  fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                  fontSize: 13,
+                  fontFamily: "inherit",
                   resize: "vertical",
                   width: "100%",
                   boxSizing: "border-box",
@@ -1204,10 +1691,10 @@ function TmcConfigPanel({ notify, isAdmin }) {
                   cursor: ewSaving ? "not-allowed" : "pointer",
                   opacity: ewSaving ? 0.5 : 1,
                 }}
-                aria-label="Save standing facts"
+                aria-label="Save report details"
               >
                 <ShieldCheck size={14} aria-hidden />
-                {ewSaving ? "Saving…" : "Save standing facts"}
+                {ewSaving ? "Saving…" : "Save report details"}
               </button>
               <p
                 style={{
@@ -1217,7 +1704,7 @@ function TmcConfigPanel({ notify, isAdmin }) {
                   color: "var(--text-secondary)",
                 }}
               >
-                Empty fields fall back to PRD §3.5.5 default standing facts.
+                Leave a field empty to use the standard report details.
               </p>
             </div>
           </form>
@@ -1235,7 +1722,7 @@ const secondaryBtnInline = {
   borderRadius: 6,
   fontWeight: 600,
   fontSize: 13,
-  background: "var(--surface-color)",
+  background: "var(--bg-color, #111318)",
   color: "var(--text-primary)",
   border: "1px solid var(--border-color)",
   cursor: "pointer",
@@ -1280,7 +1767,7 @@ const emptyStyle = {
   textAlign: "center",
   color: "var(--text-secondary)",
   fontSize: 14,
-  background: "var(--surface-color)",
+  background: "var(--bg-color, #111318)",
   border: "1px solid var(--border-color)",
   borderRadius: 8,
 };
@@ -1310,7 +1797,7 @@ const secondaryBtn = {
   borderRadius: 6,
   fontWeight: 600,
   fontSize: 13,
-  background: "var(--surface-color)",
+  background: "var(--bg-color, #111318)",
   color: "var(--text-primary)",
   border: "1px solid var(--border-color)",
   cursor: "pointer",

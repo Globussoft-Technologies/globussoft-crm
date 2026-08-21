@@ -33,13 +33,15 @@
 // Mirrors SightseeingMaster.jsx (ca052d20) — same #907 arc, same admin-table
 // pattern, same notify hook (`../utils/notify`, not `../hooks/useNotify`).
 
-import React, { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Copy, Download, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Upload, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Copy, Upload, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Download, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import CountBadge from '../../components/CountBadge';
 import { AuthContext } from '../../App';
 import { useActiveSubBrand } from '../../utils/subBrand';
+import PatientPager from '../wellness/patients/PatientPager';
 import {
   accessibleSubBrands,
   defaultSubBrandFor,
@@ -82,6 +84,7 @@ const BUDGET_TIERS = [
 ];
 
 const PAGE_SIZE = 20;
+const ITINERARY_TABLE_WIDTH = 1800;
 
 // G061 — Parse the template's `templateJson` (String? @db.LongText holding
 // `{ items: [...] }`) into the array MapPreview consumes. Resilient to:
@@ -106,6 +109,30 @@ function parseTemplateItems(tpl) {
   }
 }
 
+function parseTemplateItemDetails(item) {
+  if (!item?.detailsJson) return null;
+  try {
+    const parsed = typeof item.detailsJson === "string" ? JSON.parse(item.detailsJson) : item.detailsJson;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+function summarizeTemplateConnections(items) {
+  const summary = { sightseeing: 0, costLinked: 0, pricingLinked: 0, supplierLinked: 0 };
+  (items || []).forEach((item) => {
+    if (!item) return;
+    const details = parseTemplateItemDetails(item);
+    const masterRefs = details?.masterRefs && typeof details.masterRefs === "object" ? details.masterRefs : null;
+    if (String(item.itemType || "").toLowerCase() === "sightseeing") summary.sightseeing += 1;
+    if (masterRefs?.costMasterId != null) summary.costLinked += 1;
+    if (details?.pricingLink) summary.pricingLinked += 1;
+    if ((masterRefs?.supplierId != null) || (item.supplierId != null && item.supplierId !== "")) summary.supplierLinked += 1;
+  });
+  return summary;
+}
+
 const EMPTY_FORM = {
   name: '',
   destinationName: '',
@@ -119,6 +146,9 @@ const EMPTY_FORM = {
   currency: 'INR',
   llmGeneratedBy: '',
   isActive: true,
+  // G115 — PDF underprint template upload.
+  pdfTemplateUrl: '',
+  pdfTemplateFileName: '',
 };
 
 export default function ItineraryTemplates() {
@@ -134,8 +164,12 @@ export default function ItineraryTemplates() {
 
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [isCustomPageSize, setIsCustomPageSize] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState('');
   const [loading, setLoading] = useState(true);
+  const [reloadTick, setReloadTick] = useState(0);
 
   // Filter state
   const [destinationFilter, setDestinationFilter] = useState('');
@@ -145,11 +179,7 @@ export default function ItineraryTemplates() {
   // 'premium' | 'luxury'. Threads to the backend as ?budgetTier=…
   const [budgetTierFilter, setBudgetTierFilter] = useState('');
   const [activeOnly, setActiveOnly] = useState(true);
-  // G048 — show archived rows. When true, the list endpoint receives
-  // ?includeArchived=true and surfaces archived rows alongside live ones.
-  // Operator can then click Restore to bring a row back.
   const [includeArchived, setIncludeArchived] = useState(false);
-
   // Form state
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -177,6 +207,37 @@ export default function ItineraryTemplates() {
     }
   };
 
+  // G115 — PDF underprint upload.
+  const pdfInputRef = useRef(null);
+  const [uploadingPdf, setUploadingPdf] = useState(false);
+
+  const pickPdfFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.type !== 'application/pdf') {
+      notify.error('Only PDF files are allowed');
+      return;
+    }
+    setUploadingPdf(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const data = await fetchApi('/api/travel/itinerary-templates/upload-pdf', { method: 'POST', body: fd });
+      setForm((prev) => ({ ...prev, pdfTemplateUrl: data.url, pdfTemplateFileName: file.name }));
+      notify.success('PDF template uploaded');
+    } catch (err) {
+      notify.error(err?.body?.error || 'PDF upload failed');
+    } finally {
+      setUploadingPdf(false);
+    }
+  };
+
+  const removePdfTemplate = () => {
+    setForm((prev) => ({ ...prev, pdfTemplateUrl: '', pdfTemplateFileName: '' }));
+    if (pdfInputRef.current) pdfInputRef.current.value = '';
+  };
+
   // G061 — Detail / preview modal (PRD FR-3.1.d). Shows the template's
   // day-by-day item summary + a Leaflet map of all POIs with lat/lng before
   // the operator commits to cloning. State holds the template currently
@@ -186,7 +247,7 @@ export default function ItineraryTemplates() {
   const [contacts, setContacts] = useState([]);
   const [cloneContactId, setCloneContactId] = useState('');
 
-  const fetchItems = useCallback(() => {
+  const fetchItems = useCallback((currentPage = page, currentPageSize = pageSize) => {
     setLoading(true);
     const qs = new URLSearchParams();
     if (destinationFilter.trim()) qs.set('destinationName', destinationFilter.trim());
@@ -196,24 +257,28 @@ export default function ItineraryTemplates() {
     if (activeOnly) qs.set('isActive', 'true');
     else qs.set('isActive', 'false');
     if (includeArchived) qs.set('includeArchived', 'true');
-    qs.set('limit', String(PAGE_SIZE));
-    qs.set('offset', String(offset));
+    qs.set('limit', String(currentPageSize));
+    qs.set('offset', String(Math.max(currentPage - 1, 0) * currentPageSize));
     fetchApi(`/api/travel/itinerary-templates?${qs.toString()}`)
       .then((res) => {
-        setItems(Array.isArray(res?.items) ? res.items : []);
-        setTotal(Number(res?.total) || 0);
+        const rows = Array.isArray(res?.items) ? res.items : [];
+        const totalCount = Number(res?.total) || 0;
+        setItems(rows);
+        setTotal(totalCount);
       })
       .catch((e) => {
         notify.error(e?.body?.error || 'Failed to load itinerary templates');
         setItems([]);
         setTotal(0);
       })
-      .finally(() => setLoading(false));
-  }, [destinationFilter, categoryFilter, subBrandFilter, budgetTierFilter, activeOnly, includeArchived, offset, notify]);
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [destinationFilter, categoryFilter, subBrandFilter, budgetTierFilter, activeOnly, includeArchived, notify, page, pageSize]);
 
   useEffect(() => {
-    fetchItems();
-  }, [fetchItems]);
+    fetchItems(page, pageSize);
+  }, [fetchItems, page, pageSize, reloadTick]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -245,6 +310,9 @@ export default function ItineraryTemplates() {
       currency: item.currency || 'INR',
       llmGeneratedBy: item.llmGeneratedBy || '',
       isActive: item.isActive !== false,
+      // G115 — PDF underprint template.
+      pdfTemplateUrl: item.pdfTemplateUrl || '',
+      pdfTemplateFileName: item.pdfTemplateUrl ? (item.pdfTemplateUrl.split('/').pop() || 'template.pdf') : '',
     });
     setEditingId(item.id);
     setShowForm(true);
@@ -280,6 +348,8 @@ export default function ItineraryTemplates() {
       currency: form.currency.trim() || null,
       llmGeneratedBy: form.llmGeneratedBy.trim() || null,
       isActive: form.isActive !== false,
+      // G115 — PDF underprint template. Empty string clears it on edit.
+      pdfTemplateUrl: form.pdfTemplateUrl.trim() || null,
     };
 
     try {
@@ -297,7 +367,7 @@ export default function ItineraryTemplates() {
         notify.success('Itinerary template added');
       }
       resetForm();
-      fetchItems();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to save template');
     }
@@ -311,7 +381,7 @@ export default function ItineraryTemplates() {
     try {
       await fetchApi(`/api/travel/itinerary-templates/${item.id}`, { method: 'DELETE' });
       notify.success('Itinerary template removed');
-      fetchItems();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to delete template');
     }
@@ -321,7 +391,7 @@ export default function ItineraryTemplates() {
   // first since this is a visible-state change.
   const handleArchive = async (item) => {
     const ok = await notify.confirm(
-      `Archive "${item.name}"? It will be hidden from the default library list (toggle "Include archived" to find it again).`,
+      `Archive "${item.name}"? It will be hidden from the default library list (toggle "Include archived" to see it again).`,
     );
     if (!ok) return;
     try {
@@ -329,7 +399,7 @@ export default function ItineraryTemplates() {
         method: 'POST',
       });
       notify.success(`Archived "${item.name}"`);
-      fetchItems();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to archive template');
     }
@@ -342,7 +412,7 @@ export default function ItineraryTemplates() {
         method: 'POST',
       });
       notify.success(`Restored "${item.name}"`);
-      fetchItems();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to restore template');
     }
@@ -357,6 +427,7 @@ export default function ItineraryTemplates() {
       const token =
         typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null;
       const qs = new URLSearchParams();
+      qs.set('isActive', activeOnly ? 'true' : 'false');
       if (includeArchived) qs.set('includeArchived', 'true');
       const url =
         `/api/travel/itinerary-templates/analytics.csv` +
@@ -505,13 +576,8 @@ export default function ItineraryTemplates() {
     return d.toLocaleDateString();
   };
 
-  const canPrev = offset > 0;
-  const canNext = offset + PAGE_SIZE < total;
-  const fromIdx = total === 0 ? 0 : offset + 1;
-  const toIdx = Math.min(offset + items.length, total);
-
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       <div
         style={{
           display: 'flex',
@@ -522,20 +588,18 @@ export default function ItineraryTemplates() {
         }}
       >
         <div>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
+          <h1 style={{ display: 'flex', alignItems: 'center', gap: 12, margin: 0, fontSize: '1.75rem', fontWeight: 600, lineHeight: 1.15, flexWrap: 'wrap' }}>
             <FileText size={28} aria-hidden /> Itinerary Template Library
+            <CountBadge count={total} title={`${total.toLocaleString()} templates`} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-            Pre-loaded itinerary templates — destination, duration, base price, sub-brand
-            affinity. Operators clone these into new itineraries via the builder. The
-            sightseeing catalogue lives in{' '}
-            <Link
-              to="/travel/sightseeing"
-              style={{ color: 'var(--primary-color, var(--accent-color))' }}
-            >
-              Sightseeing Master
-            </Link>
-            .
+            Pre-loaded itinerary templates - destination, duration, base price, sub-brand
+            affinity, with preserved sightseeing, supplier cost, and pricing-rule context.
+            Operators clone these into new itineraries via the builder. Linked master
+            data lives in{' '}
+            <Link to="/travel/sightseeing" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Sightseeing Master</Link>,{' '}
+            <Link to="/travel/cost-master" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Cost Master</Link>, and{' '}
+            <Link to="/travel/pricing-rules" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Pricing Rules</Link>.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -547,7 +611,7 @@ export default function ItineraryTemplates() {
             data-testid="export-csv-btn"
             title="Download a CSV with id, name, sub-brand, usage, accepted, avg sale, last used, version"
           >
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
           </button>
           {!showForm && (
             <button type="button" onClick={openCreateForm} style={primaryBtn}>
@@ -578,8 +642,8 @@ export default function ItineraryTemplates() {
             type="text"
             value={destinationFilter}
             onChange={(e) => {
-              setOffset(0);
               setDestinationFilter(e.target.value);
+              setPage(1);
             }}
             placeholder="Filter by destination"
             aria-label="Destination filter"
@@ -589,8 +653,8 @@ export default function ItineraryTemplates() {
         <select
           value={categoryFilter}
           onChange={(e) => {
-            setOffset(0);
             setCategoryFilter(e.target.value);
+            setPage(1);
           }}
           aria-label="Category filter"
           style={selectStyle}
@@ -604,8 +668,8 @@ export default function ItineraryTemplates() {
         <select
           value={subBrandFilter}
           onChange={(e) => {
-            setOffset(0);
             setSubBrandFilter(e.target.value);
+            setPage(1);
           }}
           aria-label="Sub-brand filter"
           style={selectStyle}
@@ -622,8 +686,8 @@ export default function ItineraryTemplates() {
         <select
           value={budgetTierFilter}
           onChange={(e) => {
-            setOffset(0);
             setBudgetTierFilter(e.target.value);
+            setPage(1);
           }}
           aria-label="Budget tier filter"
           data-testid="budget-tier-filter"
@@ -642,25 +706,20 @@ export default function ItineraryTemplates() {
             type="checkbox"
             checked={activeOnly}
             onChange={(e) => {
-              setOffset(0);
               setActiveOnly(e.target.checked);
+              setPage(1);
             }}
             aria-label="Active only"
           />
           Active only
         </label>
-        {/* G048 — Include archived rows in the list. Off by default; when
-            on, archived rows surface and the operator can click the
-            Restore icon to bring them back. */}
-        <label
-          style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}
-        >
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
           <input
             type="checkbox"
             checked={includeArchived}
             onChange={(e) => {
-              setOffset(0);
               setIncludeArchived(e.target.checked);
+              setPage(1);
             }}
             aria-label="Include archived"
           />
@@ -863,6 +922,69 @@ export default function ItineraryTemplates() {
                 )}
               </div>
             </Field>
+
+            {/* G115 — PDF underprint template upload */}
+            <Field label="Reference PDF (optional)">
+              <input
+                ref={pdfInputRef}
+                type="file"
+                accept="application/pdf"
+                onChange={pickPdfFile}
+                style={{ display: 'none' }}
+                aria-label="Upload reference PDF template"
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                {form.pdfTemplateUrl ? (
+                  <>
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '0.35rem 0.7rem',
+                        borderRadius: 6,
+                        background: 'rgba(59,130,246,0.12)',
+                        color: '#60a5fa',
+                        fontSize: '0.8rem',
+                        border: '1px solid rgba(59,130,246,0.25)',
+                      }}
+                    >
+                      <FileText size={14} />
+                      {form.pdfTemplateFileName || 'PDF template'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => pdfInputRef.current?.click()}
+                      disabled={uploadingPdf}
+                      style={{ ...secondaryBtn, padding: '0.4rem 0.7rem', fontSize: '0.8rem' }}
+                    >
+                      <Upload size={13} /> {uploadingPdf ? 'Uploading…' : 'Replace'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={removePdfTemplate}
+                      title="Remove PDF template"
+                      style={{ ...secondaryBtn, padding: '0.4rem 0.7rem', fontSize: '0.8rem', color: 'var(--danger-color, #ef4444)' }}
+                    >
+                      <X size={13} /> Remove
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => pdfInputRef.current?.click()}
+                    disabled={uploadingPdf}
+                    style={{ ...secondaryBtn, border: '1px dashed var(--border-color)', color: 'var(--text-secondary)' }}
+                  >
+                    <Upload size={14} /> {uploadingPdf ? 'Uploading…' : 'Upload reference PDF'}
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                Upload a branded PDF. When this template is used, the itinerary data will be overlaid on top.
+              </div>
+            </Field>
+
             <Field label="LLM source (if AI-drafted)">
               <input
                 value={form.llmGeneratedBy}
@@ -918,17 +1040,25 @@ export default function ItineraryTemplates() {
           background: 'var(--surface-color)',
           borderRadius: 8,
           border: '1px solid var(--border-color)',
-          overflow: 'hidden',
         }}
       >
-        {loading ? (
+        {loading && items.length === 0 ? (
           <div style={emptyStyle}>Loading&hellip;</div>
         ) : items.length === 0 ? (
           <div style={emptyStyle}>No itinerary templates yet. Add one above.</div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
+          <div
+            data-testid="itinerary-templates-table-scroll"
+            style={{
+              overflow: 'auto',
+              height: 'calc(100vh - 370px)',
+              minHeight: 490,
+              maxHeight: 730,
+            }}
+          >
+            <table style={{ width: '100%', minWidth: ITINERARY_TABLE_WIDTH, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
                 <th style={th}>Name</th>
                 <th style={th}>Destination</th>
                 <th style={th}>Duration</th>
@@ -943,7 +1073,7 @@ export default function ItineraryTemplates() {
                 <th style={th}>Accepted</th>
                 <th style={th}>Avg sale</th>
                 <th style={th}>Last used</th>
-                <th style={th}>Active</th>
+                <th style={th}>Status</th>
                 {/* G048 — version column. Editing a template bumps the
                     visible version while preserving the previous row's id
                     so existing Itinerary.clonedFromTemplateId FKs stay
@@ -951,18 +1081,54 @@ export default function ItineraryTemplates() {
                 <th style={th}>Ver</th>
                 <th style={th}>Actions</th>
               </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => (
-                <tr
-                  key={item.id}
-                  style={{
-                    borderTop: '1px solid var(--border-light)',
-                    opacity: item.isActive ? 1 : 0.5,
-                  }}
-                >
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr
+                    key={item.id}
+                    style={{
+                      borderTop: '1px solid var(--border-light)',
+                      opacity: item.archivedAt ? 0.9 : item.isActive ? 1 : 0.58,
+                      background: item.archivedAt ? 'rgba(245, 158, 11, 0.08)' : undefined,
+                      boxShadow: item.archivedAt ? 'inset 4px 0 0 rgba(245, 158, 11, 0.85)' : undefined,
+                    }}
+                  >
                   <td style={td}>
                     <strong>{item.name}</strong>
+                    {item.archivedAt && (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          padding: '2px 6px',
+                          borderRadius: 999,
+                          background: 'rgba(245, 158, 11, 0.18)',
+                          color: 'rgb(146, 64, 14)',
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: 0.5,
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        archived
+                      </span>
+                    )}
+                    {item.pdfTemplateUrl && (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          padding: '2px 6px',
+                          borderRadius: 999,
+                          background: 'rgba(59, 130, 246, 0.18)',
+                          color: 'rgb(29, 78, 216)',
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: 0.5,
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        PDF
+                      </span>
+                    )}
                     {item.description && (
                       <div
                         style={{
@@ -1001,7 +1167,15 @@ export default function ItineraryTemplates() {
                   <td style={td} data-testid={`tpl-lastUsedAt-${item.id}`}>
                     {formatLastUsedAt(item.lastUsedAt)}
                   </td>
-                  <td style={td}>{item.isActive ? 'Yes' : 'No'}</td>
+                  <td style={td}>
+                    {item.archivedAt ? (
+                      <span style={statusBadgeArchived}>Archived</span>
+                    ) : item.isActive ? (
+                      <span style={statusBadgeActive}>Active</span>
+                    ) : (
+                      <span style={statusBadgeInactive}>Inactive</span>
+                    )}
+                  </td>
                   <td style={td} data-testid={`tpl-version-${item.id}`}>
                     v{item.version != null ? item.version : 1}
                     {item.archivedAt && (
@@ -1078,49 +1252,27 @@ export default function ItineraryTemplates() {
                       </button>
                     </div>
                   </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-      </div>
-
-      {/* Pagination */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginTop: 12,
-          fontSize: 13,
-          color: 'var(--text-secondary)',
-        }}
-      >
-        <div>
-          {total === 0
-            ? 'No results'
-            : `Showing ${fromIdx}-${toIdx} of ${total}`}
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            type="button"
-            onClick={() => canPrev && setOffset(Math.max(0, offset - PAGE_SIZE))}
-            disabled={!canPrev}
-            style={canPrev ? secondaryBtn : disabledBtn}
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={14} /> Prev
-          </button>
-          <button
-            type="button"
-            onClick={() => canNext && setOffset(offset + PAGE_SIZE)}
-            disabled={!canNext}
-            style={canNext ? secondaryBtn : disabledBtn}
-            aria-label="Next page"
-          >
-            Next <ChevronRight size={14} />
-          </button>
-        </div>
+        <PatientPager
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(nextSize) => {
+            setPageSize(nextSize);
+            setPage(1);
+          }}
+          isCustomPageSize={isCustomPageSize}
+          setIsCustomPageSize={setIsCustomPageSize}
+          customPageSize={customPageSize}
+          setCustomPageSize={setCustomPageSize}
+          label="itinerary templates"
+        />
       </div>
 
       {/* G061 — Detail / preview modal (PRD FR-3.1.d). Renders when the
@@ -1286,6 +1438,34 @@ function TemplatePreviewModal({
           </div>
         )}
 
+        {/* Linked data summary */}
+        <div
+          style={{
+            padding: 16,
+            borderBottom: '1px solid var(--border-color)',
+            display: "grid",
+            gap: 8,
+          }}
+          data-testid="preview-linked-data-section"
+        >
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}>
+            Linked data
+          </div>
+          {(() => {
+            const summary = summarizeTemplateConnections(items);
+            return (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 12, color: "var(--text-primary)" }}>
+                <span style={metaPill}>Sightseeing: {summary.sightseeing}</span>
+                <span style={metaPill}>Cost-linked: {summary.costLinked}</span>
+                <span style={metaPill}>Pricing-linked: {summary.pricingLinked}</span>
+                <span style={metaPill}>Supplier-linked: {summary.supplierLinked}</span>
+              </div>
+            );
+          })()}
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+            Review the source masters in <Link to="/travel/sightseeing">Sightseeing Master</Link>, <Link to="/travel/cost-master">Cost Master</Link>, and <Link to="/travel/pricing-rules">Pricing Rules</Link>.
+          </div>
+        </div>
         {/* Map preview */}
         <div
           style={{
@@ -1327,7 +1507,7 @@ function TemplatePreviewModal({
               }}
               data-testid="preview-no-pins"
             >
-              No mapped points of interest yet. The template's items don't
+              No mapped points of interest yet. The template&apos;s items don&apos;t
               carry latitude / longitude.
             </div>
           )}
@@ -1476,6 +1656,15 @@ function Field({ label, children }) {
   );
 }
 
+const metaPill = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "4px 10px",
+  borderRadius: 999,
+  background: "var(--subtle-bg)",
+  border: "1px solid var(--border-color)",
+};
+
 const inputStyle = {
   padding: '8px 10px',
   borderRadius: 6,
@@ -1503,6 +1692,9 @@ const emptyStyle = {
   fontSize: 14,
 };
 const th = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 3,
   textAlign: 'left',
   padding: '10px 12px',
   fontSize: 12,
@@ -1510,7 +1702,9 @@ const th = {
   letterSpacing: 0.5,
   color: 'var(--text-secondary)',
   borderBottom: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg)',
+  background: 'var(--modal-bg, var(--bg-color))',
+  backgroundClip: 'padding-box',
+  boxShadow: 'inset 0 -1px 0 var(--border-color)',
 };
 const td = { padding: '10px 12px', fontSize: 14, color: 'var(--text-primary)' };
 const brandBadge = {
@@ -1522,6 +1716,31 @@ const brandBadge = {
   color: 'var(--primary-color, var(--accent-color))',
   textTransform: 'uppercase',
   letterSpacing: 0.5,
+};
+const statusBadgeBase = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '2px 8px',
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.4,
+  textTransform: 'uppercase',
+};
+const statusBadgeActive = {
+  ...statusBadgeBase,
+  background: 'rgba(34, 197, 94, 0.12)',
+  color: 'rgb(22, 163, 74)',
+};
+const statusBadgeInactive = {
+  ...statusBadgeBase,
+  background: 'rgba(107, 114, 128, 0.14)',
+  color: 'rgb(75, 85, 99)',
+};
+const statusBadgeArchived = {
+  ...statusBadgeBase,
+  background: 'rgba(245, 158, 11, 0.16)',
+  color: 'rgb(180, 83, 9)',
 };
 const primaryBtn = {
   display: 'inline-flex',

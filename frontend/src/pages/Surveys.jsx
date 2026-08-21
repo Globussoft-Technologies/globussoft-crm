@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { ClipboardList, Send, Plus, BarChart3, X, ArrowLeft, MessageSquare, Users, Download, ListChecks, Trash2, GripVertical } from 'lucide-react';
+import { ClipboardList, Send, Plus, BarChart3, X, ArrowLeft, MessageSquare, Users, Upload, ListChecks, Trash2, GripVertical } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
@@ -462,7 +462,7 @@ export default function Surveys() {
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button onClick={exportCsv} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Download size={16} /> Export CSV
+              <Upload size={16} /> Export CSV
             </button>
             <button onClick={openSendModal} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
               <Send size={16} /> Send Survey
@@ -1295,7 +1295,7 @@ function MultiQuestionDetail({ survey, stats, submissions, onBack, onSend, onExp
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button onClick={onExport} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Download size={16} /> Export CSV
+            <Upload size={16} /> Export CSV
           </button>
           <button onClick={onSend} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
             <Send size={16} /> Send Survey

@@ -16,15 +16,13 @@
  *     disabled when status is "Sent" / confirm modal opens with Q9 copy /
  *     cancel does NOT fire notify.info / accept fires notify.info + PUT
  *     /api/travel/quotes/:id { status: "Sent" }.
- *   - Slice 8 (THIS commit): "Calculate with markups" action button +
- *     dismissable preview panel that reads GET /api/travel/quotes/:id/
- *     pricing-preview (slice 5 endpoint at commit 91a7b931). The preview
- *     is informational — Save Draft still persists the pre-markup
- *     grandTotal. New test cases pin: button rendered in actions row /
- *     disabled in NEW mode / disabled when no lines / click fires GET /
- *     renders subtotal + markupApplied entries + total / empty
- *     markupApplied[] shows the "no rules apply" hint / 5xx fires
- *     notify.error / panel can be dismissed.
+ *   - Issue 11 (current): the worked-example pricing preview auto-fetches
+ *     when a saved quote has lines, using the trip date to pick a season
+ *     multiplier. The manual "Refresh breakdown" button is still available.
+ *     The preview panel shows base subtotal → season → after-season
+ *     subtotal → markup rules → total. The preview is informational —
+ *     Save Draft still persists the pre-markup grandTotal. Errors fail
+ *     softly (no toast) so the operator isn't blocked.
  *
  * Scope — pins the page-surface invariants for the line-items builder:
  *
@@ -199,6 +197,12 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     expect(screen.queryByRole('button', { name: /Download PDF/i })).toBeNull();
   });
 
+  it('renders the hotel offer image generator below the header', async () => {
+    renderPage();
+    const quoteHeading = await screen.findByRole('heading', { name: /Quote Builder/i });
+    const generatorHeading = await screen.findByRole('heading', { name: /Hotel offer image generator/i });
+    expect(quoteHeading.compareDocumentPosition(generatorHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
   it('NEW mode: no GET to quotes/:id fires on mount; Add-line disabled until save', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
@@ -222,7 +226,7 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     await screen.findByRole('heading', { name: /Quote Builder/i });
     await waitFor(() => {
       const supplierFetch = fetchApiMock.mock.calls.find(
-        ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers?subBrand=tmc'),
+        ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers') && u.includes('subBrand=tmc'),
       );
       expect(supplierFetch).toBeTruthy();
     });
@@ -230,10 +234,9 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
 
   // R-15 — Quote Builder must mirror InvoicesAdmin's customer dropdown so
   // operators can't accidentally attach a quote to the wrong customer by
-  // typing a wrong numeric id. Pre-fix the field was a raw <input type
-  // ="number"> with placeholder "Contact ID *"; post-fix it's a <select>
-  // populated from GET /api/contacts?fields=summary&limit=500.
-  it('NEW mode: customer field is a <select> populated from /api/contacts', async () => {
+  // typing a wrong numeric id. The field is now a searchable inline picker
+  // instead of a separate search box + native <select>.
+  it('NEW mode: customer field is a searchable input populated from /api/contacts', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
 
@@ -245,17 +248,16 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
       expect(contactsFetch).toBeTruthy();
     });
 
-    const customerSelect = screen.getByLabelText('Customer');
-    expect(customerSelect.tagName).toBe('SELECT');
-    // The default "Select customer *" placeholder + the 3 seeded contacts
-    // from defaultFetchHandler.
+    const customerInput = screen.getByLabelText('Customer');
+    expect(customerInput.tagName).toBe('INPUT');
+    expect(customerInput).toHaveAttribute('placeholder', 'Select customer *');
+    fireEvent.focus(customerInput);
     await waitFor(() => {
-      expect(customerSelect.querySelectorAll('option').length).toBeGreaterThanOrEqual(4);
+      expect(screen.getByRole('listbox', { name: /Customer search results/i })).toBeInTheDocument();
     });
-    // Contact names + emails are visible in the dropdown options.
-    expect(screen.getByRole('option', { name: /Ahmed Khan.*ahmed@example.com/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Bharat Pilgrim/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Select customer/i })).toBeInTheDocument();
+    // Contact names + emails are visible in the inline results.
+    expect(screen.getByRole('button', { name: /Ahmed Khan.*ahmed@example.com/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bharat Pilgrim/i })).toBeInTheDocument();
   });
 });
 
@@ -299,7 +301,9 @@ describe('<QuoteBuilder /> — EDIT mode hydration', () => {
       expect(get).toBeTruthy();
     });
     const contactInput = await screen.findByLabelText('Customer');
-    expect(contactInput.value).toBe('5050');
+    await waitFor(() => {
+      expect(contactInput.value).toContain('5050');
+    });
     expect(screen.getByLabelText(/^Currency$/i).value).toBe('USD');
     expect(screen.getByLabelText(/Sub-brand/i).value).toBe('rfu');
     // Quote # + Sent status badge (multi-occurrence acceptable for "Sent"
@@ -595,7 +599,7 @@ describe('<QuoteBuilder /> — supplier picker', () => {
     await waitFor(() => {
       expect(
         fetchApiMock.mock.calls.some(
-          ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers?subBrand=tmc'),
+          ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers') && u.includes('subBrand=tmc'),
         ),
       ).toBe(true);
     });
@@ -604,7 +608,7 @@ describe('<QuoteBuilder /> — supplier picker', () => {
     await waitFor(() => {
       expect(
         fetchApiMock.mock.calls.some(
-          ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers?subBrand=rfu'),
+          ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers') && u.includes('subBrand=rfu'),
         ),
       ).toBe(true);
     });
@@ -657,7 +661,7 @@ describe('<QuoteBuilder /> — Save Draft (quote header)', () => {
     });
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
-    // Wait for the contacts list to land before changing the select.
+    // Wait for the contacts list to land before using the inline search.
     await waitFor(() => {
       expect(
         fetchApiMock.mock.calls.find(([u]) =>
@@ -665,7 +669,10 @@ describe('<QuoteBuilder /> — Save Draft (quote header)', () => {
         ),
       ).toBeTruthy();
     });
-    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: '5050' } });
+    const customerInput = screen.getByLabelText('Customer');
+    fireEvent.focus(customerInput);
+    fireEvent.change(customerInput, { target: { value: 'Ahmed' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Ahmed Khan.*ahmed@example.com/i }));
     fireEvent.change(screen.getByLabelText(/^Currency$/i), { target: { value: 'usd' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Draft/i }));
     await waitFor(() => {
@@ -886,10 +893,10 @@ describe('<QuoteBuilder /> — Send to customer (slice 6, STUB pending Q9)', () 
   });
 });
 
-describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)', () => {
+describe('<QuoteBuilder /> — pricing preview / worked-example breakdown (Issue 11)', () => {
   // Helper: hydrate an EDIT-mode quote that has ≥1 persisted line so the
-  // "Calculate with markups" button is enabled. The supplier fetch is
-  // empty by default (irrelevant to this surface).
+  // "Refresh breakdown" button is enabled and the debounced auto-fetch can
+  // fire. The supplier fetch is empty by default (irrelevant to this surface).
   function setupQuoteWithLines(previewResponse) {
     mockRouteId = '42';
     fetchApiMock.mockImplementation((url, opts) => {
@@ -920,19 +927,19 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     });
   }
 
-  it('renders the "Calculate with markups" button in the actions row', async () => {
-    setupQuoteWithLines({ subtotal: 0, markupApplied: [], total: 0, currency: 'INR', lines: [] });
+  it('renders the "Refresh breakdown" button in the actions row', async () => {
+    setupQuoteWithLines({ baseSubtotal: 0, subtotal: 0, markupApplied: [], total: 0, currency: 'INR', lines: [] });
     renderPage();
     await screen.findByText(/#42/);
-    const btn = await screen.findByRole('button', { name: /Calculate with markups/i });
+    const btn = await screen.findByRole('button', { name: /Refresh pricing breakdown/i });
     expect(btn).toBeInTheDocument();
   });
 
   it('button is HIDDEN in NEW mode (no saved id)', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
-    // Create mode shows only Save Draft; Calculate appears on a saved quote.
-    expect(screen.queryByRole('button', { name: /Calculate with markups/i })).toBeNull();
+    // Create mode shows only Save Draft; Refresh breakdown appears on a saved quote.
+    expect(screen.queryByRole('button', { name: /Refresh pricing breakdown/i })).toBeNull();
   });
 
   it('button is DISABLED when the quote has zero visible lines', async () => {
@@ -954,12 +961,13 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     });
     renderPage();
     await screen.findByText(/#42/);
-    const btn = screen.getByRole('button', { name: /Calculate with markups/i });
+    const btn = screen.getByRole('button', { name: /Refresh pricing breakdown/i });
     expect(btn.disabled).toBe(true);
   });
 
-  it('clicking the button fires GET /api/travel/quotes/:id/pricing-preview', async () => {
+  it('auto-fetches GET /api/travel/quotes/:id/pricing-preview when a saved quote has lines', async () => {
     setupQuoteWithLines({
+      baseSubtotal: 10000,
       subtotal: 10000,
       markupApplied: [],
       total: 10000,
@@ -968,8 +976,6 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     });
     renderPage();
     await screen.findByDisplayValue('Hilton Mecca');
-    const btn = screen.getByRole('button', { name: /Calculate with markups/i });
-    fireEvent.click(btn);
     await waitFor(() => {
       const get = fetchApiMock.mock.calls.find(
         ([u, o]) =>
@@ -980,9 +986,35 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     });
   });
 
-  it('renders subtotal + markupApplied entries + total from the response', async () => {
+  it('clicking Refresh breakdown fires an explicit GET /api/travel/quotes/:id/pricing-preview', async () => {
     setupQuoteWithLines({
+      baseSubtotal: 10000,
       subtotal: 10000,
+      markupApplied: [],
+      total: 10000,
+      currency: 'INR',
+      lines: [],
+    });
+    renderPage();
+    await screen.findByDisplayValue('Hilton Mecca');
+    const btn = screen.getByRole('button', { name: /Refresh pricing breakdown/i });
+    fireEvent.click(btn);
+    await waitFor(() => {
+      const gets = fetchApiMock.mock.calls.filter(
+        ([u, o]) =>
+          u === '/api/travel/quotes/42/pricing-preview' &&
+          (!o || !o.method || o.method === 'GET'),
+      );
+      expect(gets.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it('renders base subtotal + season + markupApplied entries + total from the response', async () => {
+    setupQuoteWithLines({
+      baseSubtotal: 10000,
+      subtotal: 11000,
+      seasonMultiplier: 1.1,
+      matchedSeasonName: 'Peak Season',
       markupApplied: [
         { ruleId: 1, ruleName: 'TMC Hotel Markup', percent: 12.5, amount: 1250 },
         { ruleId: 2, ruleName: 'Peak Season Surcharge', percent: 5, amount: 500 },
@@ -995,12 +1027,19 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     });
     renderPage();
     await screen.findByDisplayValue('Hilton Mecca');
-    fireEvent.click(screen.getByRole('button', { name: /Calculate with markups/i }));
     // Wait for the preview panel to appear.
     await screen.findByLabelText(/Pricing preview subtotal/i);
-    // Subtotal (10,000.00).
+    // Base subtotal (10,000.00).
+    const baseSubtotalEl = screen.getByLabelText(/Pricing preview base subtotal/i);
+    expect(baseSubtotalEl.textContent).toMatch(/10,000\.00/);
+    expect(baseSubtotalEl.textContent).toMatch(/INR/);
+    // Season multiplier renders.
+    const seasonEl = screen.getByLabelText(/Pricing preview season/i);
+    expect(seasonEl.textContent).toMatch(/×1\.1/);
+    expect(seasonEl.textContent).toMatch(/Peak Season/);
+    // After-season subtotal (11,000.00).
     const subtotalEl = screen.getByLabelText(/Pricing preview subtotal/i);
-    expect(subtotalEl.textContent).toMatch(/10,000\.00/);
+    expect(subtotalEl.textContent).toMatch(/11,000\.00/);
     expect(subtotalEl.textContent).toMatch(/INR/);
     // Markup rules — both rule names + percentages render.
     expect(screen.getByText(/TMC Hotel Markup/)).toBeInTheDocument();
@@ -1019,6 +1058,7 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
 
   it('empty markupApplied[] renders the "no rules apply" hint', async () => {
     setupQuoteWithLines({
+      baseSubtotal: 10000,
       subtotal: 10000,
       markupApplied: [],
       total: 10000,
@@ -1027,7 +1067,6 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     });
     renderPage();
     await screen.findByDisplayValue('Hilton Mecca');
-    fireEvent.click(screen.getByRole('button', { name: /Calculate with markups/i }));
     await screen.findByLabelText(/No markup rules apply/i);
     expect(
       screen.getByText(/No markup rules apply for this sub-brand/i),
@@ -1037,25 +1076,33 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     expect(screen.getByLabelText(/Pricing preview total/i)).toBeInTheDocument();
   });
 
-  it('5xx response fires notify.error and does NOT open the panel', async () => {
+  it('5xx response fails softly and does NOT open the panel', async () => {
     const err = new Error('Internal Server Error');
     err.status = 500;
     err.data = { error: 'Failed to compute pricing preview' };
     setupQuoteWithLines(err);
     renderPage();
     await screen.findByDisplayValue('Hilton Mecca');
-    fireEvent.click(screen.getByRole('button', { name: /Calculate with markups/i }));
+    // Issue 11: preview failures are informational, so the UI does not
+    // surface a toast and simply leaves the panel closed.
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/Failed to compute pricing preview/i),
+      const get = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          u === '/api/travel/quotes/42/pricing-preview' &&
+          (!o || !o.method || o.method === 'GET'),
       );
+      expect(get).toBeTruthy();
     });
+    expect(notifyError).not.toHaveBeenCalledWith(
+      expect.stringMatching(/Failed to compute pricing preview/i),
+    );
     // Panel did NOT render (the aria-labelled subtotal element is absent).
     expect(screen.queryByLabelText(/Pricing preview subtotal/i)).toBeNull();
   });
 
   it('panel can be dismissed via the close button', async () => {
     setupQuoteWithLines({
+      baseSubtotal: 10000,
       subtotal: 10000,
       markupApplied: [],
       total: 10000,
@@ -1064,8 +1111,7 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     });
     renderPage();
     await screen.findByDisplayValue('Hilton Mecca');
-    fireEvent.click(screen.getByRole('button', { name: /Calculate with markups/i }));
-    // Panel renders.
+    // Panel renders via auto-fetch.
     await screen.findByLabelText(/Pricing preview subtotal/i);
     // Click the dismiss button.
     fireEvent.click(screen.getByRole('button', { name: /Dismiss pricing preview/i }));
@@ -1081,6 +1127,7 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     // total than grandTotal, Save Draft's PUT body should still carry the
     // pre-markup grandTotal (which is 10,000 for one hotel line at 2×5000).
     setupQuoteWithLines({
+      baseSubtotal: 10000,
       subtotal: 10000,
       markupApplied: [{ ruleId: 1, ruleName: 'TMC Hotel Markup', percent: 12.5, amount: 1250 }],
       total: 11250,
@@ -1089,8 +1136,7 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     });
     renderPage();
     await screen.findByDisplayValue('Hilton Mecca');
-    // Compute the preview.
-    fireEvent.click(screen.getByRole('button', { name: /Calculate with markups/i }));
+    // Wait for auto-fetch to populate the panel.
     await screen.findByLabelText(/Pricing preview total/i);
     // Now Save Draft.
     fireEvent.click(screen.getByRole('button', { name: /Save Draft/i }));
@@ -1308,3 +1354,4 @@ describe('<QuoteBuilder /> — TBO flight/hotel search', () => {
     expect(screen.getByDisplayValue('Makkah Hotel, Makkah — Deluxe')).toBeInTheDocument();
   });
 });
+

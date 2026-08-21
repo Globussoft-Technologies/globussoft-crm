@@ -498,7 +498,7 @@ test.describe('Wellness Reports API — attribution JSON shape', () => {
   let payload;
 
   test.beforeAll(async ({ request }) => {
-    const res = await authGet(request, '/api/wellness/reports/attribution', 'admin');
+    const res = await authGet(request, '/api/wellness/reports/attribution?limit=100', 'admin');
     expect(res.status()).toBe(200);
     payload = await res.json();
   });
@@ -808,7 +808,7 @@ test.describe('Wellness Reports API — PDF exports (#227)', () => {
 
 test.describe('#565 (HI-16) — canonical revenue reconciliation across surfaces', () => {
   test('P&L by-service totalRevenue == sum(rows.revenue) (internal sanity, #281)', async ({ request }) => {
-    const r = await authGet(request, '/api/wellness/reports/pnl-by-service', 'admin');
+    const r = await authGet(request, '/api/wellness/reports/pnl-by-service?limit=100', 'admin');
     expect(r.ok()).toBeTruthy();
     const body = await r.json();
     expect(typeof body.totalRevenue).toBe('number');

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Database, Plus, ArrowLeft, Download, Filter } from 'lucide-react';
+import { Database, Plus, ArrowLeft, Upload, Filter } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
@@ -64,7 +64,7 @@ export default function CustomObjectView() {
         
         <div style={{ display: 'flex', gap: '1rem' }}>
           <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Filter size={18}/> Filter Set</button>
-          <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Download size={18}/> Export CSV</button>
+          <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Upload size={18}/> Export CSV</button>
           <button onClick={() => setShowAdd(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#ec4899', color: '#fff' }}>
             <Plus size={18} /> New {entity.name.slice(0, -1)}
           </button>

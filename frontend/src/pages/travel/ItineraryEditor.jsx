@@ -550,7 +550,18 @@ export default function ItineraryEditor() {
   // store the times + optional url + notes in detailsJson so they
   // survive a round-trip + can be re-read for G053 conflict detection.
   const submitInlineAdd = useCallback(
-    async ({ day, kind, name, startTime, endTime, url, notes, latitude, longitude }) => {
+    async ({
+      day,
+      kind,
+      name,
+      startTime,
+      endTime,
+      url,
+      notes,
+      latitude,
+      longitude,
+      selectedPlace,
+    }) => {
       const itemType = kind === "hotel" ? "hotel" : "activity";
       const description = String(name || "").trim();
       if (!description) {
@@ -562,6 +573,12 @@ export default function ItineraryEditor() {
       if (endTime) detailsObj.endTime = endTime;
       if (url) detailsObj.url = String(url).trim();
       if (notes) detailsObj.notes = String(notes).trim();
+      if (selectedPlace) {
+        detailsObj.placeSource = selectedPlace.sourceType || null;
+        detailsObj.sightseeingId = selectedPlace.sightseeingId ?? null;
+        detailsObj.poiId = selectedPlace.poiId ?? null;
+        detailsObj.placeCategory = selectedPlace.category ?? null;
+      }
       const body = {
         itemType,
         description,
@@ -1007,6 +1024,8 @@ export default function ItineraryEditor() {
                     onCancel={() => setAddForm(null)}
                     onSubmit={(payload) => submitInlineAdd({ day, kind: addForm.kind, ...payload })}
                     destinationSlug={toSlug(itin?.destination)}
+                    destinationName={itin?.destination || ""}
+                    subBrand={String(itin?.subBrand || "").toLowerCase()}
                   />
                 )}
                 {/* G057 — pending draft strip. Shows the suggestion's items
@@ -1291,7 +1310,7 @@ export default function ItineraryEditor() {
 // AddPoiModal (FR-3.7a) — the modal POSTs to /api/travel/pois and the
 // suggested POI lands in pendingApproval=true state for admin review.
 // Hotels keep the plain-text name input (no POI catalog for hotels).
-function InlineAddForm({ day, kind, busy, onCancel, onSubmit, destinationSlug }) {
+function InlineAddForm({ day, kind, busy, onCancel, onSubmit, destinationSlug, destinationName, subBrand }) {
   const [name, setName] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
@@ -1331,6 +1350,7 @@ function InlineAddForm({ day, kind, busy, onCancel, onSubmit, destinationSlug })
             name, startTime, endTime, url, notes,
             latitude: selectedPoi?.latitude ?? null,
             longitude: selectedPoi?.longitude ?? null,
+            selectedPlace: selectedPoi,
           });
           if (ok) {
             setName(""); setStartTime(""); setEndTime(""); setUrl(""); setNotes("");
@@ -1360,15 +1380,20 @@ function InlineAddForm({ day, kind, busy, onCancel, onSubmit, destinationSlug })
         {kind === "activity" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
             <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>
-              Pick from POI catalog (optional)
+              Pick from Sightseeing Master (optional)
             </span>
             <PoiPicker
               value={selectedPoi}
               onChange={handlePoiChange}
               destinationSlug={destinationSlug}
+              destinationName={destinationName}
+              subBrand={subBrand}
               onAddNew={handleAddNew}
               placeholder="Search attractions, landmarks…"
             />
+            <span style={{ fontSize: "0.68rem", color: "var(--text-secondary)" }}>
+              Approved POIs are synced into Sightseeing Master and appear here for itinerary use.
+            </span>
           </div>
         )}
 
@@ -1578,7 +1603,7 @@ function AddPoiModal({ destinationSlug, initialName, onClose, onCreated }) {
           </button>
         </div>
         <p style={{ fontSize: "0.78rem", color: "var(--text-secondary)", margin: 0 }}>
-          This POI will be submitted for admin approval before appearing in other reps' searches.
+          This POI will be submitted for admin approval before appearing in Sightseeing Master and other reps' itinerary searches.
         </p>
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
           {/* POI name — what gets stored in the catalog */}

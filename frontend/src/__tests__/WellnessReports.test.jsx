@@ -301,7 +301,7 @@ describe('<WellnessReports /> — loading + mount-time fetch', () => {
     renderWithRouter();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
     const url = fetchApiMock.mock.calls[0][0];
-    expect(url).toMatch(/^\/api\/wellness\/reports\/pnl-by-service\?from=\d{4}-\d{2}-\d{2}T00:00:00&to=\d{4}-\d{2}-\d{2}T23:59:59$/);
+    expect(url).toMatch(/^\/api\/wellness\/reports\/pnl-by-service\?from=\d{4}-\d{2}-\d{2}T00%3A00%3A00&to=\d{4}-\d{2}-\d{2}T23%3A59%3A59&limit=10$/);
     // Other tabs NOT pre-fetched.
     const allUrls = fetchApiMock.mock.calls.map(([u]) => u);
     expect(allUrls.some((u) => u.startsWith('/api/wellness/reports/per-professional'))).toBe(false);
@@ -423,14 +423,9 @@ describe('<WellnessReports /> — Marketing Attribution tab content', () => {
     renderWithRouter();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
     fireEvent.click(screen.getByRole('button', { name: /Marketing Attribution/i }));
-    // KPI tiles for attribution use distinct labels (Total leads / Junk / Qualified).
-    // NOTE: gating on a SOURCE-ROW string (not a tile label) — SUT's load
-    // effect doesn't pre-clear `data`, so between tab='att' commit and the
-    // 350ms-debounced new fetch resolving, AttTable renders with the OLD
-    // P&L payload (`data.rows` is still the P&L rows, totals.leads/junk
-    // are undefined→0). Labels render as 0 during that window; the
-    // distinguishing signal that the att fetch landed is a source-row
-    // string from ATT_POPULATED (P&L rows have no `r.source`).
+    expect(screen.queryByText('Hydrafacial')).toBeNull();
+    expect(screen.getByText(/Loading/)).toBeInTheDocument();
+    // Gate on a source-row string so we know the attribution fetch landed.
     expect(await screen.findByText('IndiaMART', {}, WAIT_OPTS)).toBeInTheDocument();
     expect(screen.getByText('Instagram Ads')).toBeInTheDocument();
     // Now the att data is committed — the KPI tile labels still appear

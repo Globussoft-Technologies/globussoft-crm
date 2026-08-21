@@ -23,13 +23,16 @@ import { CheckCircle2, Globe, Sparkles, Send, RefreshCw } from "lucide-react";
 const DEFAULT_TENANT_SLUG = "travel-stall";
 const SUB_BRAND = "travelstall";
 
-// Back-compat: older diagnostics stored /uploads/diagnostics/... which the
-// frontend SPA may intercept in production. Rewrite to /api/uploads/... so
-// the request reaches the backend static mount.
+// Back-compat: older diagnostics may store either /uploads/diagnostics/... or
+// /api/uploads/diagnostics/... depending on when the PDF was generated.
+// Normalize both forms to the canonical /api/uploads/diagnostics/... path.
 function normalizeDiagnosticPdfUrl(url) {
   if (!url || typeof url !== "string") return url;
   if (url.startsWith("/uploads/diagnostics/")) {
-    return `/api/uploads/diagnostics/${url.slice("/uploads/diagnostics/".length)}`;
+    return `/api${url}`;
+  }
+  if (url.startsWith("/api/uploads/diagnostics/")) {
+    return url;
   }
   return url;
 }

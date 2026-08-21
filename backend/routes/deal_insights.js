@@ -5,39 +5,11 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { llmLimiter } = require("../middleware/apiRateLimiters");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { estimateLlmCost } = require("../lib/apiPricing");
+const aiGateway = require("../lib/aiGateway");
+const { formatGeminiLimitMessage } = require("../lib/geminiErrors");
 
 const router = express.Router();
 const { formatMoney } = require("../utils/formatMoney");
-
-// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
-// persistLlmCallLog helper so this direct Gemini call is visible to the
-// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
-// deal-insight generation, hence the nested try/catch and the un-awaited
-// .catch() on the create.
-function persistLlmCallLog(data) {
-  try {
-    const prismaClient = require("../lib/prisma");
-    prismaClient.llmCallLog.create({ data }).catch((e) =>
-      console.error(`[DealInsights] LlmCallLog persist failed (non-fatal): ${e.message}`),
-    );
-  } catch (e) {
-    console.error(`[DealInsights] LlmCallLog require failed (non-fatal): ${e.message}`);
-  }
-}
-
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
-let aiModel = null;
-if (GEMINI_KEY) {
-  try {
-    const genAI = new GoogleGenerativeAI(GEMINI_KEY);
-    aiModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    console.log("[DealInsights] Gemini initialized");
-  } catch (err) {
-    console.warn("[DealInsights] Gemini init failed:", err.message);
-  }
-}
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -397,10 +369,13 @@ router.post("/generate/:dealId", llmLimiter, async (req, res) => {
 
     const candidates = await runHeuristicRules(deal);
 
-    // Optional Gemini-generated insight
-    if (aiModel) {
-      try {
-        const prompt = `You are a CRM sales analyst. Based on the following deal data, give EXACTLY ONE sentence (max 30 words) of actionable insight for the sales rep. No preamble, no quotes, no markdown — just one sentence.
+    // Optional AI-generated insight — goes through aiGateway (BYOK or a
+    // funded CRM-managed subscription); logging + credit deduction happen
+    // inside it. Fail-soft: heuristic rules above always run regardless,
+    // so a blocked tenant or a provider hiccup just means fewer insights,
+    // never a broken response.
+    try {
+      const prompt = `You are a CRM sales analyst. Based on the following deal data, give EXACTLY ONE sentence (max 30 words) of actionable insight for the sales rep. No preamble, no quotes, no markdown — just one sentence.
 
 Deal: "${deal.title}"
 Amount: ${formatMoney(deal.amount, deal.currency || "USD")}
@@ -413,52 +388,27 @@ Recent emails: ${(deal.contact?.emails || []).slice(0, 3).map(e => e.subject).jo
 Recent calls: ${(deal.contact?.callLogs || []).length} call(s)
 Recent activities: ${(deal.contact?.activities || []).slice(0, 3).map(a => `${a.type}: ${(a.description || "").slice(0, 60)}`).join("; ") || "none"}`;
 
-        const result = await aiModel.generateContent(prompt);
-        const aiText = (result.response.text() || "").trim().replace(/^["']|["']$/g, "");
-        const usage = result.response.usageMetadata || {};
-        const promptTokens = usage.promptTokenCount || 0;
-        const completionTokens = usage.candidatesTokenCount || 0;
-        persistLlmCallLog({
-          tenantId: req.user.tenantId || 1,
-          task: "deal-insights",
-          model: "gemini-2.5-flash",
-          provider: "gemini",
-          reason: null,
-          promptTokens,
-          completionTokens,
-          totalTokens: promptTokens + completionTokens,
-          costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
-          stub: false,
-          userId: req.user.userId || null,
-          surface: "deal-insights",
-          status: "success",
+      const resp = await aiGateway.runAiRequest({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        task: "deal-insights",
+        surface: "deal-insights",
+        requestedModelLabel: "gemini-flash",
+        messages: [{ role: "user", content: prompt }],
+      });
+      const aiText = (resp.text || "").trim().replace(/^["']|["']$/g, "");
+      if (aiText) {
+        candidates.push({
+          type: "NEXT_BEST_ACTION",
+          severity: "INFO",
+          insight: `[AI] ${aiText}`,
         });
-        if (aiText) {
-          candidates.push({
-            type: "NEXT_BEST_ACTION",
-            severity: "INFO",
-            insight: `[AI] ${aiText}`,
-          });
-        }
-      } catch (aiErr) {
-        persistLlmCallLog({
-          tenantId: (req.user && req.user.tenantId) || 1,
-          task: "deal-insights",
-          model: "gemini-2.5-flash",
-          provider: "gemini",
-          reason: null,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-          costEstimate: 0,
-          stub: false,
-          userId: (req.user && req.user.userId) || null,
-          surface: "deal-insights",
-          status: "failed",
-          errorMessage: aiErr.message,
-        });
-        console.warn("[DealInsights] AI insight skipped:", aiErr.message);
       }
+    } catch (aiErr) {
+      if (!aiErr.friendly) {
+        console.warn("[DealInsights] AI insight skipped:", formatGeminiLimitMessage(aiErr) || aiErr.message);
+      }
+      // friendly (no BYOK, no funded subscription) — silently skip, no log spam.
     }
 
     const saved = await persistInsights(dealId, req.user.tenantId, candidates);

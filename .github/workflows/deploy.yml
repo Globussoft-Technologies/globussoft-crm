@@ -1,4 +1,4 @@
-﻿name: Deploy to demo server (crm.globusdemos.com)
+name: Deploy to demo server (crm.globusdemos.com)
 
 on:
   push:
@@ -426,6 +426,7 @@ jobs:
             tests/auth-security-regression-api.spec.js \
             tests/audit-coverage-api.spec.js \
             tests/public-booking-api.spec.js \
+            tests/wellness-public-enquiry-api.spec.js \
             tests/services-api.spec.js \
             tests/sequences-authoring-api.spec.js \
             tests/orchestrator-api.spec.js \
@@ -508,6 +509,7 @@ jobs:
             tests/wellness-role-types-api.spec.js \
             tests/subscriptions-api.spec.js \
             tests/funnel-api.spec.js \
+            tests/lead-reports-api.spec.js \
             tests/win-loss-api.spec.js \
             tests/marketplace-leads-api.spec.js \
             tests/approvals-api.spec.js \
@@ -538,6 +540,7 @@ jobs:
             tests/gmail-api.spec.js \
             tests/travel-brochures-models-api.spec.js \
             tests/teardown-completeness.spec.js \
+            tests/callified-campaign-api.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"
 
@@ -845,7 +848,12 @@ jobs:
             npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.prisma
 
             echo "=== prisma db push (schema sync) ==="
-            npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
+            if ! npx prisma db push --skip-generate --accept-data-loss > /tmp/prisma-db-push.log 2>&1; then
+              echo "::error::prisma db push failed"
+              cat /tmp/prisma-db-push.log
+              exit 1
+            fi
+            tail -5 /tmp/prisma-db-push.log
 
             # Optional: re-run seed-wellness.js when the operator opts in via
             # workflow_dispatch.seed_wellness=true. Only fires on manual
@@ -870,7 +878,8 @@ jobs:
               echo "=== seed-travel (always) ==="
               node prisma/seed-travel.js 2>&1 | tail -20
             fi
-            # Optional RBAC backfill. Keep this OFF for normal deploys so
+
+            # Optional RBAC backfill. Keep this OFF for normal deploys so
             # already-selected permissions remain unchanged across refreshes
             # and restarts. Operators can opt in only when they are
             # intentionally adding a newly-wide preset grant.
@@ -1257,13 +1266,19 @@ jobs:
             npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.prisma
 
             echo "=== prisma db push (schema sync) ==="
-            npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
+            if ! npx prisma db push --skip-generate --accept-data-loss > /tmp/prisma-db-push.log 2>&1; then
+              echo "::error::prisma db push failed"
+              cat /tmp/prisma-db-push.log
+              exit 1
+            fi
+            tail -5 /tmp/prisma-db-push.log
 
             if [ -f prisma/seed-travel.js ]; then
               echo "=== seed-travel (always) ==="
               node prisma/seed-travel.js 2>&1 | tail -20
             fi
-            # Optional RBAC backfill. Keep this OFF for normal deploys so
+
+            # Optional RBAC backfill. Keep this OFF for normal deploys so
             # already-selected permissions remain unchanged across refreshes
             # and restarts. Operators can opt in only when they are
             # intentionally adding a newly-wide preset grant.

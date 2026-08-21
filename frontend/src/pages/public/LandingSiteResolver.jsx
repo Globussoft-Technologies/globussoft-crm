@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import BlockRenderer from '../../components/landing-page-renderers/BlockRenderer';
 
@@ -11,7 +11,7 @@ export default function LandingSiteResolver() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/landing-sites/public/${encodeURIComponent(slug || '')}`, { method: 'GET' });
+        const res = await fetch(`/api/landing-sites/public/${encodeURIComponent(slug || '')}?vertical=generic`, { method: 'GET' });
         if (cancelled) return;
         if (!res.ok) {
           setError('Landing site not found');
@@ -49,5 +49,5 @@ export default function LandingSiteResolver() {
     ? page.content
     : (() => { try { return JSON.parse(page.content || '[]'); } catch { return []; } })();
 
-  return <BlockRenderer landingPage={{ ...page, content }} />;
+  return <BlockRenderer landingPage={{ ...page, content, publicSubmit: true }} />;
 }

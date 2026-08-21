@@ -25,6 +25,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
+import { safeNext } from "../../utils/safeNext";
 import {
   CheckCircle2, AlertCircle, Loader2, Plane, Mail, Phone, UserCheck,
   CalendarDays, MapPin, IndianRupee, FileText, Users, Clock, Sparkles, ClipboardCheck,
@@ -74,8 +75,11 @@ export default function PublicTripMicrosite() {
   // RegistrationConfirmPanel above the existing content that walks
   // the user through phone OTP verification and binds the verified
   // OTP to the draft. After verification, the draft sits in the CRM's
-  // Participants queue waiting for operator approval.
+  // Participants queue waiting for operator approval. Some landing-page
+  // flows also attach a portalRedirect param so we can send the parent to
+  // customer sign-up immediately after document upload.
   const draftToken = queryParams.get("draftToken");
+  const portalRedirect = safeNext(queryParams.get("portalRedirect") || "");
 
   const [info, setInfo] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
@@ -325,7 +329,7 @@ export default function PublicTripMicrosite() {
         )}
       </div>
 
-      {docModalOpen && draftToken && (
+        {docModalOpen && draftToken && (
         <DocumentUploadModal
           publicUuid={publicUuid}
           draftToken={draftToken}
@@ -333,6 +337,7 @@ export default function PublicTripMicrosite() {
           accentBg={palette.headerBg}
           onClose={() => setDocModalOpen(false)}
           onUploaded={refreshDocStatus}
+          portalRedirect={portalRedirect}
         />
       )}
       <style>{"@keyframes spin{to{transform:rotate(360deg)}}"}</style>
@@ -830,7 +835,7 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
 // stored on the draft counts, so a re-upload of just one is allowed) and
 // a mandatory parent-consent checkbox. Posts multipart/form-data to the
 // public /documents endpoint.
-function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose, onUploaded }) {
+function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose, onUploaded, portalRedirect }) {
   const [passport, setPassport] = useState(null);
   const [aadhaar, setAadhaar] = useState(null);
   const [consentLetter, setConsentLetter] = useState(null);
@@ -899,6 +904,9 @@ function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose
       if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`);
       setDone(true);
       onUploaded?.();
+      if (portalRedirect) {
+        window.location.assign(portalRedirect);
+      }
     } catch (err) {
       setError(err.message);
     } finally {

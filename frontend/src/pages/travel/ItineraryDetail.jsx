@@ -29,7 +29,7 @@
 
 import { useEffect, useState, useContext, useRef } from "react";
 import { createPortal } from "react-dom";
-import { useParams, Link } from "react-router-dom";
+import { useLocation, useParams, Link } from "react-router-dom";
 import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Plus, Pencil, Trash2, X, Sparkles, Share2, Download, Check, XCircle, Copy,
@@ -167,6 +167,46 @@ function buildFlightDetails(fields) {
   if (fields.seatPref?.trim()) obj.seatPref = fields.seatPref.trim();
   if (fields.mealPref?.trim()) obj.mealPref = fields.mealPref.trim();
   return Object.keys(obj).length > 0 ? JSON.stringify(obj) : "";
+}
+
+function parseDetailsObject(detailsJson) {
+  if (!detailsJson) return {};
+  try {
+    const parsed = JSON.parse(detailsJson);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function mergePricingLinkDetails(detailsJson, preview, supplierId) {
+  if (!preview?.matched) return detailsJson || "";
+  const parsed = parseDetailsObject(detailsJson);
+  if (parsed == null && detailsJson) return detailsJson;
+  const details = parsed || {};
+  const masterRefs = details.masterRefs && typeof details.masterRefs === "object" && !Array.isArray(details.masterRefs)
+    ? { ...details.masterRefs }
+    : {};
+  if (preview.costMasterId != null && Number.isFinite(Number(preview.costMasterId))) {
+    masterRefs.costMasterId = Number(preview.costMasterId);
+  }
+  if (supplierId !== "" && supplierId != null && Number.isFinite(Number(supplierId))) {
+    masterRefs.supplierId = Number(supplierId);
+  }
+  const next = { ...details };
+  if (Object.keys(masterRefs).length > 0) next.masterRefs = masterRefs;
+  next.pricingLink = {
+    ...(details.pricingLink && typeof details.pricingLink === "object" && !Array.isArray(details.pricingLink)
+      ? details.pricingLink
+      : {}),
+    baseRate: preview.baseRate ?? null,
+    seasonMultiplier: preview.seasonMultiplier ?? null,
+    matchedSeasonName: preview.matchedSeasonName || null,
+    matchedMarkupRuleId: preview.matchedMarkupRuleId ?? null,
+    currency: preview.currency || null,
+    linkedAt: new Date().toISOString(),
+  };
+  return JSON.stringify(next);
 }
 
 // Merge flight fields into a values object (for initializing edit mode).
@@ -318,6 +358,11 @@ function fmtMoney(amt, currency = "INR") {
   return `${currency === "INR" ? "₹" : currency + " "}${n.toLocaleString()}`;
 }
 
+function fmtScore(score) {
+  const n = Number(score);
+  return Number.isFinite(n) ? n.toFixed(2) : "—";
+}
+
 function TierBadge({ tier }) {
   if (!tier) return <span style={{ color: "var(--text-secondary)" }}>—</span>;
   const tc = TIER_COLORS[tier] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
@@ -347,6 +392,9 @@ function StatusBadge({ status }) {
 
 export default function ItineraryDetail() {
   const { id } = useParams();
+  const location = useLocation();
+  const backTo = location.state?.backTo || null;
+  const backLabel = location.state?.backLabel || "Back";
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
@@ -686,7 +734,8 @@ export default function ItineraryDetail() {
         description: newItem.description,
       };
       if (newItem.position !== "") body.position = Number(newItem.position);
-      if (newItem.detailsJson !== "") body.detailsJson = newItem.detailsJson;
+      const mergedDetailsJson = mergePricingLinkDetails(newItem.detailsJson, pricingPreview, newItem.supplierId);
+      if (mergedDetailsJson !== "") body.detailsJson = mergedDetailsJson;
       if (newItem.supplierId !== "") body.supplierId = Number(newItem.supplierId);
       if (newItem.unitCost !== "") body.unitCost = Number(newItem.unitCost);
       if (newItem.markup !== "") body.markup = Number(newItem.markup);
@@ -852,12 +901,29 @@ export default function ItineraryDetail() {
   // server tweak — keep the link simple for now and document inline.
   const token = typeof getAuthToken === "function" ? getAuthToken() : null;
   const pdfHref = `/api/travel/itineraries/${id}/pdf${token ? `?_t=${encodeURIComponent(token)}` : ""}`;
+  const relatedContext = itin.relatedContext || {};
+  const latestDiagnostic = relatedContext.latestDiagnostic || null;
+  const curriculumRecommendations = Array.isArray(relatedContext.curriculumRecommendations)
+    ? relatedContext.curriculumRecommendations
+    : [];
+  const relatedQuotes = Array.isArray(relatedContext.relatedQuotes)
+    ? relatedContext.relatedQuotes
+    : [];
+  const latestProposalQuote = relatedContext.latestProposalQuote || null;
+  const sightseeingSuggestions = Array.isArray(relatedContext.sightseeingSuggestions)
+    ? relatedContext.sightseeingSuggestions
+    : [];
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <header style={{ marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
           <div>
+            {backTo && (
+              <Link to={backTo} style={{ ...secondaryBtn, textDecoration: "none", marginBottom: 10 }}>
+                {backLabel}
+              </Link>
+            )}
             <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
               <MapIcon size={28} aria-hidden /> {itin.destination || "Itinerary"}
             </h1>
@@ -895,6 +961,11 @@ export default function ItineraryDetail() {
               <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
                 Group ({pax}): {fmtMoney(itin.totalAmount, itin.currency)}
               </span>
+              {itin.contact?.name && (
+                <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+                  Contact: <strong style={{ color: "var(--text-primary)" }}>{itin.contact.name}</strong>
+                </span>
+              )}
               {itin.updatedAt && (
                 <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
                   Updated {new Date(itin.updatedAt).toLocaleDateString()}
@@ -939,6 +1010,137 @@ export default function ItineraryDetail() {
           </div>
         )}
       </header>
+
+      <section style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 12, flexWrap: "wrap" }}>
+          <h2 style={{ margin: 0, fontSize: 16 }}>Connected context</h2>
+          <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+            Related diagnostic, curriculum-fit, sightseeing, and quote/proposal links for this itinerary.
+          </span>
+        </div>
+        <div style={contextGrid}>
+          <div style={contextCard}>
+            <div style={contextCardHeader}>
+              <div>
+                <div style={contextEyebrow}>Diagnostic</div>
+                <strong>Latest diagnostic context</strong>
+              </div>
+              {latestDiagnostic?.id ? (
+                <Link to={`/travel/diagnostics/${latestDiagnostic.id}`} style={contextLink}>
+                  Open diagnostic
+                </Link>
+              ) : null}
+            </div>
+            {latestDiagnostic ? (
+              <div style={contextMetaList}>
+                <span>Score: {fmtScore(latestDiagnostic.score)}</span>
+                <span>Classification: {latestDiagnostic.classificationLabel || latestDiagnostic.classification || "—"}</span>
+                <span>Tier: {latestDiagnostic.recommendedTier || "—"}</span>
+                <span>Submitted: {fmtDate(latestDiagnostic.createdAt)}</span>
+              </div>
+            ) : (
+              <p style={contextEmptyText}>
+                No linked diagnostic found for this contact in the current sub-brand. This itinerary can still work, but it is not anchored to a scored assessment yet.
+              </p>
+            )}
+          </div>
+
+          <div style={contextCard}>
+            <div style={contextCardHeader}>
+              <div>
+                <div style={contextEyebrow}>Curriculum Fit</div>
+                <strong>TMC recommendation carry-over</strong>
+              </div>
+              {itin.subBrand === "tmc" ? (
+                <Link to="/travel/curriculum-mappings" style={contextLink}>
+                  Open curriculum mappings
+                </Link>
+              ) : null}
+            </div>
+            {curriculumRecommendations.length > 0 ? (
+              <div style={contextList}>
+                {curriculumRecommendations.slice(0, 3).map((rec, idx) => (
+                  <div key={`${rec.mappingId || rec.destinationId || rec.destinationLabel || idx}`} style={contextListItem}>
+                    <strong>{rec.destinationLabel || rec.destinationKey || "Recommended destination"}</strong>
+                    <span style={contextItemSubtle}>
+                      {(rec.board || rec.curriculum || "Curriculum fit")}{rec.subject ? ` · ${rec.subject}` : ""}{rec.fitScore != null ? ` · fit ${rec.fitScore}` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={contextEmptyText}>
+                {itin.subBrand === "tmc"
+                  ? "No cached curriculum-fit recommendations were carried into this itinerary yet."
+                  : "Curriculum-fit recommendations apply to TMC diagnostic flows only."}
+              </p>
+            )}
+          </div>
+
+          <div style={contextCard}>
+            <div style={contextCardHeader}>
+              <div>
+                <div style={contextEyebrow}>Sightseeing</div>
+                <strong>Nearby master entries</strong>
+              </div>
+              <Link to={`/travel/sightseeing?destinationName=${encodeURIComponent(itin.destination || "")}`} style={contextLink}>
+                Open sightseeing master
+              </Link>
+            </div>
+            {sightseeingSuggestions.length > 0 ? (
+              <div style={contextList}>
+                {sightseeingSuggestions.slice(0, 4).map((spot) => (
+                  <div key={spot.id} style={contextListItem}>
+                    <strong>{spot.name}</strong>
+                    <span style={contextItemSubtle}>
+                      {spot.destinationName}{spot.category ? ` · ${spot.category}` : ""}{spot.durationMinutes ? ` · ${spot.durationMinutes} min` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={contextEmptyText}>
+                No active sightseeing-master entries matched this itinerary destination yet.
+              </p>
+            )}
+          </div>
+
+          <div style={contextCard}>
+            <div style={contextCardHeader}>
+              <div>
+                <div style={contextEyebrow}>Quote / Proposal</div>
+                <strong>Commercial context</strong>
+              </div>
+              {latestProposalQuote?.id ? (
+                <Link to={`/travel/quotes/${latestProposalQuote.id}`} style={contextLink}>
+                  Open latest proposal
+                </Link>
+              ) : null}
+            </div>
+            {latestProposalQuote ? (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>Latest proposal-style quote</div>
+                <Link to={`/travel/quotes/${latestProposalQuote.id}`} style={contextRowLink}>
+                  Quote #{latestProposalQuote.id} · {latestProposalQuote.status} · {fmtMoney(latestProposalQuote.totalAmount, latestProposalQuote.currency)}
+                </Link>
+              </div>
+            ) : (
+              <p style={contextEmptyText}>
+                No sent/accepted/rejected quote was found yet, so this itinerary is still acting as a mostly standalone commercial artifact.
+              </p>
+            )}
+            {relatedQuotes.length > 0 ? (
+              <div style={contextList}>
+                {relatedQuotes.slice(0, 3).map((quote) => (
+                  <Link key={quote.id} to={`/travel/quotes/${quote.id}`} style={contextRowLink}>
+                    Quote #{quote.id} · {quote.status} · {fmtMoney(quote.totalAmount, quote.currency)}
+                  </Link>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </section>
 
       {/* Payment status and balance payment section */}
       {status !== "draft" && status !== "rejected" && (
@@ -1078,7 +1280,7 @@ export default function ItineraryDetail() {
             }
             return (
               <div style={{ ...box, color: "var(--text-secondary)" }}>
-                Refund can&apos;t be auto-calculated — {r.policyName ? "set a travel start date" : "assign a cancellation policy"} on this booking, then approve. Settle the refund manually per policy.
+                Refund can&apos;t be auto-calculated - {r.policyName ? `${r.policyName} is applied; set a travel start date` : "assign a cancellation policy"} on this booking, then approve. Settle the refund manually per policy.
               </div>
             );
           })()}
@@ -1802,6 +2004,70 @@ const fieldLabel = {
 const hintLabel = {
   fontSize: 11, textTransform: "none", letterSpacing: 0,
   color: "var(--text-secondary)", opacity: 0.8, fontWeight: 400,
+};
+const contextGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+  gap: 12,
+};
+const contextCard = {
+  background: "var(--surface-color)",
+  border: "1px solid var(--border-color)",
+  borderRadius: 10,
+  padding: 14,
+  display: "grid",
+  gap: 10,
+  alignContent: "start",
+};
+const contextCardHeader = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: 10,
+};
+const contextEyebrow = {
+  fontSize: 11,
+  color: "var(--text-secondary)",
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+  marginBottom: 2,
+};
+const contextLink = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: "var(--primary-color, var(--accent-color))",
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+};
+const contextMetaList = {
+  display: "grid",
+  gap: 6,
+  fontSize: 13,
+  color: "var(--text-primary)",
+};
+const contextList = {
+  display: "grid",
+  gap: 8,
+};
+const contextListItem = {
+  display: "grid",
+  gap: 2,
+};
+const contextItemSubtle = {
+  fontSize: 12,
+  color: "var(--text-secondary)",
+};
+const contextRowLink = {
+  color: "var(--text-primary)",
+  textDecoration: "none",
+  fontSize: 13,
+  lineHeight: 1.45,
+};
+const contextEmptyText = {
+  margin: 0,
+  fontSize: 13,
+  color: "var(--text-secondary)",
+  lineHeight: 1.5,
 };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const th = {

@@ -1,5 +1,6 @@
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
+const { normalizePhoneValue } = require("../lib/phoneFormatting");
 
 /**
  * Normalize a phone number to digits-only for comparison.
@@ -10,8 +11,9 @@ const prisma = new PrismaClient();
  * For the user-facing E.164 display form (`+919876543210`) use toE164().
  */
 function normalizePhone(phone) {
-  if (!phone) return null;
-  const digits = phone.replace(/[^0-9]/g, "");
+  const normalized = normalizePhoneValue(phone);
+  if (!normalized) return null;
+  const digits = normalized.replace(/[^0-9]/g, "");
   // Indian numbers: if 10 digits, prepend 91
   if (digits.length === 10) return "91" + digits;
   return digits || null;

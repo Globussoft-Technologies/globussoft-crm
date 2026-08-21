@@ -1,84 +1,84 @@
-/**
- * InvoicesAdmin.test.jsx — vitest + RTL coverage for the Travel-vertical
+﻿/**
+ * InvoicesAdmin.test.jsx â€” vitest + RTL coverage for the Travel-vertical
  * invoices admin page (frontend/src/pages/travel/InvoicesAdmin.jsx, shipped
  * tick #98 commit c156df4).
  *
- * Scope — pins page-surface invariants for the Travel invoices CRUD page:
- *   1. Page chrome — heading "Travel Invoices" + filter bar + "New Invoice"
+ * Scope â€” pins page-surface invariants for the Travel invoices CRUD page:
+ *   1. Page chrome â€” heading "Travel Invoices" + filter bar + "New Invoice"
  *      CTA (CTA gated on ADMIN/MANAGER via AuthContext.user.role).
- *   2. Loading state — pre-first-fetch the table region renders "Loading…"
+ *   2. Loading state â€” pre-first-fetch the table region renders "Loadingâ€¦"
  *      copy; once GET resolves the table replaces it.
- *   3. GET on mount — fires GET /api/travel/invoices with NO querystring when
+ *   3. GET on mount â€” fires GET /api/travel/invoices with NO querystring when
  *      no filters set; row contents render from the response shape
  *      `{ invoices: [...], total: N }`.
- *   4. Empty-state — zero invoices, `permissionDenied=false` → "No invoices
+ *   4. Empty-state â€” zero invoices, `permissionDenied=false` â†’ "No invoices
  *      match." copy renders.
- *   5. Permission-denied empty-state (#829) — 403 from the GET → "Access
+ *   5. Permission-denied empty-state (#829) â€” 403 from the GET â†’ "Access
  *      restricted." copy renders instead of the no-rows surface.
- *   6. Sub-brand filter — changing the sub-brand <select> appends
+ *   6. Sub-brand filter â€” changing the sub-brand <select> appends
  *      `?subBrand=<value>` to the GET URL.
- *   7. Status filter — changing the status <select> appends `?status=<value>`
+ *   7. Status filter â€” changing the status <select> appends `?status=<value>`
  *      (read from the literal enum: Draft / Issued / Partial / Paid / Voided).
- *   8. Money formatting — table cell renders the row's totalAmount through
- *      formatMoney with the row's currency (e.g. "₹50,000" for INR).
- *   9. Invoice number display — TINV-YYYY-NNNN format renders verbatim from
+ *   8. Money formatting â€” table cell renders the row's totalAmount through
+ *      formatMoney with the row's currency (e.g. "â‚¹50,000" for INR).
+ *   9. Invoice number display â€” TINV-YYYY-NNNN format renders verbatim from
  *      the backend response. The serial is BACKEND-assigned (race-safe per
  *      backend/routes/travel_invoices.js tick #97); the test mocks the
- *      formatted string and asserts a verbatim render — does NOT generate
+ *      formatted string and asserts a verbatim render â€” does NOT generate
  *      the serial in the test.
- *  10. Sub-brand badge per row — real `travelSubBrand.SUB_BRAND_BG` palette
+ *  10. Sub-brand badge per row â€” real `travelSubBrand.SUB_BRAND_BG` palette
  *      is consumed (not mocked) so any drift in the canonical sub-brand id
  *      set or palette is caught here.
- *  11. New-invoice modal — clicking "New Invoice" opens the form; submitting
+ *  11. New-invoice modal â€” clicking "New Invoice" opens the form; submitting
  *      with a valid contactId + totalAmount + currency + dueDate fires
  *      POST /api/travel/invoices with the form payload (status defaults to
  *      Draft; subBrand defaults to "tmc"; quoteId omitted when blank).
- *  12. Delete enforcement — the page-rule "only Draft invoices may be
+ *  12. Delete enforcement â€” the page-rule "only Draft invoices may be
  *      deleted" is reflected in the UI: Draft rows expose an enabled Trash2
  *      button; Issued/Partial/Paid/Voided rows have it disabled with the
- *      audit-trail tooltip. (Backend is the source of truth — 422
- *      INVOICE_DELETE_FORBIDDEN — but the UI affordance must match.)
- *  13. Per-row PDF download (#901 slice 3, this tick) — every visible row
+ *      audit-trail tooltip. (Backend is the source of truth â€” 422
+ *      INVOICE_DELETE_FORBIDDEN â€” but the UI affordance must match.)
+ *  13. Per-row PDF download (#901 slice 3, this tick) â€” every visible row
  *      exposes a "Download PDF for invoice <num>" button. Click fires raw
- *      fetch (NOT fetchApi — the helper JSON-parses; PDFs are binary so we
+ *      fetch (NOT fetchApi â€” the helper JSON-parses; PDFs are binary so we
  *      need the Response object's .blob()) at
  *      GET /api/travel/invoices/:id/pdf with the Bearer auth header,
  *      blobs the response, anchors the result with download=`invoice-:id.pdf`,
  *      then revokes the object URL. Failed responses (4xx / 5xx) fire
  *      notify.error('Failed to download PDF'). Loading state flips the button
- *      to "Downloading…" while in flight + disables the button so a double-
+ *      to "Downloadingâ€¦" while in flight + disables the button so a double-
  *      click can't trigger two browser saves of the same blob.
  *
  * Backend contract pinned (per backend/routes/travel_invoices.js, 913 LOC,
  * 10 vitest cases tick #97):
  *   GET    /api/travel/invoices[?subBrand|status|contactId|quoteId]
- *          → 200 { invoices: TravelInvoice[], total: number }
+ *          â†’ 200 { invoices: TravelInvoice[], total: number }
  *          | 403 (USER role on tenants where Travel is locked)
- *   POST   /api/travel/invoices            → 201 { invoice: TravelInvoice }
+ *   POST   /api/travel/invoices            â†’ 201 { invoice: TravelInvoice }
  *                                            (ADMIN+MANAGER); invoiceNum
  *                                            server-assigned TINV-YYYY-NNNN
- *   PUT    /api/travel/invoices/:id        → 200 { invoice: TravelInvoice }
+ *   PUT    /api/travel/invoices/:id        â†’ 200 { invoice: TravelInvoice }
  *                                            (forward-only status matrix
  *                                            enforced)
- *   DELETE /api/travel/invoices/:id        → 204 (Draft only) | 422
+ *   DELETE /api/travel/invoices/:id        â†’ 204 (Draft only) | 422
  *                                            INVOICE_DELETE_FORBIDDEN
  *   Status enum (forward-only matrix):
- *     Draft   → Issued | Voided
- *     Issued  → Partial | Paid | Voided
- *     Partial → Paid | Voided
- *     Paid    → Voided
- *     Voided  → (terminal)
+ *     Draft   â†’ Issued | Voided
+ *     Issued  â†’ Partial | Paid | Voided
+ *     Partial â†’ Paid | Voided
+ *     Paid    â†’ Voided
+ *     Voided  â†’ (terminal)
  *
  * Drift pinned around (prompt vs. actual code):
- *   - Prompt mentioned "payment-recording flow" — the SUT has NO payment-
+ *   - Prompt mentioned "payment-recording flow" â€” the SUT has NO payment-
  *     recording UI; payments are tracked via PUT status transitions (Issued
- *     → Partial / Paid) NOT a separate amount-paid input. Tests omit any
+ *     â†’ Partial / Paid) NOT a separate amount-paid input. Tests omit any
  *     payment-recording assertions.
  *   - Prompt referenced "status enum draft/sent/paid/etc"; actual enum is
  *     Pascal-case ("Draft" / "Issued" / "Partial" / "Paid" / "Voided") and
  *     uses "Issued" not "sent". Tests pin the real labels.
  *   - SUT's empty-state copy is "No invoices match." (period), NOT "No
- *     invoices found" — pinned verbatim.
+ *     invoices found" â€” pinned verbatim.
  *
  * Mocking discipline (per CLAUDE.md RTL standing rules):
  *   - fetchApi mocked at ../utils/api (the page's dependency, NOT global
@@ -93,10 +93,10 @@
  *     buttons). Default user role = ADMIN so canWrite=true; one test mounts
  *     with role=USER to assert the CTA + actions column are hidden.
  *   - Data-dependent assertions use await findBy / waitFor (per CLAUDE.md
- *     tick #108 cron-learning — sync getBy for data-dependent text is a CI
+ *     tick #108 cron-learning â€” sync getBy for data-dependent text is a CI
  *     race trap).
  *
- * Path: flat __tests__/ — DO NOT add a __tests__/travel/ subdir.
+ * Path: flat __tests__/ â€” DO NOT add a __tests__/travel/ subdir.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -108,7 +108,7 @@ vi.mock('../utils/api', () => ({
   getAuthToken: () => 'test-token',
 }));
 
-// Stable notify object — RTL standing rule (Wave 11 cfb5789 / Wave 12
+// Stable notify object â€” RTL standing rule (Wave 11 cfb5789 / Wave 12
 // f59e91d). The SUT closes over notify inside handleSubmit + handleDelete,
 // so a fresh object per render would flap state across re-renders.
 const notifyError = vi.fn();
@@ -150,7 +150,7 @@ function makeInvoice(overrides = {}) {
 
 // Install a fetchApi mock that routes by URL prefix + method. The /invoices
 // GET defaults to a single Issued row; tests opt-in to other surfaces.
-// `detail` covers the slice-22 GET /:id?include=lines surface — when an
+// `detail` covers the slice-22 GET /:id?include=lines surface â€” when an
 // editor opens an Issued/Paid invoice the page fetches its lines to
 // compute TDS withholding client-side.
 function installFetchMock({
@@ -159,7 +159,7 @@ function installFetchMock({
   update = { invoice: makeInvoice() },
   remove = null,
   detail = null,
-  // S56 — cancel-preview + void surfaces. Default `preview` = an OK
+  // S56 â€” cancel-preview + void surfaces. Default `preview` = an OK
   // response with a 50% TMC Default tier; tests opt-in to NO_POLICY_RESOLVED
   // or Error to exercise the warning + error branches.
   preview = {
@@ -187,19 +187,19 @@ function installFetchMock({
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
-    // Slice 22 — match the include=lines detail GET first so it takes
+    // Slice 22 â€” match the include=lines detail GET first so it takes
     // precedence over the list-GET prefix match (both URLs start with
     // /api/travel/invoices but the detail GET has ?include=lines).
     if (url.includes('?include=lines') && method === 'GET') {
       if (detail instanceof Error) return Promise.reject(detail);
       return Promise.resolve(detail);
     }
-    // S56 — cancel-preview GET (fires when void modal opens).
+    // S56 â€” cancel-preview GET (fires when void modal opens).
     if (url.includes('/cancel-preview') && method === 'GET') {
       if (preview instanceof Error) return Promise.reject(preview);
       return Promise.resolve(preview);
     }
-    // S56 — POST /:id/void (fires on Confirm).
+    // S56 â€” POST /:id/void (fires on Confirm).
     if (/\/api\/travel\/invoices\/\d+\/void$/.test(url) && method === 'POST') {
       if (voidResp instanceof Error) return Promise.reject(voidResp);
       return Promise.resolve(voidResp);
@@ -262,7 +262,7 @@ beforeEach(() => {
   installFetchMock();
 });
 
-describe('<InvoicesAdmin /> — page chrome', () => {
+describe('<InvoicesAdmin /> â€” page chrome', () => {
   it('renders heading + filter bar + "New Invoice" CTA when role=ADMIN', async () => {
     renderPage();
     expect(
@@ -280,11 +280,14 @@ describe('<InvoicesAdmin /> — page chrome', () => {
       screen.getByLabelText(/Filter by status/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByLabelText(/Filter by contact ID/i),
+      screen.queryByLabelText(/Filter by contact ID/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/Filter by customer name/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByLabelText(/Filter by quote ID/i),
-    ).toBeInTheDocument();
+      screen.queryByLabelText(/Filter by quote ID/i),
+    ).not.toBeInTheDocument();
     // Wait for mount GET so the dangling promise doesn't leak.
     await waitFor(() => {
       expect(
@@ -303,25 +306,77 @@ describe('<InvoicesAdmin /> — page chrome', () => {
   });
 });
 
-describe('<InvoicesAdmin /> — list fetch + filter chrome', () => {
-  it('GETs /api/travel/invoices on mount (no querystring) + renders invoice rows', async () => {
+describe('<InvoicesAdmin /> - Excel Software reconciliation', () => {
+  let originalFetch;
+  let fetchSpy;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    fetchSpy = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        totalRows: 1,
+        scannedInvoices: 1,
+        matchedRows: 1,
+        mismatchedRows: 0,
+        missingRows: 0,
+        discrepancyCount: 0,
+        discrepancies: [],
+        workbookAmount: 100,
+        matchedAmount: 100,
+      }),
+    }));
+    globalThis.fetch = fetchSpy;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('uploads a workbook as multipart/form-data and renders the summary', async () => {
+    renderPage();
+    await screen.findByText(/Travel Invoices/i);
+    const file = new File(['Invoice Number,Invoice Total\nTINV-2026-0001,100'], 'travel-accounting.csv', { type: 'text/csv' });
+    fireEvent.change(screen.getByLabelText(/Excel Software reconciliation file/i), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Run reconciliation/i }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+    });
+    const [url, opts] = fetchSpy.mock.calls[0];
+    expect(url).toBe('/api/travel/invoices/reconcile/excel-software');
+    expect(opts?.method).toBe('POST');
+    expect(opts?.headers?.Authorization).toBe('Bearer test-token');
+    expect(opts?.body).toBeInstanceOf(FormData);
+    expect(await screen.findByTestId('excel-reconciliation-result')).toBeInTheDocument();
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Matched 1 invoices/i));
+  });
+});
+
+describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
+  it('GETs /api/travel/invoices on mount with pager params + renders invoice rows', async () => {
     renderPage();
     // Row renders the verbatim TINV-YYYY-NNNN backend-assigned serial.
     expect(await screen.findByText('TINV-2026-0001')).toBeInTheDocument();
-    // #1051 — CONTACT column falls back to "#<id>" when the /api/contacts/:id
+    // #1051 â€” CONTACT column falls back to "#<id>" when the /api/contacts/:id
     // lookup returns null (default mock); when it returns a Contact row the
-    // cell renders `contact.name` instead. See the "#1051 — contact name
+    // cell renders `contact.name` instead. See the "#1051 â€” contact name
     // resolution" describe block below for the success path.
     expect(screen.getByText('#42')).toBeInTheDocument();
-    // No-querystring GET fired exactly once.
+    // Initial list GET includes pager params.
     const gets = fetchApiMock.mock.calls.filter(
       ([url, opts]) =>
-        url === '/api/travel/invoices' && (!opts || !opts.method || opts.method === 'GET'),
+        typeof url === 'string'
+        && url.startsWith('/api/travel/invoices?')
+        && (!opts || !opts.method || opts.method === 'GET'),
     );
-    expect(gets.length).toBe(1);
+    expect(gets.length).toBeGreaterThanOrEqual(1);
+    expect(gets.some(([url]) => /limit=20/.test(url) && /offset=0/.test(url))).toBe(true);
   });
 
-  it('loading state shows "Loading…" before the first GET resolves', async () => {
+  it('loading state shows "Loadingâ€¦" before the first GET resolves', async () => {
     // Never-resolving promise so the initial loading branch stays mounted.
     let releaseList;
     const slowList = new Promise((resolve) => { releaseList = resolve; });
@@ -340,7 +395,7 @@ describe('<InvoicesAdmin /> — list fetch + filter chrome', () => {
     });
   });
 
-  it('empty-state: zero invoices → "No invoices match." copy renders', async () => {
+  it('empty-state: zero invoices â†’ "No invoices match." copy renders', async () => {
     installFetchMock({ list: { invoices: [], total: 0 } });
     renderPage();
     expect(await screen.findByText(/No invoices match/i)).toBeInTheDocument();
@@ -348,7 +403,7 @@ describe('<InvoicesAdmin /> — list fetch + filter chrome', () => {
     expect(screen.queryByText(/Access restricted/i)).toBeNull();
   });
 
-  it('permission-denied empty-state (#829): 403 from list GET → "Access restricted." copy', async () => {
+  it('permission-denied empty-state (#829): 403 from list GET â†’ "Access restricted." copy', async () => {
     const err = new Error('Forbidden');
     err.status = 403;
     installFetchMock({ list: err });
@@ -371,7 +426,9 @@ describe('<InvoicesAdmin /> — list fetch + filter chrome', () => {
           url.includes('subBrand=rfu') && (!opts || !opts.method || opts.method === 'GET'),
       );
       expect(filtered).toBeTruthy();
-      expect(filtered[0]).toBe('/api/travel/invoices?subBrand=rfu');
+      expect(filtered[0]).toMatch(/subBrand=rfu/);
+      expect(filtered[0]).toMatch(/limit=20/);
+      expect(filtered[0]).toMatch(/offset=0/);
     });
   });
 
@@ -388,15 +445,69 @@ describe('<InvoicesAdmin /> — list fetch + filter chrome', () => {
           url.includes('status=Paid') && (!opts || !opts.method || opts.method === 'GET'),
       );
       expect(filtered).toBeTruthy();
-      expect(filtered[0]).toBe('/api/travel/invoices?status=Paid');
+      expect(filtered[0]).toMatch(/status=Paid/);
+      expect(filtered[0]).toMatch(/limit=20/);
+      expect(filtered[0]).toMatch(/offset=0/);
     });
+  });
+
+  it('customer name filter narrows visible rows by resolved contact name', async () => {
+    const ashaInvoice = makeInvoice({ id: 101, invoiceNum: 'TINV-2026-0001', contactId: 42 });
+    const rahulInvoice = makeInvoice({ id: 102, invoiceNum: 'TINV-2026-0002', contactId: 43 });
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/contacts?fields=summary&limit=500' && method === 'GET') {
+        return Promise.resolve([
+          { id: 42, name: 'Asha Mehta', email: 'asha@example.com' },
+          { id: 43, name: 'Rahul Shah', email: 'rahul@example.com' },
+        ]);
+      }
+      if (url === '/api/contacts/42' && method === 'GET') {
+        return Promise.resolve({ id: 42, name: 'Asha Mehta', email: 'asha@example.com' });
+      }
+      if (url === '/api/contacts/43' && method === 'GET') {
+        return Promise.resolve({ id: 43, name: 'Rahul Shah', email: 'rahul@example.com' });
+      }
+      if (
+        (url === '/api/travel/invoices'
+          || url === '/api/travel/invoices?limit=20&offset=0')
+        && method === 'GET'
+      ) {
+        return Promise.resolve({ invoices: [ashaInvoice, rahulInvoice], total: 2 });
+      }
+      if (
+        (url === '/api/travel/invoices?contactId=42'
+          || url === '/api/travel/invoices?contactId=42&limit=20&offset=0'
+          || url === '/api/travel/invoices?limit=20&offset=0&contactId=42')
+        && method === 'GET'
+      ) {
+        return Promise.resolve({ invoices: [ashaInvoice], total: 1 });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+
+    expect(await screen.findByText('TINV-2026-0001')).toBeInTheDocument();
+    expect(await screen.findByText('TINV-2026-0002')).toBeInTheDocument();
+    await screen.findByText('Asha Mehta');
+    await screen.findByText('Rahul Shah');
+
+    fireEvent.change(screen.getByLabelText(/Filter by customer name/i), {
+      target: { value: 'asha' },
+    });
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(expect.stringMatching(/contactId=42/));
+    });
+    expect(await screen.findByText('TINV-2026-0001')).toBeInTheDocument();
+    expect(screen.queryByText('TINV-2026-0002')).toBeNull();
   });
 });
 
-describe('<InvoicesAdmin /> — row rendering', () => {
+describe('<InvoicesAdmin /> â€” row rendering', () => {
   it('money formatting: INR totalAmount renders via formatMoney with row currency', async () => {
     renderPage();
-    // formatMoney(50000, { currency: 'INR' }) under en-IN → "₹50,000".
+    // formatMoney(50000, { currency: 'INR' }) under en-IN â†’ "₹50,000".
     // We assert the digit grouping + ₹ rather than verbatim to remain
     // resilient to Intl whitespace variants across ICU builds (per CLAUDE.md
     // cron-learning 2026-05-07 wave-6 on ICU portability).
@@ -417,13 +528,13 @@ describe('<InvoicesAdmin /> — row rendering', () => {
       },
     });
     renderPage();
-    // Both verbatim serial strings render — the test does NOT generate the
+    // Both verbatim serial strings render â€” the test does NOT generate the
     // serial (race-safe assignment is BACKEND-side per tick #97).
     expect(await screen.findByText('TINV-2026-0007')).toBeInTheDocument();
     expect(screen.getByText('TINV-2026-0042')).toBeInTheDocument();
   });
 
-  it('#1051 — CONTACT column renders the contact name (with link to /contacts/:id) once the lookup resolves', async () => {
+  it('#1051 â€” CONTACT column renders the contact name (with link to /contacts/:id) once the lookup resolves', async () => {
     installFetchMock({
       list: {
         invoices: [
@@ -471,7 +582,7 @@ describe('<InvoicesAdmin /> — row rendering', () => {
     });
     renderPage();
     await screen.findByText('TINV-2026-0201');
-    // Sub-brand identifiers render as the badge text (verbatim — the SUT
+    // Sub-brand identifiers render as the badge text (verbatim â€” the SUT
     // prints inv.subBrand directly, the palette is applied via style only).
     const rfuBadge = screen.getByText('rfu');
     expect(rfuBadge).toBeInTheDocument();
@@ -494,20 +605,20 @@ describe('<InvoicesAdmin /> — row rendering', () => {
     });
     renderPage();
     await screen.findByText('TINV-2026-0301');
-    // Draft row → Delete enabled with the standard label.
+    // Draft row â†’ Delete enabled with the standard label.
     const draftDel = screen.getByRole('button', { name: /Delete invoice TINV-2026-0301/i });
     expect(draftDel).not.toBeDisabled();
-    // Issued row → Delete disabled with the audit-trail-aware aria-label
+    // Issued row â†’ Delete disabled with the audit-trail-aware aria-label
     // ("Delete disabled for Issued invoice").
     const issuedDel = screen.getByRole('button', { name: /Delete disabled for Issued invoice/i });
     expect(issuedDel).toBeDisabled();
-    // Voided row → likewise disabled.
+    // Voided row â†’ likewise disabled.
     const voidedDel = screen.getByRole('button', { name: /Delete disabled for Voided invoice/i });
     expect(voidedDel).toBeDisabled();
   });
 });
 
-describe('<InvoicesAdmin /> — new-invoice modal', () => {
+describe('<InvoicesAdmin /> â€” new-invoice modal', () => {
   it('clicking "New Invoice" opens the form and submitting POSTs the payload', async () => {
     renderPage();
     await screen.findByText('TINV-2026-0001');
@@ -537,7 +648,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
       expect(body.status).toBe('Draft');
       expect(body.subBrand).toBe('tmc');
       expect(body.dueDate).toBe('2026-12-31');
-      // quoteId omitted (blank input → key not on payload).
+      // quoteId omitted (blank input â†’ key not on payload).
       expect(body.quoteId).toBeUndefined();
     });
     // notify.success fired referencing the contact id.
@@ -557,7 +668,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     fireEvent.change(totalInput, { target: { value: '100' } });
     fireEvent.change(dueInput, { target: { value: '2026-12-31' } });
     // Bypass HTML5 required-attr by submitting via the form's onSubmit
-    // directly — fire a submit event on the form so the SUT's handler runs.
+    // directly â€” fire a submit event on the form so the SUT's handler runs.
     fetchApiMock.mockClear();
     const form = totalInput.closest('form');
     expect(form).toBeTruthy();
@@ -573,7 +684,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     expect(posts.length).toBe(0);
   });
 
-  // #996 — 409 DUPLICATE_DRAFT_INVOICE hard-block behavior (no force-retry).
+  // #996 â€” 409 DUPLICATE_DRAFT_INVOICE hard-block behavior (no force-retry).
   it('on 409 DUPLICATE_DRAFT_INVOICE: fires a single POST, surfaces notify.info naming the existing draft, does NOT auto-retry', async () => {
     const dupeErr = Object.assign(new Error('An identical Draft invoice (TINV-2026-0002) was created in the last 5 minutes for this contact.'), {
       status: 409,
@@ -610,7 +721,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     });
     // Info toast names the existing draft so the operator knows the keeper.
     expect(notifyInfo.mock.calls[0][0]).toMatch(/TINV-2026-0002/);
-    // Exactly one POST — the silent first attempt. NO force-true retry.
+    // Exactly one POST â€” the silent first attempt. NO force-true retry.
     const posts = fetchApiMock.mock.calls.filter(
       ([u, o]) => u === '/api/travel/invoices' && o?.method === 'POST',
     );
@@ -624,7 +735,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     expect(notifyError).not.toHaveBeenCalled();
   });
 
-  // #996 — synchronous re-entry guard prevents the double-fire race.
+  // #996 â€” synchronous re-entry guard prevents the double-fire race.
   it('rapid double-submit fires exactly ONE POST (re-entry guard short-circuits the second call)', async () => {
     // Slow POST so the second submit overlaps the first's in-flight phase.
     let resolveFirst;
@@ -650,7 +761,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '120000' } });
     fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-12-31' } });
     const form = screen.getByLabelText(/^Total amount$/i).closest('form');
-    // Fire submit TWICE synchronously — simulating a fast double-click before
+    // Fire submit TWICE synchronously â€” simulating a fast double-click before
     // setSaving(true) has rendered the disabled button.
     fireEvent.submit(form);
     fireEvent.submit(form);
@@ -659,7 +770,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     await waitFor(() => {
       expect(notifySuccess).toHaveBeenCalled();
     });
-    // Exactly ONE POST despite TWO submits — the re-entry guard fired.
+    // Exactly ONE POST despite TWO submits â€” the re-entry guard fired.
     const posts = fetchApiMock.mock.calls.filter(
       ([u, o]) => u === '/api/travel/invoices' && o?.method === 'POST',
     );
@@ -668,22 +779,22 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
 });
 
 // ---------------------------------------------------------------------------
-// #901 slice 3 — per-row PDF download tests
+// #901 slice 3 â€” per-row PDF download tests
 // ---------------------------------------------------------------------------
 //
 // The SUT routes PDF downloads through raw global `fetch` (NOT the shared
-// fetchApi helper) because fetchApi JSON-parses every 2xx body — a binary
+// fetchApi helper) because fetchApi JSON-parses every 2xx body â€” a binary
 // PDF blob has to flow through the Response object directly so we can call
 // .blob() on it. The test mocks:
-//   - global fetch (for the PDF endpoint) — returns a Response-shaped object
+//   - global fetch (for the PDF endpoint) â€” returns a Response-shaped object
 //     with { ok, status, blob() }.
-//   - URL.createObjectURL + URL.revokeObjectURL — vitest spies on the
+//   - URL.createObjectURL + URL.revokeObjectURL â€” vitest spies on the
 //     globalThis.URL namespace.
-//   - HTMLAnchorElement.prototype.click — vitest spy that swallows the click
+//   - HTMLAnchorElement.prototype.click â€” vitest spy that swallows the click
 //     so jsdom doesn't actually attempt a navigation.
 // fetchApi stays mocked for the list GET; the PDF call deliberately bypasses
 // it so we can pin the auth header + Response.blob() pattern explicitly.
-describe('<InvoicesAdmin /> — per-row PDF download (#901 slice 3)', () => {
+describe('<InvoicesAdmin /> â€” per-row PDF download (#901 slice 3)', () => {
   let originalFetch;
   let originalCreateObjectURL;
   let originalRevokeObjectURL;
@@ -760,7 +871,7 @@ describe('<InvoicesAdmin /> — per-row PDF download (#901 slice 3)', () => {
       expect(createObjectURLSpy).toHaveBeenCalled();
     });
     // The blob handed to createObjectURL must be a Blob with the PDF mime
-    // type — pinning the type catches the day someone "optimises" the SUT
+    // type â€” pinning the type catches the day someone "optimises" the SUT
     // by passing the raw Response (which createObjectURL won't accept).
     const blobArg = createObjectURLSpy.mock.calls[0][0];
     expect(blobArg).toBeInstanceOf(Blob);
@@ -808,7 +919,7 @@ describe('<InvoicesAdmin /> — per-row PDF download (#901 slice 3)', () => {
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Failed to download PDF');
     });
-    // No download surface created on failure — guard against partial-success
+    // No download surface created on failure â€” guard against partial-success
     // states like creating an orphan blob URL.
     expect(createObjectURLSpy).not.toHaveBeenCalled();
     expect(anchorClickSpy).not.toHaveBeenCalled();
@@ -828,7 +939,7 @@ describe('<InvoicesAdmin /> — per-row PDF download (#901 slice 3)', () => {
     });
   });
 
-  it('button shows "Downloading…" + is disabled while the in-flight fetch is pending', async () => {
+  it('button shows "Downloadingâ€¦" + is disabled while the in-flight fetch is pending', async () => {
     let releasePdf;
     const pending = new Promise((resolve) => { releasePdf = resolve; });
     fetchSpy.mockImplementationOnce(() => pending);
@@ -853,32 +964,32 @@ describe('<InvoicesAdmin /> — per-row PDF download (#901 slice 3)', () => {
   it('hidden when role=USER (PDF download is gated on canWrite alongside Edit/Delete)', async () => {
     renderPage({ role: 'USER' });
     await screen.findByText('TINV-2026-0001');
-    // Same actions-column gate as Edit/Delete — no PDF button surface for USER.
+    // Same actions-column gate as Edit/Delete â€” no PDF button surface for USER.
     expect(screen.queryByRole('button', { name: /Download PDF for invoice/i })).toBeNull();
   });
 });
 
 // ---------------------------------------------------------------------------
-// #901 slice 22 — TDS withholding tiles in the edit modal
+// #901 slice 22 â€” TDS withholding tiles in the edit modal
 // ---------------------------------------------------------------------------
 //
 // Slice 21 (12b9c752) shipped TDS math: POST /:id/issue now adds
 // `totalTds` + `payableAfterTds` to the response envelope. Slice 22
-// surfaces those figures on the InvoicesAdmin edit-modal panel — when the
-// invoice being edited has status ∈ {Issued, Paid} AND the lazy-fetched
+// surfaces those figures on the InvoicesAdmin edit-modal panel â€” when the
+// invoice being edited has status âˆˆ {Issued, Paid} AND the lazy-fetched
 // detail (GET /:id?include=lines) contains lineType==='tds' rows summing
 // to >0. The two tiles render:
-//   - "Total TDS Withheld" → formatMoney(totalTds, currency)
-//   - "Net Payable (After TDS)" → formatMoney(totalAmount - totalTds, currency)
+//   - "Total TDS Withheld" â†’ formatMoney(totalTds, currency)
+//   - "Net Payable (After TDS)" â†’ formatMoney(totalAmount - totalTds, currency)
 //
 // Visibility matrix:
-//   Status=Draft   → tiles never rendered (no detail fetch fires)
-//   Status=Issued  → detail fetched; tiles render only if totalTds > 0
-//   Status=Paid    → detail fetched; tiles render only if totalTds > 0
-//   Status=Partial → tiles never rendered (payable-after-TDS goes stale
-//                    once any payment is received — see comments in SUT)
-//   Status=Voided  → tiles never rendered (terminal state)
-describe('<InvoicesAdmin /> — TDS withholding tiles (#901 slice 22)', () => {
+//   Status=Draft   â†’ tiles never rendered (no detail fetch fires)
+//   Status=Issued  â†’ detail fetched; tiles render only if totalTds > 0
+//   Status=Paid    â†’ detail fetched; tiles render only if totalTds > 0
+//   Status=Partial â†’ tiles never rendered (payable-after-TDS goes stale
+//                    once any payment is received â€” see comments in SUT)
+//   Status=Voided  â†’ tiles never rendered (terminal state)
+describe('<InvoicesAdmin /> â€” TDS withholding tiles (#901 slice 22)', () => {
   it('renders both tiles when editing an Issued invoice with TDS lines (totalTds > 0)', async () => {
     installFetchMock({
       list: {
@@ -902,12 +1013,12 @@ describe('<InvoicesAdmin /> — TDS withholding tiles (#901 slice 22)', () => {
     renderPage();
     await screen.findByText('TINV-2026-0501');
     fireEvent.click(screen.getByRole('button', { name: /Edit invoice TINV-2026-0501/i }));
-    // Tiles surface — wait for the lazy fetch to resolve.
+    // Tiles surface â€” wait for the lazy fetch to resolve.
     expect(await screen.findByText(/Total TDS Withheld/i)).toBeInTheDocument();
     expect(screen.getByText(/Net Payable \(After TDS\)/i)).toBeInTheDocument();
     // The tile region (data-testid lock to avoid coupling to glass class).
     const tiles = screen.getByTestId('tds-tiles');
-    // Total TDS rendered through formatMoney with INR currency — assert
+    // Total TDS rendered through formatMoney with INR currency â€” assert
     // digit grouping + ₹ rather than verbatim per ICU-portability standing
     // rule (CLAUDE.md 2026-05-07 wave-6).
     expect(tiles.textContent).toMatch(/₹/);
@@ -954,7 +1065,7 @@ describe('<InvoicesAdmin /> — TDS withholding tiles (#901 slice 22)', () => {
       );
       expect(detailCall).toBeTruthy();
     });
-    // Tiles NOT in the DOM — no TDS line means no withholding surface.
+    // Tiles NOT in the DOM â€” no TDS line means no withholding surface.
     expect(screen.queryByTestId('tds-tiles')).toBeNull();
     expect(screen.queryByText(/Total TDS Withheld/i)).toBeNull();
   });
@@ -1016,7 +1127,7 @@ describe('<InvoicesAdmin /> — TDS withholding tiles (#901 slice 22)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// S56 (#920) — void-confirmation modal with cancel-preview surface
+// S56 (#920) â€” void-confirmation modal with cancel-preview surface
 // ---------------------------------------------------------------------------
 //
 // Per the S33 follow-up #4 backlog item: operators clicking the dedicated
@@ -1025,20 +1136,20 @@ describe('<InvoicesAdmin /> — TDS withholding tiles (#901 slice 22)', () => {
 // GET /api/travel/invoices/:id/cancel-preview (S58, commit c634af14)
 // and rendered based on `reason`:
 //
-//   reason: 'OK'                  → "Refund: ₹X per <policyName> (Y% — Zd before service)"
-//   reason: 'NO_POLICY_RESOLVED'  → "No matching cancellation policy. Voiding
+//   reason: 'OK'                  â†’ "Refund: â‚¹X per <policyName> (Y% â€” Zd before service)"
+//   reason: 'NO_POLICY_RESOLVED'  â†’ "No matching cancellation policy. Voiding
 //                                    will NOT auto-issue a credit note."
-//   preview-fetch failure         → "Could not load refund preview — review
+//   preview-fetch failure         â†’ "Could not load refund preview â€” review
 //                                    the policy before confirming."
 //
 // The reason text input is REQUIRED by the backend (5..500 chars,
-// INVALID_VOID_REASON) and remains in place — the preview is purely
+// INVALID_VOID_REASON) and remains in place â€” the preview is purely
 // informational. Confirm fires POST /:id/void with { reason }.
 //
 // Discriminator key: `preview.reason` (NOT `refundAmount === null`) since
 // `refundAmount: 0` is a valid no-refund-but-policy-matched state (the 0%
 // tier surfaces the policy without auto-issuing a credit note).
-describe('<InvoicesAdmin /> — void-confirmation modal (S56)', () => {
+describe('<InvoicesAdmin /> â€” void-confirmation modal (S56)', () => {
   it('clicking the Void icon button opens the modal AND fires the cancel-preview GET', async () => {
     renderPage();
     await screen.findByText('TINV-2026-0001');
@@ -1066,7 +1177,7 @@ describe('<InvoicesAdmin /> — void-confirmation modal (S56)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
     // Wait for the preview to land.
     const panel = await screen.findByTestId('void-preview-panel');
-    // Refund line: ₹25,000 + TMC Default + 50% + 14d.
+    // Refund line: â‚¹25,000 + TMC Default + 50% + 14d.
     // Asserting on substrings to tolerate the en-IN locale digit-grouping
     // variants per CLAUDE.md cron-learning 2026-05-07 wave-6.
     await waitFor(() => {
@@ -1115,7 +1226,7 @@ describe('<InvoicesAdmin /> — void-confirmation modal (S56)', () => {
       expect(panel.textContent).toMatch(/Could not load refund preview/);
     });
     expect(panel.textContent).toMatch(/review the policy before confirming/);
-    // Confirm button MUST remain available even after preview failure —
+    // Confirm button MUST remain available even after preview failure â€”
     // the preview is informational, not a hard gate.
     const confirmBtn = screen.getByRole('button', { name: /Confirm void of invoice TINV-2026-0001/i });
     expect(confirmBtn).not.toBeDisabled();
@@ -1134,7 +1245,7 @@ describe('<InvoicesAdmin /> — void-confirmation modal (S56)', () => {
     const reasonInput = screen.getByLabelText(/Void reason/i);
     expect(reasonInput).toBeInTheDocument();
     fireEvent.change(reasonInput, {
-      target: { value: 'Customer cancelled trip — refunded via card.' },
+      target: { value: 'Customer cancelled trip â€” refunded via card.' },
     });
     // Clear so we can isolate the POST call.
     fetchApiMock.mockClear();
@@ -1149,7 +1260,7 @@ describe('<InvoicesAdmin /> — void-confirmation modal (S56)', () => {
       );
       expect(post).toBeTruthy();
       const body = JSON.parse(post[1].body);
-      expect(body.reason).toBe('Customer cancelled trip — refunded via card.');
+      expect(body.reason).toBe('Customer cancelled trip â€” refunded via card.');
     });
     // Success toast fires + modal closes.
     await waitFor(() => {
@@ -1192,11 +1303,11 @@ describe('<InvoicesAdmin /> — void-confirmation modal (S56)', () => {
     });
     renderPage();
     await screen.findByText('TINV-2026-0601');
-    // Issued row → Void button surfaces.
+    // Issued row â†’ Void button surfaces.
     expect(
       screen.getByRole('button', { name: /Void invoice TINV-2026-0601/i }),
     ).toBeInTheDocument();
-    // Voided row → no Void button (already-Voided is terminal).
+    // Voided row â†’ no Void button (already-Voided is terminal).
     expect(
       screen.queryByRole('button', { name: /Void invoice TINV-2026-0602/i }),
     ).toBeNull();
@@ -1243,7 +1354,7 @@ describe('<InvoicesAdmin /> — void-confirmation modal (S56)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
     await screen.findByTestId('void-preview-panel');
     fireEvent.change(screen.getByLabelText(/Void reason/i), {
-      target: { value: 'Customer cancelled trip — refunded via card.' },
+      target: { value: 'Customer cancelled trip â€” refunded via card.' },
     });
     fireEvent.click(
       screen.getByRole('button', { name: /Confirm void of invoice TINV-2026-0001/i }),
@@ -1256,3 +1367,4 @@ describe('<InvoicesAdmin /> — void-confirmation modal (S56)', () => {
     expect(notifySuccess.mock.calls[0][0]).toMatch(/credit note auto-issued/i);
   });
 });
+

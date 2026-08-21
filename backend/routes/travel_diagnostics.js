@@ -1,41 +1,44 @@
-// Travel CRM — diagnostic engine routes (Phase 1 MVP).
+// Travel CRM  diagnostic engine routes (Phase 1 MVP).
 //
 // Endpoints:
-//   GET    /api/travel/diagnostic-banks                     — list active banks for caller's tenant
-//   POST   /api/travel/diagnostic-banks                     — ADMIN: create a new bank version
-//   GET    /api/travel/diagnostic-banks/:id                 — fetch one bank
-//   POST   /api/travel/diagnostics                          — submit a diagnostic (authed)
-//   GET    /api/travel/diagnostics                          — list diagnostics (paginated, filterable)
-//   GET    /api/travel/diagnostics/:id                      — fetch one diagnostic
-//   POST   /api/travel/diagnostics/:id/talking-points/regen — ADMIN/MANAGER: regen LLM brief (PRD §4.2)
-//   POST   /api/travel/diagnostics/banks/:id/request-change — any travel role: file a scoring
-//                                                             change-request Ticket to GS (PRD §4.2)
+//   GET    /api/travel/diagnostic-banks                      list active banks for caller's tenant
+//   POST   /api/travel/diagnostic-banks                      ADMIN: create a new bank version
+//   GET    /api/travel/diagnostic-banks/:id                  fetch one bank
+//   POST   /api/travel/diagnostics                           submit a diagnostic (authed)
+//   GET    /api/travel/diagnostics                           list diagnostics (paginated, filterable)
+//   GET    /api/travel/diagnostics/:id                       fetch one diagnostic
+//   POST   /api/travel/diagnostics/:id/talking-points/regen  ADMIN/MANAGER: regen LLM brief (PRD 4.2)
+//   POST   /api/travel/diagnostics/banks/:id/request-change  any travel role: file a scoring
+//                                                             change-request Ticket to GS (PRD 4.2)
 //
 // Mounted at /api/travel by server.js. All endpoints scope to
 // req.user.tenantId + vertical=travel (via requireTravelTenant guard,
 // shared with backend/routes/travel.js).
 //
-// Q16 — editable scoring is P1.5. POST /diagnostic-banks (admin) creates
+// Q16  editable scoring is P1.5. POST /diagnostic-banks (admin) creates
 // a NEW bank version; existing banks are not mutated. PUT is intentionally
-// omitted in P1 — admins ship a v2 bank by POSTing a new row + flipping
+// omitted in P1  admins ship a v2 bank by POSTing a new row + flipping
 // isActive on the old one.
 //
-// See docs/TRAVEL_CRM_PRD.md §4.2 + §5.1 for the contract.
+// See docs/TRAVEL_CRM_PRD.md 4.2 + 5.1 for the contract.
 
 const express = require("express");
-const path = require("path");
-const fs = require("fs");
 const crypto = require("crypto");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
-const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
+const {
+  scoreDiagnostic,
+  parseBank,
+} = require("../lib/travelDiagnosticScoring");
 const pdfRenderer = require("../services/pdfRenderer");
-const { renderTravelDiagnosticPdf } = pdfRenderer;
 const { findDuplicateContactFull } = require("../utils/deduplication");
 const llmRouter = require("../lib/llmRouter");
-// ── TMC diagnostic engine modules (T2 / T3 / T6 / T7) — used by T8 ────
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+const { sendEmail } = require("../lib/emailSender");
+const waWebClient = require("../services/whatsappWebClient");
+//  TMC diagnostic engine modules (T2 / T3 / T6 / T7)  used by T8
 // Require via shared `module.exports.<fn>` indirection so the test suite
 // can swap individual handlers via vi.spyOn on the cached modules without
 // having to vi.mock(). Matches the CJS self-mocking seam used by sibling
@@ -44,6 +47,8 @@ const tmcEngine = require("../lib/tmcDiagnosticEngine");
 const tmcLeadQuality = require("../lib/tmcLeadQuality");
 const tmcPrompts = require("../services/tmcDiagnosticPrompts");
 const tmcReportGuard = require("../lib/tmcReportGuard");
+const travelRag = require("../lib/travelRag");
+const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -51,119 +56,106 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
-const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
+const {
+  sanitizeText,
+  sanitizeJsonForStringColumn,
+} = require("../lib/sanitizeJson");
 
-// PRD §4.2 branded PDF — saved under backend/uploads/diagnostics/ and
-// served via the existing /uploads static mount (server.js:710). Filename
-// includes a 16-byte random suffix so the URL is unguessable for casual
-// access; auth'd surfaces (WhatsApp / email delivery, advisor download)
-// resolve via the stored TravelDiagnostic.reportPdfUrl column.
-const DIAG_PDF_DIR = path.join(__dirname, "..", "uploads", "diagnostics");
-try { fs.mkdirSync(DIAG_PDF_DIR, { recursive: true }); } catch { /* best-effort */ }
-
-async function generateDiagnosticPdfBestEffort(diag, bank) {
-  // Best-effort: if PDF generation fails, we don't break the diagnostic
-  // submission — the row is already saved, the advisor still sees it on
-  // the dashboard, and a future endpoint can re-generate. Logs the error
-  // for observability but swallows.
-  try {
-    const contact = diag.contactId
-      ? await prisma.contact.findUnique({
-          where: { id: diag.contactId },
-          select: { name: true, email: true, phone: true },
-        })
-      : { name: "Anonymous customer", email: null, phone: null };
-
-    // Brand logo for the header — S3 (tenant.logoUrl) first, local /uploads
-    // next, bundled asset last. Best-effort: a failure here just means the
-    // header draws its emblem instead.
-    let logoBuffer = null;
-    try {
-      const { resolveBrandLogoBuffer } = require("../lib/brandLogo");
-      const tenant = await prisma.tenant.findUnique({
-        where: { id: diag.tenantId },
-        select: { logoUrl: true },
-      });
-      logoBuffer = await resolveBrandLogoBuffer(tenant?.logoUrl);
-    } catch (logoErr) {
-      console.warn("[travel-diag] logo resolve failed:", logoErr.message);
-    }
-
-    const pdfBuf = await renderTravelDiagnosticPdf(diag, contact, bank, { logoBuffer });
-    const rand = crypto.randomBytes(16).toString("hex");
-    const filename = `diag-${diag.id}-${rand}.pdf`;
-    const filepath = path.join(DIAG_PDF_DIR, filename);
-    await fs.promises.writeFile(filepath, pdfBuf);
-    // Use the canonical /api/uploads prefix so the URL is routed to the backend
-    // in deployments where /uploads/* is handled by the frontend SPA.
-    const url = `/api/uploads/diagnostics/${filename}`;
-    await prisma.travelDiagnostic.update({
-      where: { id: diag.id },
-      data: { reportPdfUrl: url },
-    });
-    return url;
-  } catch (e) {
-    console.error("[travel-diag] PDF generation failed:", e.message);
-    return null;
+function parseDateRangeBoundary(input, kind) {
+  if (!input) return null;
+  const raw = String(input).trim();
+  if (!raw) return null;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? `${raw}${kind === "end" ? "T23:59:59.999Z" : "T00:00:00.000Z"}`
+    : raw;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    const err = new Error(
+      `${kind === "end" ? "toDate" : "fromDate"} must be a valid date`,
+    );
+    err.status = 400;
+    err.code = "INVALID_DATE";
+    throw err;
   }
+  return parsed;
 }
 
-// ─── Question banks ───────────────────────────────────────────────────
+//  Question banks
 
 // GET /api/travel/diagnostic-banks?subBrand=tmc&active=true
-router.get("/diagnostic-banks", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const where = { tenantId: req.travelTenant.id };
-    if (req.query.subBrand) {
-      assertValidSubBrand(String(req.query.subBrand));
-      where.subBrand = String(req.query.subBrand);
-    }
-    if (req.query.active === "true") where.isActive = true;
-    if (req.query.active === "false") where.isActive = false;
+router.get(
+  "/diagnostic-banks",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+      if (req.query.subBrand) {
+        assertValidSubBrand(String(req.query.subBrand));
+        where.subBrand = String(req.query.subBrand);
+      }
+      if (req.query.active === "true") where.isActive = true;
+      if (req.query.active === "false") where.isActive = false;
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (allowed) {
-      // Scope to allowed sub-brands only.
-      where.subBrand = where.subBrand
-        ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
-        : { in: [...allowed] };
-    }
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        // Scope to allowed sub-brands only.
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
 
-    const banks = await prisma.travelDiagnosticQuestionBank.findMany({
-      where,
-      orderBy: [{ subBrand: "asc" }, { version: "desc" }],
-      take: 100,
-    });
-    res.json({ banks });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-diag] list banks error:", e.message);
-    res.status(500).json({ error: "Failed to list banks" });
-  }
-});
+      const banks = await prisma.travelDiagnosticQuestionBank.findMany({
+        where,
+        orderBy: [{ subBrand: "asc" }, { version: "desc" }],
+        take: 100,
+      });
+      res.json({ banks });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] list banks error:", e.message);
+      res.status(500).json({ error: "Failed to list banks" });
+    }
+  },
+);
 
 // GET /api/travel/diagnostic-banks/:id
-router.get("/diagnostic-banks/:id", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-    });
-    if (!bank) return res.status(404).json({ error: "Bank not found", code: "NOT_FOUND" });
+router.get(
+  "/diagnostic-banks/:id",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!bank)
+        return res
+          .status(404)
+          .json({ error: "Bank not found", code: "NOT_FOUND" });
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, bank.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, bank.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      res.json(bank);
+    } catch (e) {
+      console.error("[travel-diag] get bank error:", e.message);
+      res.status(500).json({ error: "Failed to get bank" });
     }
-    res.json(bank);
-  } catch (e) {
-    console.error("[travel-diag] get bank error:", e.message);
-    res.status(500).json({ error: "Failed to get bank" });
-  }
-});
+  },
+);
 
 // POST /api/travel/diagnostic-banks
 // Admin-only: creates a new bank version. Body must include subBrand,
@@ -178,7 +170,8 @@ router.post(
   requirePermission("diagnostics", "write"),
   async (req, res) => {
     try {
-      const { subBrand, questionsJson, scoringRulesJson, isActive } = req.body || {};
+      const { subBrand, questionsJson, scoringRulesJson, isActive } =
+        req.body || {};
       if (!subBrand || !questionsJson || !scoringRulesJson) {
         return res.status(400).json({
           error: "subBrand, questionsJson, scoringRulesJson required",
@@ -187,7 +180,7 @@ router.post(
       }
       assertValidSubBrand(subBrand);
 
-      // Validate JSON parseability up-front — a non-parseable bank can't
+      // Validate JSON parseability up-front  a non-parseable bank can't
       // be scored against, so we reject at create time rather than at
       // submit time.
       const { bank, warnings } = parseBank(questionsJson, scoringRulesJson);
@@ -231,22 +224,23 @@ router.post(
       });
       res.status(201).json(created);
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] create bank error:", e.message);
       res.status(500).json({ error: "Failed to create bank" });
     }
   },
 );
 
-// ─── PRD §4.2 — Phase-1 "Request change" ticket (view-only scoring) ────
+//  PRD 4.2  Phase-1 "Request change" ticket (view-only scoring)
 //
 // POST /api/travel/diagnostics/banks/:id/request-change
 //
-// Diagnostic scoring is VIEW-ONLY in Phase 1 (Response A.6 — protects the
+// Diagnostic scoring is VIEW-ONLY in Phase 1 (Response A.6  protects the
 // 90-day analytics baseline). Advisors who spot a question/band problem
 // can't edit the bank; this endpoint routes a change request to GS as a
 // support Ticket instead. ANY travel role may request (verifyToken +
-// requireTravelTenant only — no verifyRole, mirrors GET /diagnostic-banks
+// requireTravelTenant only  no verifyRole, mirrors GET /diagnostic-banks
 // posture), but sub-brand access is still enforced so a MANAGER locked to
 // one sub-brand can't file tickets against another brand's bank.
 //
@@ -256,11 +250,11 @@ router.post(
 //   goes through sanitizeJsonForStringColumn so the ticket description
 //   carries a clean JSON string.
 //
-// Creates a tenant-scoped Ticket (status "Open", priority "Medium" — the
+// Creates a tenant-scoped Ticket (status "Open", priority "Medium"  the
 // "normal" tier of routes/tickets.js VALID_PRIORITIES) with subject
 // `[Diagnostic change request] <subBrand> bank v<version>: <summary>`,
 // then writes a best-effort DIAGNOSTIC_BANK_CHANGE_REQUESTED audit row
-// (writeAudit is fail-soft by contract — never blocks the response).
+// (writeAudit is fail-soft by contract  never blocks the response).
 //
 // Returns 201 { ticket: { id, subject, status } }.
 router.post(
@@ -271,40 +265,54 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
       const { summary, details, proposedChangesJson } = req.body || {};
       // Sanitize BEFORE the required-check so a value that is nothing but
-      // markup (e.g. "<script>…</script>") rejects as missing.
-      const cleanSummary = typeof summary === "string" ? sanitizeText(summary) : "";
+      // markup (e.g. "<script></script>") rejects as missing.
+      const cleanSummary =
+        typeof summary === "string" ? sanitizeText(summary) : "";
       if (!cleanSummary) {
         return res.status(400).json({
           error: "summary is required",
           code: "MISSING_FIELDS",
         });
       }
-      const cleanDetails = typeof details === "string" ? sanitizeText(details) : null;
+      const cleanDetails =
+        typeof details === "string" ? sanitizeText(details) : null;
       const cleanProposed =
-        proposedChangesJson != null ? sanitizeJsonForStringColumn(proposedChangesJson) : null;
+        proposedChangesJson != null
+          ? sanitizeJsonForStringColumn(proposedChangesJson)
+          : null;
 
       const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
-      if (!bank) return res.status(404).json({ error: "Bank not found", code: "NOT_FOUND" });
+      if (!bank)
+        return res
+          .status(404)
+          .json({ error: "Bank not found", code: "NOT_FOUND" });
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, bank.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       // Cap the summary inside the subject so the row stays well under the
       // column's VARCHAR budget; the full text still lands in description.
-      const subjectSummary = cleanSummary.length > 140 ? `${cleanSummary.slice(0, 140)}…` : cleanSummary;
+      const subjectSummary =
+        cleanSummary.length > 140
+          ? `${cleanSummary.slice(0, 140)}`
+          : cleanSummary;
       const subject = `[Diagnostic change request] ${bank.subBrand} bank v${bank.version}: ${subjectSummary}`;
       const requester = `user #${req.user.userId}${req.user.email ? ` (${req.user.email})` : ""}`;
       const descLines = [
-        "Diagnostic scoring is view-only in Phase 1 (PRD §4.2) — change request routed to GS.",
+        "Diagnostic scoring is view-only in Phase 1 (PRD 4.2) — change request routed to GS.",
         `Requested by: ${requester}`,
         `Question bank: #${bank.id} — ${bank.subBrand} v${bank.version}`,
         `Summary: ${cleanSummary}`,
@@ -322,38 +330,48 @@ router.post(
         },
       });
 
-      // Best-effort audit row — writeAudit swallows its own failures.
+      // Best-effort audit row  writeAudit swallows its own failures.
       await writeAudit(
         "TravelDiagnosticQuestionBank",
         "DIAGNOSTIC_BANK_CHANGE_REQUESTED",
         bank.id,
         req.user.userId,
         req.travelTenant.id,
-        { ticketId: ticket.id, subBrand: bank.subBrand, version: bank.version, summary: subjectSummary },
+        {
+          ticketId: ticket.id,
+          subBrand: bank.subBrand,
+          version: bank.version,
+          summary: subjectSummary,
+        },
       );
 
       res.status(201).json({
-        ticket: { id: ticket.id, subject: ticket.subject, status: ticket.status },
+        ticket: {
+          id: ticket.id,
+          subject: ticket.subject,
+          status: ticket.status,
+        },
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] request-change error:", e.message);
       res.status(500).json({ error: "Failed to submit change request" });
     }
   },
 );
 
-// ─── Diagnostic submissions ───────────────────────────────────────────
+//  Diagnostic submissions
 
 // POST /api/travel/diagnostics
 // Submit a completed diagnostic. Caller provides bankId + answersJson;
 // the route scores it, stamps the questionsJson snapshot, and persists.
 // Optional links: contactId (the lead) and leadId (the deal).
-// PRD_TMC_CURRICULUM_MAPPING §3 FR-5 — build curriculum→destination
+// PRD_TMC_CURRICULUM_MAPPING 3 FR-5  build curriculumdestination
 // recommendations for a TMC diagnostic. Given the student's curriculum + grade
 // (+ optional subject), match active TravelCurriculumMapping rows, aggregate by
 // destination, rank by average fitScore, and return the top N. Returns null
-// when curriculum context is absent or nothing matches — the caller then
+// when curriculum context is absent or nothing matches  the caller then
 // leaves curriculumFitJson null and the PDF omits the section (FR-7 fallback).
 async function buildCurriculumFit(tenantId, { curriculum, grade, subject }) {
   const cur = (curriculum || "").toString().trim();
@@ -377,8 +395,11 @@ async function buildCurriculumFit(tenantId, { curriculum, grade, subject }) {
   for (const r of rows) {
     const key =
       r.destinationLabel ||
-      (r.destinationId != null ? `Trip #${r.destinationId}` : "Unspecified destination");
-    if (!byDest.has(key)) byDest.set(key, { destination: key, scores: [], reasons: [] });
+      (r.destinationId != null
+        ? `Trip #${r.destinationId}`
+        : "Unspecified destination");
+    if (!byDest.has(key))
+      byDest.set(key, { destination: key, scores: [], reasons: [] });
     const bucket = byDest.get(key);
     if (typeof r.fitScore === "number") bucket.scores.push(r.fitScore);
     bucket.reasons.push({
@@ -399,103 +420,153 @@ async function buildCurriculumFit(tenantId, { curriculum, grade, subject }) {
     .sort((a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0))
     .slice(0, 5);
 
-  return { curriculum: cur, grade: grd, subject: subj || null, recommendations };
+  return {
+    curriculum: cur,
+    grade: grd,
+    subject: subj || null,
+    recommendations,
+  };
 }
 
-router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const { bankId, answers, contactId, leadId, consentCapturedAt, curriculum, grade, subject } = req.body || {};
-    if (!bankId || !answers) {
-      return res.status(400).json({
-        error: "bankId and answers required",
-        code: "MISSING_FIELDS",
-      });
-    }
-    const bankIdNum = parseInt(bankId, 10);
-    if (!Number.isFinite(bankIdNum)) {
-      return res.status(400).json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
-    }
-
-    const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
-      where: { id: bankIdNum, tenantId: req.travelTenant.id },
-    });
-    if (!bank) {
-      return res.status(404).json({ error: "Bank not found", code: "BANK_NOT_FOUND" });
-    }
-    if (!bank.isActive) {
-      return res.status(409).json({ error: "Bank is not active", code: "BANK_INACTIVE" });
-    }
-
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, bank.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
-    }
-
-    // Parse the bank's stored JSON, compute the score.
-    const { bank: parsed, warnings: parseWarnings } = parseBank(
-      bank.questionsJson,
-      bank.scoringRulesJson,
-    );
-    if (!parsed) {
-      // Bank passed create-time validation; if it fails now it's been
-      // corrupted in-storage. Refuse to write a score in that case.
-      return res.status(500).json({
-        error: "Bank JSON has become unparseable",
-        code: "BANK_CORRUPTED",
-        warnings: parseWarnings,
-      });
-    }
-
-    const result = scoreDiagnostic(parsed, answers);
-
-    // FR-5: TMC-only curriculum-fit recommendations. Curriculum context comes
-    // from explicit body fields, falling back to same-named answer keys. Any
-    // failure here is non-fatal — the diagnostic still writes without the fit.
-    let curriculumFit = null;
-    if (bank.subBrand === "tmc") {
-      try {
-        curriculumFit = await buildCurriculumFit(req.travelTenant.id, {
-          curriculum: curriculum ?? answers?.curriculum,
-          grade: grade ?? answers?.grade,
-          subject: subject ?? answers?.subject,
+router.post(
+  "/diagnostics",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const {
+        bankId,
+        answers,
+        contactId,
+        leadId,
+        consentCapturedAt,
+        curriculum,
+        grade,
+        subject,
+      } = req.body || {};
+      if (!bankId || !answers) {
+        return res.status(400).json({
+          error: "bankId and answers required",
+          code: "MISSING_FIELDS",
         });
-      } catch (fitErr) {
-        console.warn("[travel-diag] curriculum-fit build failed:", fitErr.message);
       }
+      const bankIdNum = parseInt(bankId, 10);
+      if (!Number.isFinite(bankIdNum)) {
+        return res
+          .status(400)
+          .json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
+      }
+
+      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+        where: { id: bankIdNum, tenantId: req.travelTenant.id },
+      });
+      if (!bank) {
+        return res
+          .status(404)
+          .json({ error: "Bank not found", code: "BANK_NOT_FOUND" });
+      }
+      if (!bank.isActive) {
+        return res
+          .status(409)
+          .json({ error: "Bank is not active", code: "BANK_INACTIVE" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, bank.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Parse the bank's stored JSON, compute the score.
+      const { bank: parsed, warnings: parseWarnings } = parseBank(
+        bank.questionsJson,
+        bank.scoringRulesJson,
+      );
+      if (!parsed) {
+        // Bank passed create-time validation; if it fails now it's been
+        // corrupted in-storage. Refuse to write a score in that case.
+        return res.status(500).json({
+          error: "Bank JSON has become unparseable",
+          code: "BANK_CORRUPTED",
+          warnings: parseWarnings,
+        });
+      }
+
+      const result = scoreDiagnostic(parsed, answers);
+
+      // FR-5: TMC-only curriculum-fit recommendations. Curriculum context comes
+      // from explicit body fields, falling back to same-named answer keys. Any
+      // failure here is non-fatal  the diagnostic still writes without the fit.
+      let curriculumFit = null;
+      if (bank.subBrand === "tmc") {
+        try {
+          curriculumFit = await buildCurriculumFit(req.travelTenant.id, {
+            curriculum: curriculum ?? answers?.curriculum,
+            grade: grade ?? answers?.grade,
+            subject: subject ?? answers?.subject,
+          });
+        } catch (fitErr) {
+          console.warn(
+            "[travel-diag] curriculum-fit build failed:",
+            fitErr.message,
+          );
+        }
+      }
+
+      // Capture the questionsJson + scoringRulesJson snapshot for audit.
+      // Combined into a single JSON-as-string to keep the schema simple.
+      const snapshot = JSON.stringify({
+        bankId: bank.id,
+        bankVersion: bank.version,
+        questionsJson: bank.questionsJson,
+        scoringRulesJson: bank.scoringRulesJson,
+        scoringWarnings: result.warnings,
+      });
+
+      const diag = await prisma.travelDiagnostic.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subBrand: bank.subBrand,
+          contactId: contactId ? parseInt(contactId, 10) : null,
+          leadId: leadId ? parseInt(leadId, 10) : null,
+          questionBankId: bank.id,
+          questionsJson: snapshot,
+          answersJson: JSON.stringify(answers),
+          score: result.score,
+          classification: result.classification,
+          classificationLabel: result.classificationLabel,
+          recommendedTier: result.recommendedTier,
+          curriculumFitJson: curriculumFit
+            ? JSON.stringify(curriculumFit)
+            : null,
+          consentCapturedAt: consentCapturedAt
+            ? new Date(consentCapturedAt)
+            : null,
+        },
+      });
+
+      // RAG knowledge-base recommendations: best-effort for any travel sub-brand
+    // that has indexed PDFs. Runs only when Qdrant + OpenAI embeddings are
+    // configured. Never blocks the diagnostic submission; a failure simply omits
+    // the RAG section from the PDF.
+    let ragResult = null;
+    try {
+      ragResult = await travelRag.runRagForDiagnostic({
+        tenantId: req.travelTenant.id,
+        diagnosticId: diag.id,
+        subBrand: bank.subBrand,
+        answers,
+        bank: parsed,
+      });
+    } catch (ragErr) {
+      console.warn("[travel-diag] RAG generation failed (non-fatal):", ragErr.message);
     }
 
-    // Capture the questionsJson + scoringRulesJson snapshot for audit.
-    // Combined into a single JSON-as-string to keep the schema simple.
-    const snapshot = JSON.stringify({
-      bankId: bank.id,
-      bankVersion: bank.version,
-      questionsJson: bank.questionsJson,
-      scoringRulesJson: bank.scoringRulesJson,
-      scoringWarnings: result.warnings,
-    });
-
-    const diag = await prisma.travelDiagnostic.create({
-      data: {
-        tenantId: req.travelTenant.id,
-        subBrand: bank.subBrand,
-        contactId: contactId ? parseInt(contactId, 10) : null,
-        leadId: leadId ? parseInt(leadId, 10) : null,
-        questionBankId: bank.id,
-        questionsJson: snapshot,
-        answersJson: JSON.stringify(answers),
-        score: result.score,
-        classification: result.classification,
-        classificationLabel: result.classificationLabel,
-        recommendedTier: result.recommendedTier,
-        curriculumFitJson: curriculumFit ? JSON.stringify(curriculumFit) : null,
-        consentCapturedAt: consentCapturedAt ? new Date(consentCapturedAt) : null,
-      },
-    });
-
-    // PRD §4.2: branded PDF generated on submission. Awaited so the
+    // PRD 4.2: branded PDF generated on submission. Awaited so the
     // response includes reportPdfUrl; if generation fails, the diagnostic
     // row is still returned (PDF can be regenerated later).
-    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank);
+    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, { ragResult });
 
     res.status(201).json({
       diagnostic: { ...diag, reportPdfUrl: reportPdfUrl || diag.reportPdfUrl },
@@ -506,6 +577,7 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
       warnings: result.warnings,
       reportPdfUrl,
       recommendations: curriculumFit?.recommendations || [],
+      ragResult,
     });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -514,118 +586,408 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
   }
 });
 
-// POST /api/travel/diagnostics/:id/report-pdf/regen — (re)generate the branded
+// POST /api/travel/diagnostics/:id/report-pdf/regen  (re)generate the branded
 // report PDF on demand. Submission-time PDF generation is best-effort and can
 // fail silently (e.g. transient write/DB error), leaving reportPdfUrl null with
 // no way to recover from the UI. This endpoint rebuilds the PDF from the
 // diagnostic's own immutable question snapshot and returns the fresh URL.
-router.post("/diagnostics/:id/report-pdf/regen", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const diag = await prisma.travelDiagnostic.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-    });
-    if (!diag) {
-      return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
-    }
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, diag.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
-    }
-
-    // Reconstruct a bank-like object from the diagnostic's stored snapshot so
-    // the report renders the exact question set it was submitted with.
-    let bank = null;
+router.post(
+  "/diagnostics/:id/report-pdf/regen",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
     try {
-      const snap = JSON.parse(diag.questionsJson || "{}");
-      bank = { version: snap.bankVersion, questionsJson: snap.questionsJson };
-    } catch {
-      bank = null;
-    }
-
-    const url = await generateDiagnosticPdfBestEffort(diag, bank);
-    if (!url) {
-      return res.status(500).json({ error: "PDF generation failed", code: "PDF_FAILED" });
-    }
-    res.json({ reportPdfUrl: url });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-diag] report-pdf regen error:", e.message);
-    res.status(500).json({ error: "Failed to regenerate report PDF" });
-  }
-});
-
-// GET /api/travel/diagnostics?subBrand=tmc&classification=level_2&contactId=42
-router.get("/diagnostics", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const where = { tenantId: req.travelTenant.id };
-    if (req.query.subBrand) {
-      assertValidSubBrand(String(req.query.subBrand));
-      where.subBrand = String(req.query.subBrand);
-    }
-    if (req.query.classification) where.classification = String(req.query.classification);
-    if (req.query.contactId) {
-      const cid = parseInt(req.query.contactId, 10);
-      if (Number.isFinite(cid)) where.contactId = cid;
-    }
-
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (allowed) {
-      where.subBrand = where.subBrand
-        ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
-        : { in: [...allowed] };
-    }
-
-    const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
-    const skip = parseInt(req.query.offset, 10) || 0;
-
-    const [diagnostics, total] = await Promise.all([
-      prisma.travelDiagnostic.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        take,
-        skip,
-      }),
-      prisma.travelDiagnostic.count({ where }),
-    ]);
-
-    // TravelDiagnostic has no Prisma relation to Contact (just contactId), so
-    // batch-fetch the contacts and attach name/email so the UI can show WHO
-    // took each diagnostic instead of a bare "#id".
-    const contactIds = [...new Set(diagnostics.map((d) => d.contactId).filter(Boolean))];
-    const contactMap = {};
-    if (contactIds.length) {
-      const contacts = await prisma.contact.findMany({
-        where: { id: { in: contactIds }, tenantId: req.travelTenant.id },
-        select: { id: true, name: true, email: true, phone: true },
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const diag = await prisma.travelDiagnostic.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
       });
-      for (const c of contacts) contactMap[c.id] = c;
+      if (!diag) {
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+      }
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, diag.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Reconstruct a bank-like object from the diagnostic's stored snapshot so
+      // the report renders the exact question set it was submitted with.
+      let bank = null;
+      try {
+        const snap = JSON.parse(diag.questionsJson || "{}");
+        bank = { version: snap.bankVersion, questionsJson: snap.questionsJson };
+      } catch {
+        bank = null;
+      }
+
+      const url = await generateDiagnosticPdfBestEffort(diag, bank);
+      if (!url) {
+        return res
+          .status(500)
+          .json({ error: "PDF generation failed", code: "PDF_FAILED" });
+      }
+      res.json({ reportPdfUrl: url });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] report-pdf regen error:", e.message);
+      res.status(500).json({ error: "Failed to regenerate report PDF" });
     }
-    const enriched = diagnostics.map((d) => ({
-      ...d,
-      contact: d.contactId ? contactMap[d.contactId] || null : null,
-    }));
-    res.json({ diagnostics: enriched, total, limit: take, offset: skip });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-diag] list diagnostics error:", e.message);
-    res.status(500).json({ error: "Failed to list diagnostics" });
-  }
-});
+  },
+);
+
+// POST /api/travel/diagnostics/:id/share
+//
+// Mint the public TMC readiness-report link and deliver it to the
+// diagnostic's contact via email and/or WhatsApp. Mirrors the quote /
+// itinerary share flow: the public link itself is always returned so the
+// advisor can copy it manually, and delivery is best-effort.
+//
+// Body:
+//   {
+//     channel: "auto" | "email" | "whatsapp" | "manual",
+//     frontendBase?: string,
+//     email?: string,
+//     phone?: string
+//   }
+//
+// The public page is `/p/tmc/report/:slug` and is backed by the
+// existing no-auth JSON endpoint.
+router.post(
+  "/diagnostics/:id/share",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "update"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const diag = await prisma.travelDiagnostic.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!diag) {
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, diag.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const contact = diag.contactId
+        ? await prisma.contact.findFirst({
+            where: { id: diag.contactId, tenantId: req.travelTenant.id },
+            select: { id: true, name: true, email: true, phone: true },
+          })
+        : null;
+
+      const channelMode = String(
+        (req.body || {}).channel || "auto",
+      ).toLowerCase();
+      if (!["auto", "email", "whatsapp", "manual"].includes(channelMode)) {
+        return res.status(400).json({
+          error: "channel must be auto, email, whatsapp, or manual",
+          code: "INVALID_CHANNEL",
+        });
+      }
+
+      const portalBase = String(
+        (req.body || {}).frontendBase || getFrontendUrlFromRequest(req) || "",
+      ).replace(/\/+$/, "");
+      if (!portalBase) {
+        return res
+          .status(400)
+          .json({
+            error: "Frontend base URL is required",
+            code: "MISSING_FRONTEND_BASE",
+          });
+      }
+      const reportSlug = buildReportSlug(diag.id);
+      const shareUrl = `${portalBase}/p/tmc/report/${reportSlug}`;
+
+      const contactName = contact?.name || "there";
+      const contactEmail = String(
+        (req.body || {}).email || contact?.email || "",
+      ).trim();
+      const contactPhone = String(
+        (req.body || {}).phone || contact?.phone || "",
+      ).trim();
+      const emailEnabled = channelMode === "auto" || channelMode === "email";
+      const whatsappEnabled =
+        channelMode === "auto" || channelMode === "whatsapp";
+
+      let emailStatus = "SKIPPED";
+      let whatsappStatus = "SKIPPED";
+      const channelsUsed = [];
+
+      if (emailEnabled && contactEmail) {
+        const result = await sendEmail({
+          to: contactEmail,
+          subject: "Your readiness report is ready",
+          text:
+            `Hi ${contactName},\n\n` +
+            `Your readiness report is ready. View it here:\n${shareUrl}\n\n` +
+            "Thank you.",
+          html:
+            `<p>Hi ${contactName},</p>` +
+            `<p>Your readiness report is ready.</p>` +
+            `<p><a href="${shareUrl}" target="_blank" rel="noopener noreferrer">Open your readiness report</a></p>` +
+            `<p>Thank you.</p>`,
+        }).catch(() => ({ sent: false }));
+        emailStatus = result && result.sent ? "SENT" : "SKIPPED";
+        if (result && result.sent) channelsUsed.push("email");
+      }
+
+      if (whatsappEnabled && contactPhone) {
+        const result = await waWebClient
+          .sendBestEffort({
+            tenantId: req.travelTenant.id,
+            subBrand: diag.subBrand,
+            toPhone: contactPhone,
+            contactId: contact?.id || null,
+            fallbackText:
+              `Hi ${contactName}! Your readiness report is ready. ` +
+              `View it here: ${shareUrl}`,
+          })
+          .catch(() => ({ sent: false, status: "FAILED" }));
+        whatsappStatus = (result && result.status) || "FAILED";
+        if (result && result.sent === true) channelsUsed.push("whatsapp");
+      }
+
+      writeAudit(
+        "TravelDiagnostic",
+        "DIAGNOSTIC_SHARE",
+        diag.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          subBrand: diag.subBrand,
+          channel: channelsUsed.join("+") || "none",
+          reportSlug,
+          shareUrl,
+          emailStatus,
+          whatsappStatus,
+        },
+      ).catch(() => {});
+
+      res.json({
+        diagnosticId: diag.id,
+        reportSlug,
+        shareUrl,
+        email: emailStatus,
+        whatsapp: whatsappStatus,
+        channel: channelsUsed.length ? channelsUsed.join("+") : "none",
+      });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] share error:", e.message);
+      res
+        .status(500)
+        .json({
+          error: "Failed to share readiness report",
+          code: "SHARE_FAILED",
+        });
+    }
+  },
+);
+// GET /api/travel/diagnostics?subBrand=tmc&classification=level_2&contactId=42
+router.get(
+  "/diagnostics",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+      if (req.query.subBrand) {
+        assertValidSubBrand(String(req.query.subBrand));
+        where.subBrand = String(req.query.subBrand);
+      }
+      if (req.query.classification)
+        where.classification = String(req.query.classification);
+      if (req.query.contactId) {
+        const cid = parseInt(req.query.contactId, 10);
+        if (Number.isFinite(cid)) where.contactId = cid;
+      }
+      const fromDate = parseDateRangeBoundary(req.query.fromDate, "start");
+      const toDate = parseDateRangeBoundary(req.query.toDate, "end");
+      if (fromDate || toDate) {
+        where.createdAt = {};
+        if (fromDate) where.createdAt.gte = fromDate;
+        if (toDate) where.createdAt.lte = toDate;
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+      const skip = parseInt(req.query.offset, 10) || 0;
+
+      const [diagnostics, total] = await Promise.all([
+        prisma.travelDiagnostic.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          take,
+          skip,
+        }),
+        prisma.travelDiagnostic.count({ where }),
+      ]);
+
+      // TravelDiagnostic has no Prisma relation to Contact (just contactId), so
+      // batch-fetch the contacts and attach name/email so the UI can show WHO
+      // took each diagnostic instead of a bare "#id".
+      const contactIds = [...new Set(diagnostics.map((d) => d.contactId).filter(Boolean))];
+      const contactMap = {};
+      if (contactIds.length) {
+        const contacts = await prisma.contact.findMany({
+          where: { id: { in: contactIds }, tenantId: req.travelTenant.id },
+          select: { id: true, name: true, email: true, phone: true },
+        });
+        for (const c of contacts) contactMap[c.id] = c;
+      }
+
+      // TravelDiagnosticRagResult is also not relation-wired; batch-fetch so the
+      // portal history can show the readiness score + recommended trips.
+      const diagnosticIds = diagnostics.map((d) => d.id);
+      const ragMap = {};
+      if (diagnosticIds.length && prisma.travelDiagnosticRagResult && typeof prisma.travelDiagnosticRagResult.findMany === "function") {
+        const ragRows = await prisma.travelDiagnosticRagResult.findMany({
+          where: { diagnosticId: { in: diagnosticIds }, tenantId: req.travelTenant.id },
+        });
+        for (const r of ragRows) {
+          let recommendations = null;
+          try {
+            recommendations = JSON.parse(r.recommendationsJson || "null");
+          } catch {
+            recommendations = null;
+          }
+          ragMap[r.diagnosticId] = {
+            id: r.id,
+            readinessScore: r.readinessScore,
+            recommendations,
+            generatedAt: r.generatedAt,
+            model: r.model,
+            stub: r.stub,
+          };
+        }
+      }
+
+      const enriched = diagnostics.map((d) => ({
+        ...d,
+        contact: d.contactId ? contactMap[d.contactId] || null : null,
+        ragResult: ragMap[d.id] || null,
+      }));
+      res.json({ diagnostics: enriched, total, limit: take, offset: skip });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] list diagnostics error:", e.message);
+      res.status(500).json({ error: "Failed to list diagnostics" });
+    }
+  });
+
+router.delete(
+  "/diagnostics/bulk",
+  verifyToken,
+  requirePermission("diagnostics", "delete"),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const ids = Array.isArray(req.body?.ids)
+        ? [...new Set(req.body.ids.map((id) => parseInt(id, 10)).filter(Number.isFinite))]
+        : [];
+      if (!ids.length) {
+        return res.status(400).json({
+          error: "ids must be a non-empty array of numeric ids",
+          code: "MISSING_IDS",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const where = {
+        tenantId: req.travelTenant.id,
+        id: { in: ids },
+      };
+      if (allowed) where.subBrand = { in: [...allowed] };
+
+      const rows = await prisma.travelDiagnostic.findMany({
+        where,
+        select: { id: true, subBrand: true },
+      });
+      if (!rows.length) {
+        return res.status(404).json({
+          error: "No matching diagnostics found",
+          code: "NOT_FOUND",
+        });
+      }
+
+      const deletedIds = rows.map((row) => row.id);
+      const result = await prisma.travelDiagnostic.deleteMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          id: { in: deletedIds },
+        },
+      });
+
+      await Promise.all(
+        deletedIds.map((id) =>
+          writeAudit(
+            "TravelDiagnostic",
+            "DELETE",
+            id,
+            req.user.userId,
+            req.travelTenant.id,
+            { deletedByBulk: true },
+          ),
+        ),
+      );
+
+      return res.json({
+        deletedCount: Number(result?.count) || deletedIds.length,
+        deletedIds,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-diag] bulk delete diagnostics error:", e.message);
+      return res.status(500).json({ error: "Failed to bulk delete diagnostics" });
+    }
+  },
+);
 
 // ============================================================================
-// GET /api/travel/diagnostics/stats — tenant-wide Diagnostic submissions rollup
-// (PRD_TRAVEL_RFU_DIAGNOSTIC §3).
+// GET /api/travel/diagnostics/stats  tenant-wide Diagnostic submissions rollup
+// (PRD_TRAVEL_RFU_DIAGNOSTIC 3).
 //
 // Mirrors #905 slice 18 /commission-profiles/stats + #903 slice 23
 // /suppliers/stats + #908 slice 19 /flyer-templates/global-stats. USER-readable
 // anodyne aggregate. Powers the Diagnostics dashboard's header summary strip
-// ("42 submissions · 18 TMC · 12 RFU · 8 TS · 4 VS · across 3 banks · last
+// ("42 submissions  18 TMC  12 RFU  8 TS  4 VS  across 3 banks  last
 // submitted 2h ago"). Without this, the frontend has to fire {list,
-// count by subBrand×4, count by bank×N} — N+1 round-trips for a single
+// count by subBrand4, count by bankN}  N+1 round-trips for a single
 // visual surface.
 //
 // Distinct from GET /diagnostics (paginated list with row payload) and
@@ -637,17 +999,17 @@ router.get("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =>
 //     allowed sub-brands' diagnostics in the counts. Same gate as the
 //     /diagnostics list endpoint.
 //   - Rollup:
-//       total                                — count of matching diagnostics
+//       total                                 count of matching diagnostics
 //       bySubBrand: { <sb|_tenant>: { count } }
-//       byBank: { <bankId>: { count, bankName } }   — bankName = `${subBrand} v${version}`
+//       byBank: { <bankId>: { count, bankName } }    bankName = `${subBrand} v${version}`
 //                                                     since QuestionBank has no name field
-//       lastSubmittedAt                      — max(createdAt) across matching rows
+//       lastSubmittedAt                       max(createdAt) across matching rows
 //   - ?from / ?to (ISO date bounds) filter Diagnostic.createdAt before aggregation.
 //
 // Public/auth split: the TravelDiagnostic schema has NO marker distinguishing
 // public-quiz submissions from authenticated submissions (both land in the
 // same model with the same fields). publicCount / authCount are intentionally
-// omitted from the response shape — the prompt allows skipping these when
+// omitted from the response shape  the prompt allows skipping these when
 // the schema doesn't model the distinction.
 //
 // Safety cap: process at most 2000 diagnostics per call; if matching total >
@@ -682,7 +1044,9 @@ router.get(
             code: "INVALID_DATE",
           });
         }
-        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, { gte: d });
+        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, {
+          gte: d,
+        });
       }
       if (toRaw) {
         const d = new Date(toRaw);
@@ -692,10 +1056,12 @@ router.get(
             code: "INVALID_DATE",
           });
         }
-        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, { lte: d });
+        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, {
+          lte: d,
+        });
       }
 
-      // Sub-brand narrowing — same gate as the /diagnostics list endpoint.
+      // Sub-brand narrowing  same gate as the /diagnostics list endpoint.
       // MANAGER subBrandAccess restricts the visible-set BEFORE counting.
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (allowed) {
@@ -721,10 +1087,12 @@ router.get(
       });
 
       // Get the true total so callers know if aggregation is bounded.
-      const totalMatching = await prisma.travelDiagnostic.count({ where: diagWhere });
+      const totalMatching = await prisma.travelDiagnostic.count({
+        where: diagWhere,
+      });
       const aggregateExceedsCap = totalMatching > DIAGNOSTICS_STATS_CAP;
 
-      // Empty short-circuit — return zeroed shape.
+      // Empty short-circuit  return zeroed shape.
       if (diagnostics.length === 0) {
         return res.json({
           total: 0,
@@ -742,14 +1110,15 @@ router.get(
       const bankIdsSeen = new Set();
 
       for (const d of diagnostics) {
-        const ts = d.createdAt instanceof Date ? d.createdAt : new Date(d.createdAt);
+        const ts =
+          d.createdAt instanceof Date ? d.createdAt : new Date(d.createdAt);
         if (!Number.isNaN(ts.getTime())) {
           if (!lastSubmittedAt || ts > lastSubmittedAt) lastSubmittedAt = ts;
         }
 
         // TravelDiagnostic.subBrand is non-nullable in schema, but defensively
-        // coalesce falsy → '_tenant' for forward-compat (matches sibling stats
-        // endpoint shape — see travel_suppliers.js /suppliers/stats).
+        // coalesce falsy  '_tenant' for forward-compat (matches sibling stats
+        // endpoint shape  see travel_suppliers.js /suppliers/stats).
         const sbKey = d.subBrand ? String(d.subBrand) : "_tenant";
         if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
         bySubBrand[sbKey].count += 1;
@@ -764,7 +1133,7 @@ router.get(
 
       // Resolve bank names. TravelDiagnosticQuestionBank has no `name` column;
       // synthesise from subBrand + version (e.g. "tmc v1"). Tenant-scoped fetch
-      // — defensive against any future cross-tenant FK leak.
+      //  defensive against any future cross-tenant FK leak.
       if (bankIdsSeen.size > 0) {
         const banks = await prisma.travelDiagnosticQuestionBank.findMany({
           where: { tenantId, id: { in: [...bankIdsSeen] } },
@@ -786,7 +1155,8 @@ router.get(
         aggregateExceedsCap,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] stats error:", e.message);
       res.status(500).json({ error: "Failed to summarise diagnostics" });
     }
@@ -794,8 +1164,8 @@ router.get(
 );
 
 // ============================================================================
-// GET /api/travel/diagnostics/by-month — tenant-wide Diagnostic submissions
-// monthly rollup (PRD_TRAVEL_RFU_DIAGNOSTIC §3).
+// GET /api/travel/diagnostics/by-month  tenant-wide Diagnostic submissions
+// monthly rollup (PRD_TRAVEL_RFU_DIAGNOSTIC 3).
 //
 // USER-readable meta endpoint. Returns one row per UTC YYYY-MM bucket for
 // the tenant-scoped (and sub-brand-narrowed) Diagnostic submission population.
@@ -806,40 +1176,40 @@ router.get(
 // Pairs with /diagnostics/stats (fffc7345): /stats is a single point-in-time
 // KPI tile (total / bySubBrand / byBank / lastSubmittedAt); /by-month is the
 // per-month time series across the same population. Two endpoints powering
-// the same Diagnostics dashboard — /stats for the KPI strip, /by-month for
+// the same Diagnostics dashboard  /stats for the KPI strip, /by-month for
 // the trend chart + per-month drill-down picker.
 //
 // Mirrors #903 slice 24 (/suppliers/by-month) + #908 slice 21
-// (/flyer-templates/by-month) + #900 slice 16 (/quotes/by-month) — same UTC
-// YYYY-MM bucketing template, same defensive math (null/invalid createdAt →
+// (/flyer-templates/by-month) + #900 slice 16 (/quotes/by-month)  same UTC
+// YYYY-MM bucketing template, same defensive math (null/invalid createdAt
 // "unknown" bucket; excluded when ?from / ?to is set, kept otherwise so
 // count surface stays accurate), same orderBy semantics.
 //
 // Query params:
-//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid →
+//   - ?from / ?to    optional inclusive YYYY-MM bounds; invalid
 //                     400 INVALID_MONTH_FORMAT
-//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
+//   - ?orderBy       default month:asc; accepts month:{asc|desc},
 //                     count:{asc|desc}; unknown tokens degrade silently
 //                     to the default
-//   - ?limit / ?offset — default 12 / 0; limit caps at 60
+//   - ?limit / ?offset  default 12 / 0; limit caps at 60
 //
 // Behaviour:
 //   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
 //     their allowed sub-brands' diagnostics in the rollup. Same gate as
-//     /diagnostics/stats — TravelDiagnostic.subBrand is NON-nullable in the
+//     /diagnostics/stats  TravelDiagnostic.subBrand is NON-nullable in the
 //     schema, so we do NOT add a `{ subBrand: null }` OR clause (mirrors
 //     /suppliers/by-month, distinct from /flyer-templates/by-month whose
-//     subBrand IS nullable). Empty access set → force-empty `subBrand:
+//     subBrand IS nullable). Empty access set  force-empty `subBrand:
 //     "__none__"` so the response stays a clean zero-rollup envelope.
 //   - JS-side aggregation over a light findMany projection
-//     ({ subBrand, createdAt }) — matches /diagnostics/stats posture.
+//     ({ subBrand, createdAt })  matches /diagnostics/stats posture.
 //   - "unknown" bucket: rows with null/invalid createdAt land here.
 //     Excluded when ?from / ?to is set; included otherwise.
 //   - Per-month bySubBrand: each bucket carries a `bySubBrand` map keyed by
-//     sub-brand token (falsy → "_tenant" for forward-compat, mirrors /stats).
+//     sub-brand token (falsy  "_tenant" for forward-compat, mirrors /stats).
 //   - Pagination applied AFTER aggregation + sort + bucket filter.
 //
-// No audit row written — read-only meta surface; matches /diagnostics/stats
+// No audit row written  read-only meta surface; matches /diagnostics/stats
 // + /suppliers/by-month + /flyer-templates/by-month posture. USER-readable:
 // anodyne (counts + month-string tokens).
 //
@@ -855,9 +1225,11 @@ router.get(
     try {
       const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
       const skip = parseInt(req.query.offset, 10) || 0;
-      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "month:asc";
 
-      // YYYY-MM validation — mirrors slice 24 /suppliers/by-month.
+      // YYYY-MM validation  mirrors slice 24 /suppliers/by-month.
       const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
       const fromRaw = req.query.from ? String(req.query.from) : null;
       const toRaw = req.query.to ? String(req.query.to) : null;
@@ -901,22 +1273,21 @@ router.get(
         }
       }
 
-      // Light projection — subBrand + createdAt is enough for the bucket
+      // Light projection  subBrand + createdAt is enough for the bucket
       // totals + per-bucket bySubBrand breakdown.
       const rows = await prisma.travelDiagnostic.findMany({
         where,
         select: { subBrand: true, createdAt: true },
       });
 
-      // Aggregate per-UTC-month. Map "YYYY-MM" → { count, bySubBrand }.
+      // Aggregate per-UTC-month. Map "YYYY-MM"  { count, bySubBrand }.
       // Null/invalid createdAt rows land in "unknown".
       const byMonth = new Map();
       for (const r of rows) {
         let monthKey = "unknown";
         if (r.createdAt) {
-          const dt = r.createdAt instanceof Date
-            ? r.createdAt
-            : new Date(r.createdAt);
+          const dt =
+            r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
           if (!Number.isNaN(dt.getTime())) {
             const yyyy = dt.getUTCFullYear();
             const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
@@ -935,7 +1306,7 @@ router.get(
         }
         bucket.count += 1;
 
-        // bySubBrand: defensively coalesce falsy → "_tenant" to match
+        // bySubBrand: defensively coalesce falsy  "_tenant" to match
         // /diagnostics/stats posture (forward-compat against any future
         // schema change to nullable subBrand).
         const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
@@ -949,15 +1320,19 @@ router.get(
       // bound is set (no comparable token); kept otherwise. Mirrors slice
       // 24 /suppliers/by-month.
       if (fromRaw !== null) {
-        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month >= fromRaw,
+        );
       }
       if (toRaw !== null) {
-        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month <= toRaw,
+        );
       }
 
       // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
       // "unknown" sorts last in asc / first in desc (lexicographically >
-      // "9999-12") — acceptable for a defensive fallback bucket that should
+      // "9999-12")  acceptable for a defensive fallback bucket that should
       // rarely appear. Mirrors slice 24 /suppliers/by-month.
       const [field, dir] = orderBy.split(":");
       const mult = dir === "asc" ? 1 : -1;
@@ -971,7 +1346,10 @@ router.get(
       });
 
       const totalMonths = months.length;
-      const grandCount = months.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+      const grandCount = months.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
 
       // Pagination AFTER aggregation + sort + filter, same as slice 24.
       const paged = months.slice(skip, skip + take);
@@ -984,7 +1362,8 @@ router.get(
         offset: skip,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] by-month error:", e.message);
       res.status(500).json({ error: "Failed to compute monthly rollup" });
     }
@@ -992,8 +1371,8 @@ router.get(
 );
 
 // ============================================================================
-// GET /api/travel/diagnostics/by-quarter — tenant-wide Diagnostic submissions
-// quarterly rollup (PRD_TRAVEL_RFU_DIAGNOSTIC §3).
+// GET /api/travel/diagnostics/by-quarter  tenant-wide Diagnostic submissions
+// quarterly rollup (PRD_TRAVEL_RFU_DIAGNOSTIC 3).
 //
 // USER-readable meta endpoint. Returns one row per UTC YYYY-Q[1-4] bucket
 // for the tenant-scoped (and sub-brand-narrowed) Diagnostic submission
@@ -1003,43 +1382,43 @@ router.get(
 //
 // Pairs with /diagnostics/stats (KPI tile) + /diagnostics/by-month (monthly
 // time series). /by-quarter is the coarser sibling for trend tiles that
-// only need a 1-year-at-a-glance view — fewer buckets (4 per year vs 12),
+// only need a 1-year-at-a-glance view  fewer buckets (4 per year vs 12),
 // same defensive math.
 //
 // Mirrors /itineraries/by-quarter (#907 slice 17) + /suppliers/by-quarter
-// + /visa/applications/by-quarter — same UTC YYYY-Qn bucketing template,
-// same defensive math (null/invalid createdAt → "unknown" bucket; excluded
+// + /visa/applications/by-quarter  same UTC YYYY-Qn bucketing template,
+// same defensive math (null/invalid createdAt  "unknown" bucket; excluded
 // when ?from / ?to is set, kept otherwise so count surface stays
 // accurate), same orderBy semantics.
 //
 // Query params:
-//   - ?from / ?to   — optional inclusive YYYY-Q[1-4] bounds; invalid →
+//   - ?from / ?to    optional inclusive YYYY-Q[1-4] bounds; invalid
 //                     400 INVALID_QUARTER_FORMAT
-//   - ?orderBy      — default quarter:asc; accepts quarter:{asc|desc},
+//   - ?orderBy       default quarter:asc; accepts quarter:{asc|desc},
 //                     count:{asc|desc}; unknown tokens degrade silently
 //                     to the default
-//   - ?limit / ?offset — default 8 / 0 (≈2 years' window of quarters);
+//   - ?limit / ?offset  default 8 / 0 (2 years' window of quarters);
 //                     limit caps at 40
 //
 // Behaviour:
 //   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
 //     their allowed sub-brands' diagnostics in the rollup. Same gate as
-//     /diagnostics/by-month — TravelDiagnostic.subBrand is NON-nullable
+//     /diagnostics/by-month  TravelDiagnostic.subBrand is NON-nullable
 //     in the schema, so we do NOT add a `{ subBrand: null }` OR clause
-//     (mirrors /suppliers/by-month posture). Empty access set →
+//     (mirrors /suppliers/by-month posture). Empty access set
 //     force-empty `subBrand: "__none__"` so the response stays a clean
 //     zero-rollup envelope.
 //   - JS-side aggregation over a light findMany projection
-//     ({ subBrand, createdAt }) — matches /diagnostics/stats +
+//     ({ subBrand, createdAt })  matches /diagnostics/stats +
 //     /by-month posture.
 //   - "unknown" bucket: rows with null/invalid createdAt land here.
 //     Excluded when ?from / ?to is set; included otherwise.
 //   - Per-quarter bySubBrand: each bucket carries a `bySubBrand` map keyed
-//     by sub-brand token (falsy → "_tenant" for forward-compat, mirrors
+//     by sub-brand token (falsy  "_tenant" for forward-compat, mirrors
 //     /stats + /by-month).
 //   - Pagination applied AFTER aggregation + sort + bucket filter.
 //
-// No audit row written — read-only meta surface; matches /diagnostics/stats
+// No audit row written  read-only meta surface; matches /diagnostics/stats
 // + /by-month + /suppliers/by-quarter posture. USER-readable: anodyne
 // (counts + quarter-string tokens).
 //
@@ -1059,7 +1438,7 @@ router.get(
         ? String(req.query.orderBy)
         : "quarter:asc";
 
-      // YYYY-Qn validation — quarter ∈ {1,2,3,4}, year is 4 digits.
+      // YYYY-Qn validation  quarter  {1,2,3,4}, year is 4 digits.
       // Mirrors /itineraries/by-quarter + /suppliers/by-quarter.
       const QUARTER_RE = /^\d{4}-Q[1-4]$/;
       const fromRaw = req.query.from ? String(req.query.from) : null;
@@ -1090,7 +1469,7 @@ router.get(
       // Tenant-scoped where + sub-brand narrowing. Mirrors /by-month
       // sub-brand gate: subBrand-restricted callers see only their
       // allowed sub-brands' diagnostics; admins (allowed=null) see all.
-      // Empty allowed set → force-empty `subBrand: "__none__"` for a
+      // Empty allowed set  force-empty `subBrand: "__none__"` for a
       // clean zero-rollup envelope (not 403).
       //
       // Note: TravelDiagnostic.subBrand is NON-nullable, so we do NOT
@@ -1107,22 +1486,21 @@ router.get(
         }
       }
 
-      // Light projection — subBrand + createdAt is enough for the
+      // Light projection  subBrand + createdAt is enough for the
       // bucket totals + per-bucket bySubBrand breakdown.
       const rows = await prisma.travelDiagnostic.findMany({
         where,
         select: { subBrand: true, createdAt: true },
       });
 
-      // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { count, bySubBrand }.
+      // Aggregate per-UTC-quarter. Map "YYYY-Qn"  { count, bySubBrand }.
       // Null/invalid createdAt rows land in "unknown".
       const byQuarter = new Map();
       for (const r of rows) {
         let quarterKey = "unknown";
         if (r.createdAt) {
-          const dt = r.createdAt instanceof Date
-            ? r.createdAt
-            : new Date(r.createdAt);
+          const dt =
+            r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
           if (!Number.isNaN(dt.getTime())) {
             const yyyy = dt.getUTCFullYear();
             const q = Math.floor(dt.getUTCMonth() / 3) + 1;
@@ -1141,7 +1519,7 @@ router.get(
         }
         bucket.count += 1;
 
-        // bySubBrand: defensively coalesce falsy → "_tenant" to match
+        // bySubBrand: defensively coalesce falsy  "_tenant" to match
         // /diagnostics/stats + /by-month posture (forward-compat
         // against any future schema change to nullable subBrand).
         const sbKey = r.subBrand ? String(r.subBrand) : "_tenant";
@@ -1197,7 +1575,8 @@ router.get(
         offset: skip,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] by-quarter error:", e.message);
       res.status(500).json({ error: "Failed to compute quarterly rollup" });
     }
@@ -1205,8 +1584,8 @@ router.get(
 );
 
 // ============================================================================
-// GET /api/travel/diagnostics/by-year — tenant-wide Diagnostic submissions
-// annual rollup (PRD_TRAVEL_RFU_DIAGNOSTIC §3).
+// GET /api/travel/diagnostics/by-year  tenant-wide Diagnostic submissions
+// annual rollup (PRD_TRAVEL_RFU_DIAGNOSTIC 3).
 //
 // USER-readable meta endpoint. Returns one row per UTC YYYY bucket for
 // the tenant-scoped (and sub-brand-narrowed) Diagnostic submission
@@ -1215,40 +1594,40 @@ router.get(
 // sub-brand drill-down.
 //
 // Completes the diagnostics rollup triplet: /by-month (slice 25),
-// /by-quarter (slice 26), /by-year (this slice — slice 27). Pairs with
+// /by-quarter (slice 26), /by-year (this slice  slice 27). Pairs with
 // /diagnostics/stats (KPI tile). Mirrors /itineraries/by-year (#907
 // slice 18) + /suppliers/by-year + /visa/applications/by-year +
-// /flyer-templates/by-year — same UTC YYYY bucketing template, same
-// defensive math (null/invalid createdAt → "unknown" bucket; excluded
+// /flyer-templates/by-year  same UTC YYYY bucketing template, same
+// defensive math (null/invalid createdAt  "unknown" bucket; excluded
 // when ?from / ?to is set, kept otherwise so count surface stays
 // accurate), same orderBy semantics.
 //
 // Query params:
-//   - ?from / ?to   — optional inclusive YYYY bounds; invalid →
+//   - ?from / ?to    optional inclusive YYYY bounds; invalid
 //                     400 INVALID_YEAR_FORMAT
-//   - ?orderBy      — default year:asc; accepts year:{asc|desc},
+//   - ?orderBy       default year:asc; accepts year:{asc|desc},
 //                     count:{asc|desc}; unknown tokens degrade silently
 //                     to the default
-//   - ?limit / ?offset — default 10 / 0; limit caps at 30
+//   - ?limit / ?offset  default 10 / 0; limit caps at 30
 //
 // Behaviour:
 //   - Sub-brand-scoped: a MANAGER restricted to one sub-brand sees ONLY
 //     their allowed sub-brands' diagnostics in the rollup. Same gate as
-//     /diagnostics/by-quarter — TravelDiagnostic.subBrand is NON-nullable
+//     /diagnostics/by-quarter  TravelDiagnostic.subBrand is NON-nullable
 //     in the schema, so we do NOT add a `{ subBrand: null }` OR clause.
 //     The narrowing is a pure `subBrand: { in: [...allowed] }`. Empty
-//     access set → force-empty `subBrand: "__none__"` so the response
+//     access set  force-empty `subBrand: "__none__"` so the response
 //     stays a clean zero-rollup envelope.
 //   - JS-side aggregation over a light findMany projection
-//     ({ subBrand, createdAt }) — matches /by-quarter posture.
+//     ({ subBrand, createdAt })  matches /by-quarter posture.
 //   - "unknown" bucket: rows with null/invalid createdAt land here.
 //     Excluded when ?from / ?to is set; included otherwise.
 //   - Per-year bySubBrand: each bucket carries a `bySubBrand` map keyed
-//     by sub-brand token (falsy → "_tenant" for forward-compat, mirrors
+//     by sub-brand token (falsy  "_tenant" for forward-compat, mirrors
 //     /stats + /by-month + /by-quarter).
 //   - Pagination applied AFTER aggregation + sort + bucket filter.
 //
-// No audit row written — read-only meta surface; matches /diagnostics/stats
+// No audit row written  read-only meta surface; matches /diagnostics/stats
 // + /by-month + /by-quarter posture. USER-readable: anodyne (counts +
 // year-string tokens).
 //
@@ -1269,7 +1648,7 @@ router.get(
         ? String(req.query.orderBy)
         : "year:asc";
 
-      // YYYY validation — exactly 4 digits. Mirrors /itineraries/by-year +
+      // YYYY validation  exactly 4 digits. Mirrors /itineraries/by-year +
       // /suppliers/by-year.
       const YEAR_RE = /^\d{4}$/;
       const fromRaw = req.query.from ? String(req.query.from) : null;
@@ -1293,14 +1672,12 @@ router.get(
         "count:asc",
         "count:desc",
       ]);
-      const orderBy = VALID_ORDER_BY.has(orderByRaw)
-        ? orderByRaw
-        : "year:asc";
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
 
       // Tenant-scoped where + sub-brand narrowing. Mirrors /by-quarter
       // sub-brand gate: subBrand-restricted callers see only their
       // allowed sub-brands' diagnostics; admins (allowed=null) see all.
-      // Empty allowed set → force-empty `subBrand: "__none__"` for a
+      // Empty allowed set  force-empty `subBrand: "__none__"` for a
       // clean zero-rollup envelope (not 403).
       //
       // Note: TravelDiagnostic.subBrand is NON-nullable, so we do NOT
@@ -1317,22 +1694,21 @@ router.get(
         }
       }
 
-      // Light projection — subBrand + createdAt is enough for the
+      // Light projection  subBrand + createdAt is enough for the
       // bucket totals + per-bucket bySubBrand breakdown.
       const rows = await prisma.travelDiagnostic.findMany({
         where,
         select: { subBrand: true, createdAt: true },
       });
 
-      // Aggregate per-UTC-year. Map "YYYY" → { count, bySubBrand }.
+      // Aggregate per-UTC-year. Map "YYYY"  { count, bySubBrand }.
       // Null/invalid createdAt rows land in "unknown".
       const byYear = new Map();
       for (const r of rows) {
         let yearKey = "unknown";
         if (r.createdAt) {
-          const dt = r.createdAt instanceof Date
-            ? r.createdAt
-            : new Date(r.createdAt);
+          const dt =
+            r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
           if (!Number.isNaN(dt.getTime())) {
             yearKey = String(dt.getUTCFullYear());
           }
@@ -1349,7 +1725,7 @@ router.get(
         }
         bucket.count += 1;
 
-        // bySubBrand: defensively coalesce falsy → "_tenant" to match
+        // bySubBrand: defensively coalesce falsy  "_tenant" to match
         // /diagnostics/stats + /by-month + /by-quarter posture
         // (forward-compat against any future schema change to nullable
         // subBrand).
@@ -1364,14 +1740,10 @@ router.get(
       // bound is set (no comparable token); kept otherwise. Mirrors
       // /by-month + /by-quarter + /itineraries/by-year.
       if (fromRaw !== null) {
-        years = years.filter(
-          (r) => r.year !== "unknown" && r.year >= fromRaw,
-        );
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
       }
       if (toRaw !== null) {
-        years = years.filter(
-          (r) => r.year !== "unknown" && r.year <= toRaw,
-        );
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
       }
 
       // Sort. "year" sorts lexicographically on YYYY which is also
@@ -1406,7 +1778,8 @@ router.get(
         offset: skip,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] by-year error:", e.message);
       res.status(500).json({ error: "Failed to compute annual rollup" });
     }
@@ -1414,39 +1787,51 @@ router.get(
 );
 
 // GET /api/travel/diagnostics/:id
-router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const diag = await prisma.travelDiagnostic.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-    });
-    if (!diag) return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+router.get(
+  "/diagnostics/:id",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const diag = await prisma.travelDiagnostic.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!diag)
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, diag.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, diag.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      // Attach the contact (name/email/phone) so the detail view can show WHO
+      // took it  TravelDiagnostic only stores contactId (no Prisma relation).
+      const contact = diag.contactId
+        ? await prisma.contact.findFirst({
+            where: { id: diag.contactId, tenantId: req.travelTenant.id },
+            select: { id: true, name: true, email: true, phone: true },
+          })
+        : null;
+      res.json({ ...diag, contact });
+    } catch (e) {
+      console.error("[travel-diag] get diagnostic error:", e.message);
+      res.status(500).json({ error: "Failed to get diagnostic" });
     }
-    // Attach the contact (name/email/phone) so the detail view can show WHO
-    // took it — TravelDiagnostic only stores contactId (no Prisma relation).
-    const contact = diag.contactId
-      ? await prisma.contact.findFirst({
-          where: { id: diag.contactId, tenantId: req.travelTenant.id },
-          select: { id: true, name: true, email: true, phone: true },
-        })
-      : null;
-    res.json({ ...diag, contact });
-  } catch (e) {
-    console.error("[travel-diag] get diagnostic error:", e.message);
-    res.status(500).json({ error: "Failed to get diagnostic" });
-  }
-});
+  },
+);
 
 // PATCH /api/travel/diagnostics/:id
 //
-// Record the senior reviewer's blind hand-pick (PRD §3.3.7 / DD-5.7). The
+// Record the senior reviewer's blind hand-pick (PRD 3.3.7 / DD-5.7). The
 // reviewer picks a trip slug / "other" / "no_rec" BEFORE the engine output is
 // revealed; we persist it on TravelDiagnostic.humanPick so the later
 // engine-vs-human agreement analysis can run. Senior-role gated
@@ -1463,23 +1848,38 @@ router.patch(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
-      const rawPick = req.body && typeof req.body.humanPick === "string" ? req.body.humanPick.trim() : "";
+      const rawPick =
+        req.body && typeof req.body.humanPick === "string"
+          ? req.body.humanPick.trim()
+          : "";
       if (!rawPick) {
-        return res.status(400).json({ error: "humanPick is required (a trip slug, \"other\", or \"no_rec\").", code: "HUMAN_PICK_REQUIRED" });
+        return res
+          .status(400)
+          .json({
+            error: 'humanPick is required (a trip slug, "other", or "no_rec").',
+            code: "HUMAN_PICK_REQUIRED",
+          });
       }
       const humanPick = rawPick.slice(0, 120);
 
       const diag = await prisma.travelDiagnostic.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
-      if (!diag) return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+      if (!diag)
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, diag.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       const updated = await prisma.travelDiagnostic.update({
@@ -1493,7 +1893,11 @@ router.patch(
         diag.id,
         req.user.userId,
         req.travelTenant.id,
-        { subBrand: diag.subBrand, humanPick, previousPick: diag.humanPick || null },
+        {
+          subBrand: diag.subBrand,
+          humanPick,
+          previousPick: diag.humanPick || null,
+        },
       ).catch(() => {});
 
       const contact = updated.contactId
@@ -1512,11 +1916,11 @@ router.patch(
 
 // POST /api/travel/diagnostics/:id/talking-points/regen
 //
-// PRD §4.2 + §6.1: generate an advisor talking-points brief for a
-// completed diagnostic via the LLM router (per PRD §9.1 this is a
-// reasoning task → Gemini Flash primary, GPT-4 fallback — 2026-07-14
+// PRD 4.2 + 6.1: generate an advisor talking-points brief for a
+// completed diagnostic via the LLM router (per PRD 9.1 this is a
+// reasoning task  Gemini Flash primary, GPT-4 fallback  2026-07-14
 // swap off Claude Opus, see backend/lib/llmRouter.js TASK_ROUTING).
-// First consumer of the lib/llmRouter.js scaffold (commit 583c06b) — until Q11 API
+// First consumer of the lib/llmRouter.js scaffold (commit 583c06b)  until Q11 API
 // keys land the router returns deterministic [STUB-TALKING-POINTS]
 // synthetic text so the advisor UI can render SOMETHING and tests can
 // pin the contract.
@@ -1531,7 +1935,7 @@ router.patch(
 // GET serves the cached brief without re-billing the LLM.
 //
 // PII discipline: payload contents (customer answers + contact info)
-// are forwarded to the router but NEVER logged from the route — the
+// are forwarded to the router but NEVER logged from the route  the
 // router's own log line only emits token counts. Don't add a
 // console.log of `payload` here.
 router.post(
@@ -1543,22 +1947,28 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const diag = await prisma.travelDiagnostic.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!diag) {
-        return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, diag.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       // Load the contact for prompt context (name + company). Tolerant
-      // of contact-not-found — talking-points still rendered against
+      // of contact-not-found  talking-points still rendered against
       // the diagnostic answers alone, just without contact framing.
       const contact = diag.contactId
         ? await prisma.contact.findFirst({
@@ -1567,7 +1977,7 @@ router.post(
           })
         : null;
 
-      // Build a clean payload — answers parsed back from the stored
+      // Build a clean payload  answers parsed back from the stored
       // JSON string so the LLM sees the structured object, not the
       // raw escaped text. Tolerate parse failure (bank corruption) by
       // forwarding an empty object; the LLM still has classification
@@ -1614,7 +2024,8 @@ router.post(
         talkingPoints: envelope,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] talking-points regen error:", e.message);
       res.status(500).json({ error: "Failed to regenerate talking points" });
     }
@@ -1623,7 +2034,7 @@ router.post(
 
 // POST /api/travel/diagnostics/:id/form-vs-call/compare
 //
-// PRD §4.1 — form-vs-call comparison panel. The customer fills the web
+// PRD 4.1  form-vs-call comparison panel. The customer fills the web
 // diagnostic (stored in TravelDiagnostic.answersJson) AND independently
 // answers the same Qs via the AI qualification call (Callified.ai, Q1
 // cred-blocked). This endpoint reconciles the two answer sets and
@@ -1632,7 +2043,7 @@ router.post(
 // straight at the quote OR need to resolve a contradiction first.
 //
 // Callified.ai itself is cred-blocked, but the comparison logic is
-// fixture-driven — the caller supplies BOTH answer sets in the body
+// fixture-driven  the caller supplies BOTH answer sets in the body
 // (the form side parsed back from the stored diagnostic, the call side
 // from the request body). Same shape works today against synthetic
 // call answers AND lights up the moment Callified delivers real ones.
@@ -1642,7 +2053,7 @@ router.post(
 // every USER firing it on every page load.
 //
 // Body: { callAnswers?: object, callTranscript?: string }
-//   At least ONE of callAnswers / callTranscript must be present —
+//   At least ONE of callAnswers / callTranscript must be present
 //   the LLM can derive a comparison from either (the answers set is
 //   the cleaner structured input; the raw transcript fallback lets
 //   the call side land before Callified maps to question IDs).
@@ -1650,15 +2061,15 @@ router.post(
 // Response: { diagnosticId, classification, scorePercent, summary,
 //             model, stub, perFieldDiff[], generatedAt }
 //
-// Persists the result envelope (minus diagnosticId — that's the row
+// Persists the result envelope (minus diagnosticId  that's the row
 // itself) to TravelDiagnostic.formVsCallJson via fire-and-forget update
 // so the next GET /diagnostics/:id surfaces the cached panel without
 // re-billing the LLM. Mirrors the talkingPointsJson pattern. A persist
 // failure surfaces in logs but does NOT 500 the user's compute response
-// — the LLM call is already billed by then.
+//  the LLM call is already billed by then.
 //
 // PII discipline: payload contents (answers + transcripts) are
-// forwarded to the router but NEVER logged from the route — the
+// forwarded to the router but NEVER logged from the route  the
 // router's own log line only emits token counts.
 router.post(
   "/diagnostics/:id/form-vs-call/compare",
@@ -1669,15 +2080,19 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
       const { callAnswers, callTranscript } = req.body || {};
-      // Coerce to boolean — bare `&&` propagates `undefined` when
+      // Coerce to boolean  bare `&&` propagates `undefined` when
       // callAnswers is missing, which then poisons `matched: hasCallAnswers && ...`
       // downstream (gate spec at travel-diagnostics-api.spec.js:984 caught this).
       const hasCallAnswers = Boolean(
-        callAnswers && typeof callAnswers === "object" && !Array.isArray(callAnswers),
+        callAnswers &&
+        typeof callAnswers === "object" &&
+        !Array.isArray(callAnswers),
       );
       const hasCallTranscript =
         typeof callTranscript === "string" && callTranscript.trim().length > 0;
@@ -1692,22 +2107,30 @@ router.post(
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!diag) {
-        return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, diag.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       // Parse the stored form answers. Tolerate corruption by treating
-      // as an empty set — the comparison still runs (the perFieldDiff
+      // as an empty set  the comparison still runs (the perFieldDiff
       // will be empty and the LLM still produces a summary against
       // the call side alone).
       let formAnswers = {};
       try {
         formAnswers = JSON.parse(diag.answersJson || "{}");
-        if (!formAnswers || typeof formAnswers !== "object" || Array.isArray(formAnswers)) {
+        if (
+          !formAnswers ||
+          typeof formAnswers !== "object" ||
+          Array.isArray(formAnswers)
+        ) {
           formAnswers = {};
         }
       } catch (_e) {
@@ -1735,7 +2158,10 @@ router.post(
       // absent we return null + classify as "unknown" so the UI
       // can render an advisor-review prompt rather than guessing.
       let scorePercent = null;
-      const pctMatch = typeof result.text === "string" ? result.text.match(/(\d{1,3})\s*%/) : null;
+      const pctMatch =
+        typeof result.text === "string"
+          ? result.text.match(/(\d{1,3})\s*%/)
+          : null;
       if (pctMatch) {
         const n = parseInt(pctMatch[1], 10);
         if (Number.isFinite(n) && n >= 0 && n <= 100) scorePercent = n;
@@ -1756,7 +2182,7 @@ router.post(
         const formValue = formAnswers[k] ?? null;
         const callValue =
           hasCallAnswers && Object.prototype.hasOwnProperty.call(callAnswers, k)
-            ? callAnswers[k] ?? null
+            ? (callAnswers[k] ?? null)
             : null;
         return {
           question: k,
@@ -1767,12 +2193,12 @@ router.post(
       });
 
       // Hoisted so the persisted snapshot and the response envelope share
-      // the exact same ISO timestamp — gate spec pins parity.
+      // the exact same ISO timestamp  gate spec pins parity.
       const generatedAt = new Date().toISOString();
 
       // Persist the result envelope so subsequent GETs serve the cached
       // comparison without re-billing the LLM. Mirrors the talkingPointsJson
-      // pattern. Fire-and-forget — a persist failure surfaces in logs but
+      // pattern. Fire-and-forget  a persist failure surfaces in logs but
       // MUST NOT 500 the user's compute response (we already paid for the
       // LLM call).
       const persistEnvelope = {
@@ -1790,7 +2216,10 @@ router.post(
           data: { formVsCallJson: JSON.stringify(persistEnvelope) },
         });
       } catch (e) {
-        console.error("[travel-diag] form-vs-call persist error (non-fatal):", e.message);
+        console.error(
+          "[travel-diag] form-vs-call persist error (non-fatal):",
+          e.message,
+        );
       }
 
       res.json({
@@ -1804,20 +2233,23 @@ router.post(
         generatedAt,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] form-vs-call compare error:", e.message);
-      res.status(500).json({ error: "Failed to compute form-vs-call comparison" });
+      res
+        .status(500)
+        .json({ error: "Failed to compute form-vs-call comparison" });
     }
   },
 );
 
-// ─── PUBLIC ENDPOINTS (no auth) — PRD §4.7 Travel Stall landing-page wizard ──
+//  PUBLIC ENDPOINTS (no auth)  PRD 4.7 Travel Stall landing-page wizard
 //
 // Public-facing quiz flow for unauthenticated leads (Travel Stall family
 // audience, Phase 2). Allowlisted in server.js openPaths under prefix
 // `/travel/diagnostics/public`.
 //
-// Tenant is resolved via `?tenantSlug=...` query/body — required because
+// Tenant is resolved via `?tenantSlug=...` query/body  required because
 // the public path has no auth context. Refuses non-travel tenants.
 //
 // Sub-brand can be any of VALID_SUB_BRANDS but the immediate consumer is
@@ -1828,9 +2260,9 @@ router.post(
 //   - scoringRulesJson is stripped from GET so visitors can't reverse-
 //     engineer band thresholds to manipulate their classification.
 //   - raw numeric score is omitted from POST submit response; only the
-//     human-readable label + recommendedTier come back (UX choice — the
+//     human-readable label + recommendedTier come back (UX choice  the
 //     advisor can see the score, the customer sees the persona).
-//   - tenant.id is never leaked in the response — only the slug echoed
+//   - tenant.id is never leaked in the response  only the slug echoed
 //     back so the wizard can confirm it's talking to the right brand.
 
 async function resolveTravelTenantBySlug(slug) {
@@ -1855,25 +2287,49 @@ router.get("/diagnostics/public/banks", async (req, res) => {
         code: "MISSING_FIELDS",
       });
     }
-    try { assertValidSubBrand(String(subBrand)); }
-    catch (e) { return res.status(e.status || 400).json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" }); }
+    try {
+      assertValidSubBrand(String(subBrand));
+    } catch (e) {
+      return res
+        .status(e.status || 400)
+        .json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" });
+    }
 
     const tenant = await resolveTravelTenantBySlug(tenantSlug);
     if (!tenant) {
-      return res.status(404).json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
     }
 
     const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
-      where: { tenantId: tenant.id, subBrand: String(subBrand), isActive: true },
+      where: {
+        tenantId: tenant.id,
+        subBrand: String(subBrand),
+        isActive: true,
+      },
       orderBy: { version: "desc" },
     });
     if (!bank) {
-      return res.status(404).json({ error: "No active bank for this sub-brand", code: "BANK_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({
+          error: "No active bank for this sub-brand",
+          code: "BANK_NOT_FOUND",
+        });
     }
 
     let questions;
-    try { questions = JSON.parse(bank.questionsJson); }
-    catch { return res.status(500).json({ error: "Bank questions JSON unparseable", code: "BANK_CORRUPTED" }); }
+    try {
+      questions = JSON.parse(bank.questionsJson);
+    } catch {
+      return res
+        .status(500)
+        .json({
+          error: "Bank questions JSON unparseable",
+          code: "BANK_CORRUPTED",
+        });
+    }
 
     // Strip per-option weights so the public payload can't be used to
     // reverse-engineer the scoring. Keeps id + text + label + value.
@@ -1881,7 +2337,10 @@ router.get("/diagnostics/public/banks", async (req, res) => {
       id: q.id,
       text: q.text,
       type: q.type,
-      options: (q.options || []).map((o) => ({ value: o.value, label: o.label })),
+      options: (q.options || []).map((o) => ({
+        value: o.value,
+        label: o.label,
+      })),
     }));
 
     res.json({
@@ -1908,34 +2367,55 @@ router.get("/diagnostics/public/banks", async (req, res) => {
 // classification.
 router.post("/diagnostics/public/submit", async (req, res) => {
   try {
-    const { tenantSlug, subBrand, bankId, answers, name, phone, email } = req.body || {};
+    const { tenantSlug, subBrand, bankId, answers, name, phone, email } =
+      req.body || {};
     if (!tenantSlug || !subBrand || !bankId || !answers || !name || !phone) {
       return res.status(400).json({
-        error: "tenantSlug, subBrand, bankId, answers, name, phone all required",
+        error:
+          "tenantSlug, subBrand, bankId, answers, name, phone all required",
         code: "MISSING_FIELDS",
       });
     }
-    try { assertValidSubBrand(String(subBrand)); }
-    catch (e) { return res.status(e.status || 400).json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" }); }
+    try {
+      assertValidSubBrand(String(subBrand));
+    } catch (e) {
+      return res
+        .status(e.status || 400)
+        .json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" });
+    }
 
     const tenant = await resolveTravelTenantBySlug(tenantSlug);
     if (!tenant) {
-      return res.status(404).json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
     }
 
     const bankIdNum = parseInt(bankId, 10);
     if (!Number.isFinite(bankIdNum)) {
-      return res.status(400).json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
+      return res
+        .status(400)
+        .json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
     }
     const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
-      where: { id: bankIdNum, tenantId: tenant.id, subBrand: String(subBrand), isActive: true },
+      where: {
+        id: bankIdNum,
+        tenantId: tenant.id,
+        subBrand: String(subBrand),
+        isActive: true,
+      },
     });
     if (!bank) {
-      return res.status(404).json({ error: "Bank not found or not active", code: "BANK_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({
+          error: "Bank not found or not active",
+          code: "BANK_NOT_FOUND",
+        });
     }
 
-    // PRD §4.5 dedup: try to attach to an existing Contact by email or
-    // phone before creating a new one — prevents the duplicate-pop-up
+    // PRD 4.5 dedup: try to attach to an existing Contact by email or
+    // phone before creating a new one  prevents the duplicate-pop-up
     // problem and keeps the pilgrim's history on one record.
     let contactId = null;
     let dedupResult = null;
@@ -1953,9 +2433,11 @@ router.post("/diagnostics/public/submit", async (req, res) => {
     } else {
       // Public-intake contact create. subBrand stamped so the lead lands
       // in the right pipeline. Email defaults to a synthetic placeholder
-      // when not provided — the @@unique([email, tenantId]) constraint
+      // when not provided  the @@unique([email, tenantId]) constraint
       // requires SOMETHING; the synthetic form sidesteps it.
-      const safeEmail = email || `public-diag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@public.local`;
+      const safeEmail =
+        email ||
+        `public-diag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@public.local`;
       const newContact = await prisma.contact.create({
         data: {
           tenantId: tenant.id,
@@ -1971,9 +2453,18 @@ router.post("/diagnostics/public/submit", async (req, res) => {
     }
 
     // Score the diagnostic.
-    const { bank: parsed, warnings: parseWarnings } = parseBank(bank.questionsJson, bank.scoringRulesJson);
+    const { bank: parsed, warnings: parseWarnings } = parseBank(
+      bank.questionsJson,
+      bank.scoringRulesJson,
+    );
     if (!parsed) {
-      return res.status(500).json({ error: "Bank JSON unparseable", code: "BANK_CORRUPTED", warnings: parseWarnings });
+      return res
+        .status(500)
+        .json({
+          error: "Bank JSON unparseable",
+          code: "BANK_CORRUPTED",
+          warnings: parseWarnings,
+        });
     }
     const result = scoreDiagnostic(parsed, answers);
 
@@ -2000,9 +2491,12 @@ router.post("/diagnostics/public/submit", async (req, res) => {
       },
     });
 
-    // PDF generation best-effort — Phase 2 will email/WhatsApp the report
+    // PDF generation best-effort  Phase 2 will email/WhatsApp the report
     // to the lead once Wati BSP creds (Q9) land.
-    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank).catch(() => null);
+    const reportPdfUrl = await generateDiagnosticPdfBestEffort(
+      diag,
+      bank,
+    ).catch(() => null);
 
     // Customer-facing payload: NO raw score, NO contact id, NO diagnostic id.
     // The advisor sees those internally. The public confirmation just
@@ -2015,7 +2509,7 @@ router.post("/diagnostics/public/submit", async (req, res) => {
       classificationLabel: result.classificationLabel,
       recommendedTier: result.recommendedTier,
       reportPdfUrl: reportPdfUrl || null,
-      message: `Thanks ${String(name).split(" ")[0]} — our advisor will reach out to you on ${phone} shortly.`,
+      message: `Thanks ${String(name).split(" ")[0]}  our advisor will reach out to you on ${phone} shortly.`,
     });
   } catch (e) {
     console.error("[travel-diag-public] submit error:", e.message);
@@ -2023,38 +2517,38 @@ router.post("/diagnostics/public/submit", async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
-// TMC Readiness Diagnostic — T8 (PRD §10): public submit + readiness PDF
-// ═══════════════════════════════════════════════════════════════════════
 //
-// Two new endpoints land in this T8 slice — both target the TMC sub-brand
+// TMC Readiness Diagnostic  T8 (PRD 10): public submit + readiness PDF
+//
+//
+// Two new endpoints land in this T8 slice  both target the TMC sub-brand
 // only (existing public/submit + per-id handlers continue to serve the
 // generic weighted-sum diagnostic for RFU / Travel Stall / Visa Sure):
 //
 //   POST /api/travel/diagnostics/public/submit-tmc        (no auth)
-//   GET  /api/travel/diagnostics/:id/readiness-report.pdf (no auth — token-gated by id)
+//   GET  /api/travel/diagnostics/:id/readiness-report.pdf (no auth  token-gated by id)
 //
 // The submit endpoint runs the T2 deterministic engine + T3 lead-quality
 // classifier inline, persists every column on TravelDiagnostic that the
 // schema added in T1, and returns a slim `{diagnosticId, reportSlug}` so
 // the T9 frontend can navigate to the report-download page (T10).
 //
-// The PDF endpoint composes the §3.7 Job A prompt via T6, calls the LLM
+// The PDF endpoint composes the 3.7 Job A prompt via T6, calls the LLM
 // router (stub mode in test/dev), runs the T7 3-layer guard, then asks
 // T8's renderer (renderTmcReadinessReport) for a PDF buffer.  Standing-
-// facts are loaded via the engine-weights row's tenant config — falling
-// back to the PRD §3.5.5 frozen defaults when no custom row exists.
+// facts are loaded via the engine-weights row's tenant config  falling
+// back to the PRD 3.5.5 frozen defaults when no custom row exists.
 //
-// PRD §3.5 is the hard contract: the school-facing report never names a
+// PRD 3.5 is the hard contract: the school-facing report never names a
 // trip, destination, or price.  The Layer-2 destination blocklist is
 // derived from the catalogue's active rows at render time (anchor
 // experiences + region + curriculum-hook topic words) so a model that
 // hallucinates a real-but-not-pulled destination still gets stripped.
 
-// PRD §3.5.5 default standing-facts block.  Empty fields are OMITTED by
-// the renderer (PRD §3.5.5 final paragraph: "Empty fields are omitted by
+// PRD 3.5.5 default standing-facts block.  Empty fields are OMITTED by
+// the renderer (PRD 3.5.5 final paragraph: "Empty fields are omitted by
 // the renderer, not filled with placeholder text").  Numbers are pinned
-// to PRD §11.4 verbatim (international stays honest at 305).
+// to PRD 11.4 verbatim (international stays honest at 305).
 const DEFAULT_STANDING_FACTS = Object.freeze({
   trust: {
     schools_served_since_2015: "over 50",
@@ -2067,10 +2561,10 @@ const DEFAULT_STANDING_FACTS = Object.freeze({
     teacher_student_ratio: "1 teacher per 15 students",
   },
   runway: {
-    day:             { lead_days:   7, display: "about 1 week" },
-    domestic_bus:    { lead_days:  30, display: "about 1 month" },
-    domestic_flight: { lead_days:  90, display: "minimum 90 days" },
-    international:   { lead_days: 180, display: "minimum 4 to 6 months" },
+    day: { lead_days: 7, display: "about 1 week" },
+    domestic_bus: { lead_days: 30, display: "about 1 month" },
+    domestic_flight: { lead_days: 90, display: "minimum 90 days" },
+    international: { lead_days: 180, display: "minimum 4 to 6 months" },
   },
   academic_calendar: {
     term_1_start: "06-01",
@@ -2078,17 +2572,20 @@ const DEFAULT_STANDING_FACTS = Object.freeze({
     term_3_start: "01-01",
     academic_year_start: "06-01",
   },
-  // PRD §3.5.1 — renderer-injected board hook per Q6.  CBSE is the only
-  // board that gets the NEP/NCF citation — AC-3 hard-codes "an IB school
+  // PRD 3.5.1  renderer-injected board hook per Q6.  CBSE is the only
+  // board that gets the NEP/NCF citation  AC-3 hard-codes "an IB school
   // never sees NEP."
   board_policy_hooks: {
-    "CBSE":      "Maps to NEP 2020 + NCF-SE 2023 + CBSE Experiential Learning Handbook — experiential learning as standard pedagogy.",
-    "ICSE_ISC":  "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
-    "ICSE":      "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
-    "ISC":       "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
-    "IGCSE":     "Aligns to the Cambridge Learner Attributes; Geography 0460 fieldwork + Science practical assessment surfaces.",
-    "IB":        "Anchored on CAS (Creativity, Activity, Service) + the IB Learner Profile; transdisciplinary inquiry the trip directly serves.",
-    "State Board": "Generic experiential-learning case; named-policy citation withheld until state's NEP adoption is confirmed.",
+    CBSE: "Maps to NEP 2020 + NCF-SE 2023 + CBSE Experiential Learning Handbook  experiential learning as standard pedagogy.",
+    ICSE_ISC:
+      "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
+    ICSE: "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
+    ISC: "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
+    IGCSE:
+      "Aligns to the Cambridge Learner Attributes; Geography 0460 fieldwork + Science practical assessment surfaces.",
+    IB: "Anchored on CAS (Creativity, Activity, Service) + the IB Learner Profile; transdisciplinary inquiry the trip directly serves.",
+    "State Board":
+      "Generic experiential-learning case; named-policy citation withheld until state's NEP adoption is confirmed.",
   },
   assurance: {
     supervision_ratio: "1 teacher per 15 students",
@@ -2103,10 +2600,10 @@ const DEFAULT_STANDING_FACTS = Object.freeze({
   },
 });
 
-// G103 — merge per-tenant EngineWeights standing-facts overrides into the
-// default. PRD §3.5.5: empty fields fall back to DEFAULT_STANDING_FACTS;
+// G103  merge per-tenant EngineWeights standing-facts overrides into the
+// default. PRD 3.5.5: empty fields fall back to DEFAULT_STANDING_FACTS;
 // admin-curated values override per-key. Returns the merged structure
-// (shallow merge on trust + assurance — array fields like governance_pack
+// (shallow merge on trust + assurance  array fields like governance_pack
 // replace rather than merge to keep the override authoritative).
 async function resolveStandingFacts(prismaClient, tenantId) {
   try {
@@ -2118,29 +2615,37 @@ async function resolveStandingFacts(prismaClient, tenantId) {
     let trustOverride = null;
     let assuranceOverride = null;
     if (ew.trustFactsJson) {
-      try { trustOverride = JSON.parse(ew.trustFactsJson); }
-      catch { trustOverride = null; }
+      try {
+        trustOverride = JSON.parse(ew.trustFactsJson);
+      } catch {
+        trustOverride = null;
+      }
     }
     if (ew.assuranceFactsJson) {
-      try { assuranceOverride = JSON.parse(ew.assuranceFactsJson); }
-      catch { assuranceOverride = null; }
+      try {
+        assuranceOverride = JSON.parse(ew.assuranceFactsJson);
+      } catch {
+        assuranceOverride = null;
+      }
     }
     if (!trustOverride && !assuranceOverride) return DEFAULT_STANDING_FACTS;
     return {
       ...DEFAULT_STANDING_FACTS,
-      trust: trustOverride && typeof trustOverride === "object"
-        ? { ...DEFAULT_STANDING_FACTS.trust, ...trustOverride }
-        : DEFAULT_STANDING_FACTS.trust,
-      assurance: assuranceOverride && typeof assuranceOverride === "object"
-        ? { ...DEFAULT_STANDING_FACTS.assurance, ...assuranceOverride }
-        : DEFAULT_STANDING_FACTS.assurance,
+      trust:
+        trustOverride && typeof trustOverride === "object"
+          ? { ...DEFAULT_STANDING_FACTS.trust, ...trustOverride }
+          : DEFAULT_STANDING_FACTS.trust,
+      assurance:
+        assuranceOverride && typeof assuranceOverride === "object"
+          ? { ...DEFAULT_STANDING_FACTS.assurance, ...assuranceOverride }
+          : DEFAULT_STANDING_FACTS.assurance,
     };
   } catch (_e) {
     return DEFAULT_STANDING_FACTS;
   }
 }
 
-// PRD §3.5.2 — resolve runway display string from geo_preference.
+// PRD 3.5.2  resolve runway display string from geo_preference.
 // PRD: "Default domestic key = `domestic_flight`. If `open`, use
 // `international` (longest runway, sharpest deadline)."
 function resolveRunwayKey(geoPreference) {
@@ -2155,15 +2660,19 @@ function resolveRunwayDisplay(standingFacts, geoPreference) {
   const key = resolveRunwayKey(geoPreference);
   const runway = standingFacts && standingFacts.runway;
   const entry = runway && runway[key];
-  return (entry && entry.display) ? String(entry.display) : "";
+  return entry && entry.display ? String(entry.display) : "";
 }
 
-// PRD §3.5.1 — resolve board hook string from the first selected board.
+// PRD 3.5.1  resolve board hook string from the first selected board.
 // Multi-board schools (Q6 array > 1) see all selected hooks stacked,
-// per PRD §9 open question 1 default proposal.
+// per PRD 9 open question 1 default proposal.
 function resolveBoardHook(standingFacts, curriculum) {
   const hooks = (standingFacts && standingFacts.board_policy_hooks) || {};
-  const list = Array.isArray(curriculum) ? curriculum : (curriculum ? [curriculum] : []);
+  const list = Array.isArray(curriculum)
+    ? curriculum
+    : curriculum
+      ? [curriculum]
+      : [];
   const out = [];
   for (const board of list) {
     const k = String(board || "").trim();
@@ -2175,11 +2684,11 @@ function resolveBoardHook(standingFacts, curriculum) {
 
 // Build a Layer-2 destination blocklist from the active TMC catalogue.
 // Sources: region, anchor_experiences[].name (split on common separators),
-// curriculum_hooks[].topic.  Phrases are kept as-is — the strip-check
+// curriculum_hooks[].topic.  Phrases are kept as-is  the strip-check
 // runs case-insensitive whole-word/multi-word regex per T7.
 function buildDestinationBlocklist(catalogue) {
   const tokens = new Set();
-  for (const t of (Array.isArray(catalogue) ? catalogue : [])) {
+  for (const t of Array.isArray(catalogue) ? catalogue : []) {
     if (!t || typeof t !== "object") continue;
     if (t.region) tokens.add(String(t.region));
     try {
@@ -2189,7 +2698,9 @@ function buildDestinationBlocklist(catalogue) {
           if (a && a.name) tokens.add(String(a.name));
         }
       }
-    } catch { /* ignore malformed JSON */ }
+    } catch {
+      /* ignore malformed JSON */
+    }
     try {
       const hooks = JSON.parse(t.curriculumHooksJson || "[]");
       if (Array.isArray(hooks)) {
@@ -2197,29 +2708,36 @@ function buildDestinationBlocklist(catalogue) {
           if (h && h.topic) tokens.add(String(h.topic));
         }
       }
-    } catch { /* ignore malformed JSON */ }
+    } catch {
+      /* ignore malformed JSON */
+    }
   }
   return Array.from(tokens).filter(Boolean);
 }
 
 // Strip destination words out of a `report_skill_blurb` before it goes
 // into the Job A prompt as "what to draw from."  The PRD says blurbs
-// "MUST not name the destination" — but we belt-and-brace by trimming
+// "MUST not name the destination"  but we belt-and-brace by trimming
 // known tokens out, in case a catalogue admin slipped one in pre-launch.
 function stripDestinationWords(text, blocklist) {
   let s = String(text || "");
-  for (const tok of (blocklist || [])) {
+  for (const tok of blocklist || []) {
     if (!tok) continue;
     try {
-      const re = new RegExp(`\\b${String(tok).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+      const re = new RegExp(
+        `\\b${String(tok).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+        "gi",
+      );
       s = s.replace(re, "");
-    } catch { /* ignore bad token */ }
+    } catch {
+      /* ignore bad token */
+    }
   }
   return s.replace(/\s{2,}/g, " ").trim();
 }
 
 // Slugify a string for tokenized URLs.  Used to build TravelDiagnostic
-// row-id → public reportSlug.  The slug is the diagnostic id padded
+// row-id  public reportSlug.  The slug is the diagnostic id padded
 // with a random suffix so the URL isn't trivially guessable for casual
 // access (matches the existing report-pdf-url pattern).
 function buildReportSlug(diagnosticId) {
@@ -2242,9 +2760,9 @@ function parseDiagnosticIdFromSlug(slug) {
 // Public no-auth endpoint per DD-5.3 + DD-5.6 + NF-5/NF-6.  Body shape:
 //   {
 //     tenantSlug: string,
-//     answers: {                       // PRD §3.1 keys; engine reads these names
+//     answers: {                       // PRD 3.1 keys; engine reads these names
 //       primary_outcome, secondary_skills[], growth_area,
-//       growth_area_skill,            // mapped skill — Q3 option's mappedSkill
+//       growth_area_skill,            // mapped skill  Q3 option's mappedSkill
 //       travel_maturity, grade_band, curriculum, geo_preference,
 //       group_size, budget_band, timeline,
 //       school_profile: { school_name, city, branches, student_strength, fee_band },
@@ -2252,7 +2770,7 @@ function parseDiagnosticIdFromSlug(slug) {
 //     }
 //   }
 //
-// Q12 email is the only hard wall (NF-6 + PRD §3.1).  Other fields fall
+// Q12 email is the only hard wall (NF-6 + PRD 3.1).  Other fields fall
 // through to engine defaults; lead-quality flags catch garbage submissions.
 router.post("/diagnostics/public/submit-tmc", async (req, res) => {
   try {
@@ -2265,8 +2783,11 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         code: "MISSING_FIELDS",
       });
     }
-    // Q12 email gate — the only hard wall per PRD §3.1 + NF-6.
-    const contact = (answers.contact && typeof answers.contact === "object") ? answers.contact : {};
+    // Q12 email gate  the only hard wall per PRD 3.1 + NF-6.
+    const contact =
+      answers.contact && typeof answers.contact === "object"
+        ? answers.contact
+        : {};
     const email = typeof contact.email === "string" ? contact.email.trim() : "";
     if (!email) {
       return res.status(400).json({
@@ -2274,7 +2795,7 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         code: "EMAIL_REQUIRED",
       });
     }
-    // Trivial email shape check — full validation lives in lead-quality.
+    // Trivial email shape check  full validation lives in lead-quality.
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({
         error: "Q12 email must be a valid email address.",
@@ -2282,12 +2803,15 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       });
     }
 
-    // Minimum-answers validation per PRD §3.1.  Q5 grade_band is the
-    // load-bearing structural answer — engine's hard grade-band filter
+    // Minimum-answers validation per PRD 3.1.  Q5 grade_band is the
+    // load-bearing structural answer  engine's hard grade-band filter
     // assumes one of the 4 frozen tokens; reject unknown values now
     // rather than silently fall through to "no survivors."
     const VALID_GRADE_BANDS = new Set(["4-6", "6-8", "9-10", "11-12"]);
-    if (answers.grade_band && !VALID_GRADE_BANDS.has(String(answers.grade_band))) {
+    if (
+      answers.grade_band &&
+      !VALID_GRADE_BANDS.has(String(answers.grade_band))
+    ) {
       return res.status(400).json({
         error: "grade_band must be one of 4-6 / 6-8 / 9-10 / 11-12",
         code: "INVALID_GRADE_BAND",
@@ -2302,24 +2826,30 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       });
     }
 
-    // Resolve the EngineWeights config row (NF-2 — hot-reloadable;
-    // missing row falls through to PRD §3.3.3 defaults).
+    // Resolve the EngineWeights config row (NF-2  hot-reloadable;
+    // missing row falls through to PRD 3.3.3 defaults).
     let weightsRow = null;
     try {
       weightsRow = await prisma.engineWeights.findUnique({
         where: { tenantId: tenant.id },
       });
-    } catch { /* table may be empty for fresh tenants — fall through */ }
-    const weights = weightsRow ? {
-      weightPrimaryOutcome:  weightsRow.weightPrimaryOutcome,
-      weightSecondarySkill:  weightsRow.weightSecondarySkill,
-      weightGrowthArea:      weightsRow.weightGrowthArea,
-      weightCurriculumHook:  weightsRow.weightCurriculumHook,
-      weightGradeBandCenter: weightsRow.weightGradeBandCenter,
-      weightTierValueLean:   weightsRow.weightTierValueLean,
-      scoresWellThreshold:   weightsRow.scoresWellThreshold,
-    } : undefined;
-    const weightsVersion = weightsRow ? String(weightsRow.version || "v1") : "v1";
+    } catch {
+      /* table may be empty for fresh tenants  fall through */
+    }
+    const weights = weightsRow
+      ? {
+          weightPrimaryOutcome: weightsRow.weightPrimaryOutcome,
+          weightSecondarySkill: weightsRow.weightSecondarySkill,
+          weightGrowthArea: weightsRow.weightGrowthArea,
+          weightCurriculumHook: weightsRow.weightCurriculumHook,
+          weightGradeBandCenter: weightsRow.weightGradeBandCenter,
+          weightTierValueLean: weightsRow.weightTierValueLean,
+          scoresWellThreshold: weightsRow.scoresWellThreshold,
+        }
+      : undefined;
+    const weightsVersion = weightsRow
+      ? String(weightsRow.version || "v1")
+      : "v1";
 
     // Load active catalogue rows for this tenant.
     let catalogue = [];
@@ -2327,19 +2857,23 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       catalogue = await prisma.tmcTripCatalogue.findMany({
         where: { tenantId: tenant.id, status: "active" },
       });
-    } catch { /* empty catalogue → engine returns no_match */ }
+    } catch {
+      /* empty catalogue  engine returns no_match */
+    }
 
-    // C7 — load active curriculum mappings for this tenant. The engine
+    // C7  load active curriculum mappings for this tenant. The engine
     // uses them to compute top-N curriculum-fit recommendations
     // (PRD_TMC_CURRICULUM_MAPPING FR-5). Empty result is the graceful
-    // path — engine returns curriculumFit: [] and the report falls
+    // path  engine returns curriculumFit: [] and the report falls
     // back to the catalogue trip alone.
     let curriculumMappings = [];
     try {
       curriculumMappings = await prisma.travelCurriculumMapping.findMany({
         where: { tenantId: tenant.id, isActive: true },
       });
-    } catch { /* table empty or fresh tenant → empty curriculumFit */ }
+    } catch {
+      /* table empty or fresh tenant  empty curriculumFit */
+    }
 
     // Run the deterministic engine (T2 + C7).  Throws on bad input shape.
     let engineOutput;
@@ -2358,11 +2892,11 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
     }
 
     // Lead-quality classifier (T3).  Repeat-submitter prior count: best-
-    // effort lookup; on failure we treat as 0 prior submissions (PRD §3.4
+    // effort lookup; on failure we treat as 0 prior submissions (PRD 3.4
     // is explicit that lead-quality NEVER blocks report generation).
     //
-    // PRD §3.4 rule 4 verbatim: ">3 submissions on (email, phone) in the
-    // last 24h" — the count MUST be scoped to THIS submitter's email OR
+    // PRD 3.4 rule 4 verbatim: ">3 submissions on (email, phone) in the
+    // last 24h"  the count MUST be scoped to THIS submitter's email OR
     // phone, NOT every TMC submission on the tenant.  Pre-T12 fix this
     // counted tenant-wide TMC submissions which made every test in a
     // multi-test e2e suite suspect after the 4th run (rule 4 fired for
@@ -2373,7 +2907,8 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
     let priorSubmissionsLast24h = 0;
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const submitterPhone = typeof contact.phone === "string" ? contact.phone.trim() : "";
+      const submitterPhone =
+        typeof contact.phone === "string" ? contact.phone.trim() : "";
       const contactOr = [];
       if (email) contactOr.push({ email });
       if (submitterPhone) contactOr.push({ phone: submitterPhone });
@@ -2395,15 +2930,22 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
           },
         });
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     const leadQualityResult = tmcLeadQuality.classifyLeadQuality(answers, {
       priorSubmissionsLast24h,
     });
 
-    // Build the combined flags array — engine flags + lead-quality flag
-    // (PRD §3.6 brief field).
-    const combinedFlags = Array.isArray(engineOutput.flags) ? [...engineOutput.flags] : [];
-    if (leadQualityResult.leadQuality === "suspect" && !combinedFlags.includes("suspect")) {
+    // Build the combined flags array  engine flags + lead-quality flag
+    // (PRD 3.6 brief field).
+    const combinedFlags = Array.isArray(engineOutput.flags)
+      ? [...engineOutput.flags]
+      : [];
+    if (
+      leadQualityResult.leadQuality === "suspect" &&
+      !combinedFlags.includes("suspect")
+    ) {
       combinedFlags.push("suspect");
     }
 
@@ -2416,13 +2958,17 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         tenantId: tenant.id,
       });
       if (dedupResult) contactId = dedupResult.contact.id;
-    } catch { /* dedup is best-effort */ }
+    } catch {
+      /* dedup is best-effort */
+    }
     if (!contactId) {
       try {
         const newContact = await prisma.contact.create({
           data: {
             tenantId: tenant.id,
-            name: String(contact.contact_name || "Anonymous school lead").trim(),
+            name: String(
+              contact.contact_name || "Anonymous school lead",
+            ).trim(),
             email: email,
             phone: contact.phone || null,
             subBrand: "tmc",
@@ -2431,26 +2977,32 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
           },
         });
         contactId = newContact.id;
-      } catch { /* contact create failure shouldn't block the diagnostic */ }
+      } catch {
+        /* contact create failure shouldn't block the diagnostic */
+      }
     }
 
     // Persist the diagnostic row with all T1 additive columns populated.
-    const primaryTripId = (engineOutput.primary && engineOutput.primary.id) || null;
-    const alternativeTripId = (engineOutput.alternative && engineOutput.alternative.id) || null;
+    const primaryTripId =
+      (engineOutput.primary && engineOutput.primary.id) || null;
+    const alternativeTripId =
+      (engineOutput.alternative && engineOutput.alternative.id) || null;
     const diag = await prisma.travelDiagnostic.create({
       data: {
         tenantId: tenant.id,
         subBrand: "tmc",
         contactId: contactId,
-        questionBankId: null, // TMC diagnostic doesn't use a versioned bank — engine + catalogue are the contract
-        questionsJson: JSON.stringify({ specVersion: "TMC_DIAGNOSTIC_ENGINE_V1_2026-06-08" }),
+        questionBankId: null, // TMC diagnostic doesn't use a versioned bank  engine + catalogue are the contract
+        questionsJson: JSON.stringify({
+          specVersion: "TMC_DIAGNOSTIC_ENGINE_V1_2026-06-08",
+        }),
         answersJson: JSON.stringify(answers),
-        // Generic columns stay null — TMC uses engine-specific columns below.
+        // Generic columns stay null  TMC uses engine-specific columns below.
         score: null,
         classification: null,
         classificationLabel: null,
         recommendedTier: null,
-        // TMC engine columns per T1 schema (PRD §3.8).
+        // TMC engine columns per T1 schema (PRD 3.8).
         engineState: engineOutput.state,
         engineScoresJson: JSON.stringify(engineOutput.scores || {}),
         recommendedTripId: primaryTripId,
@@ -2460,10 +3012,12 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         leadQualityReasonsJson: JSON.stringify(leadQualityResult.reasons || []),
         flagsJson: JSON.stringify(combinedFlags),
         weightsVersion: weightsVersion,
-        // C7 — persist curriculum-fit snapshot so the brief / PDF
+        // C7  persist curriculum-fit snapshot so the brief / PDF
         // doesn't drift as advisors edit mappings post-submit.
         curriculumFitJson: JSON.stringify(
-          Array.isArray(engineOutput.curriculumFit) ? engineOutput.curriculumFit : [],
+          Array.isArray(engineOutput.curriculumFit)
+            ? engineOutput.curriculumFit
+            : [],
         ),
       },
     });
@@ -2474,9 +3028,11 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       reportSlug,
       tenantSlug: tenant.slug,
       engineState: engineOutput.state,
-      curriculumFit: Array.isArray(engineOutput.curriculumFit) ? engineOutput.curriculumFit : [],
+      curriculumFit: Array.isArray(engineOutput.curriculumFit)
+        ? engineOutput.curriculumFit
+        : [],
       message:
-        `Thanks${contact.contact_name ? `, ${String(contact.contact_name).split(" ")[0]}` : ""} — your readiness profile is ready. ` +
+        `Thanks${contact.contact_name ? `, ${String(contact.contact_name).split(" ")[0]}` : ""}  your readiness profile is ready. ` +
         `Our team will reach out at ${email} within one working day.`,
     });
   } catch (e) {
@@ -2490,12 +3046,12 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
 
 // GET /api/travel/diagnostics/:id/readiness-report.pdf
 //
-// Public, token-gated by id (matches DD-5.2 — the URL is what the T9 page
+// Public, token-gated by id (matches DD-5.2  the URL is what the T9 page
 // surfaces to the school via the `reportSlug` from the submit response).
 // Returns application/pdf attachment.  Cache-Control: no-store.
 //
-// Pipeline: lookup → build Job A prompt (T6) → llmRouter (stub or real)
-// → guardReportOutput (T7) → renderTmcReadinessReport.
+// Pipeline: lookup  build Job A prompt (T6)  llmRouter (stub or real)
+//  guardReportOutput (T7)  renderTmcReadinessReport.
 router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -2507,7 +3063,7 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
     }
 
     const diag = await prisma.travelDiagnostic.findFirst({
-      where: { id, subBrand: "tmc" },
+      where: { id },
     });
     if (!diag) {
       return res.status(404).json({
@@ -2517,8 +3073,11 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
     }
 
     let answers = {};
-    try { answers = JSON.parse(diag.answersJson || "{}"); }
-    catch { /* malformed → empty answers, fallback renderer text */ }
+    try {
+      answers = JSON.parse(diag.answersJson || "{}");
+    } catch {
+      /* malformed  empty answers, fallback renderer text */
+    }
 
     // Load active catalogue for the destination blocklist + matched-trip
     // narrative material.  recommendedTripId / alternativeTripId may be null.
@@ -2527,19 +3086,24 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
       catalogue = await prisma.tmcTripCatalogue.findMany({
         where: { tenantId: diag.tenantId, status: "active" },
       });
-    } catch { /* empty catalogue is fine — guard falls to template */ }
+    } catch {
+      /* empty catalogue is fine  guard falls to template */
+    }
     const matchedTripIds = new Set(
       [diag.recommendedTripId, diag.alternativeTripId].filter((x) => x != null),
     );
     const matchedRows = catalogue.filter((t) => matchedTripIds.has(t.id));
 
     // Build Job A prompt (T6).
-    // G103 — resolve standingFacts with per-tenant EngineWeights overrides
-    // (assuranceFactsJson + trustFactsJson). Empty tenant config → defaults.
+    // G103  resolve standingFacts with per-tenant EngineWeights overrides
+    // (assuranceFactsJson + trustFactsJson). Empty tenant config  defaults.
     const standingFacts = await resolveStandingFacts(prisma, diag.tenantId);
     const destinationBlocklist = buildDestinationBlocklist(catalogue);
     const catalogueMatchedBlurbs = matchedRows.map((t) => ({
-      blurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+      blurb: stripDestinationWords(
+        t.reportSkillBlurb || "",
+        destinationBlocklist,
+      ),
       tier: t.tier,
     }));
     let engineOutputForPrompt = null;
@@ -2548,7 +3112,9 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
         state: diag.engineState || null,
         flags: JSON.parse(diag.flagsJson || "[]"),
       };
-    } catch { engineOutputForPrompt = { state: diag.engineState || null, flags: [] }; }
+    } catch {
+      engineOutputForPrompt = { state: diag.engineState || null, flags: [] };
+    }
 
     const promptEnvelope = tmcPrompts.buildReadinessNarrativePrompt({
       answers,
@@ -2570,12 +3136,18 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
       });
       // Attempt to parse JSON from llmResp.text.  Real-mode returns strict
       // JSON; stub-mode returns prose tagged "[STUB-...]" which fails Layer
-      // 1 → guard falls through to Layer 3 template.
-      try { llmRaw = JSON.parse(llmResp && llmResp.text); }
-      catch { llmRaw = llmResp && llmResp.text; }
+      // 1  guard falls through to Layer 3 template.
+      try {
+        llmRaw = JSON.parse(llmResp && llmResp.text);
+      } catch {
+        llmRaw = llmResp && llmResp.text;
+      }
     } catch (e) {
-      // LLM call failure (e.g. budget cap) → fall through to template.
-      console.error("[travel-diag-tmc] LLM call failed (falling through to template):", e.message);
+      // LLM call failure (e.g. budget cap)  fall through to template.
+      console.error(
+        "[travel-diag-tmc] LLM call failed (falling through to template):",
+        e.message,
+      );
     }
 
     // Run the T7 guard.  Layer 3 fallback fills from schoolAnswers.
@@ -2584,21 +3156,22 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
       schoolAnswers: answers,
     });
 
-    // Resolve §3.5.1 board hook + §3.5.2 runway display.
+    // Resolve 3.5.1 board hook + 3.5.2 runway display.
     const boardHook = resolveBoardHook(standingFacts, answers.curriculum);
-    const runwayDisplay = resolveRunwayDisplay(standingFacts, answers.geo_preference);
-
-    // Booking URL: DD-5.4 GS-default — env-var override; otherwise the renderer
-    // resolves from tenant.subBrandConfigJson.tmc.bookingLinkUrl per G105
-    // (PRD_TMC §3.9 admin-curated link). Empty string falls back to the
-    // "executive will reach out" copy.
-    const bookingUrl = String(
-      process.env.TMC_BOOKING_URL_FALLBACK ||
-      process.env.TMC_BOOKING_URL ||
-      "",
+    const runwayDisplay = resolveRunwayDisplay(
+      standingFacts,
+      answers.geo_preference,
     );
 
-    // G105 — load tenant for subBrandConfigJson booking-link resolution.
+    // Booking URL: DD-5.4 GS-default  env-var override; otherwise the renderer
+    // resolves from tenant.subBrandConfigJson.tmc.bookingLinkUrl per G105
+    // (PRD_TMC 3.9 admin-curated link). Empty string falls back to the
+    // "executive will reach out" copy.
+    const bookingUrl = String(
+      process.env.TMC_BOOKING_URL_FALLBACK || process.env.TMC_BOOKING_URL || "",
+    );
+
+    // G105  load tenant for subBrandConfigJson booking-link resolution.
     // Best-effort: render proceeds with tenant=null if lookup fails.
     let tenantForRender = null;
     try {
@@ -2606,7 +3179,9 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
         where: { id: diag.tenantId },
         select: { id: true, subBrandConfigJson: true, logoUrl: true },
       });
-    } catch (_e) { /* fall through to null */ }
+    } catch (_e) {
+      /* fall through to null */
+    }
 
     const engineOutputForRender = {
       state: diag.engineState,
@@ -2626,7 +3201,7 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
       tenant: tenantForRender,
     });
 
-    // Slugify for filename — best-effort tenant scoping into the name.
+    // Slugify for filename  best-effort tenant scoping into the name.
     const slug = `readiness-report-${id}`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${slug}.pdf"`);
@@ -2645,8 +3220,8 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
 
 // GET /api/travel/diagnostics/public/readiness-report/:slug
 //
-// Public no-auth endpoint per T14 / PRD §3.5.  The T10 frontend page
-// (`/p/tmc/report/:slug` → TmcReadinessReport.jsx) fetches this endpoint
+// Public no-auth endpoint per T14 / PRD 3.5.  The T10 frontend page
+// (`/p/tmc/report/:slug`  TmcReadinessReport.jsx) fetches this endpoint
 // to render the 10-section template.  Mirrors the PDF endpoint's data
 // pipeline (engine output + Job A narrative + report-guard + standing-
 // facts + board hook + runway display) but returns the pre-render
@@ -2658,7 +3233,7 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
 // extracts the leading numeric id.  We additionally validate that the
 // suffix matches the stored slug's suffix-bytes-shape to ensure the slug
 // isn't trivially guessable by anyone who knows the diagnostic id
-// (DD-5.2 — token-gated public access).
+// (DD-5.2  token-gated public access).
 //
 // Tenant isolation: slugs are global-unique by construction (id is
 // unique); the response intentionally omits tenant identity (no
@@ -2667,7 +3242,7 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
 //
 // Layer 3 fallback: when the LLM call fails or T7's guard rejects the
 // LLM output, this endpoint still returns 200 with the deterministic
-// template narrative (mirrors PDF endpoint behaviour — NEVER 5xx on
+// template narrative (mirrors PDF endpoint behaviour  NEVER 5xx on
 // guard-fallback).
 //
 // Cache: `Cache-Control: public, max-age=300` (5 min).  Report content
@@ -2686,7 +3261,7 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
     }
 
     const diag = await prisma.travelDiagnostic.findFirst({
-      where: { id, subBrand: "tmc" },
+      where: { id },
     });
     if (!diag) {
       return res.status(404).json({
@@ -2696,8 +3271,11 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
     }
 
     let answers = {};
-    try { answers = JSON.parse(diag.answersJson || "{}"); }
-    catch { /* malformed → empty answers, fallback template */ }
+    try {
+      answers = JSON.parse(diag.answersJson || "{}");
+    } catch {
+      /* malformed  empty answers, fallback template */
+    }
 
     // Load active catalogue for the destination blocklist + matched-trip
     // narrative material.
@@ -2706,19 +3284,24 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
       catalogue = await prisma.tmcTripCatalogue.findMany({
         where: { tenantId: diag.tenantId, status: "active" },
       });
-    } catch { /* empty catalogue is fine — guard falls to template */ }
+    } catch {
+      /* empty catalogue is fine  guard falls to template */
+    }
     const matchedTripIds = new Set(
       [diag.recommendedTripId, diag.alternativeTripId].filter((x) => x != null),
     );
     const matchedRows = catalogue.filter((t) => matchedTripIds.has(t.id));
 
     // Build Job A prompt (T6).
-    // G103 — resolve standingFacts with per-tenant EngineWeights overrides
-    // (assuranceFactsJson + trustFactsJson). Empty tenant config → defaults.
+    // G103  resolve standingFacts with per-tenant EngineWeights overrides
+    // (assuranceFactsJson + trustFactsJson). Empty tenant config  defaults.
     const standingFacts = await resolveStandingFacts(prisma, diag.tenantId);
     const destinationBlocklist = buildDestinationBlocklist(catalogue);
     const catalogueMatchedBlurbs = matchedRows.map((t) => ({
-      blurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+      blurb: stripDestinationWords(
+        t.reportSkillBlurb || "",
+        destinationBlocklist,
+      ),
       tier: t.tier,
     }));
     let engineOutputForPrompt = null;
@@ -2727,7 +3310,9 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
         state: diag.engineState || null,
         flags: JSON.parse(diag.flagsJson || "[]"),
       };
-    } catch { engineOutputForPrompt = { state: diag.engineState || null, flags: [] }; }
+    } catch {
+      engineOutputForPrompt = { state: diag.engineState || null, flags: [] };
+    }
 
     const promptEnvelope = tmcPrompts.buildReadinessNarrativePrompt({
       answers,
@@ -2739,7 +3324,7 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
 
     // Call the LLM router (T6).  Stub mode returns prose that won't pass
     // Layer 1 schema validation, so the guard falls through to the
-    // deterministic template per design — same as the PDF endpoint.
+    // deterministic template per design  same as the PDF endpoint.
     let llmRaw = null;
     try {
       const llmResp = await llmRouter.routeRequest({
@@ -2747,10 +3332,16 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
         payload: { system: promptEnvelope.system, user: promptEnvelope.user },
         tenantId: diag.tenantId,
       });
-      try { llmRaw = JSON.parse(llmResp && llmResp.text); }
-      catch { llmRaw = llmResp && llmResp.text; }
+      try {
+        llmRaw = JSON.parse(llmResp && llmResp.text);
+      } catch {
+        llmRaw = llmResp && llmResp.text;
+      }
     } catch (e) {
-      console.error("[travel-diag-tmc] readiness-report.json LLM call failed (falling through to template):", e.message);
+      console.error(
+        "[travel-diag-tmc] readiness-report.json LLM call failed (falling through to template):",
+        e.message,
+      );
     }
 
     // Run the T7 guard.  Layer 3 fallback fills from schoolAnswers.
@@ -2759,24 +3350,33 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
       schoolAnswers: answers,
     });
 
-    // Resolve §3.5.1 board hook + §3.5.2 runway display.
+    // Resolve 3.5.1 board hook + 3.5.2 runway display.
     const boardHook = resolveBoardHook(standingFacts, answers.curriculum);
-    const runwayDisplay = resolveRunwayDisplay(standingFacts, answers.geo_preference);
+    const runwayDisplay = resolveRunwayDisplay(
+      standingFacts,
+      answers.geo_preference,
+    );
     const runwayKey = resolveRunwayKey(answers.geo_preference);
-    const runwayDays = (standingFacts.runway[runwayKey] && standingFacts.runway[runwayKey].lead_days) || null;
+    const runwayDays =
+      (standingFacts.runway[runwayKey] &&
+        standingFacts.runway[runwayKey].lead_days) ||
+      null;
 
-    // Board name surfaced for the §3.5.1 hook block — first selected
+    // Board name surfaced for the 3.5.1 hook block  first selected
     // curriculum (multi-board schools see the concatenated hookText but
     // the header `board` field uses the first).  Empty string when
     // curriculum is missing.
     const curriculumList = Array.isArray(answers.curriculum)
       ? answers.curriculum
-      : (answers.curriculum ? [answers.curriculum] : []);
-    const boardName = curriculumList.length > 0 ? String(curriculumList[0]) : "";
+      : answers.curriculum
+        ? [answers.curriculum]
+        : [];
+    const boardName =
+      curriculumList.length > 0 ? String(curriculumList[0]) : "";
 
-    // catalogueMatched — buyer-facing.  Trip name + region + tier +
+    // catalogueMatched  buyer-facing.  Trip name + region + tier +
     // duration ONLY.  Pricing fields (indicativePricePerStudent,
-    // priceBand) are EXCLUDED — DD-5.4 keeps the report a "what becomes
+    // priceBand) are EXCLUDED  DD-5.4 keeps the report a "what becomes
     // possible" surface, not a quote.  The executive surfaces price
     // separately via the brief / human follow-up.
     const catalogueMatchedSafe = matchedRows.map((t) => ({
@@ -2786,12 +3386,15 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
       region: t.region,
       durationDays: t.durationDays,
       durationNights: t.durationNights,
-      reportSkillBlurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+      reportSkillBlurb: stripDestinationWords(
+        t.reportSkillBlurb || "",
+        destinationBlocklist,
+      ),
     }));
 
-    // Engine output — only the buyer-safe surface.  The full
+    // Engine output  only the buyer-safe surface.  The full
     // `engineScoresJson` (survivors[], eliminated[], weightsUsed{}) is
-    // INTENTIONALLY EXCLUDED — it would leak weight tuning and the
+    // INTENTIONALLY EXCLUDED  it would leak weight tuning and the
     // catalogue's eliminated set is an internal sales artifact.  We
     // expose only state + tier + the matched trip ids (which are already
     // the school's surface).
@@ -2808,7 +3411,10 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
         engineState: diag.engineState || null,
         icpTier: diag.icpTier || null,
         weightsVersion: diag.weightsVersion || null,
-        createdAt: diag.createdAt instanceof Date ? diag.createdAt.toISOString() : diag.createdAt,
+        createdAt:
+          diag.createdAt instanceof Date
+            ? diag.createdAt.toISOString()
+            : diag.createdAt,
       },
       narrative: guarded.output,
       engineOutput: engineOutputForJson,
@@ -2839,14 +3445,14 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────
-// G104 — DD-5.7 blind-collapsed brief-reveal audit endpoint
-// ─────────────────────────────────────────────────────────────────────
+//
+// G104  DD-5.7 blind-collapsed brief-reveal audit endpoint
+//
 //
 // PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE DD-5.7. DiagnosticDetail.jsx
 // renders Job-B sales-brief sections collapsed by default to avoid biasing
 // the advisor before they choose a section to read. Per-section reveal
-// clicks POST here so we can audit "advisor saw section X at time Y" — the
+// clicks POST here so we can audit "advisor saw section X at time Y"  the
 // brief itself is render-time content, but the reveal-action is governance.
 //
 // POST /api/travel/diagnostics/:id/brief-reveal
@@ -2915,7 +3521,7 @@ router.post(
   },
 );
 
-// Internal exports for the T8 vitest suite — keeps the helpers
+// Internal exports for the T8 vitest suite  keeps the helpers
 // inline-testable without round-tripping through supertest.
 module.exports = router;
 module.exports.__internal = {

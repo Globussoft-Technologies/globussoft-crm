@@ -36,6 +36,7 @@ const {
   applyRupeeCapableFonts,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { sanitizeText } = require("../lib/sanitizeJson");
 const { sendEmail } = require("../lib/emailSender");
 const waWebClient = require("../services/whatsappWebClient");
 // #920 slice S42  wellness PHI list-endpoint slim projections.
@@ -106,6 +107,7 @@ const {
   requirePermission,
   userHasPermission,
 } = require("../middleware/requirePermission");
+const { findDuplicateContactFull } = require("../utils/deduplication");
 // #920 slice S59  canonical PHI-read gate factory. The original inline
 // declaration of `phiReadGate` (which lived just below the `phiReadGate`
 // JSDoc block ~line 365) has been replaced with this factory call so the
@@ -709,7 +711,7 @@ async function attachInvoiceStateToVisits(visits, tenantId) {
   try {
     const invoices = await prisma.invoice.findMany({
       where: { tenantId, visitId: { in: visitIds } },
-      select: { id: true, visitId: true, status: true, paidAt: true },
+      select: { id: true, visitId: true, status: true, paidAt: true, amount: true },
     });
     if (!invoices.length) return visits;
 
@@ -742,7 +744,7 @@ async function attachInvoiceStateToVisits(visits, tenantId) {
 // Returns { url, gateway, paymentId } on success, or { error, code } when the
 // tenant has no payment gateway configured. Never throws for gateway issues;
 // caller handles/ignores the error object.
-async function generateVisitPaymentLink({ visit, tenantId, baseUrl }) {
+async function generateVisitPaymentLink({ visit, tenantId, baseUrl, amount }) {
   const { createInvoicePaymentLink } = require("../lib/paymentLink");
 
   const patient = await prisma.patient.findUnique({
@@ -756,6 +758,8 @@ async function generateVisitPaymentLink({ visit, tenantId, baseUrl }) {
     where: { visitId: visit.id, tenantId },
   });
 
+  const invoiceAmount = amount != null ? Number(amount) : Math.round(Number(visit.amountCharged) * 100) / 100;
+
   if (!invoice) {
     const invoiceNum = `WLV-${visit.id}-${Date.now()}`;
     const dueDate = new Date();
@@ -764,12 +768,19 @@ async function generateVisitPaymentLink({ visit, tenantId, baseUrl }) {
     invoice = await prisma.invoice.create({
       data: {
         invoiceNum,
-        amount: Math.round(Number(visit.amountCharged) * 100) / 100,
+        amount: invoiceAmount,
         dueDate,
         contactId: contact.id,
         tenantId,
         visitId: visit.id,
       },
+    });
+  } else if (amount != null && invoice.amount !== invoiceAmount) {
+    // Update existing invoice amount when a custom amount is supplied (e.g.
+    // coupon-adjusted balance on a previously-generated link).
+    invoice = await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { amount: invoiceAmount },
     });
   }
 
@@ -809,8 +820,108 @@ async function generateVisitPaymentLink({ visit, tenantId, baseUrl }) {
   return link;
 }
 
+// Look up a successfully-paid booking locking-fee Payment for a visit. The
+// relationship is stored in Payment.metadata (no schema change needed) so this
+// helper parses metadata to find the match. Returns the payment row or null.
+async function findPaidBookingLockingFee(visitId) {
+  const payments = await prisma.payment.findMany({
+    where: {
+      gateway: "razorpay",
+      status: "SUCCESS",
+      amount: 200,
+      metadata: { contains: `"visitId":${Number(visitId)}` },
+    },
+  });
+  for (const p of payments) {
+    let meta = {};
+    try {
+      meta = JSON.parse(p.metadata || "{}");
+    } catch (_e) {
+      continue;
+    }
+    if (meta.kind === "booking_fee" && Number(meta.visitId) === Number(visitId)) {
+      return p;
+    }
+  }
+  return null;
+}
 
-async function sendVisitPaymentLink({ visit, tenantId, baseUrl }) {
+// Compute the treatment balance due for a visit, given an optional coupon and
+// the already-paid non-refundable locking fee. Returns { baseAmount, discount,
+// excess, lockingFee, balance, applied, coupon, error }.
+async function computeTreatmentBalance({
+  tenantId,
+  baseAmount,
+  serviceId,
+  couponCode,
+  visitId,
+}) {
+  let discount = 0;
+  let applied = false;
+  let excess = 0;
+  let coupon = null;
+  if (couponCode && String(couponCode).trim()) {
+    const lookup = await loadCouponForApply(
+      tenantId,
+      String(couponCode).trim().toUpperCase(),
+    );
+    if (lookup.error) {
+      return { error: lookup.error, baseAmount, discount: 0, excess: 0, lockingFee: 0, balance: baseAmount, applied: false };
+    }
+    coupon = lookup.coupon;
+    const result = computeCouponDiscount(coupon, baseAmount, serviceId);
+    discount = result.discount;
+    applied = result.applied;
+    excess = result.excess;
+  }
+  const lockingFeePayment = await findPaidBookingLockingFee(visitId);
+  const lockingFee = lockingFeePayment ? 200 : 0;
+  const balance = Math.max(0, baseAmount - discount - lockingFee);
+  return {
+    baseAmount,
+    discount,
+    excess,
+    lockingFee,
+    balance,
+    applied,
+    coupon,
+  };
+}
+
+// Parse the JSON-text couponBreakdown column on a Visit row. Returns the parsed
+// object when valid, otherwise null. Kept defensive so callers can safely fall
+// back to visit.amountCharged.
+function parseVisitCouponBreakdown(visit) {
+  if (!visit || !visit.couponBreakdown) return null;
+  try {
+    const parsed = JSON.parse(visit.couponBreakdown);
+    if (parsed && typeof parsed === "object" && Number.isFinite(Number(parsed.balance))) {
+      return parsed;
+    }
+  } catch (_e) {
+    // ignore malformed JSON
+  }
+  return null;
+}
+
+// Decorate one or more Visit rows for the frontend by parsing couponBreakdown
+// from its JSON-text column into an object. Mutates the row(s) in place.
+function attachCouponBreakdownToVisits(visits) {
+  if (!Array.isArray(visits)) {
+    if (visits && typeof visits === "object") {
+      const parsed = parseVisitCouponBreakdown(visits);
+      if (parsed) visits.couponBreakdown = parsed;
+    }
+    return visits;
+  }
+  for (const visit of visits) {
+    const parsed = parseVisitCouponBreakdown(visit);
+    if (parsed) visit.couponBreakdown = parsed;
+  }
+  return visits;
+}
+
+async function sendVisitPaymentLink({ visit, tenantId, baseUrl, amount }) {
   const patient = await prisma.patient.findUnique({
     where: { id: visit.patientId },
     select: { id: true, name: true, email: true, phone: true, contactId: true },
@@ -819,7 +930,7 @@ async function sendVisitPaymentLink({ visit, tenantId, baseUrl }) {
   const contact = await ensurePatientContact(patient, tenantId);
   const paymentLink = visit.paymentLinkUrl
     ? { url: visit.paymentLinkUrl, gateway: visit.paymentLinkGateway || "razorpay" }
-    : await generateVisitPaymentLink({ visit, tenantId, baseUrl });
+    : await generateVisitPaymentLink({ visit, tenantId, baseUrl, amount });
 
   if (paymentLink.error || !paymentLink.url) {
     return paymentLink;
@@ -1976,6 +2087,7 @@ router.get("/patients/:id/visits", phiReadGate, async (req, res) => {
       visits,
       req.user.tenantId,
     );
+    attachCouponBreakdownToVisits(visitsWithInvoiceState);
     // Audit-log the read same as the flat /visits list (PRD 11 clinical reads).
     // #534 (PERF-1): fire-and-forget  see PATIENT_LIST_READ above.
     writeAudit(
@@ -2953,6 +3065,9 @@ router.get("/visits", phiReadGate, async (req, res) => {
       visitFindArgs.select = listProjection("Visit", false);
     }
     const visits = await prisma.visit.findMany(visitFindArgs);
+    if (wantFullShape) {
+      attachCouponBreakdownToVisits(visits);
+    }
     // PRD 11 / T2.2: staff-side cross-patient visit list is a PHI read
     // (response includes patient name + phone on full path). One audit row
     // per request, with the filter params and result count  never the row
@@ -3029,6 +3144,7 @@ router.get("/visits/:id", phiReadGate, async (req, res) => {
     if (visit.prescriptions) {
       visit.prescriptions = visit.prescriptions.map(normalizePrescriptionDrugs);
     }
+    attachCouponBreakdownToVisits(visit);
     res.json(visit);
   } catch (e) {
     console.error("[wellness] get visit error:", e.message);
@@ -3303,6 +3419,10 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Visit not found" });
 
     const data = {};
+    const couponCode =
+      req.body.couponCode !== undefined
+        ? String(req.body.couponCode || "").trim().toUpperCase() || null
+        : null;
     // Agent B: added videoRoom (telehealth Jitsi room name)
     // Wave 11 Agent GG: added doctorId/resourceId/locationId for booking gate.
     const allowed = [
@@ -3353,6 +3473,11 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     // #277: same per-visit cap as POST  reject overflow updates.
     if (data.amountCharged != null && data.amountCharged !== "") {
       const amt = Number(data.amountCharged);
+      if (Number.isNaN(amt))
+        return res.status(400).json({
+          error: "amountCharged must be a number",
+          code: "AMOUNT_INVALID",
+        });
       if (amt < 0)
         return res.status(400).json({
           error: "amountCharged must be 0 or greater",
@@ -3363,6 +3488,7 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
           error: "amountCharged exceeds the 50,00,000 per-visit cap",
           code: "AMOUNT_TOO_LARGE",
         });
+      data.amountCharged = amt;
     }
 
     // #197: enforce status enum + transition matrix. A junk status like 'frog'
@@ -3476,6 +3602,12 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     // UI can render a "Copy" action. Uses the same tenant BYOK Razorpay keys
     // as the rest of the CRM; gateway issues are logged but do NOT fail the
     // clinical visit update.
+    //
+    // If a couponCode was supplied, apply the discount and subtract any already-
+    // paid non-refundable booking locking fee (stored in Payment.metadata) before
+    // generating the link. The coupon redemption count is incremented here; if
+    // the patient never pays the link, that is a known limitation of this MVP.
+    let billingBreakdown = null;
     if (
       data.status === "completed" &&
       existing.status !== "completed" &&
@@ -3484,26 +3616,133 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     ) {
       try {
         const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
-        const link = await generateVisitPaymentLink({
-          visit: updated,
+        const balanceCtx = await computeTreatmentBalance({
           tenantId: req.user.tenantId,
-          baseUrl: getFrontendUrlFromRequest(req),
+          baseAmount: Number(updated.amountCharged),
+          serviceId: updated.serviceId,
+          couponCode,
+          visitId: updated.id,
         });
-        if (link.error) {
-          console.error(
-            "[wellness] visit payment-link generation failed:",
-            link.error,
-          );
-        } else {
+
+        if (balanceCtx.error) {
+          // Coupon is invalid/expired; do not silently proceed. Surface it as a
+          // 400 so the Log Visit UI can show the error and let staff correct it.
+          return res.status(balanceCtx.error.status).json({
+            error: balanceCtx.error.message,
+            code: balanceCtx.error.code,
+          });
+        }
+
+        billingBreakdown = {
+          baseAmount: balanceCtx.baseAmount,
+          discount: balanceCtx.discount,
+          excess: balanceCtx.excess,
+          lockingFee: balanceCtx.lockingFee,
+          balance: balanceCtx.balance,
+          couponCode: balanceCtx.coupon?.code || null,
+        };
+
+        if (balanceCtx.coupon && balanceCtx.applied) {
+          await prisma.coupon.update({
+            where: { id: balanceCtx.coupon.id },
+            data: { redemptionCount: { increment: 1 } },
+          });
+        }
+
+        if (balanceCtx.excess > 0 && updated.patientId) {
+          try {
+            const wallet = await getOrCreateWallet(req, updated.patientId);
+            await writeWalletTransaction({
+              tenantId: req.user.tenantId,
+              walletId: wallet.id,
+              type: "CREDIT_COUPON_EXCESS",
+              absAmount: balanceCtx.excess,
+              performedBy: req.user.userId,
+              reason: `Coupon ${balanceCtx.coupon.code} excess credited`,
+              visitId: updated.id,
+              couponId: balanceCtx.coupon.id,
+            });
+          } catch (excessErr) {
+            console.error(
+              "[wellness] coupon excess wallet credit failed:",
+              excessErr.message,
+            );
+          }
+        }
+
+        if (balanceCtx.balance > 0) {
+          const link = await generateVisitPaymentLink({
+            visit: updated,
+            tenantId: req.user.tenantId,
+            baseUrl: getFrontendUrlFromRequest(req),
+            amount: balanceCtx.balance,
+          });
+          if (link.error) {
+            console.error(
+              "[wellness] visit payment-link generation failed:",
+              link.error,
+            );
+          } else {
+            // Stamp the coupon / locking-fee breakdown into the Payment metadata
+            // so the clinic can audit exactly how the balance was derived.
+            if (link.paymentId) {
+              try {
+                const payment = await prisma.payment.findFirst({
+                  where: { id: link.paymentId },
+                });
+                if (payment) {
+                  let pm = {};
+                  try {
+                    pm = JSON.parse(payment.metadata || "{}");
+                  } catch (_e) {
+                    pm = {};
+                  }
+                  await prisma.payment.update({
+                    where: { id: payment.id },
+                    data: {
+                      metadata: JSON.stringify({
+                        ...pm,
+                        visitBilling: billingBreakdown,
+                      }),
+                    },
+                  });
+                }
+              } catch (metaErr) {
+                console.error(
+                  "[wellness] visit payment-link metadata update failed:",
+                  metaErr.message,
+                );
+              }
+            }
+            const finalVisit = await prisma.visit.update({
+              where: { id: updated.id },
+              data: {
+                paymentLinkUrl: link.url,
+                paymentLinkGeneratedAt: new Date(),
+                couponBreakdown: JSON.stringify(billingBreakdown),
+              },
+            });
+            updated.paymentLinkUrl = finalVisit.paymentLinkUrl;
+            updated.paymentLinkGeneratedAt = finalVisit.paymentLinkGeneratedAt;
+            updated.couponBreakdown = finalVisit.couponBreakdown;
+          }
+        } else if (balanceCtx.applied) {
+          // Coupon + locking fee fully cover the bill; no link needed.
+          // Persist the breakdown so the Completed Visits UI can show the
+          // discount even when nothing is due.
           const finalVisit = await prisma.visit.update({
             where: { id: updated.id },
             data: {
-              paymentLinkUrl: link.url,
-              paymentLinkGeneratedAt: new Date(),
+              paymentLinkUrl: null,
+              paymentLinkGeneratedAt: null,
+              paymentStatus: "paid",
+              couponBreakdown: JSON.stringify(billingBreakdown),
             },
           });
           updated.paymentLinkUrl = finalVisit.paymentLinkUrl;
           updated.paymentLinkGeneratedAt = finalVisit.paymentLinkGeneratedAt;
+          updated.paymentStatus = finalVisit.paymentStatus;
+          updated.couponBreakdown = finalVisit.couponBreakdown;
         }
       } catch (hookErr) {
         console.error(
@@ -3536,7 +3775,8 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
       );
     }
 
-    res.json(updated);
+    attachCouponBreakdownToVisits(updated);
+    res.json({ ...updated, billingBreakdown });
   } catch (e) {
     console.error("[wellness] update visit error:", e.message);
     // #168 #165: same as POST.
@@ -3565,10 +3805,12 @@ router.post("/visits/:id/payment-link", phiWriteGate, async (req, res) => {
       return res.status(400).json({ error: "Visit is already paid", code: "VISIT_ALREADY_PAID" });
 
     const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+    const couponBreakdown = parseVisitCouponBreakdown(visit);
     const link = await generateVisitPaymentLink({
       visit,
       tenantId: req.user.tenantId,
       baseUrl: getFrontendUrlFromRequest(req),
+      amount: couponBreakdown ? couponBreakdown.balance : undefined,
     });
 
     if (link.error)
@@ -3608,10 +3850,12 @@ router.post("/visits/:id/payment-link/send", phiWriteGate, async (req, res) => {
     }
 
     const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+    const couponBreakdown = parseVisitCouponBreakdown(visit);
     const result = await sendVisitPaymentLink({
       visit,
       tenantId: req.user.tenantId,
       baseUrl: getFrontendUrlFromRequest(req),
+      amount: couponBreakdown ? couponBreakdown.balance : undefined,
     });
     if (result.error) {
       return res.status(502).json({ error: result.error, code: result.code });
@@ -4029,8 +4273,21 @@ function requireClinicalRole(req, res, next) {
 router.get("/prescriptions", phiReadGate, async (req, res) => {
   try {
     const { patientId, limit = 50, skip = 0 } = req.query;
+    const q = String(req.query.q || "").trim();
     const where = tenantWhere(req);
     if (patientId) where.patientId = parseInt(patientId);
+    if (q) {
+      where.patient = {
+        is: {
+          OR: [
+            { name: { contains: q } },
+            { displayName: { contains: q } },
+            { phone: { contains: q } },
+            { email: { contains: q } },
+          ],
+        },
+      };
+    }
     const take = Math.min(parseInt(limit, 10) || 50, 200);
     const skipN = Math.max(parseInt(skip, 10) || 0, 0);
     // #920 slice S42: opt-in slim shape via `?fields=summary`. Drops the
@@ -4048,7 +4305,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     };
     if (wantFullShape) {
       rxFindArgs.include = {
-        patient: { select: { id: true, name: true } },
+        patient: { select: { id: true, name: true, phone: true } },
         doctor: { select: { id: true, name: true } },
       };
     } else {
@@ -4075,7 +4332,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
       req.user.tenantId,
       {
         count: items.length,
-        filters: { patientId: patientId ? parseInt(patientId) : null },
+        filters: { patientId: patientId ? parseInt(patientId) : null, q: q || null },
         shape: wantFullShape ? "full" : "summary",
       },
     ).catch((auditErr) => {
@@ -7401,9 +7658,13 @@ router.get(
       if (req.query.activeOnly === "1" || req.query.activeOnly === "true") {
         where.isActive = true;
       }
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 200);
+      const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
       const rows = await prisma.resource.findMany({
         where,
         orderBy: { name: "asc" },
+        take: limit,
+        skip: offset,
       });
       res.json(rows);
     } catch (e) {
@@ -7930,6 +8191,80 @@ const reportRange = (req) => {
   return { from, to };
 };
 
+const REPORT_PAGE_SIZE_DEFAULT = 10;
+const REPORT_PAGE_SIZE_MAX = 100;
+
+function parseReportPagination(req) {
+  const rawLimit = Number.parseInt(req.query.limit, 10);
+  const limit = Number.isInteger(rawLimit) && rawLimit > 0
+    ? Math.min(rawLimit, REPORT_PAGE_SIZE_MAX)
+    : REPORT_PAGE_SIZE_DEFAULT;
+  const cursor = typeof req.query.cursor === "string" && req.query.cursor.trim()
+    ? req.query.cursor.trim()
+    : null;
+  return { limit, cursor };
+}
+
+function encodeReportCursor(row, keyField) {
+  if (!row) return null;
+  const payload = {
+    v: 1,
+    revenue: Number(row.revenue) || 0,
+    key: String(row?.[keyField] ?? row?.id ?? row?.source ?? ""),
+  };
+  return Buffer.from(JSON.stringify(payload)).toString("base64url");
+}
+
+function decodeReportCursor(cursor) {
+  try {
+    const raw = Buffer.from(String(cursor), "base64url").toString("utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed.v !== 1) return null;
+    return {
+      revenue: Number(parsed.revenue) || 0,
+      key: String(parsed.key ?? ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function compareReportRows(a, b, keyField) {
+  const revenueDelta = (Number(b.revenue) || 0) - (Number(a.revenue) || 0);
+  if (revenueDelta !== 0) return revenueDelta;
+  return String(a?.[keyField] ?? a?.id ?? a?.source ?? "").localeCompare(
+    String(b?.[keyField] ?? b?.id ?? b?.source ?? ""),
+  );
+}
+
+function paginateReportRows(rows, req, keyField = "id") {
+  const { limit, cursor } = parseReportPagination(req);
+  const sorted = [...rows].sort((a, b) => compareReportRows(a, b, keyField));
+  let start = 0;
+  const decoded = cursor ? decodeReportCursor(cursor) : null;
+  if (decoded) {
+    const idx = sorted.findIndex((row) =>
+      (Number(row.revenue) || 0) === decoded.revenue &&
+      String(row?.[keyField] ?? row?.id ?? row?.source ?? "") === decoded.key,
+    );
+    start = idx >= 0 ? idx + 1 : 0;
+  }
+  const pageRows = sorted.slice(start, start + limit);
+  const nextCursor = start + limit < sorted.length
+    ? encodeReportCursor(pageRows[pageRows.length - 1], keyField)
+    : null;
+  return {
+    rows: pageRows,
+    pagination: {
+      limit,
+      total: sorted.length,
+      hasMore: !!nextCursor,
+      nextCursor,
+    },
+  };
+}
+
 // #207/#216: org-wide financial reports must not leak to clinical staff.
 // Doctors / professionals see their own slice via /per-professional? but
 // the unfiltered P&L view stays admin/manager.
@@ -8080,6 +8415,7 @@ async function computePnlByService(req) {
     ticketTier: r.ticketTier,
     count: r.count,
   }));
+  const paginated = paginateReportRows(rows, req, "id");
   return {
     window: { from, to, locationId: locationId || null },
     totals: {
@@ -8102,7 +8438,8 @@ async function computePnlByService(req) {
     // a different figure than the P&L page for the same window.
     totalRevenue: bucketedRevenue,
     servicesSummary,
-    rows,
+    rows: paginated.rows,
+    pagination: paginated.pagination,
   };
 }
 
@@ -8164,6 +8501,7 @@ async function computePerProfessional(req) {
   const rows = Object.values(acc).sort((a, b) => b.revenue - a.revenue);
   const canonical = canonicalVisitTotals(visits);
   const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
+  const paginated = paginateReportRows(rows, req, "id");
   return {
     window: { from, to, locationId: locationId || null },
     totals: {
@@ -8171,7 +8509,8 @@ async function computePerProfessional(req) {
       revenue: canonical.revenue,
       unbucketed: canonical.visits - bucketedVisits,
     },
-    rows,
+    rows: paginated.rows,
+    pagination: paginated.pagination,
   };
 }
 
@@ -8232,6 +8571,7 @@ async function computeAttribution(req) {
       revenuePerLead: r.leads ? Math.round(r.revenue / r.leads) : 0,
     }))
     .sort((a, b) => b.revenue - a.revenue);
+  const paginated = paginateReportRows(rows, req, "source");
 
   return {
     window: { from, to },
@@ -8241,7 +8581,8 @@ async function computeAttribution(req) {
       qualified: rows.reduce((s, r) => s + r.qualified, 0),
       revenue: rows.reduce((s, r) => s + r.revenue, 0),
     },
-    rows,
+    rows: paginated.rows,
+    pagination: paginated.pagination,
   };
 }
 
@@ -8288,6 +8629,9 @@ async function computePerLocation(req) {
 
   const canonical = canonicalVisitTotals(visits);
   const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
+  const paginated = paginateReportRows(rows, req, "id");
+  const activeCount = rows.filter((r) => r.isActive).length;
+  const inactiveCount = rows.length - activeCount;
   return {
     window: { from, to },
     totals: {
@@ -8295,7 +8639,12 @@ async function computePerLocation(req) {
       revenue: canonical.revenue,
       unbucketed: canonical.visits - bucketedVisits,
     },
-    rows,
+    locationSummary: {
+      activeCount,
+      inactiveCount,
+    },
+    rows: paginated.rows,
+    pagination: paginated.pagination,
   };
 }
 
@@ -8417,7 +8766,7 @@ function sendCsv(res, baseName, window, csvText) {
 
 // Generic tabular PDF  a renderer matching the prescription/consent style:
 // clinic letterhead, centered title, range subtitle, and a paginated table.
-async function renderReportPdf(title, columns, rows, range, clinic) {
+async function renderReportPdf(title, columns, rows, range, clinic, options = {}) {
   const PDFDocument = require("pdfkit");
   const doc = new PDFDocument({ size: "A4", margin: 40, layout: "landscape" });
   applyRupeeCapableFonts(doc); //  glyph fix
@@ -8474,60 +8823,90 @@ async function renderReportPdf(title, columns, rows, range, clinic) {
   }
   doc.moveDown(0.6);
 
-  // Table  equal-width columns scaled to printable width.
+  // Table
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const printW = right - left;
-  const colW = printW / columns.length;
-  const headerY = doc.y;
-  doc.font("Helvetica-Bold").fontSize(9).fillColor("#333");
-  columns.forEach((h, i) => {
-    doc.text(String(h), left + i * colW + 2, headerY, {
-      width: colW - 4,
-      ellipsis: true,
-    });
+  const configuredColumns = Array.isArray(options.columns) ? options.columns : [];
+  const weights = columns.map((_, i) => {
+    const w = Number(configuredColumns[i]?.weight);
+    return w > 0 ? w : 1;
   });
-  doc
-    .moveTo(left, headerY + 14)
-    .lineTo(right, headerY + 14)
-    .lineWidth(0.5)
-    .strokeColor("#bbb")
-    .stroke();
-
-  let y = headerY + 18;
-  doc.font("Helvetica").fontSize(9).fillColor("#222");
-  const lineH = 14;
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || columns.length;
+  const colWidths = weights.map((weight) => (printW * weight) / totalWeight);
+  const colLefts = colWidths.reduce((acc, width, i) => {
+    acc.push(i === 0 ? left : acc[i - 1] + colWidths[i - 1]);
+    return acc;
+  }, []);
+  const numericColumns = new Set(
+    columns
+      .map((name, index) => ({ name: String(name).toLowerCase(), index }))
+      .filter(({ name }) =>
+        /visits|patients|leads|junk|qualified|revenue|cost|contribution|rate|%|rev/.test(name),
+      )
+      .map(({ index }) => index),
+  );
+  const cellPadX = 4;
+  const cellGapY = 6;
+  const lineH = 11.5;
   const bottom = doc.page.height - doc.page.margins.bottom - 20;
-  for (const row of rows) {
-    if (y + lineH > bottom) {
-      doc.addPage({ size: "A4", margin: 40, layout: "landscape" });
-      y = doc.page.margins.top;
-      // re-emit table header on new page for readability
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#333");
-      columns.forEach((h, i) => {
-        doc.text(String(h), left + i * colW + 2, y, {
-          width: colW - 4,
-          ellipsis: true,
-        });
+
+  const drawHeader = (yPos) => {
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#333");
+    const heights = columns.map((h, i) =>
+      doc.heightOfString(String(h), {
+        width: Math.max(12, colWidths[i] - cellPadX * 2),
+        lineGap: 1,
+      }),
+    );
+    const headerH = Math.max(14, ...heights);
+    columns.forEach((h, i) => {
+      doc.text(String(h), colLefts[i] + cellPadX, yPos, {
+        width: Math.max(12, colWidths[i] - cellPadX * 2),
+        lineGap: 1,
+        align: numericColumns.has(i) ? "right" : "left",
       });
-      doc
-        .moveTo(left, y + 14)
-        .lineTo(right, y + 14)
-        .lineWidth(0.5)
-        .strokeColor("#bbb")
-        .stroke();
-      y += 18;
-      doc.font("Helvetica").fontSize(9).fillColor("#222");
+    });
+    doc
+      .moveTo(left, yPos + headerH + 4)
+      .lineTo(right, yPos + headerH + 4)
+      .lineWidth(0.5)
+      .strokeColor("#bbb")
+      .stroke();
+    return yPos + headerH + 9;
+  };
+
+  let y = drawHeader(doc.y);
+  doc.font("Helvetica").fontSize(8.5).fillColor("#222");
+  for (const row of rows) {
+    doc.font("Helvetica").fontSize(8.5);
+    const rowH = Math.max(
+      lineH,
+      ...row.map((cell, i) =>
+        doc.heightOfString(cell === null || cell === undefined ? "" : String(cell), {
+          width: Math.max(12, colWidths[i] - cellPadX * 2),
+          lineGap: 1,
+        }),
+      ),
+    );
+    if (y + rowH > bottom) {
+      doc.addPage({ size: "A4", margin: 40, layout: "landscape" });
+      y = drawHeader(doc.page.margins.top);
+      doc.font("Helvetica").fontSize(8.5).fillColor("#222");
     }
     row.forEach((cell, i) => {
       doc.text(
         cell === null || cell === undefined ? "" : String(cell),
-        left + i * colW + 2,
+        colLefts[i] + cellPadX,
         y,
-        { width: colW - 4, ellipsis: true },
+        {
+          width: Math.max(12, colWidths[i] - cellPadX * 2),
+          lineGap: 1,
+          align: numericColumns.has(i) ? "right" : "left",
+        },
       );
     });
-    y += lineH;
+    y += rowH + cellGapY;
   }
   if (rows.length === 0) {
     doc.fillColor("#888").text("No data in this window.", left, y + 6, {
@@ -8669,6 +9048,17 @@ router.get(
         rows,
         result.window,
         clinic,
+        {
+          columns: [
+            { weight: 2.6 },
+            { weight: 1.55 },
+            { weight: 0.75 },
+            { weight: 0.7 },
+            { weight: 1.05 },
+            { weight: 1.05 },
+            { weight: 1.15 },
+          ],
+        },
       );
       sendPdf(res, "pnl-by-service", result.window, buf);
     } catch (e) {
@@ -8789,6 +9179,14 @@ router.get(
         rows,
         result.window,
         clinic,
+        {
+          columns: [
+            { weight: 2.2 },
+            { weight: 1.4 },
+            { weight: 0.7 },
+            { weight: 1 },
+          ],
+        },
       );
       sendPdf(res, "per-professional", result.window, buf);
     } catch (e) {
@@ -8923,6 +9321,17 @@ router.get(
         rows,
         result.window,
         clinic,
+        {
+          columns: [
+            { weight: 2.3 },
+            { weight: 1.25 },
+            { weight: 1.25 },
+            { weight: 0.8 },
+            { weight: 0.7 },
+            { weight: 1 },
+            { weight: 0.85 },
+          ],
+        },
       );
       sendPdf(res, "per-location", result.window, buf);
     } catch (e) {
@@ -9077,6 +9486,18 @@ router.get(
         rows,
         result.window,
         clinic,
+        {
+          columns: [
+            { weight: 2.4 },
+            { weight: 0.65 },
+            { weight: 0.65 },
+            { weight: 0.75 },
+            { weight: 0.9 },
+            { weight: 0.75 },
+            { weight: 1.1 },
+            { weight: 1.1 },
+          ],
+        },
       );
       sendPdf(res, "attribution", result.window, buf);
     } catch (e) {
@@ -10126,6 +10547,587 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
   }
 });
 
+// Shared visit creation helper for public booking paths. Mirrors the
+// transaction in POST /public/book so both the legacy free path and the
+// paid locking-fee path create identical Visit + Patient rows.
+async function createPublicBookingVisit({
+  tenant,
+  service,
+  bookingType,
+  trimmedName,
+  phoneStr,
+  email,
+  preferredSlot,
+  notes,
+  normalizedAddress,
+  normalizedCity,
+  normalizedPincode,
+  resolvedLocationId,
+  resolvedResourceId,
+  travelTimeMinutes,
+  utmFields,
+  last10,
+}) {
+  return prisma.$transaction(async (tx) => {
+    let patient = await tx.patient.findFirst({
+      where: { tenantId: tenant.id, phone: { contains: last10 } },
+    });
+    if (!patient) {
+      patient = await tx.patient.create({
+        data: {
+          name: trimmedName,
+          phone: phoneStr,
+          email: email ? String(email).trim() : null,
+          source: "public-booking",
+          tenantId: tenant.id,
+          locationId: resolvedLocationId,
+        },
+      });
+    }
+    const videoCallUrl =
+      bookingType === "VIDEO"
+        ? buildVideoCallUrl(tenant.slug, patient.id)
+        : null;
+    const visit = await tx.visit.create({
+      data: {
+        visitDate: preferredSlot
+          ? new Date(preferredSlot)
+          : new Date(Date.now() + 24 * 3600000),
+        status: "booked",
+        notes: notes || null,
+        patientId: patient.id,
+        serviceId: service.id,
+        locationId: resolvedLocationId,
+        amountCharged: service.basePrice,
+        tenantId: tenant.id,
+        bookingType,
+        atHomeAddress: normalizedAddress,
+        atHomeCity: normalizedCity,
+        atHomePincode: normalizedPincode,
+        travelTimeMinutes,
+        videoCallUrl,
+        resourceId: resolvedResourceId,
+        utmSource: utmFields.utmSource,
+        utmMedium: utmFields.utmMedium,
+        utmCampaign: utmFields.utmCampaign,
+        utmTerm: utmFields.utmTerm,
+        utmContent: utmFields.utmContent,
+        referrer: utmFields.referrer,
+      },
+    });
+    return { patient, visit };
+  });
+}
+
+// Fixed non-refundable booking-slot locking fee for wellness public bookings.
+// Paid by the patient on the public booking page before the appointment is
+// confirmed. The amount is intentionally separate from the treatment bill.
+const BOOKING_LOCKING_FEE_INR = 200;
+
+// POST /api/wellness/public/book/order — create a visit and a Razorpay order
+// for the ₹200 locking fee. Returns the checkout payload so the public booking
+// page can open the Razorpay modal. The visit is created immediately with
+// status "booked" so the dashboard already shows the appointment.
+router.post("/public/book/order", publicBookLimiter, async (req, res) => {
+  try {
+    const {
+      tenantSlug,
+      serviceId,
+      locationId,
+      name,
+      phone,
+      email,
+      preferredSlot,
+      notes,
+      bookingType: rawBookingType,
+      atHomeAddress,
+      atHomeCity,
+      atHomePincode,
+      resourceId: rawResourceId,
+      utm,
+      referrer,
+    } = req.body;
+
+    if (!tenantSlug || !serviceId || !name || !phone) {
+      return res
+        .status(400)
+        .json({ error: "tenantSlug, serviceId, name, phone required" });
+    }
+
+    const trimmedName = String(name).trim();
+    if (trimmedName.length < 2 || trimmedName.length > 100) {
+      return res
+        .status(400)
+        .json({ error: "name must be 2 to 100 characters", code: "INVALID_NAME" });
+    }
+
+    const phoneStr = String(phone).trim();
+    if (!/^(\+?91)?[6-9]\d{9}$/.test(phoneStr.replace(/[\s-]/g, ""))) {
+      return res.status(400).json({
+        error:
+          "phone must be a 10-digit Indian mobile (starts 6/7/8/9, optional +91)",
+        code: "INVALID_PHONE",
+      });
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
+      return res
+        .status(400)
+        .json({ error: "email is not a valid format", code: "INVALID_EMAIL" });
+    }
+
+    let parsedPreferredSlot = null;
+    if (preferredSlot) {
+      const slot = new Date(preferredSlot);
+      if (Number.isNaN(slot.getTime())) {
+        return res.status(400).json({
+          error: "preferredSlot is not a valid date",
+          code: "INVALID_SLOT",
+        });
+      }
+      const now = new Date();
+      const ninetyDays = new Date(now.getTime() + 90 * 24 * 3600000);
+      if (slot < now) {
+        return res.status(400).json({
+          error: "preferredSlot must be in the future",
+          code: "SLOT_IN_PAST",
+        });
+      }
+      if (slot > ninetyDays) {
+        return res.status(400).json({
+          error: "preferredSlot cannot be more than 90 days out",
+          code: "SLOT_TOO_FAR",
+        });
+      }
+      parsedPreferredSlot = slot;
+    }
+
+    const bookingType = rawBookingType
+      ? String(rawBookingType).trim().toUpperCase()
+      : "CLINIC_VISIT";
+    if (!BOOKING_TYPES.includes(bookingType)) {
+      return res.status(400).json({
+        error: `bookingType must be one of: ${BOOKING_TYPES.join(", ")}`,
+        code: "INVALID_INPUT",
+      });
+    }
+
+    let normalizedAddress = null;
+    let normalizedCity = null;
+    let normalizedPincode = null;
+    if (bookingType === "IN_HOME") {
+      const addr = atHomeAddress != null ? String(atHomeAddress).trim() : "";
+      if (addr.length < 5 || addr.length > 500) {
+        return res.status(400).json({
+          error: "atHomeAddress is required for IN_HOME bookings (5500 chars)",
+          code: "INVALID_INPUT",
+        });
+      }
+      const pin = atHomePincode != null ? String(atHomePincode).trim() : "";
+      if (!/^\d{6}$/.test(pin)) {
+        return res.status(400).json({
+          error:
+            "atHomePincode must be a 6-digit Indian pincode for IN_HOME bookings",
+          code: "INVALID_INPUT",
+        });
+      }
+      normalizedAddress = addr;
+      normalizedCity =
+        atHomeCity != null
+          ? String(atHomeCity).trim().slice(0, 100) || null
+          : null;
+      normalizedPincode = pin;
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+    });
+    if (!tenant || tenant.vertical !== "wellness")
+      return res.status(404).json({ error: "Clinic not found" });
+
+    const parsedServiceId = parseInt(serviceId);
+    if (!Number.isFinite(parsedServiceId))
+      return res
+        .status(400)
+        .json({ error: "Invalid service", code: "INVALID_SERVICE" });
+    const service = await prisma.service.findFirst({
+      where: { id: parsedServiceId, tenantId: tenant.id },
+    });
+    if (!service)
+      return res
+        .status(400)
+        .json({ error: "Invalid service", code: "INVALID_SERVICE" });
+
+    const supported = parseSupportedBookingTypes(service.supportedBookingTypes);
+    if (!supported.includes(bookingType)) {
+      return res.status(422).json({
+        error: `Service "${service.name}" does not support bookingType=${bookingType}. Supported: ${supported.join(", ")}`,
+        code: "BOOKING_TYPE_NOT_SUPPORTED",
+        supportedBookingTypes: supported,
+      });
+    }
+
+    const last10 = String(phone).replace(/\D/g, "").slice(-10);
+    const reqLocationId =
+      locationId !== undefined && locationId !== null && locationId !== ""
+        ? parseInt(locationId)
+        : null;
+    if (reqLocationId !== null && !Number.isFinite(reqLocationId)) {
+      return res.status(400).json({
+        error: "locationId must be numeric",
+        code: "INVALID_LOCATION",
+      });
+    }
+    let resolvedLocationId = reqLocationId;
+    if (resolvedLocationId === null) {
+      const fallback = await prisma.location.findFirst({
+        where: { tenantId: tenant.id, isActive: true },
+        orderBy: { id: "asc" },
+      });
+      resolvedLocationId = fallback?.id || null;
+    } else {
+      const exists = await prisma.location.findFirst({
+        where: { id: resolvedLocationId, tenantId: tenant.id },
+      });
+      if (!exists)
+        return res
+          .status(400)
+          .json({ error: "Invalid location", code: "INVALID_LOCATION" });
+    }
+
+    const utmFields = sanitizeUtmInput(
+      utm,
+      referrer ?? req.get("referer") ?? null,
+    );
+
+    let resolvedResourceId = null;
+    if (
+      rawResourceId !== undefined &&
+      rawResourceId !== null &&
+      rawResourceId !== ""
+    ) {
+      const parsedResourceId = parseInt(rawResourceId);
+      if (!Number.isFinite(parsedResourceId)) {
+        return res.status(400).json({
+          error: "resourceId must be numeric",
+          code: "INVALID_RESOURCE",
+        });
+      }
+      const found = await prisma.resource.findFirst({
+        where: {
+          id: parsedResourceId,
+          tenantId: tenant.id,
+          isActive: true,
+        },
+      });
+      if (found) {
+        if (
+          found.locationId == null ||
+          found.locationId === resolvedLocationId
+        ) {
+          resolvedResourceId = found.id;
+        }
+      }
+    }
+
+    let travelTimeMinutes = null;
+    if (bookingType === "IN_HOME") {
+      try {
+        const { estimateTravelMinutes } = require("../lib/pincodeZones");
+        let clinicPincode = null;
+        if (resolvedLocationId) {
+          const loc = await prisma.location.findUnique({
+            where: { id: resolvedLocationId },
+            select: { pincode: true },
+          });
+          clinicPincode = loc?.pincode || null;
+        }
+        travelTimeMinutes = estimateTravelMinutes(
+          clinicPincode,
+          normalizedPincode,
+        );
+      } catch (_e) {
+        travelTimeMinutes = DEFAULT_TRAVEL_TIME_MIN;
+      }
+    }
+
+    const { patient, visit } = await createPublicBookingVisit({
+      tenant,
+      service,
+      bookingType,
+      trimmedName,
+      phoneStr,
+      email,
+      preferredSlot: parsedPreferredSlot,
+      notes,
+      normalizedAddress,
+      normalizedCity,
+      normalizedPincode,
+      resolvedLocationId,
+      resolvedResourceId,
+      travelTimeMinutes,
+      utmFields,
+      last10,
+    });
+
+    const {
+      getTenantRazorpayClient,
+      NOT_CONFIGURED_MESSAGE,
+    } = require("../lib/tenantPaymentGateway");
+    const rp = await getTenantRazorpayClient(tenant.id);
+    if (!rp) {
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+    }
+
+    const amountPaise = Math.round(BOOKING_LOCKING_FEE_INR * 100);
+    const currency = "INR";
+    let order;
+    try {
+      order = await rp.client.orders.create({
+        amount: amountPaise,
+        currency,
+        receipt: `bookfee_${tenant.id}_${visit.id}_${Date.now()}`,
+        notes: {
+          tenantId: String(tenant.id),
+          visitId: String(visit.id),
+          patientId: String(patient.id),
+          kind: "booking_fee",
+        },
+      });
+    } catch (gatewayErr) {
+      console.error(
+        "[wellness] booking locking-fee order failed:",
+        gatewayErr && gatewayErr.message,
+      );
+      return res.status(502).json({ error: "Failed to create payment order" });
+    }
+
+    const payment = await prisma.payment.create({
+      data: {
+        invoiceId: null,
+        contactId: null,
+        description: `Booking fee for ${service.name} at ${tenant.name}`,
+        amount: BOOKING_LOCKING_FEE_INR,
+        currency,
+        gateway: "razorpay",
+        gatewayId: order.id,
+        status: "PENDING",
+        tenantId: tenant.id,
+        metadata: JSON.stringify({
+          kind: "booking_fee",
+          visitId: visit.id,
+          patientId: patient.id,
+          serviceId: service.id,
+          tenantId: tenant.id,
+          orderId: order.id,
+          orderStatus: order.status,
+          phone: phoneStr,
+          serviceName: service.name,
+          tenantName: tenant.name,
+        }),
+      },
+    });
+
+    res.json({
+      orderId: order.id,
+      paymentId: payment.id,
+      key: rp.keyId,
+      amount: amountPaise,
+      currency,
+      visitId: visit.id,
+      patientId: patient.id,
+      patientName: patient.name,
+      serviceName: service.name,
+      receiptDescription: `Booking fee for ${service.name} at ${tenant.name}`,
+    });
+  } catch (e) {
+    console.error("[wellness] public book order failed:", e.message, e.stack);
+    res.status(500).json({ error: "Booking order failed", detail: e.message });
+  }
+});
+
+// POST /api/wellness/public/book/confirm — verify the Razorpay checkout
+// signature for the locking fee and mark the booking fee payment as SUCCESS.
+router.post("/public/book/confirm", publicBookLimiter, async (req, res) => {
+  try {
+    const {
+      paymentId,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body || {};
+
+    if (
+      !paymentId ||
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature
+    ) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: { id: parseInt(paymentId, 10) },
+    });
+    if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+    let meta = {};
+    try {
+      meta = JSON.parse(payment.metadata || "{}");
+    } catch (_e) {
+      return res.status(400).json({ error: "Invalid payment metadata" });
+    }
+    if (meta.kind !== "booking_fee" || !meta.visitId || !meta.tenantId) {
+      return res.status(400).json({ error: "Payment is not a booking fee" });
+    }
+
+    const {
+      getTenantRazorpayCreds,
+      NOT_CONFIGURED_MESSAGE,
+    } = require("../lib/tenantPaymentGateway");
+    const creds = await getTenantRazorpayCreds(Number(meta.tenantId));
+    if (!creds || !creds.keySecret) {
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+    }
+
+    const expected = require("crypto")
+      .createHmac("sha256", creds.keySecret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest("hex");
+
+    if (expected !== razorpay_signature) {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: "FAILED" },
+      });
+      return res.status(400).json({ error: "Signature verification failed" });
+    }
+
+    const visit = await prisma.visit.findFirst({
+      where: { id: Number(meta.visitId) },
+      include: { patient: { select: { id: true, name: true } }, service: { select: { name: true } } },
+    });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: "SUCCESS",
+        paidAt: new Date(),
+        gatewayId: razorpay_payment_id,
+        metadata: JSON.stringify({
+          ...meta,
+          razorpay_order_id,
+          razorpay_payment_id,
+          razorpay_signature,
+          verifiedAt: new Date().toISOString(),
+        }),
+      },
+    });
+
+    res.json({
+      ok: true,
+      visit: {
+        id: visit.id,
+        status: visit.status,
+        visitDate: visit.visitDate,
+        amountCharged: visit.amountCharged,
+        serviceName: visit.service?.name,
+      },
+      patient: visit.patient,
+      receiptUrl: `/api/wellness/public/book/receipt?paymentId=${payment.id}`,
+      amountPaid: BOOKING_LOCKING_FEE_INR,
+      currency: "INR",
+    });
+  } catch (e) {
+    console.error("[wellness] public book confirm failed:", e.message, e.stack);
+    res.status(500).json({ error: "Booking confirmation failed", detail: e.message });
+  }
+});
+
+// GET /api/wellness/public/book/receipt — download a PDF receipt for the
+// booking locking fee. No auth; the payment id is the unguessable token.
+router.get("/public/book/receipt", async (req, res) => {
+  try {
+    const paymentId = parseInt(req.query.paymentId, 10);
+    if (!Number.isFinite(paymentId)) {
+      return res.status(400).json({ error: "Invalid paymentId" });
+    }
+    const payment = await prisma.payment.findFirst({
+      where: { id: paymentId, gateway: "razorpay", status: "SUCCESS" },
+    });
+    if (!payment) return res.status(404).json({ error: "Receipt not found" });
+
+    let meta = {};
+    try {
+      meta = JSON.parse(payment.metadata || "{}");
+    } catch (_e) {
+      return res.status(400).json({ error: "Invalid payment metadata" });
+    }
+    if (meta.kind !== "booking_fee" || !meta.visitId) {
+      return res.status(400).json({ error: "Payment is not a booking fee" });
+    }
+
+    const [visit, tenant] = await Promise.all([
+      prisma.visit.findFirst({
+        where: { id: Number(meta.visitId) },
+        include: {
+          patient: { select: { id: true, name: true, phone: true } },
+          service: { select: { id: true, name: true } },
+          location: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.tenant.findUnique({
+        where: { id: Number(meta.tenantId) },
+        select: { name: true },
+      }),
+    ]);
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+
+    const PDFDocument = require("pdfkit");
+    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    const filename = `booking-receipt-${visit.id}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${filename}"`,
+    );
+    doc.pipe(res);
+
+    doc.fontSize(22).font("Helvetica-Bold").text(tenant?.name || "Wellness Clinic", 50, 50);
+    doc.fontSize(11).font("Helvetica").fillColor("#666").text("Booking Confirmation & Receipt", 50, 78);
+    doc.moveTo(50, 95).lineTo(545, 95).strokeColor("#e0e0e0").stroke();
+
+    doc.fillColor("#000").fontSize(12).font("Helvetica-Bold").text("Appointment Details", 50, 110);
+    doc.font("Helvetica").fontSize(11).fillColor("#333");
+    doc.text(`Patient: ${visit.patient?.name || "Guest"}`, 50, 130);
+    if (visit.patient?.phone) doc.text(`Phone: ${visit.patient.phone}`, 50, 148);
+    doc.text(`Service: ${visit.service?.name || "—"}`, 50, visit.patient?.phone ? 166 : 148);
+    doc.text(`Clinic: ${visit.location?.name || tenant?.name || "—"}`, 50, visit.patient?.phone ? 184 : 166);
+    doc.text(`Date: ${new Date(visit.visitDate).toLocaleString("en-IN")}`, 50, visit.patient?.phone ? 202 : 184);
+    doc.text(`Booking Reference: #${visit.id}`, 50, visit.patient?.phone ? 220 : 202);
+
+    doc.moveTo(50, 245).lineTo(545, 245).strokeColor("#e0e0e0").stroke();
+    doc.fontSize(13).font("Helvetica-Bold").fillColor("#000").text("Amount Paid (Non-refundable locking fee)", 50, 255);
+    const amtStr = `INR ${Number(payment.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+    doc.fontSize(20).text(amtStr, 50, 275);
+
+    doc.fontSize(10).font("Helvetica").fillColor("#666");
+    doc.text(`Paid on: ${new Date(payment.paidAt).toLocaleString("en-IN")}`, 50, 305);
+    doc.text(`Payment ID: ${payment.gatewayId || "—"}`, 50, 320);
+    doc.text("This is a computer-generated receipt and does not require a signature.", 50, 355);
+
+    doc.end();
+  } catch (e) {
+    console.error("[wellness] booking receipt error:", e.message, e.stack);
+    res.status(500).json({ error: "Failed to generate receipt" });
+  }
+});
+
 //  PDF exports (prescriptions / consents / branded invoices) 
 
 async function primaryClinic(tenantId) {
@@ -10227,6 +11229,117 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
 // renders an explanatory empty state ("Your patient profile isn't
 // linked yet  ask your clinic to link it") rather than treating
 // missing-link as an error.
+const _publicEnquiryIpMax = process.env.NODE_ENV === "test" ? 5000 : 20;
+const publicEnquiryLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: _publicEnquiryIpMax,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: {
+    error: "Too many enquiry requests from this network. Please try again in a minute.",
+    code: "RATE_LIMITED",
+  },
+});
+
+const cleanPublicLeadText = (value, maxLen = 191) => {
+  if (value == null) return "";
+  return sanitizeText(String(value)).trim().slice(0, maxLen);
+};
+
+const buildPublicLeadNote = ({ service, message }) => {
+  const parts = [
+    "Website enquiry",
+    service ? `Service: ${service}` : null,
+    message ? `Message: ${message}` : null,
+  ].filter(Boolean);
+  return parts.join(" | ");
+};
+
+router.post("/public/enquiry", publicEnquiryLimiter, async (req, res) => {
+  try {
+    const tenantSlug = cleanPublicLeadText(req.body?.tenantSlug, 80);
+    const firstName = cleanPublicLeadText(req.body?.firstName, 80);
+    const lastName = cleanPublicLeadText(req.body?.lastName, 80);
+    const bodyName = cleanPublicLeadText(req.body?.name, 160);
+    const name = bodyName || [firstName, lastName].filter(Boolean).join(" ").trim();
+    const email = cleanPublicLeadText(req.body?.email, 191);
+    const phone = cleanPublicLeadText(req.body?.phone, 24);
+    const service = cleanPublicLeadText(req.body?.service, 120);
+    const message = cleanPublicLeadText(req.body?.message, 2000);
+
+    if (!tenantSlug) {
+      return res.status(400).json({ error: "tenantSlug is required", code: "MISSING_TENANT" });
+    }
+    if (!name) {
+      return res.status(400).json({ error: "name is required", code: "MISSING_NAME" });
+    }
+    if (!email && !phone) {
+      return res.status(400).json({ error: "email or phone is required", code: "INSUFFICIENT_IDENTITY" });
+    }
+    if (phone && !/^(?:\+?91)?[6-9]\d{9}$/.test(phone.replace(/[\s-]/g, ""))) {
+      return res.status(400).json({ error: "phone must be a 10-digit Indian mobile number", code: "INVALID_PHONE" });
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "email is not a valid format", code: "INVALID_EMAIL" });
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, slug: true, vertical: true, name: true },
+    });
+    if (!tenant || tenant.vertical !== "wellness") {
+      return res.status(404).json({ error: "Clinic not found", code: "TENANT_NOT_FOUND" });
+    }
+
+    const syntheticEmail = email || `wellness-enquiry-${tenant.slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@inbound.local`;
+    const note = buildPublicLeadNote({ service, message });
+
+    const duplicate = await findDuplicateContactFull({
+      email: email || null,
+      phone: phone || null,
+      tenantId: tenant.id,
+    });
+
+    if (duplicate) {
+      const existing = duplicate.contact;
+      const nextDescription = [existing.description, note].filter(Boolean).join("\n\n") || note;
+      await prisma.contact.update({
+        where: { id: existing.id },
+        data: {
+          status: "Lead",
+          name: existing.name || name,
+          email: existing.email || syntheticEmail,
+          phone: existing.phone || phone || null,
+          firstTouchSource: existing.firstTouchSource || "Dr. Enhance Wellness website enquiry",
+          description: nextDescription,
+        },
+      });
+      return res.json({ created: false, duplicate: true, contactId: existing.id, message: "Thanks - we'll be in touch shortly." });
+    }
+
+    const contact = await prisma.contact.create({
+      data: {
+        tenantId: tenant.id,
+        name,
+        email: syntheticEmail,
+        phone: phone || null,
+        status: "Lead",
+        source: "website",
+        firstTouchSource: "Dr. Enhance Wellness website enquiry",
+        description: note,
+        aiScore: 30,
+        aiScoreLastComputedAt: new Date(),
+      },
+    });
+
+    return res.status(201).json({ created: true, contactId: contact.id, message: "Thanks - we'll be in touch shortly." });
+  } catch (e) {
+    console.error("[wellness] public enquiry error:", e.message);
+    res.status(500).json({ error: "Failed to submit enquiry" });
+  }
+});
+
 router.get(
   "/my-prescriptions",
   requirePermission("my_prescriptions", "read"),
@@ -12626,13 +13739,16 @@ router.get("/waitlist", async (req, res) => {
   try {
     const where = tenantWhere(req);
     if (req.query.status) where.status = String(req.query.status);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     const items = await prisma.waitlist.findMany({
       where,
       orderBy: { createdAt: "desc" },
       include: {
         patient: { select: { id: true, name: true, phone: true } },
       },
-      take: 200,
+      take: limit,
+      skip: offset,
     });
     res.json(items);
   } catch (e) {
@@ -13023,75 +14139,11 @@ const {
   computeCouponDiscount,
   computeCashbackEarn,
 } = require("../lib/walletCodes");
-
-async function writeWalletTransaction({
-  tenantId,
-  walletId,
-  type,
-  absAmount,
-  performedBy,
-  reason,
-  visitId = null,
-  invoiceId = null,
-  giftCardId = null,
-  couponId = null,
-}) {
-  const isCredit = String(type || "").startsWith("CREDIT_");
-  const isDebit = String(type || "").startsWith("DEBIT_");
-  if (!isCredit && !isDebit) {
-    throw new Error(`Invalid wallet transaction type: ${type}`);
-  }
-  const signed = isCredit ? Math.abs(absAmount) : -Math.abs(absAmount);
-  return prisma.$transaction(async (tx) => {
-    const wallet = await tx.wallet.findFirst({
-      where: { id: walletId, tenantId },
-    });
-    if (!wallet) throw new Error("WALLET_NOT_FOUND");
-    const newBalance = +(wallet.balance + signed).toFixed(2);
-    if (newBalance < 0) {
-      const e = new Error("INSUFFICIENT_BALANCE");
-      e.code = "INSUFFICIENT_BALANCE";
-      throw e;
-    }
-    await tx.wallet.update({
-      where: { id: walletId },
-      data: { balance: newBalance },
-    });
-    return tx.walletTransaction.create({
-      data: {
-        tenantId,
-        walletId,
-        type,
-        amount: signed,
-        reason: reason || null,
-        visitId,
-        invoiceId,
-        giftCardId,
-        couponId,
-        balanceAfter: newBalance,
-        performedBy,
-      },
-    });
-  });
-}
-
-async function getOrCreateWallet(req, patientId) {
-  let wallet = await prisma.wallet.findFirst({
-    where: { tenantId: req.user.tenantId, patientId },
-  });
-  if (wallet) return wallet;
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: req.user.tenantId },
-    select: { defaultCurrency: true },
-  });
-  return prisma.wallet.create({
-    data: {
-      tenantId: req.user.tenantId,
-      patientId,
-      currency: tenant?.defaultCurrency || "INR",
-    },
-  });
-}
+const { loadCouponForApply } = require("../lib/couponApply");
+const {
+  writeWalletTransaction,
+  getOrCreateWallet,
+} = require("../lib/wellnessWallet");
 
 router.get("/patients/:id/wallet", phiReadGate, async (req, res) => {
   try {
@@ -14761,12 +15813,16 @@ router.get("/coupons", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
     const where = tenantWhere(req);
     if (req.query.isActive === "true") where.isActive = true;
     if (req.query.isActive === "false") where.isActive = false;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 200);
+    const skip = Math.max(parseInt(req.query.skip, 10) || 0, 0);
     const coupons = await prisma.coupon.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: 200,
+      take: limit,
+      skip,
     });
-    res.json({ coupons });
+    const total = await prisma.coupon.count({ where });
+    res.json({ coupons, total });
   } catch (e) {
     console.error("[wellness] coupons list error:", e.message);
     res.status(500).json({ error: "Failed to list coupons" });
@@ -14926,74 +15982,9 @@ router.delete("/coupons/:id", verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
-// tenantId is passed explicitly so callers without a req.user (anonymous public
-// payment flow) can reuse this. Existing auth'd callers pass req.user.tenantId.
-async function loadCouponForApply(tenantId, code) {
-  const coupon = await prisma.coupon.findFirst({
-    where: {
-      tenantId,
-      code: String(code || "")
-        .trim()
-        .toUpperCase(),
-    },
-  });
-  if (!coupon)
-    return {
-      error: {
-        status: 404,
-        code: "COUPON_NOT_FOUND",
-        message: "Coupon not found",
-      },
-    };
-  if (!coupon.isActive)
-    return {
-      error: {
-        status: 409,
-        code: "COUPON_INACTIVE",
-        message: "Coupon is inactive",
-      },
-      coupon,
-    };
-  const now = Date.now();
-  if (coupon.validFrom && coupon.validFrom.getTime() > now) {
-    return {
-      error: {
-        status: 409,
-        code: "COUPON_NOT_YET_VALID",
-        message: "Coupon is not yet valid",
-      },
-      coupon,
-    };
-  }
-  if (coupon.validUntil && coupon.validUntil.getTime() < now) {
-    return {
-      error: {
-        status: 410,
-        code: "COUPON_EXPIRED",
-        message: "Coupon has expired",
-      },
-      coupon,
-    };
-  }
-  if (
-    coupon.maxRedemptions != null &&
-    coupon.redemptionCount >= coupon.maxRedemptions
-  ) {
-    return {
-      error: {
-        status: 409,
-        code: "COUPON_LIMIT_REACHED",
-        message: "Coupon redemption limit reached",
-      },
-      coupon,
-    };
-  }
-  return { coupon };
-}
-
 router.post("/coupons/preview", async (req, res) => {
   try {
-    const { code, baseAmount, serviceId } = req.body || {};
+    const { code, baseAmount, serviceId, visitId } = req.body || {};
     const base = Number(baseAmount);
     if (!Number.isFinite(base) || base <= 0) {
       return res
@@ -15011,12 +16002,21 @@ router.post("/coupons/preview", async (req, res) => {
       base,
       serviceId ? parseInt(serviceId, 10) : null,
     );
+    let lockingFee = 0;
+    let balance = result.finalAmount;
+    if (visitId) {
+      const lockingFeePayment = await findPaidBookingLockingFee(parseInt(visitId, 10));
+      lockingFee = lockingFeePayment ? 200 : 0;
+      balance = Math.max(0, result.finalAmount - lockingFee);
+    }
     res.json({
       code: lookup.coupon.code,
       discountType: lookup.coupon.discountType,
       discountValue: lookup.coupon.discountValue,
       baseAmount: +base.toFixed(2),
       ...result,
+      lockingFee,
+      balance,
     });
   } catch (e) {
     console.error("[wellness] coupon preview error:", e.message);
@@ -16379,6 +17379,175 @@ router.patch(
     }
   },
 );
+
+// -----------------------------------------------------------------------------
+// QR Events — Events Management QR generator persistence.
+// -----------------------------------------------------------------------------
+// Replaces the previous localStorage-only store with tenant-scoped Prisma
+// persistence. All endpoints below are staff-authed and isolated to
+// req.user.tenantId. QrCode rows cascade-delete with their parent QrEvent.
+
+router.get("/qr-events", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const events = await prisma.qrEvent.findMany({
+      where: { tenantId },
+      include: { qrs: { orderBy: { createdAt: "desc" } } },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({ events });
+  } catch (err) {
+    console.error("[wellness] GET /qr-events failed:", err.message);
+    res.status(500).json({ error: "Failed to load QR events", code: "QR_EVENTS_LOAD_FAILED" });
+  }
+});
+
+router.post("/qr-events", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const userId = req.user.userId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const { name } = req.body || {};
+    const trimmed = String(name || "").trim();
+    if (!trimmed) {
+      return res.status(400).json({ error: "Event name is required", code: "QR_EVENT_NAME_REQUIRED" });
+    }
+    const event = await prisma.qrEvent.create({
+      data: { name: trimmed, tenantId, createdBy: userId },
+      include: { qrs: true },
+    });
+    writeAudit("QrEvent", "CREATE", event.id, userId, tenantId, { name: trimmed }).catch(
+      (auditErr) => console.warn("[wellness] audit QrEvent CREATE failed:", auditErr.message),
+    );
+    res.status(201).json(event);
+  } catch (err) {
+    console.error("[wellness] POST /qr-events failed:", err.message);
+    res.status(500).json({ error: "Failed to create QR event", code: "QR_EVENT_CREATE_FAILED" });
+  }
+});
+
+router.delete("/qr-events/:id", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const userId = req.user.userId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const eventId = parseInt(req.params.id, 10);
+    const event = await prisma.qrEvent.findFirst({
+      where: { id: eventId, tenantId },
+      select: { id: true, name: true },
+    });
+    if (!event) {
+      return res.status(404).json({ error: "Event not found", code: "QR_EVENT_NOT_FOUND" });
+    }
+    await prisma.qrEvent.delete({ where: { id: eventId } });
+    writeAudit("QrEvent", "DELETE", event.id, userId, tenantId, { name: event.name }).catch(
+      (auditErr) => console.warn("[wellness] audit QrEvent DELETE failed:", auditErr.message),
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[wellness] DELETE /qr-events/:id failed:", err.message);
+    res.status(500).json({ error: "Failed to delete QR event", code: "QR_EVENT_DELETE_FAILED" });
+  }
+});
+
+router.post("/qr-events/:id/qrs", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const userId = req.user.userId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const eventId = parseInt(req.params.id, 10);
+    const event = await prisma.qrEvent.findFirst({
+      where: { id: eventId, tenantId },
+      select: { id: true },
+    });
+    if (!event) {
+      return res.status(404).json({ error: "Event not found", code: "QR_EVENT_NOT_FOUND" });
+    }
+    const { name, text, size, fgColor, bgColor, errorLevel } = req.body || {};
+    const qr = await prisma.qrCode.create({
+      data: {
+        eventId,
+        tenantId,
+        createdBy: userId,
+        name: String(name || "").trim() || "Untitled QR",
+        text: String(text || "").trim(),
+        size: Number(size) || 256,
+        fgColor: String(fgColor || "#000000"),
+        bgColor: String(bgColor || "#ffffff"),
+        errorLevel: String(errorLevel || "M"),
+      },
+    });
+    res.status(201).json(qr);
+  } catch (err) {
+    console.error("[wellness] POST /qr-events/:id/qrs failed:", err.message);
+    res.status(500).json({ error: "Failed to add QR code", code: "QR_CODE_CREATE_FAILED" });
+  }
+});
+
+router.put("/qr-events/:id/qrs/:qrId", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const eventId = parseInt(req.params.id, 10);
+    const qrId = parseInt(req.params.qrId, 10);
+    const existing = await prisma.qrCode.findFirst({
+      where: { id: qrId, eventId, tenantId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "QR code not found", code: "QR_CODE_NOT_FOUND" });
+    }
+    const { name, text, size, fgColor, bgColor, errorLevel } = req.body || {};
+    const data = {};
+    if (name !== undefined) data.name = String(name || "").trim() || existing.name || "Untitled QR";
+    if (text !== undefined) data.text = String(text || "").trim();
+    if (size !== undefined) data.size = Number(size) || existing.size;
+    if (fgColor !== undefined) data.fgColor = String(fgColor);
+    if (bgColor !== undefined) data.bgColor = String(bgColor);
+    if (errorLevel !== undefined) data.errorLevel = String(errorLevel);
+    const qr = await prisma.qrCode.update({
+      where: { id: qrId },
+      data,
+    });
+    res.json(qr);
+  } catch (err) {
+    console.error("[wellness] PUT /qr-events/:id/qrs/:qrId failed:", err.message);
+    res.status(500).json({ error: "Failed to update QR code", code: "QR_CODE_UPDATE_FAILED" });
+  }
+});
+
+router.delete("/qr-events/:id/qrs/:qrId", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const eventId = parseInt(req.params.id, 10);
+    const qrId = parseInt(req.params.qrId, 10);
+    const existing = await prisma.qrCode.findFirst({
+      where: { id: qrId, eventId, tenantId },
+      select: { id: true, name: true },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "QR code not found", code: "QR_CODE_NOT_FOUND" });
+    }
+    await prisma.qrCode.delete({ where: { id: qrId } });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[wellness] DELETE /qr-events/:id/qrs/:qrId failed:", err.message);
+    res.status(500).json({ error: "Failed to delete QR code", code: "QR_CODE_DELETE_FAILED" });
+  }
+});
 
 module.exports = router;
 

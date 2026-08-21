@@ -1,18 +1,18 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  BadgePercent, IndianRupee, Download, Filter, Plus, Upload,
+  BadgePercent, IndianRupee, Upload, Download, Filter, Plus,
   Pencil, Trash2, Check, X,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
-import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
   accessibleSubBrands, defaultSubBrandFor,
   SUB_BRAND_IDS, SUB_BRAND_LABEL,
 } from "../../utils/travelSubBrand";
+import CountBadge from "../../components/CountBadge";
 
 const CATEGORIES = [
   { value: "", label: "All categories" },
@@ -43,6 +43,8 @@ const VIEW_LABELS = {
 const FLOOR_LABELS = { low: "Low floor", mid: "Mid floor", high: "High floor" };
 
 const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SAR"];
+const OTHER_OPTION = "__other__";
+const PAGE_SIZE = 200;
 
 function AttributeChips({ attributes }) {
   const chips = [];
@@ -84,16 +86,50 @@ function PillToggle({ active, onChange, label }) {
   );
 }
 
-function EditRow({ rate, onSave, onCancel, saving }) {
+function EditRow({ rate, onSave, onCancel, saving, supplierOptions, seasonOptions }) {
   const [edit, setEdit] = useState({
     category: rate.category,
     routeOrSku: rate.routeOrSku,
     baseRate: String(rate.baseRate),
     currency: rate.currency,
+    supplierChoice: rate.supplierName || "",
+    supplierOtherName: "",
+    seasonChoice: rate.seasonName || "",
+    seasonOtherName: "",
+    validFrom: rate.validFrom ? String(rate.validFrom).slice(0, 10) : "",
+    validTo: rate.validTo ? String(rate.validTo).slice(0, 10) : "",
     view: rate.attributes?.view || "",
     floorLevel: rate.attributes?.floorLevel || "",
     roomCategory: rate.attributes?.roomCategory || "",
   });
+
+  const availableSupplierNames = (supplierOptions || [])
+    .filter((supplier) => supplier.subBrand === rate.subBrand)
+    .map((supplier) => supplier.name)
+    .filter(Boolean);
+  const availableSeasonNames = (seasonOptions || [])
+    .filter((season) => season.subBrand === rate.subBrand)
+    .map((season) => season.seasonName)
+    .filter(Boolean);
+
+  const normalizedSupplierChoice =
+    edit.supplierChoice && !availableSupplierNames.includes(edit.supplierChoice)
+      ? OTHER_OPTION
+      : edit.supplierChoice;
+  const normalizedSeasonChoice =
+    edit.seasonChoice && !availableSeasonNames.includes(edit.seasonChoice)
+      ? OTHER_OPTION
+      : edit.seasonChoice;
+
+  const payload = {
+    ...edit,
+    supplierName: normalizedSupplierChoice === OTHER_OPTION
+      ? edit.supplierOtherName
+      : normalizedSupplierChoice,
+    seasonName: normalizedSeasonChoice === OTHER_OPTION
+      ? edit.seasonOtherName
+      : normalizedSeasonChoice,
+  };
 
   return (
     <tr style={{ background: "var(--subtle-bg, rgba(255,255,255,0.03))", borderBottom: "1px solid var(--border-color)" }}>
@@ -122,29 +158,81 @@ function EditRow({ rate, onSave, onCancel, saving }) {
         </select>
       </td>
       <td style={td}>
-        {edit.category === "hotel" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <select value={edit.view} onChange={(e) => setEdit({ ...edit, view: e.target.value })}
-              style={{ ...inlineInput, fontSize: 11 }} aria-label="Edit hotel view">
-              {HOTEL_VIEWS.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
-            </select>
-            <select value={edit.floorLevel} onChange={(e) => setEdit({ ...edit, floorLevel: e.target.value })}
-              style={{ ...inlineInput, fontSize: 11 }} aria-label="Edit floor level">
-              {HOTEL_FLOORS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
-            </select>
-            <input value={edit.roomCategory} onChange={(e) => setEdit({ ...edit, roomCategory: e.target.value })}
-              placeholder="Room category" style={{ ...inlineInput, fontSize: 11 }} aria-label="Edit room category" />
-          </div>
-        ) : (
-          <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>&mdash;</span>
-        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 180 }}>
+          <select
+            value={normalizedSupplierChoice}
+            onChange={(e) => setEdit({ ...edit, supplierChoice: e.target.value, supplierOtherName: e.target.value === OTHER_OPTION ? edit.supplierOtherName : "" })}
+            style={{ ...inlineInput, fontSize: 11 }}
+            aria-label="Edit supplier"
+          >
+            <option value="">No supplier</option>
+            {availableSupplierNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            <option value={OTHER_OPTION}>Other</option>
+          </select>
+          {normalizedSupplierChoice === OTHER_OPTION && (
+            <input
+              value={edit.supplierOtherName}
+              onChange={(e) => setEdit({ ...edit, supplierOtherName: e.target.value })}
+              placeholder="Enter supplier name"
+              style={{ ...inlineInput, fontSize: 11 }}
+              aria-label="Edit new supplier name"
+            />
+          )}
+          <select
+            value={normalizedSeasonChoice}
+            onChange={(e) => setEdit({ ...edit, seasonChoice: e.target.value, seasonOtherName: e.target.value === OTHER_OPTION ? edit.seasonOtherName : "" })}
+            style={{ ...inlineInput, fontSize: 11 }}
+            aria-label="Edit season"
+          >
+            <option value="">No season</option>
+            {availableSeasonNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            <option value={OTHER_OPTION}>Other</option>
+          </select>
+          {normalizedSeasonChoice === OTHER_OPTION && (
+            <input
+              value={edit.seasonOtherName}
+              onChange={(e) => setEdit({ ...edit, seasonOtherName: e.target.value })}
+              placeholder="Enter season name"
+              style={{ ...inlineInput, fontSize: 11 }}
+              aria-label="Edit new season name"
+            />
+          )}
+          <input
+            type="date"
+            value={edit.validFrom}
+            onChange={(e) => setEdit({ ...edit, validFrom: e.target.value })}
+            style={{ ...inlineInput, fontSize: 11 }}
+            aria-label="Edit valid from"
+          />
+          <input
+            type="date"
+            value={edit.validTo}
+            onChange={(e) => setEdit({ ...edit, validTo: e.target.value })}
+            style={{ ...inlineInput, fontSize: 11 }}
+            aria-label="Edit valid to"
+          />
+          {edit.category === "hotel" ? (
+            <>
+              <select value={edit.view} onChange={(e) => setEdit({ ...edit, view: e.target.value })}
+                style={{ ...inlineInput, fontSize: 11 }} aria-label="Edit hotel view">
+                {HOTEL_VIEWS.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
+              </select>
+              <select value={edit.floorLevel} onChange={(e) => setEdit({ ...edit, floorLevel: e.target.value })}
+                style={{ ...inlineInput, fontSize: 11 }} aria-label="Edit floor level">
+                {HOTEL_FLOORS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+              </select>
+              <input value={edit.roomCategory} onChange={(e) => setEdit({ ...edit, roomCategory: e.target.value })}
+                placeholder="Room category" style={{ ...inlineInput, fontSize: 11 }} aria-label="Edit room category" />
+            </>
+          ) : null}
+        </div>
       </td>
       <td style={td}>
         <PillToggle active={rate.isActive} onChange={() => {}} label="Active (toggle on list)" />
       </td>
       <td style={td}>
         <div style={{ display: "flex", gap: 4 }}>
-          <button type="button" onClick={() => onSave(edit)} disabled={saving}
+          <button type="button" onClick={() => onSave(payload)} disabled={saving}
             aria-label={`Save changes for ${rate.routeOrSku}`}
             style={{ ...iconBtn, color: "var(--success-color, #3ecf7e)", borderColor: "var(--success-color, #3ecf7e)" }}>
             <Check size={14} />
@@ -168,11 +256,23 @@ export default function CostMaster() {
 
   const [rates, setRates] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [filterSubBrand, setFilterSubBrand] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [suppliers, setSuppliers] = useState([]);
+  const [seasons, setSeasons] = useState([]);
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const listRef = useRef(null);
+  const ratesRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
   const defaultBrand = defaultSubBrandFor(user, activeSubBrand, myBrands[0]);
   const [form, setForm] = useState({
@@ -181,24 +281,98 @@ export default function CostMaster() {
     routeOrSku: "",
     baseRate: "",
     currency: "INR",
+    supplierChoice: "",
+    supplierOtherName: "",
+    seasonChoice: "",
+    seasonOtherName: "",
+    validFrom: "",
+    validTo: "",
     view: "",
     floorLevel: "",
     roomCategory: "",
   });
 
-  const load = useCallback(() => {
-    setLoading(true);
+  useEffect(() => {
+    ratesRef.current = rates;
+  }, [rates]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setRates([]);
+      ratesRef.current = [];
+      setOffset(0);
+      setTotal(0);
+      setHasMore(true);
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
     const qs = new URLSearchParams();
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     if (filterCategory) qs.set("category", filterCategory);
-    qs.set("limit", "200");
-    fetchApi(`/api/travel/cost-master?${qs.toString()}`)
-      .then((res) => setRates(Array.isArray(res?.rates) ? res.rates : []))
-      .catch((e) => { notify.error(e?.body?.error || "Failed to load rates"); setRates([]); })
-      .finally(() => setLoading(false));
-  }, [filterSubBrand, filterCategory]); // eslint-disable-line react-hooks/exhaustive-deps
+    qs.set("limit", String(PAGE_SIZE));
+    qs.set("offset", String(startOffset));
+    try {
+      const res = await fetchApi(`/api/travel/cost-master?${qs.toString()}`);
+      const list = Array.isArray(res?.rates) ? res.rates : [];
+      const totalCount = Number.isFinite(Number(res?.total)) ? Number(res.total) : list.length;
+      const nextRates = reset ? list : [...ratesRef.current, ...list];
+      const nextOffset = startOffset + list.length;
+      const nextHasMore = Number.isFinite(totalCount) ? nextOffset < totalCount : list.length === PAGE_SIZE;
+      ratesRef.current = nextRates;
+      setRates(nextRates);
+      setTotal(totalCount);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to load rates");
+      setRates([]);
+      ratesRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(false);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [filterSubBrand, filterCategory, notify]);
 
-  useEffect(load, [load]);
+  useEffect(() => {
+    load({ reset: true });
+  }, [load]);
+
+  const loadLookupData = useCallback(() => {
+    fetchApi("/api/travel/suppliers?limit=500&fields=summary")
+      .then((res) => setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []))
+      .catch(() => setSuppliers([]));
+    fetchApi("/api/travel/seasons")
+      .then((res) => setSeasons(Array.isArray(res?.seasons) ? res.seasons : []))
+      .catch(() => setSeasons([]));
+  }, []);
+
+  useEffect(() => {
+    loadLookupData();
+  }, [loadLookupData]);
 
   const add = async () => {
     if (!form.routeOrSku.trim() || !form.baseRate) {
@@ -206,8 +380,18 @@ export default function CostMaster() {
       return;
     }
     try {
-      const { view, floorLevel, roomCategory, ...rest } = form;
+      const {
+        view, floorLevel, roomCategory,
+        supplierChoice, supplierOtherName, seasonChoice, seasonOtherName,
+        validFrom, validTo, ...rest
+      } = form;
       const body = { ...rest, baseRate: Number(form.baseRate) };
+      const supplierName = supplierChoice === OTHER_OPTION ? supplierOtherName.trim() : supplierChoice.trim();
+      const seasonName = seasonChoice === OTHER_OPTION ? seasonOtherName.trim() : seasonChoice.trim();
+      if (supplierName) body.supplierName = supplierName;
+      if (seasonName) body.seasonName = seasonName;
+      if (validFrom) body.validFrom = validFrom;
+      if (validTo) body.validTo = validTo;
       if (form.category === "hotel") {
         const attributes = {};
         if (view) attributes.view = view;
@@ -217,9 +401,29 @@ export default function CostMaster() {
       }
       await fetchApi("/api/travel/cost-master", { method: "POST", body: JSON.stringify(body) });
       notify.success("Rate added");
-      setForm((f) => ({ ...f, routeOrSku: "", baseRate: "", view: "", floorLevel: "", roomCategory: "" }));
+      if (supplierChoice === OTHER_OPTION && supplierName) {
+        notify.info(`Supplier "${supplierName}" was added as a temporary record. Edit the information when ready.`);
+      }
+      if (seasonChoice === OTHER_OPTION && seasonName) {
+        notify.info(`Season "${seasonName}" was added as a temporary record. Edit the information when ready.`);
+      }
+      loadLookupData();
+      setForm((f) => ({
+        ...f,
+        routeOrSku: "",
+        baseRate: "",
+        supplierChoice: "",
+        supplierOtherName: "",
+        seasonChoice: "",
+        seasonOtherName: "",
+        validFrom: "",
+        validTo: "",
+        view: "",
+        floorLevel: "",
+        roomCategory: "",
+      }));
       setAdding(false);
-      load();
+      load({ reset: true });
     } catch (e) {
       notify.error(e?.body?.error || "Failed to add rate");
     }
@@ -237,18 +441,33 @@ export default function CostMaster() {
         routeOrSku: editFields.routeOrSku.trim(),
         baseRate: Number(editFields.baseRate),
         currency: editFields.currency,
+        validFrom: editFields.validFrom || null,
+        validTo: editFields.validTo || null,
       };
+      if (editFields.supplierName.trim()) body.supplierName = editFields.supplierName.trim();
+      else body.supplierId = null;
+      if (editFields.seasonName.trim()) body.seasonName = editFields.seasonName.trim();
+      else body.seasonId = null;
       if (editFields.category === "hotel") {
         const attributes = {};
         if (editFields.view) attributes.view = editFields.view;
         if (editFields.floorLevel) attributes.floorLevel = editFields.floorLevel;
         if (editFields.roomCategory.trim()) attributes.roomCategory = editFields.roomCategory.trim();
         body.attributes = Object.keys(attributes).length > 0 ? attributes : null;
+      } else {
+        body.attributes = null;
       }
       await fetchApi(`/api/travel/cost-master/${rate.id}`, { method: "PATCH", body: JSON.stringify(body) });
       notify.success("Rate updated");
+      if (editFields.supplierChoice === OTHER_OPTION && editFields.supplierName.trim()) {
+        notify.info(`Supplier "${editFields.supplierName.trim()}" was added as a temporary record. Edit the information when ready.`);
+      }
+      if (editFields.seasonChoice === OTHER_OPTION && editFields.seasonName.trim()) {
+        notify.info(`Season "${editFields.seasonName.trim()}" was added as a temporary record. Edit the information when ready.`);
+      }
+      loadLookupData();
       setEditingId(null);
-      load();
+      load({ reset: true });
     } catch (e) {
       notify.error(e?.body?.error || "Failed to update rate");
     } finally {
@@ -262,7 +481,7 @@ export default function CostMaster() {
     try {
       await fetchApi(`/api/travel/cost-master/${rate.id}`, { method: "DELETE" });
       notify.success("Rate deleted");
-      load();
+      load({ reset: true });
     } catch (e) {
       notify.error(e?.body?.error || "Failed to delete rate");
     }
@@ -275,7 +494,7 @@ export default function CostMaster() {
         method: "PATCH",
         body: JSON.stringify({ isActive: !rate.isActive }),
       });
-      load();
+      load({ reset: true });
     } catch (e) {
       setRates((prev) => prev.map((r) => (r.id === rate.id ? { ...r, isActive: rate.isActive } : r)));
       notify.error(e?.body?.error || "Failed to toggle");
@@ -283,6 +502,28 @@ export default function CostMaster() {
   };
 
   const fileRef = useRef(null);
+
+  const downloadTemplate = async (format) => {
+    try {
+      const ext = format === "xlsx" ? "xlsx" : "csv";
+      const label = format === "xlsx" ? "Excel template" : "CSV template";
+      const res = await fetch(`/api/travel/cost-master/import-template?format=${ext}`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) throw new Error(`Failed to download ${label.toLowerCase()}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `travel-cost-master-template.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.error(e.message || `Failed to download ${format} template`);
+    }
+  };
 
   const exportCsv = async () => {
     try {
@@ -323,9 +564,19 @@ export default function CostMaster() {
       if (body.errors?.length) notify.error(`${summary}. First error row ${body.errors[0].rowNumber}: ${body.errors[0].reason}`);
       else notify.success(summary);
       load();
+      loadLookupData();
     } catch (e) { notify.error(e.message || "Failed to import"); }
     finally { if (fileRef.current) fileRef.current.value = ""; }
   };
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      load({ reset: false });
+    }
+  }, [load]);
 
   // All sub-brands for the filter dropdown (not scoped to user access — filter
   // should show what's IN the table, not what the user can create).
@@ -333,24 +584,43 @@ export default function CostMaster() {
     { value: "", label: "All sub-brands" },
     ...SUB_BRAND_IDS.map((id) => ({ value: id, label: SUB_BRAND_LABEL[id] || id })),
   ];
+  const supplierChoices = [...new Set(
+    suppliers
+      .filter((supplier) => !form.subBrand || supplier.subBrand === form.subBrand)
+      .map((supplier) => supplier.name)
+      .filter(Boolean),
+  )].sort((a, b) => a.localeCompare(b));
+  const seasonChoices = [...new Set(
+    seasons
+      .filter((season) => !form.subBrand || season.subBrand === form.subBrand)
+      .map((season) => season.seasonName)
+      .filter(Boolean),
+  )].sort((a, b) => a.localeCompare(b));
 
   return (
-    <div style={{ padding: "28px 32px", maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: "28px 32px", width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 6 }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 8, margin: 0, fontSize: 22, fontWeight: 600, color: "var(--success-color, #3ecf7e)" }}>
           <IndianRupee size={22} aria-hidden /> Cost Master
+          <CountBadge count={total} title={`${total.toLocaleString()} cost rows`} />
         </h1>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Link to="/travel/pricing-rules" style={{ ...secondaryBtn, textDecoration: "none" }}>
             <BadgePercent size={14} /> Pricing rules
           </Link>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
+          </button>
+          <button type="button" onClick={() => downloadTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} /> Download CSV Template
+          </button>
+          <button type="button" onClick={() => downloadTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} /> Download Excel Template
           </button>
           <button type="button" onClick={() => fileRef.current?.click()} style={secondaryBtn}
-            title="Bulk-upload supplier rates (CSV or Excel). Columns: subBrand, category, routeOrSku, baseRate, currency, supplierId, seasonId, attributesJson, validFrom, validTo, isActive.">
-            <Upload size={14} /> Import CSV/Excel
+            title="Bulk-upload supplier rates (CSV or Excel). Columns: subBrand, category, routeOrSku, supplierName, baseRate, currency, seasonName, validFrom, validTo, hotelView, hotelFloorLevel, roomCategory, isActive.">
+            <Download size={14} /> Import CSV/Excel
           </button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,text/csv" onChange={importCsv}
             style={{ display: "none" }} aria-label="Upload cost-master CSV or Excel file" />
@@ -361,9 +631,16 @@ export default function CostMaster() {
           )}
         </div>
       </div>
-      <p style={{ color: "var(--text-secondary)", fontSize: 13.5, margin: "2px 0 22px" }}>
+      <p style={{ color: "var(--text-secondary)", fontSize: 13.5, margin: "2px 0 10px" }}>
         Supplier rate book. /pricing/quote applies seasons + markup rules over these base rates.
       </p>
+      <div style={templateHelpCard}>
+        <div style={templateHelpTitle}>Template guide</div>
+        <div style={templateHelpLine}><strong>Required:</strong> <code>subBrand</code>, <code>category</code>, <code>routeOrSku</code>, <code>baseRate</code></div>
+        <div style={templateHelpLine}><strong>Optional:</strong> <code>supplierName</code>, <code>currency</code>, <code>seasonName</code>, <code>validFrom</code>, <code>validTo</code>, <code>isActive</code></div>
+        <div style={templateHelpLine}><strong>Hotel only:</strong> <code>hotelView</code>, <code>hotelFloorLevel</code>, <code>roomCategory</code></div>
+        <div style={templateHelpNote}>If you choose a new supplier or season name, the system creates a temporary record that you can edit later.</div>
+      </div>
 
       {/* Filters */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", background: "var(--surface-color)", padding: 16, borderRadius: 12, border: "1px solid var(--border-color)", marginBottom: 20 }}>
@@ -426,6 +703,62 @@ export default function CostMaster() {
               </select>
             </div>
 
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={fieldLabel}>Supplier</label>
+              <div style={fieldHint}>Optional. Pick an existing supplier or choose Other to add a temporary one.</div>
+              <select
+                value={form.supplierChoice}
+                onChange={(e) => setForm({ ...form, supplierChoice: e.target.value, supplierOtherName: e.target.value === OTHER_OPTION ? form.supplierOtherName : "" })}
+                style={input}
+              >
+                <option value="">No supplier</option>
+                {supplierChoices.map((name) => <option key={name} value={name}>{name}</option>)}
+                <option value={OTHER_OPTION}>Other</option>
+              </select>
+              {form.supplierChoice === OTHER_OPTION && (
+                <input
+                  placeholder="Enter supplier name"
+                  value={form.supplierOtherName}
+                  onChange={(e) => setForm({ ...form, supplierOtherName: e.target.value })}
+                  style={input}
+                />
+              )}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={fieldLabel}>Season</label>
+              <div style={fieldHint}>Optional. Pick an existing season or choose Other to add a temporary one.</div>
+              <select
+                value={form.seasonChoice}
+                onChange={(e) => setForm({ ...form, seasonChoice: e.target.value, seasonOtherName: e.target.value === OTHER_OPTION ? form.seasonOtherName : "" })}
+                style={input}
+              >
+                <option value="">No season</option>
+                {seasonChoices.map((name) => <option key={name} value={name}>{name}</option>)}
+                <option value={OTHER_OPTION}>Other</option>
+              </select>
+              {form.seasonChoice === OTHER_OPTION && (
+                <input
+                  placeholder="Enter season name"
+                  value={form.seasonOtherName}
+                  onChange={(e) => setForm({ ...form, seasonOtherName: e.target.value })}
+                  style={input}
+                />
+              )}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={fieldLabel}>Valid from</label>
+              <div style={fieldHint}>Optional. Use this when the rate should start on a specific date.</div>
+              <input type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} style={input} />
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={fieldLabel}>Valid to</label>
+              <div style={fieldHint}>Optional. Leave blank if the rate does not have an end date yet.</div>
+              <input type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} style={input} />
+            </div>
+
             {form.category === "hotel" && (
               <>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -456,14 +789,33 @@ export default function CostMaster() {
       )}
 
       {/* Table */}
-      <div style={{ background: "var(--surface-color)", borderRadius: 12, border: "1px solid var(--border-color)", overflow: "visible" }}>
-        {loading ? (
+      <div style={{ background: "var(--surface-color)", borderRadius: 12, border: "1px solid var(--border-color)" }}>
+        {loading && rates.length === 0 ? (
           <div style={emptyStyle}>Loading&hellip;</div>
         ) : rates.length === 0 ? (
           <div style={emptyStyle}>No rates yet. Add one using the &ldquo;+ Add rate&rdquo; button above.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div
+            ref={listRef}
+            data-testid="cost-master-table-scroll"
+            onScroll={handleListScroll}
+            style={{
+              maxHeight: "calc(100vh - 475px)",
+              overflowY: "auto",
+              overflowX: "hidden",
+            }}
+          >
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
+            <colgroup>
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "24%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "20%" }} />
+              <col style={{ width: "7%" }} />
+              <col style={{ width: "9%" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
@@ -480,6 +832,8 @@ export default function CostMaster() {
               {rates.map((r) =>
                 editingId === r.id ? (
                   <EditRow key={r.id} rate={r} saving={saving}
+                    supplierOptions={suppliers}
+                    seasonOptions={seasons}
                     onSave={(fields) => saveEdit(r, fields)}
                     onCancel={() => setEditingId(null)} />
                 ) : (
@@ -490,11 +844,27 @@ export default function CostMaster() {
                     <td style={td}><span style={brandBadge}>{r.subBrand}</span></td>
                     <td style={td}>{r.category}</td>
                     <td style={td}>
-                      <code style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", fontSize: 13 }}>{r.routeOrSku}</code>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <code style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", fontSize: 13, whiteSpace: "normal", wordBreak: "break-word" }}>{r.routeOrSku}</code>
+                        {(r.supplierName || r.seasonName) && (
+                          <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                            {[r.supplierName, r.seasonName].filter(Boolean).join(" � ")}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td style={{ ...td, fontWeight: 600 }}>₹{Number(r.baseRate).toLocaleString()}</td>
                     <td style={td}>{r.currency}</td>
-                    <td style={td}><AttributeChips attributes={r.attributes} /></td>
+                    <td style={td}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <AttributeChips attributes={r.attributes} />
+                        {(r.validFrom || r.validTo) && (
+                          <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                            {[r.validFrom ? String(r.validFrom).slice(0, 10) : null, r.validTo ? String(r.validTo).slice(0, 10) : null].filter(Boolean).join(" to ")}
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td style={td}>
                       <PillToggle active={r.isActive} onChange={() => toggleActive(r)}
                         label={`Toggle active for ${r.routeOrSku}`} />
@@ -522,7 +892,15 @@ export default function CostMaster() {
               )}
             </tbody>
           </table>
-          </TopScrollSync>
+          {loadingMore && (
+            <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
+              Loading more&hellip;
+            </div>
+          )}
+          {!loadingMore && hasMore && (
+            <div data-testid="cost-master-scroll-sentinel" style={{ height: 1 }} />
+          )}
+          </div>
         )}
       </div>
 
@@ -531,11 +909,16 @@ export default function CostMaster() {
 }
 
 const fieldLabel = { fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-secondary)" };
+const fieldHint = { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 };
+const templateHelpCard = { margin: "0 0 22px", padding: "12px 14px", borderRadius: 10, border: "1px solid var(--border-color)", background: "var(--surface-color)", display: "flex", flexDirection: "column", gap: 6 };
+const templateHelpTitle = { fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-primary)" };
+const templateHelpLine = { fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.5 };
+const templateHelpNote = { fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.45 };
 const selectStyle = { padding: "9px 12px", borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--surface-color)", color: "var(--text-primary)", minWidth: 160, fontSize: 13 };
 const input = { padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--bg-color)", color: "var(--text-primary)", fontSize: 13 };
 const inlineInput = { padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--bg-color)", color: "var(--text-primary)", fontSize: 13, width: "100%" };
 const emptyStyle = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
-const th = { textAlign: "left", padding: "14px 16px", fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)", fontWeight: 600 };
+const th = { position: "sticky", top: 0, background: "var(--modal-bg, var(--bg-color))", zIndex: 3, textAlign: "left", padding: "14px 16px", fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)", boxShadow: "inset 0 -1px 0 var(--border-color)", fontWeight: 600, whiteSpace: "nowrap" };
 const td = { padding: "14px 16px", fontSize: 13.5, color: "var(--text-primary)", verticalAlign: "middle" };
 const brandBadge = { display: "inline-block", padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--subtle-bg-3, rgba(91,110,248,0.15))", color: "var(--primary-color, #5b6ef8)", textTransform: "uppercase", letterSpacing: 0.5 };
 const attrChip = { padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "var(--subtle-bg)", color: "var(--text-secondary)", border: "1px solid var(--border-color)", whiteSpace: "nowrap" };

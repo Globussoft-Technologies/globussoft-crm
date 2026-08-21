@@ -18,37 +18,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 
 const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
-const { estimateLlmCost } = require("../lib/apiPricing");
-
-// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
-// persistLlmCallLog helper so this direct Gemini call is visible to the
-// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
-// sentiment scoring, hence the nested try/catch and the un-awaited .catch().
-function persistLlmCallLog(data) {
-  try {
-    const prismaClient = require("../lib/prisma");
-    prismaClient.llmCallLog.create({ data }).catch((e) =>
-      console.error(`[Sentiment] LlmCallLog persist failed (non-fatal): ${e.message}`),
-    );
-  } catch (e) {
-    console.error(`[Sentiment] LlmCallLog require failed (non-fatal): ${e.message}`);
-  }
-}
-
-let genAI = null;
-let geminiModel = null;
-try {
-  const { GoogleGenerativeAI } = require("@google/generative-ai");
-  if (process.env.GEMINI_API_KEY) {
-    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    geminiModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    console.log("[Sentiment] Gemini initialized (gemini-2.5-flash)");
-  } else {
-    console.warn("[Sentiment] GEMINI_API_KEY not set — using rule-based fallback");
-  }
-} catch (err) {
-  console.warn("[Sentiment] @google/generative-ai not available, falling back to rules:", err.message);
-}
+const aiGateway = require("../lib/aiGateway");
 
 const POSITIVE_WORDS = ["good", "great", "excellent", "happy", "thanks", "perfect"];
 const NEGATIVE_WORDS = ["bad", "terrible", "angry", "frustrated", "problem", "issue", "cancel"];
@@ -113,60 +83,63 @@ function parseGeminiResponse(raw) {
  * Analyze a single piece of text (email body or call notes).
  * Returns { sentiment, sentimentScore }.
  */
-async function analyzeMessage(text) {
+async function analyzeMessageDetailed(text, tenantId) {
   const safeText = String(text || "").trim();
-  if (!safeText) return { sentiment: "neutral", sentimentScore: 0 };
+  if (!safeText) {
+    return {
+      sentiment: "neutral",
+      sentimentScore: 0,
+      provider: "empty",
+      trusted: false,
+      usedFallback: true,
+    };
+  }
 
-  if (geminiModel) {
+  // AI path goes through aiGateway (BYOK or a funded CRM-managed
+  // subscription) — requires a real tenantId to resolve access. No
+  // tenantId (e.g. a caller that hasn't been updated yet) skips straight
+  // to the rule-based fallback rather than guessing a tenant.
+  if (tenantId) {
     try {
       const prompt =
         "Analyze sentiment of this text. Reply with ONLY: positive, neutral, or negative on first line. " +
         "Then a score from -1.0 to 1.0 on second line.\n\n" +
         `Text: "${safeText.slice(0, 4000)}"`;
-      const result = await geminiModel.generateContent(prompt);
-      const raw = result.response.text();
-      const usage = result.response.usageMetadata || {};
-      const promptTokens = usage.promptTokenCount || 0;
-      const completionTokens = usage.candidatesTokenCount || 0;
-      persistLlmCallLog({
-        tenantId: 1,
+      const resp = await aiGateway.runAiRequest({
+        tenantId,
         task: "sentiment",
-        model: "gemini-2.5-flash",
-        provider: "gemini",
-        reason: null,
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + completionTokens,
-        costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
-        stub: false,
-        userId: null,
         surface: "sentimentEngine",
-        status: "success",
+        requestedModelLabel: "gemini-flash",
+        messages: [{ role: "user", content: prompt }],
       });
-      const parsed = parseGeminiResponse(raw);
-      if (parsed) return parsed;
+      const parsed = parseGeminiResponse(resp.text);
+      if (parsed) {
+        return {
+          ...parsed,
+          provider: "gemini",
+          trusted: true,
+          usedFallback: false,
+        };
+      }
     } catch (err) {
-      persistLlmCallLog({
-        tenantId: 1,
-        task: "sentiment",
-        model: "gemini-2.5-flash",
-        provider: "gemini",
-        reason: null,
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
-        costEstimate: 0,
-        stub: false,
-        userId: null,
-        surface: "sentimentEngine",
-        status: "failed",
-        errorMessage: err.message,
-      });
-      console.warn("[Sentiment] Gemini call failed, falling back to rules:", err.message);
+      if (!err.friendly) {
+        console.warn("[Sentiment] AI call failed, falling back to rules:", err.message);
+      }
+      // friendly (no BYOK, no funded subscription) — silently fall through.
     }
   }
 
-  return ruleBasedAnalyze(safeText);
+  return {
+    ...ruleBasedAnalyze(safeText),
+    provider: "rule-based",
+    trusted: false,
+    usedFallback: true,
+  };
+}
+
+async function analyzeMessage(text, tenantId) {
+  const { sentiment, sentimentScore } = await analyzeMessageDetailed(text, tenantId);
+  return { sentiment, sentimentScore };
 }
 
 /**
@@ -189,7 +162,7 @@ async function tickSentimentEngine() {
     let processed = 0;
     for (const msg of pending) {
       try {
-        const { sentiment, sentimentScore } = await analyzeMessage(msg.body);
+        const { sentiment, sentimentScore } = await analyzeMessage(msg.body, msg.tenantId);
         await prisma.emailMessage.update({
           where: { id: msg.id },
           data: { sentiment, sentimentScore },
@@ -231,7 +204,9 @@ function initSentimentCron() {
 module.exports = {
   initSentimentCron,
   analyzeMessage,
+  analyzeMessageDetailed,
   tickSentimentEngine,
   ruleBasedAnalyze,
   parseGeminiResponse,
 };
+

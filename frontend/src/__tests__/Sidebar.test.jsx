@@ -34,7 +34,7 @@
  *   - useNotify returns a STABLE object reference (per the 2026-05-23
  *     standing rule on RTL hook mocks).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
@@ -152,6 +152,7 @@ const { fetchApiMock } = vi.hoisted(() => ({
   fetchApiMock: vi.fn(),
 }));
 vi.mock('../utils/api', () => ({ fetchApi: fetchApiMock }));
+let consoleErrorSpy;
 
 // Sample page catalog used by the wellness-vertical tests that exercise
 // renderWellnessNav. Every entry mirrors the server's shape
@@ -170,6 +171,7 @@ const SAMPLE_WELLNESS_PAGES = [
   { category: 'Leads & Revenue', path: '/wellness/telecaller-queue', label: 'Telecaller Queue' },
   { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
   { category: 'Finance', path: '/wellness/invoices', label: 'Invoices' },
+  { category: 'Marketing', path: '/landing-sites', label: 'Landing Sites' },
   { category: 'Products', path: '/wellness/products', label: 'Products' },
   { category: 'Products', path: '/wellness/product-categories', label: 'Categories' },
   { category: 'Products', path: '/wellness/auto-consumption', label: 'Auto-consumption' },
@@ -227,6 +229,18 @@ function renderSidebar({
 }
 
 beforeEach(() => {
+  consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+    const first = String(args[0] ?? '');
+    if (
+      first.includes('Warning: An update to Sidebar inside a test was not wrapped in act')
+      || first.includes('When testing, code that causes React state updates should be wrapped into act')
+    ) {
+      return;
+    }
+    // Preserve every other console.error so real regressions still surface.
+    // eslint-disable-next-line no-console
+    console.warn(...args);
+  });
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
   notifyObj.info.mockReset();
@@ -248,6 +262,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  consoleErrorSpy?.mockRestore();
+});
+
 describe('Sidebar — load-bearing render surface', () => {
   describe('Generic vertical', () => {
     it('renders core generic nav items (Dashboard / Contacts / Pipeline / Leads / Tickets)', () => {
@@ -260,6 +278,13 @@ describe('Sidebar — load-bearing render surface', () => {
       // accept either by checking we have at least one match.
       expect(screen.getAllByText('Leads').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Tickets')).toBeTruthy();
+    });
+
+    it('renders the Web Forms nav entry with href /forms for ADMIN', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const link = screen.getByText('Web Forms').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/forms');
     });
 
     it('renders 40+ links for ADMIN under generic vertical (full enterprise nav)', () => {
@@ -298,6 +323,18 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Attendance')).toBeTruthy();
       expect(screen.getByText('Unified Inbox')).toBeTruthy();
       expect(screen.getByText('Point of Sale')).toBeTruthy();
+    });
+
+    it('renders Landing Sites in the Marketing section for wellness tenants', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          { category: 'Marketing', path: '/landing-sites', label: 'Landing Sites' },
+        ],
+      });
+      await screen.findByText('Landing Sites');
+      expect(document.querySelector('a[href="/landing-sites"]')).toBeTruthy();
     });
 
     it('shows wellness submodules only while their module is hovered', async () => {
@@ -596,6 +633,22 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 
+
+  describe('Travel vertical ? Flight Offer Image hidden', () => {
+    it('does not render /travel/flight-offer-image link under travel (reused by quick-quote)', () => {
+      // The route stays mounted in App.jsx, but the sidebar surface is hidden
+      // because Flight quick-quote now owns the shared implementation.
+      const cases = ['USER', 'MANAGER', 'ADMIN'];
+      cases.forEach((role) => {
+        const { unmount } = renderSidebar({ vertical: 'travel', role });
+        const link = Array.from(document.querySelectorAll('a'))
+          .find((a) => a.getAttribute('href') === '/travel/flight-offer-image');
+        expect(link).toBeFalsy();
+        unmount();
+      });
+    });
+  });
+
   describe('Brand header', () => {
     it('renders the tenant name in the header', () => {
       renderSidebar({ tenantName: 'Globussoft Enterprise', vertical: 'generic' });
@@ -660,7 +713,7 @@ describe('Sidebar — load-bearing render surface', () => {
   //   - AdsGPT external button + Callified internal NavLink presence
   //   - tenant.brandColor / backdrop / aside ARIA-role nuances
   //   - travel-vertical specific items (Visa Sure admin-only, Quote Builder
-  //     manager-only, Marketing Flyer Studio manager-only).
+  //     manager-only marketing/output items).
   //
   // (Note: the Sidebar SUT has no expand/collapse groups — section labels
   // are static <div> headers — so the prompt's "collapsible groups" probe
@@ -994,11 +1047,12 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Embassy Rules')).toBeNull();
     });
 
-    it('renders manager-only travel items (Quote Builder / Flyer Studio / Travel Stall) for MANAGER', () => {
+    it('renders manager-only travel items (Quote Builder / Travel Stall) for MANAGER', () => {
       renderSidebar({ vertical: 'travel', role: 'MANAGER' });
       expect(screen.getByText('Quote Builder')).toBeTruthy();
-      expect(screen.getByText('Marketing Flyer Studio')).toBeTruthy();
-      expect(screen.getByText('Flyer Templates')).toBeTruthy();
+      expect(screen.queryByText('Marketing Flyer Studio')).toBeNull();
+      expect(screen.queryByText('Flyer Templates')).toBeNull();
+      expect(screen.queryByText('Flyer Share Admin')).toBeNull();
       // T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Catalogue
       // admin entry is ADMIN+MANAGER visible. Page CRUD is verifyRole
       // ADMIN+MANAGER server-side; nav mirrors that posture. PR #1142 added
@@ -1666,3 +1720,4 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 });
+

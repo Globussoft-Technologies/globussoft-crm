@@ -146,7 +146,7 @@ const QUOTES_DEFAULT = [
 // Install a fetchApi mock that routes by URL + method. Tests override
 // only the surface they care about.
 function installFetchMock({
-  list = { quotes: QUOTES_DEFAULT, total: QUOTES_DEFAULT.length, limit: 100, offset: 0 },
+  list = { quotes: QUOTES_DEFAULT, total: QUOTES_DEFAULT.length, limit: 50, offset: 0 },
   create = null,
   update = null,
   del = null,
@@ -173,9 +173,9 @@ function installFetchMock({
   });
 }
 
-function renderPage(user = ADMIN_USER) {
+function renderPage(user = ADMIN_USER, initialEntries = ['/travel/quotes-admin']) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false }}>
         <QuotesAdmin />
       </AuthContext.Provider>
@@ -250,15 +250,15 @@ describe('<QuotesAdmin /> — load + render lifecycle', () => {
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
-  it('GETs /api/travel/quotes on mount with NO query string when filters are empty', async () => {
+  it('GETs /api/travel/quotes on mount with limit/offset when filters are empty', async () => {
     renderPage();
     await waitFor(() => {
       const listCall = fetchApiMock.mock.calls.find(([u, o]) =>
         typeof u === 'string' && u.startsWith('/api/travel/quotes') && (!o?.method || o.method === 'GET'),
       );
       expect(listCall).toBeTruthy();
-      // No query string when both filters are blank.
-      expect(listCall[0]).toBe('/api/travel/quotes');
+      expect(listCall[0]).toContain('limit=50');
+      expect(listCall[0]).toContain('offset=0');
     });
     // Renders one row per quote.
     expect(await screen.findByText('Alice Smith')).toBeInTheDocument();
@@ -304,6 +304,22 @@ describe('<QuotesAdmin /> — filter behavior', () => {
       );
       expect(call).toBeTruthy();
     });
+  });
+
+  it('report Expired filter uses the expired-quotes endpoint without sending invalid status to list API', async () => {
+    installFetchMock({ list: { quotes: [makeQuote({ id: 201, subBrand: 'tmc', status: 'Sent', contact: { id: 5009, name: 'Expired Customer' }, validUntil: '2026-01-01T00:00:00.000Z' })], count: 1 } });
+    renderPage(ADMIN_USER, ['/travel/quotes-admin?source=reports&subBrand=tmc&status=Expired']);
+
+    expect(await screen.findByText('Expired Customer')).toBeInTheDocument();
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' && u.startsWith('/api/travel/quotes/expired') && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+      expect(call[0]).toContain('subBrand=tmc');
+      expect(call[0]).not.toContain('status=Expired');
+    });
+    expect(screen.getAllByText('Expired').length).toBeGreaterThanOrEqual(1);
   });
 
   it('selecting status "Sent" re-fetches with ?status=Sent in the URL', async () => {

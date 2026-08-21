@@ -5,7 +5,7 @@ import { dropdownMenuStyle, dropdownItemStyle } from "./styles";
 // Pagination footer — Prev / numbered pages (windowed) / Next + items-per-
 // page selector. Rendered below the table so it's always reachable even
 // with a tall list. Hides itself when total fits within a single page.
-export default function PatientPager({ total, page, pageSize, onPageChange, onPageSizeChange, isCustomPageSize, setIsCustomPageSize, customPageSize, setCustomPageSize }) {
+export default function PatientPager({ total, page, pageSize, onPageChange, onPageSizeChange, isCustomPageSize, setIsCustomPageSize, customPageSize, setCustomPageSize, label = "patients" }) {
   const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
   const safePage = Math.min(page, pageCount);
   // Custom dropdown for the page-size selector — matches the Export
@@ -60,7 +60,7 @@ export default function PatientPager({ total, page, pageSize, onPageChange, onPa
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", justifyContent: "space-between", padding: "0.85rem 1rem", borderTop: "1px solid var(--border-color, rgba(255,255,255,0.08))", fontSize: "0.85rem" }}>
       <div style={{ color: "var(--text-secondary)" }}>
-        Showing <strong style={{ color: "var(--text-primary)" }}>{start}–{end}</strong> of <strong style={{ color: "var(--text-primary)" }}>{total}</strong> patients
+        Showing <strong style={{ color: "var(--text-primary)" }}>{start}–{end}</strong> of <strong style={{ color: "var(--text-primary)" }}>{total}</strong> {label}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
         <label style={{ color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>

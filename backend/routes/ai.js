@@ -1,26 +1,24 @@
 const express = require("express");
-const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true }); // load root .env for GEMINI_API_KEY
 const { verifyToken } = require("../middleware/auth");
 const { llmLimiter } = require("../middleware/apiRateLimiters");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { estimateLlmCost } = require("../lib/apiPricing");
+const aiGateway = require("../lib/aiGateway");
+const { isGeminiLimitError, buildGeminiLimitError } = require("../lib/geminiErrors");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { formatMoney } = require("../utils/formatMoney");
 
-// Load Gemini API key from root .env or backend .env
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
-let genAI = null;
-let model = null;
-
-if (GEMINI_KEY) {
-  genAI = new GoogleGenerativeAI(GEMINI_KEY);
-  model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-  console.log("[AI] Gemini initialized (gemini-2.5-flash)");
-} else {
-  console.warn("[AI] GEMINI_API_KEY not found — AI draft will use fallback templates");
+// Every call below goes through aiGateway.runAiRequest — the mandatory
+// resolve/gate/log/deduct entry point (BYOK first, then a funded
+// CRM-managed subscription). A "friendly" blocked-access error (no BYOK,
+// no funded subscription) is treated the SAME as a Gemini outage: this
+// route was designed to degrade to a template fallback rather than 5xx,
+// so an unconfigured tenant silently gets the template, not an error page.
+function respondGeminiLimit(res, err) {
+  if (!isGeminiLimitError(err)) return false;
+  const quotaErr = buildGeminiLimitError(err);
+  res.status(429).json({ error: quotaErr.message, code: quotaErr.code });
+  return true;
 }
 
 // ── AI Email Draft ────────────────────────────────────────────────
@@ -54,12 +52,10 @@ router.post("/draft", verifyToken, llmLimiter, async (req, res) => {
 
     const toneInstruction = tone ? `Write in a ${tone} tone.` : "Write in a professional yet warm tone.";
 
-    // Use Gemini if available
-    if (model) {
-      // Represent the TENANT's own organisation (e.g. "Travel Stall"), never the
-      // platform vendor that built the CRM.
-      const { orgName, bizDescriptor } = await resolveSenderOrg(req.user.tenantId);
-      const prompt = `You are an email assistant writing on behalf of ${orgName}${bizDescriptor ? `, ${bizDescriptor}` : ""}. Represent ONLY ${orgName} — never mention, describe, or sign off as any other company (in particular do NOT reference the software vendor that built this CRM). Write a professional business email body (no subject line, no "Subject:" prefix) based on the following context.
+    // Represent the TENANT's own organisation (e.g. "Travel Stall"), never the
+    // platform vendor that built the CRM.
+    const { orgName, bizDescriptor } = await resolveSenderOrg(req.user.tenantId);
+    const prompt = `You are an email assistant writing on behalf of ${orgName}${bizDescriptor ? `, ${bizDescriptor}` : ""}. Represent ONLY ${orgName} — never mention, describe, or sign off as any other company (in particular do NOT reference the software vendor that built this CRM). Write a professional business email body (no subject line, no "Subject:" prefix) based on the following context.
 
 Subject/Context: "${context}"
 ${toneInstruction}
@@ -74,53 +70,26 @@ Requirements:
 - Sign off as the sender (don't include a specific name, just "Best regards,")
 - Do not include a subject line in the output`;
 
-      let result;
-      try {
-        result = await model.generateContent(prompt);
-      } catch (genErr) {
-        persistLlmCallLog({
-          tenantId: (req.user && req.user.tenantId) || 1,
-          task: "email-draft",
-          model: "gemini-2.5-flash",
-          provider: "gemini",
-          reason: null,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-          costEstimate: 0,
-          stub: false,
-          userId: null,
-          surface: "ai-email-draft",
-          status: "failed",
-          errorMessage: genErr.message,
-        });
-        throw genErr;
-      }
-      const draft = result.response.text();
-      const usage = result.response.usageMetadata || {};
-      const promptTokens = usage.promptTokenCount || 0;
-      const completionTokens = usage.candidatesTokenCount || 0;
-      persistLlmCallLog({
-        tenantId: (req.user && req.user.tenantId) || 1,
+    try {
+      const resp = await aiGateway.runAiRequest({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
         task: "email-draft",
-        model: "gemini-2.5-flash",
-        provider: "gemini",
-        reason: null,
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + completionTokens,
-        costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
-        stub: false,
-        userId: null,
         surface: "ai-email-draft",
-        status: "success",
+        requestedModelLabel: "gemini-flash",
+        messages: [{ role: "user", content: prompt }],
       });
-      return res.json({ draft, model: "gemini-2.5-flash" });
+      return res.json({ draft: resp.text, model: resp.model });
+    } catch (genErr) {
+      if (respondGeminiLimit(res, genErr)) return;
+      if (genErr.friendly) {
+        // No BYOK, no funded CRM subscription — degrade to the template
+        // fallback rather than surfacing a billing error on a compose box.
+        const draft = generateFallbackDraft(context, tone);
+        return res.json({ draft, model: "template-fallback" });
+      }
+      throw genErr;
     }
-
-    // Fallback: template-based draft if no API key
-    const draft = generateFallbackDraft(context, tone);
-    res.json({ draft, model: "template-fallback" });
   } catch (err) {
     console.error("[AI Draft] Error:", err.message);
     // Fallback on any error
@@ -135,9 +104,8 @@ router.post("/reply", verifyToken, llmLimiter, async (req, res) => {
     const { originalEmail, tone } = req.body;
     if (!originalEmail) return res.status(400).json({ error: "Original email content required." });
 
-    if (model) {
-      const { orgName, bizDescriptor } = await resolveSenderOrg(req.user.tenantId);
-      const prompt = `You are an email assistant writing on behalf of ${orgName}${bizDescriptor ? `, ${bizDescriptor}` : ""}. Represent ONLY ${orgName} — never reference any other company (including the CRM's software vendor). Write a professional reply to the following email.
+    const { orgName, bizDescriptor } = await resolveSenderOrg(req.user.tenantId);
+    const prompt = `You are an email assistant writing on behalf of ${orgName}${bizDescriptor ? `, ${bizDescriptor}` : ""}. Represent ONLY ${orgName} — never reference any other company (including the CRM's software vendor). Write a professional reply to the following email.
 
 Original email:
 "${originalEmail.slice(0, 2000)}"
@@ -150,48 +118,20 @@ Requirements:
 - Be concise and actionable
 - End with appropriate sign-off`;
 
-      let result;
-      try {
-        result = await model.generateContent(prompt);
-      } catch (genErr) {
-        persistLlmCallLog({
-          tenantId: (req.user && req.user.tenantId) || 1,
-          task: "email-draft",
-          model: "gemini-2.5-flash",
-          provider: "gemini",
-          reason: null,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-          costEstimate: 0,
-          stub: false,
-          userId: null,
-          surface: "ai-email-draft",
-          status: "failed",
-          errorMessage: genErr.message,
-        });
-        throw genErr;
-      }
-      const draft = result.response.text();
-      const usage = result.response.usageMetadata || {};
-      const promptTokens = usage.promptTokenCount || 0;
-      const completionTokens = usage.candidatesTokenCount || 0;
-      persistLlmCallLog({
-        tenantId: (req.user && req.user.tenantId) || 1,
+    try {
+      const resp = await aiGateway.runAiRequest({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
         task: "email-draft",
-        model: "gemini-2.5-flash",
-        provider: "gemini",
-        reason: null,
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + completionTokens,
-        costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
-        stub: false,
-        userId: null,
         surface: "ai-email-draft",
-        status: "success",
+        requestedModelLabel: "gemini-flash",
+        messages: [{ role: "user", content: prompt }],
       });
-      return res.json({ draft, model: "gemini-2.5-flash" });
+      return res.json({ draft: resp.text, model: resp.model });
+    } catch (genErr) {
+      if (respondGeminiLimit(res, genErr)) return;
+      if (!genErr.friendly) throw genErr;
+      // Falls through to the canned fallback below.
     }
 
     res.json({ draft: "Thank you for your email. I've reviewed your message and will follow up with a detailed response shortly.\n\nBest regards,", model: "fallback" });
@@ -207,53 +147,25 @@ router.post("/subject-lines", verifyToken, llmLimiter, async (req, res) => {
     const { context, count } = req.body;
     if (!context) return res.status(400).json({ error: "Context required." });
 
-    if (model) {
-      const prompt = `Generate ${count || 5} email subject lines for the following context. Return only the subject lines, one per line, no numbering.
+    const prompt = `Generate ${count || 5} email subject lines for the following context. Return only the subject lines, one per line, no numbering.
 
 Context: "${context}"`;
 
-      let result;
-      try {
-        result = await model.generateContent(prompt);
-      } catch (genErr) {
-        persistLlmCallLog({
-          tenantId: (req.user && req.user.tenantId) || 1,
-          task: "email-draft",
-          model: "gemini-2.5-flash",
-          provider: "gemini",
-          reason: null,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-          costEstimate: 0,
-          stub: false,
-          userId: null,
-          surface: "ai-email-draft",
-          status: "failed",
-          errorMessage: genErr.message,
-        });
-        throw genErr;
-      }
-      const lines = result.response.text().split("\n").filter(l => l.trim()).slice(0, count || 5);
-      const usage = result.response.usageMetadata || {};
-      const promptTokens = usage.promptTokenCount || 0;
-      const completionTokens = usage.candidatesTokenCount || 0;
-      persistLlmCallLog({
-        tenantId: (req.user && req.user.tenantId) || 1,
+    try {
+      const resp = await aiGateway.runAiRequest({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
         task: "email-draft",
-        model: "gemini-2.5-flash",
-        provider: "gemini",
-        reason: null,
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + completionTokens,
-        costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
-        stub: false,
-        userId: null,
         surface: "ai-email-draft",
-        status: "success",
+        requestedModelLabel: "gemini-flash",
+        messages: [{ role: "user", content: prompt }],
       });
+      const lines = resp.text.split("\n").filter(l => l.trim()).slice(0, count || 5);
       return res.json({ subjects: lines });
+    } catch (genErr) {
+      if (respondGeminiLimit(res, genErr)) return;
+      if (!genErr.friendly) throw genErr;
+      // Falls through to the canned fallback below.
     }
 
     res.json({ subjects: [`Follow up: ${context}`, `Quick question about ${context}`, `RE: ${context}`, `Update on ${context}`, `Action needed: ${context}`] });
@@ -261,22 +173,6 @@ Context: "${context}"`;
     res.json({ subjects: [`Follow up: ${req.body.context}`, `RE: ${req.body.context}`] });
   }
 });
-
-// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
-// persistLlmCallLog helper so direct Gemini calls from this route are
-// visible to the Super Admin "API Analytics" dashboard. A DB hiccup here
-// must NEVER break email-draft generation, hence the nested try/catch and
-// the un-awaited .catch() on the create.
-function persistLlmCallLog(data) {
-  try {
-    const prismaClient = require("../lib/prisma");
-    prismaClient.llmCallLog.create({ data }).catch((e) =>
-      console.error(`[AI] LlmCallLog persist failed (non-fatal): ${e.message}`),
-    );
-  } catch (e) {
-    console.error(`[AI] LlmCallLog require failed (non-fatal): ${e.message}`);
-  }
-}
 
 // Resolve the SENDER's own organisation so AI-written emails represent the
 // tenant (e.g. "Travel Stall"), NOT the platform vendor that built the CRM.

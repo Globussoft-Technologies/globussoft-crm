@@ -101,8 +101,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { AuthContext } from '../App';
 
 const fetchApiMock = vi.fn();
+const rawFetchMock = vi.fn();
+const originalFetch = globalThis.fetch;
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
   getAuthToken: () => 'test-token',
@@ -129,6 +132,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import TripDetail from '../pages/travel/TripDetail';
+import LandingPageBuilder from '../pages/LandingPageBuilder';
 
 // Canonical trip fixture — exercises Overview + Participants + Microsite
 // surfaces. Default has no microsite (un-published path), and one
@@ -171,6 +175,7 @@ function installFetchMock({
   // empty / not-linked so existing tests stay green.
   pendingRegs = [],
   landingPage = { status: 404, body: { code: 'NOT_LINKED' } }, // 404 = no page linked
+  builderLandingPage = null,
   landingPageCreate = null, // override to return a created page on POST
   registrationDecide = null, // override per-test to assert approve/reject
   itinerarySuggest = null, // override to return a custom AI suggestion
@@ -216,6 +221,18 @@ function installFetchMock({
       }
       return Promise.resolve(landingPage);
     }
+    // GET /api/landing-pages/:id (builder surface reached from the trip page)
+    if (method === 'GET' && /^\/api\/landing-pages\/\d+$/.test(url)) {
+      if (builderLandingPage instanceof Error) return Promise.reject(builderLandingPage);
+      if (builderLandingPage) return Promise.resolve(builderLandingPage);
+      return Promise.resolve({
+        id: 77,
+        title: 'Trip Microsite',
+        slug: 'trip-microsite',
+        status: 'DRAFT',
+        content: JSON.stringify([]),
+      });
+    }
     // Phase 8 — POST /api/travel/trips/:id/landing-page (lazy create)
     if (method === 'POST' && /^\/api\/travel\/trips\/\d+\/landing-page$/.test(url)) {
       if (landingPageCreate instanceof Error) return Promise.reject(landingPageCreate);
@@ -258,18 +275,41 @@ function installFetchMock({
 // Render at /travel/trips/101 with the Routes + Route wrapper so useParams
 // reads { id: '101' }. The SUT does NOT consume AuthContext (no role gate),
 // so no Provider is needed.
-function renderPage(tripId = 101) {
+function renderPage(tripId = 101, entryState = null) {
+  let entry = `/travel/trips/${tripId}`;
+  if (entryState) {
+    if (typeof entryState === 'object' && (Object.prototype.hasOwnProperty.call(entryState, 'pathname') || Object.prototype.hasOwnProperty.call(entryState, 'search') || Object.prototype.hasOwnProperty.call(entryState, 'hash'))) {
+      entry = {
+        pathname: entryState.pathname || `/travel/trips/${tripId}`,
+        search: entryState.search || '',
+        hash: entryState.hash || '',
+        state: Object.prototype.hasOwnProperty.call(entryState, 'state') ? entryState.state : null,
+      };
+    } else {
+      entry = { pathname: `/travel/trips/${tripId}`, state: entryState };
+    }
+  }
+  const authValue = {
+    user: { tenant: { vertical: 'travel' } },
+    tenant: { vertical: 'travel' },
+    loading: false,
+  };
   return render(
-    <MemoryRouter initialEntries={[`/travel/trips/${tripId}`]}>
-      <Routes>
-        <Route path="/travel/trips/:id" element={<TripDetail />} />
-      </Routes>
-    </MemoryRouter>,
+    <AuthContext.Provider value={authValue}>
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route path="/travel/trips/:id" element={<TripDetail />} />
+          <Route path="/landing-pages/builder/:id" element={<LandingPageBuilder />} />
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
   );
 }
 
 beforeEach(() => {
   fetchApiMock.mockReset();
+  rawFetchMock.mockReset();
+  globalThis.fetch = rawFetchMock;
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
@@ -284,6 +324,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -320,7 +361,7 @@ describe('<TripDetail /> — load lifecycle', () => {
     installFetchMock({ trip: null });
     renderPage();
     expect(await screen.findByText(/Trip not found\./i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Back to trips/i })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Trips/i })).toHaveAttribute(
       'href',
       '/travel/trips',
     );
@@ -362,6 +403,21 @@ describe('<TripDetail /> — header + status badge', () => {
 });
 
 describe('<TripDetail /> — tab strip', () => {
+  it('opens the Public Experience tab when the route carries ?tab=microsite', async () => {
+    renderPage(101, { search: '?tab=microsite' });
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    expect(screen.getByRole('tab', { name: /Public Experience/i })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('uses preserved report result URL when opened from Reports drill-down', async () => {
+    renderPage(101, { backTo: '/travel/trips?status=confirmed&from=reports', backLabel: 'Back to reports results' });
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    expect(screen.getByRole('link', { name: /Back to reports results/i })).toHaveAttribute(
+      'href',
+      '/travel/trips?status=confirmed&from=reports',
+    );
+  });
+
   it('renders all 5 tabs with role="tab" + Overview selected by default', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
@@ -475,6 +531,39 @@ describe('<TripDetail /> — Participants tab', () => {
       ([, o]) => o?.method === 'POST',
     );
     expect(posts.length).toBe(0);
+  });
+
+  it('bulk import panel opens a modal, posts multipart file, and shows the summary', async () => {
+    rawFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ inserted: 1, updated: 1, skipped: 0, errors: [], total: 2 }),
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Anaya Sharma');
+
+    expect(screen.queryByTestId('participant-bulk-import-modal')).toBeNull();
+    expect(screen.queryByLabelText(/Bulk import participants file/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
+    expect(await screen.findByTestId('participant-bulk-import-modal')).toBeInTheDocument();
+
+    const file = new File(['fullName,parentPhone\nKabir Mehta,9876543210'], 'participants.csv', { type: 'text/csv' });
+    fireEvent.change(screen.getByLabelText(/Bulk import participants file/i), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Confirm import/i }));
+    await waitFor(() => {
+      expect(rawFetchMock).toHaveBeenCalled();
+    });
+    const [url, opts] = rawFetchMock.mock.calls[0];
+    expect(url).toBe('/api/travel/trips/101/participants/import');
+    expect(opts?.method).toBe('POST');
+    expect(opts?.body).toBeInstanceOf(FormData);
+    expect(await screen.findByTestId('participant-bulk-import-result')).toBeInTheDocument();
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Imported 1, updated 1/i));
   });
 });
 
@@ -1162,6 +1251,20 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
     expect(puts.length).toBe(0);
   });
 
+
+  it('renders CRM portal link buttons per instalment and no participant Razorpay link generation', async () => {
+    installPaymentMock();
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Edit payment plan/i });
+
+    expect(screen.getByRole('button', { name: /Copy instalment 1 payment link/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy instalment 2 payment link/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy instalment 3 payment link/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Generate payment link/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/rzp\.io/i)).not.toBeInTheDocument();
+  });
   it('per-participant instalments section renders rows from /instalments response', async () => {
     const perPartFixture = [
       {
@@ -1769,6 +1872,35 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
     expect(screen.queryByTestId('create-landing-page-btn')).not.toBeInTheDocument();
   });
 
+  it('the landing-page handoff from Public Experience preserves the TMC Trips return state', async () => {
+    installFetchMock({
+      landingPage: {
+        id: 77,
+        slug: 'trip-bali2026',
+        status: 'PUBLISHED',
+        tripId: 101,
+        title: 'Bali Trip — bali2026',
+      },
+      builderLandingPage: {
+        id: 77,
+        slug: 'trip-bali2026',
+        status: 'DRAFT',
+        title: 'Bali Trip — bali2026',
+        content: JSON.stringify([]),
+      },
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
+
+    fireEvent.click(await screen.findByTestId('manage-landing-page-link'));
+
+    expect(await screen.findByTitle('Back to TMC Trips')).toHaveAttribute('href', '/travel/trips/101?tab=overview');
+    expect(screen.getByRole('link', { name: 'TMC Trips' })).toHaveAttribute('href', '/travel/trips/101?tab=overview');
+    expect(screen.getByText('Public experience')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Public experience' })).toHaveAttribute('href', '/travel/trips/101?tab=microsite');
+  });
+
   it('Public Experience tab renders BOTH landing-page card AND microsite section', async () => {
     installFetchMock({
       landingPage: {
@@ -1942,3 +2074,4 @@ describe('<TripDetail /> — Sync from registration button', () => {
     });
   });
 });
+

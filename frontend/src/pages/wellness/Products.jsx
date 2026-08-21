@@ -5,7 +5,12 @@ import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
 import PageHeader from '../../components/PageHeader';
+import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 import TopScrollSync from '../../components/TopScrollSync';
+import Pagination from '../../components/ui/Pagination';
+
+const DEFAULT_PAGE_SIZE = 10;
+const SEARCH_DEBOUNCE_MS = 300;
 
 export default function Products() {
   const notify = useNotify();
@@ -35,8 +40,14 @@ export default function Products() {
   const [loadingConsumption, setLoadingConsumption] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [totalProducts, setTotalProducts] = useState(0);
+  const [reloadTick, setReloadTick] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const requestIdRef = useRef(0);
   const [formData, setFormData] = useState({
     name: '',
     sku: '',
@@ -63,8 +74,26 @@ export default function Products() {
   });
 
   useEffect(() => {
-    loadData();
+    loadCategories();
   }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearchTerm(searchTerm.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearchTerm, filterCategory, pageSize]);
+
+  useEffect(() => {
+    loadProducts({
+      currentPage: page,
+      currentPageSize: pageSize,
+      currentSearch: debouncedSearchTerm,
+      currentCategory: filterCategory,
+    });
+  }, [page, pageSize, debouncedSearchTerm, filterCategory, reloadTick]);
 
   // Auto-open detail panel when navigated from a low-stock notification (?productId=N)
   useEffect(() => {
@@ -95,28 +124,44 @@ export default function Products() {
     return () => { cancelled = true; };
   }, [selectedProductForDetails?.id]);
 
-  const loadData = async () => {
+  const loadCategories = async () => {
     try {
-      setLoading(true);
-      const [productsRes, categoriesRes] = await Promise.all([
-        fetchApi('/api/wellness/products'),
-        fetchApi('/api/wellness/product-categories'),
-      ]);
-      setProducts(productsRes || []);
+      const categoriesRes = await fetchApi('/api/wellness/product-categories');
       setCategories(categoriesRes || []);
     } catch (err) {
-      notify.error('Failed to load data');
-    } finally {
-      setLoading(false);
+      notify.error('Failed to load categories');
     }
   };
 
-  const filteredProducts = products.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         (p.sku && p.sku.toLowerCase().includes(searchTerm.toLowerCase()));
-    const matchesCategory = !filterCategory || p.categoryId === parseInt(filterCategory);
-    return matchesSearch && matchesCategory;
-  });
+  const loadProducts = async ({
+    currentPage = page,
+    currentPageSize = pageSize,
+    currentSearch = debouncedSearchTerm,
+    currentCategory = filterCategory,
+  } = {}) => {
+    const requestId = ++requestIdRef.current;
+    try {
+      setLoading(true);
+      const params = new URLSearchParams({
+        paginate: 'true',
+        page: String(currentPage),
+        limit: String(currentPageSize),
+      });
+      if (currentSearch) params.set('q', currentSearch);
+      if (currentCategory) params.set('categoryId', currentCategory);
+      const res = await fetchApi(`/api/wellness/products?${params.toString()}`);
+      if (requestId !== requestIdRef.current) return;
+      setProducts(Array.isArray(res?.items) ? res.items : []);
+      setTotalProducts(Number.isFinite(res?.pagination?.total) ? res.pagination.total : 0);
+    } catch (err) {
+      if (requestId !== requestIdRef.current) return;
+      setProducts([]);
+      setTotalProducts(0);
+      notify.error('Failed to load products');
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
+  };
 
   const handleOpenModal = (product = null) => {
     if (product) {
@@ -217,7 +262,8 @@ export default function Products() {
         notify.success('Product created successfully');
       }
       setShowModal(false);
-      loadData();
+      setPage(1);
+      setReloadTick((tick) => tick + 1);
     } catch (err) {
       const errorMsg = err.message || 'Failed to save product';
       console.error('[Products]', errorMsg, err);
@@ -237,7 +283,8 @@ export default function Products() {
     try {
       await fetchApi(`/api/wellness/products/${id}`, { method: 'DELETE' });
       notify.success('Product deleted');
-      loadData();
+      setPage(1);
+      setReloadTick((tick) => tick + 1);
     } catch (err) {
       notify.error('Failed to delete product');
     }
@@ -305,6 +352,21 @@ export default function Products() {
         ) : null}
       >
         {canWriteProducts && (
+          <CsvImportExportToolbar
+            entity="inventory-products"
+            label="Products"
+            filters={{
+              q: debouncedSearchTerm || undefined,
+              categoryId: filterCategory || undefined,
+            }}
+            formats={['csv', 'xlsx']}
+            onImported={() => {
+              setPage(1);
+              setReloadTick((tick) => tick + 1);
+            }}
+          />
+        )}
+        {canWriteProducts && (
           <button
             onClick={() => handleOpenModal()}
             style={{
@@ -364,12 +426,13 @@ export default function Products() {
         <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
           Loading products...
         </div>
-      ) : filteredProducts.length === 0 ? (
+      ) : products.length === 0 ? (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <AlertCircle size={24} style={{ margin: '0 auto 0.5rem', opacity: 0.5 }} />
-          {products.length === 0 ? 'No products yet.' : 'No products match your filters.'}
+          {totalProducts === 0 && !debouncedSearchTerm && !filterCategory ? 'No products yet.' : 'No products match your filters.'}
         </div>
       ) : (
+        <>
         <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -392,7 +455,7 @@ export default function Products() {
               </tr>
             </thead>
             <tbody>
-              {filteredProducts.map((product) => (
+              {products.map((product) => (
                 <tr key={product.id} style={{ borderBottom: '1px solid var(--border-color)', hover: { background: 'rgba(168, 85, 247, 0.05)' } }}>
                   <td style={{ padding: '1rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -482,6 +545,64 @@ export default function Products() {
             </tbody>
           </table>
         </TopScrollSync>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '0.75rem',
+            flexWrap: 'wrap',
+            marginTop: '1rem',
+          }}
+        >
+          <div
+            data-testid="products-pagination"
+            style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}
+          >
+            Page <strong style={{ color: 'var(--text-primary)' }}>{page}</strong> of{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>
+              {Math.max(1, Math.ceil(totalProducts / pageSize))}
+            </strong>{' '}
+            - {totalProducts.toLocaleString()} products
+          </div>
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              fontSize: '0.85rem',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            Per page:
+            <select
+              aria-label="Products per page"
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              style={{
+                padding: '0.35rem 0.5rem',
+                borderRadius: 6,
+                border: '1px solid var(--border-color)',
+                background: 'var(--surface-color)',
+                color: 'var(--text-primary)',
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+              }}
+            >
+              {[10, 25, 50].map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={totalProducts}
+          onChange={setPage}
+          style={{ marginTop: '0.25rem' }}
+        />
+        </>
       )}
 
       {/* Product Details Modal */}

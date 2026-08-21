@@ -105,68 +105,40 @@
 import { describe, test, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
 
-// CRITICAL: backend/cron/sentimentEngine.js calls dotenv.config({override:true})
-// at module top against the repo root .env, which carries a real GEMINI_API_KEY
-// in dev/CI. Without intercepting the @google/generative-ai SDK BEFORE the
-// engine's require() chain executes, every "Gemini path" test would issue a
-// live, billed API call (and the response returned to the test isn't
-// deterministic, so assertions on score values would flake or fail).
-//
-// vi.mock('@google/generative-ai') with an ESM factory does NOT intercept
-// CJS require() chains under this vitest setup (same quirk documented in
-// MOCK_PATTERNS.md §4 for @sentry/node). Workaround: load the real CJS
-// module via createRequire INSIDE a vi.hoisted() block — vi.hoisted runs
-// before any ESM import statement is evaluated — and monkey-patch the
-// cached `GoogleGenerativeAI` constructor on its exports object. The
-// engine's `const { GoogleGenerativeAI } = require("@google/generative-ai")`
-// then resolves to our stub class because the require cache is shared and
-// the monkey-patch lands BEFORE the engine import executes.
-const { mockGenerateContent } = vi.hoisted(() => {
-  // CRITICAL: set GEMINI_API_KEY BEFORE the engine import. The engine's
-  // top-level code does `if (process.env.GEMINI_API_KEY) { ... init ... }`
-  // and captures `geminiModel` ONCE at module load. In dev, a real key
-  // arrives via dotenv from repo-root .env. In CI (deploy.yml unit_tests
-  // job), no GEMINI_API_KEY is set anywhere — without this line, the
-  // engine skips init, `geminiModel` stays null, and every "Gemini-on
-  // path" test falls through to ruleBasedAnalyze and never invokes the
-  // mocked SDK. This is the asymmetry that made tests pass locally but
-  // fail in CI on commit 76bf2a4.
-  //
-  // The fake key value is intentionally non-credential — engine only
-  // checks truthiness; the mock SDK ignores it entirely.
-  process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-fake-key';
+// The engine now routes its optional AI call through lib/aiGateway.runAiRequest
+// — the mandatory resolve/gate/log/deduct entry point every AI feature in the
+// CRM shares (BYOK first, then a funded CRM-managed subscription). This
+// suite mocks aiGateway.runAiRequest directly rather than the Gemini SDK
+// (the engine no longer touches the SDK or captures a module-load-time
+// singleton — access is resolved per-call, per-tenantId).
+const { mockRunAiRequest } = vi.hoisted(() => ({ mockRunAiRequest: vi.fn() }));
+vi.mock('../../lib/aiGateway', () => ({
+  default: { runAiRequest: mockRunAiRequest },
+  runAiRequest: mockRunAiRequest,
+}));
 
-  const { createRequire } = require('node:module');
-  const requireCJS = createRequire(__filename || process.cwd() + '/');
-  const genAIModule = requireCJS('@google/generative-ai');
+import { createRequire } from 'node:module';
+const requireCJS = createRequire(import.meta.url);
+// The engine requires aiGateway via CJS; make the CJS cache resolve to the
+// same mock object vi.mock's ESM-level factory installed (Module._cache
+// injection pattern used across this suite for CJS modules vitest's
+// ESM-level vi.mock can't otherwise intercept).
+const aiGatewayPath = requireCJS.resolve('../../lib/aiGateway');
+require('node:module')._cache[aiGatewayPath] = {
+  id: aiGatewayPath,
+  filename: aiGatewayPath,
+  loaded: true,
+  exports: { runAiRequest: mockRunAiRequest },
+  children: [],
+  paths: [],
+};
 
-  // Single stable vi.fn() captured at hoist time. The engine's
-  // `geminiModel.generateContent` reference is fixed at engine-load time,
-  // so we need a single function whose mock-impl we can swap per-test via
-  // mockResolvedValueOnce / mockRejectedValueOnce / mockReset.
-  const fn = vi.fn();
-
-  // CRITICAL: must be a regular `function` (NOT an arrow) because the engine
-  // calls `new GoogleGenerativeAI(key)`. Arrow functions are not constructors
-  // — `new` on an arrow throws `TypeError: ... is not a constructor`, which
-  // the engine catches and falls back to rules, defeating the test.
-  // Also avoid `vi.fn().mockImplementation(arrow)` for the same reason —
-  // vi.fn wraps but does not coerce the impl into being constructable.
-  function MockGoogleGenerativeAI() {
-    this.getGenerativeModel = function () {
-      return { generateContent: fn };
-    };
-  }
-  genAIModule.GoogleGenerativeAI = MockGoogleGenerativeAI;
-  return { mockGenerateContent: fn };
-});
-
-import {
+const {
   analyzeMessage,
   tickSentimentEngine,
   ruleBasedAnalyze,
   parseGeminiResponse,
-} from '../../cron/sentimentEngine.js';
+} = requireCJS('../../cron/sentimentEngine.js');
 
 beforeAll(() => {
   prisma.emailMessage = {
@@ -183,11 +155,11 @@ beforeEach(() => {
   prisma.emailMessage.findMany.mockResolvedValue([]);
   prisma.emailMessage.update.mockResolvedValue({});
 
-  // DEFAULT: Gemini "fails" so analyzeMessage falls through to the rule-based
-  // scorer. Tests that want to exercise the Gemini happy path queue a
+  // DEFAULT: AI "fails" so analyzeMessage falls through to the rule-based
+  // scorer. Tests that want to exercise the AI happy path queue a
   // mockResolvedValueOnce, which takes precedence over this default reject.
-  mockGenerateContent.mockReset();
-  mockGenerateContent.mockRejectedValue(new Error('test-default-no-gemini'));
+  mockRunAiRequest.mockReset();
+  mockRunAiRequest.mockRejectedValue(new Error('test-default-no-ai'));
 });
 
 // ─── ruleBasedAnalyze (pure fn) ─────────────────────────────────────────────
@@ -542,89 +514,123 @@ describe('cron/sentimentEngine — tickSentimentEngine top-level error containme
   });
 });
 
-// ─── Gemini-on path ─────────────────────────────────────────────────────────
+// ─── AI-on path ─────────────────────────────────────────────────────────────
 //
-// The engine captures `geminiModel` once at module load. The createRequire
-// monkey-patch above swapped @google/generative-ai's GoogleGenerativeAI
-// constructor BEFORE the engine's require() ran, so geminiModel ends up
-// pointing at our stubbed object whose .generateContent === mockGenerateContent.
-//
-// Per-test we just program mockGenerateContent (mockResolvedValueOnce /
-// mockRejectedValueOnce) — no resetModules / re-import needed. Each test's
-// beforeEach calls mockGenerateContent.mockReset() to clear the call ledger.
+// analyzeMessage/analyzeMessageDetailed now require a tenantId to attempt
+// the AI path at all (aiGateway.runAiRequest resolves BYOK/CRM-managed
+// access per-tenant — no tenantId means no bare-env fallback, straight to
+// rule-based). Every test in this block passes a tenantId so the AI attempt
+// actually fires; mockRunAiRequest's resolved/rejected value controls the
+// provider response.
 
-describe('cron/sentimentEngine — analyzeMessage (Gemini-on path)', () => {
+describe('cron/sentimentEngine — analyzeMessage (AI-on path)', () => {
   beforeEach(() => {
-    mockGenerateContent.mockReset();
+    mockRunAiRequest.mockReset();
   });
 
   afterEach(() => {
-    // Hand the call ledger back to the next test in a clean state.
-    mockGenerateContent.mockReset();
+    mockRunAiRequest.mockReset();
   });
 
-  test('Gemini happy path → AI label/score is returned', async () => {
-    mockGenerateContent.mockResolvedValueOnce({
-      response: { text: () => 'positive\n0.92' },
+  test('AI happy path → label/score is returned', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: 'positive\n0.92',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
     });
 
-    const out = await analyzeMessage('the new feature is amazing');
+    const out = await analyzeMessage('the new feature is amazing', 1);
     expect(out).toEqual({ sentiment: 'positive', sentimentScore: 0.92 });
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    expect(mockRunAiRequest).toHaveBeenCalledTimes(1);
+    expect(mockRunAiRequest.mock.calls[0][0].tenantId).toBe(1);
   });
 
-  test('Gemini sees the prompt with body slice + the two-line answer template', async () => {
-    mockGenerateContent.mockResolvedValueOnce({
-      response: { text: () => 'neutral\n0.0' },
+  test('AI sees the prompt with body slice + the two-line answer template', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: 'neutral\n0.0',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 },
     });
-    await analyzeMessage('hello world');
-    const prompt = mockGenerateContent.mock.calls[0][0];
+    await analyzeMessage('hello world', 1);
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
     expect(prompt).toContain('positive, neutral, or negative');
     expect(prompt).toContain('hello world');
   });
 
-  test('Gemini happy path: negative label parsed', async () => {
-    mockGenerateContent.mockResolvedValueOnce({
-      response: { text: () => 'negative\n-0.7' },
+  test('AI happy path: negative label parsed', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: 'negative\n-0.7',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 },
     });
-    const out = await analyzeMessage('please cancel my subscription');
+    const out = await analyzeMessage('please cancel my subscription', 1);
     expect(out).toEqual({ sentiment: 'negative', sentimentScore: -0.7 });
   });
 
-  test('Gemini throws → graceful fallback to rule-based scorer', async () => {
-    mockGenerateContent.mockRejectedValueOnce(new Error('quota exceeded'));
+  test('AI throws → graceful fallback to rule-based scorer', async () => {
+    mockRunAiRequest.mockRejectedValueOnce(new Error('quota exceeded'));
 
-    const out = await analyzeMessage('great service, thanks!');
-    // Rule-based picks up "great"+"thanks" → positive even though Gemini failed.
+    const out = await analyzeMessage('great service, thanks!', 1);
+    // Rule-based picks up "great"+"thanks" → positive even though AI failed.
     expect(out.sentiment).toBe('positive');
     expect(out.sentimentScore).toBeGreaterThan(0);
-    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+    expect(mockRunAiRequest).toHaveBeenCalledTimes(1);
   });
 
-  test('Gemini returns unparseable text → graceful fallback', async () => {
-    mockGenerateContent.mockResolvedValueOnce({
-      response: { text: () => 'I am not sure about this one' },
+  test('blocked access (no BYOK, no funded subscription) → silent fallback, no warning noise', async () => {
+    const err = new Error('Your organization has not configured an AI provider yet.');
+    err.friendly = true;
+    mockRunAiRequest.mockRejectedValueOnce(err);
+
+    const out = await analyzeMessage('great service, thanks!', 1);
+    expect(out.sentiment).toBe('positive');
+    expect(mockRunAiRequest).toHaveBeenCalledTimes(1);
+  });
+
+  test('no tenantId → AI is never attempted, straight to rule-based', async () => {
+    const out = await analyzeMessage('great service, thanks!');
+    expect(out.sentiment).toBe('positive');
+    expect(mockRunAiRequest).not.toHaveBeenCalled();
+  });
+
+  test('AI returns unparseable text → graceful fallback', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: 'I am not sure about this one',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 },
     });
 
     // parseGeminiResponse returns null for unknown labels → fall through.
-    const out = await analyzeMessage('terrible problem, please cancel');
+    const out = await analyzeMessage('terrible problem, please cancel', 1);
     expect(out.sentiment).toBe('negative');
     expect(out.sentimentScore).toBeLessThan(0);
   });
 
-  test('empty body short-circuits BEFORE Gemini is called', async () => {
-    const out = await analyzeMessage('');
+  test('empty body short-circuits BEFORE AI is called', async () => {
+    const out = await analyzeMessage('', 1);
     expect(out).toEqual({ sentiment: 'neutral', sentimentScore: 0 });
-    expect(mockGenerateContent).not.toHaveBeenCalled();
+    expect(mockRunAiRequest).not.toHaveBeenCalled();
   });
 
   test('long body is truncated to 4000 chars in the prompt', async () => {
-    mockGenerateContent.mockResolvedValueOnce({
-      response: { text: () => 'neutral\n0' },
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: 'neutral\n0',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 },
     });
     const huge = 'x'.repeat(10_000);
-    await analyzeMessage(huge);
-    const prompt = mockGenerateContent.mock.calls[0][0];
+    await analyzeMessage(huge, 1);
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
     // The body slice is wrapped in `Text: "<...>"`; the embedded copy must
     // not exceed 4000 chars (engine's slice cap).
     const m = prompt.match(/Text: "([\s\S]*)"$/);
@@ -632,11 +638,11 @@ describe('cron/sentimentEngine — analyzeMessage (Gemini-on path)', () => {
     expect(m[1].length).toBeLessThanOrEqual(4000);
   });
 
-  test('Gemini failure inside tickSentimentEngine → row still persists via rule-based fallback', async () => {
-    mockGenerateContent.mockRejectedValueOnce(new Error('rate limit'));
+  test('AI failure inside tickSentimentEngine → row still persists via rule-based fallback', async () => {
+    mockRunAiRequest.mockRejectedValueOnce(new Error('rate limit'));
 
     prisma.emailMessage.findMany.mockResolvedValueOnce([
-      { id: 'msg-fail', body: 'great work but had a problem' },
+      { id: 'msg-fail', tenantId: 1, body: 'great work but had a problem' },
     ]);
 
     const out = await tickSentimentEngine();
@@ -647,5 +653,25 @@ describe('cron/sentimentEngine — analyzeMessage (Gemini-on path)', () => {
     const arg = prisma.emailMessage.update.mock.calls[0][0];
     expect(arg.data).toHaveProperty('sentiment');
     expect(['positive', 'negative', 'neutral']).toContain(arg.data.sentiment);
+  });
+
+  test('tickSentimentEngine threads each row\'s own tenantId into the AI call', async () => {
+    mockRunAiRequest.mockResolvedValue({
+      text: 'neutral\n0',
+      model: 'gemini-2.5-flash-lite',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 },
+    });
+    prisma.emailMessage.findMany.mockResolvedValueOnce([
+      { id: 'msg-t3', tenantId: 3, body: 'hello' },
+      { id: 'msg-t9', tenantId: 9, body: 'world' },
+    ]);
+
+    await tickSentimentEngine();
+
+    expect(mockRunAiRequest).toHaveBeenCalledTimes(2);
+    const tenantIds = mockRunAiRequest.mock.calls.map((c) => c[0].tenantId);
+    expect(tenantIds).toEqual([3, 9]);
   });
 });

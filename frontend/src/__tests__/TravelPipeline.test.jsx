@@ -16,6 +16,7 @@
  *   9. Status filter: selecting "Accepted" re-fetches with ?status=accepted
  *  10. Text search filters rows client-side by destination
  *  11. Inline status dropdown: changing status PATCHes /api/travel/itineraries/:id
+ *      and renders unknown/current server statuses instead of a blank pill
  *  12. KPI tiles compute correctly from itinerary data (won/negotiation/lost buckets)
  *  13. Export CSV button fires without error
  *  14. Delete flow: clicking trash → confirm → DELETE /api/travel/itineraries/:id
@@ -36,7 +37,6 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { vi, describe, it, beforeEach, expect } from "vitest";
-import React from "react";
 
 // ── Stable notify mock (CLAUDE.md RTL rule: one object reference) ──────────
 const notifyObj = {
@@ -102,7 +102,12 @@ function mockFetch(itins = DEFAULT_ITINS, contacts = []) {
   });
 }
 
-function renderPage(user = ADMIN_USER) {
+function setTheme(theme = "light") {
+  document.documentElement.setAttribute("data-theme", theme);
+}
+
+function renderPage(user = ADMIN_USER, theme = "light") {
+  setTheme(theme);
   return render(
     <AuthContext.Provider value={{ user }}>
       <MemoryRouter>
@@ -119,6 +124,7 @@ describe("TravelPipeline", () => {
     vi.clearAllMocks();
     notifyObj.confirm.mockResolvedValue(true);
     mockFetch();
+    setTheme("light");
   });
 
   // 1. Page chrome
@@ -140,8 +146,13 @@ describe("TravelPipeline", () => {
     expect(screen.getAllByText(/Won/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Lost/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Achieved/).length).toBeGreaterThanOrEqual(1);
-    // deal count appears in the sub-line
-    expect(screen.getByText(String(DEFAULT_ITINS.length))).toBeInTheDocument();
+    // count badge now reads as a compact total chip rather than a second heading
+    expect(
+      screen.getByText((_, node) => {
+        const text = node?.textContent?.replace(/\s+/g, " ").trim();
+        return text === `${DEFAULT_ITINS.length} Total Deals`;
+      }),
+    ).toBeInTheDocument();
   });
 
   // 3. Filter bar
@@ -250,6 +261,37 @@ describe("TravelPipeline", () => {
       expect(patchCall[0]).toMatch(/\/api\/travel\/itineraries\/1/);
       expect(JSON.parse(patchCall[1].body)).toEqual({ status: "draft" });
     });
+  });
+
+  it("keeps achieved out of writable status options but renders unknown current statuses readably", async () => {
+    mockFetch([
+      makeItin({ id: 11, destination: "Umrah Group Tour", status: "achieved" }),
+      makeItin({ id: 12, destination: "Custom Safari", status: "custom_review" }),
+    ]);
+    renderPage();
+
+    await screen.findByText("Umrah Group Tour");
+    const statusDropdowns = screen.getAllByRole("combobox", { name: /change status/i });
+
+    expect(statusDropdowns[0]).toHaveValue("achieved");
+    expect(within(statusDropdowns[0]).getByRole("option", { name: "Achieved" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /filter by status/i })).not.toHaveTextContent("Achieved");
+
+    expect(statusDropdowns[1]).toHaveValue("custom_review");
+    expect(within(statusDropdowns[1]).getByRole("option", { name: "Custom Review" })).toBeInTheDocument();
+  });
+
+  it("does not PATCH unsupported statuses from a stale dropdown value", async () => {
+    renderPage();
+    await screen.findByText("Bali Honeymoon Special");
+
+    const statusDropdown = screen.getAllByRole("combobox", { name: /change status/i })[0];
+    fireEvent.change(statusDropdown, { target: { value: "achieved" } });
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith("Status cannot be updated to that value");
+    });
+    expect(fetchApi.mock.calls.some((call) => call[1]?.method === "PATCH")).toBe(false);
   });
 
   // 12. KPI tile values
@@ -367,6 +409,50 @@ describe("TravelPipeline", () => {
     // TravelStall badge
     const tsLabel = screen.getAllByText("TravelStall");
     expect(tsLabel.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("uses softer tones in light mode", async () => {
+    renderPage(ADMIN_USER, "light");
+    await screen.findByText("Bali Honeymoon Special");
+
+    const tmcBadge = screen.getAllByText("TMC").find((el) => el.getAttribute("style"));
+    expect(tmcBadge).toBeTruthy();
+    expect(tmcBadge.getAttribute("style")).toContain("rgba(18, 38, 71, 0.06)");
+    expect(tmcBadge.getAttribute("style")).toContain("rgba(18, 38, 71, 0.12)");
+
+    const statusSelectLight = screen.getAllByLabelText("Change status")[0];
+    expect(statusSelectLight.getAttribute("style")).toContain("rgba(47, 122, 77, 0.12)");
+    expect(statusSelectLight.getAttribute("style")).toContain("rgba(47, 122, 77, 0.18)");
+    expect(statusSelectLight.getAttribute("style")).not.toContain("appearance: none");
+    expect(statusSelectLight.getAttribute("style")).not.toContain("background-image");
+  });
+
+  it("keeps richer tones in dark mode", async () => {
+    renderPage(ADMIN_USER, "dark");
+    await screen.findByText("Bali Honeymoon Special");
+
+    const darkTmcBadge = screen.getAllByText("TMC").find((el) => el.getAttribute("style"));
+    expect(darkTmcBadge).toBeTruthy();
+    expect(darkTmcBadge.getAttribute("style")).toContain("rgba(18, 38, 71, 0.72)");
+    expect(darkTmcBadge.getAttribute("style")).toContain("rgba(157, 183, 230, 0.18)");
+
+    const statusSelectDark = screen.getAllByLabelText("Change status")[0];
+    expect(statusSelectDark.getAttribute("style")).toContain("rgba(47, 122, 77, 0.22)");
+    expect(statusSelectDark.getAttribute("style")).toContain("rgba(47, 122, 77, 0.3)");
+  });
+
+  it("updates status styling immediately when the app theme toggles", async () => {
+    renderPage(ADMIN_USER, "light");
+    await screen.findByText("Bali Honeymoon Special");
+
+    const statusSelect = screen.getAllByLabelText("Change status")[0];
+    expect(statusSelect.getAttribute("style")).toContain("rgba(47, 122, 77, 0.12)");
+
+    setTheme("dark");
+    await waitFor(() => {
+      const updated = screen.getAllByLabelText("Change status")[0];
+      expect(updated.getAttribute("style")).toContain("rgba(47, 122, 77, 0.22)");
+    });
   });
 
   // Refresh button re-fetches

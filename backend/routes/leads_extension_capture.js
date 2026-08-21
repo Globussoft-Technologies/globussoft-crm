@@ -13,6 +13,8 @@
 //               body, attachments, links }
 //   WhatsApp: { source: "whatsapp", capturedAt, chatName,
 //               messages: [{ direction: "in"|"out", sender, text, timestamp }] }
+// Both may also carry an optional `assignedToId` (tenant user id) — see
+// resolveAssignee() below.
 //
 // Both shapes get normalized into the SAME internal message list and handed
 // to lib/leadConversationSummary.js's summarizeMessages() — the exact
@@ -38,6 +40,7 @@ const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
+const { notify } = require("../lib/notificationService");
 const { findDuplicateContact } = require("../utils/deduplication");
 const {
   summarizeMessages,
@@ -79,6 +82,77 @@ function extractContactHints(body) {
   return { name: body.chatName || null, email: null, phone: null };
 }
 
+// Optional `assignedToId` (2026-08-17) — the extension's lead cards now carry
+// the same tenant-user picker the "Send as Task" modal already had, so a rep
+// can file a capture straight onto a colleague instead of it always landing in
+// their own queue. Omitted / empty → unchanged behaviour: the capturing user
+// owns the lead. `assignedToId` is NOT touched by the global stripDangerous
+// middleware (only bare `userId` is), so it's safe to read off req.body
+// directly — same as contacts.js's POST / and PUT /:id/assign.
+//
+// Any authenticated tenant user may pick an assignee here, matching POST
+// /api/tasks's `targetUserId` (the flow this mirrors). That's deliberately
+// looser than contacts.js's ADMIN-only PUT /:id/assign, which re-assigns a
+// lead someone else may already be working; this only ever sets the owner on a
+// lead being created (or adopts an unowned one), so there's nothing to steal.
+async function resolveAssignee(rawAssignedToId, req) {
+  if (
+    rawAssignedToId === undefined ||
+    rawAssignedToId === null ||
+    rawAssignedToId === ""
+  ) {
+    return { assigneeId: req.user.userId, explicit: false };
+  }
+  const assigneeId = parseInt(rawAssignedToId, 10);
+  if (Number.isNaN(assigneeId)) {
+    return { error: "assignedToId must be a user id", code: "INVALID_ASSIGNEE" };
+  }
+  const user = await prisma.user.findFirst({
+    where: { id: assigneeId, tenantId: req.user.tenantId },
+    select: { id: true },
+  });
+  if (!user) {
+    return {
+      error: "That user isn't in your organisation",
+      code: "INVALID_ASSIGNEE",
+    };
+  }
+  return { assigneeId, explicit: true };
+}
+
+// Fire-and-forget "a lead landed in your queue" ping, reusing the copy the
+// ADMIN assign route (contacts.js PUT /:id/assign) sends. Skipped when the
+// capturing user assigned the lead to themselves — nobody needs to be told
+// about their own click.
+async function notifyLeadAssignee({ assigneeId, contact, req }) {
+  if (!assigneeId || assigneeId === req.user.userId) return;
+  try {
+    const actorName = req.user?.name || req.user?.email || "A teammate";
+    const leadName = contact.name || "#" + contact.id;
+    await notify({
+      userId: assigneeId,
+      tenantId: req.user.tenantId,
+      title: "New lead assigned",
+      message:
+        actorName +
+        ' has assigned lead "' +
+        leadName +
+        '" to you. Please look into it.',
+      type: "info",
+      category: "lead",
+      entityType: "lead",
+      entityId: contact.id,
+      link: "/contacts/" + contact.id,
+      io: req.io,
+    });
+  } catch (notifyErr) {
+    console.error(
+      "[leads-extension-capture] assignee notify failed:",
+      notifyErr && notifyErr.message,
+    );
+  }
+}
+
 // Normalize either payload shape into the { direction, body, createdAt }[]
 // shape lib/leadConversationSummary.js's summarizeMessages() expects
 // (direction "INBOUND"|"OUTBOUND", mirroring WhatsAppMessage rows).
@@ -118,10 +192,10 @@ function normalizeMessages(body) {
  * Body: see file header for the two accepted shapes.
  *
  * Responses:
- *   201 { created: true, contactId, summary: {purpose, highlights, leadStage} }
- *   200 { created: false, contactId, appended: true, summary: {...} }  — existing contact, summary appended
+ *   201 { created: true, contactId, assignedToId, summary: {purpose, highlights, leadStage} }
+ *   200 { created: false, contactId, assignedToId, appended: true, summary: {...} }  — existing contact, summary appended
  *   200 { created: false, contactId, duplicate: true }                — idempotent retry, no new work done
- *   400 { error, code: "INVALID_SOURCE" | "MISSING_PAYLOAD" | "EMPTY_CAPTURE" }
+ *   400 { error, code: "INVALID_SOURCE" | "MISSING_PAYLOAD" | "EMPTY_CAPTURE" | "INVALID_ASSIGNEE" }
  */
 router.post("/extension-capture", verifyToken, async (req, res) => {
   try {
@@ -151,6 +225,13 @@ router.post("/extension-capture", verifyToken, async (req, res) => {
         error: "Capture had no usable text content",
         code: "EMPTY_CAPTURE",
       });
+    }
+
+    // Resolved before the (slow, billable) summarizer call so a bad assignee
+    // fails fast instead of after an LLM round-trip.
+    const assignee = await resolveAssignee(body.assignedToId, req);
+    if (assignee.error) {
+      return res.status(400).json({ error: assignee.error, code: assignee.code });
     }
 
     const tenantId = req.user.tenantId;
@@ -191,17 +272,30 @@ router.post("/extension-capture", verifyToken, async (req, res) => {
       const nextDescription = existing.description
         ? `${existing.description}\n\n${block}`
         : block;
-      await prisma.contact.update({
+      // An explicit pick only ADOPTS an unowned lead — it never yanks a lead
+      // off whoever already owns it. Re-assignment stays the ADMIN-only
+      // contacts.js PUT /:id/assign path; a capture appended to someone's
+      // existing lead shouldn't silently move it out of their queue.
+      const adopts = assignee.explicit && existing.assignedToId == null;
+      const updated = await prisma.contact.update({
         where: { id: existing.id },
-        data: { description: nextDescription },
+        data: {
+          description: nextDescription,
+          ...(adopts ? { assignedToId: assignee.assigneeId } : {}),
+        },
       });
       await writeAudit("Contact", "EXTENSION_CAPTURE_APPEND", existing.id, req.user.userId, tenantId, {
         source: sourceTag,
+        ...(adopts ? { assignedTo: assignee.assigneeId } : {}),
       });
+      if (adopts) {
+        await notifyLeadAssignee({ assigneeId: assignee.assigneeId, contact: updated, req });
+      }
       return res.json({
         created: false,
         appended: true,
         contactId: existing.id,
+        assignedToId: updated.assignedToId,
         summary,
       });
     }
@@ -220,9 +314,11 @@ router.post("/extension-capture", verifyToken, async (req, res) => {
         idempotencyKey,
         aiScore,
         aiScoreLastComputedAt: new Date(),
-        assignedToId: req.user.userId,
+        assignedToId: assignee.assigneeId,
       },
     });
+
+    await notifyLeadAssignee({ assigneeId: assignee.assigneeId, contact, req });
 
     try {
       const { emitEvent } = require("../lib/eventBus");
@@ -247,9 +343,15 @@ router.post("/extension-capture", verifyToken, async (req, res) => {
     await writeAudit("Contact", "CREATE", contact.id, req.user.userId, tenantId, {
       name: contact.name,
       source: sourceTag,
+      assignedTo: contact.assignedToId,
     });
 
-    return res.status(201).json({ created: true, contactId: contact.id, summary });
+    return res.status(201).json({
+      created: true,
+      contactId: contact.id,
+      assignedToId: contact.assignedToId,
+      summary,
+    });
   } catch (err) {
     console.error("[leads-extension-capture] error:", err && err.message);
     return res.status(500).json({ error: "Failed to capture lead", code: "CAPTURE_FAILED" });

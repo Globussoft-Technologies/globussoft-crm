@@ -7,11 +7,24 @@ const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, ensure
 const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const { normalizePhone, computeDuplicateGroupKey, findDuplicateContactFull } = require("../utils/deduplication");
+const { notify } = require('../lib/notificationService');
+const { notifyAdminsOfNewLead } = require('../lib/leadNotifications');
+const { getSetting, KEYS } = require('../lib/tenantSettings');
+const { evaluateAutoCampaignRules } = require('../lib/callifiedAutoCampaignRules');
+const callifiedClient = require("../services/callifiedClient");
+const { CALL_STATUS, normalizeLeadStatus } = require("../lib/callifiedLeadStatus");
+const { sanitizeText } = require("../lib/sanitizeJson");
+const { normalizePhoneValue } = require("../lib/phoneFormatting");
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
 // FieldPermissions UI had zero effect on read/write payloads. Default
 // (no rule in DB) is full access.
 const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
+
+const CONTACT_TAG_LIMIT = 50;
+const CONTACT_TAG_MAX_LENGTH = 80;
+// eslint-disable-next-line no-control-regex
+const CONTACT_TAG_CONTROL_RE = /[\x00-\x1F\x7F]/;
 
 // #167: soft-delete helper. Aggregations / reports / merge / internal joins
 // (e.g. activities, deals, sequenceEnrollments) are NOT yet filtered by
@@ -20,6 +33,137 @@ function applyDeletedAtFilter(where, includeDeleted) {
   if (includeDeleted) return where;
   where.deletedAt = null;
   return where;
+}
+
+function parseContactTags(tagsJson) {
+  if (!tagsJson) return [];
+  try {
+    const parsed = typeof tagsJson === "string" ? JSON.parse(tagsJson) : tagsJson;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+      .filter(Boolean);
+  } catch (_e) {
+    return [];
+  }
+}
+
+function normalizeContactPhone(contact) {
+  if (!contact || typeof contact !== "object") return contact;
+  if (contact.phone === null || contact.phone === undefined || String(contact.phone).trim() === "") {
+    return contact;
+  }
+  const normalizedPhone = normalizePhoneValue(contact.phone);
+  return normalizedPhone === contact.phone ? contact : { ...contact, phone: normalizedPhone };
+}
+
+function workflowContactPayload(contact, userId, changedFields = []) {
+  const callifiedStatus = String(contact.callifiedLeadStatus || "").toLowerCase();
+  const isJunk = contact.status === "Junk" || callifiedStatus === "junk";
+  const isQualified = ["Prospect", "Customer"].includes(contact.status) || callifiedStatus === "qualified";
+  const externalId = contact.externalId || null;
+  return {
+    contactId: contact.id,
+    name: contact.name,
+    email: contact.email,
+    phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
+    company: contact.company,
+    title: contact.title,
+    status: contact.status,
+    source: contact.source,
+    tags: parseContactTags(contact.tagsJson),
+    aiScore: contact.aiScore,
+    assignedToId: contact.assignedToId,
+    firstTouchSource: contact.firstTouchSource,
+    lastTouchSource: contact.lastTouchSource,
+    callifiedLeadStatus: contact.callifiedLeadStatus,
+    callifiedLeadStatusReason: contact.callifiedLeadStatusReason,
+    externalId,
+    metaLeadgenId: typeof externalId === "string" && externalId.startsWith("meta:") ? externalId.slice(5) : null,
+    metaSignal: isJunk ? "junk" : isQualified ? "qualified" : null,
+    metaIsJunk: isJunk,
+    metaIsQualified: isQualified,
+    changedFields,
+    userId,
+    tenantId: contact.tenantId,
+  };
+}
+
+function serializeContactTags(contact) {
+  if (!contact || typeof contact !== "object") return contact;
+  const { tagsJson, ...rest } = normalizeContactPhone(contact);
+  return { ...rest, tags: parseContactTags(tagsJson) };
+}
+
+function serializeContactTagsBatch(contacts) {
+  if (!Array.isArray(contacts)) return contacts;
+  return contacts.map(serializeContactTags);
+}
+
+function normalizeContactTagValue(raw) {
+  return sanitizeText(String(raw || "")).trim();
+}
+
+function normalizeContactTagsInput(raw) {
+  if (raw === undefined) return { hasValue: false, tags: [] };
+  if (raw === null || raw === "") return { hasValue: true, tags: [] };
+
+  let values = raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return { hasValue: true, tags: [] };
+    try {
+      values = JSON.parse(trimmed);
+    } catch (_e) {
+      values = trimmed.split(",");
+    }
+  }
+
+  if (!Array.isArray(values)) {
+    return {
+      error: { status: 400, error: "tags must be an array of strings", code: "INVALID_TAGS" },
+    };
+  }
+  if (values.length > CONTACT_TAG_LIMIT) {
+    return {
+      error: {
+        status: 400,
+        error: `A contact can have at most ${CONTACT_TAG_LIMIT} tags`,
+        code: "TOO_MANY_TAGS",
+      },
+    };
+  }
+
+  const seen = new Set();
+  const tags = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      return {
+        error: { status: 400, error: "tags must be an array of strings", code: "INVALID_TAGS" },
+      };
+    }
+    const tag = sanitizeText(value);
+    if (!tag) continue;
+    if (CONTACT_TAG_CONTROL_RE.test(tag)) {
+      return {
+        error: { status: 400, error: "tags contain invalid control characters", code: "INVALID_TAGS" },
+      };
+    }
+    if (tag.length > CONTACT_TAG_MAX_LENGTH) {
+      return {
+        error: {
+          status: 400,
+          error: `Each tag must be ${CONTACT_TAG_MAX_LENGTH} characters or less`,
+          code: "TAG_TOO_LONG",
+        },
+      };
+    }
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+  }
+  return { hasValue: true, tags };
 }
 
 // #160 #166 #168: shared validator for create + update payloads on Contact.
@@ -53,7 +197,7 @@ function validateContactInput(body, { isUpdate = false } = {}) {
     const tErr = ensureStringLength(body.treatmentOfInterest, { max: 191, field: "treatmentOfInterest" });
     if (tErr) return tErr;
   }
-  for (const idField of ["preferredLocationId", "preferredPractitionerId"]) {
+  for (const idField of ["preferredLocationId", "preferredPractitionerId", "callifiedCampaignId"]) {
     if (body[idField] !== undefined && body[idField] !== null && body[idField] !== "") {
       const v = Number(body[idField]);
       if (!Number.isInteger(v) || v <= 0) {
@@ -110,6 +254,340 @@ function validateContactInput(body, { isUpdate = false } = {}) {
     if (annErr) return annErr;
   }
   return null;
+}
+
+function canViewAllLeads(req) {
+  return !!(req && req.user && ['ADMIN', 'MANAGER'].includes(req.user.role));
+}
+
+// Freshsales-style "Filter by" panel — field allowlist. Each entry maps a
+// UI-facing field key to a real Contact column (or the two joined columns,
+// owner/territory, which resolve to a User/Territory row for their label).
+// `kind: "text"` fields support contains/does not contain/is empty/is not
+// empty. `kind: "id"` fields (owner, territory) are equality-only against a
+// resolved id, since "contains" has no meaning on a foreign key — the UI
+// still presents them as a checkbox list of distinct values, just sourced
+// from the User/Territory table instead of DISTINCT on Contact.
+// `required: true` marks the one column (Contact.status) that is a
+// non-nullable `String` in the schema — Prisma rejects `{ not: null }` on a
+// required-string field ("Argument `not` is missing", since `null` isn't a
+// valid value for that field's type at all), so the /filter-fields
+// has-any-data presence check below only checks "not empty string" for it,
+// skipping the not-null half other (nullable) fields need.
+//
+// `verticals: [...]` restricts a field to specific Tenant.vertical values
+// (see the `vertical` column on Tenant — "generic" | "wellness" | "travel").
+// Two fields on Contact are travel-specific per their own schema.prisma
+// comments — `subBrand` ("Travel vertical sub-brand tag... nullable so
+// generic + wellness Contacts ignore it") and `kycStatus` ("Travel CRM —
+// customer-portal DigiLocker / Aadhaar verification... nullable so
+// non-travel + non-customer Contacts ignore them"). The has-data presence
+// check alone isn't enough to keep these off a generic tenant's picker:
+// `kycStatus` has a schema `@default("unverified")` that Prisma writes to
+// EVERY new Contact regardless of vertical — so has-data is trivially true
+// everywhere, even though no generic tenant ever intentionally sets it —
+// and `subBrand` can leak in from a single stray/seed/imported row even on
+// a tenant that has never used the travel feature. A field with no
+// `verticals` key is available to every vertical (the common case).
+// SOURCE OF TRUTH: this list is deliberately kept in lockstep with
+// BUILTIN_COLUMNS in table_column_preferences.js ("Customize table") — the
+// same union of Leads + Contacts built-in columns (name, email, phone,
+// company, aiScore, source, status, assignedTo, createdAt), mapped to
+// their real Contact column + comparison kind. Two lists existed briefly
+// during development (this one grew to ~30 fields including title,
+// linkedin, gst, birthDate, callifiedCampaignId, etc.) and drifted out of
+// sync with what "Customize table" actually shows as columns — a field a
+// user could filter by but never see rendered anywhere. Reusing the same
+// authoritative set both UIs already agree on avoids that drift by
+// construction. Territory (territoryId) is the one addition beyond
+// BUILTIN_COLUMNS — it has no visible table column today, but is kept
+// because it's a real, already-shipped Freshsales-parity filter (see the
+// original screenshots this feature was built from) with its own User/
+// Territory-backed value resolution, not a hand-added guess.
+//
+// `kind` drives BOTH the operator set the value-panel offers per field AND
+// how buildFilterClause turns a checkbox selection into a Prisma clause:
+//   "text"   — contains/not_contains via substring `contains` match.
+//   "id"     — contains/not_contains via `in`/`notIn` on a parsed int,
+//              values resolved against a local table (User/Territory) for
+//              a human label.
+//   "number" — contains/not_contains via `in`/`notIn` on a parsed float.
+//   "date"   — contains/not_contains via `in`/`notIn` matching the exact
+//              calendar day (values are day-boundary ranges under the
+//              hood — see buildFilterClause).
+//   "range"  — a bounded numeric column offered as fixed BUCKETS rather
+//              than one checkbox per distinct value. Lead Score is 0-100,
+//              so a DISTINCT scan lists every individual score a tenant
+//              happens to have (5, 36, 49, 64, 66, 68, 72, ...) — useless
+//              to pick from and unbounded as data grows. The buckets
+//              mirror the Lead Score dropdown Contacts.jsx already ships
+//              (SCORE_BUCKETS), so both surfaces offer the same choices.
+const FILTERABLE_FIELDS = {
+  name: { column: 'name', kind: 'text', label: 'Name', required: true },
+  email: { column: 'email', kind: 'text', label: 'Email' },
+  phone: { column: 'phone', kind: 'text', label: 'Phone' },
+  company: { column: 'company', kind: 'text', label: 'Company' },
+  status: { column: 'status', kind: 'text', label: 'Status', required: true },
+  source: { column: 'source', kind: 'text', label: 'Source' },
+  callifiedCampaignId: { column: 'callifiedCampaignId', kind: 'id', label: 'Callified Campaign' },
+  callifiedLeadStatus: { column: 'callifiedLeadStatus', kind: 'text', label: 'Call Status' },
+  tags: { column: 'tagsJson', kind: 'text', label: 'Tags' },
+  kycStatus: { column: 'kycStatus', kind: 'text', label: 'KYC Status', verticals: ['travel'] },
+  subBrand: { column: 'subBrand', kind: 'text', label: 'Sub-brand', verticals: ['travel'] },
+  aiScore: {
+    column: 'aiScore',
+    kind: 'range',
+    label: 'Lead Score',
+    required: true,
+    // Mirrors SCORE_BUCKETS in frontend/src/pages/Contacts.jsx.
+    buckets: [
+      { value: '0-25', label: '0 - 25', min: 0, max: 25 },
+      { value: '26-50', label: '26 - 50', min: 26, max: 50 },
+      { value: '51-75', label: '51 - 75', min: 51, max: 75 },
+      { value: '76-100', label: '76 - 100', min: 76, max: 100 },
+    ],
+  },
+  createdAt: { column: 'createdAt', kind: 'date', label: 'Created', required: true },
+  assignedToId: { column: 'assignedToId', kind: 'id', label: 'Sales Owner' },
+};
+
+const CALL_STATUS_LABELS = {
+  [CALL_STATUS.YET_TO_CALL]: 'Yet to Call',
+  [CALL_STATUS.CONNECTED]: 'Connected',
+  [CALL_STATUS.DNP]: 'DNP',
+  [CALL_STATUS.QUALIFIED]: 'Qualified',
+  [CALL_STATUS.JUNK]: 'Junk',
+};
+
+// `between` is date-only: it takes [from, to] (either side omittable for an
+// open-ended range) and is what a date field offers instead of the
+// checkbox-of-every-stored-day list the other kinds use.
+const FILTER_OPERATORS = ['contains', 'not_contains', 'is_empty', 'is_not_empty', 'between'];
+
+// NOTE: there is deliberately NO "has-data" gate on the field list.
+//
+// A field is offered because the ORG HAS IT — i.e. it's one of the
+// Leads/Contacts table columns (BUILTIN_COLUMNS) or a custom field an
+// admin created in Settings > Lead Fields. Whether any row has a value
+// yet is irrelevant to whether the field exists: a freshly-added "UTM
+// Source" custom field with zero values filled in is still a field this
+// org has, and hiding it from the picker just makes the panel look broken
+// next to a table that clearly renders that column.
+//
+// Earlier revisions gated on row counts (≥1, then ≥2) to suppress
+// "First Touch Source", which appeared off the back of a single
+// system-generated Sample row. That was the wrong lever — firstTouchSource
+// is not a table column or a custom field, so it simply doesn't belong in
+// FILTERABLE_FIELDS at all, and removing it there fixed the real problem.
+//
+// "Show only what exists" still applies one level down, to VALUES: each
+// field's checkbox list is a DISTINCT scan of values actually present, so
+// an empty field just yields an empty value list.
+
+// Admin-defined Lead custom fields (Settings > Lead Fields,
+// LeadCustomFieldDefinition/LeadCustomFieldValue) are dynamic per tenant —
+// unlike FILTERABLE_FIELDS above they can't be a static allowlist. The
+// panel addresses them as "custom_<definitionId>" and this always resolves
+// against `valueText`: every fieldType stores its display value there
+// too (dropdown/radio store the selected option string, multiselect a JSON
+// array string, checkbox "true"/"false" — see the model comment in
+// schema.prisma), so a single `contains`-style match works uniformly
+// without needing per-type clause branches.
+const CUSTOM_FIELD_PREFIX = 'custom_';
+
+// Maps a LeadCustomFieldDefinition.fieldType to the filter `kind` that
+// drives its operator set and value UI. Mirrors the typed-column split in
+// LeadCustomFieldValue: date → valueDate, number → valueNumber, checkbox →
+// valueBool, and everything else → valueText. Types not listed fall back to
+// "text" (textarea / url / dropdown / radio / multiselect all live in
+// valueText and are matched as strings).
+const CUSTOM_FIELD_TYPE_TO_KIND = {
+  date: 'date',
+  number: 'number',
+  checkbox: 'boolean',
+};
+
+function isCustomField(field) {
+  return typeof field === 'string' && field.startsWith(CUSTOM_FIELD_PREFIX);
+}
+
+function customFieldDefIdFromKey(field) {
+  const id = parseInt(field.slice(CUSTOM_FIELD_PREFIX.length), 10);
+  return Number.isNaN(id) ? null : id;
+}
+
+// Builds a single Prisma where-clause fragment for one filter field.
+// `values` is always an array (checkbox multi-select) — for `kind: "text"`
+// with "contains"/"not_contains" this becomes an OR/AND-NOT of `contains`
+// matches; `kind: "id"` uses `in`/`notIn` on the raw id since exact-match
+// is the only sensible comparison for a foreign key.
+//
+// Converts a "YYYY-MM-DD" (or any Date-parseable) checkbox value into a
+// [start-of-day, start-of-next-day) range — the DISTINCT scan in
+// /filter-values/:field returns whole calendar days for date-kind fields
+// (see that route), so a "contains" match here means "occurred on this
+// day", not an exact-to-the-millisecond DateTime equality that would never
+// match a real timestamp.
+function dayRange(value) {
+  const start = new Date(value);
+  if (Number.isNaN(start.getTime())) return null;
+  start.setUTCHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { gte: start, lt: end };
+}
+
+// [from, to] "YYYY-MM-DD" pair → an inclusive-of-both-days Prisma range.
+// `to` becomes the START of the following day and is compared with `lt`, so
+// a stored timestamp anywhere inside the end day still matches — comparing
+// `lte` against the end day's midnight would drop everything after 00:00 on
+// that day. Either side may be blank for an open-ended range; both blank
+// (or both unparseable) yields null so the caller drops the clause.
+function betweenRange(fromValue, toValue) {
+  const range = {};
+  if (fromValue) {
+    const from = new Date(fromValue);
+    if (!Number.isNaN(from.getTime())) {
+      from.setUTCHours(0, 0, 0, 0);
+      range.gte = from;
+    }
+  }
+  if (toValue) {
+    const to = new Date(toValue);
+    if (!Number.isNaN(to.getTime())) {
+      to.setUTCHours(0, 0, 0, 0);
+      to.setUTCDate(to.getUTCDate() + 1);
+      range.lt = to;
+    }
+  }
+  return Object.keys(range).length ? range : null;
+}
+
+// is_empty/is_not_empty on a `required` (non-nullable) column — Contact.
+// name/status/aiScore/createdAt today — must NOT reference `{ not: null }`
+// / `{ [column]: null }` at all: Prisma rejects null as a value for a
+// required field's comparison ("Argument `not` must not be null" /
+// equivalent), since null can never legally appear in that column. A
+// required TEXT field's "empty" can only mean the empty string; a required
+// NUMBER/DATE field (aiScore, createdAt) has no such "empty" representation
+// at all — every row always has a value — so is_empty matches nothing and
+// is_not_empty matches everything for those two kinds.
+function buildFilterClause(fieldDef, operator, values) {
+  const { column, kind, required } = fieldDef;
+  // A DateTime / Int column has no empty-string state, and Prisma rejects
+  // '' as a value for one outright ("Invalid value for argument: Expected
+  // ISO-8601 DateTime"). Only NULL means empty for these.
+  const nonTextual = kind === 'number' || kind === 'date' || kind === 'range';
+  if (operator === 'is_empty') {
+    if (kind === 'id' || kind === 'external') return { [column]: null };
+    if (required && nonTextual) return { id: { in: [] } }; // matches nothing — see comment above
+    if (nonTextual) return { [column]: null };
+    return required ? { [column]: '' } : { OR: [{ [column]: null }, { [column]: '' }] };
+  }
+  if (operator === 'is_not_empty') {
+    if (kind === 'id' || kind === 'external') return { [column]: { not: null } };
+    if (required && nonTextual) return {}; // matches everything — see comment above
+    if (nonTextual) return { [column]: { not: null } };
+    return required
+      ? { [column]: { not: '' } }
+      : { AND: [{ [column]: { not: null } }, { [column]: { not: '' } }] };
+  }
+  // Handled before the empty-string strip below: `between` carries
+  // [from, to] positionally, and either end may legitimately be blank for
+  // an open-ended range — compacting the array would shift `to` into `from`.
+  if (operator === 'between') {
+    if (kind !== 'date') return null;
+    const range = betweenRange((values || [])[0], (values || [])[1]);
+    return range ? { [column]: range } : null;
+  }
+  const list = (values || []).filter((v) => v !== undefined && v !== null && v !== '');
+  if (list.length === 0) return null;
+  if (kind === 'id' || kind === 'external') {
+    const ids = list.map((v) => parseInt(v, 10)).filter((n) => !Number.isNaN(n));
+    if (ids.length === 0) return null;
+    return operator === 'not_contains' ? { [column]: { notIn: ids } } : { [column]: { in: ids } };
+  }
+  if (kind === 'number') {
+    const nums = list.map((v) => Number(v)).filter((n) => Number.isFinite(n));
+    if (nums.length === 0) return null;
+    return operator === 'not_contains' ? { [column]: { notIn: nums } } : { [column]: { in: nums } };
+  }
+  if (kind === 'range') {
+    // Values are bucket keys ("26-50"), resolved back to their {min,max}
+    // via the field's own `buckets` definition rather than parsed from the
+    // string — an unknown key is dropped instead of being coerced into a
+    // bogus range.
+    const picked = list
+      .map((v) => (fieldDef.buckets || []).find((b) => b.value === String(v)))
+      .filter(Boolean);
+    if (picked.length === 0) return null;
+    return operator === 'not_contains'
+      ? { AND: picked.map((b) => ({ NOT: { [column]: { gte: b.min, lte: b.max } } })) }
+      : { OR: picked.map((b) => ({ [column]: { gte: b.min, lte: b.max } })) };
+  }
+  if (kind === 'date') {
+    const ranges = list.map(dayRange).filter(Boolean);
+    if (ranges.length === 0) return null;
+    return operator === 'not_contains'
+      ? { AND: ranges.map((r) => ({ NOT: { [column]: r } })) }
+      : { OR: ranges.map((r) => ({ [column]: r })) };
+  }
+  if (operator === 'not_contains') {
+    return { AND: list.map((v) => ({ [column]: { not: { contains: String(v) } } })) };
+  }
+  return { OR: list.map((v) => ({ [column]: { contains: String(v) } })) };
+}
+
+// Same operator semantics as buildFilterClause, but against the related
+// LeadCustomFieldValue rows for one definition id (via
+// Contact.leadCustomFieldValues — see the relation field of that name on
+// both Contact and LeadCustomFieldDefinition in schema.prisma). is_empty
+// means "no LeadCustomFieldValue row for this field at all, OR a row
+// exists with an empty valueText" — an admin can add a field after leads
+// already exist, leaving old rows with no value row for it.
+function buildCustomFieldClause(defId, operator, values, kind = 'text') {
+  // Which typed column on LeadCustomFieldValue actually holds this field's
+  // data — see CUSTOM_FIELD_TYPE_TO_KIND. A Date-picker field's values live
+  // in valueDate and are always NULL in valueText, so probing valueText for
+  // one returns nothing no matter what the user picked.
+  const isDate = kind === 'date';
+  if (operator === 'is_empty') {
+    if (isDate) {
+      return { OR: [
+        { leadCustomFieldValues: { none: { fieldId: defId } } },
+        { leadCustomFieldValues: { some: { fieldId: defId, valueDate: null } } },
+      ] };
+    }
+    return { OR: [
+      { leadCustomFieldValues: { none: { fieldId: defId } } },
+      { leadCustomFieldValues: { some: { fieldId: defId, OR: [{ valueText: null }, { valueText: '' }] } } },
+    ] };
+  }
+  if (operator === 'is_not_empty') {
+    if (isDate) {
+      return { leadCustomFieldValues: { some: { fieldId: defId, valueDate: { not: null } } } };
+    }
+    return { leadCustomFieldValues: { some: { fieldId: defId, valueText: { not: null }, NOT: { valueText: '' } } } };
+  }
+  // See buildFilterClause: handled before the empty-string strip so an
+  // open-ended [from, ""] range keeps its positions.
+  if (operator === 'between') {
+    if (!isDate) return null;
+    const range = betweenRange((values || [])[0], (values || [])[1]);
+    return range ? { leadCustomFieldValues: { some: { fieldId: defId, valueDate: range } } } : null;
+  }
+  const list = (values || []).filter((v) => v !== undefined && v !== null && v !== '');
+  if (list.length === 0) return null;
+  if (operator === 'not_contains') {
+    return { NOT: { leadCustomFieldValues: { some: { fieldId: defId, OR: list.map((v) => ({ valueText: { contains: String(v) } })) } } } };
+  }
+  return { leadCustomFieldValues: { some: { fieldId: defId, OR: list.map((v) => ({ valueText: { contains: String(v) } })) } } };
+}
+
+function canAccessLead(req, contact) {
+  if (!req || !req.user || !contact) return false;
+  if (canViewAllLeads(req)) return true;
+  return Number(contact.assignedToId) === Number(req.user.userId);
 }
 
 // PRD Gap §1.1e — walletBalance is a read-only computed surface. We strip
@@ -431,6 +909,79 @@ router.get('/', async (req, res) => {
       }
       where.source = { startsWith: prefix };
     }
+    // Freshsales-style "Filter by" panel — ?filters=<JSON array>, each entry
+    // {field, operator, values}. `field` is either a FILTERABLE_FIELDS key
+    // (never trust a raw column name from the client into a Prisma
+    // where-clause) or "custom_<id>" for an admin-defined Lead custom field
+    // (Settings > Lead Fields — dynamic per tenant, so it can't be a static
+    // allowlist like FILTERABLE_FIELDS). operator must be one of
+    // FILTER_OPERATORS. Invalid entries are skipped rather than erroring —
+    // the panel only ever sends known field/operator pairs, so a mismatch
+    // here means stale client cache, not attacker input.
+    if (req.query.filters) {
+      let parsed;
+      try {
+        parsed = JSON.parse(req.query.filters);
+      } catch {
+        return res.status(400).json({ error: 'filters must be a JSON array', code: 'INVALID_FILTERS' });
+      }
+      if (!Array.isArray(parsed)) {
+        return res.status(400).json({ error: 'filters must be a JSON array', code: 'INVALID_FILTERS' });
+      }
+      // Custom-field entries need their definition id checked against this
+      // tenant before it's trusted in a query — otherwise a crafted
+      // "custom_<id>" from another tenant's field would leak whether a
+      // row exists there. Fetched once, only when the payload actually
+      // references one, to avoid an extra round-trip on the common case.
+      let tenantCustomFieldIds = null;
+      let tenantCustomFieldKinds = null;
+      if (parsed.some((f) => f && isCustomField(f.field))) {
+        const defs = await prisma.leadCustomFieldDefinition.findMany({
+          where: { tenantId: req.user.tenantId },
+          select: { id: true, fieldType: true },
+        });
+        tenantCustomFieldIds = new Set(defs.map((d) => d.id));
+        // fieldType decides WHICH typed column on LeadCustomFieldValue holds
+        // the data (valueDate for a Date-picker field, valueText otherwise),
+        // so buildCustomFieldClause needs it to probe the right one. Without
+        // it every custom field was treated as text and a date `between`
+        // silently produced no clause at all — the filter then returned the
+        // whole unfiltered list rather than the matching rows.
+        tenantCustomFieldKinds = new Map(
+          defs.map((d) => [d.id, CUSTOM_FIELD_TYPE_TO_KIND[d.fieldType] || 'text']),
+        );
+      }
+      // Vertical gate — same rule as /filter-fields and /filter-values (see
+      // the big comment above FILTERABLE_FIELDS): a field restricted to
+      // e.g. `verticals: ['travel']` must be rejected here too, not just
+      // hidden from the picker, or a crafted request could still filter a
+      // generic tenant's contacts by a travel-only column. Only resolved
+      // when the payload actually references a `verticals`-gated field, to
+      // avoid the extra round-trip on the common (ungated-fields-only) case.
+      let vertical = null;
+      if (parsed.some((f) => f && FILTERABLE_FIELDS[f.field]?.verticals)) {
+        const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+        vertical = tenant?.vertical || 'generic';
+      }
+      const clauses = [];
+      for (const f of parsed) {
+        if (!f || typeof f !== 'object' || !FILTER_OPERATORS.includes(f.operator)) continue;
+        const rawValues = Array.isArray(f.values) ? f.values : [];
+        if (isCustomField(f.field)) {
+          const defId = customFieldDefIdFromKey(f.field);
+          if (defId === null || !tenantCustomFieldIds.has(defId)) continue;
+          const clause = buildCustomFieldClause(defId, f.operator, rawValues, tenantCustomFieldKinds.get(defId) || 'text');
+          if (clause) clauses.push(clause);
+          continue;
+        }
+        const fieldDef = FILTERABLE_FIELDS[f.field];
+        if (!fieldDef) continue;
+        if (fieldDef.verticals && !fieldDef.verticals.includes(vertical)) continue;
+        const clause = buildFilterClause(fieldDef, f.operator, rawValues);
+        if (clause) clauses.push(clause);
+      }
+      if (clauses.length > 0) where.AND = [...(where.AND || []), ...clauses];
+    }
     // #167: hide soft-deleted rows by default; admin views can opt in.
     applyDeletedAtFilter(where, req.query.includeDeleted === 'true');
     // #588: USER role sees only contacts assigned to them; ADMIN/MANAGER see
@@ -438,7 +989,7 @@ router.get('/', async (req, res) => {
     // from a USER is overridden by their own userId — a sales rep cannot
     // probe a colleague's book of business by URL. Total Contacts KPI on
     // /dashboard now reflects own-book size for sales reps.
-    if (req.user.role === 'USER') where.assignedToId = req.user.userId;
+    if (!canViewAllLeads(req)) where.assignedToId = req.user.userId;
     // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
     if (req.query.count === '1') {
       const total = await prisma.contact.count({ where });
@@ -484,10 +1035,338 @@ router.get('/', async (req, res) => {
     // (no-op elsewhere — see attachLeadCustomFieldsBatch). Skipped for the
     // ?fields=summary slim shape, which is an explicit "give me the minimal
     // projection" opt-in.
-    const withCustomFields = isSummary ? filtered : await attachLeadCustomFieldsBatch(filtered, req.user.tenantId);
+    const withTags = serializeContactTagsBatch(filtered);
+    const withCustomFields = isSummary ? withTags : await attachLeadCustomFieldsBatch(withTags, req.user.tenantId);
     res.json(withCustomFields);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
+  }
+});
+
+// GET /api/contacts/filter-fields — the field list a "Filter by" panel
+// offers, mirroring Freshsales' field picker. Merges the static
+// FILTERABLE_FIELDS allowlist (kept in lockstep with BUILTIN_COLUMNS in
+// table_column_preferences.js — the same columns "Customize table" shows)
+// with this tenant's admin-defined Lead custom fields (Settings > Lead
+// Fields), so a field an admin adds today shows up in the filter panel
+// immediately with no code change. Every field the org HAS is listed;
+// there is no has-data gate (see the NOTE above FILTERABLE_FIELDS for why
+// row-count gating was removed). The frontend renders these as the
+// left-hand field-picker list, then calls /filter-values/:field once a
+// field is chosen.
+//
+// Optional ?status=<value> scopes the VALUE lists (via /filter-values) to
+// the same subset the calling page filters over — Leads.jsx passes
+// ?status=Lead (leads ARE Contact rows with status="Lead"; there is no
+// separate Lead model), Contacts.jsx passes nothing and sees every status.
+// It's accepted here too so both endpoints take the same query shape.
+//
+// Registered BEFORE /:id — Express matches in order, so a literal path
+// must precede the /:id param route or it would be read as :id.
+router.get('/filter-fields', async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    // Vertical gate — see the comment above FILTERABLE_FIELDS. Travel-only
+    // columns (subBrand, kycStatus) never reach a generic/wellness tenant's
+    // picker, regardless of what stray or schema-default data exists.
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    const vertical = tenant?.vertical || 'generic';
+    const staticFields = Object.entries(FILTERABLE_FIELDS)
+      .filter(([, def]) => !def.verticals || def.verticals.includes(vertical))
+      .map(([key, def]) => ({
+        field: key,
+        label: def.label,
+        kind: def.kind,
+      }));
+    const customDefs = await prisma.leadCustomFieldDefinition.findMany({
+      where: { tenantId },
+      orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
+      select: { id: true, label: true, fieldType: true },
+    });
+    // A custom field's admin-chosen fieldType decides how it can be
+    // filtered, exactly as it decides which typed column stores its values
+    // (valueText / valueNumber / valueDate / valueBool — see
+    // attachLeadCustomFieldsBatch). Handing every custom field back as
+    // "text" made a Date-picker field offer a substring match over a list
+    // of stored days instead of a calendar.
+    const customFields = customDefs.map((d) => ({
+      field: `${CUSTOM_FIELD_PREFIX}${d.id}`,
+      label: d.label,
+      kind: CUSTOM_FIELD_TYPE_TO_KIND[d.fieldType] || 'text',
+      custom: true,
+      fieldType: d.fieldType,
+    }));
+    res.json({ fields: [...staticFields, ...customFields] });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to fetch filter fields' });
+  }
+});
+
+// GET /api/contacts/filter-values/:field — distinct values for one field,
+// scoped to the caller's tenant, for the panel's checkbox list. `id`-kind
+// fields (owner/territory) resolve against User/Territory rows rather than
+// DISTINCT Contact.assignedToId, since the panel needs a human label
+// ("Jane Doe"), not a bare foreign-key integer. "custom_<id>" fields with a
+// fixed choice list (dropdown/radio/multiselect) return the field
+// definition's own `options` — this is deliberately NOT a DISTINCT scan
+// over stored values, so a choice nobody has picked yet still appears as a
+// filterable option (mirrors how the Lead create/edit form itself sources
+// its dropdown). Free-text custom field types (text/textarea/url/number/
+// date/checkbox) fall back to a DISTINCT scan since there's no fixed list.
+router.get('/filter-values/:field', async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    // Same ?status scoping as /filter-fields (see that route's comment) —
+    // Leads.jsx passes ?status=Lead so the value list only shows values
+    // that actually occur among Lead-status rows, matching what /filter-
+    // fields already gated the field's very presence on. Without this, a
+    // field could correctly appear in the Leads picker (gated on Lead-scoped
+    // presence) but its value list would still include values that only
+    // ever occur on Customer/Prospect rows — same mismatch, one level down.
+    const statusScope = typeof req.query.status === 'string' && req.query.status ? req.query.status : null;
+    const scopeWhere = statusScope ? { status: statusScope } : {};
+    if (isCustomField(req.params.field)) {
+      const defId = customFieldDefIdFromKey(req.params.field);
+      if (defId === null) return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+      const def = await prisma.leadCustomFieldDefinition.findFirst({ where: { id: defId, tenantId } });
+      if (!def) return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+      if (['dropdown', 'radio', 'multiselect'].includes(def.fieldType) && def.options) {
+        const options = JSON.parse(def.options);
+        return res.json({ values: options.map((o) => ({ value: o, label: o })) });
+      }
+      // Custom field values live on LeadCustomFieldValue, joined via its
+      // `contact` relation — status scoping has to filter through that
+      // relation since the value row itself has no status column.
+      const rows = await prisma.leadCustomFieldValue.findMany({
+        where: {
+          fieldId: defId,
+          tenantId,
+          valueText: { not: null },
+          ...(statusScope ? { contact: { status: statusScope, deletedAt: null } } : {}),
+        },
+        select: { valueText: true },
+        distinct: ['valueText'],
+        orderBy: { valueText: 'asc' },
+        take: 200,
+      });
+      const values = rows
+        .map((r) => r.valueText)
+        .filter((v) => v !== null && v !== '')
+        .map((v) => ({ value: v, label: v }));
+      return res.json({ values });
+    }
+    const fieldDef = FILTERABLE_FIELDS[req.params.field];
+    if (!fieldDef) return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+    // Vertical gate — mirrors /filter-fields' eligibility check (see the
+    // big comment above FILTERABLE_FIELDS). A vertical-restricted field
+    // (subBrand, kycStatus) is rejected here too, not just hidden from the
+    // picker — otherwise a stale client-side filter chip, or someone
+    // hitting this endpoint directly, could still pull values for a
+    // feature this tenant's vertical doesn't have.
+    if (fieldDef.verticals) {
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+      const vertical = tenant?.vertical || 'generic';
+      if (!fieldDef.verticals.includes(vertical)) {
+        return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+      }
+    }
+    if (req.params.field === 'assignedToId') {
+      const users = await prisma.user.findMany({
+        where: { tenantId },
+        select: { id: true, name: true, email: true },
+        orderBy: { name: 'asc' },
+      });
+      return res.json({ values: users.map((u) => ({ value: String(u.id), label: u.name || u.email })) });
+    }
+    if (req.params.field === 'callifiedCampaignId') {
+      const campaigns = await callifiedClient.listCampaigns(tenantId).catch(() => []);
+      const values = (Array.isArray(campaigns) ? campaigns : [])
+        .filter((campaign) => campaign && campaign.id != null)
+        .map((campaign) => ({
+          value: String(campaign.id),
+          label: campaign.name || campaign.label || campaign.title || `Campaign ${campaign.id}`,
+        }));
+      if (values.length > 0) {
+        return res.json({ values });
+      }
+      const rows = await prisma.contact.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          callifiedCampaignId: { not: null },
+        },
+        select: { callifiedCampaignId: true },
+        distinct: ['callifiedCampaignId'],
+        orderBy: { callifiedCampaignId: 'asc' },
+        take: 200,
+      });
+      return res.json({
+        values: rows
+          .map((row) => row.callifiedCampaignId)
+          .filter((value) => value !== null && value !== undefined)
+          .map((value) => ({
+            value: String(value),
+            label: `Campaign ${value}`,
+          })),
+      });
+    }
+    if (req.params.field === 'callifiedLeadStatus') {
+      const rows = await prisma.contact.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          AND: [scopeWhere, { callifiedLeadStatus: { not: null } }],
+        },
+        select: { callifiedLeadStatus: true },
+        distinct: ['callifiedLeadStatus'],
+        orderBy: { callifiedLeadStatus: 'asc' },
+        take: 200,
+      });
+      const seen = new Set();
+      const values = [];
+      for (const row of rows) {
+        if (row.callifiedLeadStatus == null || row.callifiedLeadStatus === "") continue;
+        const normalized = normalizeLeadStatus(row.callifiedLeadStatus);
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        values.push({
+          value: normalized,
+          label: CALL_STATUS_LABELS[normalized] || normalized,
+        });
+      }
+      return res.json({ values });
+    }
+    if (req.params.field === 'territoryId') {
+      const territories = await prisma.territory.findMany({
+        where: { tenantId },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      });
+      return res.json({ values: territories.map((t) => ({ value: String(t.id), label: t.name })) });
+    }
+    if (req.params.field === 'tags') {
+      const rows = await prisma.contact.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          AND: [scopeWhere, { tagsJson: { not: null } }, { tagsJson: { not: '' } }],
+        },
+        select: { tagsJson: true },
+        take: 1000,
+      });
+      const seen = new Set();
+      const values = [];
+      for (const row of rows) {
+        for (const tag of parseContactTags(row.tagsJson)) {
+          const key = tag.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          values.push({ value: tag, label: tag });
+        }
+      }
+      values.sort((a, b) => a.label.localeCompare(b.label));
+      return res.json({ values });
+    }
+    // range-kind fields offer their fixed buckets, not a DISTINCT scan of
+    // every individual value present (see the "range" note above
+    // FILTERABLE_FIELDS — Lead Score would otherwise list 5, 36, 49, 64…).
+    if (fieldDef.kind === 'range') {
+      return res.json({ values: (fieldDef.buckets || []).map((b) => ({ value: b.value, label: b.label })) });
+    }
+    // `required` (non-nullable) columns — Contact.name/status/aiScore/
+    // createdAt — can't be filtered with `{ not: null }`; Prisma rejects
+    // null as a comparison value for a field whose type never permits it.
+    // Text ones only need the empty-string exclusion; number/date ones
+    // have no "empty" representation at all (every row has a real value),
+    // so no not-null/not-empty filter is needed on the DISTINCT scan itself.
+    let notNullFilter;
+    if (fieldDef.required && (fieldDef.kind === 'number' || fieldDef.kind === 'date')) {
+      notNullFilter = undefined;
+    } else if (fieldDef.required) {
+      notNullFilter = { not: '' };
+    } else {
+      notNullFilter = { not: null };
+    }
+    // Same status/column key-collision risk as /filter-fields' presence
+    // check above (querying /filter-values/status?status=Lead would spread
+    // `status: 'Lead'` then `status: {not: ''}`, silently dropping one) —
+    // AND-combine instead of a flat spread so both always apply.
+    const columnPredicate = notNullFilter ? { [fieldDef.column]: notNullFilter } : {};
+    const rows = await prisma.contact.findMany({
+      where: { tenantId, deletedAt: null, AND: [scopeWhere, columnPredicate] },
+      select: { [fieldDef.column]: true },
+      distinct: [fieldDef.column],
+      orderBy: { [fieldDef.column]: 'asc' },
+      take: 200,
+    });
+    // date-kind values are DateTime objects — normalize to a "YYYY-MM-DD"
+    // day label both for the checkbox list's display AND as the `value`
+    // sent back in ?filters=, since buildFilterClause's dayRange() parses
+    // that same string into a [start, end) range. Time-of-day is dropped
+    // deliberately — the panel filters by "occurred on this day", matching
+    // how a human reads a date column in a table, not exact timestamps.
+    if (fieldDef.kind === 'date') {
+      const days = [...new Set(
+        rows
+          .map((r) => r[fieldDef.column])
+          .filter((v) => v !== null)
+          .map((v) => new Date(v).toISOString().slice(0, 10)),
+      )].sort();
+      return res.json({ values: days.map((d) => ({ value: d, label: d })) });
+    }
+    const values = rows
+      .map((r) => r[fieldDef.column])
+      .filter((v) => v !== null && v !== '')
+      .map((v) => ({ value: String(v), label: String(v) }));
+    res.json({ values });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to fetch filter values' });
+  }
+});
+
+router.delete('/tags', async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const tag = normalizeContactTagValue(req.body?.tag);
+    if (!tag) {
+      return res.status(400).json({ error: 'Tag is required', code: 'TAG_REQUIRED' });
+    }
+    if (CONTACT_TAG_CONTROL_RE.test(tag)) {
+      return res.status(400).json({ error: 'Tag contains invalid control characters', code: 'INVALID_TAG' });
+    }
+    if (tag.length > CONTACT_TAG_MAX_LENGTH) {
+      return res.status(400).json({
+        error: `Each tag must be ${CONTACT_TAG_MAX_LENGTH} characters or less`,
+        code: 'TAG_TOO_LONG',
+      });
+    }
+    const statusScope = typeof req.body?.status === 'string' && req.body.status.trim()
+      ? req.body.status.trim()
+      : 'Lead';
+    const tagKey = tag.toLowerCase();
+    const rows = await prisma.contact.findMany({
+      where: {
+        tenantId,
+        deletedAt: null,
+        status: statusScope,
+        tagsJson: { not: null },
+      },
+      select: { id: true, tagsJson: true },
+    });
+    let updatedContacts = 0;
+    for (const row of rows) {
+      const currentTags = parseContactTags(row.tagsJson);
+      const nextTags = currentTags.filter((current) => current.toLowerCase() !== tagKey);
+      if (nextTags.length === currentTags.length) continue;
+      await prisma.contact.update({
+        where: { id: row.id },
+        data: { tagsJson: nextTags.length > 0 ? JSON.stringify(nextTags) : null },
+      });
+      updatedContacts += 1;
+    }
+    return res.json({ deletedTag: tag, status: statusScope, updatedContacts });
+  } catch (_err) {
+    return res.status(500).json({ error: 'Failed to delete tag' });
   }
 });
 
@@ -501,6 +1380,7 @@ router.get('/:id', async (req, res) => {
       include: { activities: { orderBy: { createdAt: 'desc' } }, tasks: true, deals: true, assignedTo: { select: { id: true, name: true, email: true } } }
     });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, contact)) return res.status(404).json({ error: 'Contact not found' });
     // #167: 404 soft-deleted rows unless caller opts in.
     if (contact.deletedAt && !includeDeleted) return res.status(404).json({ error: 'Contact not found' });
     // #464: strip read-restricted fields per the caller's role.
@@ -514,7 +1394,7 @@ router.get('/:id', async (req, res) => {
     // Generic-vertical-only: attach { fieldKey: value } from this tenant's
     // Lead custom field definitions/values (no-op elsewhere — see helper).
     const withCustomFields = await attachLeadCustomFields(withTimeline, req.user.tenantId);
-    res.json(withCustomFields);
+    res.json(serializeContactTags(withCustomFields));
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contact' });
   }
@@ -536,6 +1416,23 @@ router.post('/', async (req, res) => {
     // LeadCustomFieldValue AFTER the contact create succeeds (see below).
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    const tagsInput = Object.prototype.hasOwnProperty.call(req.body, "tags")
+      ? req.body.tags
+      : undefined;
+    delete req.body.tags;
+    delete req.body.tagsJson;
+    const tagsResult = normalizeContactTagsInput(tagsInput);
+    if (tagsResult.error) return res.status(tagsResult.error.status).json(tagsResult.error);
+    const skipInitialAssignee = req.body.skipInitialAssignee === true;
+    delete req.body.skipInitialAssignee;
+    // #600 / #557 follow-up: the Leads form sends wellness-only optional fields
+    // as empty strings even in the generic vertical. Prisma Int? / DateTime? /
+    // String? columns reject "" where they expect null / a valid shape, so
+    // normalize empty strings to null before validation. This keeps the route
+    // resilient to any frontend/client that sends "" for optional fields.
+    for (const key of ["preferredLocationId", "preferredPractitionerId", "birthDate", "anniversary", "treatmentOfInterest", "gst", "stateCode", "billingStateCode", "callifiedCampaignId"]) {
+      if (req.body[key] === "") req.body[key] = null;
+    }
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
     // clear code instead of a 500 from the DB layer.
     const inputErr = validateContactInput(req.body, { isUpdate: false });
@@ -544,6 +1441,9 @@ router.post('/', async (req, res) => {
     // leading/trailing whitespace into search indexes, exports, etc. The
     // validator already verified there's at least one non-whitespace char.
     const normalised = { ...req.body, name: typeof req.body.name === "string" ? req.body.name.trim() : req.body.name };
+    if (tagsResult.hasValue) {
+      normalised.tagsJson = tagsResult.tags.length ? JSON.stringify(tagsResult.tags) : null;
+    }
     // PRD Gap §1.1a/§1.1d — date fields come in as ISO strings; Prisma
     // rejects strings on DateTime columns with PrismaClientValidationError.
     // Coerce to Date objects after validation.
@@ -553,11 +1453,31 @@ router.post('/', async (req, res) => {
     if (typeof normalised.birthDate === "string" && normalised.birthDate !== "") {
       normalised.birthDate = new Date(normalised.birthDate);
     }
-    // #588: default assignedToId to the creator so USER-role list scoping
-    // (which filters by assignedToId = req.user.userId) actually surfaces
-    // the contact they just created. Mirrors POST /api/deals which sets
-    // ownerId = req.user.userId. Explicit body.assignedToId still wins.
-    if (normalised.assignedToId == null) normalised.assignedToId = req.user.userId;
+    // Generic CRM Callified leads stay unassigned until the call produces a real status.
+    // Explicit assignedToId still wins, and non-generic contact creation keeps the existing creator default.
+    const isGenericLeadAwaitingCall =
+      (req.user.vertical || 'generic') === 'generic' &&
+      normalised.status === 'Lead' &&
+      (!normalised.callifiedLeadStatus || normalised.callifiedLeadStatus === 'yet_to_call');
+    const shouldSkipInitialAssignee = isGenericLeadAwaitingCall || (skipInitialAssignee && normalised.status === 'Lead');
+    if (normalised.assignedToId == null && !shouldSkipInitialAssignee) {
+      normalised.assignedToId = req.user.userId;
+    }
+
+    // Auto-assign new Leads to a matching Callified campaign based on the
+    // tenant's rule configuration when no campaign was supplied explicitly.
+    // Rules are evaluated in order; the first matching column+value wins.
+    // Covers manual create, import, extension capture, and webhooks.
+    if (normalised.status === "Lead" && normalised.callifiedCampaignId == null) {
+      try {
+        const matchedCampaignId = await evaluateAutoCampaignRules(req.user.tenantId, normalised, customFields);
+        if (matchedCampaignId) {
+          normalised.callifiedCampaignId = matchedCampaignId;
+        }
+      } catch (e) {
+        console.error("[contacts] auto-campaign rule evaluation failed:", e.message);
+      }
+    }
 
     // PRD §4.5 — Phase 2 dedup preflight. Before letting Prisma's
     // @@unique([email, tenantId]) throw a P2002, run the richer
@@ -593,7 +1513,7 @@ router.post('/', async (req, res) => {
               id: c.id,
               name: c.name,
               email: c.email,
-              phone: c.phone,
+              phone: c.phone ? normalizePhoneValue(c.phone) : c.phone,
               company: c.company,
               status: c.status,
               subBrand: c.subBrand,
@@ -608,11 +1528,30 @@ router.post('/', async (req, res) => {
       }
     }
 
-    const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
+    let restoredSoftDeletedContact = false;
+    let contact = null;
+    if (normalised.email) {
+      const deletedContact = await prisma.contact.findUnique({
+        where: { email_tenantId: { email: normalised.email, tenantId: req.user.tenantId } },
+      });
+      if (deletedContact?.deletedAt) {
+        contact = await prisma.contact.update({
+          where: { id: deletedContact.id },
+          data: { ...normalised, tenantId: req.user.tenantId, status: normalised.status || "Lead", deletedAt: null },
+        });
+        restoredSoftDeletedContact = true;
+      }
+    }
+    if (!contact) {
+      contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
+    }
     // Generic-vertical-only Lead custom fields — best-effort, after the
-    // primary create already succeeded (see writeLeadCustomFieldValues).
+    // primary create/restore already succeeded (see writeLeadCustomFieldValues).
     await writeLeadCustomFieldValues(contact.id, req.user.tenantId, customFields);
-    try { const { emitEvent } = require('../lib/eventBus'); await emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
+    try {
+      const { emitEvent } = require('../lib/eventBus');
+      await emitEvent('contact.created', workflowContactPayload(contact, req.user.userId), req.user.tenantId, req.io);
+    } catch (_e) { /* event bus optional */ }
     // [GP-CRM integration] Fire lead.new to registered webhooks (e.g. GlobusPhone)
     // when a Lead contact is created. Carries the id/name/phone/email shape the
     // partner expects (the emitEvent above uses a workflow-rule payload keyed on
@@ -623,17 +1562,47 @@ router.post('/', async (req, res) => {
         await deliverWebhooks("lead.new", {
           id: contact.id,
           name: contact.name,
-          phone: contact.phone,
+          phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
           email: contact.email,
           status: contact.status,
           assignedToId: contact.assignedToId,
           tenantId: req.user.tenantId,
         }, req.user.tenantId);
       } catch (_e) { /* webhook delivery is fire-and-forget */ }
+      await notifyAdminsOfNewLead({ tenantId: req.user.tenantId, contact, io: req.io });
     }
-    // #179: audit row for new contact.
-    await writeAudit('Contact', 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
-    res.status(201).json(contact);
+    // #179: audit row for new/restored contact.
+    await writeAudit('Contact', restoredSoftDeletedContact ? 'RESTORE' : 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
+
+    // Auto-dial newly-created Leads that have a Callified campaign + phone,
+    // but only when the tenant has enabled auto-dial for new leads.
+    // Fire-and-forget: never block the create response on an outbound call.
+    if (contact.status === 'Lead' && contact.callifiedCampaignId && contact.phone) {
+      try {
+        const autoDialEnabled = await getSetting(contact.tenantId, KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED, {
+          coerce: (v) => String(v).toLowerCase() !== 'false',
+        });
+        if (autoDialEnabled) {
+          const { enqueue } = require('../lib/callifiedAutoDialQueue');
+          enqueue({
+            tenantId: contact.tenantId,
+            contactId: contact.id,
+            campaignId: contact.callifiedCampaignId,
+            userId: req.user.userId,
+          });
+        }
+      } catch (_e) {
+        console.error('[contacts] auto-dial enqueue failed:', _e && _e.message);
+      }
+    }
+
+    res
+      .status(restoredSoftDeletedContact ? 200 : 201)
+      .json(
+        restoredSoftDeletedContact
+          ? { ...serializeContactTags(contact), restored: true }
+          : serializeContactTags(contact),
+      );
   } catch (err) {
     // #178: duplicate email should be 409 Conflict, not 500.
     // #165: validation-class Prisma errors (string-too-long, FK miss, …) are
@@ -653,30 +1622,115 @@ router.put('/bulk-assign', verifyRole(['ADMIN']), async (req, res) => {
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
       return res.status(400).json({ error: 'No contact IDs provided' });
     }
-    const ids = contactIds.map(id => parseInt(id));
-    let assignableIds = ids;
-    let skipped = 0;
-    // Travel security guard — when assigning to a person, drop any brand-tagged
-    // lead the assignee can't access (rather than failing the whole batch).
-    // Generic/wellness leads have subBrand null → always assignable → unchanged.
-    if (assignedToId) {
-      const rows = await prisma.contact.findMany({
-        where: { id: { in: ids }, tenantId: req.user.tenantId },
-        select: { id: true, subBrand: true },
-      });
-      const { getSubBrandAccessSet, canAccessSubBrand } = require('../middleware/travelGuards');
-      const allowed = await getSubBrandAccessSet(parseInt(assignedToId));
-      const ok = rows.filter(r => !r.subBrand || canAccessSubBrand(allowed, r.subBrand)).map(r => r.id);
-      skipped = ids.length - ok.length;
-      assignableIds = ok;
-    }
-    await prisma.contact.updateMany({
-      where: { id: { in: assignableIds }, tenantId: req.user.tenantId },
-      data: { assignedToId: assignedToId ? parseInt(assignedToId) : null }
+    const ids = contactIds.map(id => parseInt(id)).filter(Number.isFinite);
+    const nextAssignedToId = assignedToId ? parseInt(assignedToId) : null;
+    const rows = await prisma.contact.findMany({
+      where: { id: { in: ids }, tenantId: req.user.tenantId },
+      select: { id: true, name: true, subBrand: true, assignedToId: true },
     });
-    res.json({ updated: assignableIds.length, skipped, assignedToId: assignedToId || null });
+
+    let assignableRows = rows;
+    let skippedRows = [];
+    if (nextAssignedToId) {
+      const { getSubBrandAccessSet, canAccessSubBrand } = require('../middleware/travelGuards');
+      const allowed = await getSubBrandAccessSet(nextAssignedToId);
+      assignableRows = rows.filter((r) => !r.subBrand || canAccessSubBrand(allowed, r.subBrand));
+      skippedRows = rows.filter((r) => r.subBrand && !canAccessSubBrand(allowed, r.subBrand));
+    }
+
+    const assignableIds = assignableRows.map((r) => r.id);
+    if (assignableIds.length > 0) {
+      await prisma.contact.updateMany({
+        where: { id: { in: assignableIds }, tenantId: req.user.tenantId },
+        data: { assignedToId: nextAssignedToId },
+      });
+    }
+
+    if (nextAssignedToId) {
+      const actorName = req.user?.name || req.user?.email || 'Admin';
+      for (const row of assignableRows) {
+        if (nextAssignedToId === row.assignedToId) continue;
+        try {
+          const leadName = row.name || ('#' + row.id);
+          await notify({
+            userId: nextAssignedToId,
+            tenantId: req.user.tenantId,
+            title: 'New lead assigned',
+            message: actorName + ' has assigned lead "' + leadName + '" to you. Please look into it.',
+            type: 'info',
+            category: 'lead',
+            entityType: 'lead',
+            entityId: row.id,
+            link: '/contacts/' + row.id,
+            io: req.io,
+          });
+        } catch (notifyErr) {
+          console.error('[contacts] bulk lead assignment notify failed:', notifyErr && notifyErr.message);
+        }
+      }
+    }
+
+    res.json({
+      updated: assignableIds.length,
+      skipped: skippedRows.length,
+      assignedToId: assignedToId || null,
+      skippedDetails: skippedRows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        subBrand: r.subBrand,
+        reason: 'ASSIGNEE_SUB_BRAND_ACCESS_MISMATCH',
+      })),
+    });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to bulk assign agent' });
+  }
+});
+
+router.put('/bulk-assign-campaign', verifyRole(['ADMIN']), async (req, res) => {
+  try {
+    const { contactIds, callifiedCampaignId } = req.body;
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({ error: 'No contact IDs provided' });
+    }
+    const ids = contactIds.map((id) => parseInt(id)).filter(Number.isFinite);
+    const nextCampaignId = callifiedCampaignId ? parseInt(callifiedCampaignId) : null;
+
+    if (nextCampaignId !== null && (!Number.isInteger(nextCampaignId) || nextCampaignId <= 0)) {
+      return res.status(400).json({ error: 'Invalid campaign ID', code: 'INVALID_CAMPAIGN_ID' });
+    }
+
+    const { count } = await prisma.contact.updateMany({
+      where: { id: { in: ids }, tenantId: req.user.tenantId },
+      data: { callifiedCampaignId: nextCampaignId },
+    });
+
+    res.json({ updated: count });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to bulk assign campaign' });
+  }
+});
+
+// Bulk soft-delete multiple contacts (must stay before /:id routes).
+router.delete('/bulk-delete', verifyRole(['ADMIN']), async (req, res) => {
+  try {
+    const { contactIds } = req.body;
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({ error: 'No contact IDs provided' });
+    }
+
+    const ids = [...new Set(contactIds.map((id) => parseInt(id)).filter(Number.isFinite))];
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'No valid contact IDs provided', code: 'INVALID_CONTACT_IDS' });
+    }
+
+    const { count } = await prisma.contact.updateMany({
+      where: { id: { in: ids }, tenantId: req.user.tenantId, deletedAt: null },
+      data: { deletedAt: new Date() },
+    });
+
+    res.json({ deleted: count });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to bulk delete contacts' });
   }
 });
 
@@ -684,6 +1738,7 @@ router.post('/:id/activities', async (req, res) => {
   try {
     const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, contact)) return res.status(404).json({ error: 'Contact not found' });
     const { type, description } = req.body;
     const activity = await prisma.activity.create({
       data: { type, description, contactId: contact.id, userId: req.user ? req.user.userId : null, tenantId: req.user.tenantId }
@@ -706,6 +1761,9 @@ router.post('/:id/summarize-chat', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid contact ID' });
+    const existing = await prisma.contact.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, existing)) return res.status(404).json({ error: 'Contact not found' });
     const leadConversationSummary = require('../lib/leadConversationSummary');
     const result = await leadConversationSummary.narrativeSummarizeContact({
       tenantId: req.user.tenantId,
@@ -754,10 +1812,16 @@ router.post('/:id/resummarize-capture', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+// #367 follow-up: /converted-leads reverts a converted contact with
+// PATCH /api/contacts/:id, but only PUT was ever registered here, so every
+// revert 404'd with "Endpoint not found". The body has always been treated as a
+// partial update (validateContactInput isUpdate:true + Prisma spread), so PUT
+// and PATCH share this one handler — both are registered right below it.
+const updateContactById = async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, existing)) return res.status(404).json({ error: 'Contact not found' });
     // #464: strip write-restricted fields per the caller's role BEFORE
     // validation so blocked-field updates can't slip through.
     req.body = await filterWriteFields(req.body, req.user.role, "Contact", req.user.tenantId);
@@ -767,11 +1831,23 @@ router.put('/:id', async (req, res) => {
     // for why this must be stripped before the Prisma spread.
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    const tagsInput = Object.prototype.hasOwnProperty.call(req.body, "tags")
+      ? req.body.tags
+      : undefined;
+    delete req.body.tags;
+    delete req.body.tagsJson;
+    const tagsResult = normalizeContactTagsInput(tagsInput);
+    if (tagsResult.error) return res.status(tagsResult.error.status).json(tagsResult.error);
+    // Normalize empty-string optional ids to null (mirrors POST handler).
+    if (req.body.callifiedCampaignId === "") req.body.callifiedCampaignId = null;
     // #168: same input checks as create so PUT can't bypass POST validation.
     const inputErr = validateContactInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // PRD Gap §1.1a/§1.1d — coerce date strings to Date objects (mirrors POST handler).
     const updateData = { ...req.body };
+    if (tagsResult.hasValue) {
+      updateData.tagsJson = tagsResult.tags.length ? JSON.stringify(tagsResult.tags) : null;
+    }
     if (typeof updateData.anniversary === "string" && updateData.anniversary !== "") {
       updateData.anniversary = new Date(updateData.anniversary);
     }
@@ -794,16 +1870,10 @@ router.put('/:id', async (req, res) => {
     try {
       require("../lib/eventBus").emitEvent(
         "contact.updated",
-        {
-          contactId: contact.id,
-          changedFields: Object.keys(req.body || {}),
-          status: contact.status,
-          assignedToId: contact.assignedToId,
-          tenantId: req.user.tenantId,
-        },
+        workflowContactPayload(contact, req.user.userId, Object.keys(req.body || {})),
         req.user.tenantId,
         req.io
-      );
+      ).catch((error) => console.error("[contacts] contact.updated workflow failed:", error.message));
     } catch (_e) {}
 
     // [GP-CRM integration] Push a partner-shaped contact.updated (and, when the
@@ -816,7 +1886,7 @@ router.put('/:id', async (req, res) => {
       await deliverWebhooks("contact.updated", {
         id: contact.id,
         name: contact.name,
-        phone: contact.phone,
+        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
         email: contact.email,
         status: contact.status,
         assignedToId: contact.assignedToId,
@@ -876,7 +1946,8 @@ router.put('/:id', async (req, res) => {
             where: { tenantId: req.user.tenantId, contactId: contact.id },
           });
           if (!patient && contact.phone) {
-            const last10 = String(contact.phone).replace(/\D/g, "").slice(-10);
+            const normalizedContactPhone = normalizePhone(contact.phone);
+            const last10 = normalizedContactPhone ? normalizedContactPhone.slice(-10) : "";
             if (last10.length === 10) {
               patient = await prisma.patient.findFirst({
                 where: { tenantId: req.user.tenantId, phone: { contains: last10 } },
@@ -921,7 +1992,7 @@ router.put('/:id', async (req, res) => {
       console.error("[contacts PUT] wellness Patient backfill failed:", e && e.message);
     }
 
-    res.json(contact);
+    res.json(serializeContactTags(contact));
   } catch (err) {
     // #168 #165: PUT used to leak 500s on bad email / out-of-range values
     // because the Prisma validation error fell through unhandled. Map the
@@ -932,7 +2003,10 @@ router.put('/:id', async (req, res) => {
     console.error('[contacts] update error:', err && err.message);
     res.status(500).json({ error: 'Failed to update contact' });
   }
-});
+};
+
+router.put('/:id', updateContactById);
+router.patch('/:id', updateContactById);
 
 // CSV Import — accepts pre-parsed rows
 // #154: validation hardening
@@ -952,6 +2026,18 @@ function sanitizeCellForExport(v) {
   // on import (rather than only on export) means stored data is also safe if
   // exported via any other path.
   return FORMULA_INJECTION_RE.test(v) ? `'${v}` : v;
+}
+
+function getSpreadsheetValue(row, aliases) {
+  if (!row || typeof row !== "object") return "";
+  const lookup = new Map(Object.entries(row).map(([key, value]) => [String(key).toLowerCase(), value]));
+  for (const alias of aliases) {
+    const value = lookup.get(String(alias).toLowerCase());
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return "";
 }
 
 router.post('/import-csv', async (req, res) => {
@@ -997,6 +2083,9 @@ router.post('/import-csv', async (req, res) => {
           data: {
             name: sanitizeCellForExport(String(row.name || "").trim()),
             email,
+            phone: normalizePhoneValue(
+              getSpreadsheetValue(row, ["phone", "phone_number", "phoneNumber", "sms_number", "smsNumber"]),
+            ) || null,
             company: sanitizeCellForExport(String(row.company || "").trim()),
             title: String(row.title || "").trim(),
             status,
@@ -1039,11 +2128,32 @@ router.put('/:id/assign', verifyRole(['ADMIN']), async (req, res) => {
         return res.status(403).json({ error: "That staff member doesn't have access to this lead's sub-brand", code: 'SUB_BRAND_ASSIGN_DENIED' });
       }
     }
+    const nextAssignedToId = assignedToId ? parseInt(assignedToId) : null;
     const contact = await prisma.contact.update({
       where: { id: existing.id },
-      data: { assignedToId: assignedToId ? parseInt(assignedToId) : null },
+      data: { assignedToId: nextAssignedToId },
       include: { assignedTo: { select: { id: true, name: true, email: true } } }
     });
+    if (nextAssignedToId && nextAssignedToId !== existing.assignedToId) {
+      try {
+        const actorName = req.user?.name || req.user?.email || 'Admin';
+        const leadName = contact.name || ('#' + contact.id);
+        await notify({
+          userId: nextAssignedToId,
+          tenantId: req.user.tenantId,
+          title: 'New lead assigned',
+          message: actorName + ' has assigned lead "' + leadName + '" to you. Please look into it.',
+          type: 'info',
+          category: 'lead',
+          entityType: 'lead',
+          entityId: contact.id,
+          link: '/contacts/' + contact.id,
+          io: req.io,
+        });
+      } catch (notifyErr) {
+        console.error('[contacts] lead assignment notify failed:', notifyErr && notifyErr.message);
+      }
+    }
     // [GP-CRM integration] Notify registered webhooks (e.g. GlobusPhone) that
     // this contact/lead was re-assigned to a different agent. Fire-and-forget.
     try {
@@ -1051,13 +2161,13 @@ router.put('/:id/assign', verifyRole(['ADMIN']), async (req, res) => {
       await deliverWebhooks("lead.assigned", {
         id: contact.id,
         name: contact.name,
-        phone: contact.phone,
+        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
         status: contact.status,
         assignedToId: contact.assignedToId,
         tenantId: req.user.tenantId,
       }, req.user.tenantId);
     } catch (_e) { /* webhook delivery is fire-and-forget */ }
-    res.json(contact);
+    res.json(serializeContactTags(contact));
   } catch (_err) {
     res.status(500).json({ error: 'Failed to assign agent' });
   }
@@ -1075,10 +2185,11 @@ router.get('/duplicates/find', async (req, res) => {
       where: { tenantId: req.user.tenantId, deletedAt: null },
       select: { id: true, name: true, email: true, phone: true, company: true, status: true, aiScore: true, createdAt: true }
     });
+    const normalizedContacts = contacts.map(normalizeContactPhone);
     const dupes = [];
     const seen = new Map();
 
-    for (const c of contacts) {
+    for (const c of normalizedContacts) {
       // Match by email domain + name similarity, or exact phone
       const key = c.email.toLowerCase();
       if (seen.has(key)) {
@@ -1094,12 +2205,14 @@ router.get('/duplicates/find', async (req, res) => {
 
       // Phone match
       if (c.phone) {
-        const phoneKey = c.phone.replace(/[^0-9]/g, '').slice(-10);
-        if (phoneKey.length >= 10) {
+        const phoneKey = normalizePhone(c.phone);
+        const phoneDigits = phoneKey ? phoneKey.slice(-10) : "";
+        if (phoneDigits.length >= 10) {
           for (const [, other] of seen) {
             if (other.id !== c.id && other.phone) {
-              const otherPhone = other.phone.replace(/[^0-9]/g, '').slice(-10);
-              if (phoneKey === otherPhone && !dupes.find(d => (d.primary.id === other.id && d.duplicates.some(dd => dd.id === c.id)))) {
+              const otherPhoneKey = normalizePhone(other.phone);
+              const otherPhone = otherPhoneKey ? otherPhoneKey.slice(-10) : "";
+              if (phoneDigits === otherPhone && !dupes.find(d => (d.primary.id === other.id && d.duplicates.some(dd => dd.id === c.id)))) {
                 const existing = dupes.find(d => d.primary.id === other.id);
                 if (existing) { existing.duplicates.push(c); }
                 else { dupes.push({ primary: other, duplicates: [c], reason: 'Same phone' }); }
@@ -1391,6 +2504,7 @@ router.get('/:id/attachments', async (req, res) => {
   try {
     const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, contact)) return res.status(404).json({ error: 'Contact not found' });
     res.json(await prisma.contactAttachment.findMany({ where: { contactId: contact.id, tenantId: req.user.tenantId }, orderBy: { createdAt: 'desc' } }));
   } catch (_err) { res.status(500).json({ error: 'Failed to fetch attachments' }); }
 });
@@ -1485,7 +2599,7 @@ router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
     if (existing.deletedAt) {
-      return res.json({ ...existing, idempotent: true, softDeleted: true });
+      return res.json({ ...serializeContactTags(existing), idempotent: true, softDeleted: true });
     }
     try {
       await prisma.auditLog.create({
@@ -1505,7 +2619,7 @@ router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
       await deliverWebhooks("contact.updated", {
         id: contact.id,
         name: contact.name,
-        phone: contact.phone,
+        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
         email: contact.email,
         status: contact.status,
         assignedToId: contact.assignedToId,
@@ -1513,7 +2627,7 @@ router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
         tenantId: req.user.tenantId,
       }, req.user.tenantId);
     } catch (_e) { /* webhook delivery is fire-and-forget */ }
-    res.json({ ...contact, softDeleted: true });
+    res.json({ ...serializeContactTags(contact), softDeleted: true });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to delete contact' });
   }
@@ -1525,7 +2639,7 @@ router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
     if (!existing.deletedAt) {
-      return res.json({ ...existing, idempotent: true, restored: false });
+      return res.json({ ...serializeContactTags(existing), idempotent: true, restored: false });
     }
     try {
       await prisma.auditLog.create({
@@ -1544,7 +2658,7 @@ router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
       await deliverWebhooks("contact.updated", {
         id: contact.id,
         name: contact.name,
-        phone: contact.phone,
+        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
         email: contact.email,
         status: contact.status,
         assignedToId: contact.assignedToId,
@@ -1552,7 +2666,7 @@ router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
         tenantId: req.user.tenantId,
       }, req.user.tenantId);
     } catch (_e) { /* webhook delivery is fire-and-forget */ }
-    res.json({ ...contact, restored: true });
+    res.json({ ...serializeContactTags(contact), restored: true });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to restore contact' });
   }

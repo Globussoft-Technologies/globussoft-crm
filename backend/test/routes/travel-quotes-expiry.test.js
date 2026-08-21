@@ -75,6 +75,7 @@ prisma.tenant.findUnique = vi.fn().mockResolvedValue({
 });
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   create: vi.fn().mockResolvedValue({ id: 1 }),
@@ -115,6 +116,7 @@ beforeEach(() => {
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
 });
@@ -143,7 +145,7 @@ describe('GET /api/travel/quotes/expired', () => {
     expect(res.body.quotes[0].id).toBe(100);
 
     // Where clause: status filter + validUntil < now.
-    const findManyArgs = prisma.travelQuote.findMany.mock.calls[0][0];
+    const findManyArgs = prisma.travelQuote.findMany.mock.calls.at(-1)[0];
     expect(findManyArgs.where.tenantId).toBe(1);
     expect(findManyArgs.where.status).toEqual({ in: ['Draft', 'Sent'] });
     expect(findManyArgs.where.validUntil.lt).toBeInstanceOf(Date);
@@ -165,24 +167,54 @@ describe('GET /api/travel/quotes/expired', () => {
   });
 
   test('?limit=10 honored, ?limit=999 clamped to 200', async () => {
-    prisma.travelQuote.findMany.mockResolvedValue([]);
+    // Route slices after in-process filtering, so `take` is not passed to Prisma.
+    const expiredQuotes = Array.from({ length: 5 }, (_, i) => ({
+      id: 900 + i,
+      tenantId: 1,
+      subBrand: 'tmc',
+      contactId: 5000 + i,
+      status: 'Sent',
+      validUntil: new Date('2020-01-01'),
+      currency: 'INR',
+    }));
+    prisma.travelQuote.findMany.mockResolvedValue(expiredQuotes);
 
-    await request(makeApp())
+    const res10 = await request(makeApp())
       .get('/api/travel/quotes/expired?limit=10')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(prisma.travelQuote.findMany.mock.calls[0][0].take).toBe(10);
+    expect(res10.status).toBe(200);
+    expect(res10.body.count).toBe(5);
+    expect(prisma.travelQuote.findMany.mock.calls[0][0].take).toBeUndefined();
 
-    prisma.travelQuote.findMany.mockClear();
-    await request(makeApp())
+    prisma.travelQuote.findMany.mockClear().mockResolvedValue(expiredQuotes);
+    const res999 = await request(makeApp())
       .get('/api/travel/quotes/expired?limit=999')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(prisma.travelQuote.findMany.mock.calls[0][0].take).toBe(200);
+    expect(res999.status).toBe(200);
+    expect(res999.body.count).toBe(5);
 
-    prisma.travelQuote.findMany.mockClear();
-    await request(makeApp())
+    prisma.travelQuote.findMany.mockClear().mockResolvedValue(expiredQuotes);
+    const resDefault = await request(makeApp())
       .get('/api/travel/quotes/expired')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(prisma.travelQuote.findMany.mock.calls[0][0].take).toBe(50);
+    expect(resDefault.status).toBe(200);
+    expect(resDefault.body.count).toBe(5);
+  });
+
+  test('ADMIN can narrow expired quotes by subBrand query', async () => {
+    prisma.travelQuote.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/expired?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const findManyArgs = prisma.travelQuote.findMany.mock.calls.at(-1)[0];
+    expect(findManyArgs.where.subBrand).toBe('tmc');
+    expect(findManyArgs.include).toEqual({
+      contact: { select: { id: true, name: true } },
+      assignedToUser: { select: { id: true, name: true, email: true } },
+    });
   });
 
   test('MANAGER with subBrandAccess=["tmc"] sees only tmc quotes', async () => {

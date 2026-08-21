@@ -57,7 +57,14 @@
 //     RateHawk clone this wiring against their own integration name.
 
 const { getBudgetCap, evaluateCap } = require("./tenantSettings");
+const {
+  isGeminiLimitError,
+  buildGeminiLimitError,
+} = require("./geminiErrors");
 
+const {
+  resolveProviderConfig: resolveManagedProviderConfig,
+} = require("./aiProviderManagement");
 // PRD §9.1 routing table. Each entry: { primary, fallback }.
 // Primary is what we call first; fallback is the real-mode degraded
 // path when the primary provider errors or rate-limits. The scaffold
@@ -71,6 +78,11 @@ const TASK_ROUTING = {
   "form-vs-call": { primary: "gemini-flash", fallback: "gpt-4" },
   "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
   "call-summary": { primary: "gemini-flash", fallback: null },
+  // Callified AI call transcript classification for CRM leads (2026-07-31).
+  // Reads the latest call transcript + review and decides whether the lead
+  // is qualified, junk, dnp, or yet_to_call. Small JSON in/out → flash primary.
+  // NOTE: gemini-2.5-flash-lite was retired by Google; use gemini-flash.
+  "callified-lead-status": { primary: "gemini-flash", fallback: "gpt-4" },
   // Itinerary-suggest (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.6 + AI_SURFACES §3
   // table). 2K in / 4K out — larger out than bulk-text because the full
   // itinerary JSON shape (daySplit + poiSuggestions + thematicNotes) lands
@@ -193,6 +205,11 @@ const TASK_ROUTING = {
     primary: "gemini-flash",
     fallback: "groq-llama",
   },
+  // Travel CRM knowledge-base RAG (2026-08-04). Given a TMC diagnostic profile
+  // and the closest matching brochure chunks from Qdrant, return a structured
+  // JSON report: readiness score, recommended trips, places, and learnings.
+  // Gemini Flash primary for low-cost JSON shape; OpenAI gpt-4 fallback.
+  "travel-knowledge-rag": { primary: "gemini-flash", fallback: "gpt-4o-mini"},
   // Catch-all for unrecognized tasks → reasoning model (Claude)
   // matches PRD's preference for a high-quality default.
 };
@@ -207,11 +224,14 @@ const ENV_FOR_MODEL = {
   "perplexity-sonar": "PERPLEXITY_API_KEY",
   "claude-opus-4-7": "ANTHROPIC_API_KEY",
   "gpt-4": "OPENAI_API_KEY",
+  "gpt-4o": "OPENAI_API_KEY",
+  "gpt-4o-mini": "OPENAI_API_KEY",
   // OpenAI's web-search-enabled chat model — same OPENAI_API_KEY, but the
   // model itself browses the live web (gpt-4o-search-preview). Used by the
   // flight/hotel/transfer search tasks so estimates are web-grounded.
   "gpt-4o-search": "OPENAI_API_KEY",
   "gemini-flash": "GEMINI_API_KEY",
+  "gemini-flash-lite": "GEMINI_API_KEY",
   "claude-haiku": "ANTHROPIC_API_KEY",
   "groq-llama": "GROQ_API_KEY",
   // S16 — image-gen providers for marketing-flyer-image task class
@@ -253,10 +273,21 @@ async function getLlmKey(tenantId, model) {
   const envVar = ENV_FOR_MODEL[model];
   const envValue = envVar ? process.env[envVar] : null;
 
-  // No tenant scope (e.g. sync probes from /api/health legacy callers
-  // wrapped via .then()) → ENV only. Matches the pre-S45 contract.
   if (!tenantId) {
     return envValue || null;
+  }
+
+  try {
+    const managedConfig = await resolveManagedProviderConfig(tenantId, {
+      requestedModelLabel: model,
+    });
+    if (managedConfig && managedConfig.apiKey) {
+      return managedConfig.apiKey;
+    }
+  } catch (e) {
+    console.error(
+      `[llm-router] getLlmKey shared AI resolver lookup failed (non-fatal, falling back to legacy stores): ${e.message}`,
+    );
   }
 
   try {
@@ -267,10 +298,6 @@ async function getLlmKey(tenantId, model) {
     ) {
       return envValue || null;
     }
-    // Accept either the model name OR the env-var name as supplierName.
-    // PRD §9.1 doesn't pin the naming convention; we accept both so the
-    // operator seeding the row doesn't need to know which one our code
-    // looks up. The 'in' filter is one Prisma round-trip vs. two.
     const candidates = [model];
     if (envVar) candidates.push(envVar);
     const row = await prisma.supplierCredential.findFirst({
@@ -282,8 +309,6 @@ async function getLlmKey(tenantId, model) {
       select: { passwordEncrypted: true },
     });
     if (row && row.passwordEncrypted) {
-      // Lazy require to avoid a circular bomb in test harnesses that
-      // hand-roll the crypto layer.
       const { decrypt } = require("./fieldEncryption");
       const plaintext = decrypt(row.passwordEncrypted);
       if (plaintext) return plaintext;
@@ -420,12 +445,51 @@ async function routeRequest({ task, payload, tenantId } = {}) {
   // the model's key was absent → talking-points/etc. 500'd instead of stubbing).
   // Passing tenantId also lets the per-tenant SupplierCredential key resolve.
   if (process.env.NODE_ENV !== "test") {
-    // Build the ordered model chain: the task's primary, then its configured
-    // fallback (typically a DIFFERENT provider, e.g. Gemini → OpenAI). Keep only
-    // candidates whose API key is actually available (per-tenant or env). When
-    // the primary errors (Gemini 503 overload / 429 quota), we transparently try
-    // the fallback so the operator still gets a real AI result rather than the
-    // deterministic stub. Empty chain (no keys) falls through to the stub below.
+    if (tenantId) {
+      // Tenant-scoped call: authorization is decided ONE way, by the shared
+      // AI Subscription & Credit gate (BYOK → funded CRM subscription →
+      // blocked), never by "does some env var happen to be set". Previously
+      // this branch built a model chain from getLlmKey(), which falls back
+      // to the bare platform process.env.*_API_KEY for ANY tenant with no
+      // BYOK and no subscription — silently giving every tenant free,
+      // unmetered access to the platform's shared key. aiGateway's
+      // assertAccessOrThrow is the only thing allowed to say yes here.
+      try {
+        return await realProviderCall({ task, model, payload, tenantId });
+      } catch (e) {
+        if (e.friendly) {
+          // Blocked (no BYOK, no funded subscription) — surface the Step 9
+          // friendly message; do NOT fall through to the stub, which would
+          // silently hand the tenant a fake-but-plausible AI response
+          // instead of telling them to configure a key or buy credits.
+          throw e;
+        }
+        // A configured, authorized provider actually failed mid-call
+        // (503/429/network) — try the task's fallback model once, same
+        // resolver, same gate, before giving up.
+        const route = TASK_ROUTING[task] || {};
+        if (route.fallback && route.fallback !== model) {
+          console.error(`[llm-router] provider failed (task=${task} model=${model}): ${e.message}`);
+          console.warn(`[llm-router] task=${task}: falling back from ${model} to ${route.fallback}`);
+          try {
+            return await realProviderCall({ task, model: route.fallback, payload, tenantId });
+          } catch (e2) {
+            if (e2.friendly) throw e2;
+            const err = new Error(`LLM provider call failed: ${e2.message}`);
+            err.code = "LLM_PROVIDER_ERROR";
+            throw err;
+          }
+        }
+        const err = new Error(`LLM provider call failed: ${e.message}`);
+        err.code = "LLM_PROVIDER_ERROR";
+        throw err;
+      }
+    }
+
+    // No tenantId (system/cron-internal call with no tenant context — e.g.
+    // a platform-wide maintenance job). These predate per-tenant billing
+    // and aren't gated by the credit system; keep the legacy bare-env
+    // lookup + stub-on-no-key behavior exactly as before.
     const route = TASK_ROUTING[task] || {};
     const chain = [];
     for (const cand of [model, route.fallback]) {
@@ -531,6 +595,8 @@ function buildStubText(task, _payload) {
       return `${tag} Lead profile suggests: (1) confirm budget tier, (2) ask about prior travel, (3) probe destination flexibility. Synthetic content — real Gemini Flash reasoning lands when Q11 keys arrive.`;
     case "call-summary":
       return `${tag} Call summary: customer expressed interest in trip, advisor walked through options, follow-up scheduled. Synthetic content — real Gemini summary lands when Q11 keys arrive.`;
+    case "callified-lead-status":
+      return JSON.stringify({ status: "junk", reason: "No strong buying signals detected in the synthetic transcript." });
     case "lead-conversation-summary":
       // Stub returns valid JSON matching the real-mode shape so
       // leadConversationSummary.js can parse it in dev/CI without a key.
@@ -598,6 +664,19 @@ function buildStubText(task, _payload) {
         { lineType: "visa", description: "Visa fees per person", quantity: 2, unitPrice: 6000, currency: "INR" },
         { lineType: "service", description: "Travel insurance per person", quantity: 2, unitPrice: 1200, currency: "INR" },
       ]);
+    case "travel-knowledge-rag":
+      return JSON.stringify({
+        readinessScore: 7,
+        summary: "[STUB-TRAVEL-KNOWLEDGE-RAG] Synthetic recommendation. Real Gemini Flash reasoning lands when Q11 keys arrive.",
+        recommendedTrips: [
+          {
+            name: "Example Trip (synthetic)",
+            driveLink: "https://drive.google.com/file/d/example/view",
+            summary: "A synthetic two-sentence summary describing why this trip fits the school's profile and what it covers.",
+            learnings: ["Learning A (synthetic)", "Learning B (synthetic)", "Learning C (synthetic)", "Learning D (synthetic)"],
+          },
+        ],
+      });
     case "reasoning":
       return `${tag} Reasoning output (synthetic). Real Gemini Flash/GPT lands when Q11 keys arrive.`;
     default:
@@ -632,6 +711,7 @@ const MODEL_ID_ENV = {
   // Web-search-enabled OpenAI model (browses the live web at query time).
   "gpt-4o-search": ["LLM_MODEL_GPT_SEARCH", "gpt-4o-search-preview"],
   "gemini-flash": ["LLM_MODEL_GEMINI", "gemini-2.5-flash"],
+  "gemini-flash-lite": ["LLM_MODEL_GEMINI_FLASH_LITE", "gemini-2.0-flash"],
   "perplexity-sonar": ["LLM_MODEL_PERPLEXITY", "sonar"],
 };
 
@@ -673,6 +753,8 @@ function buildPrompt(task, payload) {
     "bulk-text": "You write clear, customer-facing travel copy. Plain text.",
     "call-summary":
       "You summarise a sales/advisory call in a few sentences. Plain text.",
+    "callified-lead-status":
+      "You are a sales-intent classifier for an AI outbound calling system. Given a call transcript (or transcript summary) and optional review data, classify the lead's buying intent as EXACTLY one of: qualified, junk, dnp, yet_to_call. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"status\":\"qualified|junk|dnp|yet_to_call\",\"reason\":string}. Rules, in order of priority: 1) If review.appointment_booked is true, status MUST be qualified. 2) If review.quality_score is >= 4 (on a 1-5 scale), status MUST be qualified. 3) If review.quality_score is <= 2, status MUST be junk. 4) If the transcript/review indicates the call did not connect (no answer, busy, voicemail-only, hang-up before human interaction), status MUST be dnp. 5) Otherwise, read the transcript: qualified = clear buying intent, asked for quote/appointment/next step, or strongly positive. junk = not interested, wrong number, asked to stop calling, or clearly negative. yet_to_call = no call has been made yet or transcript is empty/missing. Keep reason to 1 concise sentence and mention the score/appointment when relevant.",
     "lead-conversation-summary":
       "You are a travel CRM assistant that writes concise, professional lead-history summaries from WhatsApp conversations — never a transcript, never chatty. Given the customer's name, the conversation date, and a batch of new WhatsApp messages (with direction: inbound = customer, outbound = agent), return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"purpose\":string,\"highlights\":string[],\"leadStage\":string}. `purpose` is 1-2 sentences on why the customer reached out / what this batch of messages was about. `highlights` is 2-6 short bullet phrases (no leading dash) covering: destination, travel dates, hotels/flights/visa/services requested, important questions raised, and actions the agent took. `leadStage` is your best single assessment of current status, one of: \"New Enquiry\", \"Quotation Pending\", \"Follow-up Required\", \"Documents Awaited\", \"Booking In Progress\", \"Booking Confirmed\", \"Payment Pending\", \"Closed\", \"Not Interested\" — pick the closest match, do not invent new ones unless truly none fit. Base everything ONLY on the messages given; do not invent destinations, dates or names not present. Return ONLY the JSON object.",
     "lead-narrative-summary":
@@ -681,6 +763,8 @@ function buildPrompt(task, payload) {
       "You generate STRUCTURED travel-destination landing-page block JSON. The canonical consumer (landingPageGeneratorLLM.js) supplies the full prompt — this text-envelope entry is a safety net for routeRequest callers. Return a JSON object with keys suggestedTitle, suggestedSlug, seoMeta {metaTitle, metaDescription}, and blocks (array). NEVER include monetary values, testimonials, ratings, discounts, vendor names, partner names, or image URLs.",
     "lead-capture-consolidate":
       "You are a travel CRM assistant that consolidates a lead's captured email/WhatsApp history into ONE flowing narrative — flowing paragraphs, never a transcript, never bullet points. The input is NOT raw messages — it is a series of ALREADY-SUMMARIZED dated blocks (each with a Customer/Date/Purpose/Discussion Highlights/Lead Stage section) that were written one at a time as separate captures over time; your job is to read all of them and merge them into one coherent case-file recap. Given the customer's name and the full block text, return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"narrative\":string,\"leadStage\":string}. `narrative` should be 2-5 short paragraphs in chronological order, each covering one meaningful phase (initial contact, a follow-up, a decision point), naming actual dates, destinations, services requested, and outcomes — do NOT restate every block verbatim, synthesize across all of them. Write in third person past tense, referring to the customer by name. `leadStage` is your best single current-status assessment from the LATEST block's stage, one of: \"New Enquiry\", \"Quotation Pending\", \"Follow-up Required\", \"Documents Awaited\", \"Booking In Progress\", \"Booking Confirmed\", \"Payment Pending\", \"Closed\", \"Not Interested\". Base everything ONLY on the text given; never invent details not present. Return ONLY the JSON object.",
+    "travel-knowledge-rag":
+      "You are a travel advisor for the CRM. Given a customer diagnostic profile and a set of brochure excerpts retrieved from a vector database, produce a structured JSON report that helps the customer understand which travel option fits them best. The sub-brand is provided in the context as `subBrand` (e.g., tmc = school trips, rfu = Umrah packages, travelstall = family holidays, visasure = visa services). Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"readinessScore\": number 0-10, \"summary\": string, \"recommendedTrips\": [{\"name\": string, \"driveLink\": string, \"summary\": string, \"learnings\": string[]}]}. The readinessScore reflects how ready the customer's answers suggest they are for the recommended travel option. recommendedTrips MUST contain at least 5 options, and up to 15 options if that many brochure excerpts are strongly relevant. If fewer than 5 excerpts are a clear match, include the next nearest relevant options to reach a minimum of 5. For every recommended option, provide a `summary` of exactly 2 concise sentences explaining why it suits the customer. Provide exactly 4 short `learnings` that describe what the traveller will experience, learn, or do on the trip. Never include cancellation, refund, payment terms, insurance disclaimers, or general booking/policy statements in the learnings. Use only the option names and facts present in the excerpts. Include the provided driveLink for each option so it is clickable in the final PDF. Do not invent destinations, prices, or details not in the excerpts.",
     reasoning:
       "You are a careful reasoning assistant for a travel CRM. Plain text.",
     search: "You answer with concise, well-sourced information. Plain text.",
@@ -775,17 +859,44 @@ async function callOpenAICompatible(
   };
 }
 
+// Build an auth header descriptor for a custom Gemini base URL.
+// Env format: GEMINI_AUTH_HEADER / TRAVEL_KNOWLEDGE_RAG_GEMINI_AUTH_HEADER = header
+// name (e.g. "Authorization" or "x-goog-api-key"), plus optional prefix env var.
+// If no prefix is supplied, "Authorization" defaults to "Bearer".
+function buildGeminiAuthHeader(headerName, prefix) {
+  if (!headerName) return null;
+  const name = headerName.trim();
+  if (!name) return null;
+  let resolvedPrefix = (prefix || "").trim();
+  if (!resolvedPrefix && name.toLowerCase() === "authorization") {
+    resolvedPrefix = "Bearer";
+  }
+  return { name, prefix: resolvedPrefix };
+}
+
 // A single generateContent call against one Gemini model. Throws on non-2xx
 // (httpJson surfaces "<status> <message>").
-async function callGeminiOnce(modelId, system, user, apiKey, maxTokens) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`;
+async function callGeminiOnce(modelId, system, user, apiKey, maxTokens, baseUrl, authHeader, jsonMode = false) {
+  const base = baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+  let url = `${base}/models/${modelId}:generateContent`;
+  const headers = { "content-type": "application/json" };
+  if (authHeader && authHeader.name) {
+    const prefix = authHeader.prefix || "";
+    headers[authHeader.name] = prefix ? `${prefix} ${apiKey}` : apiKey;
+  } else {
+    url += `?key=${encodeURIComponent(apiKey)}`;
+  }
+  const generationConfig = { maxOutputTokens: maxTokens };
+  if (jsonMode) {
+    generationConfig.responseMimeType = "application/json";
+  }
   const body = await httpJson(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts: [{ text: user }] }],
-      generationConfig: { maxOutputTokens: maxTokens },
+      generationConfig,
     }),
   });
   const parts =
@@ -820,18 +931,19 @@ function geminiModelChain(primaryId) {
   const raw = process.env.LLM_GEMINI_FALLBACK_MODELS;
   const fallbacks = raw && raw.trim()
     ? raw.split(",").map((s) => s.trim()).filter(Boolean)
-    : ["gemini-2.5-flash-lite", "gemini-2.0-flash"];
+    : ["gemini-2.0-flash"];
   return [primaryId, ...fallbacks].filter((m, i, a) => m && a.indexOf(m) === i);
 }
 
-async function callGemini(modelId, system, user, apiKey, maxTokens) {
+async function callGemini(modelId, system, user, apiKey, maxTokens, opts = {}) {
+  const { baseUrl, authHeader, jsonMode } = opts;
   const chain = geminiModelChain(modelId);
   const attemptsPerModel = 2;
   let lastErr;
   for (const m of chain) {
     for (let attempt = 1; attempt <= attemptsPerModel; attempt += 1) {
       try {
-        const out = await callGeminiOnce(m, system, user, apiKey, maxTokens);
+        const out = await callGeminiOnce(m, system, user, apiKey, maxTokens, baseUrl, authHeader, jsonMode);
         if (m !== modelId) {
           console.warn(`[llm-router] gemini: '${modelId}' unavailable, succeeded on fallback '${m}'`);
         }
@@ -853,6 +965,9 @@ async function callGemini(modelId, system, user, apiKey, maxTokens) {
     }
     console.warn(`[llm-router] gemini: '${m}' still failing after ${attemptsPerModel} attempts — trying next model`);
   }
+  if (isGeminiLimitError(lastErr)) {
+    throw buildGeminiLimitError(lastErr);
+  }
   throw lastErr || new Error("gemini call failed");
 }
 
@@ -869,8 +984,26 @@ function persistLlmCallLog(data) {
   }
 }
 
+// Tasks whose consumer expects a strict JSON object from the LLM.
+// Gemini 2.x supports responseMimeType: "application/json", which forces
+// valid JSON output and avoids mid-JSON truncation that breaks parsers.
+const JSON_OUTPUT_TASKS = new Set([
+  "callified-lead-status",
+  "flight-search",
+  "hotel-search",
+  "landing-page-generate",
+  "lead-capture-consolidate",
+  "lead-conversation-summary",
+  "lead-narrative-summary",
+  "marketing-flyer-copy",
+  "quote-template-generate",
+  "transfer-search",
+  "travel-knowledge-rag",
+  "whatsapp-lead-qualify",
+]);
+
 async function realProviderCall({ task, model, payload, tenantId }) {
-  const provider = providerForModel(model);
+  let provider = providerForModel(model);
   const { estimateLlmCost } = require("./apiPricing");
   const baseLogFields = {
     tenantId: tenantId || 1,
@@ -882,13 +1015,55 @@ async function realProviderCall({ task, model, payload, tenantId }) {
     surface: (payload && payload.__surface) || null,
   };
 
-  let apiKey, modelId, system, user;
+  let modelId = resolveRealModelId(model);
+  let system;
+  let user;
+  try {
+    ({ system, user } = buildPrompt(task, payload));
+  } catch (e) {
+    persistLlmCallLog({
+      ...baseLogFields,
+      reason: "real",
+      costEstimate: 0,
+      status: "failed",
+      errorMessage: e.message,
+    });
+    throw e;
+  }
+
+  if (tenantId) {
+    // Tenant-scoped: go through aiGateway, the ONE mandatory entry point
+    // that resolves BYOK/crm-managed access, logs LlmCallLog, and deducts
+    // credits — all in one place, so this call site can't drift from any
+    // other feature's gating/metering behavior. Throws a "friendly" error
+    // (no BYOK, no funded subscription) that the caller (routeRequest) is
+    // responsible for surfacing rather than silently falling back.
+    const aiGateway = require("./aiGateway");
+    const resp = await aiGateway.runAiRequest({
+      tenantId,
+      task,
+      surface: baseLogFields.surface,
+      userId: baseLogFields.userId,
+      requestedModelLabel: model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    return {
+      text: resp.text || "",
+      finishReason: "stop",
+      usage: resp.usage,
+      model: resp.model || modelId,
+      stub: false,
+    };
+  }
+
+  let apiKey;
   try {
     const envVar = ENV_FOR_MODEL[model];
     apiKey = envVar && process.env[envVar];
     if (!apiKey) throw new Error(`no API key for ${model}`);
-    modelId = resolveRealModelId(model);
-    ({ system, user } = buildPrompt(task, payload));
   } catch (e) {
     persistLlmCallLog({
       ...baseLogFields,
@@ -905,21 +1080,29 @@ async function realProviderCall({ task, model, payload, tenantId }) {
   try {
     if (provider === "anthropic") out = await callAnthropic(modelId, system, user, apiKey, maxTokens);
     else if (provider === "openai") {
-      // gpt-4o-search-preview browses the live web when web_search_options is set;
-      // regular gpt-4o has no web access, so only enable it for the search model.
       const extra = /search/.test(modelId) ? { web_search_options: {} } : {};
       out = await callOpenAICompatible("https://api.openai.com/v1", modelId, system, user, apiKey, maxTokens, extra);
     }
     else if (provider === "perplexity") out = await callOpenAICompatible("https://api.perplexity.ai", modelId, system, user, apiKey, maxTokens);
-    else if (provider === "gemini") out = await callGemini(modelId, system, user, apiKey, maxTokens);
+    else if (provider === "gemini") {
+      let baseUrl = null;
+      let authHeader = null;
+      if (task === "travel-knowledge-rag" && process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL) {
+        baseUrl = process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL;
+        authHeader = buildGeminiAuthHeader(process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_AUTH_HEADER, process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_AUTH_PREFIX);
+      } else if (process.env.GEMINI_BASE_URL) {
+        baseUrl = process.env.GEMINI_BASE_URL;
+        authHeader = buildGeminiAuthHeader(process.env.GEMINI_AUTH_HEADER, process.env.GEMINI_AUTH_PREFIX);
+      }
+      out = await callGemini(modelId, system, user, apiKey, maxTokens, { task, baseUrl, authHeader, jsonMode: JSON_OUTPUT_TASKS.has(task) });
+    }
     else if (provider === "groq") out = await callOpenAICompatible("https://api.groq.com/openai/v1", modelId, system, user, apiKey, maxTokens);
     else throw new Error(`unknown provider for ${model}`);
   } catch (e) {
-    // Failure path — log WHY (errorMessage), no tokens/cost since no
-    // successful response came back. Powers the API Analytics "failures"
-    // view: every failed external call is visible with its real error text.
     persistLlmCallLog({
       ...baseLogFields,
+      model: modelId,
+      provider,
       reason: "real",
       costEstimate: 0,
       status: "failed",
@@ -928,21 +1111,19 @@ async function realProviderCall({ task, model, payload, tenantId }) {
     throw e;
   }
 
-  const tokensIn =
-    out.tokensIn || estimateTokens(JSON.stringify(payload || {}));
+  const tokensIn = out.tokensIn || estimateTokens(JSON.stringify(payload || {}));
   const tokensOut = out.tokensOut || estimateTokens(out.text);
-  const costEstimate = estimateLlmCost(model, tokensIn, tokensOut);
+  const costEstimate = estimateLlmCost(modelId, tokensIn, tokensOut);
 
-  // Token-only telemetry — NEVER log payload content (PII discipline).
   console.log(
     `[llm-router] task=${task} model=${model} (${modelId}) tenant=${tenantId || "?"} ` +
     `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$${costEstimate.toFixed(6)} stub=false reason=real`,
   );
 
-  // Persist one LlmCallLog row (best-effort, fire-and-forget) — mirrors the
-  // stub path so the admin spend dashboard counts real calls too.
   persistLlmCallLog({
     ...baseLogFields,
+    model: modelId,
+    provider,
     reason: "real",
     promptTokens: tokensIn,
     completionTokens: tokensOut,
@@ -959,7 +1140,7 @@ async function realProviderCall({ task, model, payload, tenantId }) {
       completionTokens: tokensOut,
       totalTokens: tokensIn + tokensOut,
     },
-    model,
+    model: modelId,
     stub: false,
   };
 }

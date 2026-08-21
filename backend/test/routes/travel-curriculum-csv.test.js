@@ -34,7 +34,7 @@
  *     tenantId from req.user, not a body-supplied value.
  *   - GET /coverage happy path: matrix shape valid; outcomesMissing
  *     reflects the 7 canonical TMC skills.
- *   - GET /coverage zero-mappings tenant: synthesised rows for the 4
+ *   - GET /coverage zero-mappings tenant: synthesised rows for the 6
  *     allowed curricula, each with all 7 skills missing.
  *   - GET /coverage role gate: USER → 403 RBAC_DENIED.
  */
@@ -332,7 +332,7 @@ describe('GET /api/travel-curriculum/export.csv', () => {
     expect(res.status).toBe(200);
     const text = res.body.toString('utf8').replace(/^\uFEFF/, '');
     expect(text).toBe(
-      'curriculum,grade,subject,learningOutcome,destinationLabel,destinationId,fitScore,fitRationale,isActive',
+      'curriculum,grade,subject,learningOutcome,academicYear,learningOutcomeCode,destinationLabel,destinationId,fitScore,confidenceScore,fitRationale,mappingSource,isActive',
     );
   });
 
@@ -431,8 +431,8 @@ describe('GET /api/travel-curriculum/coverage', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
 
     expect(res.status).toBe(200);
-    // 4 allowed curricula × all-7 missing.
-    expect(res.body.coverage).toHaveLength(4);
+    // 6 allowed curricula × all-7 missing.
+    expect(res.body.coverage).toHaveLength(6);
     for (const row of res.body.coverage) {
       expect(row.mappingCount).toBe(0);
       expect(row.outcomesCovered).toEqual([]);
@@ -452,7 +452,7 @@ describe('GET /api/travel-curriculum/coverage', () => {
     expect(res.body.totals.totalMappings).toBe(0);
     expect(res.body.totals.boardsCovered).toBe(0);
     expect(res.body.totals.fullCoverageBoards).toEqual([]);
-    expect(res.body.totals.gapCount).toBe(4 * 7);
+    expect(res.body.totals.gapCount).toBe(6 * 7);
   });
 
   test('case 12: role gate — USER → 403', async () => {

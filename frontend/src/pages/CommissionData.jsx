@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { IndianRupee, Download, Search } from 'lucide-react';
+import { IndianRupee, Upload, Search } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -206,7 +206,7 @@ export default function CommissionData() {
                 fontWeight: 500,
               }}
             >
-              <Download size={15} />
+              <Upload size={15} />
               Export CSV
             </button>
           </div>

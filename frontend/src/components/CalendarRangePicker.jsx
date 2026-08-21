@@ -64,7 +64,12 @@ function isBetween(d, start, end) {
   return t > Math.min(start.getTime(), end.getTime()) && t < Math.max(start.getTime(), end.getTime());
 }
 
-export default function CalendarRangePicker({ value, onChange, label = 'Date range' }) {
+// `align` picks which edge of the pill the popover hangs from. Default 'left'
+// keeps every existing caller pixel-identical; pass 'right' when the picker
+// sits in a right-aligned toolbar, where a left-anchored 300px popover would
+// otherwise run off the right edge of the viewport and clip the last two
+// weekday columns.
+export default function CalendarRangePicker({ value, onChange, label = 'Date range', align = 'left' }) {
   const state = value || { from: '', to: '' };
   const committedFrom = parseIso(state.from);
   const committedTo = parseIso(state.to);
@@ -161,13 +166,21 @@ export default function CalendarRangePicker({ value, onChange, label = 'Date ran
         className="input-field"
         onClick={() => setOpen((o) => !o)}
         aria-label={label}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         style={{
           display: 'flex', alignItems: 'center', gap: 6,
-          width: 'auto',
-          minWidth: 150,
+          width: 182,
+          minWidth: 182,
+          flex: '0 0 182px',
+          height: 46,
+          boxSizing: 'border-box',
           justifyContent: 'flex-start',
           cursor: 'pointer',
-          fontSize: 'inherit',
+          fontSize: '0.9rem',
+          fontWeight: 600,
+          borderRadius: 10,
+          background: 'var(--input-bg, var(--surface-color, #101321))',
         }}
       >
         <Calendar size={14} style={{ flexShrink: 0, color: 'var(--text-secondary, #9aa0ab)' }} />
@@ -186,10 +199,18 @@ export default function CalendarRangePicker({ value, onChange, label = 'Date ran
           role="dialog"
           aria-label="Select date range"
           style={{
-            position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 50,
-            background: 'var(--card-bg, #1a1a1a)', color: 'var(--text-primary)',
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            ...(align === 'right' ? { right: 0 } : { left: 0 }),
+            zIndex: 50,
+            // --card-bg is not defined by either theme, so this always fell
+            // through to the hardcoded dark #1a1a1a. Under the light theme
+            // that put --text-primary (near-black there) on a near-black
+            // panel and the month name and dates went invisible. --bg-color
+            // is defined by both themes and is opaque in both.
+            background: 'var(--bg-color)', color: 'var(--text-primary)',
             border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-            borderRadius: 12, boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+            borderRadius: 12, boxShadow: 'var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.4))',
             padding: '0.85rem', width: 300,
           }}
         >

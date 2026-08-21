@@ -119,6 +119,7 @@ authMw.verifyRole = (_roles) => (_req, _res, next) => next();
 // ── Prisma singleton patching.
 prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
+prisma.contact.findUnique = vi.fn();
 prisma.contact.create = vi.fn();
 prisma.contact.update = vi.fn();
 prisma.patient = prisma.patient || {};
@@ -148,6 +149,7 @@ function makeApp({ role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);

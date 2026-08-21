@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDateMedium } from '../utils/date';
 import { useNotify } from '../utils/notify';
-import { PieChart as PieChartIcon, Download, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
+import { PieChart as PieChartIcon, Upload, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 
@@ -88,6 +88,7 @@ export default function Reports() {
         setData([]);
         setLoading(false);
       });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- dateParams is derived from the listed state deps
   }, [metric, groupBy, startDate, endDate]);
 
   useEffect(() => {
@@ -97,6 +98,7 @@ export default function Reports() {
         .then(res => { setDetailData(Array.isArray(res) ? res : []); setDetailLoading(false); })
         .catch(() => { setDetailData([]); setDetailLoading(false); });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- dateParams is derived from the listed state deps
   }, [viewMode, detailType, startDate, endDate]);
 
   // Schedules
@@ -177,7 +179,7 @@ export default function Reports() {
   const needsGroupBy = metric === 'revenue' || metric === 'count';
 
   return (
-    <div style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="reports-page" style={{ padding: '2rem', minHeight: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Reports & Analytics</h1>
@@ -198,10 +200,10 @@ export default function Reports() {
             )}
           </div>
           <button className="btn-secondary" onClick={() => exportFile('csv')} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Download size={16} /> CSV
+            <Upload size={16} /> CSV
           </button>
           <button className="btn-primary" onClick={() => exportFile('pdf')} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Download size={16} /> PDF
+            <Upload size={16} /> PDF
           </button>
           <button className="btn-secondary" onClick={() => setShowScheduleModal(true)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Clock size={16} /> Schedule
@@ -220,9 +222,9 @@ export default function Reports() {
       </div>
 
       {viewMode === 'chart' ? (
-        <div style={{ display: 'flex', gap: '2rem', flex: 1, minHeight: 0, flexWrap: 'wrap' }}>
+        <div className="reports-page__overview">
           {/* Controls Sidebar */}
-          <div className="card" style={{ width: '300px', minWidth: '260px', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '2rem', flex: '0 0 auto' }}>
+          <div className="card" style={{ minWidth: 0, padding: '2rem', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Filter size={20} color="var(--primary-color, var(--accent-color))" /> Query Builder
             </h3>
@@ -272,7 +274,7 @@ export default function Reports() {
               and add `minWidth: 0` so the card can shrink below its content
               width without forcing a -1 measurement. Mirrors the
               OwnerDashboard.jsx revenue-trend pattern (`<div style={{ height: 220 }}>`). */}
-          <div className="card" style={{ flex: 1, minWidth: 0, padding: '2rem', display: 'flex', flexDirection: 'column' }}>
+          <div className="card" style={{ minWidth: 0, padding: '2rem', display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
               <h3 style={{ fontSize: '1.25rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <PieChartIcon size={20} color="var(--success-color)" /> Data Projection
@@ -350,13 +352,13 @@ export default function Reports() {
             ))}
           </div>
 
-          <div className="card" style={{ overflow: 'auto' }}>
+          <div className="reports-page__table-shell card">
             {detailLoading ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading data...</div>
             ) : detailData.length === 0 ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No records found for the selected period.</div>
             ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+              <table className="stable-table" style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                     {detailType === 'deals' && <>
@@ -439,12 +441,12 @@ export default function Reports() {
 
       {/* Scheduled Reports Section */}
       {schedules.length > 0 && (
-        <div style={{ marginTop: '2rem' }}>
+        <div className="reports-page__schedule" style={{ marginTop: '2rem' }}>
           <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Mail size={18} color="var(--accent-color)" /> Scheduled Email Reports
           </h3>
-          <div className="card" style={{ overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+          <div className="reports-page__table-shell card">
+            <table className="stable-table reports-page__schedule-table" style={{ borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                   <th style={thStyle}>Name</th>

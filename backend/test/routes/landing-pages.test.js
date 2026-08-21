@@ -108,6 +108,8 @@ prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
 prisma.tripParticipant.update = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripMicrosite = prisma.tripMicrosite || {};
 prisma.tripMicrosite.findUnique = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 // Phase 11 — PUT /:id can set tripId, which validates the trip exists
 // in the requester's tenant before persisting the link.
 prisma.tmcTrip = prisma.tmcTrip || {};
@@ -160,6 +162,7 @@ beforeEach(() => {
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
   prisma.tripParticipant.update.mockReset().mockResolvedValue({ id: 1 });
   prisma.tripMicrosite.findUnique.mockReset();
+  prisma.tenant.findUnique.mockReset();
   prisma.tmcTrip.findFirst.mockReset();
 });
 
@@ -607,6 +610,33 @@ describe('POST /api/landing-pages/:id/publish | /unpublish | /duplicate', () => 
     expect(res.body.publishedAt).toBeTruthy();
   });
 
+  test('publish: blocks a second generic landing site while one is already published', async () => {
+    prisma.landingPage.findFirst.mockImplementation(async (args) => {
+      if (args.where?.id === 50) {
+        return {
+          id: 50,
+          tenantId: 1,
+          status: 'DRAFT',
+          title: 'Hair Treatment',
+          slug: 'hair-treatment',
+          templateType: 'generic-site-wellness-v1',
+          content: JSON.stringify([]),
+        };
+      }
+      if (args.where?.status === 'PUBLISHED') {
+        return { id: 51, tenantId: 1, status: 'PUBLISHED', title: 'Skin Care', slug: 'skin-care' };
+      }
+      return null;
+    });
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/publish')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ANOTHER_LANDING_SITE_PUBLISHED');
+    expect(res.body.currentPublishedLandingSite).toMatchObject({ id: 51, title: 'Skin Care', slug: 'skin-care' });
+    expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+
   test('unpublish: flips PUBLISHED back to DRAFT', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({ id: 50, tenantId: 1, status: 'PUBLISHED' });
     prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data }));
@@ -756,25 +786,144 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
   });
 });
 
+describe('GET /api/landing-pages/public/featured-full (no auth, full published payload)', () => {
+  test('200 returns the featured PUBLISHED row with parsed content for external hosts', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50,
+      slug: 'europe-2026',
+      title: 'Europe 2026',
+      status: 'PUBLISHED',
+      templateType: 'wanderlux-v1',
+      destination: 'Europe',
+      subBrand: 'tmc',
+      metaTitle: 'Europe 2026',
+      metaDescription: 'Trip page',
+      featuredAt: new Date('2026-08-01T10:00:00Z'),
+      publishedAt: new Date('2026-08-01T10:00:00Z'),
+      updatedAt: new Date('2026-08-02T10:00:00Z'),
+      content: JSON.stringify({ theme: { brandColor: '#0F1B3D' }, brand: { subBrand: 'TMC' } }),
+    });
+
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured-full?subBrand=tmc');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 50,
+      slug: 'europe-2026',
+      title: 'Europe 2026',
+      templateType: 'wanderlux-v1',
+      publicUrl: '/p/europe-2026',
+      content: {
+        theme: { brandColor: '#0F1B3D' },
+        brand: { subBrand: 'TMC' },
+      },
+    });
+    const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
+    expect(findArgs.where.subBrand).toBe('tmc');
+    expect(findArgs.orderBy).toEqual({ featuredAt: 'desc' });
+  });
+
+  test('500 when featured page content is malformed JSON', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50,
+      slug: 'broken-page',
+      title: 'Broken',
+      status: 'PUBLISHED',
+      templateType: 'wanderlux-v1',
+      destination: 'Europe',
+      subBrand: 'tmc',
+      metaTitle: 'Broken',
+      metaDescription: 'Broken',
+      featuredAt: new Date('2026-08-01T10:00:00Z'),
+      publishedAt: new Date('2026-08-01T10:00:00Z'),
+      updatedAt: new Date('2026-08-02T10:00:00Z'),
+      content: '{bad json',
+    });
+
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured-full');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/not valid JSON/);
+  });
+});
+
+describe('GET /api/landing-pages/public/by-slug/:slug (no auth, full published payload)', () => {
+  test('200 returns the exact published page payload with parsed content', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 77,
+      slug: 'modern-classroom',
+      title: 'The Modern Classroom',
+      status: 'PUBLISHED',
+      templateType: 'wanderlux-v1',
+      destination: 'Europe',
+      subBrand: 'tmc',
+      metaTitle: 'The Modern Classroom',
+      metaDescription: 'Landing page',
+      featuredAt: new Date('2026-08-01T10:00:00Z'),
+      publishedAt: new Date('2026-08-01T10:00:00Z'),
+      updatedAt: new Date('2026-08-02T10:00:00Z'),
+      content: JSON.stringify({ hero: { headline: 'Where Textbooks Come Alive' } }),
+    });
+
+    const res = await request(makeApp()).get('/api/landing-pages/public/by-slug/modern-classroom');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 77,
+      slug: 'modern-classroom',
+      publicUrl: '/p/modern-classroom',
+      content: {
+        hero: { headline: 'Where Textbooks Come Alive' },
+      },
+    });
+    expect(prisma.landingPage.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { slug: 'modern-classroom', status: 'PUBLISHED' },
+      }),
+    );
+  });
+
+  test('404 when the slug is not published', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp()).get('/api/landing-pages/public/by-slug/missing-page');
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NO_PAGE_PUBLISHED');
+  });
+});
 describe('GET /api/landing-pages/public/featured (no auth, /trips resolver)', () => {
-  test('200 returns featured PUBLISHED row when one exists', async () => {
+  test('200 returns the featured PUBLISHED row by default', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'japan-2026', title: 'Japan 2026', destination: 'Japan',
       subBrand: 'tmc', featuredAt: new Date('2026-06-22T10:00:00Z'),
     });
-    // Public route — no Bearer header.
+    // Public route - no Bearer header.
     const res = await request(makeApp()).get('/api/landing-pages/public/featured');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       id: 50, slug: 'japan-2026', title: 'Japan 2026',
       destination: 'Japan', subBrand: 'tmc',
     });
-    // Filter must include isFeatured: true AND status: PUBLISHED.
+    // Default lookup returns ANY featured page across all sub-brands.
     const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
     expect(findArgs.where.isFeatured).toBe(true);
     expect(findArgs.where.status).toBe('PUBLISHED');
+    expect(findArgs.where.subBrand).toBeUndefined();
     // Recency-ordered.
     expect(findArgs.orderBy).toEqual({ featuredAt: 'desc' });
+  });
+
+  test('?subBrand=tmc ignores a featured wellness row when travel is featured too', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'japan-2026', title: 'Japan 2026', destination: 'Japan',
+      subBrand: 'tmc', featuredAt: new Date('2026-06-22T10:00:00Z'),
+    });
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured?subBrand=tmc');
+    expect(res.status).toBe(200);
+    expect(res.body.subBrand).toBe('tmc');
+    const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
+    expect(findArgs.where.subBrand).toBe('tmc');
   });
 
   test('404 NO_FEATURED_PAGE when no row matches', async () => {
@@ -804,7 +953,6 @@ describe('GET /api/landing-pages/public/featured (no auth, /trips resolver)', ()
     expect(findArgs.where.subBrand).toBeNull();
   });
 });
-
 // ─── GET /:id/analytics ──────────────────────────────────────────────
 
 describe('GET /api/landing-pages/:id/analytics', () => {
@@ -1108,6 +1256,45 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
     );
   });
 
+  test('wellness-style public registration stores first/last name and service interest on the lead contact', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 52,
+      slug: 'blood-donation-bangalore-enhance-wellness',
+      status: 'PUBLISHED',
+      title: 'Enhance Wellness Blood Donation Drive',
+      content: JSON.stringify([{ type: 'form', props: {} }]),
+      tenantId: 2,
+      templateType: 'generic-site:wellness-registration-v1',
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 1200, email: 'asha@example.com', tenantId: 2 });
+    prisma.landingPage.update.mockResolvedValue({ id: 52, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/blood-donation-bangalore-enhance-wellness/submit')
+      .send({
+        first_name: 'Asha',
+        last_name: 'Donor',
+        email: 'asha@example.com',
+        phone: '+919876543210',
+        service_interest: 'Event Registration',
+        message: 'I can donate in the morning.',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const upsertArgs = prisma.contact.upsert.mock.calls[0][0];
+    expect(upsertArgs.where.email_tenantId).toEqual({ email: 'asha@example.com', tenantId: 2 });
+    expect(upsertArgs.create).toMatchObject({
+      name: 'Asha Donor',
+      email: 'asha@example.com',
+      phone: '+919876543210',
+      status: 'Lead',
+      source: 'inbound:webform',
+      firstTouchSource: 'Landing Page: Enhance Wellness Blood Donation Drive',
+      treatmentOfInterest: 'Event Registration',
+      tenantId: 2,
+    });
+  });
   test('unknown slug → 404 (no contact/deal/analytics writes)', async () => {
     prisma.landingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp())
@@ -1187,6 +1374,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       publishedAt: new Date(),
       expiresAt: null,
     });
+    prisma.tenant.findUnique.mockResolvedValue({ slug: 'travel-stall' });
     prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
     prisma.contact.upsert.mockResolvedValue({ id: 8001, tenantId: 1 });
 
@@ -1204,11 +1392,23 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       draftId: 7001,
       redirect: {
         type: 'microsite',
-        // URL must carry ONLY the opaque draftToken — no PII fields
-        url: expect.stringMatching(/^\/p\/tripmicrosite\/[0-9a-f-]+\?draftToken=[0-9a-f]{64}$/),
+        // URL must carry the opaque draftToken plus the customer-register bridge.
+        url: expect.stringMatching(/^\/p\/tripmicrosite\/[0-9a-f-]+\?draftToken=[0-9a-f]{64}&portalRedirect=.*/),
       },
     });
-    // PII must NOT appear in the redirect URL
+    const redirectUrl = new URL(`http://localhost${res.body.redirect.url}`);
+    expect(redirectUrl.searchParams.get('draftToken')).toMatch(/^[0-9a-f]{64}$/);
+    const portalRedirect = redirectUrl.searchParams.get('portalRedirect');
+    expect(portalRedirect).toContain('/customer/register?tenantSlug=travel-stall');
+    expect(portalRedirect).toContain('next=');
+    // #1307: PII (name/email/phone/passport) must not appear in the
+    // customer-portal bridge URL. The portal can resolve the draft via the
+    // opaque draftToken using /api/travel/microsites/public/:uuid/draft-summary.
+    expect(portalRedirect).not.toContain('name=');
+    expect(portalRedirect).not.toContain('Rohan');
+    expect(portalRedirect).not.toContain('email=');
+    expect(portalRedirect).not.toContain('rohan%40example.com');
+    // PII must not appear in the microsite URL directly.
     expect(res.body.redirect.url).not.toContain('Aarav');
     expect(res.body.redirect.url).not.toContain('rohan@example.com');
     expect(res.body.redirect.url).not.toContain('919876543210');

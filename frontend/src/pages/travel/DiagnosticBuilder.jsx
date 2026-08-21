@@ -24,7 +24,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
-  Download, FileJson, Plus, Save, Send, Settings, Trash2, Upload,
+  Upload, Download, FileJson, Plus, Save, Send, Settings, Trash2,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -254,7 +254,7 @@ export default function DiagnosticBuilder() {
         </h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
-            <Download size={14} aria-hidden /> Export CSV
+            <Upload size={14} aria-hidden /> Export CSV
           </button>
           <button
             type="button"
@@ -262,7 +262,7 @@ export default function DiagnosticBuilder() {
             style={secondaryBtn}
             title="Bulk-upload diagnostic banks (CSV or Excel). Columns: subBrand, version, questionsJson, scoringRulesJson, isActive."
           >
-            <Upload size={14} aria-hidden /> Import CSV/Excel
+            <Download size={14} aria-hidden /> Import CSV/Excel
           </button>
           <input
             ref={fileRef}

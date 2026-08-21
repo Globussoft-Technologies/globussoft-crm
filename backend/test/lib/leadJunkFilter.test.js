@@ -19,11 +19,40 @@
 // of the wellness E2E suite re-create test-skip / test-junk contacts, and
 // without this helper they'd re-pollute the demo Marketing Attribution screen
 // until the operator re-runs the scrub.
-import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import prisma from '../../lib/prisma.js';
-import junk from '../../lib/leadJunkFilter.js';
 import junkSourceFilter from '../../lib/junkSourceFilter.js';
 
+// The optional Stage-3.5 AI classifier (LEAD_JUNK_AI=1) goes through
+// lib/aiGateway.runAiRequest — the mandatory resolve/gate/log/deduct entry
+// point every AI feature in the CRM shares (BYOK first, then a funded
+// CRM-managed subscription). Mocked directly here rather than the Gemini SDK
+// (leadJunkFilter no longer touches the SDK — access is resolved per-call,
+// per-tenantId). Pattern mirrors test/cron/sentimentEngine.test.js.
+//
+// leadJunkFilter.js is loaded via requireCJS (NOT a static ESM import) —
+// a static `import junk from '../../lib/leadJunkFilter.js'` is hoisted and
+// evaluated before the Module._cache injection below runs, so it would
+// require() the real aiGateway instead of the mock.
+const { mockRunAiRequest } = vi.hoisted(() => ({ mockRunAiRequest: vi.fn() }));
+vi.mock('../../lib/aiGateway', () => ({
+  default: { runAiRequest: mockRunAiRequest },
+  runAiRequest: mockRunAiRequest,
+}));
+
+import { createRequire } from 'node:module';
+const requireCJS = createRequire(import.meta.url);
+const aiGatewayPath = requireCJS.resolve('../../lib/aiGateway');
+require('node:module')._cache[aiGatewayPath] = {
+  id: aiGatewayPath,
+  filename: aiGatewayPath,
+  loaded: true,
+  exports: { runAiRequest: mockRunAiRequest },
+  children: [],
+  paths: [],
+};
+
+const junk = requireCJS('../../lib/leadJunkFilter.js');
 const { classifyLead, isIndianMobile, looksLikeGibberish, suspiciousEmail } = junk;
 const { isJunkSource, JUNK_SOURCE_EXACT, JUNK_SOURCE_PREFIXES } = junkSourceFilter;
 
@@ -35,6 +64,8 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset();
   prisma.contact.findFirst.mockResolvedValue(null); // no recent dup by default
   delete process.env.LEAD_JUNK_AI;
+  mockRunAiRequest.mockReset();
+  mockRunAiRequest.mockRejectedValue(new Error('test-default-no-ai'));
 });
 
 describe('lib/leadJunkFilter — module shape', () => {
@@ -347,6 +378,169 @@ describe('lib/leadJunkFilter — classifyLead', () => {
     expect(arg.where.createdAt.gte).toBeInstanceOf(Date);
     const orStr = JSON.stringify(arg.where.OR);
     expect(orStr).toContain('9876543210');
+  });
+});
+
+// ─── classifyLead — Stage 3.5 AI classifier (LEAD_JUNK_AI=1, via aiGateway) ─
+//
+// Only fires for scores in the ambiguous 26-50 mid-band. A gibberish name
+// alone (base 60 - 25) lands a clean-contact-info lead at 35 — in-band and
+// not already junk — so it's used as the base case throughout.
+
+describe('lib/leadJunkFilter — classifyLead AI path (LEAD_JUNK_AI=1)', () => {
+  beforeEach(() => {
+    process.env.LEAD_JUNK_AI = '1';
+  });
+
+  afterEach(() => {
+    delete process.env.LEAD_JUNK_AI;
+  });
+
+  test('AI verdict=junk with high confidence flips a mid-band lead to junk', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: '{"verdict":"junk","confidence":0.9,"reason":"looks like a bot submission"}',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 50, completionTokens: 10, totalTokens: 60 },
+    });
+    const out = await classifyLead({
+      tenantId: 1,
+      name: 'asdf',
+      phone: '9876543210',
+      email: 'real@gmail.com',
+    });
+    expect(mockRunAiRequest).toHaveBeenCalledTimes(1);
+    expect(mockRunAiRequest.mock.calls[0][0].tenantId).toBe(1);
+    expect(mockRunAiRequest.mock.calls[0][0].task).toBe('junk-classification');
+    expect(out.isJunk).toBe(true);
+    expect(out.score).toBeLessThanOrEqual(20);
+    expect(out.reasons.some((r) => /AI:.*bot submission/.test(r))).toBe(true);
+  });
+
+  test('AI verdict=good with high confidence raises the score, does not flip isJunk', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: '{"verdict":"good","confidence":0.85,"reason":"legit inquiry"}',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 50, completionTokens: 10, totalTokens: 60 },
+    });
+    const out = await classifyLead({
+      tenantId: 1,
+      name: 'asdf',
+      phone: '9876543210',
+      email: 'real@gmail.com',
+    });
+    expect(out.isJunk).toBe(false);
+    expect(out.score).toBeGreaterThanOrEqual(65);
+  });
+
+  test('AI verdict below confidence threshold (0.7) leaves the rule-based score untouched', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: '{"verdict":"junk","confidence":0.5,"reason":"uncertain"}',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 50, completionTokens: 10, totalTokens: 60 },
+    });
+    const out = await classifyLead({
+      tenantId: 1,
+      name: 'asdf',
+      phone: '9876543210',
+      email: 'real@gmail.com',
+    });
+    expect(out.isJunk).toBe(false);
+    expect(out.score).toBe(35);
+  });
+
+  test('AI throws (non-friendly) → swallowed, rule-based score stands, no throw upstream', async () => {
+    mockRunAiRequest.mockRejectedValueOnce(new Error('quota exceeded'));
+    const out = await classifyLead({
+      tenantId: 1,
+      name: 'asdf',
+      phone: '9876543210',
+      email: 'real@gmail.com',
+    });
+    expect(out.isJunk).toBe(false);
+    expect(out.score).toBe(35);
+  });
+
+  test('blocked access (no BYOK, no funded subscription) → silently swallowed', async () => {
+    const err = new Error('Your organization has not configured an AI provider yet.');
+    err.friendly = true;
+    mockRunAiRequest.mockRejectedValueOnce(err);
+    const out = await classifyLead({
+      tenantId: 1,
+      name: 'asdf',
+      phone: '9876543210',
+      email: 'real@gmail.com',
+    });
+    expect(out.isJunk).toBe(false);
+    expect(out.score).toBe(35);
+  });
+
+  test('AI returns malformed JSON → swallowed via the outer try/catch, rule-based score stands', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: 'not json at all',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 50, completionTokens: 10, totalTokens: 60 },
+    });
+    const out = await classifyLead({
+      tenantId: 1,
+      name: 'asdf',
+      phone: '9876543210',
+      email: 'real@gmail.com',
+    });
+    expect(out.isJunk).toBe(false);
+    expect(out.score).toBe(35);
+  });
+
+  test('score outside the 26-50 mid-band → AI is never attempted', async () => {
+    const out = await classifyLead({
+      tenantId: 1,
+      name: 'Rishu Kumar',
+      phone: '9876543210',
+      email: 'rishu@gmail.com',
+      source: 'referral',
+    });
+    expect(out.score).toBeGreaterThan(50);
+    expect(mockRunAiRequest).not.toHaveBeenCalled();
+  });
+
+  test('env flag unset (default) → AI is never attempted even for a mid-band score', async () => {
+    delete process.env.LEAD_JUNK_AI;
+    const out = await classifyLead({
+      tenantId: 1,
+      name: 'asdf',
+      phone: '9876543210',
+      email: 'real@gmail.com',
+    });
+    expect(out.score).toBe(35);
+    expect(mockRunAiRequest).not.toHaveBeenCalled();
+  });
+
+  test('the prompt includes lead fields and pre-flagged reasons', async () => {
+    mockRunAiRequest.mockResolvedValueOnce({
+      text: '{"verdict":"good","confidence":0.8,"reason":"ok"}',
+      model: 'gemini-2.5-flash',
+      provider: 'gemini',
+      accessType: 'byok',
+      usage: { promptTokens: 50, completionTokens: 10, totalTokens: 60 },
+    });
+    await classifyLead({
+      tenantId: 1,
+      name: 'asdf',
+      phone: '9876543210',
+      email: 'real@gmail.com',
+      source: 'website',
+    });
+    const prompt = mockRunAiRequest.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('name="asdf"');
+    expect(prompt).toContain('phone="9876543210"');
+    expect(prompt).toContain('gibberish');
   });
 });
 

@@ -15,6 +15,7 @@ import { FileText, Plus, Send, CheckCircle, Truck, XCircle, Download, RefreshCw 
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import CountBadge from "../../components/CountBadge";
 
 const STATUSES = [
   { value: "", label: "All statuses" },
@@ -78,8 +79,8 @@ export default function PurchaseOrders() {
       .catch(() => setSuppliers([]));
   };
 
-  useEffect(load, [status]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(loadSuppliers, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [status, notify]);
+  useEffect(loadSuppliers, []);
 
   const create = async () => {
     if (!form.supplierId) {
@@ -158,8 +159,9 @@ export default function PurchaseOrders() {
   return (
     <div style={{ padding: "1.5rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
-        <h1 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "1.5rem", fontWeight: 600 }}>
+        <h1 style={{ display: "flex", alignItems: "center", gap: 12, fontSize: "1.5rem", fontWeight: 600, flexWrap: "wrap" }}>
           <FileText size={24} /> Supplier Purchase Orders
+          <CountBadge count={pos.length} title={`${pos.length.toLocaleString()} purchase orders`} />
         </h1>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={load} className="btn btn-secondary" title="Refresh">
@@ -185,7 +187,7 @@ export default function PurchaseOrders() {
       {loading ? (
         <p>Loading purchase orders…</p>
       ) : pos.length === 0 ? (
-        <p style={{ color: "#777" }}>No purchase orders yet. Click "New PO" to create one.</p>
+        <p style={{ color: "#777" }}>No purchase orders yet. Click &quot;New PO&quot; to create one.</p>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>

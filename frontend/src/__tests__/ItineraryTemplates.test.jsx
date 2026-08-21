@@ -1,12 +1,12 @@
-/**
- * ItineraryTemplates.test.jsx — vitest + RTL coverage for the Travel-vertical
+﻿/**
+ * ItineraryTemplates.test.jsx â€” vitest + RTL coverage for the Travel-vertical
  * Itinerary Template Library admin page
  * (frontend/src/pages/travel/ItineraryTemplates.jsx).
  *
  * #907 slice 7/N. Pins the page-surface invariants that consume the
  * ItineraryTemplate CRUD shipped in slice 6 (8972b8ca):
  *   GET    /api/travel/itinerary-templates?destinationName=&category=&subBrand=&isActive=&limit=&offset=
- *          → 200 { items, total, limit, offset }
+ *          â†’ 200 { items, total, limit, offset }
  *   POST   /api/travel/itinerary-templates  body: { name(req), destinationName(req),
  *                                                    durationDays(req), ... }
  *   PATCH  /api/travel/itinerary-templates/:id
@@ -17,26 +17,26 @@
  *   2. GET on mount: hits /api/travel/itinerary-templates?... and renders one
  *      row per item.
  *   3. Empty list shows "No itinerary templates yet" empty state.
- *   4. Create flow: click "Add template" → fill required fields → submit
- *      "Create" → POST /api/travel/itinerary-templates called with payload →
+ *   4. Create flow: click "Add template" â†’ fill required fields â†’ submit
+ *      "Create" â†’ POST /api/travel/itinerary-templates called with payload â†’
  *      list re-fetched + notify.success surfaced.
- *   5. Validation: missing name → notify.error fired, NO POST.
- *   6. Validation: missing destinationName → notify.error fired, NO POST.
- *   7. Validation: missing durationDays → notify.error fired, NO POST.
- *   8. Edit flow: click Edit on a row → form populated → submit "Save changes"
- *      → PATCH /api/travel/itinerary-templates/:id called.
- *   9. Delete flow: click Delete → notify.confirm prompts → ack → DELETE
- *      /api/travel/itinerary-templates/:id → list re-fetched.
- *  10. Filter: change category → GET re-fires with ?category=… in the URL.
+ *   5. Validation: missing name â†’ notify.error fired, NO POST.
+ *   6. Validation: missing destinationName â†’ notify.error fired, NO POST.
+ *   7. Validation: missing durationDays â†’ notify.error fired, NO POST.
+ *   8. Edit flow: click Edit on a row â†’ form populated â†’ submit "Save changes"
+ *      â†’ PATCH /api/travel/itinerary-templates/:id called.
+ *   9. Delete flow: click Delete â†’ notify.confirm prompts â†’ ack â†’ DELETE
+ *      /api/travel/itinerary-templates/:id â†’ list re-fetched.
+ *  10. Filter: change category â†’ GET re-fires with ?category=â€¦ in the URL.
  *
  * Mocking discipline (per CLAUDE.md RTL standing rules):
  *   - fetchApi mocked at ../utils/api.
- *   - useNotify stub at ../utils/notify (not ../hooks/useNotify — code reality
+ *   - useNotify stub at ../utils/notify (not ../hooks/useNotify â€” code reality
  *     per the verifying-gap-card-claims discipline; see SightseeingMaster.test
  *     for the precedent).
  *   - notifyObj is a STABLE module-level reference (Wave 11 cfb5789 / Wave 12
- *     f59e91d RTL standing rule — fresh per-call objects flap useCallback
- *     identity → infinite re-renders).
+ *     f59e91d RTL standing rule â€” fresh per-call objects flap useCallback
+ *     identity â†’ infinite re-renders).
  *   - AuthContext consumed via real Provider. Default user role = ADMIN.
  *   - MemoryRouter wraps the SUT (the page renders a <Link to="/travel/
  *     sightseeing"> in the header copy).
@@ -53,9 +53,9 @@ vi.mock('../utils/api', () => ({
   getAuthToken: () => 'test-token',
 }));
 
-// G061 — Mock MapPreview to avoid pulling in leaflet (heavy + jsdom-hostile).
+// G061 â€” Mock MapPreview to avoid pulling in leaflet (heavy + jsdom-hostile).
 // Pattern mirrors ItineraryDetail.test.jsx's vi.mock('../components/MapPreview')
-// — the SUT's wire-in contract is what we assert (items prop pass-through +
+// â€” the SUT's wire-in contract is what we assert (items prop pass-through +
 // presence of the map section), not the leaflet render itself which is
 // exercised by MapPreview.test.jsx.
 const mapPreviewMock = vi.fn();
@@ -69,7 +69,7 @@ vi.mock('../components/MapPreview', () => ({
         data-pin-count={(props.items || []).length}
         data-height={props.height ?? ''}
       >
-        MapPreview stub — {(props.items || []).length} items
+        MapPreview stub â€” {(props.items || []).length} items
       </div>
     );
   },
@@ -139,7 +139,7 @@ const ITEMS_DEFAULT = [
   }),
   makeItem({
     id: 503,
-    name: 'Europe School Trip — 14 days',
+    name: 'Europe School Trip â€” 14 days',
     destinationName: 'London + Paris + Rome',
     durationDays: 14,
     category: 'school',
@@ -209,12 +209,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('<ItineraryTemplates /> — page chrome', () => {
+describe('<ItineraryTemplates /> â€” page chrome', () => {
   it('renders heading "Itinerary Template Library" + "Add template" CTA', async () => {
     renderPage();
     expect(
       screen.getByRole('heading', { name: /Itinerary Template Library/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/templates/i)).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Add template/i }),
     ).toBeInTheDocument();
@@ -228,12 +229,12 @@ describe('<ItineraryTemplates /> — page chrome', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — load + render lifecycle', () => {
+describe('<ItineraryTemplates /> â€” load + render lifecycle', () => {
   it('GETs /api/travel/itinerary-templates on mount and renders one row per item', async () => {
     renderPage();
     expect(await screen.findByText('Makkah-Madinah 10-day Umrah')).toBeInTheDocument();
     expect(screen.getByText('Bali Family Holiday')).toBeInTheDocument();
-    expect(screen.getByText('Europe School Trip — 14 days')).toBeInTheDocument();
+    expect(screen.getByText('Europe School Trip â€” 14 days')).toBeInTheDocument();
     const call = fetchApiMock.mock.calls.find(
       ([u, o]) =>
         typeof u === 'string'
@@ -254,7 +255,7 @@ describe('<ItineraryTemplates /> — load + render lifecycle', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — create flow', () => {
+describe('<ItineraryTemplates /> â€” create flow', () => {
   it('clicking "Add template" reveals the form; filling required fields + Create POSTs payload', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
@@ -263,7 +264,7 @@ describe('<ItineraryTemplates /> — create flow', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
 
     fireEvent.change(screen.getByLabelText('name'), {
-      target: { value: 'Goa Honeymoon — 5 nights' },
+      target: { value: 'Goa Honeymoon â€” 5 nights' },
     });
     fireEvent.change(screen.getByLabelText('destinationName'), {
       target: { value: 'Goa' },
@@ -287,7 +288,7 @@ describe('<ItineraryTemplates /> — create flow', () => {
       );
       expect(post).toBeTruthy();
       const body = JSON.parse(post[1].body);
-      expect(body.name).toBe('Goa Honeymoon — 5 nights');
+      expect(body.name).toBe('Goa Honeymoon â€” 5 nights');
       expect(body.destinationName).toBe('Goa');
       expect(body.durationDays).toBe(5);
       expect(body.basePriceMinor).toBe(4500000);
@@ -309,7 +310,7 @@ describe('<ItineraryTemplates /> — create flow', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — create validation', () => {
+describe('<ItineraryTemplates /> â€” create validation', () => {
   it('missing name surfaces notify.error and does NOT POST', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
@@ -376,7 +377,7 @@ describe('<ItineraryTemplates /> — create validation', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — edit flow', () => {
+describe('<ItineraryTemplates /> â€” edit flow', () => {
   it('clicking Edit on a row populates the form; submit PATCHes /api/travel/itinerary-templates/:id', async () => {
     renderPage();
     const rowName = await screen.findByText('Makkah-Madinah 10-day Umrah');
@@ -419,7 +420,7 @@ describe('<ItineraryTemplates /> — edit flow', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — delete flow', () => {
+describe('<ItineraryTemplates /> â€” delete flow', () => {
   it('clicking Delete on a row prompts notify.confirm + DELETEs /api/travel/itinerary-templates/:id', async () => {
     renderPage();
     const rowName = await screen.findByText('Makkah-Madinah 10-day Umrah');
@@ -447,8 +448,8 @@ describe('<ItineraryTemplates /> — delete flow', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — filter behaviour', () => {
-  it('changing category filter re-fetches with ?category=… in the URL', async () => {
+describe('<ItineraryTemplates /> â€” filter behaviour', () => {
+  it('changing category filter re-fetches with ?category=â€¦ in the URL', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
     fetchApiMock.mockClear();
@@ -471,7 +472,7 @@ describe('<ItineraryTemplates /> — filter behaviour', () => {
     });
   });
 
-  it('changing sub-brand filter re-fetches with ?subBrand=… in the URL', async () => {
+  it('changing sub-brand filter re-fetches with ?subBrand=â€¦ in the URL', async () => {
     renderPage();
     await screen.findByText('Bali Family Holiday');
     fetchApiMock.mockClear();
@@ -494,7 +495,7 @@ describe('<ItineraryTemplates /> — filter behaviour', () => {
     });
   });
 
-  it('typing in destination filter re-fetches with ?destinationName=… (trimmed) in the URL', async () => {
+  it('typing in destination filter re-fetches with ?destinationName=â€¦ (trimmed) in the URL', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
     fetchApiMock.mockClear();
@@ -512,7 +513,7 @@ describe('<ItineraryTemplates /> — filter behaviour', () => {
           && (!o?.method || o.method === 'GET'),
       );
       expect(call).toBeTruthy();
-      // Trimmed — raw " Bali " not present
+      // Trimmed â€” raw " Bali " not present
       expect(call[0]).not.toMatch(/destinationName=\+Bali\+/);
     });
   });
@@ -547,8 +548,8 @@ describe('<ItineraryTemplates /> — filter behaviour', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
-  it('formats base price with currency symbol (₹ for INR) and falls back to "—" when basePriceMinor is null', async () => {
+describe('<ItineraryTemplates /> â€” formatting helpers (cell render)', () => {
+  it('formats base price with currency symbol (â‚¹ for INR) and falls back to "â€”" when basePriceMinor is null', async () => {
     installFetchMock({
       list: {
         items: [
@@ -648,7 +649,7 @@ describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
     expect(within(fortnightRow).getByText('14 days')).toBeInTheDocument();
   });
 
-  it('formats default markup percent to one decimal (e.g. "15.0%") and "—" when null', async () => {
+  it('formats default markup percent to one decimal (e.g. "15.0%") and "â€”" when null', async () => {
     installFetchMock({
       list: {
         items: [
@@ -687,14 +688,14 @@ describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
     await screen.findByText('RFU Template');
 
     const rfuRow = screen.getByText('RFU Template').closest('tr');
-    // Badge contains the raw value "rfu" — CSS textTransform makes it visually uppercase.
+    // Badge contains the raw value "rfu" â€” CSS textTransform makes it visually uppercase.
     expect(within(rfuRow).getByText('rfu')).toBeInTheDocument();
 
     const tenantRow = screen.getByText('Tenant-Wide Template').closest('tr');
     expect(within(tenantRow).getByText('tenant')).toBeInTheDocument();
   });
 
-  it('renders usageCount (falsy 0 still renders as "0", not blank/—)', async () => {
+  it('renders usageCount (falsy 0 still renders as "0", not blank/â€”)', async () => {
     installFetchMock({
       list: {
         items: [
@@ -713,19 +714,20 @@ describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
     expect(within(usedRow).getByText('42')).toBeInTheDocument();
 
     const zeroRow = screen.getByText('Zero-Usage Template').closest('tr');
-    // G049 — Usage, Accepted columns each render `0` when zero, so getByText('0')
+    // G049 â€” Usage, Accepted columns each render `0` when zero, so getByText('0')
     // is no longer unique within the row. Assert both 0-cells are present.
     expect(within(zeroRow).getAllByText('0').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders isActive=false rows with Active="No"', async () => {
+  it('renders explicit status badges for active, inactive, and archived rows', async () => {
     installFetchMock({
       list: {
         items: [
           makeItem({ id: 1201, name: 'Active Template', isActive: true }),
-          makeItem({ id: 1202, name: 'Archived Template', isActive: false }),
+          makeItem({ id: 1202, name: 'Inactive Template', isActive: false }),
+          makeItem({ id: 1203, name: 'Archived Template', isActive: false, archivedAt: '2026-06-01T10:00:00.000Z' }),
         ],
-        total: 2,
+        total: 3,
         limit: 20,
         offset: 0,
       },
@@ -734,58 +736,61 @@ describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
     await screen.findByText('Active Template');
 
     const activeRow = screen.getByText('Active Template').closest('tr');
-    expect(within(activeRow).getByText('Yes')).toBeInTheDocument();
+    expect(within(activeRow).getByText('Active')).toBeInTheDocument();
+
+    const inactiveRow = screen.getByText('Inactive Template').closest('tr');
+    expect(within(inactiveRow).getByText('Inactive')).toBeInTheDocument();
 
     const archivedRow = screen.getByText('Archived Template').closest('tr');
-    expect(within(archivedRow).getByText('No')).toBeInTheDocument();
+    expect(within(archivedRow).getByText('Archived')).toBeInTheDocument();
   });
 });
 
-describe('<ItineraryTemplates /> — pagination', () => {
-  it('renders "Showing 1-3 of 3" summary and disables both Prev + Next when total fits in one page', async () => {
+describe('<ItineraryTemplates /> â€” pagination', () => {
+  it('renders the first page inside the scroll container when total fits on one page', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
 
-    expect(screen.getByText(/Showing 1-3 of 3/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Previous page/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Next page/i })).toBeDisabled();
+    expect(screen.getByText('Bali Family Holiday')).toBeInTheDocument();
+    expect(screen.getByText('Europe School Trip â€” 14 days')).toBeInTheDocument();
+    expect(screen.getByTestId('itinerary-templates-table-scroll')).toBeInTheDocument();
+    expect(screen.queryByTestId('itinerary-templates-scroll-sentinel')).toBeNull();
   });
 
-  it('shows "No results" when total=0 (no items)', async () => {
+  it('shows only the empty-state copy when total=0 (no items)', async () => {
     installFetchMock({ list: { items: [], total: 0, limit: 20, offset: 0 } });
     renderPage();
-    await screen.findByText(/No itinerary templates yet/i);
-    expect(screen.getByText(/No results/i)).toBeInTheDocument();
+    await screen.findByText(/No itinerary templates yet\. Add one above\./i);
+    expect(screen.queryByTestId('itinerary-templates-table-scroll')).toBeNull();
   });
 
-  it('clicking Next advances offset → re-fetches with ?offset=20', async () => {
-    // Simulate a large list — total=50 so we have multiple pages.
-    const bigItems = Array.from({ length: 20 }).map((_, i) =>
+  it('clicking Next advances to page 2 and re-fetches with ?offset=20', async () => {
+    // Simulate a large list â€” total=50 so we have multiple pages.
+    const firstPage = Array.from({ length: 20 }).map((_, i) =>
       makeItem({ id: 2000 + i, name: `Template ${i + 1}` }),
     );
-    installFetchMock({
-      list: { items: bigItems, total: 50, limit: 20, offset: 0 },
+    const secondPage = Array.from({ length: 20 }).map((_, i) =>
+      makeItem({ id: 3000 + i, name: `Template ${i + 21}` }),
+    );
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/itinerary-templates?') && method === 'GET') {
+        if (url.includes('offset=20')) {
+          return Promise.resolve({ items: secondPage, total: 50, limit: 20, offset: 20 });
+        }
+        return Promise.resolve({ items: firstPage, total: 50, limit: 20, offset: 0 });
+      }
+      if (url.startsWith('/api/contacts?limit=200') && method === 'GET') {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve(null);
     });
+
     renderPage();
     await screen.findByText('Template 1');
 
-    expect(screen.getByText(/Showing 1-20 of 50/i)).toBeInTheDocument();
-    const nextBtn = screen.getByRole('button', { name: /Next page/i });
-    expect(nextBtn).not.toBeDisabled();
-
-    fetchApiMock.mockClear();
-    installFetchMock({
-      list: {
-        items: Array.from({ length: 20 }).map((_, i) =>
-          makeItem({ id: 3000 + i, name: `Template ${i + 21}` }),
-        ),
-        total: 50,
-        limit: 20,
-        offset: 20,
-      },
-    });
-
-    fireEvent.click(nextBtn);
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -796,10 +801,13 @@ describe('<ItineraryTemplates /> — pagination', () => {
       );
       expect(call).toBeTruthy();
     });
+
+    expect(await screen.findByText('Template 21')).toBeInTheDocument();
+    expect(screen.getByText('Template 40')).toBeInTheDocument();
   });
 });
 
-describe('<ItineraryTemplates /> — create form extras', () => {
+describe('<ItineraryTemplates /> â€” create form extras', () => {
   it('currency input auto-uppercases input (e.g. typing "usd" yields "USD")', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
@@ -887,7 +895,7 @@ describe('<ItineraryTemplates /> — create form extras', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — delete flow extras', () => {
+describe('<ItineraryTemplates /> â€” delete flow extras', () => {
   it('delete is aborted when notify.confirm resolves false; no DELETE fires', async () => {
     renderPage();
     const rowName = await screen.findByText('Makkah-Madinah 10-day Umrah');
@@ -915,7 +923,7 @@ describe('<ItineraryTemplates /> — delete flow extras', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — error surfacing', () => {
+describe('<ItineraryTemplates /> â€” error surfacing', () => {
   it('GET error surfaces notify.error and falls back to empty list', async () => {
     const err = new Error('Network down');
     err.body = { error: 'Service unavailable' };
@@ -932,10 +940,10 @@ describe('<ItineraryTemplates /> — error surfacing', () => {
 });
 
 // ---------------------------------------------------------------------------
-// G048 + G058 — Archive/Restore toggle + Export CSV + Include archived
-// filter. The new UI surface from this slice's PRD §3.5 round-trip.
+// G048 + G058 â€” Archive/Restore toggle + Export CSV. The new UI surface
+// from this slice's PRD Â§3.5 round-trip.
 // ---------------------------------------------------------------------------
-describe('<ItineraryTemplates /> — G048/G058 new UI', () => {
+describe('<ItineraryTemplates /> â€” G048/G058 new UI', () => {
   it('renders "Export CSV" CTA in the page header', async () => {
     renderPage();
     expect(
@@ -945,9 +953,7 @@ describe('<ItineraryTemplates /> — G048/G058 new UI', () => {
 
   it('renders "Include archived" filter checkbox', async () => {
     renderPage();
-    expect(
-      screen.getByLabelText(/Include archived/i),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Include archived/i)).toBeInTheDocument();
   });
 
   it('toggling "Include archived" re-fires GET with ?includeArchived=true', async () => {
@@ -1091,12 +1097,12 @@ describe('<ItineraryTemplates /> — G048/G058 new UI', () => {
 });
 
 // ---------------------------------------------------------------------------
-// G061 — Budget-tier filter facet + preview-before-clone modal
+// G061 â€” Budget-tier filter facet + preview-before-clone modal
 // (PRD FR-3.1.c, FR-3.1.d).
 //
 // Filter facet:
 //   - 4 buckets (budget / mid / premium / luxury) selectable via dropdown
-//   - selecting a bucket threads ?budgetTier=… to the list endpoint
+//   - selecting a bucket threads ?budgetTier=â€¦ to the list endpoint
 //   - default (no selection) doesn't add the param
 //
 // Preview modal:
@@ -1107,7 +1113,7 @@ describe('<ItineraryTemplates /> — G048/G058 new UI', () => {
 //     clonedFromTemplateId set and notify.success surfaces
 //   - "Close" / backdrop click / X dismisses the modal
 // ---------------------------------------------------------------------------
-describe('<ItineraryTemplates /> — G061 budget-tier filter facet', () => {
+describe('<ItineraryTemplates /> â€” G061 budget-tier filter facet', () => {
   it('renders the budget tier dropdown with 4 bracket options + default "All budgets"', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
@@ -1147,7 +1153,7 @@ describe('<ItineraryTemplates /> — G061 budget-tier filter facet', () => {
     });
   });
 
-  it('default (no selection) does NOT add ?budgetTier=… to the URL', async () => {
+  it('default (no selection) does NOT add ?budgetTier=â€¦ to the URL', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
     const initialCall = fetchApiMock.mock.calls.find(
@@ -1194,7 +1200,7 @@ describe('<ItineraryTemplates /> — G061 budget-tier filter facet', () => {
   });
 });
 
-describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
+describe('<ItineraryTemplates /> â€” G061 preview-before-clone modal', () => {
   // Helper: stub a template with templateJson day-by-day items so the modal
   // can render a non-empty day-by-day plan + a non-zero pin count.
   function makePreviewableTemplate(overrides = {}) {
@@ -1396,7 +1402,7 @@ describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
     fireEvent.click(screen.getByTestId('preview-tpl-5001'));
     const modal = await screen.findByTestId('template-preview-modal');
 
-    // Pick a customer — the clone CTA is disabled until cloneContactId is set.
+    // Pick a customer â€” the clone CTA is disabled until cloneContactId is set.
     await waitFor(() => {
       expect(within(modal).getByTestId('clone-contact-select').options.length).toBeGreaterThan(1);
     });
@@ -1467,3 +1473,4 @@ describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
     expect(screen.getByTestId('template-preview-modal')).toBeInTheDocument();
   });
 });
+

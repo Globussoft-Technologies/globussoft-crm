@@ -92,10 +92,37 @@
 //   - Supplier list is fetched on subBrand-change and re-used across all
 //     row pickers in the table (single fetch, not per-row).
 
-import { useEffect, useState, useContext, useCallback } from "react";
-import { useParams } from "react-router-dom";
-import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown, Plane, Hotel, Search, Car, LayoutTemplate, CreditCard, CheckCircle } from "lucide-react";
-import { FlightResultsBoard, HotelResultsGrid, TransferResultsList, SuggestedItinerary } from "../../components/TravelSearchResults";
+import { useEffect, useState, useContext, useCallback, useMemo, useRef } from "react";
+import HotelOfferImageGenerator from "./HotelOfferImageGenerator";
+import { Link, useLocation, useParams } from "react-router-dom";
+import {
+  Calculator,
+  Plus,
+  Trash2,
+  Save,
+  Send,
+  Copy,
+  Download,
+  Check,
+  X,
+  TrendingUp,
+  FileText,
+  ThumbsUp,
+  ThumbsDown,
+  Plane,
+  Hotel,
+  Search,
+  Car,
+  LayoutTemplate,
+  CreditCard,
+  CheckCircle,
+} from "lucide-react";
+import {
+  FlightResultsBoard,
+  HotelResultsGrid,
+  TransferResultsList,
+  SuggestedItinerary,
+} from "../../components/TravelSearchResults";
 import TopScrollSync from "../../components/TopScrollSync";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -120,14 +147,23 @@ const SUB_BRANDS = [
   { value: "travelstall", label: "Travel Stall" },
   { value: "visasure", label: "Visa Sure" },
 ];
-const SUB_BRAND_LABELS = Object.fromEntries(SUB_BRANDS.map((s) => [s.value, s.label]));
+const SUB_BRAND_LABELS = Object.fromEntries(
+  SUB_BRANDS.map((s) => [s.value, s.label]),
+);
 
 const LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
+const LINE_LINK_MARKER = "[[QUOTE_LINK_META]]";
 
 // TBO search data-source badge (mirrors tboClient's `provider`): live TBO,
 // an AI web estimate, or offline sample data — so the operator verifies before
 // quoting.
-const PROVIDER_LABEL = { serpapi: "Google live", "osm-road": "Live road distance", tbo: "TBO live", "llm-web": "AI web estimate", stub: "Sample data" };
+const PROVIDER_LABEL = {
+  serpapi: "Google live",
+  "osm-road": "Live road distance",
+  tbo: "TBO live",
+  "llm-web": "AI web estimate",
+  stub: "Sample data",
+};
 const PROVIDER_COLORS = {
   serpapi: { bg: "rgba(34,197,94,0.16)", fg: "#1e8449" },
   "osm-road": { bg: "rgba(14,124,134,0.16)", fg: "#0e7c86" },
@@ -137,13 +173,194 @@ const PROVIDER_COLORS = {
 };
 function providerBadge(p) {
   const c = PROVIDER_COLORS[p] || PROVIDER_COLORS.stub;
-  return { display: "inline-block", padding: "1px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, marginRight: 6, background: c.bg, color: c.fg };
+  return {
+    display: "inline-block",
+    padding: "1px 8px",
+    borderRadius: 10,
+    fontSize: 11,
+    fontWeight: 700,
+    marginRight: 6,
+    background: c.bg,
+    color: c.fg,
+  };
 }
 function fmtSearchTime(s) {
   if (!s) return null;
   const d = new Date(s);
   if (!Number.isFinite(d.getTime())) return null;
-  return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatCustomerLabel(customer, currentSubBrand = null) {
+  if (!customer) return "";
+  const name = customer.name || `Contact #${customer.id}`;
+  const email = customer.email ? ` — ${customer.email}` : "";
+  const subBrandSuffix = customer.subBrand
+    ? currentSubBrand && customer.subBrand !== currentSubBrand
+      ? ` — ${SUB_BRAND_LABELS[customer.subBrand] || customer.subBrand}`
+      : ""
+    : " · (unassigned)";
+  return `${name}${email}${subBrandSuffix}`;
+}
+
+function SearchableCustomerSelect({
+  options,
+  value,
+  onChange,
+  placeholder = "Select customer *",
+  currentSubBrand = "",
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const selected = options.find((c) => String(c.id) === String(value));
+  const selectedLabel = selected ? formatCustomerLabel(selected, currentSubBrand) : "";
+  const filtered = query.trim()
+    ? options.filter((c) => {
+        const needle = query.trim().toLowerCase();
+        return (
+          String(c.id || "").includes(needle) ||
+          (c.name || "").toLowerCase().includes(needle) ||
+          (c.email || "").toLowerCase().includes(needle) ||
+          (c.phone || "").toLowerCase().includes(needle)
+        );
+      })
+    : options;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocDown = (event) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onDocDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [open]);
+
+  const commit = (customer) => {
+    onChange(String(customer.id));
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", width: "100%", minWidth: 0, overflow: "visible" }}>
+      <div style={{ position: "relative", zIndex: 2 }}>
+        <input
+          ref={inputRef}
+          type="text"
+          value={open ? query : selectedLabel}
+          onFocus={() => {
+            setOpen(true);
+            setQuery("");
+          }}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          placeholder={placeholder}
+          aria-label="Customer"
+          autoComplete="off"
+          style={{ ...inputStyle, width: "100%", boxSizing: "border-box", paddingRight: 36 }}
+        />
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          aria-label="Toggle customer search"
+          style={{
+            position: "absolute",
+            right: 8,
+            top: "50%",
+            transform: "translateY(-50%)",
+            border: "none",
+            background: "transparent",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            padding: 4,
+            lineHeight: 1,
+          }}
+        >
+          ▾
+        </button>
+      </div>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label="Customer search results"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 0,
+            right: 0,
+            maxHeight: 260,
+            overflowY: "auto",
+            zIndex: 60,
+            background: "var(--bg-color)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 10,
+            boxShadow: "0 16px 36px rgba(15, 23, 42, 0.16)",
+          }}
+        >
+          {filtered.length === 0 ? (
+            <div style={{ padding: "10px 12px", fontSize: 13, color: "var(--text-secondary)" }}>
+              No matches.
+            </div>
+          ) : (
+            filtered.map((customer) => {
+              const isSelected = String(customer.id) === String(value);
+              return (
+                <button
+                  key={customer.id}
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => commit(customer)}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "10px 12px",
+                    border: "none",
+                    background: isSelected ? "rgba(59, 130, 246, 0.12)" : "transparent",
+                    color: "var(--text-primary)",
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  {formatCustomerLabel(customer, currentSubBrand)}
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const EMPTY_DRAFT = () => ({
@@ -165,7 +382,10 @@ function lineAmount(line) {
 
 function fmt(n) {
   const v = Number(n) || 0;
-  return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return v.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function countTemplateLines(linesJson) {
@@ -177,8 +397,82 @@ function countTemplateLines(linesJson) {
   }
 }
 
+function parseLineNotesPayload(raw) {
+  const text = raw == null ? "" : String(raw);
+  const idx = text.indexOf(LINE_LINK_MARKER);
+  if (idx === -1) return { visibleNotes: text, linkMeta: null };
+  const visibleNotes = text.slice(0, idx).trimEnd();
+  const encoded = text.slice(idx + LINE_LINK_MARKER.length).trim();
+  if (!encoded) return { visibleNotes, linkMeta: null };
+  try {
+    const parsed = JSON.parse(atob(encoded));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { visibleNotes, linkMeta: null };
+    }
+    return { visibleNotes, linkMeta: parsed };
+  } catch {
+    return { visibleNotes: text, linkMeta: null };
+  }
+}
+
+function normalizeLineLinkMeta(linkMeta, fallbackSupplierId = null) {
+  if (!linkMeta || typeof linkMeta !== "object" || Array.isArray(linkMeta)) return null;
+  const out = { ...linkMeta };
+  const masterRefs = out.masterRefs && typeof out.masterRefs === "object" && !Array.isArray(out.masterRefs)
+    ? { ...out.masterRefs }
+    : {};
+  if (masterRefs.supplierId == null && fallbackSupplierId != null && `${fallbackSupplierId}` !== "") {
+    const sid = Number(fallbackSupplierId);
+    if (Number.isFinite(sid)) masterRefs.supplierId = sid;
+  }
+  if (Object.keys(masterRefs).length > 0) out.masterRefs = masterRefs;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function mergeLineLinkMeta(existingMeta, previewLine, supplierId) {
+  const base = normalizeLineLinkMeta(existingMeta, supplierId) || {};
+  const additions = previewLine && typeof previewLine === "object" ? {
+    masterRefs: {
+      ...(previewLine.costMasterId != null ? { costMasterId: Number(previewLine.costMasterId) } : {}),
+      ...(previewLine.routeOrSku ? { routeOrSku: previewLine.routeOrSku } : {}),
+      ...(previewLine.supplierId != null ? { supplierId: Number(previewLine.supplierId) } : {}),
+    },
+    pricingLink: {
+      ...(previewLine.baseRate != null ? { baseRate: Number(previewLine.baseRate) } : {}),
+      ...(previewLine.currency ? { currency: previewLine.currency } : {}),
+      seasonMultiplier: previewLine.seasonMultiplier ?? 1,
+      matchedSeasonName: previewLine.matchedSeasonName ?? null,
+      matchedMarkupRuleId: previewLine.markupRuleId ?? previewLine.matchedMarkupRuleId ?? null,
+      ...(previewLine.subtotal != null ? { subtotal: Number(previewLine.subtotal) } : {}),
+      ...(previewLine.grandTotal != null ? { grandTotal: Number(previewLine.grandTotal) } : {}),
+      linkedAt: new Date().toISOString(),
+    },
+  } : {};
+  const merged = {
+    ...base,
+    ...additions,
+    masterRefs: { ...(base.masterRefs || {}), ...(additions.masterRefs || {}) },
+    pricingLink: { ...(base.pricingLink || {}), ...(additions.pricingLink || {}) },
+  };
+  if (!Object.keys(merged.masterRefs).length) delete merged.masterRefs;
+  if (!Object.keys(merged.pricingLink).length) delete merged.pricingLink;
+  return normalizeLineLinkMeta(merged, supplierId);
+}
+
+function summarizeLinkedQuoteData(lines) {
+  return (Array.isArray(lines) ? lines : []).reduce((acc, line) => {
+    if (line?.costMasterId != null || line?.linkMeta?.masterRefs?.costMasterId != null) acc.costLinked += 1;
+    if (line?.markupRuleId != null || line?.linkMeta?.pricingLink?.matchedMarkupRuleId != null) acc.pricingLinked += 1;
+    if (line?.supplierId != null || line?.linkMeta?.masterRefs?.supplierId != null) acc.supplierLinked += 1;
+    return acc;
+  }, { costLinked: 0, pricingLinked: 0, supplierLinked: 0 });
+}
+
 export default function QuoteBuilder() {
   const { id: routeId } = useParams();
+  const location = useLocation();
+  const backTo = location.state?.backTo || null;
+  const backLabel = location.state?.backLabel || "Back";
   const isEdit = !!routeId;
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
@@ -189,7 +483,6 @@ export default function QuoteBuilder() {
   const [quoteId, setQuoteId] = useState(routeId ? Number(routeId) : null);
   const [status, setStatus] = useState("Draft");
   const [contactId, setContactId] = useState("");
-  const [customerSearch, setCustomerSearch] = useState("");
   // Contact picker — mirrors the InvoicesAdmin pattern. Loads the tenant's
   // contacts once on mount so the header field can be a labelled <select>
   // instead of a raw numeric "Contact ID" input that lets an operator
@@ -260,11 +553,22 @@ export default function QuoteBuilder() {
   // Searches live options (TBO → AI web → sample via tboClient) and drops a
   // chosen result into the quote as a draft line. City names OR IATA codes
   // are accepted for flights (the backend resolves to IATA).
-  const [fSearch, setFSearch] = useState({ from: "", to: "", departDate: "", cabinClass: "Economy" });
+  const [fSearch, setFSearch] = useState({
+    from: "",
+    to: "",
+    departDate: "",
+    cabinClass: "Economy",
+  });
   const [fResults, setFResults] = useState([]);
   const [fMeta, setFMeta] = useState(null);
   const [fLoading, setFLoading] = useState(false);
-  const [hSearch, setHSearch] = useState({ city: "", checkIn: "", checkOut: "", rooms: 1, starRating: "" });
+  const [hSearch, setHSearch] = useState({
+    city: "",
+    checkIn: "",
+    checkOut: "",
+    rooms: 1,
+    starRating: "",
+  });
   const [hResults, setHResults] = useState([]);
   const [hMeta, setHMeta] = useState(null);
   const [hLoading, setHLoading] = useState(false);
@@ -283,7 +587,9 @@ export default function QuoteBuilder() {
   const [adults, setAdults] = useState(2);
   const [children, setChildren] = useState(0);
   const [rooms, setRooms] = useState(1);
-  const [destinations, setDestinations] = useState([{ city: "", nights: 2, noStay: false }]);
+  const [destinations, setDestinations] = useState([
+    { city: "", nights: 2, noStay: false },
+  ]);
   const [suggesting, setSuggesting] = useState(false);
   // Structured AI suggestion (full option sets per leg/city) powering the
   // visual "Suggested itinerary" panel + Change flight/hotel. Selections sync
@@ -315,9 +621,16 @@ export default function QuoteBuilder() {
         return;
       }
       try {
-        const r = await fetchApi(`/api/fx/latest?base=INR&quote=${encodeURIComponent(currency)}`);
+        const r = await fetchApi(
+          `/api/fx/latest?base=INR&quote=${encodeURIComponent(currency)}`,
+        );
         if (!cancelled && r && r.rate != null) {
-          setFxRate({ base: r.base, quote: r.quote, rate: r.rate, fetchedAt: r.fetchedAt });
+          setFxRate({
+            base: r.base,
+            quote: r.quote,
+            rate: r.rate,
+            fetchedAt: r.fetchedAt,
+          });
         } else if (!cancelled) {
           setFxRate(null);
         }
@@ -326,7 +639,9 @@ export default function QuoteBuilder() {
       }
     }
     loadFxRate();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [currency]);
 
   // Load available quote templates when the "Use template" modal is open.
@@ -344,13 +659,17 @@ export default function QuoteBuilder() {
       })
       .catch((err) => {
         if (cancelled) return;
-        notify.error(err?.data?.error || err?.message || "Failed to load templates");
+        notify.error(
+          err?.data?.error || err?.message || "Failed to load templates",
+        );
         setTemplateOptions([]);
       })
       .finally(() => {
         if (!cancelled) setLoadingTemplates(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [useTemplateOpen]);
 
   // Re-fetch the parent quote (used after line writes — server recomputes
@@ -386,19 +705,24 @@ export default function QuoteBuilder() {
       const resp = await fetchApi(`/api/travel/quotes/${id}/lines`);
       const rows = Array.isArray(resp?.lines) ? resp.lines : [];
       setPersistedLines(
-        rows.map((r) => ({
-          key: `srv-${r.id}`,
-          id: r.id,
-          lineType: r.lineType || "other",
-          description: r.description || "",
-          quantity: Number(r.quantity) || 1,
-          unitPrice: Number(r.unitPrice) || 0,
-          amount: Number(r.amount) || 0,
-          supplierId: r.supplierId == null ? "" : String(r.supplierId),
-          notes: r.notes || "",
-          currency: r.currency || null,
-          sortOrder: r.sortOrder || 0,
-        })),
+        rows.map((r) => {
+          const parsedNotes = parseLineNotesPayload(r.notes);
+          return {
+            key: `srv-${r.id}`,
+            id: r.id,
+            lineType: r.lineType || "other",
+            description: r.description || "",
+            quantity: Number(r.quantity) || 1,
+            unitPrice: Number(r.unitPrice) || 0,
+            amount: Number(r.amount) || 0,
+            supplierId: r.supplierId == null ? "" : String(r.supplierId),
+            notes: parsedNotes.visibleNotes || "",
+            linkMeta: normalizeLineLinkMeta(r.linkMeta || parsedNotes.linkMeta, r.supplierId),
+            currency: r.currency || null,
+            taxPercent: r.taxPercent == null ? 0 : Number(r.taxPercent) || 0,
+            sortOrder: r.sortOrder || 0,
+          };
+        }),
       );
     } catch (err) {
       notify.error(err?.data?.error || err?.message || "Failed to load lines");
@@ -414,7 +738,9 @@ export default function QuoteBuilder() {
       const trail = await fetchApi(`/api/travel/quotes/${id}/audit-trail`);
       const rows = Array.isArray(trail?.entries) ? trail.entries : [];
       const snap = rows.find(
-        (r) => r.action === "TRAVEL_QUOTE_CUSTOMER_ACCEPTED" || r.action === "TRAVEL_QUOTE_ACCEPTED",
+        (r) =>
+          r.action === "TRAVEL_QUOTE_CUSTOMER_ACCEPTED" ||
+          r.action === "TRAVEL_QUOTE_ACCEPTED",
       );
       if (snap) {
         const details = snap.details || {};
@@ -427,7 +753,7 @@ export default function QuoteBuilder() {
     } catch {
       // Non-fatal — acceptance details are supplementary.
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Edit-mode hydration from GET /api/travel/quotes/:id + lines.
@@ -458,7 +784,9 @@ export default function QuoteBuilder() {
         }
       })
       .catch((err) => {
-        notify.error(err?.data?.error || err?.message || "Failed to load quote");
+        notify.error(
+          err?.data?.error || err?.message || "Failed to load quote",
+        );
       })
       .finally(() => setLoading(false));
     // Intentionally only re-run when the route id changes.
@@ -473,8 +801,12 @@ export default function QuoteBuilder() {
   useEffect(() => {
     fetchApi("/api/contacts?fields=summary&limit=500")
       .then((data) => {
-        const list = Array.isArray(data) ? data : data?.contacts || data?.rows || [];
-        list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+        const list = Array.isArray(data)
+          ? data
+          : data?.contacts || data?.rows || [];
+        list.sort((a, b) =>
+          String(a.name || "").localeCompare(String(b.name || "")),
+        );
         setCustomers(list);
       })
       .catch(() => setCustomers([]));
@@ -503,9 +835,14 @@ export default function QuoteBuilder() {
       })
       .catch(() => {
         if (cancelled) return;
-        setContactsById((prev) => ({ ...prev, [contactId]: { name: null, email: null } }));
+        setContactsById((prev) => ({
+          ...prev,
+          [contactId]: { name: null, email: null },
+        }));
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // contactsById intentionally omitted — we only need to fetch on
     // contactId / customers changes; the guards above skip cache hits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -518,17 +855,24 @@ export default function QuoteBuilder() {
   // contact is always kept visible via the preserved <option> below, even if
   // it belongs to another sub-brand (edit-mode safety). Re-derives whenever
   // subBrand or the loaded contacts change.
-  const visibleCustomers = customers.filter((c) => !c.subBrand || c.subBrand === subBrand);
-  const selectedCustomer = customers.find((c) => String(c.id) === String(contactId));
-
-  // Filtered list for the customer search input.
-  const customerSearchLower = customerSearch.toLowerCase();
-  const filteredCustomers = customerSearchLower
-    ? visibleCustomers.filter((c) =>
-        (c.name || "").toLowerCase().includes(customerSearchLower) ||
-        (c.email || "").toLowerCase().includes(customerSearchLower) ||
-        (c.phone || "").toLowerCase().includes(customerSearchLower),
-      )
+  const visibleCustomers = customers.filter(
+    (c) => !c.subBrand || c.subBrand === subBrand,
+  );
+  const selectedCustomer = customers.find(
+    (c) => String(c.id) === String(contactId),
+  );
+  const selectedCustomerForPicker = selectedCustomer || (contactId
+    ? {
+        id: contactId,
+        name: contactsById[contactId]?.name || null,
+        email: contactsById[contactId]?.email || null,
+        subBrand: null,
+      }
+    : null);
+  const customerPickerOptions = selectedCustomerForPicker && !visibleCustomers.some(
+    (c) => String(c.id) === String(selectedCustomerForPicker.id),
+  )
+    ? [...visibleCustomers, selectedCustomerForPicker]
     : visibleCustomers;
 
   // Fetch the supplier list when subBrand changes (or on initial load
@@ -541,7 +885,9 @@ export default function QuoteBuilder() {
     }
     let cancelled = false;
     setSuppliersLoading(true);
-    fetchApi(`/api/travel/suppliers?subBrand=${encodeURIComponent(subBrand)}`)
+    fetchApi(
+      `/api/travel/suppliers?fields=summary&subBrand=${encodeURIComponent(subBrand)}`,
+    )
       .then((resp) => {
         if (cancelled) return;
         const rows = Array.isArray(resp?.suppliers) ? resp.suppliers : [];
@@ -549,7 +895,9 @@ export default function QuoteBuilder() {
       })
       .catch((err) => {
         if (cancelled) return;
-        notify.error(err?.data?.error || err?.message || "Failed to load suppliers");
+        notify.error(
+          err?.data?.error || err?.message || "Failed to load suppliers",
+        );
         setSuppliers([]);
       })
       .finally(() => {
@@ -563,7 +911,8 @@ export default function QuoteBuilder() {
 
   // Visible lines = persisted (sorted by sortOrder) + drafts (appended).
   const sortedPersisted = [...persistedLines].sort(
-    (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || (a.id || 0) - (b.id || 0),
+    (a, b) =>
+      (a.sortOrder || 0) - (b.sortOrder || 0) || (a.id || 0) - (b.id || 0),
   );
   const visibleLines = [...sortedPersisted, ...draftLines];
 
@@ -602,53 +951,120 @@ export default function QuoteBuilder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     JSON.stringify(
-      visibleLines.map((l) => l.supplierId).filter((s) => s != null && s !== ""),
+      visibleLines
+        .map((l) => l.supplierId)
+        .filter((s) => s != null && s !== ""),
     ),
   ]);
 
   const subtotal = visibleLines.reduce((acc, it) => acc + lineAmount(it), 0);
-  const discountAmount = subtotal * (Number(discountPct) || 0) / 100;
+  const discountAmount = (subtotal * (Number(discountPct) || 0)) / 100;
   const taxable = subtotal - discountAmount;
-  const taxAmount = taxable * (Number(taxPct) || 0) / 100;
+  const taxAmount = (taxable * (Number(taxPct) || 0)) / 100;
   const grandTotal = taxable + taxAmount;
+  const selectedSubBrandLabel = SUB_BRAND_LABELS[subBrand] || subBrand;
+  const customerLabel = selectedCustomer?.name || contactsById[contactId]?.name || (contactId ? `Contact #${contactId}` : "Not selected");
+  const internalMarkupDelta = pricingPreview ? Math.max(0, Number(pricingPreview.total || 0) - Number(pricingPreview.subtotal || 0)) : 0;
+  const quoteComposition = LINE_TYPES
+    .map((type) => ({
+      type,
+      count: visibleLines.filter((line) => (line.lineType || "other") === type).length,
+    }))
+    .filter((item) => item.count > 0);
+  const customerActionState = status === "Accepted"
+    ? "Customer accepted"
+    : status === "Rejected"
+      ? "Customer rejected"
+      : shareInfo?.shareUrl
+        ? "Awaiting customer action"
+        : "Ready to share";
+  const customerActionTone = status === "Accepted"
+    ? { fg: "var(--success-color, #22c55e)", bg: "rgba(34, 197, 94, 0.12)" }
+    : status === "Rejected"
+      ? { fg: "var(--danger-color, #f43f5e)", bg: "rgba(244, 63, 94, 0.12)" }
+      : { fg: "var(--primary-color, var(--accent-color))", bg: "rgba(59, 130, 246, 0.12)" };
 
   const addLine = () => setDraftLines([...draftLines, EMPTY_DRAFT()]);
 
   // ── TBO search → draft line ─────────────────────────────────────
   const runFlightSearch = async () => {
-    if (!fSearch.from.trim() || !fSearch.to.trim()) { notify.error("Enter flight from and to (city or IATA)"); return; }
-    if (!fSearch.departDate) { notify.error("Pick a flight date"); return; }
-    setFLoading(true); setFResults([]); setFMeta(null);
+    if (!fSearch.from.trim() || !fSearch.to.trim()) {
+      notify.error("Enter flight from and to (city or IATA)");
+      return;
+    }
+    if (!fSearch.departDate) {
+      notify.error("Pick a flight date");
+      return;
+    }
+    setFLoading(true);
+    setFResults([]);
+    setFMeta(null);
     try {
       const res = await fetchApi("/api/travel/search/flights", {
         method: "POST",
-        body: JSON.stringify({ from: fSearch.from.trim(), to: fSearch.to.trim(), departDate: fSearch.departDate, cabinClass: fSearch.cabinClass, currency: currency || "INR" }),
+        body: JSON.stringify({
+          from: fSearch.from.trim(),
+          to: fSearch.to.trim(),
+          departDate: fSearch.departDate,
+          cabinClass: fSearch.cabinClass,
+          currency: currency || "INR",
+        }),
       });
       setFResults(Array.isArray(res?.options) ? res.options : []);
-      setFMeta({ provider: res?.provider || "stub", note: res?.note || null, resolved: res?.resolved || null });
+      setFMeta({
+        provider: res?.provider || "stub",
+        note: res?.note || null,
+        resolved: res?.resolved || null,
+      });
     } catch (err) {
-      notify.error(err?.data?.error || err?.body?.error || err?.message || "Flight search failed");
-    } finally { setFLoading(false); }
+      notify.error(
+        err?.data?.error ||
+          err?.body?.error ||
+          err?.message ||
+          "Flight search failed",
+      );
+    } finally {
+      setFLoading(false);
+    }
   };
   const runHotelSearch = async () => {
-    if (!hSearch.city.trim()) { notify.error("Enter a hotel city"); return; }
-    if (!hSearch.checkIn || !hSearch.checkOut) { notify.error("Pick hotel check-in and check-out"); return; }
-    setHLoading(true); setHResults([]); setHMeta(null);
+    if (!hSearch.city.trim()) {
+      notify.error("Enter a hotel city");
+      return;
+    }
+    if (!hSearch.checkIn || !hSearch.checkOut) {
+      notify.error("Pick hotel check-in and check-out");
+      return;
+    }
+    setHLoading(true);
+    setHResults([]);
+    setHMeta(null);
     try {
       const res = await fetchApi("/api/travel/search/hotels", {
         method: "POST",
         body: JSON.stringify({
-          city: hSearch.city.trim(), checkIn: hSearch.checkIn, checkOut: hSearch.checkOut,
+          city: hSearch.city.trim(),
+          checkIn: hSearch.checkIn,
+          checkOut: hSearch.checkOut,
           rooms: parseInt(hSearch.rooms, 10) || 1,
-          starRating: hSearch.starRating ? parseInt(hSearch.starRating, 10) : undefined,
+          starRating: hSearch.starRating
+            ? parseInt(hSearch.starRating, 10)
+            : undefined,
           currency: currency || "INR",
         }),
       });
       setHResults(Array.isArray(res?.hotels) ? res.hotels : []);
       setHMeta({ provider: res?.provider || "stub", note: res?.note || null });
     } catch (err) {
-      notify.error(err?.data?.error || err?.body?.error || err?.message || "Hotel search failed");
-    } finally { setHLoading(false); }
+      notify.error(
+        err?.data?.error ||
+          err?.body?.error ||
+          err?.message ||
+          "Hotel search failed",
+      );
+    } finally {
+      setHLoading(false);
+    }
   };
   // Pure builders so manual "Add" and the auto-suggest share one mapping.
   // fromLabel/toLabel let the auto-suggest show FULL city names ("Bangalore →
@@ -660,33 +1076,71 @@ export default function QuoteBuilder() {
     // Fare is PER traveller → quantity = pax so the line multiplies by headcount
     // (2 adults → qty 2). Customer description uses FULL names; IATA + times in notes.
     const seats = Math.max(1, parseInt(pax, 10) || 1);
-    const desc = `${o.airlineName || o.airline || "Flight"}${o.flightNumber ? ` ${o.flightNumber}` : ""} ${fl} → ${tl}${o.fareClass ? ` (${o.fareClass})` : ""}`.trim();
-    const notes = [o.from && o.to && `${o.from}→${o.to}`, fmtSearchTime(o.departAt) && `Dep ${fmtSearchTime(o.departAt)}`, fmtSearchTime(o.arriveAt) && `Arr ${fmtSearchTime(o.arriveAt)}`, o.baggage && `Bag ${o.baggage}`].filter(Boolean).join(" · ");
-    return { ...EMPTY_DRAFT(), lineType: "flight", description: desc, quantity: seats, unitPrice: Number(o.fare) || 0, notes };
+    const desc =
+      `${o.airlineName || o.airline || "Flight"}${o.flightNumber ? ` ${o.flightNumber}` : ""} ${fl} → ${tl}${o.fareClass ? ` (${o.fareClass})` : ""}`.trim();
+    const notes = [
+      o.from && o.to && `${o.from}→${o.to}`,
+      fmtSearchTime(o.departAt) && `Dep ${fmtSearchTime(o.departAt)}`,
+      fmtSearchTime(o.arriveAt) && `Arr ${fmtSearchTime(o.arriveAt)}`,
+      o.baggage && `Bag ${o.baggage}`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      ...EMPTY_DRAFT(),
+      lineType: "flight",
+      description: desc,
+      quantity: seats,
+      unitPrice: Number(o.fare) || 0,
+      notes,
+    };
   };
   const hotelDraft = (h) => {
     // Multiply the stay transparently: qty = nights, unit price = per-night rate
     // (so 1 room × 2 nights shows "2 × ₹/night"). totalRate from search already
     // factors nights × rooms, so per-night = totalRate / nights keeps it exact.
     const nights = Number(h.nights) > 0 ? Math.round(Number(h.nights)) : 1;
-    const total = Number(h.totalRate != null ? h.totalRate : (Number(h.ratePerNight) || 0) * nights) || 0;
-    const perNight = nights > 0 ? Math.round((total / nights) * 100) / 100 : total;
+    const total =
+      Number(
+        h.totalRate != null
+          ? h.totalRate
+          : (Number(h.ratePerNight) || 0) * nights,
+      ) || 0;
+    const perNight =
+      nights > 0 ? Math.round((total / nights) * 100) / 100 : total;
     const desc = `${h.name || "Hotel"}${h.city ? `, ${h.city}` : ""}${h.roomType ? ` — ${h.roomType}` : ""}`;
-    const notes = [h.starRating && `${h.starRating}★`, `${nights} night${nights === 1 ? "" : "s"}`, h.board, h.refundable === true && "Refundable"].filter(Boolean).join(" · ");
-    return { ...EMPTY_DRAFT(), lineType: "hotel", description: desc, quantity: nights, unitPrice: perNight, notes };
+    const notes = [
+      h.starRating && `${h.starRating}★`,
+      `${nights} night${nights === 1 ? "" : "s"}`,
+      h.board,
+      h.refundable === true && "Refundable",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      ...EMPTY_DRAFT(),
+      lineType: "hotel",
+      description: desc,
+      quantity: nights,
+      unitPrice: perNight,
+      notes,
+    };
   };
   // Drop a search result into the quote as a draft line (operator saves it like
   // any other line — Save the quote first if it's brand new).
   const addFlightLine = (o) => {
     const pax = (parseInt(adults, 10) || 1) + (parseInt(children, 10) || 0);
     setDraftLines((p) => [...p, flightDraft(o, undefined, undefined, pax)]);
-    notify.success?.(`Added flight ${o.from}→${o.to} (${pax} traveller${pax === 1 ? "" : "s"})`);
+    notify.success?.(
+      `Added flight ${o.from}→${o.to} (${pax} traveller${pax === 1 ? "" : "s"})`,
+    );
   };
   const addHotelLine = (h) => {
     // Derive nights from the hotel-search dates so the line multiplies correctly.
     let nights = Number(h.nights) || 1;
     if (hSearch.checkIn && hSearch.checkOut) {
-      const a = new Date(hSearch.checkIn); const b = new Date(hSearch.checkOut);
+      const a = new Date(hSearch.checkIn);
+      const b = new Date(hSearch.checkOut);
       if (!Number.isNaN(a.getTime()) && !Number.isNaN(b.getTime())) {
         nights = Math.max(1, Math.round((b - a) / (24 * 60 * 60 * 1000)));
       }
@@ -695,39 +1149,75 @@ export default function QuoteBuilder() {
     notify.success?.(`Added hotel ${h.name || ""}`);
   };
   const transferDraft = (t) => {
-    const desc = `Transfer: ${t.from || ""} → ${t.to || ""}${t.vehicle ? ` (${t.vehicle})` : ""}`.trim();
-    const notes = [t.durationMinutes && `~${t.durationMinutes} min`, t.note].filter(Boolean).join(" · ");
-    return { ...EMPTY_DRAFT(), lineType: "transport", description: desc, quantity: 1, unitPrice: Number(t.price) || 0, notes };
+    const desc =
+      `Transfer: ${t.from || ""} → ${t.to || ""}${t.vehicle ? ` (${t.vehicle})` : ""}`.trim();
+    const notes = [t.durationMinutes && `~${t.durationMinutes} min`, t.note]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      ...EMPTY_DRAFT(),
+      lineType: "transport",
+      description: desc,
+      quantity: 1,
+      unitPrice: Number(t.price) || 0,
+      notes,
+    };
   };
   const addTransferLine = (t) => {
     setDraftLines((p) => [...p, transferDraft(t)]);
     notify.success?.(`Added transfer ${t.from} → ${t.to}`);
   };
   const runTransferSearch = async () => {
-    if (!tSearch.from.trim() || !tSearch.to.trim()) { notify.error("Enter transfer from and to"); return; }
-    setTLoading(true); setTResults([]); setTMeta(null);
+    if (!tSearch.from.trim() || !tSearch.to.trim()) {
+      notify.error("Enter transfer from and to");
+      return;
+    }
+    setTLoading(true);
+    setTResults([]);
+    setTMeta(null);
     try {
       const res = await fetchApi("/api/travel/search/transfers", {
         method: "POST",
-        body: JSON.stringify({ from: tSearch.from.trim(), to: tSearch.to.trim(), date: tSearch.date || undefined, pax: parseInt(adults, 10) || 2, currency: currency || "INR" }),
+        body: JSON.stringify({
+          from: tSearch.from.trim(),
+          to: tSearch.to.trim(),
+          date: tSearch.date || undefined,
+          pax: parseInt(adults, 10) || 2,
+          currency: currency || "INR",
+        }),
       });
       setTResults(Array.isArray(res?.transfers) ? res.transfers : []);
       setTMeta({ provider: res?.provider || "stub", note: res?.note || null });
     } catch (err) {
-      notify.error(err?.data?.error || err?.body?.error || err?.message || "Transfer search failed");
-    } finally { setTLoading(false); }
+      notify.error(
+        err?.data?.error ||
+          err?.body?.error ||
+          err?.message ||
+          "Transfer search failed",
+      );
+    } finally {
+      setTLoading(false);
+    }
   };
 
   // Plan-trip destination handlers.
-  const setDest = (i, patch) => setDestinations((p) => p.map((d, idx) => (idx === i ? { ...d, ...patch } : d)));
-  const addDest = () => setDestinations((p) => [...p, { city: "", nights: 1, noStay: false }]);
-  const removeDest = (i) => setDestinations((p) => (p.length <= 1 ? p : p.filter((_, idx) => idx !== i)));
+  const setDest = (i, patch) =>
+    setDestinations((p) =>
+      p.map((d, idx) => (idx === i ? { ...d, ...patch } : d)),
+    );
+  const addDest = () =>
+    setDestinations((p) => [...p, { city: "", nights: 1, noStay: false }]);
+  const removeDest = (i) =>
+    setDestinations((p) =>
+      p.length <= 1 ? p : p.filter((_, idx) => idx !== i),
+    );
 
   // 1-click AI auto-suggest: round-trip flights (leaving-from → first city, last
   // city → leaving-from) + a hotel per staying city, dates derived from nights.
   // Each leg/city is best-effort — a leg that can't resolve is skipped, not
   // fatal. Reuses the same /search endpoints (TBO → AI web → sample).
-  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const ymd = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
   // Rebuild the _suggested draft lines from the current selection set (called on
   // first suggest + every Change flight/hotel). Keeps manually-added lines.
@@ -761,29 +1251,71 @@ export default function QuoteBuilder() {
       // Auto-apply the sub-brand flight markup rule (no manual markup field in
       // the suggest flow) → the quote carries margin, not raw supplier cost.
       const baseFare = Number(o.fare) || 0;
-      const markedFare = pax > 0 ? applyMarkupToTotal(rules, "flight", baseFare * pax, uid) / pax : baseFare;
-      drafts.push(flightDraft({ ...o, fare: markedFare }, leg.fromLabel, leg.toLabel, pax));
+      const markedFare =
+        pax > 0
+          ? applyMarkupToTotal(rules, "flight", baseFare * pax, uid) / pax
+          : baseFare;
+      drafts.push(
+        flightDraft(
+          { ...o, fare: markedFare },
+          leg.fromLabel,
+          leg.toLabel,
+          pax,
+        ),
+      );
     }
     for (const tr of sug.transfers || []) {
       const t = tr.options[tr.selectedIdx];
       if (!t) continue;
-      const markedPrice = applyMarkupToTotal(rules, "transport", Number(t.price) || 0, uid);
-      drafts.push(transferDraft({ ...t, price: markedPrice, from: tr.fromLabel, to: tr.toLabel }));
+      const markedPrice = applyMarkupToTotal(
+        rules,
+        "transport",
+        Number(t.price) || 0,
+        uid,
+      );
+      drafts.push(
+        transferDraft({
+          ...t,
+          price: markedPrice,
+          from: tr.fromLabel,
+          to: tr.toLabel,
+        }),
+      );
     }
     for (const st of sug.stays || []) {
       const h = st.options[st.selectedIdx];
       if (!h) continue;
-      const baseTotal = Number(h.totalRate != null ? h.totalRate : (Number(h.ratePerNight) || 0) * (st.nights || 1)) || 0;
+      const baseTotal =
+        Number(
+          h.totalRate != null
+            ? h.totalRate
+            : (Number(h.ratePerNight) || 0) * (st.nights || 1),
+        ) || 0;
       const markedTotal = applyMarkupToTotal(rules, "hotel", baseTotal, uid);
-      drafts.push(hotelDraft({ ...h, totalRate: markedTotal, city: st.city, nights: st.nights }));
+      drafts.push(
+        hotelDraft({
+          ...h,
+          totalRate: markedTotal,
+          city: st.city,
+          nights: st.nights,
+        }),
+      );
     }
-    setDraftLines((p) => [...p.filter((d) => !d._suggested), ...drafts.map((d) => ({ ...d, _suggested: true }))]);
+    setDraftLines((p) => [
+      ...p.filter((d) => !d._suggested),
+      ...drafts.map((d) => ({ ...d, _suggested: true })),
+    ]);
   };
   // Swap the chosen flight/hotel in the visual panel + re-sync the line items.
   const changeSuggestion = (kind, idx, optIdx) => {
     setSuggestion((prev) => {
       if (!prev) return prev;
-      const next = { ...prev, [kind]: prev[kind].map((g, i) => (i === idx ? { ...g, selectedIdx: optIdx } : g)) };
+      const next = {
+        ...prev,
+        [kind]: prev[kind].map((g, i) =>
+          i === idx ? { ...g, selectedIdx: optIdx } : g,
+        ),
+      };
       rebuildSuggestedLines(next);
       return next;
     });
@@ -792,15 +1324,28 @@ export default function QuoteBuilder() {
   const suggestTrip = async () => {
     const from = leavingFrom.trim();
     const dests = destinations.filter((d) => d.city.trim());
-    if (!from) { notify.error("Enter where the trip leaves from"); return; }
-    if (!tripStart) { notify.error("Pick the trip start date"); return; }
-    if (dests.length === 0) { notify.error("Add at least one destination city"); return; }
+    if (!from) {
+      notify.error("Enter where the trip leaves from");
+      return;
+    }
+    if (!tripStart) {
+      notify.error("Pick the trip start date");
+      return;
+    }
+    if (dests.length === 0) {
+      notify.error("Add at least one destination city");
+      return;
+    }
     const start = new Date(tripStart);
-    if (Number.isNaN(start.getTime())) { notify.error("Invalid start date"); return; }
+    if (Number.isNaN(start.getTime())) {
+      notify.error("Invalid start date");
+      return;
+    }
     setSuggesting(true);
     const cur = currency || "INR";
     const roomCount = parseInt(rooms, 10) || 1;
-    const headcount = (parseInt(adults, 10) || 1) + (parseInt(children, 10) || 0);
+    const headcount =
+      (parseInt(adults, 10) || 1) + (parseInt(children, 10) || 0);
     try {
       // Per-city stay windows (running date pointer).
       let cursor = new Date(start);
@@ -809,14 +1354,22 @@ export default function QuoteBuilder() {
         const n = parseInt(d.nights, 10) || 0;
         const checkOut = new Date(cursor.getTime() + n * 86400000);
         cursor = new Date(checkOut);
-        return { city: d.city.trim(), nights: n, noStay: d.noStay, checkIn, checkOut };
+        return {
+          city: d.city.trim(),
+          nights: n,
+          noStay: d.noStay,
+          checkIn,
+          checkOut,
+        };
       });
       const totalNights = stops.reduce((s, c) => s + c.nights, 0);
       const endDate = new Date(start.getTime() + totalNights * 86400000);
 
       // Capture the FULL option set per leg/city (not just the first) so the
       // visual panel can offer "Change flight / Change hotel" alternatives.
-      const sFlights = []; const sTransfers = []; const sStays = [];
+      const sFlights = [];
+      const sTransfers = [];
+      const sStays = [];
       // FLIGHTS: outbound (leaving-from → first city) + return (last city →
       // leaving-from). Inter-city hops are done as ground TRANSFERS below
       // (e.g. Makkah → Madina by road) — the common real case; if a customer
@@ -830,22 +1383,51 @@ export default function QuoteBuilder() {
         try {
           const res = await fetchApi("/api/travel/search/flights", {
             method: "POST",
-            body: JSON.stringify({ from: leg.from, to: leg.to, departDate: leg.date, cabinClass: "Economy", currency: cur }),
+            body: JSON.stringify({
+              from: leg.from,
+              to: leg.to,
+              departDate: leg.date,
+              cabinClass: "Economy",
+              currency: cur,
+            }),
           });
           const options = Array.isArray(res?.options) ? res.options : [];
-          if (options.length) sFlights.push({ fromLabel: leg.from, toLabel: leg.to, date: leg.date, options, selectedIdx: 0 });
-        } catch { /* skip this leg */ }
+          if (options.length)
+            sFlights.push({
+              fromLabel: leg.from,
+              toLabel: leg.to,
+              date: leg.date,
+              options,
+              selectedIdx: 0,
+            });
+        } catch {
+          /* skip this leg */
+        }
       }
       // TRANSFERS: inter-city ground hops (city[i] → city[i+1]).
       for (let i = 0; i < stops.length - 1; i += 1) {
         try {
           const res = await fetchApi("/api/travel/search/transfers", {
             method: "POST",
-            body: JSON.stringify({ from: stops[i].city, to: stops[i + 1].city, date: ymd(stops[i].checkOut), pax: parseInt(adults, 10) || 2, currency: cur }),
+            body: JSON.stringify({
+              from: stops[i].city,
+              to: stops[i + 1].city,
+              date: ymd(stops[i].checkOut),
+              pax: parseInt(adults, 10) || 2,
+              currency: cur,
+            }),
           });
           const options = Array.isArray(res?.transfers) ? res.transfers : [];
-          if (options.length) sTransfers.push({ fromLabel: stops[i].city, toLabel: stops[i + 1].city, options, selectedIdx: 0 });
-        } catch { /* skip this hop */ }
+          if (options.length)
+            sTransfers.push({
+              fromLabel: stops[i].city,
+              toLabel: stops[i + 1].city,
+              options,
+              selectedIdx: 0,
+            });
+        } catch {
+          /* skip this hop */
+        }
       }
       // A hotel per staying city (with the full alternatives list).
       for (const c of stops) {
@@ -853,35 +1435,72 @@ export default function QuoteBuilder() {
         try {
           const res = await fetchApi("/api/travel/search/hotels", {
             method: "POST",
-            body: JSON.stringify({ city: c.city, checkIn: ymd(c.checkIn), checkOut: ymd(c.checkOut), rooms: roomCount, currency: cur }),
+            body: JSON.stringify({
+              city: c.city,
+              checkIn: ymd(c.checkIn),
+              checkOut: ymd(c.checkOut),
+              rooms: roomCount,
+              currency: cur,
+            }),
           });
-          const options = (Array.isArray(res?.hotels) ? res.hotels : []).map((h) => ({ ...h, city: c.city, nights: c.nights }));
-          if (options.length) sStays.push({ city: c.city, nights: c.nights, options, selectedIdx: 0 });
-        } catch { /* skip this city */ }
+          const options = (Array.isArray(res?.hotels) ? res.hotels : []).map(
+            (h) => ({ ...h, city: c.city, nights: c.nights }),
+          );
+          if (options.length)
+            sStays.push({
+              city: c.city,
+              nights: c.nights,
+              options,
+              selectedIdx: 0,
+            });
+        } catch {
+          /* skip this city */
+        }
       }
-      const nFlights = sFlights.length; const nHotels = sStays.length; const nTransfers = sTransfers.length;
+      const nFlights = sFlights.length;
+      const nHotels = sStays.length;
+      const nTransfers = sTransfers.length;
       if (nFlights + nHotels + nTransfers === 0) {
-        notify.error("Couldn't fetch any options — try adjusting the cities or dates");
+        notify.error(
+          "Couldn't fetch any options — try adjusting the cities or dates",
+        );
         return;
       }
       // Fetch the sub-brand's active markup rules so suggested prices carry
       // margin automatically (the suggest flow has no manual markup field).
       let rulesFetched = [];
       try {
-        const rr = await fetchApi(`/api/travel/markup-rules?subBrand=${encodeURIComponent(subBrand)}&active=true`);
+        const rr = await fetchApi(
+          `/api/travel/markup-rules?subBrand=${encodeURIComponent(subBrand)}&active=true`,
+        );
         rulesFetched = Array.isArray(rr?.rules) ? rr.rules : [];
-      } catch { rulesFetched = []; }
+      } catch {
+        rulesFetched = [];
+      }
       setMarkupRules(rulesFetched);
 
       // Build the structured suggestion → render the visual panel + (re)build the
       // _suggested draft lines. Re-running Suggest REPLACES the previous set
       // while keeping any lines the operator added manually.
-      const sug = { flights: sFlights, transfers: sTransfers, stays: sStays, currency: cur, pax: headcount, adults: parseInt(adults, 10) || 1 };
+      const sug = {
+        flights: sFlights,
+        transfers: sTransfers,
+        stays: sStays,
+        currency: cur,
+        pax: headcount,
+        adults: parseInt(adults, 10) || 1,
+      };
       setSuggestion(sug);
       rebuildSuggestedLines(sug, rulesFetched);
-      const parts = [`${nFlights} flight${nFlights === 1 ? "" : "s"}`, `${nHotels} hotel${nHotels === 1 ? "" : "s"}`];
-      if (nTransfers > 0) parts.push(`${nTransfers} transfer${nTransfers === 1 ? "" : "s"}`);
-      const markupNote = rulesFetched.length ? " — prices include your markup rules" : " — no markup rules set for this sub-brand";
+      const parts = [
+        `${nFlights} flight${nFlights === 1 ? "" : "s"}`,
+        `${nHotels} hotel${nHotels === 1 ? "" : "s"}`,
+      ];
+      if (nTransfers > 0)
+        parts.push(`${nTransfers} transfer${nTransfers === 1 ? "" : "s"}`);
+      const markupNote = rulesFetched.length
+        ? " — prices include your markup rules"
+        : " — no markup rules set for this sub-brand";
       notify.success(`Suggested ${parts.join(" + ")}${markupNote}`);
     } catch (e) {
       notify.error(e?.message || "Suggest failed");
@@ -892,10 +1511,13 @@ export default function QuoteBuilder() {
 
   // Update a draft row in-place (no backend call).
   const updateDraft = (key, patch) =>
-    setDraftLines(draftLines.map((it) => (it.key === key ? { ...it, ...patch } : it)));
+    setDraftLines(
+      draftLines.map((it) => (it.key === key ? { ...it, ...patch } : it)),
+    );
 
   // Remove a draft row (no backend call needed — it was never persisted).
-  const removeDraft = (key) => setDraftLines(draftLines.filter((it) => it.key !== key));
+  const removeDraft = (key) =>
+    setDraftLines(draftLines.filter((it) => it.key !== key));
 
   // Update a persisted row's local copy (for inline edit before save).
   const updatePersistedLocal = (key, patch) =>
@@ -920,21 +1542,17 @@ export default function QuoteBuilder() {
     }
     setBusyLineKey(draft.key);
     try {
-      const body = {
-        lineType: draft.lineType || "other",
-        description: draft.description.trim(),
-        quantity: Math.max(1, parseInt(draft.quantity, 10) || 1),
-        unitPrice: unit,
-      };
-      if (draft.supplierId !== "" && draft.supplierId != null) {
-        body.supplierId = parseInt(draft.supplierId, 10);
+      const body = buildLinePayload(draft);
+      if (!body) {
+        notify.error("Line is missing required pricing details");
+        return;
       }
-      if (draft.notes) body.notes = String(draft.notes);
       await fetchApi(`/api/travel/quotes/${quoteId}/lines`, {
         method: "POST",
         body: JSON.stringify(body),
       });
-      // Server recomputed totals; re-pull both lines and parent.
+      // Server recomputed totals; restore the customer-facing total and re-pull both lines and parent.
+      await syncQuoteTotals(quoteId);
       await refreshLines(quoteId);
       await refreshParentQuote(quoteId);
       // Drop the draft now that it's persisted.
@@ -952,10 +1570,14 @@ export default function QuoteBuilder() {
     if (!quoteId || !row.id) return;
     setBusyLineKey(row.key);
     try {
+      const taxPercent = currentQuoteTaxPercent();
+      const previewLine = pricingPreview?.lines?.find?.((line) => line.lineId === row.id) || null;
+      const linkMeta = mergeLineLinkMeta(row.linkMeta, previewLine, patch?.supplierId ?? row.supplierId);
       await fetchApi(`/api/travel/quotes/${quoteId}/lines/${row.id}`, {
         method: "PUT",
-        body: JSON.stringify(patch),
+        body: JSON.stringify({ ...patch, taxPercent, ...(row.notes ? { notes: row.notes } : {}), ...(linkMeta ? { linkMeta } : {}) }),
       });
+      await syncQuoteTotals(quoteId);
       await refreshLines(quoteId);
       await refreshParentQuote(quoteId);
       notify.success(`Line #${row.id} updated`);
@@ -978,6 +1600,7 @@ export default function QuoteBuilder() {
       await fetchApi(`/api/travel/quotes/${quoteId}/lines/${row.id}`, {
         method: "DELETE",
       });
+      await syncQuoteTotals(quoteId);
       await refreshLines(quoteId);
       await refreshParentQuote(quoteId);
       notify.success(`Line #${row.id} deleted`);
@@ -1005,6 +1628,40 @@ export default function QuoteBuilder() {
     };
   };
 
+  const currentQuoteTaxPercent = () => {
+    const n = Number(taxPct);
+    return Number.isFinite(n) && n > 0 ? Number(n.toFixed(2)) : 0;
+  };
+
+  const buildLinePayload = (row, previewLine = null) => {
+    const unit = Number(row?.unitPrice);
+    if (!Number.isFinite(unit) || unit < 0) return null;
+    const body = {
+      lineType: row?.lineType || "other",
+      description: String(row?.description || "").trim(),
+      quantity: Math.max(1, parseInt(row?.quantity, 10) || 1),
+      unitPrice: unit,
+      taxPercent: currentQuoteTaxPercent(),
+    };
+    if (!body.description) return null;
+    if (row?.supplierId !== "" && row?.supplierId != null) {
+      body.supplierId = parseInt(row.supplierId, 10);
+    }
+    if (row?.notes) body.notes = String(row.notes);
+    const linkMeta = mergeLineLinkMeta(row?.linkMeta, previewLine, row?.supplierId);
+    if (linkMeta) body.linkMeta = linkMeta;
+    return body;
+  };
+
+  const syncQuoteTotals = async (id) => {
+    const payload = buildPayload();
+    if (!id || !payload) return;
+    await fetchApi(`/api/travel/quotes/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  };
+
   const handleSaveDraft = async () => {
     const payload = buildPayload();
     if (!payload) return;
@@ -1013,42 +1670,75 @@ export default function QuoteBuilder() {
     try {
       let id = quoteId;
       if (id) {
-        await fetchApi(`/api/travel/quotes/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+        await fetchApi(`/api/travel/quotes/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
       } else {
-        const created = await fetchApi("/api/travel/quotes", { method: "POST", body: JSON.stringify(payload) });
+        const created = await fetchApi("/api/travel/quotes", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
         id = created?.id;
         if (id) setQuoteId(id);
       }
-      if (!id) { notify.error("Save failed — no quote id returned"); return; }
+      if (!id) {
+        notify.error("Save failed — no quote id returned");
+        return;
+      }
 
       // Auto-commit ALL draft (un-persisted) lines so Save Draft saves the
       // WHOLE quote — header + lines. Previously drafts stayed local until each
       // row's ✓ was clicked, so the PDF / public view (which read persisted
       // lines) came out empty even though the total was set. Best-effort per
       // line; the backend recomputes the quote total after the writes.
-      const pending = draftLines.filter((d) => d.description && d.description.trim());
+      const pending = draftLines.filter(
+        (d) => d.description && d.description.trim(),
+      );
       let committed = 0;
       for (const d of pending) {
-        const unit = Number(d.unitPrice);
-        if (!Number.isFinite(unit) || unit < 0) continue;
+        const body = buildLinePayload(d);
+        if (!body) continue;
         try {
-          const body = {
-            lineType: d.lineType || "other",
-            description: d.description.trim(),
-            quantity: Math.max(1, parseInt(d.quantity, 10) || 1),
-            unitPrice: unit,
-          };
-          if (d.supplierId !== "" && d.supplierId != null) body.supplierId = parseInt(d.supplierId, 10);
-          if (d.notes) body.notes = String(d.notes);
-          await fetchApi(`/api/travel/quotes/${id}/lines`, { method: "POST", body: JSON.stringify(body) });
+          await fetchApi(`/api/travel/quotes/${id}/lines`, {
+            method: "POST",
+            body: JSON.stringify(body),
+          });
           committed += 1;
-        } catch { /* skip a bad line, keep going */ }
+        } catch {
+          /* skip a bad line, keep going */
+        }
       }
+      const latestLines = await fetchApi(`/api/travel/quotes/${id}/lines`);
+      const rows = Array.isArray(latestLines?.lines) ? latestLines.lines : [];
+      const targetTaxPercent = currentQuoteTaxPercent();
+      const previewById = new Map((pricingPreview?.lines || []).map((line) => [line.lineId, line]));
+      for (const row of rows) {
+        const savedTaxPercent = row?.taxPercent == null ? 0 : Number(row.taxPercent) || 0;
+        if (savedTaxPercent == targetTaxPercent) continue;
+        const parsedNotes = parseLineNotesPayload(row?.notes);
+        const nextLinkMeta = mergeLineLinkMeta(
+          row?.linkMeta || parsedNotes.linkMeta,
+          previewById.get(row.id) || null,
+          row?.supplierId,
+        );
+        try {
+          await fetchApi(`/api/travel/quotes/${id}/lines/${row.id}`, {
+            method: "PUT",
+            body: JSON.stringify({
+              taxPercent: targetTaxPercent,
+              ...(parsedNotes.visibleNotes ? { notes: parsedNotes.visibleNotes } : {}),
+              ...(nextLinkMeta ? { linkMeta: nextLinkMeta } : {}),
+            }),
+          });
+        } catch { /* keep saving the quote even if one line tax sync fails */ }
+      }
+      await syncQuoteTotals(id);
       if (committed > 0) {
         setDraftLines((prev) => prev.filter((d) => !pending.includes(d)));
-        await refreshLines(id);
-        await refreshParentQuote(id);
       }
+      await refreshLines(id);
+      await refreshParentQuote(id);
       notify.success(
         wasNew
           ? `Quote created (#${id})${committed ? ` with ${committed} line${committed === 1 ? "" : "s"}` : ""}`
@@ -1083,13 +1773,18 @@ export default function QuoteBuilder() {
     try {
       const res = await fetchApi(`/api/travel/quotes/${quoteId}/share`, {
         method: "POST",
-        body: JSON.stringify({ channel: "auto", frontendBase: window.location.origin }),
+        body: JSON.stringify({
+          channel: "auto",
+          frontendBase: window.location.origin,
+        }),
       });
       if (res?.status) setStatus(res.status);
       setShareInfo(res || null);
       const ch = res?.channel || "none";
       if (ch === "none") {
-        notify.success("Share link created — send it manually (the contact has no email/phone, or WhatsApp isn't connected)");
+        notify.success(
+          "Share link created — send it manually (the contact has no email/phone, or WhatsApp isn't connected)",
+        );
       } else {
         const parts = [];
         if (ch.includes("email")) parts.push("email");
@@ -1097,7 +1792,9 @@ export default function QuoteBuilder() {
         notify.success(`Quote sent to the customer via ${parts.join(" + ")}`);
       }
     } catch (err) {
-      notify.error(err?.data?.error || err?.body?.error || err?.message || "Send failed");
+      notify.error(
+        err?.data?.error || err?.body?.error || err?.message || "Send failed",
+      );
     } finally {
       setSending(false);
       setSendConfirmOpen(false);
@@ -1139,14 +1836,17 @@ export default function QuoteBuilder() {
         method: "POST",
         body: JSON.stringify(body),
       });
-      const label = trimmed === "" || Number(trimmed) === 0
-        ? `Quote duplicated as #${dup?.id ?? "new"}`
-        : `Quote duplicated as #${dup?.id ?? "new"} with ${trimmed}% markup`;
+      const label =
+        trimmed === "" || Number(trimmed) === 0
+          ? `Quote duplicated as #${dup?.id ?? "new"}`
+          : `Quote duplicated as #${dup?.id ?? "new"} with ${trimmed}% markup`;
       notify.success(label);
       setDuplicateOpen(false);
     } catch (err) {
       if (err?.status === 404) {
-        notify.info("Duplicate endpoint not yet available — try again after backend deploy");
+        notify.info(
+          "Duplicate endpoint not yet available — try again after backend deploy",
+        );
         return;
       }
       notify.error(err?.data?.error || err?.message || "Duplicate failed");
@@ -1167,7 +1867,9 @@ export default function QuoteBuilder() {
       });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        notify.error(errData.error || `PDF download failed (${response.status})`);
+        notify.error(
+          errData.error || `PDF download failed (${response.status})`,
+        );
         return;
       }
       const blob = await response.blob();
@@ -1190,6 +1892,8 @@ export default function QuoteBuilder() {
   // (button is disabled in NEW mode) and is informational only — the
   // preview total does NOT feed back into Save Draft's payload. The
   // separate disclaimer near the panel reinforces this for operators.
+  // Fail-soft: 4xx/5xx errors do NOT surface a toast (Issue 11); they simply
+  // leave the panel closed so the operator isn't blocked while editing.
   const handlePricingPreview = async () => {
     if (!quoteId) {
       notify.error("Save the quote first before calculating with markups");
@@ -1201,9 +1905,15 @@ export default function QuoteBuilder() {
     }
     setPreviewLoading(true);
     try {
-      const resp = await fetchApi(`/api/travel/quotes/${quoteId}/pricing-preview`);
+      const resp = await fetchApi(
+        `/api/travel/quotes/${quoteId}/pricing-preview`,
+      );
       if (resp && typeof resp === "object") {
+        const lines = Array.isArray(resp.lines) ? resp.lines : [];
         setPricingPreview({
+          baseSubtotal: Number(resp.baseSubtotal) || 0,
+          seasonMultiplier: Number(resp.seasonMultiplier) || 1,
+          matchedSeasonName: resp.matchedSeasonName || "",
           subtotal: Number(resp.subtotal) || 0,
           total: Number(resp.total) || 0,
           currency: resp.currency || currency || "INR",
@@ -1211,14 +1921,23 @@ export default function QuoteBuilder() {
           lines: Array.isArray(resp.lines) ? resp.lines : [],
         });
       }
-    } catch (err) {
-      notify.error(err?.data?.error || err?.message || "Pricing preview failed");
+    } catch {
+      // Fail-soft: pricing preview is informational; a backend error should
+      // not block the operator with a toast while they are still editing.
     } finally {
       setPreviewLoading(false);
     }
   };
 
   const dismissPricingPreview = () => setPricingPreview(null);
+
+  // Auto-fetch pricing preview in edit mode once persisted lines have loaded.
+  useEffect(() => {
+    if (!quoteId || loading || previewLoading || pricingPreview) return;
+    if (persistedLines.length === 0 && draftLines.length === 0) return;
+    handlePricingPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteId, loading, persistedLines.length, draftLines.length]);
 
   // Slice 11: Accept / Decline workflow endpoints (POST
   // /api/travel/quotes/:id/{accept,decline}). Dedicated semantic
@@ -1342,7 +2061,9 @@ export default function QuoteBuilder() {
         );
         return;
       }
-      notify.error(err?.data?.error || err?.message || "Convert to invoice failed");
+      notify.error(
+        err?.data?.error || err?.message || "Convert to invoice failed",
+      );
     }
   };
 
@@ -1364,6 +2085,7 @@ export default function QuoteBuilder() {
           sortOrder: idx,
         };
         if (l.notes) item.notes = String(l.notes);
+        if (l.linkMeta) item.linkMeta = l.linkMeta;
         return item;
       });
 
@@ -1373,8 +2095,11 @@ export default function QuoteBuilder() {
       return;
     }
     // Seed a sensible default name from the contact / sub-brand.
-    const cName = (contactsById[contactId] && contactsById[contactId].name) || "";
-    setTemplateName(cName ? `${cName} — ${(subBrand || "Quote").toUpperCase()}` : "");
+    const cName =
+      (contactsById[contactId] && contactsById[contactId].name) || "";
+    setTemplateName(
+      cName ? `${cName} — ${(subBrand || "Quote").toUpperCase()}` : "",
+    );
     setTemplateCategory("");
     setTemplateModalOpen(true);
   };
@@ -1409,7 +2134,9 @@ export default function QuoteBuilder() {
       setTemplateName("");
       setTemplateCategory("");
     } catch (err) {
-      notify.error(err?.data?.error || err?.message || "Failed to save template");
+      notify.error(
+        err?.data?.error || err?.message || "Failed to save template",
+      );
     } finally {
       setSavingTemplate(false);
     }
@@ -1423,7 +2150,9 @@ export default function QuoteBuilder() {
     if (!selectedTemplateId) return;
     setApplyingTemplate(true);
     try {
-      const t = await fetchApi(`/api/travel/quote-templates/${selectedTemplateId}`);
+      const t = await fetchApi(
+        `/api/travel/quote-templates/${selectedTemplateId}`,
+      );
       const arr = JSON.parse(t.linesJson || "[]");
       if (!Array.isArray(arr) || arr.length === 0) {
         notify.error("Selected template has no lines");
@@ -1441,6 +2170,7 @@ export default function QuoteBuilder() {
         unitPrice: Number(l.unitPrice) || 0,
         supplierId: l.supplierId != null ? String(l.supplierId) : "",
         notes: l.notes || "",
+        linkMeta: normalizeLineLinkMeta(l.linkMeta, l.supplierId),
         currency: l.currency || t.currency || currency || "INR",
       }));
       setDraftLines((prev) => [...prev, ...newDrafts]);
@@ -1450,7 +2180,9 @@ export default function QuoteBuilder() {
       setUseTemplateOpen(false);
       setSelectedTemplateId("");
     } catch (err) {
-      notify.error(err?.data?.error || err?.message || "Failed to apply template");
+      notify.error(
+        err?.data?.error || err?.message || "Failed to apply template",
+      );
     } finally {
       setApplyingTemplate(false);
     }
@@ -1458,7 +2190,7 @@ export default function QuoteBuilder() {
 
   if (loading) {
     return (
-      <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+      <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
         <div style={empty}>Loading&hellip;</div>
       </div>
     );
@@ -1468,8 +2200,10 @@ export default function QuoteBuilder() {
     <div
       style={{
         padding: 24,
-        maxWidth: 1200,
+        width: "100%",
+        maxWidth: 1480,
         margin: "0 auto",
+        boxSizing: "border-box",
         animation: "fadeIn 0.4s ease-out",
       }}
     >
@@ -1484,6 +2218,18 @@ export default function QuoteBuilder() {
         }}
       >
         <div>
+          {backTo && (
+            <Link
+              to={backTo}
+              style={{
+                ...secondaryBtn,
+                textDecoration: "none",
+                marginBottom: 10,
+              }}
+            >
+              {backLabel}
+            </Link>
+          )}
           <h1
             style={{
               display: "flex",
@@ -1496,11 +2242,16 @@ export default function QuoteBuilder() {
           >
             <Calculator size={26} aria-hidden /> Quote Builder
           </h1>
-          <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
+          <p
+            style={{
+              color: "var(--text-secondary)",
+              marginTop: 4,
+              fontSize: "0.9rem",
+            }}
+          >
             {quoteId ? (
               <>
-                Quote <strong>#{quoteId}</strong>
-                {" "}
+                Quote <strong>#{quoteId}</strong>{" "}
                 <span
                   style={{
                     ...statusBadge,
@@ -1531,7 +2282,10 @@ export default function QuoteBuilder() {
                 the lines). Hidden until at least one line exists. */}
             <button
               type="button"
-              onClick={() => { setSelectedTemplateId(""); setUseTemplateOpen(true); }}
+              onClick={() => {
+                setSelectedTemplateId("");
+                setUseTemplateOpen(true);
+              }}
               disabled={applyingTemplate || loadingTemplates}
               style={secondaryBtn}
               title="Load line items from an existing quote template"
@@ -1544,7 +2298,11 @@ export default function QuoteBuilder() {
               onClick={openTemplateModal}
               disabled={savingTemplate || visibleLines.length === 0}
               style={secondaryBtn}
-              title={visibleLines.length === 0 ? "Add a line first" : "Save these lines as a reusable template"}
+              title={
+                visibleLines.length === 0
+                  ? "Add a line first"
+                  : "Save these lines as a reusable template"
+              }
               aria-label="Save as template"
             >
               <LayoutTemplate size={14} /> Save as template
@@ -1554,91 +2312,290 @@ export default function QuoteBuilder() {
                 the quote exists / when opened from the quotes history. */}
             {quoteId && (
               <>
-            <button
-              type="button"
-              onClick={openSendConfirm}
-              disabled={saving || sending || !quoteId}
-              style={secondaryBtn}
-              title="Send / re-send to customer (WhatsApp + email)"
-            >
-              <Send size={14} /> {status === "Sent" ? "Re-send" : "Send to customer"}
-            </button>
-            <button
-              type="button"
-              onClick={handleDuplicate}
-              disabled={!quoteId}
-              style={secondaryBtn}
-              title={!quoteId ? "Save first" : "Duplicate this quote"}
-            >
-              <Copy size={14} /> Duplicate
-            </button>
-            <button
-              type="button"
-              onClick={handleDownloadPdf}
-              disabled={!quoteId}
-              style={secondaryBtn}
-              title={!quoteId ? "Save first" : "Download PDF"}
-            >
-              <Download size={14} /> Download PDF
-            </button>
-            <button
-              type="button"
-              onClick={handlePricingPreview}
-              disabled={!quoteId || visibleLines.length === 0 || previewLoading}
-              style={secondaryBtn}
-              title={
-                !quoteId
-                  ? "Save first"
-                  : visibleLines.length === 0
-                    ? "Add a line first"
-                    : "Calculate subtotal + markup-rule preview"
-              }
-              aria-label="Calculate with markups"
-            >
-              <TrendingUp size={14} />{" "}
-              {previewLoading ? "Calculating…" : "Calculate with markups"}
-            </button>
-            <button
-              type="button"
-              onClick={handleConvertToInvoice}
-              disabled={!quoteId}
-              style={secondaryBtn}
-              title={
-                !quoteId
-                  ? "Save first"
-                  : "Convert this quote to a draft invoice"
-              }
-              aria-label="Convert to invoice"
-            >
-              <FileText size={14} /> Convert to invoice
-            </button>
+                <button
+                  type="button"
+                  onClick={openSendConfirm}
+                  disabled={saving || sending || !quoteId}
+                  style={secondaryBtn}
+                  title="Send / re-send to customer (WhatsApp + email)"
+                >
+                  <Send size={14} />{" "}
+                  {status === "Sent" ? "Re-send" : "Send to customer"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDuplicate}
+                  disabled={!quoteId}
+                  style={secondaryBtn}
+                  title={!quoteId ? "Save first" : "Duplicate this quote"}
+                >
+                  <Copy size={14} /> Duplicate
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadPdf}
+                  disabled={!quoteId}
+                  style={secondaryBtn}
+                  title={!quoteId ? "Save first" : "Download PDF"}
+                >
+                  <Download size={14} /> Download PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePricingPreview}
+                  disabled={
+                    !quoteId || visibleLines.length === 0 || previewLoading
+                  }
+                  style={secondaryBtn}
+                  title={
+                    !quoteId
+                      ? "Save first"
+                      : visibleLines.length === 0
+                        ? "Add a line first"
+                        : "Calculate subtotal + markup-rule preview"
+                  }
+                  aria-label="Refresh pricing breakdown"
+                >
+                  <TrendingUp size={14} />{" "}
+                  {previewLoading
+                    ? "Calculating…"
+                    : "Refresh pricing breakdown"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConvertToInvoice}
+                  disabled={!quoteId}
+                  style={secondaryBtn}
+                  title={
+                    !quoteId
+                      ? "Save first"
+                      : "Convert this quote to a draft invoice"
+                  }
+                  aria-label="Convert to invoice"
+                >
+                  <FileText size={14} /> Convert to invoice
+                </button>
               </>
             )}
           </div>
         )}
       </header>
 
+      <HotelOfferImageGenerator />
+
+      <section style={heroPanel} aria-label="Quote builder summary">
+        <div>
+          <div style={eyebrowStyle}>Travel quote workspace</div>
+          <h2
+            style={{ margin: "6px 0 8px", fontSize: "1.5rem", lineHeight: 1.2 }}
+          >
+            Build a branded quote that looks customer-ready and keeps pricing
+            controls internal.
+          </h2>
+          <p
+            style={{
+              margin: 0,
+              color: "var(--text-secondary)",
+              maxWidth: 760,
+              fontSize: 14,
+              lineHeight: 1.6,
+            }}
+          >
+            Flights, hotels, transfers, GST/TCS visibility, and customer actions
+            are all managed from one screen. The customer sees a polished travel
+            quote while your markup decisions stay internal.
+          </p>
+          <div style={summaryGrid}>
+            <div style={summaryCard}>
+              <div style={summaryLabel}>Customer</div>
+              <div style={summaryValue}>{customerLabel}</div>
+              <div style={summaryHint}>
+                {contactId
+                  ? selectedSubBrandLabel
+                  : "Choose a traveler before sending"}
+              </div>
+            </div>
+            <div style={summaryCard}>
+              <div style={summaryLabel}>Quote mix</div>
+              <div style={summaryValue}>
+                {visibleLines.length} line{visibleLines.length === 1 ? "" : "s"}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  flexWrap: "wrap",
+                  marginTop: 8,
+                }}
+              >
+                {quoteComposition.length > 0 ? (
+                  quoteComposition.map((item) => (
+                    <span key={item.type} style={chipPill}>
+                      {item.type} x{item.count}
+                    </span>
+                  ))
+                ) : (
+                  <span style={{ ...summaryHintStyle, marginTop: 0 }}>
+                    No services added yet
+                  </span>
+                )}
+              </div>
+            </div>
+            <div style={summaryCard}>
+              <div style={summaryLabel}>Commercials</div>
+              <div style={summaryValue}>
+                {currency} {fmt(grandTotal)}
+              </div>
+              <div style={summaryHint}>
+                Live total with discount and GST/TCS style tax breakdown
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={heroAside}>
+          <div style={heroAsideCard}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 8,
+                alignItems: "center",
+              }}
+            >
+              <span style={summaryLabel}>Customer action</span>
+              <span
+                style={{
+                  ...statusChip,
+                  color: customerActionTone.fg,
+                  background: customerActionTone.bg,
+                  borderColor: customerActionTone.bg,
+                }}
+              >
+                {customerActionState}
+              </span>
+            </div>
+            <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+              <div style={timelineRow}>
+                <span style={timelineDot} /> Share from this quote on
+                email/WhatsApp
+              </div>
+              <div style={timelineRow}>
+                <span style={timelineDot} /> Customer can accept, reject, or
+                request changes
+              </div>
+              <div style={timelineRow}>
+                <span style={timelineDot} /> Agent sees status updates and
+                payment progress here
+              </div>
+            </div>
+          </div>
+          <div style={heroAsideCardMuted}>
+            <div style={summaryLabel}>Brand & compliance</div>
+            <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>
+              Present on brand domain styling
+            </div>
+            <div
+              style={{
+                marginTop: 8,
+                color: "var(--text-secondary)",
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}
+            >
+              Match the brand-led quote feel with clearer taxes, optional
+              compliance notes, and a cleaner customer-facing summary.
+            </div>
+          </div>
+        </div>
+      </section>
+
       {shareInfo?.shareUrl && (
         <section
           className="glass"
           aria-label="Customer share link"
-          style={{ padding: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+          style={{
+            padding: 16,
+            marginBottom: 16,
+            border: "1px solid rgba(59,130,246,0.18)",
+            background:
+              "linear-gradient(135deg, rgba(59,130,246,0.12), rgba(255,255,255,0.02))",
+          }}
         >
-          <Send size={14} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))" }} />
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Customer link:</span>
-          <code style={{ fontSize: 12, wordBreak: "break-all", flex: 1, minWidth: 0 }}>{shareInfo.shareUrl}</code>
-          <button
-            type="button"
-            onClick={() => { navigator.clipboard?.writeText(shareInfo.shareUrl).then(() => notify.success("Link copied")).catch(() => notify.error("Copy failed — select the link")); }}
-            style={secondaryBtn}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+              alignItems: "flex-start",
+            }}
           >
-            <Copy size={14} /> Copy
-          </button>
-          <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-            {shareInfo.channel && shareInfo.channel !== "none"
-              ? `Sent via ${shareInfo.channel.replace("+", " + ")}`
-              : "Not delivered — share the link manually"}
-          </span>
+            <div style={{ flex: "1 1 480px", minWidth: 0 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 6,
+                }}
+              >
+                <Send
+                  size={15}
+                  aria-hidden
+                  style={{ color: "var(--primary-color, var(--accent-color))" }}
+                />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>
+                  Customer share link ready
+                </span>
+                <span style={chipPill}>
+                  {shareInfo.channel && shareInfo.channel !== "none"
+                    ? `Sent via ${shareInfo.channel.replace("+", " + ")}`
+                    : "Manual share"}
+                </span>
+              </div>
+              <div
+                style={{
+                  fontSize: 13,
+                  color: "var(--text-secondary)",
+                  lineHeight: 1.6,
+                  marginBottom: 10,
+                }}
+              >
+                Share this branded quote link with the customer. Their actions
+                and follow-up status will map back to this quote.
+              </div>
+              <code style={{ ...shareLinkBox, wordBreak: "break-all" }}>
+                {shareInfo.shareUrl}
+              </code>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gap: 8,
+                minWidth: 220,
+                flex: "0 1 240px",
+              }}
+            >
+              <div style={miniInfoCard}>
+                <div style={summaryLabel}>Interaction status</div>
+                <div style={{ fontWeight: 700, marginTop: 4 }}>
+                  {customerActionState}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard
+                    ?.writeText(shareInfo.shareUrl)
+                    .then(() => notify.success("Link copied"))
+                    .catch(() => notify.error("Copy failed - select the link"));
+                }}
+                style={secondaryBtn}
+              >
+                <Copy size={14} /> Copy link
+              </button>
+            </div>
+          </div>
         </section>
       )}
 
@@ -1657,32 +2614,69 @@ export default function QuoteBuilder() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <ThumbsUp size={16} aria-hidden style={{ color: "var(--success-color, #22c55e)", flexShrink: 0 }} />
-            <span style={{ fontWeight: 700, fontSize: 14, color: "var(--success-color, #22c55e)" }}>
+            <ThumbsUp
+              size={16}
+              aria-hidden
+              style={{ color: "var(--success-color, #22c55e)", flexShrink: 0 }}
+            />
+            <span
+              style={{
+                fontWeight: 700,
+                fontSize: 14,
+                color: "var(--success-color, #22c55e)",
+              }}
+            >
               Quote accepted by customer
             </span>
             {acceptanceDetails?.acceptedAt && (
-              <span style={{ fontSize: 12, color: "var(--text-secondary)", marginLeft: "auto" }}>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  marginLeft: "auto",
+                }}
+              >
                 {new Date(acceptanceDetails.acceptedAt).toLocaleString()}
               </span>
             )}
           </div>
           {acceptanceDetails ? (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "10px 24px", paddingLeft: 24, fontSize: 13 }}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "10px 24px",
+                paddingLeft: 24,
+                fontSize: 13,
+              }}
+            >
               <span>
                 <span style={{ fontWeight: 600 }}>Name: </span>
-                {acceptanceDetails.customerName || <em style={{ color: "var(--text-secondary)" }}>not provided</em>}
+                {acceptanceDetails.customerName || (
+                  <em style={{ color: "var(--text-secondary)" }}>
+                    not provided
+                  </em>
+                )}
               </span>
               <span style={{ flex: "1 1 100%" }}>
                 <span style={{ fontWeight: 600 }}>Note: </span>
-                {acceptanceDetails.note
-                  ? <span style={{ whiteSpace: "pre-wrap" }}>{acceptanceDetails.note}</span>
-                  : <em style={{ color: "var(--text-secondary)" }}>none</em>
-                }
+                {acceptanceDetails.note ? (
+                  <span style={{ whiteSpace: "pre-wrap" }}>
+                    {acceptanceDetails.note}
+                  </span>
+                ) : (
+                  <em style={{ color: "var(--text-secondary)" }}>none</em>
+                )}
               </span>
             </div>
           ) : (
-            <span style={{ fontSize: 12, color: "var(--text-secondary)", paddingLeft: 24 }}>
+            <span
+              style={{
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                paddingLeft: 24,
+              }}
+            >
               Loading acceptance details…
             </span>
           )}
@@ -1697,35 +2691,88 @@ export default function QuoteBuilder() {
             padding: 14,
             marginBottom: 16,
             borderLeft: `4px solid ${paymentInfo.status === "fully_paid" ? "var(--primary-color, var(--accent-color))" : "#f59e0b"}`,
-            background: paymentInfo.status === "fully_paid" ? "rgba(34, 197, 94, 0.05)" : "rgba(245, 158, 11, 0.07)",
+            background:
+              paymentInfo.status === "fully_paid"
+                ? "rgba(34, 197, 94, 0.05)"
+                : "rgba(245, 158, 11, 0.07)",
             display: "flex",
             flexDirection: "column",
             gap: 6,
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {paymentInfo.status === "fully_paid"
-              ? <CheckCircle size={16} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))", flexShrink: 0 }} />
-              : <CreditCard size={16} aria-hidden style={{ color: "#f59e0b", flexShrink: 0 }} />
-            }
-            <span style={{ fontWeight: 700, fontSize: 14, color: paymentInfo.status === "fully_paid" ? "var(--primary-color, var(--accent-color))" : "#b45309" }}>
-              {paymentInfo.status === "fully_paid" ? "Fully paid" : "Advance payment received"}
+            {paymentInfo.status === "fully_paid" ? (
+              <CheckCircle
+                size={16}
+                aria-hidden
+                style={{
+                  color: "var(--primary-color, var(--accent-color))",
+                  flexShrink: 0,
+                }}
+              />
+            ) : (
+              <CreditCard
+                size={16}
+                aria-hidden
+                style={{ color: "#f59e0b", flexShrink: 0 }}
+              />
+            )}
+            <span
+              style={{
+                fontWeight: 700,
+                fontSize: 14,
+                color:
+                  paymentInfo.status === "fully_paid"
+                    ? "var(--primary-color, var(--accent-color))"
+                    : "#b45309",
+              }}
+            >
+              {paymentInfo.status === "fully_paid"
+                ? "Fully paid"
+                : "Advance payment received"}
             </span>
             {paymentInfo.paidAt && (
-              <span style={{ fontSize: 12, color: "var(--text-secondary)", marginLeft: "auto" }}>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  marginLeft: "auto",
+                }}
+              >
                 {new Date(paymentInfo.paidAt).toLocaleString()}
               </span>
             )}
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "10px 24px", paddingLeft: 24, fontSize: 13 }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "10px 24px",
+              paddingLeft: 24,
+              fontSize: 13,
+            }}
+          >
             <span>
               <span style={{ fontWeight: 600 }}>Amount paid: </span>
-              {currency} {Number(paymentInfo.amount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {currency}{" "}
+              {Number(paymentInfo.amount).toLocaleString("en-IN", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
             </span>
             {paymentInfo.reference && (
               <span>
                 <span style={{ fontWeight: 600 }}>Reference: </span>
-                <code style={{ fontSize: 12, background: "rgba(0,0,0,0.06)", padding: "1px 5px", borderRadius: 3 }}>{paymentInfo.reference}</code>
+                <code
+                  style={{
+                    fontSize: 12,
+                    background: "rgba(0,0,0,0.06)",
+                    padding: "1px 5px",
+                    borderRadius: 3,
+                  }}
+                >
+                  {paymentInfo.reference}
+                </code>
               </span>
             )}
           </div>
@@ -1738,44 +2785,32 @@ export default function QuoteBuilder() {
         style={{
           padding: 16,
           marginBottom: 16,
+          position: "relative",
+          zIndex: 2,
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))",
+          gridTemplateColumns:
+            "repeat(auto-fit, minmax(min(100%, 200px), 1fr))",
           gap: 10,
-          alignItems: "end",
+          alignItems: "start",
         }}
       >
         <label style={fieldLabel}>
           Customer
-          {/* Search input filters the native select options below. */}
-          <input
-            type="text"
-            value={customerSearch}
-            onChange={(e) => setCustomerSearch(e.target.value)}
-            placeholder="Search customers…"
-            style={{ ...inputStyle, marginBottom: 4 }}
-          />
-          <select
+          <SearchableCustomerSelect
+            options={customerPickerOptions}
             value={contactId}
-            onChange={(e) => { setContactId(e.target.value); setCustomerSearch(""); }}
-            style={inputStyle}
-            aria-label="Customer"
+            onChange={setContactId}
+            currentSubBrand={subBrand}
+            placeholder="Select customer *"
+          />
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--text-secondary)",
+              marginTop: 4,
+              display: "block",
+            }}
           >
-            <option value="">Select customer *</option>
-            {contactId && !filteredCustomers.some((c) => String(c.id) === String(contactId)) && (
-              <option value={contactId}>
-                {(selectedCustomer?.name || contactsById[contactId]?.name || `Contact #${contactId}`)
-                  + (selectedCustomer?.subBrand && selectedCustomer.subBrand !== subBrand
-                    ? ` — ${SUB_BRAND_LABELS[selectedCustomer.subBrand] || selectedCustomer.subBrand}`
-                    : "")}
-              </option>
-            )}
-            {filteredCustomers.map((c) => (
-              <option key={c.id} value={String(c.id)}>
-                {(c.name || `Contact #${c.id}`) + (c.email ? ` — ${c.email}` : "") + (!c.subBrand ? " · (unassigned)" : "")}
-              </option>
-            ))}
-          </select>
-          <span style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4, display: "block" }}>
             {visibleCustomers.length === 0
               ? `No ${SUB_BRAND_LABELS[subBrand] || subBrand} customers yet`
               : `Showing ${SUB_BRAND_LABELS[subBrand] || subBrand} customers`}
@@ -1820,37 +2855,161 @@ export default function QuoteBuilder() {
       </section>
 
       {/* Plan trip — destinations + 1-click AI auto-suggest (nexus-style). */}
-      <section className="glass" aria-label="Plan trip" style={{ padding: 16, marginBottom: 16 }}>
-        <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+      <section
+        className="glass"
+        aria-label="Plan trip"
+        style={{ padding: 16, marginBottom: 16, position: "relative", zIndex: 1 }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            fontSize: "1rem",
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
           <Calculator size={16} aria-hidden /> Plan trip
         </h2>
-        <p style={{ color: "var(--text-secondary)", fontSize: 12, margin: "4px 0 12px" }}>
-          Enter the cities + nights, then let AI suggest flights &amp; hotels — it fills the lines below, which you can edit via the search panels.
+        <p
+          style={{
+            color: "var(--text-secondary)",
+            fontSize: 12,
+            margin: "4px 0 12px",
+          }}
+        >
+          Enter the cities + nights, then let AI suggest flights &amp; hotels —
+          it fills the lines below, which you can edit via the search panels.
         </p>
-        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,150px),1fr))", marginBottom: 10 }}>
-          <input placeholder="Leaving from (city)" value={leavingFrom} onChange={(e) => setLeavingFrom(e.target.value)} style={inputStyle} aria-label="Leaving from" />
-          <input type="date" value={tripStart} onChange={(e) => setTripStart(e.target.value)} style={inputStyle} aria-label="Trip start date" />
-          <input type="number" min="1" placeholder="Adults" value={adults} onChange={(e) => setAdults(e.target.value)} style={inputStyle} aria-label="Adults" />
-          <input type="number" min="0" placeholder="Children" value={children} onChange={(e) => setChildren(e.target.value)} style={inputStyle} aria-label="Children" />
-          <input type="number" min="1" placeholder="Rooms" value={rooms} onChange={(e) => setRooms(e.target.value)} style={inputStyle} aria-label="Rooms" />
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%,150px),1fr))",
+            marginBottom: 10,
+          }}
+        >
+          <input
+            placeholder="Leaving from (city)"
+            value={leavingFrom}
+            onChange={(e) => setLeavingFrom(e.target.value)}
+            style={inputStyle}
+            aria-label="Leaving from"
+          />
+          <input
+            type="date"
+            value={tripStart}
+            onChange={(e) => setTripStart(e.target.value)}
+            style={inputStyle}
+            aria-label="Trip start date"
+          />
+          <input
+            type="number"
+            min="1"
+            placeholder="Adults"
+            value={adults}
+            onChange={(e) => setAdults(e.target.value)}
+            style={inputStyle}
+            aria-label="Adults"
+          />
+          <input
+            type="number"
+            min="0"
+            placeholder="Children"
+            value={children}
+            onChange={(e) => setChildren(e.target.value)}
+            style={inputStyle}
+            aria-label="Children"
+          />
+          <input
+            type="number"
+            min="1"
+            placeholder="Rooms"
+            value={rooms}
+            onChange={(e) => setRooms(e.target.value)}
+            style={inputStyle}
+            aria-label="Rooms"
+          />
         </div>
-        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Destinations (in order)</div>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>
+          Destinations (in order)
+        </div>
         {destinations.map((d, i) => (
-          <div key={i} style={{ display: "grid", gap: 8, gridTemplateColumns: "2fr 1fr auto auto", alignItems: "center", marginBottom: 6 }}>
-            <input placeholder={`City ${i + 1} (e.g. Makkah)`} value={d.city} onChange={(e) => setDest(i, { city: e.target.value })} style={inputStyle} aria-label={`Destination city ${i + 1}`} />
-            <input type="number" min="0" placeholder="Nights" value={d.nights} onChange={(e) => setDest(i, { nights: e.target.value })} style={inputStyle} aria-label={`Nights in city ${i + 1}`} disabled={d.noStay} />
-            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
-              <input type="checkbox" checked={d.noStay} onChange={(e) => setDest(i, { noStay: e.target.checked })} aria-label={`No stay in city ${i + 1}`} /> No stay
+          <div
+            key={i}
+            style={{
+              display: "grid",
+              gap: 8,
+              gridTemplateColumns: "2fr 1fr auto auto",
+              alignItems: "center",
+              marginBottom: 6,
+            }}
+          >
+            <input
+              placeholder={`City ${i + 1} (e.g. Makkah)`}
+              value={d.city}
+              onChange={(e) => setDest(i, { city: e.target.value })}
+              style={inputStyle}
+              aria-label={`Destination city ${i + 1}`}
+            />
+            <input
+              type="number"
+              min="0"
+              placeholder="Nights"
+              value={d.nights}
+              onChange={(e) => setDest(i, { nights: e.target.value })}
+              style={inputStyle}
+              aria-label={`Nights in city ${i + 1}`}
+              disabled={d.noStay}
+            />
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={d.noStay}
+                onChange={(e) => setDest(i, { noStay: e.target.checked })}
+                aria-label={`No stay in city ${i + 1}`}
+              />{" "}
+              No stay
             </label>
-            <button type="button" onClick={() => removeDest(i)} disabled={destinations.length <= 1} style={{ ...iconBtn, opacity: destinations.length <= 1 ? 0.4 : 1 }} aria-label={`Remove city ${i + 1}`}>
+            <button
+              type="button"
+              onClick={() => removeDest(i)}
+              disabled={destinations.length <= 1}
+              style={{
+                ...iconBtn,
+                opacity: destinations.length <= 1 ? 0.4 : 1,
+              }}
+              aria-label={`Remove city ${i + 1}`}
+            >
               <Trash2 size={16} />
             </button>
           </div>
         ))}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          <button type="button" onClick={addDest} style={secondaryBtn}><Plus size={14} /> Add city</button>
-          <button type="button" onClick={suggestTrip} disabled={suggesting} style={primaryBtn}>
-            <TrendingUp size={14} /> {suggesting ? "Suggesting…" : "Suggest flights & hotels"}
+        <div
+          style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}
+        >
+          <button type="button" onClick={addDest} style={secondaryBtn}>
+            <Plus size={14} /> Add city
+          </button>
+          <button
+            type="button"
+            onClick={suggestTrip}
+            disabled={suggesting}
+            style={primaryBtn}
+          >
+            <TrendingUp size={14} />{" "}
+            {suggesting ? "Suggesting…" : "Suggest flights & hotels"}
           </button>
         </div>
       </section>
@@ -1859,71 +3018,303 @@ export default function QuoteBuilder() {
           a price summary, and Change flight/hotel (re-syncs the Line Items). */}
       <SuggestedItinerary
         suggestion={suggestion}
-        onChangeFlight={(idx, optIdx) => changeSuggestion("flights", idx, optIdx)}
+        onChangeFlight={(idx, optIdx) =>
+          changeSuggestion("flights", idx, optIdx)
+        }
         onChangeStay={(idx, optIdx) => changeSuggestion("stays", idx, optIdx)}
       />
 
       {/* TBO trip search — flights + hotels → draft lines (PRD trip builder).
           Live options via tboClient (TBO → AI web → sample); "Add" drops a
           result into the quote as a draft line the operator then saves. */}
-      <section className="glass" aria-label="Search flights and hotels" style={{ padding: 16, marginBottom: 16 }}>
-        <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+      <section
+        className="glass"
+        aria-label="Search flights and hotels"
+        style={{ padding: 16, marginBottom: 16 }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            fontSize: "1rem",
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
           <Search size={16} aria-hidden /> Search flights &amp; hotels
         </h2>
-        <p style={{ color: "var(--text-secondary)", fontSize: 12, margin: "4px 0 12px" }}>
-          Live options via TBO (falls back to an AI web estimate, then sample data). Add a result to drop it into the quote below as a line.
+        <p
+          style={{
+            color: "var(--text-secondary)",
+            fontSize: 12,
+            margin: "4px 0 12px",
+          }}
+        >
+          Live options via TBO (falls back to an AI web estimate, then sample
+          data). Add a result to drop it into the quote below as a line.
         </p>
 
-        <div style={{ marginBottom: 8, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Plane size={14} aria-hidden /> Flights</div>
-        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,140px),1fr))" }}>
-          <input placeholder="From (city or IATA)" value={fSearch.from} onChange={(e) => setFSearch({ ...fSearch, from: e.target.value })} style={inputStyle} aria-label="Flight from" />
-          <input placeholder="To (city or IATA)" value={fSearch.to} onChange={(e) => setFSearch({ ...fSearch, to: e.target.value })} style={inputStyle} aria-label="Flight to" />
-          <input type="date" value={fSearch.departDate} onChange={(e) => setFSearch({ ...fSearch, departDate: e.target.value })} style={inputStyle} aria-label="Flight date" />
-          <select value={fSearch.cabinClass} onChange={(e) => setFSearch({ ...fSearch, cabinClass: e.target.value })} style={inputStyle} aria-label="Cabin class">
-            {["Economy", "Premium Economy", "Business", "First"].map((c) => <option key={c} value={c}>{c}</option>)}
+        <div
+          style={{
+            marginBottom: 8,
+            fontWeight: 600,
+            fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <Plane size={14} aria-hidden /> Flights
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%,140px),1fr))",
+          }}
+        >
+          <input
+            placeholder="From (city or IATA)"
+            value={fSearch.from}
+            onChange={(e) => setFSearch({ ...fSearch, from: e.target.value })}
+            style={inputStyle}
+            aria-label="Flight from"
+          />
+          <input
+            placeholder="To (city or IATA)"
+            value={fSearch.to}
+            onChange={(e) => setFSearch({ ...fSearch, to: e.target.value })}
+            style={inputStyle}
+            aria-label="Flight to"
+          />
+          <input
+            type="date"
+            value={fSearch.departDate}
+            onChange={(e) =>
+              setFSearch({ ...fSearch, departDate: e.target.value })
+            }
+            style={inputStyle}
+            aria-label="Flight date"
+          />
+          <select
+            value={fSearch.cabinClass}
+            onChange={(e) =>
+              setFSearch({ ...fSearch, cabinClass: e.target.value })
+            }
+            style={inputStyle}
+            aria-label="Cabin class"
+          >
+            {["Economy", "Premium Economy", "Business", "First"].map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
           </select>
-          <button type="button" onClick={runFlightSearch} disabled={fLoading} style={primaryBtn}><Search size={14} /> {fLoading ? "Searching…" : "Search flights"}</button>
+          <button
+            type="button"
+            onClick={runFlightSearch}
+            disabled={fLoading}
+            style={primaryBtn}
+          >
+            <Search size={14} /> {fLoading ? "Searching…" : "Search flights"}
+          </button>
         </div>
         {fMeta && (
-          <p style={{ fontSize: 12, margin: "8px 0 0", color: "var(--text-secondary)" }}>
-            <span style={providerBadge(fMeta.provider)}>{PROVIDER_LABEL[fMeta.provider] || fMeta.provider}</span>
-            {fMeta.resolved ? `${fMeta.resolved.from.input} → ${fMeta.resolved.from.iata} · ${fMeta.resolved.to.input} → ${fMeta.resolved.to.iata}. ` : ""}
+          <p
+            style={{
+              fontSize: 12,
+              margin: "8px 0 0",
+              color: "var(--text-secondary)",
+            }}
+          >
+            <span style={providerBadge(fMeta.provider)}>
+              {PROVIDER_LABEL[fMeta.provider] || fMeta.provider}
+            </span>
+            {fMeta.resolved
+              ? `${fMeta.resolved.from.input} → ${fMeta.resolved.from.iata} · ${fMeta.resolved.to.input} → ${fMeta.resolved.to.iata}. `
+              : ""}
             {fMeta.note || ""}
           </p>
         )}
-        <FlightResultsBoard results={fResults} currency={currency} onAdd={addFlightLine} addLabel="Add" />
+        <FlightResultsBoard
+          results={fResults}
+          currency={currency}
+          onAdd={addFlightLine}
+          addLabel="Add"
+        />
 
-        <div style={{ margin: "16px 0 8px", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Hotel size={14} aria-hidden /> Hotels</div>
-        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,140px),1fr))" }}>
-          <input placeholder="City" value={hSearch.city} onChange={(e) => setHSearch({ ...hSearch, city: e.target.value })} style={inputStyle} aria-label="Hotel city" />
-          <input type="date" value={hSearch.checkIn} onChange={(e) => setHSearch({ ...hSearch, checkIn: e.target.value })} style={inputStyle} aria-label="Check-in" />
-          <input type="date" value={hSearch.checkOut} onChange={(e) => setHSearch({ ...hSearch, checkOut: e.target.value })} style={inputStyle} aria-label="Check-out" />
-          <input type="number" min="1" placeholder="Rooms" value={hSearch.rooms} onChange={(e) => setHSearch({ ...hSearch, rooms: e.target.value })} style={inputStyle} aria-label="Rooms" />
-          <select value={hSearch.starRating} onChange={(e) => setHSearch({ ...hSearch, starRating: e.target.value })} style={inputStyle} aria-label="Star rating">
-            <option value="">Any rating</option>{[3, 4, 5].map((s) => <option key={s} value={s}>{s} star</option>)}
+        <div
+          style={{
+            margin: "16px 0 8px",
+            fontWeight: 600,
+            fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <Hotel size={14} aria-hidden /> Hotels
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%,140px),1fr))",
+          }}
+        >
+          <input
+            placeholder="City"
+            value={hSearch.city}
+            onChange={(e) => setHSearch({ ...hSearch, city: e.target.value })}
+            style={inputStyle}
+            aria-label="Hotel city"
+          />
+          <input
+            type="date"
+            value={hSearch.checkIn}
+            onChange={(e) =>
+              setHSearch({ ...hSearch, checkIn: e.target.value })
+            }
+            style={inputStyle}
+            aria-label="Check-in"
+          />
+          <input
+            type="date"
+            value={hSearch.checkOut}
+            onChange={(e) =>
+              setHSearch({ ...hSearch, checkOut: e.target.value })
+            }
+            style={inputStyle}
+            aria-label="Check-out"
+          />
+          <input
+            type="number"
+            min="1"
+            placeholder="Rooms"
+            value={hSearch.rooms}
+            onChange={(e) => setHSearch({ ...hSearch, rooms: e.target.value })}
+            style={inputStyle}
+            aria-label="Rooms"
+          />
+          <select
+            value={hSearch.starRating}
+            onChange={(e) =>
+              setHSearch({ ...hSearch, starRating: e.target.value })
+            }
+            style={inputStyle}
+            aria-label="Star rating"
+          >
+            <option value="">Any rating</option>
+            {[3, 4, 5].map((s) => (
+              <option key={s} value={s}>
+                {s} star
+              </option>
+            ))}
           </select>
-          <button type="button" onClick={runHotelSearch} disabled={hLoading} style={primaryBtn}><Search size={14} /> {hLoading ? "Searching…" : "Search hotels"}</button>
+          <button
+            type="button"
+            onClick={runHotelSearch}
+            disabled={hLoading}
+            style={primaryBtn}
+          >
+            <Search size={14} /> {hLoading ? "Searching…" : "Search hotels"}
+          </button>
         </div>
         {hMeta && (
-          <p style={{ fontSize: 12, margin: "8px 0 0", color: "var(--text-secondary)" }}>
-            <span style={providerBadge(hMeta.provider)}>{PROVIDER_LABEL[hMeta.provider] || hMeta.provider}</span>{hMeta.note || ""}
+          <p
+            style={{
+              fontSize: 12,
+              margin: "8px 0 0",
+              color: "var(--text-secondary)",
+            }}
+          >
+            <span style={providerBadge(hMeta.provider)}>
+              {PROVIDER_LABEL[hMeta.provider] || hMeta.provider}
+            </span>
+            {hMeta.note || ""}
           </p>
         )}
-        <HotelResultsGrid results={hResults} currency={currency} city={hSearch.city} onAdd={addHotelLine} addLabel="Add to quote" />
+        <HotelResultsGrid
+          results={hResults}
+          currency={currency}
+          city={hSearch.city}
+          onAdd={addHotelLine}
+          addLabel="Add to quote"
+        />
 
-        <div style={{ margin: "16px 0 8px", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Car size={14} aria-hidden /> Transfers (taxi / road)</div>
-        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,140px),1fr))" }}>
-          <input placeholder="From (city / airport)" value={tSearch.from} onChange={(e) => setTSearch({ ...tSearch, from: e.target.value })} style={inputStyle} aria-label="Transfer from" />
-          <input placeholder="To (city / hotel)" value={tSearch.to} onChange={(e) => setTSearch({ ...tSearch, to: e.target.value })} style={inputStyle} aria-label="Transfer to" />
-          <input type="date" value={tSearch.date} onChange={(e) => setTSearch({ ...tSearch, date: e.target.value })} style={inputStyle} aria-label="Transfer date" />
-          <button type="button" onClick={runTransferSearch} disabled={tLoading} style={primaryBtn}><Search size={14} /> {tLoading ? "Searching…" : "Search transfers"}</button>
+        <div
+          style={{
+            margin: "16px 0 8px",
+            fontWeight: 600,
+            fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <Car size={14} aria-hidden /> Transfers (taxi / road)
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%,140px),1fr))",
+          }}
+        >
+          <input
+            placeholder="From (city / airport)"
+            value={tSearch.from}
+            onChange={(e) => setTSearch({ ...tSearch, from: e.target.value })}
+            style={inputStyle}
+            aria-label="Transfer from"
+          />
+          <input
+            placeholder="To (city / hotel)"
+            value={tSearch.to}
+            onChange={(e) => setTSearch({ ...tSearch, to: e.target.value })}
+            style={inputStyle}
+            aria-label="Transfer to"
+          />
+          <input
+            type="date"
+            value={tSearch.date}
+            onChange={(e) => setTSearch({ ...tSearch, date: e.target.value })}
+            style={inputStyle}
+            aria-label="Transfer date"
+          />
+          <button
+            type="button"
+            onClick={runTransferSearch}
+            disabled={tLoading}
+            style={primaryBtn}
+          >
+            <Search size={14} /> {tLoading ? "Searching…" : "Search transfers"}
+          </button>
         </div>
         {tMeta && (
-          <p style={{ fontSize: 12, margin: "8px 0 0", color: "var(--text-secondary)" }}>
-            <span style={providerBadge(tMeta.provider)}>{PROVIDER_LABEL[tMeta.provider] || tMeta.provider}</span>{tMeta.note || ""}
+          <p
+            style={{
+              fontSize: 12,
+              margin: "8px 0 0",
+              color: "var(--text-secondary)",
+            }}
+          >
+            <span style={providerBadge(tMeta.provider)}>
+              {PROVIDER_LABEL[tMeta.provider] || tMeta.provider}
+            </span>
+            {tMeta.note || ""}
           </p>
         )}
-        <TransferResultsList results={tResults} currency={currency} onAdd={addTransferLine} addLabel="Add" />
+        <TransferResultsList
+          results={tResults}
+          currency={currency}
+          onAdd={addTransferLine}
+          addLabel="Add"
+        />
       </section>
 
       {/* PRD_TRAVEL_SUPPLIER_MASTER G043 — credit-utilization advisory chips.
@@ -1944,9 +3335,12 @@ export default function QuoteBuilder() {
           const supplier = suppliers.find((s) => s.id === sid);
           const name = supplier ? supplier.name : `Supplier ${sid}`;
           const isExceeded = cs.status === "exceeded";
-          const bg = isExceeded ? "rgba(168, 50, 63, 0.14)" : "rgba(200, 154, 78, 0.16)";
+          const bg = isExceeded
+            ? "rgba(168, 50, 63, 0.14)"
+            : "rgba(200, 154, 78, 0.16)";
           const color = isExceeded ? "#A8323F" : "#9A6F2E";
-          const cur = (cs.currency || "INR") === "INR" ? "₹" : `${cs.currency} `;
+          const cur =
+            (cs.currency || "INR") === "INR" ? "₹" : `${cs.currency} `;
           const fmtNum = (n) => Number(n || 0).toLocaleString();
           chips.push(
             <span
@@ -1964,15 +3358,19 @@ export default function QuoteBuilder() {
                 background: bg,
                 color,
               }}
-              title={isExceeded
-                ? "Booking will be blocked — supplier credit limit exceeded"
-                : "Approaching supplier credit limit"}
+              title={
+                isExceeded
+                  ? "Booking will be blocked — supplier credit limit exceeded"
+                  : "Approaching supplier credit limit"
+              }
             >
               {isExceeded ? "Credit exceeded" : "Near credit limit"}
               {" · "}
               {name}
               {" · "}
-              {cur}{fmtNum(cs.current)} / {cur}{fmtNum(cs.limit)}
+              {cur}
+              {fmtNum(cs.current)} / {cur}
+              {fmtNum(cs.limit)}
             </span>,
           );
         }
@@ -2008,7 +3406,9 @@ export default function QuoteBuilder() {
             gap: 8,
           }}
         >
-          <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 600 }}>Line Items</h2>
+          <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 600 }}>
+            Line Items
+          </h2>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
               {suppliersLoading
@@ -2024,7 +3424,11 @@ export default function QuoteBuilder() {
                 style={primaryBtn}
                 aria-label="Add line"
                 disabled={!quoteId}
-                title={!quoteId ? "Save the quote first before adding lines" : "Add line"}
+                title={
+                  !quoteId
+                    ? "Save the quote first before adding lines"
+                    : "Add line"
+                }
               >
                 <Plus size={14} /> Add line
               </button>
@@ -2032,7 +3436,9 @@ export default function QuoteBuilder() {
           </div>
         </div>
         <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 880 }}>
+          <table
+            style={{ width: "100%", borderCollapse: "collapse", minWidth: 880 }}
+          >
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
                 <th style={{ ...th, width: 110 }}>Type</th>
@@ -2041,7 +3447,9 @@ export default function QuoteBuilder() {
                 <th style={{ ...th, width: 120 }}>Unit Price</th>
                 <th style={{ ...th, width: 180 }}>Supplier</th>
                 <th style={{ ...th, width: 120 }}>Amount</th>
-                {canWrite && <th style={{ ...th, width: 90, textAlign: "center" }}>—</th>}
+                {canWrite && (
+                  <th style={{ ...th, width: 90, textAlign: "center" }}>—</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -2049,10 +3457,17 @@ export default function QuoteBuilder() {
                 <tr>
                   <td
                     colSpan={canWrite ? 7 : 6}
-                    style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}
+                    style={{
+                      ...td,
+                      textAlign: "center",
+                      color: "var(--text-secondary)",
+                    }}
                   >
                     {quoteId ? (
-                      <>No line items yet. Click <strong>Add line</strong> to start.</>
+                      <>
+                        No line items yet. Click <strong>Add line</strong> to
+                        start.
+                      </>
                     ) : (
                       <>Save the quote first to start adding lines.</>
                     )}
@@ -2064,17 +3479,24 @@ export default function QuoteBuilder() {
                 const isBusy = busyLineKey === it.key;
                 const onChange = isDraft ? updateDraft : updatePersistedLocal;
                 return (
-                  <tr key={it.key} style={{ borderTop: "1px solid var(--border-color)" }}>
+                  <tr
+                    key={it.key}
+                    style={{ borderTop: "1px solid var(--border-color)" }}
+                  >
                     <td style={td}>
                       <select
                         value={it.lineType || "other"}
-                        onChange={(e) => onChange(it.key, { lineType: e.target.value })}
+                        onChange={(e) =>
+                          onChange(it.key, { lineType: e.target.value })
+                        }
                         style={{ ...inputStyle, width: "100%" }}
                         aria-label={`Line ${it.key} type`}
                         disabled={!canWrite || isBusy}
                       >
                         {LINE_TYPES.map((t) => (
-                          <option key={t} value={t}>{t}</option>
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
                         ))}
                       </select>
                     </td>
@@ -2082,7 +3504,9 @@ export default function QuoteBuilder() {
                       <input
                         type="text"
                         value={it.description}
-                        onChange={(e) => onChange(it.key, { description: e.target.value })}
+                        onChange={(e) =>
+                          onChange(it.key, { description: e.target.value })
+                        }
                         placeholder="Service / package description"
                         style={{ ...inputStyle, width: "100%" }}
                         aria-label={`Line ${it.key} description`}
@@ -2094,7 +3518,9 @@ export default function QuoteBuilder() {
                         type="number"
                         min={1}
                         value={it.quantity}
-                        onChange={(e) => onChange(it.key, { quantity: e.target.value })}
+                        onChange={(e) =>
+                          onChange(it.key, { quantity: e.target.value })
+                        }
                         style={{ ...inputStyle, width: "100%" }}
                         aria-label={`Line ${it.key} quantity`}
                         disabled={!canWrite || isBusy}
@@ -2106,7 +3532,9 @@ export default function QuoteBuilder() {
                         min={0}
                         step="0.01"
                         value={it.unitPrice}
-                        onChange={(e) => onChange(it.key, { unitPrice: e.target.value })}
+                        onChange={(e) =>
+                          onChange(it.key, { unitPrice: e.target.value })
+                        }
                         style={{ ...inputStyle, width: "100%" }}
                         aria-label={`Line ${it.key} unit price`}
                         disabled={!canWrite || isBusy}
@@ -2114,29 +3542,48 @@ export default function QuoteBuilder() {
                     </td>
                     <td style={td}>
                       <select
-                        value={it.supplierId == null ? "" : String(it.supplierId)}
-                        onChange={(e) => onChange(it.key, { supplierId: e.target.value })}
+                        value={
+                          it.supplierId == null ? "" : String(it.supplierId)
+                        }
+                        onChange={(e) =>
+                          onChange(it.key, { supplierId: e.target.value })
+                        }
                         style={{ ...inputStyle, width: "100%" }}
                         aria-label={`Line ${it.key} supplier`}
                         disabled={!canWrite || isBusy || suppliers.length === 0}
                       >
                         <option value="">
-                          {suppliers.length === 0 ? "— no suppliers —" : "— none —"}
+                          {suppliers.length === 0
+                            ? "— no suppliers —"
+                            : "— none —"}
                         </option>
                         {suppliers.map((s) => (
                           <option key={s.id} value={s.id}>
-                            {s.name}{s.supplierCategory ? ` (${s.supplierCategory})` : ""}
+                            {s.name}
+                            {s.supplierCategory
+                              ? ` (${s.supplierCategory})`
+                              : ""}
                           </option>
                         ))}
                       </select>
                     </td>
-                    <td style={{ ...td, fontWeight: 600, position: "relative" }}>
+                    <td
+                      style={{ ...td, fontWeight: 600, position: "relative" }}
+                    >
                       {(() => {
-                        const lineBreakdown = pricingPreview?.lines?.find?.((l) => l.lineId === it.id);
+                        const lineBreakdown = pricingPreview?.lines?.find?.(
+                          (l) => l.lineId === it.id,
+                        );
                         if (!lineBreakdown) return fmt(lineAmount(it));
                         const tipId = `markup-tip-${it.id ?? it.key}`;
                         return (
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                            }}
+                          >
                             {fmt(lineAmount(it))}
                             <span
                               role="img"
@@ -2145,7 +3592,8 @@ export default function QuoteBuilder() {
                               style={{
                                 cursor: "help",
                                 fontSize: 11,
-                                background: "var(--primary-color, var(--accent-color))",
+                                background:
+                                  "var(--primary-color, var(--accent-color))",
                                 color: "#fff",
                                 borderRadius: 3,
                                 padding: "1px 5px",
@@ -2153,10 +3601,28 @@ export default function QuoteBuilder() {
                                 userSelect: "none",
                               }}
                               tabIndex={0}
-                              onFocus={(e) => e.currentTarget.nextSibling?.removeAttribute("hidden")}
-                              onBlur={(e) => e.currentTarget.nextSibling?.setAttribute("hidden", "")}
-                              onMouseEnter={(e) => e.currentTarget.nextSibling?.removeAttribute("hidden")}
-                              onMouseLeave={(e) => e.currentTarget.nextSibling?.setAttribute("hidden", "")}
+                              onFocus={(e) =>
+                                e.currentTarget.nextSibling?.removeAttribute(
+                                  "hidden",
+                                )
+                              }
+                              onBlur={(e) =>
+                                e.currentTarget.nextSibling?.setAttribute(
+                                  "hidden",
+                                  "",
+                                )
+                              }
+                              onMouseEnter={(e) =>
+                                e.currentTarget.nextSibling?.removeAttribute(
+                                  "hidden",
+                                )
+                              }
+                              onMouseLeave={(e) =>
+                                e.currentTarget.nextSibling?.setAttribute(
+                                  "hidden",
+                                  "",
+                                )
+                              }
                             >
                               markup ▸
                             </span>
@@ -2169,7 +3635,8 @@ export default function QuoteBuilder() {
                                 zIndex: 999,
                                 bottom: "calc(100% + 6px)",
                                 right: 0,
-                                background: "var(--glass-bg, rgba(255,255,255,0.97))",
+                                background:
+                                  "var(--glass-bg, rgba(255,255,255,0.97))",
                                 border: "1px solid var(--border-color, #ddd)",
                                 borderRadius: 6,
                                 padding: "8px 12px",
@@ -2180,22 +3647,49 @@ export default function QuoteBuilder() {
                                 whiteSpace: "nowrap",
                               }}
                             >
-                              <div style={{ fontWeight: 600, marginBottom: 4 }}>Pricing breakdown</div>
-                              <div>Base rate: {lineBreakdown.currency} {fmt(lineBreakdown.baseRate)}</div>
-                              {lineBreakdown.seasonMultiplier != null && lineBreakdown.seasonMultiplier !== 1 && (
-                                <div>
-                                  Season ×{lineBreakdown.seasonMultiplier}
-                                  {lineBreakdown.matchedSeasonName ? ` (${lineBreakdown.matchedSeasonName})` : ""}
-                                </div>
-                              )}
-                              <div>Subtotal: {lineBreakdown.currency} {fmt(lineBreakdown.subtotal)}</div>
-                              {lineBreakdown.markupAmount != null && lineBreakdown.markupAmount !== 0 && (
-                                <div style={{ color: "var(--primary-color, var(--accent-color))" }}>
-                                  Markup: +{lineBreakdown.currency} {fmt(lineBreakdown.markupAmount)}
-                                </div>
-                              )}
-                              <div style={{ fontWeight: 600, borderTop: "1px solid var(--border-color, #ddd)", marginTop: 4, paddingTop: 4 }}>
-                                Total: {lineBreakdown.currency} {fmt(lineBreakdown.grandTotal)}
+                              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                                Pricing breakdown
+                              </div>
+                              <div>
+                                Base rate: {lineBreakdown.currency}{" "}
+                                {fmt(lineBreakdown.baseRate)}
+                              </div>
+                              {lineBreakdown.seasonMultiplier != null &&
+                                lineBreakdown.seasonMultiplier !== 1 && (
+                                  <div>
+                                    Season ×{lineBreakdown.seasonMultiplier}
+                                    {lineBreakdown.matchedSeasonName
+                                      ? ` (${lineBreakdown.matchedSeasonName})`
+                                      : ""}
+                                  </div>
+                                )}
+                              <div>
+                                Subtotal: {lineBreakdown.currency}{" "}
+                                {fmt(lineBreakdown.subtotal)}
+                              </div>
+                              {lineBreakdown.markupAmount != null &&
+                                lineBreakdown.markupAmount !== 0 && (
+                                  <div
+                                    style={{
+                                      color:
+                                        "var(--primary-color, var(--accent-color))",
+                                    }}
+                                  >
+                                    Markup: +{lineBreakdown.currency}{" "}
+                                    {fmt(lineBreakdown.markupAmount)}
+                                  </div>
+                                )}
+                              <div
+                                style={{
+                                  fontWeight: 600,
+                                  borderTop:
+                                    "1px solid var(--border-color, #ddd)",
+                                  marginTop: 4,
+                                  paddingTop: 4,
+                                }}
+                              >
+                                Total: {lineBreakdown.currency}{" "}
+                                {fmt(lineBreakdown.grandTotal)}
                               </div>
                             </span>
                           </span>
@@ -2231,13 +3725,21 @@ export default function QuoteBuilder() {
                           <div style={{ display: "inline-flex", gap: 4 }}>
                             <button
                               type="button"
-                              onClick={() => updatePersistedRow(it, {
-                                lineType: it.lineType,
-                                description: it.description,
-                                quantity: Math.max(1, parseInt(it.quantity, 10) || 1),
-                                unitPrice: Number(it.unitPrice) || 0,
-                                supplierId: it.supplierId === "" ? null : parseInt(it.supplierId, 10),
-                              })}
+                              onClick={() =>
+                                updatePersistedRow(it, {
+                                  lineType: it.lineType,
+                                  description: it.description,
+                                  quantity: Math.max(
+                                    1,
+                                    parseInt(it.quantity, 10) || 1,
+                                  ),
+                                  unitPrice: Number(it.unitPrice) || 0,
+                                  supplierId:
+                                    it.supplierId === ""
+                                      ? null
+                                      : parseInt(it.supplierId, 10),
+                                })
+                              }
                               style={iconBtnPrimary}
                               aria-label={`Save line ${it.id}`}
                               title="Save changes"
@@ -2271,90 +3773,170 @@ export default function QuoteBuilder() {
         className="glass"
         aria-label="Totals"
         style={{
-          padding: 16,
+          padding: 18,
           marginBottom: 16,
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
-          gap: 16,
-          alignItems: "center",
+          gridTemplateColumns: "minmax(280px, 1.05fr) minmax(320px, 1fr)",
+          gap: 18,
+          alignItems: "stretch",
         }}
       >
-        <div>
-          <label style={fieldLabel}>
-            Discount %
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step="0.01"
-              value={discountPct}
-              onChange={(e) => setDiscountPct(e.target.value)}
-              style={inputStyle}
-              aria-label="Discount percent"
-            />
-          </label>
-        </div>
-        <div>
-          <label style={fieldLabel}>
-            Tax %
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step="0.01"
-              value={taxPct}
-              onChange={(e) => setTaxPct(e.target.value)}
-              style={inputStyle}
-              aria-label="Tax percent"
-            />
-          </label>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={totalsRow}>
-            <span style={totalsLabel}>Subtotal</span>
-            <span style={totalsValue} aria-label="Subtotal">
-              {currency} {fmt(subtotal)}
-            </span>
+        <div style={controlPanelCard}>
+          <div style={eyebrowStyle}>Internal pricing controls</div>
+          <h2 style={{ margin: "4px 0 6px", fontSize: "1.05rem" }}>
+            Profit and compliance setup
+          </h2>
+          <p
+            style={{
+              margin: "0 0 14px",
+              color: "var(--text-secondary)",
+              fontSize: 13,
+              lineHeight: 1.6,
+            }}
+          >
+            Keep margin and markup decisions internal while giving the customer
+            a cleaner tax and total summary.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+            <label style={fieldLabel}>
+              Discount %
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step="0.01"
+                value={discountPct}
+                onChange={(e) => setDiscountPct(e.target.value)}
+                style={inputStyle}
+                aria-label="Discount percent"
+              />
+            </label>
+            <label style={fieldLabel}>
+              GST / TCS %
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step="0.01"
+                value={taxPct}
+                onChange={(e) => setTaxPct(e.target.value)}
+                style={inputStyle}
+                aria-label="Tax percent"
+              />
+            </label>
           </div>
-          <div style={totalsRow}>
-            <span style={totalsLabel}>Discount</span>
-            <span style={totalsValue} aria-label="Discount amount">
-              -{currency} {fmt(discountAmount)}
-            </span>
-          </div>
-          <div style={totalsRow}>
-            <span style={totalsLabel}>Tax</span>
-            <span style={totalsValue} aria-label="Tax amount">
-              {currency} {fmt(taxAmount)}
-            </span>
+          <div style={complianceNoteCard}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              Customer-facing note
+            </div>
+            <div
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}
+            >
+              Show GST/TCS clearly in the final quote or add a compliance note
+              at the bottom. Profit and markup stay on the operator side and are
+              not shown to the customer.
+            </div>
           </div>
           <div
             style={{
-              ...totalsRow,
-              borderTop: "1px solid var(--border-color)",
-              paddingTop: 6,
-              marginTop: 6,
-              fontWeight: 700,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+              gap: 10,
             }}
           >
-            <span style={totalsLabel}>Grand Total</span>
-            <span
-              style={{ ...totalsValue, color: "var(--primary-color, var(--accent-color))" }}
-              aria-label="Grand total"
-            >
-              {currency} {fmt(grandTotal)}
-            </span>
+            <div style={miniInfoCard}>
+              <div style={summaryLabel}>Internal margin preview</div>
+              <div style={{ fontWeight: 700, marginTop: 4 }}>
+                {currency} {fmt(internalMarkupDelta)}
+              </div>
+              <div style={summaryHint}>
+                Shown only when markup preview is calculated
+              </div>
+            </div>
+            <div style={miniInfoCard}>
+              <div style={summaryLabel}>Customer actions</div>
+              <div style={{ fontWeight: 700, marginTop: 4 }}>
+                {customerActionState}
+              </div>
+              <div style={summaryHint}>
+                Accept, reject, or recommend changes
+              </div>
+            </div>
           </div>
-
+        </div>
+        <div style={totalPanelCard}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              alignItems: "center",
+              marginBottom: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={eyebrowStyle}>Customer-facing summary</div>
+              <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+                Ready-to-share total
+              </div>
+            </div>
+            <span style={chipPill}>{selectedSubBrandLabel}</span>
+          </div>
+          <div style={totalsGrid}>
+            <div style={totalStatCard}>
+              <span style={totalsLabel}>Subtotal</span>
+              <span style={totalsValue} aria-label="Subtotal">
+                {currency} {fmt(subtotal)}
+              </span>
+            </div>
+            <div style={totalStatCard}>
+              <span style={totalsLabel}>Discount</span>
+              <span style={totalsValue} aria-label="Discount amount">
+                -{currency} {fmt(discountAmount)}
+              </span>
+            </div>
+            <div style={totalStatCard}>
+              <span style={totalsLabel}>GST / TCS</span>
+              <span style={totalsValue} aria-label="Tax amount">
+                {currency} {fmt(taxAmount)}
+              </span>
+            </div>
+            <div
+              style={{
+                ...totalStatCard,
+                background:
+                  "linear-gradient(135deg, rgba(59,130,246,0.14), var(--surface-color))",
+                borderColor: "rgba(59,130,246,0.18)",
+              }}
+            >
+              <span style={totalsLabel}>Grand Total</span>
+              <span
+                style={{
+                  ...totalsValue,
+                  color: "var(--primary-color, var(--accent-color))",
+                }}
+                aria-label="Grand total"
+              >
+                {currency} {fmt(grandTotal)}
+              </span>
+            </div>
+          </div>
           {fxRate && (
             <div
               aria-label="FX conversion reference"
               style={{
-                marginTop: 10,
-                paddingTop: 10,
-                borderTop: "1px dashed var(--border-color, rgba(148, 163, 184, 0.4))",
+                marginTop: 14,
+                paddingTop: 14,
+                borderTop:
+                  "1px dashed var(--border-color, rgba(148, 163, 184, 0.4))",
                 fontSize: 12,
                 color: "var(--text-secondary)",
+                lineHeight: 1.6,
               }}
             >
               1 {fxRate.base} = {Number(fxRate.rate).toFixed(4)} {fxRate.quote}
@@ -2364,7 +3946,7 @@ export default function QuoteBuilder() {
                 </span>
               )}
               <span style={{ marginLeft: 6 }}>
-                ≈ {fxRate.quote} {fmt(Number(grandTotal) * Number(fxRate.rate))}
+                ? {fxRate.quote} {fmt(Number(grandTotal) * Number(fxRate.rate))}
               </span>
             </div>
           )}
@@ -2421,7 +4003,26 @@ export default function QuoteBuilder() {
           </div>
           <div style={{ display: "grid", gap: 8 }}>
             <div style={totalsRow}>
-              <span style={totalsLabel}>Subtotal (pre-markup)</span>
+              <span style={totalsLabel}>Base subtotal</span>
+              <span
+                style={totalsValue}
+                aria-label="Pricing preview base subtotal"
+              >
+                {pricingPreview.currency} {fmt(pricingPreview.baseSubtotal)}
+              </span>
+            </div>
+            {pricingPreview.seasonMultiplier > 1 &&
+              pricingPreview.matchedSeasonName && (
+                <div style={totalsRow}>
+                  <span style={totalsLabel}>Season</span>
+                  <span style={totalsValue} aria-label="Pricing preview season">
+                    ×{pricingPreview.seasonMultiplier} (
+                    {pricingPreview.matchedSeasonName})
+                  </span>
+                </div>
+              )}
+            <div style={totalsRow}>
+              <span style={totalsLabel}>Subtotal</span>
               <span style={totalsValue} aria-label="Pricing preview subtotal">
                 {pricingPreview.currency} {fmt(pricingPreview.subtotal)}
               </span>
@@ -2450,7 +4051,11 @@ export default function QuoteBuilder() {
                   Markup rules applied
                 </div>
                 <ul
-                  style={{ margin: 0, padding: "0 0 0 16px", listStyle: "disc" }}
+                  style={{
+                    margin: 0,
+                    padding: "0 0 0 16px",
+                    listStyle: "disc",
+                  }}
                   aria-label="Markup rules applied"
                 >
                   {pricingPreview.markupApplied.map((r) => (
@@ -2460,8 +4065,8 @@ export default function QuoteBuilder() {
                     >
                       <span>{r.ruleName}</span>
                       <span style={{ color: "var(--text-secondary)" }}>
-                        {r.percent != null ? `: ${Number(r.percent)}%` : ""}{" "}
-                        ({pricingPreview.currency} {fmt(r.amount)})
+                        {r.percent != null ? `: ${Number(r.percent)}%` : ""} (
+                        {pricingPreview.currency} {fmt(r.amount)})
                       </span>
                     </li>
                   ))}
@@ -2479,7 +4084,10 @@ export default function QuoteBuilder() {
             >
               <span style={totalsLabel}>Total with markup</span>
               <span
-                style={{ ...totalsValue, color: "var(--primary-color, var(--accent-color))" }}
+                style={{
+                  ...totalsValue,
+                  color: "var(--primary-color, var(--accent-color))",
+                }}
                 aria-label="Pricing preview total"
               >
                 {pricingPreview.currency} {fmt(pricingPreview.total)}
@@ -2494,7 +4102,10 @@ export default function QuoteBuilder() {
           role="dialog"
           aria-modal="true"
           aria-label="Save quote as template"
-          onClick={(e) => { if (e.target === e.currentTarget && !savingTemplate) setTemplateModalOpen(false); }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !savingTemplate)
+              setTemplateModalOpen(false);
+          }}
           style={{
             position: "fixed",
             inset: 0,
@@ -2521,13 +4132,31 @@ export default function QuoteBuilder() {
               boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
             }}
           >
-            <h3 style={{ margin: "0 0 6px", fontSize: "1.1rem", display: "flex", alignItems: "center", gap: 8 }}>
+            <h3
+              style={{
+                margin: "0 0 6px",
+                fontSize: "1.1rem",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
               <LayoutTemplate size={18} /> Save as template
             </h3>
-            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
+            <p
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: 14,
+                marginBottom: 16,
+              }}
+            >
               Saves the current{" "}
-              <strong>{buildTemplateLines().length} line{buildTemplateLines().length === 1 ? "" : "s"}</strong>{" "}
-              into the Quote Template library so you can reuse them on a future quote in one click.
+              <strong>
+                {buildTemplateLines().length} line
+                {buildTemplateLines().length === 1 ? "" : "s"}
+              </strong>{" "}
+              into the Quote Template library so you can reuse them on a future
+              quote in one click.
             </p>
             <label style={fieldLabel}>
               Template name
@@ -2543,7 +4172,10 @@ export default function QuoteBuilder() {
               />
             </label>
             <label style={{ ...fieldLabel, marginTop: 12 }}>
-              Category <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>(optional)</span>
+              Category{" "}
+              <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>
+                (optional)
+              </span>
               <input
                 type="text"
                 value={templateCategory}
@@ -2554,7 +4186,14 @@ export default function QuoteBuilder() {
                 maxLength={120}
               />
             </label>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                marginTop: 18,
+              }}
+            >
               <button
                 type="button"
                 onClick={() => setTemplateModalOpen(false)}
@@ -2570,7 +4209,8 @@ export default function QuoteBuilder() {
                 aria-label="Confirm save as template"
                 disabled={savingTemplate || !templateName.trim()}
               >
-                <LayoutTemplate size={14} /> {savingTemplate ? "Saving…" : "Save template"}
+                <LayoutTemplate size={14} />{" "}
+                {savingTemplate ? "Saving…" : "Save template"}
               </button>
             </div>
           </div>
@@ -2582,7 +4222,10 @@ export default function QuoteBuilder() {
           role="dialog"
           aria-modal="true"
           aria-label="Use quote template"
-          onClick={(e) => { if (e.target === e.currentTarget && !applyingTemplate) setUseTemplateOpen(false); }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !applyingTemplate)
+              setUseTemplateOpen(false);
+          }}
           style={{
             position: "fixed",
             inset: 0,
@@ -2609,17 +4252,47 @@ export default function QuoteBuilder() {
               boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
             }}
           >
-            <h3 style={{ margin: "0 0 6px", fontSize: "1.1rem", display: "flex", alignItems: "center", gap: 8 }}>
+            <h3
+              style={{
+                margin: "0 0 6px",
+                fontSize: "1.1rem",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
               <LayoutTemplate size={18} /> Use template
             </h3>
-            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
-              Choose a reusable template to pre-fill line items. You can still edit everything before saving.
+            <p
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: 14,
+                marginBottom: 16,
+              }}
+            >
+              Choose a reusable template to pre-fill line items. You can still
+              edit everything before saving.
             </p>
             {loadingTemplates ? (
-              <div style={{ padding: 16, textAlign: "center", color: "var(--text-secondary)" }}>Loading templates…</div>
+              <div
+                style={{
+                  padding: 16,
+                  textAlign: "center",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                Loading templates…
+              </div>
             ) : templateOptions.length === 0 ? (
-              <div style={{ padding: 16, textAlign: "center", color: "var(--text-secondary)" }}>
-                No active templates found. Create one from the Quote Templates page.
+              <div
+                style={{
+                  padding: 16,
+                  textAlign: "center",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                No active templates found. Create one from the Quote Templates
+                page.
               </div>
             ) : (
               <label style={fieldLabel}>
@@ -2634,14 +4307,21 @@ export default function QuoteBuilder() {
                   {templateOptions.map((t) => (
                     <option key={t.id} value={String(t.id)}>
                       {t.name}
-                      {t.category ? ` · ${t.category}` : ""}
-                      {" "}({countTemplateLines(t.linesJson)} lines)
+                      {t.category ? ` · ${t.category}` : ""} (
+                      {countTemplateLines(t.linesJson)} lines)
                     </option>
                   ))}
                 </select>
               </label>
             )}
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                marginTop: 18,
+              }}
+            >
               <button
                 type="button"
                 onClick={() => setUseTemplateOpen(false)}
@@ -2654,9 +4334,15 @@ export default function QuoteBuilder() {
                 type="button"
                 onClick={applySelectedTemplate}
                 style={primaryBtn}
-                disabled={applyingTemplate || !selectedTemplateId || loadingTemplates || templateOptions.length === 0}
+                disabled={
+                  applyingTemplate ||
+                  !selectedTemplateId ||
+                  loadingTemplates ||
+                  templateOptions.length === 0
+                }
               >
-                <LayoutTemplate size={14} /> {applyingTemplate ? "Applying…" : "Apply template"}
+                <LayoutTemplate size={14} />{" "}
+                {applyingTemplate ? "Applying…" : "Apply template"}
               </button>
             </div>
           </div>
@@ -2668,7 +4354,10 @@ export default function QuoteBuilder() {
           role="dialog"
           aria-modal="true"
           aria-label="Confirm send to customer"
-          onClick={(e) => { if (e.target === e.currentTarget && !sending) setSendConfirmOpen(false); }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !sending)
+              setSendConfirmOpen(false);
+          }}
           style={{
             position: "fixed",
             inset: 0,
@@ -2697,13 +4386,21 @@ export default function QuoteBuilder() {
             <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>
               Send quote #{quoteId} to customer?
             </h3>
-            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
+            <p
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: 14,
+                marginBottom: 16,
+              }}
+            >
               This creates a secure customer link (they can view + accept the
               quote) and delivers it by <strong>email</strong> (if on file) and
               <strong> WhatsApp</strong> via your connected number. You can
               re-send any time.
             </p>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <div
+              style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+            >
               <button
                 type="button"
                 onClick={() => setSendConfirmOpen(false)}
@@ -2753,7 +4450,13 @@ export default function QuoteBuilder() {
             <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>
               Decline quote #{quoteId}?
             </h3>
-            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 12 }}>
+            <p
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: 14,
+                marginBottom: 12,
+              }}
+            >
               The quote status will flip to <strong>Rejected</strong>. The
               customer's reason (if provided) is captured in the audit chain.
             </p>
@@ -2769,7 +4472,14 @@ export default function QuoteBuilder() {
                 maxLength={1000}
               />
             </label>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                marginTop: 16,
+              }}
+            >
               <button
                 type="button"
                 onClick={() => {
@@ -2784,7 +4494,10 @@ export default function QuoteBuilder() {
               <button
                 type="button"
                 onClick={confirmDecline}
-                style={{ ...primaryBtn, background: "var(--danger-color, #f43f5e)" }}
+                style={{
+                  ...primaryBtn,
+                  background: "var(--danger-color, #f43f5e)",
+                }}
                 aria-label="Confirm decline quote"
                 disabled={declineInFlight}
               >
@@ -2813,14 +4526,26 @@ export default function QuoteBuilder() {
         >
           <div
             className="glass"
-            style={{ padding: 24, minWidth: 320, maxWidth: 480, borderRadius: 8 }}
+            style={{
+              padding: 24,
+              minWidth: 320,
+              maxWidth: 480,
+              borderRadius: 8,
+            }}
           >
             <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>
               Duplicate quote #{quoteId}
             </h3>
-            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
-              Optionally apply a markup % to every line. Leave blank for a raw clone.
-              Useful for sub-agents who price-up a parent quote before forwarding it.
+            <p
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: 14,
+                marginBottom: 16,
+              }}
+            >
+              Optionally apply a markup % to every line. Leave blank for a raw
+              clone. Useful for sub-agents who price-up a parent quote before
+              forwarding it.
             </p>
             <label style={fieldLabel}>
               Clone with markup %
@@ -2836,7 +4561,14 @@ export default function QuoteBuilder() {
                 aria-label="Markup percent"
               />
             </label>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                marginTop: 16,
+              }}
+            >
               <button
                 type="button"
                 onClick={closeDuplicateModal}
@@ -2864,7 +4596,9 @@ export default function QuoteBuilder() {
           role="dialog"
           aria-modal="true"
           aria-label="Confirm delete line"
-          onClick={(e) => { if (e.target === e.currentTarget) setDeleteTarget(null); }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDeleteTarget(null);
+          }}
           style={{
             position: "fixed",
             inset: 0,
@@ -2892,11 +4626,21 @@ export default function QuoteBuilder() {
               boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
             }}
           >
-            <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>Remove line?</h3>
-            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>
+              Remove line?
+            </h3>
+            <p
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: 14,
+                marginBottom: 16,
+              }}
+            >
               {`Permanently remove line #${deleteTarget.id} "${deleteTarget.description}"? This cannot be undone.`}
             </p>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <div
+              style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+            >
               <button
                 type="button"
                 onClick={() => setDeleteTarget(null)}
@@ -2907,7 +4651,10 @@ export default function QuoteBuilder() {
               <button
                 type="button"
                 onClick={confirmDeleteLine}
-                style={{ ...primaryBtn, background: "var(--danger-color, #f43f5e)" }}
+                style={{
+                  ...primaryBtn,
+                  background: "var(--danger-color, #f43f5e)",
+                }}
                 aria-label="Confirm delete line"
               >
                 <Trash2 size={14} /> Remove
@@ -2931,6 +4678,17 @@ const th = {
   fontWeight: 600,
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
+const miniPill = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "4px 10px",
+  borderRadius: 999,
+  background: "rgba(15, 118, 110, 0.12)",
+  color: "#0f766e",
+  border: "1px solid rgba(15, 118, 110, 0.18)",
+  fontSize: 12,
+  fontWeight: 700,
+};
 const empty = {
   padding: 32,
   textAlign: "center",
@@ -2938,45 +4696,208 @@ const empty = {
   fontSize: 14,
 };
 const inputStyle = {
-  padding: "8px 10px",
-  borderRadius: 6,
+  padding: "10px 12px",
+  borderRadius: 10,
   border: "1px solid var(--border-color)",
   background: "var(--bg-color, rgba(255,255,255,0.05))",
   color: "var(--text-primary)",
   fontSize: 13,
   outline: "none",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
 };
 const fieldLabel = {
   display: "flex",
   flexDirection: "column",
-  gap: 4,
+  gap: 6,
   fontSize: 12,
   color: "var(--text-secondary)",
+};
+const eyebrowStyle = {
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: "0.12em",
+  color: "var(--text-secondary)",
+  fontWeight: 700,
+};
+const heroPanel = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1.4fr) minmax(280px, 0.9fr)",
+  gap: 16,
+  padding: 20,
+  marginBottom: 16,
+  borderRadius: 18,
+  border: "1px solid rgba(96, 165, 250, 0.16)",
+  background:
+    "linear-gradient(135deg, rgba(250,204,21,0.08), rgba(59,130,246,0.10) 48%, var(--surface-color))",
+  boxShadow:
+    "inset 0 1px 0 rgba(255,255,255,0.03), var(--shadow-sm, 0 1px 2px rgba(18, 38, 71, 0.06))",
+};
+const summaryGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 12,
+  marginTop: 16,
+};
+const summaryCard = {
+  padding: 14,
+  borderRadius: 14,
+  background:
+    "linear-gradient(180deg, var(--surface-color), var(--subtle-bg-2, var(--surface-color)))",
+  border: "1px solid var(--border-color)",
+  backdropFilter: "blur(10px)",
+  WebkitBackdropFilter: "blur(10px)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+};
+const summaryLabel = {
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: "0.1em",
+  color: "var(--text-secondary)",
+  fontWeight: 700,
+};
+const summaryValue = {
+  marginTop: 6,
+  fontSize: 18,
+  fontWeight: 700,
+  color: "var(--text-primary)",
+};
+const summaryHintStyle = {
+  marginTop: 6,
+  color: "var(--text-secondary)",
+  fontSize: 12,
+  lineHeight: 1.5,
+};
+const summaryHint = summaryHintStyle;
+const heroAside = {
+  display: "grid",
+  gap: 12,
+};
+const heroAsideCard = {
+  padding: 16,
+  borderRadius: 16,
+  background:
+    "linear-gradient(180deg, var(--surface-color), var(--subtle-bg, var(--surface-color)))",
+  border: "1px solid var(--border-color)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+};
+const heroAsideCardMuted = {
+  padding: 16,
+  borderRadius: 16,
+  background: "var(--subtle-bg, rgba(15, 23, 42, 0.08))",
+  border: "1px solid var(--border-color)",
+};
+const chipPill = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "4px 10px",
+  borderRadius: 999,
+  background: "var(--subtle-bg, rgba(59,130,246,0.14))",
+  border: "1px solid rgba(96,165,250,0.18)",
+  fontSize: 11,
+  fontWeight: 700,
+  color: "var(--primary-color, var(--accent-color))",
+  textTransform: "capitalize",
+};
+const statusChip = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "5px 10px",
+  borderRadius: 999,
+  border: "1px solid transparent",
+  fontSize: 11,
+  fontWeight: 700,
+};
+const timelineRow = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 13,
+};
+const timelineDot = {
+  width: 8,
+  height: 8,
+  borderRadius: 999,
+  background: "var(--primary-color, var(--accent-color))",
+  flexShrink: 0,
+};
+const shareLinkBox = {
+  display: "block",
+  padding: "12px 14px",
+  borderRadius: 12,
+  background: "rgba(15, 23, 42, 0.72)",
+  border: "1px solid rgba(96,165,250,0.16)",
+  fontSize: 12,
+  color: "#e2e8f0",
+};
+const miniInfoCard = {
+  padding: 12,
+  borderRadius: 12,
+  background: "var(--surface-color)",
+  border: "1px solid var(--border-color)",
+};
+const controlPanelCard = {
+  padding: 16,
+  borderRadius: 16,
+  background:
+    "linear-gradient(180deg, var(--surface-color), var(--subtle-bg, var(--surface-color)))",
+  border: "1px solid var(--border-color)",
+  display: "grid",
+  gap: 14,
+};
+const complianceNoteCard = {
+  padding: 14,
+  borderRadius: 14,
+  background: "rgba(120, 53, 15, 0.28)",
+  border: "1px solid rgba(251,191,36,0.24)",
+};
+const totalPanelCard = {
+  padding: 16,
+  borderRadius: 16,
+  background:
+    "linear-gradient(180deg, var(--surface-color), var(--subtle-bg, var(--surface-color)))",
+  border: "1px solid var(--border-color)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+};
+const totalsGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 10,
+};
+const totalStatCard = {
+  display: "grid",
+  gap: 6,
+  padding: 14,
+  borderRadius: 14,
+  background: "var(--subtle-bg, rgba(255,255,255,0.03))",
+  border: "1px solid var(--border-color)",
 };
 const primaryBtn = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
-  padding: "8px 14px",
-  borderRadius: 6,
-  fontWeight: 600,
+  padding: "10px 16px",
+  borderRadius: 10,
+  fontWeight: 700,
   fontSize: 13,
-  background: "var(--primary-color, var(--accent-color))",
+  background:
+    "linear-gradient(135deg, var(--primary-color, var(--accent-color)), #0f766e)",
   color: "#fff",
   border: "none",
   cursor: "pointer",
+  boxShadow: "0 8px 20px rgba(15, 118, 110, 0.18)",
 };
 const secondaryBtn = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
-  padding: "8px 14px",
-  borderRadius: 6,
-  fontWeight: 600,
+  padding: "10px 16px",
+  borderRadius: 10,
+  fontWeight: 700,
   fontSize: 13,
-  background: "var(--surface-color)",
+  background: "rgba(255,255,255,0.08)",
   color: "var(--text-primary)",
-  border: "1px solid var(--border-color)",
+  border: "1px solid rgba(148,163,184,0.20)",
   cursor: "pointer",
 };
 const iconBtn = {
@@ -3011,3 +4932,5 @@ const totalsRow = {
 };
 const totalsLabel = { color: "var(--text-secondary)" };
 const totalsValue = { color: "var(--text-primary)", fontFamily: "monospace" };
+
+

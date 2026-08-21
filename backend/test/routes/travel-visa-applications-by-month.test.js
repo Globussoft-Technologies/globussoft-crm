@@ -27,7 +27,7 @@
  *   - Query validation:
  *       INVALID_STATUS for unknown status value.
  *       INVALID_MONTH_FORMAT for non-YYYY-MM from/to values.
- *   - Empty-state contract: zero visasure contacts → graceful empty
+ *   - Empty-state contract: zero tenant contacts → graceful empty
  *     envelope (NOT 404) with grand-totals at 0 + months: [].
  *   - Happy path: 4 applications across 2 UTC months → 2 month buckets
  *     with correct per-status splits + complexCount + flaggedCount.
@@ -240,7 +240,7 @@ describe('GET /applications/by-month — path-precedence', () => {
 // ─── Empty-state contract ─────────────────────────────────────────────
 
 describe('GET /applications/by-month — empty state', () => {
-  test('zero visasure contacts → graceful empty envelope (NOT 404)', async () => {
+  test('zero tenant contacts → graceful empty envelope (NOT 404)', async () => {
     prisma.contact.findMany.mockResolvedValue([]);
     const res = await request(makeApp())
       .get('/api/travel/visa/applications/by-month')
@@ -468,7 +468,7 @@ describe('GET /applications/by-month — complex + flagged counts', () => {
 // ─── Tenant isolation ─────────────────────────────────────────────────
 
 describe('GET /applications/by-month — tenant isolation (cross-tenant safe)', () => {
-  test('every Contact + VisaApplication query narrows to (tenantId, subBrand=visasure)', async () => {
+  test('every Contact + VisaApplication query narrows to (tenantId only)', async () => {
     prisma.contact.findMany.mockResolvedValue([{ id: 71 }]);
     prisma.visaApplication.findMany.mockResolvedValue([
       { id: 1, status: 'intake', complexCase: false, advisorRiskFlag: null,
@@ -479,10 +479,9 @@ describe('GET /applications/by-month — tenant isolation (cross-tenant safe)', 
       .get('/api/travel/visa/applications/by-month')
       .set('Authorization', `Bearer ${tokenFor('ADMIN', { tenantId: 1 })}`);
     expect(res.status).toBe(200);
-    // Contact lookup pinned tenantId + subBrand=visasure.
+    // Contact lookup pinned tenantId only.
     expect(prisma.contact.findMany.mock.calls[0][0].where).toMatchObject({
       tenantId: 1,
-      subBrand: 'visasure',
     });
     // VisaApplication lookup pinned tenantId + the resolved contact set.
     expect(prisma.visaApplication.findMany.mock.calls[0][0].where).toMatchObject({

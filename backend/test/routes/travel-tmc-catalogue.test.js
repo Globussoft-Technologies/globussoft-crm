@@ -75,6 +75,9 @@ import jwt from 'jsonwebtoken';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const { serializeRows } = requireCJS('../../lib/csvHelpers');
+const { TEMPLATE_HEADERS } = requireCJS('../../lib/travelTmcCatalogueImport');
+const IMPORT_COLUMNS = TEMPLATE_HEADERS.map((key) => ({ key, header: key }));
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const catalogueRouter = requireCJS('../../routes/travel_tmc_catalogue');
 
@@ -95,6 +98,10 @@ function tokenFor(role = 'ADMIN', { userId = 7, tenantId = 1 } = {}) {
 
 // A minimal-valid POST body for the catalogue. Matches the schema's NOT NULL
 // columns. Tests that exercise create-with-overrides spread on top of this.
+function buildImportCsv(rows) {
+  return serializeRows(IMPORT_COLUMNS, rows);
+}
+
 function validCreateBody(overrides = {}) {
   return {
     tripId: 'golden-triangle-delhi-agra-jaipur',
@@ -449,6 +456,138 @@ describe('POST /api/travel-tmc-catalogue', () => {
 // ─────────────────────────────────────────────────────────────────────
 // PATCH /api/travel-tmc-catalogue/:id
 // ─────────────────────────────────────────────────────────────────────
+
+describe('GET /api/travel-tmc-catalogue/import-template', () => {
+  test('csv template downloads with the expected filename and headers', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel-tmc-catalogue/import-template?format=csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.headers['content-disposition']).toContain('tmc-catalogue-template.csv');
+    expect(res.text).toContain('tripId,title,tagline,tier,region');
+    expect(res.text).toContain('golden-triangle-school-heritage');
+  });
+
+  test('xlsx template downloads with the expected content type', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel-tmc-catalogue/import-template?format=xlsx')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(res.headers['content-disposition']).toContain('tmc-catalogue-template.xlsx');
+    expect(Number(res.headers['content-length'])).toBeGreaterThan(0);
+  });
+});
+
+describe('POST /api/travel-tmc-catalogue/import', () => {
+  test('bulk upload creates new rows archived and updates existing ones', async () => {
+    const csv = buildImportCsv([
+      {
+        tripId: 'andaman-sea-explorer',
+        title: 'Andaman Sea Explorer',
+        tagline: 'Island science and ecology',
+        tier: 'domestic',
+        region: 'Andaman & Nicobar',
+        durationDays: 5,
+        durationNights: 4,
+        minGradeBand: '6-8',
+        maxGradeBand: '9-10',
+        boardsSupportedJson: 'CBSE, ICSE',
+        minGroupSize: 24,
+        priceBand: 'mid',
+        indicativePricePerStudent: 42000,
+        primaryOutcomesJson: 'marine literacy, collaboration',
+        skillsDevelopedJson: 'teamwork, observation',
+        subjectsTouchedJson: 'Science, Geography',
+        anchorExperiencesJson: '[{"name":"coral walk"}]',
+        curriculumHooksJson: '[{"board":"CBSE","topic":"ecosystems"}]',
+        reportSkillBlurb: 'Builds scientific inquiry and teamwork.',
+        summaryForBrief: 'A coastal science itinerary.',
+        imageUrl: '',
+      },
+      {
+        tripId: 'golden-triangle',
+        title: 'Golden Triangle Heritage Trail (Imported)',
+        tagline: 'Updated from Excel',
+        tier: 'domestic',
+        region: 'North India',
+        durationDays: 6,
+        durationNights: 5,
+        minGradeBand: '6-8',
+        maxGradeBand: '9-10',
+        boardsSupportedJson: 'CBSE, ICSE',
+        minGroupSize: 20,
+        priceBand: 'mid',
+        indicativePricePerStudent: 36000,
+        primaryOutcomesJson: 'history, cultural fluency',
+        skillsDevelopedJson: 'communication',
+        subjectsTouchedJson: 'History, Geography',
+        anchorExperiencesJson: '[{"name":"Taj Mahal sunrise"}]',
+        curriculumHooksJson: '[{"board":"CBSE","topic":"Mughal India"}]',
+        reportSkillBlurb: 'Historical reasoning with cross-cultural fluency.',
+        summaryForBrief: 'Updated itinerary brief.',
+        imageUrl: '',
+      },
+    ]);
+
+    prisma.tmcTripCatalogue.findFirst.mockImplementation(async ({ where }) => {
+      if (where.tripId === 'golden-triangle') {
+        return { id: 44, tenantId: 1, tripId: 'golden-triangle', status: 'active' };
+      }
+      return null;
+    });
+    prisma.tmcTripCatalogue.create.mockImplementation(async ({ data }) => ({
+      id: 77,
+      tenantId: 1,
+      ...data,
+    }));
+    prisma.tmcTripCatalogue.update.mockImplementation(async ({ data }) => ({
+      id: 44,
+      tenantId: 1,
+      tripId: 'golden-triangle',
+      status: 'active',
+      ...data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel-tmc-catalogue/import')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from(csv), 'tmc-catalogue.csv');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      imported: 1,
+      updated: 1,
+      skipped: 0,
+      total: 2,
+      reviewLabel: 'AI-classified, pending review',
+    });
+    expect(res.body.createdTripIds).toEqual(['andaman-sea-explorer']);
+    expect(res.body.updatedTripIds).toEqual(['golden-triangle']);
+
+    expect(prisma.tmcTripCatalogue.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tenantId: 1,
+          tripId: 'andaman-sea-explorer',
+          status: 'archived',
+        }),
+      }),
+    );
+    expect(prisma.tmcTripCatalogue.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 44 },
+        data: expect.objectContaining({
+          tripId: 'golden-triangle',
+          status: 'active',
+        }),
+      }),
+    );
+  });
+});
 
 describe('PATCH /api/travel-tmc-catalogue/:id', () => {
   test('happy path updates allowed fields', async () => {

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The Modern Classroom Landing Page</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      min-height: 100%;
+      background: #ffffff;
+      overflow: hidden;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+    }
+
+    #landing-frame {
+      border: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      background: #ffffff;
+    }
+
+    #status {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      text-align: center;
+      background: #ffffff;
+      color: #0f172a;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    #status.hidden {
+      display: none;
+    }
+
+    #status.error {
+      color: #b91c1c;
+      max-width: 760px;
+      margin: 0 auto;
+      white-space: pre-line;
+    }
+  </style>
+</head>
+<body>
+  <div id="status">Loading landing page...</div>
+  <iframe id="landing-frame" title="Landing page"></iframe>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const apiBase = (params.get('apiBase') || 'https://globuscrm.globussoft.com').replace(/\/+$/, '');
+    const tripIdOverride = (params.get('tripId') || '').trim();
+    const customerIdOverride = (params.get('customerId') || '').trim();
+    const pageIdOverride = (params.get('pageId') || '').trim();
+    const slugOverride = (params.get('slug') || '').trim();
+    const clientEmail = (params.get('clientEmail') || 'yasin@travelstall.in').trim();
+    const pathSegments = window.location.pathname
+      .replace(/\/+$/, '')
+      .split('/')
+      .filter(Boolean);
+    const pathKeyOverride = pathSegments[pathSegments.length - 1] || '';
+    const pathTripIdOverride = pathSegments.length >= 2
+      && pathSegments[pathSegments.length - 2] === 'trips'
+      ? pathKeyOverride
+      : '';
+
+    const statusEl = document.getElementById('status');
+    const frame = document.getElementById('landing-frame');
+
+    function showError(message) {
+      statusEl.className = 'error';
+      statusEl.textContent = message;
+    }
+
+    async function readError(response) {
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        payload = null;
+      }
+
+      if (response.status === 404) {
+        return (
+          'No landing page is currently published from the CRM for this website.\n\n' +
+          `Client: ${clientEmail}\n` +
+          'Please publish or feature a landing page in the CRM and refresh this page.'
+        );
+      }
+
+      if (payload && payload.error) {
+        return `${payload.error} (status ${response.status})`;
+      }
+
+      return `Landing page payload lookup failed with status ${response.status}.`;
+    }
+
+    async function fetchLandingPayload() {
+      // Important: the public API does not resolve pages by login email.
+      // Selection priority:
+      //   1. ?tripId=<trip-id> or /landing/trips/<trip-id>
+      //   2. ?customerId=<tenant-id> for this customer's current published page
+      //   3. ?pageId=<numeric-id> for one exact published page
+      //   4. ?slug=<published-page-slug> for one exact published page
+      //   5. trailing path key, e.g. /landing/japanpage -> slug "japanpage"
+      //   6. fallback to the globally featured page
+      const endpoint = tripIdOverride
+        ? `${apiBase}/api/landing-pages/public/by-trip/${encodeURIComponent(tripIdOverride)}`
+        : pathTripIdOverride
+          ? `${apiBase}/api/landing-pages/public/by-trip/${encodeURIComponent(pathTripIdOverride)}`
+        : customerIdOverride
+        ? `${apiBase}/api/landing-pages/public/featured-full?customerId=${encodeURIComponent(customerIdOverride)}`
+        : pageIdOverride
+        ? `${apiBase}/api/landing-pages/public/by-id/${encodeURIComponent(pageIdOverride)}`
+        : slugOverride
+          ? `${apiBase}/api/landing-pages/public/by-slug/${encodeURIComponent(slugOverride)}`
+          : (pathKeyOverride && pathKeyOverride !== 'themodernclassroom-landing-embed.html')
+            ? `${apiBase}/api/landing-pages/public/by-slug/${encodeURIComponent(pathKeyOverride)}`
+          : `${apiBase}/api/landing-pages/public/featured-full`;
+
+      const response = await fetch(endpoint, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      return response.json();
+    }
+
+    async function boot() {
+      try {
+        if (window.location.protocol === 'file:') {
+          throw new Error(
+            'This HTML cannot be tested by opening it directly as file://.\n\n' +
+            'Run it through a local web server instead, for example:\n' +
+            '1. cd docs\n' +
+            '2. python -m http.server 8000\n' +
+            '3. Open http://localhost:8000/themodernclassroom-landing-embed.html?apiBase=https://globuscrm.globussoft.com&tripId=<trip-id>\n' +
+            '   or, with a rewrite-capable web server, /landing/trips/<trip-id>'
+          );
+        }
+
+        const page = await fetchLandingPayload();
+        if (!page || !page.slug) {
+          throw new Error('Landing page payload did not include a slug.');
+        }
+
+        window.__landingPagePayload = page;
+        window.__landingPageClientEmail = clientEmail;
+        document.title = page.metaTitle || page.title || 'Landing Page';
+        frame.src = `${apiBase}${page.publicUrl || `/p/${encodeURIComponent(page.slug)}`}`;
+        statusEl.classList.add('hidden');
+      } catch (error) {
+        showError(String(error.message || error));
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>

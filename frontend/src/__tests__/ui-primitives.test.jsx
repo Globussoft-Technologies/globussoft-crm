@@ -9,6 +9,7 @@ import {
   SkeletonRow,
   SkeletonTable,
   SearchInput,
+  SearchHighlight,
   Pagination,
   Modal,
 } from '../components/ui';
@@ -215,6 +216,25 @@ describe('<SearchInput />', () => {
     fireEvent.click(screen.getByLabelText(/clear search/i));
     expect(onChange).toHaveBeenCalledWith('');
     expect(onSearch).toHaveBeenCalledWith('');
+  });
+});
+
+describe('<SearchHighlight />', () => {
+  it('renders plain text when the query is empty', () => {
+    render(<SearchHighlight text="Alice Chen" query="" />);
+    expect(screen.getByText('Alice Chen')).toBeInTheDocument();
+    expect(document.querySelector('mark')).toBeNull();
+  });
+
+  it('highlights every case-insensitive match inside the text with a darker mark color', () => {
+    const { container } = render(<SearchHighlight text="Ak Ak" query="ak" />);
+    const highlights = container.querySelectorAll('mark');
+    expect(highlights).toHaveLength(2);
+    expect(highlights[0]).toHaveTextContent('Ak');
+    expect(highlights[1]).toHaveTextContent('Ak');
+    expect(highlights[0]).toHaveStyle({ backgroundColor: 'rgba(245, 158, 11, 0.45)' });
+    expect(highlights[0].style.border).toBe('');
+    expect(highlights[0].style.boxShadow).toBe('');
   });
 });
 

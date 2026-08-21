@@ -1,34 +1,31 @@
-// Travel CRM — TMC payment reminders cron (PRD §4.4 + §6.3).
+// Travel CRM - TMC payment reminders cron (PRD 4.4 + 6.3).
 //
 // Daily 07:13 IST. For each travel tenant, scans TripInstalmentPayment
 // rows that fall into one of two reminder windows:
 //
-//   pre-due  — dueDate ∈ [now, now + reminderDays] AND status ∈
+//   pre-due  - dueDate in [now, now + reminderDays] AND status in
 //              {pending, partial}
-//   overdue  — dueDate < now AND status ∈ {pending, partial} AND
-//              dueDate ≥ 30 days ago (don't pester ancient instalments)
+//   overdue  - dueDate < now AND status in {pending, partial} AND
+//              dueDate >= 30 days ago (don't pester ancient instalments)
 //
-// `reminderDays` comes from the parent TripPaymentPlan.instalmentsJson —
-// the JSON shape is `[{ dueDate, amount, reminderDays }]` indexed by
-// instalmentIndex. Defaults to 7 days if missing.
+// reminderDays comes from the parent TripPaymentPlan.instalmentsJson.
+// Defaults to 7 days if missing.
 //
 // Idempotency: the Notification model carries entityType + entityId +
-// type. We use `entityType='TripInstalmentPayment'`, `entityId=<id>`,
-// `type='info'` for pre-due alerts and `type='warning'` for overdue
-// alerts. The dedup check looks for an existing notification with that
-// composite key. So each instalment can have at most ONE pre-due
-// notification AND ONE overdue notification across its lifecycle.
+// type. We use entityType='TripInstalmentPayment', entityId=<id>,
+// type='info' for pre-due alerts and type='warning' for overdue alerts.
+// The dedup check looks for an existing notification with that composite
+// key. So each instalment can have at most ONE pre-due notification and
+// ONE overdue notification across its lifecycle.
 //
-// Dispatch: this Phase 1 ship creates the Notification row + logs a
-// dispatch line. WhatsApp/email send slots in once Wati BSP creds (Q9)
-// land — the WhatsAppMessage row creation goes in the same loop.
+// Dispatch: this pass creates the Notification row, sends a best-effort
+// email reminder, and logs a dispatch line. WhatsApp dispatch remains
+// best-effort via the existing Web client.
 
 const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
-// WhatsApp transport swap (Q9): Wati REST is COMMENTED OUT (kept on disk, not removed);
-// travel now dispatches over WhatsApp Web (QR-scan) via a drop-in client.
-// const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
+const { sendEmail } = require("../lib/emailSender");
 const watiClient = require("../services/whatsappWebClient");
 
 const DEFAULT_REMINDER_DAYS = 7;
@@ -43,8 +40,6 @@ const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com"
 async function runPaymentRemindersForTenant(tenantId) {
   const now = Date.now();
   const cutoffFloor = new Date(now - OVERDUE_LOOKBACK_DAYS * 86400_000);
-  // Future cutoff = max possible reminderDays (cap at 60d). The actual
-  // filter happens per-instalment using its plan's reminderDays.
   const cutoffCeiling = new Date(now + 60 * 86400_000);
 
   const instalments = await prisma.tripInstalmentPayment.findMany({
@@ -68,35 +63,33 @@ async function runPaymentRemindersForTenant(tenantId) {
 
   if (instalments.length === 0) return { dueSoon: 0, overdue: 0 };
 
-  // One tenant row read per pass for the Q9 cut-over plumbing — the
-  // wabaId is logged at notification-create time so operators can see
-  // which WABA the dispatch WOULD route through once Wati creds land.
-  // Instalments here belong to TmcTrips → subBrand=tmc by construction.
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
     select: { subBrandConfigJson: true },
   });
   const tmcCfg = resolveForSubBrand(tenant, "tmc");
 
-  // Batch-fetch participant parent phones for the WhatsApp dispatch leg.
-  // Best-effort: a lookup failure only skips the WA leg — the notification
-  // loop below must keep running regardless (mirrors the advisor-alerts
-  // cron's tolerate-missing-table posture).
   let participantById = {};
   try {
     const participantIds = [...new Set(instalments.map((i) => i.participantId).filter(Boolean))];
     const participants = participantIds.length
       ? await prisma.tripParticipant.findMany({
           where: { id: { in: participantIds } },
-          select: { id: true, parentPhone: true, parentName: true, fullName: true },
+          select: {
+            id: true,
+            parentPhone: true,
+            parentName: true,
+            parentEmail: true,
+            fullName: true,
+            applicationStatus: true,
+          },
         })
       : [];
     participantById = Object.fromEntries(participants.map((p) => [p.id, p]));
   } catch (e) {
-    console.error(`[TripPaymentReminders] participant phone lookup failed (WA leg skipped): ${e.message}`);
+    console.error(`[TripPaymentReminders] participant lookup failed: ${e.message}`);
   }
 
-  // Batch-fetch parent plans so we can look up reminderDays per instalment.
   const tripIds = [...new Set(instalments.map((i) => i.tripId))];
   const plans = await prisma.tripPaymentPlan.findMany({
     where: { tripId: { in: tripIds } },
@@ -125,7 +118,6 @@ async function runPaymentRemindersForTenant(tenantId) {
     const isOverdue = dueAt < now;
     const reminderWindowStart = dueAt - reminderDays * 86400_000;
     const inPreDueWindow = !isOverdue && now >= reminderWindowStart && now <= dueAt;
-
     if (!isOverdue && !inPreDueWindow) continue;
 
     const phaseType = isOverdue ? "warning" : "info";
@@ -149,6 +141,10 @@ async function runPaymentRemindersForTenant(tenantId) {
       ? `Trip instalment #${inst.instalmentIndex + 1} (₹${amountStr}) was due ${dueIso} and is unpaid. Status: ${inst.status}.`
       : `Trip instalment #${inst.instalmentIndex + 1} (₹${amountStr}) is due ${dueIso} (in ${Math.max(0, Math.ceil((dueAt - now) / 86400_000))} days).`;
 
+    const participant = inst.participantId ? participantById[inst.participantId] : null;
+    if (participant && participant.applicationStatus !== "approved") continue;
+    const portalLink = `${PORTAL_BASE}/pay/trip/${inst.tripId}/installment/${inst.instalmentIndex + 1}`;
+
     try {
       await prisma.notification.create({
         data: {
@@ -161,15 +157,31 @@ async function runPaymentRemindersForTenant(tenantId) {
           entityId: inst.id,
         },
       });
-      const link = `${PORTAL_BASE}/travel/trips/${inst.tripId}`;
+
       console.log(
-        `[TripPaymentReminders] tenant ${tenantId} inst ${inst.id} (${phaseType}) → notification created; ` +
-          `admin link: ${link} — would-route subBrand=tmc wabaId=${tmcCfg.wabaId || "(no-config)"}`,
+        `[TripPaymentReminders] tenant ${tenantId} inst ${inst.id} (${phaseType}) -> notification created; admin link: ${PORTAL_BASE}/travel/trips/${inst.tripId} ` +
+          `subBrand=tmc wabaId=${tmcCfg.wabaId || "(no-config)"}`,
       );
-      // WhatsApp dispatch via watiClient (Q9) — stub-logs + QUEUED row when
-      // WATI creds are absent; real template send when they're set. Best-
-      // effort: a send failure never blocks the notification loop.
-      const participant = inst.participantId ? participantById[inst.participantId] : null;
+
+      if (participant && participant.parentEmail) {
+        const subject = isOverdue
+          ? `Payment overdue: instalment #${inst.instalmentIndex + 1}`
+          : `Payment due soon: instalment #${inst.instalmentIndex + 1}`;
+        const reminderText = [
+          `Hello ${participant.parentName || participant.fullName || "there"},`,
+          "",
+          messageBody,
+          "",
+          `Pay now: ${portalLink}`,
+        ].join("\n");
+        await sendEmail({
+          to: participant.parentEmail,
+          subject,
+          text: reminderText,
+          html: reminderText.replace(/\n/g, "<br>"),
+        });
+      }
+
       if (participant && participant.parentPhone) {
         await watiClient.sendBestEffort({
           tenantId,
@@ -182,9 +194,10 @@ async function runPaymentRemindersForTenant(tenantId) {
             { name: "due_date", value: dueIso },
           ],
           broadcastName: "travel-trip-payment-reminders",
-          fallbackText: messageBody,
+          fallbackText: `${messageBody}\n\nPay here: ${portalLink}`,
         });
       }
+
       if (isOverdue) overdue++;
       else dueSoon++;
     } catch (e) {
@@ -223,8 +236,6 @@ async function runPaymentRemindersForAllTravelTenants() {
 }
 
 function initTripPaymentRemindersCron() {
-  // Daily 07:13 IST. PRD §6.3 says "daily 09:00 IST" — running earlier so
-  // the reminders are queued by the time school finance teams open the system.
   cronRegistry.register({
     name: "tripPaymentReminders",
     description: "TripInstalmentPayment pre-due/overdue reminder notifications (daily 07:13 IST)",

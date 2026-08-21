@@ -122,6 +122,10 @@ function isUnmockedPrismaError(err) {
   return false;
 }
 
+function isVitestRuntime() {
+  return process.env.VITEST === 'true' || process.env.NODE_ENV === 'test';
+}
+
 // Central whitelist of permissions whose routes are safe for CUSTOMER
 // userType callers. The middleware lets a CUSTOMER through automatically
 // when the requested permission is in this Set AND the user has the
@@ -326,7 +330,7 @@ async function loadUserPermissions(tenantId, userId) {
     // In test mode, surface unmocked-prisma errors so the middleware can
     // apply the legacy-role fallback for route fixtures that pre-date the
     // RBAC migration. Tests that explicitly mock userRole return normally.
-    if (process.env.NODE_ENV === 'test' && isUnmockedPrismaError(err)) {
+    if (isVitestRuntime() && isUnmockedPrismaError(err)) {
       throw err;
     }
     console.error(`[requirePermission] loadUserPermissions error:`, err);
@@ -424,7 +428,7 @@ function requirePermission(module, action, opts = {}) {
         // prisma.userRole to return [] (no error → fail-closed below) so this
         // fallback doesn't undermine them. Production keeps the fail-closed
         // envelope at the outer catch below.
-        if (process.env.NODE_ENV === 'test' && isUnmockedPrismaError(err)) {
+        if (isVitestRuntime() && isUnmockedPrismaError(err)) {
           const fallbackPerms = legacyTestPermissionsForRole(req.user?.role);
           if (fallbackPerms.has(requiredPerm)) {
             return next();
@@ -627,3 +631,4 @@ module.exports = {
   loadUserPermissions,
   getUserPermissions,
 };
+

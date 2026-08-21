@@ -268,6 +268,7 @@ describe('<CurriculumAdmin /> — list + filter lifecycle', () => {
     expect(await screen.findByText(/Mughal architecture/i)).toBeInTheDocument();
     expect(screen.getByText(/Practical electromagnetism/i)).toBeInTheDocument();
     expect(screen.getByText(/Coastal erosion patterns/i)).toBeInTheDocument();
+    expect(screen.getByTestId('curriculum-mapping-table')).toHaveStyle({ minWidth: '1480px' });
     // Fit score badge classes — verify the band classes are applied.
     const row501 = screen.getByTestId('curriculum-mapping-row-501');
     const row502 = screen.getByTestId('curriculum-mapping-row-502');
@@ -811,3 +812,5 @@ describe('<CurriculumAdmin /> — POST body normalisation + server errors', () =
     confirmSpy.mockRestore();
   });
 });
+
+

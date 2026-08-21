@@ -310,6 +310,41 @@ describe('originCheck — browser callers with allowed Origin', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
+  test('localhost on a port NOT in the allowlist passes outside production', () => {
+    // Regression: Vite takes the next free port when 5173 is busy (a second
+    // dev server, a stale process), so the app's own frontend served from
+    // :5174 was failing the app's own CSRF origin check with
+    // ORIGIN_NOT_ALLOWED. Any loopback port is accepted in dev.
+    delete process.env.NODE_ENV;
+    for (const origin of ['http://localhost:5174', 'http://localhost:3000', 'http://127.0.0.1:4321']) {
+      const { req, res, next } = makeReqRes({ headers: { origin } });
+      originCheck(req, res, next);
+      expect(next, `expected ${origin} to pass in dev`).toHaveBeenCalledOnce();
+    }
+  });
+
+  test('localhost on an unlisted port is REJECTED in production', () => {
+    // The dev bypass is gated on NODE_ENV — production keeps the exact
+    // allowlist, so a literal localhost Origin there is still a 403.
+    process.env.NODE_ENV = 'production';
+    const { req, res, next } = makeReqRes({
+      headers: { origin: 'http://localhost:5174' },
+    });
+    originCheck(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  test('a non-loopback origin is still rejected in dev (bypass is loopback-only)', () => {
+    delete process.env.NODE_ENV;
+    const { req, res, next } = makeReqRes({
+      headers: { origin: 'http://localhost.evil.com' },
+    });
+    originCheck(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
   test('127.0.0.1:5000 passes', () => {
     const { req, res, next } = makeReqRes({
       headers: { origin: 'http://127.0.0.1:5000' },
@@ -435,6 +470,9 @@ describe('buildAllowlist', () => {
     expect(list).toContain('http://127.0.0.1:5173');
     expect(list).toContain('http://127.0.0.1:5000');
     expect(list).toContain('https://globuscrm.globussoft.com');
+    expect(list).toContain('https://empcloud.com');
+    expect(list).toContain('https://www.empcloud.com');
+    expect(list).toContain('https://app.empcloud.com');
   });
 
   test('extends with FRONTEND_URL env var', () => {

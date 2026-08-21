@@ -57,6 +57,7 @@ import { useNavigate } from "react-router-dom";
 import { FileImage, Plus, Pencil, Trash2, Copy, CopyPlus, Search, Download, ChevronDown, Eye, X } from "lucide-react";
 import { fetchApi, getAuthToken, getActiveTenantId } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import {
   SUB_BRAND_BG,
   SUB_BRAND_LABEL,
@@ -357,12 +358,12 @@ export default function FlyerTemplates() {
         }}
       >
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+          <h1 style={{ display: "flex", alignItems: "center", gap: 12, margin: 0, fontSize: "1.75rem", fontWeight: 600, lineHeight: 1.15, flexWrap: "wrap" }}>
             <FileImage size={26} aria-hidden /> Flyer Templates
+            <CountBadge count={total} title={`${total.toLocaleString()} templates`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
             Reusable flyer designs for marketing campaigns.
-            {total > 0 && ` ${total.toLocaleString()} template${total === 1 ? "" : "s"}.`}
           </p>
         </div>
         {canWrite && (

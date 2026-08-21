@@ -101,6 +101,10 @@ const sampleTemplates = [
   { id: 'event', name: 'Event RSVP', description: 'RSVP capture', content: [{ id: 'h2', type: 'heading', props: { text: 'Event Hero' } }] },
 ];
 
+function setTheme(theme = 'light') {
+  document.documentElement.setAttribute('data-theme', theme);
+}
+
 function defaultFetchMock(url, opts) {
   if (url === '/api/landing-pages' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(samplePages);
@@ -111,9 +115,10 @@ function defaultFetchMock(url, opts) {
   return Promise.resolve(null);
 }
 
-function renderPage() {
+function renderPage(theme = 'light', initialEntries = ['/landing-pages']) {
+  setTheme(theme);
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <LandingPages />
     </MemoryRouter>
   );
@@ -121,8 +126,11 @@ function renderPage() {
 
 describe('<LandingPages /> — index page surface', () => {
   let clipboardWriteText;
+  let previousTheme;
 
   beforeEach(() => {
+    previousTheme = document.documentElement.getAttribute('data-theme');
+    setTheme('light');
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
     navigateMock.mockReset();
@@ -148,6 +156,11 @@ describe('<LandingPages /> — index page surface', () => {
       configurable: true,
       writable: true,
     });
+    if (previousTheme == null) {
+      document.documentElement.removeAttribute('data-theme');
+    } else {
+      document.documentElement.setAttribute('data-theme', previousTheme);
+    }
   });
 
   it('renders the header + subtitle + a top-right "Create Page" CTA', async () => {
@@ -228,6 +241,103 @@ describe('<LandingPages /> — index page surface', () => {
     // Sibling DRAFT page has 0 visits → 0.0% fallback (NOT "0%" or "—").
     // formatPercent guarantees "0.0%" for the literal-zero case (#639).
     expect(screen.getByText('0.0%')).toBeInTheDocument();
+  });
+
+  it('uses theme-aware card and filter surfaces in both light and dark mode', async () => {
+    const lightRender = renderPage('light');
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    const lightCardStyle = screen.getByText('Spring Launch').closest('.card')?.getAttribute('style') || '';
+    expect(lightCardStyle).toMatch(/rgba\(255, 255, 255, 0\.98\)/);
+    expect(lightCardStyle).toMatch(/rgba\(148, 163, 184, 0\.22\)/);
+
+    const filterStyle = screen.getByRole('combobox').getAttribute('style') || '';
+    expect(filterStyle).toMatch(/background:\s*var\(--surface-color\)/);
+    expect(filterStyle).toMatch(/border:\s*1px solid var\(--border-color\)/);
+    expect(screen.getByText(/Filter by created date/i).parentElement).toContainElement(
+      screen.getByRole('combobox'),
+    );
+
+    lightRender.unmount();
+
+    renderPage('dark');
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    const darkCardStyle = screen.getByText('Spring Launch').closest('.card')?.getAttribute('style') || '';
+    expect(darkCardStyle).toMatch(/rgba\(17, 20, 27, 0\.98\)/);
+    expect(darkCardStyle).toMatch(/rgba\(255, 255, 255, 0\.08\)/);
+  });
+
+  it('renders the search box and status filters with draft / published / total counts', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    expect(
+      screen.getByRole('searchbox', { name: /Search landing pages/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /All\s*2/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Published\s*1/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Drafts\s*1/i })).toBeInTheDocument();
+  });
+
+  it('searches landing pages by title or slug and updates the visible count', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    const searchInput = screen.getByRole('searchbox', { name: /Search landing pages/i });
+
+    fireEvent.change(searchInput, { target: { value: 'winter-promo' } });
+    expect(screen.getByText('Winter Promo Draft')).toBeInTheDocument();
+    expect(screen.queryByText('Spring Launch')).not.toBeInTheDocument();
+    expect(screen.getByText(/Showing 1 of 2 landing pages/i)).toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: 'launch' } });
+    expect(screen.getByText('Spring Launch')).toBeInTheDocument();
+    expect(screen.queryByText('Winter Promo Draft')).not.toBeInTheDocument();
+  });
+
+  it('status filters hide published or draft pages and reset via All', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Drafts\s*1/i }));
+    expect(screen.queryByText('Spring Launch')).not.toBeInTheDocument();
+    expect(screen.getByText('Winter Promo Draft')).toBeInTheDocument();
+    expect(screen.getByText(/Showing 1 of 2 landing pages/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Published\s*1/i }));
+    expect(screen.getByText('Spring Launch')).toBeInTheDocument();
+    expect(screen.queryByText('Winter Promo Draft')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /All\s*2/i }));
+    expect(screen.getByText('Spring Launch')).toBeInTheDocument();
+    expect(screen.getByText('Winter Promo Draft')).toBeInTheDocument();
+  });
+
+  it('renders the TMC Trips back-track breadcrumb when location state is provided', async () => {
+    renderPage('light', [{
+      pathname: '/landing-pages',
+      state: {
+        returnTo: { label: 'TMC Trips', path: '/travel/trips/101?tab=overview' },
+        currentLabel: 'Public experience',
+        currentPath: '/travel/trips/101?tab=microsite',
+        backTo: '/travel/trips',
+        backLabel: 'Trips',
+        tripContext: {
+          tripId: 101,
+          tripCode: 'TMC-AND-2026-MUMBAI-G7',
+          destination: 'Andaman',
+          durationDays: 7,
+          audience: 'School students',
+          subBrand: 'tmc',
+        },
+      },
+    }]);
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    expect(screen.getByRole('navigation', { name: /breadcrumb/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'TMC Trips' })).toHaveAttribute('href', '/travel/trips/101?tab=overview');
+    expect(screen.getByRole('link', { name: 'Public experience' })).toHaveAttribute('href', '/travel/trips/101?tab=microsite');
   });
 
   it('does NOT render a "View" link any more (button was removed); each row has an Edit link to /landing-pages/builder/:id', async () => {
@@ -368,7 +478,7 @@ describe('<LandingPages /> — index page surface', () => {
     });
     // Post-create navigation goes to the builder for the returned id.
     await waitFor(() => {
-      expect(navigateMock).toHaveBeenCalledWith('/landing-pages/builder/42');
+      expect(navigateMock.mock.calls.some(([path]) => path === '/landing-pages/builder/42')).toBe(true);
     });
   });
 

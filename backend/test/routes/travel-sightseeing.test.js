@@ -205,7 +205,7 @@ describe('GET /api/travel/sightseeing — list', () => {
 
     expect(res.status).toBe(200);
     const call = prisma.travelSightseeing.findMany.mock.calls[0][0];
-    expect(call.where.destinationName).toBe('Paris');
+    expect(call.where.destinationName).toEqual({ contains: 'Paris' });
     expect(call.where.category).toBe('monument');
     expect(call.where.isActive).toBe(true);
   });

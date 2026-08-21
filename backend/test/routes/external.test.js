@@ -75,17 +75,17 @@
  *   real Gemini/keyword logic. Drive via supertest. No real DB.
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { createRequire } from 'node:module';
+import { describe, test, expect, beforeEach, vi } from "vitest";
+import { createRequire } from "node:module";
 
-import prisma from '../../lib/prisma.js';
+import prisma from "../../lib/prisma.js";
 
 const requireCJS = createRequire(import.meta.url);
-const Module = requireCJS('node:module');
+const Module = requireCJS("node:module");
 
 // ── Patch lib/leadJunkFilter in require cache BEFORE router require ────
 const classifyLeadMock = vi.fn();
-const leadJunkFilterPath = requireCJS.resolve('../../lib/leadJunkFilter.js');
+const leadJunkFilterPath = requireCJS.resolve("../../lib/leadJunkFilter.js");
 Module._cache[leadJunkFilterPath] = {
   id: leadJunkFilterPath,
   filename: leadJunkFilterPath,
@@ -100,7 +100,7 @@ Module._cache[leadJunkFilterPath] = {
 
 // ── Patch lib/leadAutoRouter in require cache BEFORE router require ────
 const pickAssigneeMock = vi.fn();
-const leadAutoRouterPath = requireCJS.resolve('../../lib/leadAutoRouter.js');
+const leadAutoRouterPath = requireCJS.resolve("../../lib/leadAutoRouter.js");
 Module._cache[leadAutoRouterPath] = {
   id: leadAutoRouterPath,
   filename: leadAutoRouterPath,
@@ -113,7 +113,7 @@ Module._cache[leadAutoRouterPath] = {
 
 // ── Patch lib/leadSla in require cache BEFORE router require ───────────
 const computeFirstResponseDueAtMock = vi.fn();
-const leadSlaPath = requireCJS.resolve('../../lib/leadSla.js');
+const leadSlaPath = requireCJS.resolve("../../lib/leadSla.js");
 Module._cache[leadSlaPath] = {
   id: leadSlaPath,
   filename: leadSlaPath,
@@ -128,6 +128,55 @@ Module._cache[leadSlaPath] = {
   },
 };
 
+const notifyAdminsOfNewLeadMock = vi.fn().mockResolvedValue([]);
+const notifyAdminsOfBlockedLeadOriginMock = vi.fn().mockResolvedValue([]);
+const leadNotificationsPath = requireCJS.resolve("../../lib/leadNotifications.js");
+Module._cache[leadNotificationsPath] = {
+  id: leadNotificationsPath,
+  filename: leadNotificationsPath,
+  loaded: true,
+  exports: {
+    notifyAdminsOfNewLead: notifyAdminsOfNewLeadMock,
+    notifyAdminsOfBlockedLeadOrigin: notifyAdminsOfBlockedLeadOriginMock,
+    isEmbedOriginAllowed: (origin, allowlistJson) => {
+      if (!allowlistJson) return true;
+      try {
+        const list = typeof allowlistJson === "string" ? JSON.parse(allowlistJson) : allowlistJson;
+        if (!Array.isArray(list) || list.length === 0) return true;
+        return list.includes(origin);
+      } catch (_err) {
+        return true;
+      }
+    },
+    normalizeEmbedOrigin: (origin) => {
+      if (!origin) return null;
+      try {
+        const parsed = new URL(origin);
+        return `${parsed.protocol}//${parsed.host}`.toLowerCase();
+      } catch (_err) {
+        return null;
+      }
+    },
+  },
+};
+
+// Stub the new-lead auto-dial queue so external lead creation tests don't
+// trigger real background Prisma calls.
+const autoDialEnqueueMock = vi.fn();
+const autoDialQueuePath = requireCJS.resolve("../../lib/callifiedAutoDialQueue.js");
+Module._cache[autoDialQueuePath] = {
+  id: autoDialQueuePath,
+  filename: autoDialQueuePath,
+  loaded: true,
+  exports: {
+    enqueue: autoDialEnqueueMock,
+    startProcessor: () => {},
+    stopProcessor: () => {},
+    getQueueLength: () => 0,
+    isDialable: () => true,
+  },
+};
+
 // ── Patch middleware/externalAuth as a configurable pass-through ───────
 //
 // The tests need to control req.tenantId / req.tenant / req.apiKey
@@ -138,33 +187,33 @@ const externalAuthState = {
   tenantId: 7,
   tenant: {
     id: 7,
-    name: 'Acme Wellness',
-    slug: 'acme-wellness',
-    vertical: 'wellness',
-    plan: 'pro',
-    country: 'IN',
-    defaultCurrency: 'INR',
-    locale: 'en-IN',
+    name: "Acme Wellness",
+    slug: "acme-wellness",
+    vertical: "wellness",
+    plan: "pro",
+    country: "IN",
+    defaultCurrency: "INR",
+    locale: "en-IN",
     logoUrl: null,
-    brandColor: '#265855',
+    brandColor: "#265855",
     isActive: true,
   },
   apiKey: {
     id: 42,
-    name: 'callified-prod',
+    name: "callified-prod",
     lastUsed: null,
     userId: 4,
     tenantId: 7,
   },
 };
-const externalAuthPath = requireCJS.resolve('../../middleware/externalAuth.js');
+const externalAuthPath = requireCJS.resolve("../../middleware/externalAuth.js");
 Module._cache[externalAuthPath] = {
   id: externalAuthPath,
   filename: externalAuthPath,
   loaded: true,
   exports: function externalAuthShim(req, res, next) {
     if (externalAuthState.unauthorize) {
-      return res.status(401).json({ error: 'Missing X-API-Key header' });
+      return res.status(401).json({ error: "Missing X-API-Key header" });
     }
     req.tenantId = externalAuthState.tenantId;
     req.tenant = externalAuthState.tenant;
@@ -186,11 +235,16 @@ prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
 prisma.contact.findMany = vi.fn();
 prisma.contact.create = vi.fn();
+prisma.contact.update = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn();
 prisma.activity = prisma.activity || {};
 prisma.activity.create = vi.fn();
 prisma.callLog = prisma.callLog || {};
+prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
+prisma.leadCustomFieldDefinition.findMany = vi.fn();
+prisma.leadCustomFieldValue = prisma.leadCustomFieldValue || {};
+prisma.leadCustomFieldValue.upsert = vi.fn();
 prisma.callLog.findFirst = vi.fn();
 prisma.callLog.create = vi.fn();
 prisma.callLog.update = vi.fn();
@@ -207,16 +261,20 @@ prisma.location.findMany = vi.fn();
 prisma.visit = prisma.visit || {};
 prisma.visit.findMany = vi.fn();
 prisma.visit.create = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findUnique = vi.fn();
 
-import express from 'express';
-import request from 'supertest';
+import express from "express";
+import request from "supertest";
 
-const externalRouter = requireCJS('../../routes/external');
+const externalRouter = requireCJS("../../routes/external");
 
 function makeApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api/v1/external', externalRouter);
+  app.use("/api/v1/external", externalRouter);
   return app;
 }
 
@@ -224,8 +282,11 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset();
   prisma.contact.findMany.mockReset();
   prisma.contact.create.mockReset();
+  prisma.contact.update.mockReset();
   prisma.patient.findFirst.mockReset();
   prisma.activity.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.leadCustomFieldDefinition.findMany.mockReset();
+  prisma.leadCustomFieldValue.upsert.mockReset();
   prisma.callLog.findFirst.mockReset();
   prisma.callLog.create.mockReset();
   prisma.callLog.update.mockReset();
@@ -236,6 +297,10 @@ beforeEach(() => {
   prisma.location.findMany.mockReset();
   prisma.visit.findMany.mockReset();
   prisma.visit.create.mockReset();
+  prisma.tenant.findUnique
+    .mockReset()
+    .mockResolvedValue({ callifiedAutoCampaignId: null, embedAllowlistJson: null });
+  prisma.tenantSetting.findUnique.mockReset();
 
   classifyLeadMock.mockReset().mockResolvedValue({
     isJunk: false,
@@ -244,11 +309,13 @@ beforeEach(() => {
   });
   pickAssigneeMock.mockReset().mockResolvedValue({
     userId: 11,
-    reason: 'matched cat=injectables',
+    reason: "matched cat=injectables",
   });
+  notifyAdminsOfNewLeadMock.mockReset().mockResolvedValue([]);
+  autoDialEnqueueMock.mockReset();
   computeFirstResponseDueAtMock.mockReset().mockResolvedValue({
-    dueAt: new Date('2026-06-01T10:05:00Z'),
-    tier: 'high',
+    dueAt: new Date("2026-06-01T10:05:00Z"),
+    tier: "high",
     minutes: 5,
   });
 
@@ -256,149 +323,150 @@ beforeEach(() => {
   externalAuthState.tenantId = 7;
   externalAuthState.tenant = {
     id: 7,
-    name: 'Acme Wellness',
-    slug: 'acme-wellness',
-    vertical: 'wellness',
-    plan: 'pro',
-    country: 'IN',
-    defaultCurrency: 'INR',
-    locale: 'en-IN',
+    name: "Acme Wellness",
+    slug: "acme-wellness",
+    vertical: "wellness",
+    plan: "pro",
+    country: "IN",
+    defaultCurrency: "INR",
+    locale: "en-IN",
     logoUrl: null,
-    brandColor: '#265855',
+    brandColor: "#265855",
     isActive: true,
   };
   externalAuthState.apiKey = {
     id: 42,
-    name: 'callified-prod',
+    name: "callified-prod",
     lastUsed: null,
     userId: 4,
     tenantId: 7,
   };
+  notifyAdminsOfBlockedLeadOriginMock.mockReset().mockResolvedValue([]);
 });
 
-describe('GET /api/v1/external/health — public reachability', () => {
+describe("GET /api/v1/external/health — public reachability", () => {
   test('200 + {status:"ok", apiVersion:"v1"}, no auth required', async () => {
     // Even with externalAuth shim set to deny, /health must succeed because
     // it's declared BEFORE router.use(externalAuth).
     externalAuthState.unauthorize = true;
 
     const app = makeApp();
-    const res = await request(app).get('/api/v1/external/health');
+    const res = await request(app).get("/api/v1/external/health");
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ok', apiVersion: 'v1' });
+    expect(res.body).toEqual({ status: "ok", apiVersion: "v1" });
   });
 });
 
-describe('GET /api/v1/external/me — auth gating', () => {
-  test('shim unauthorized → 401', async () => {
+describe("GET /api/v1/external/me — auth gating", () => {
+  test("shim unauthorized → 401", async () => {
     externalAuthState.unauthorize = true;
     const app = makeApp();
 
-    const res = await request(app).get('/api/v1/external/me');
+    const res = await request(app).get("/api/v1/external/me");
 
     expect(res.status).toBe(401);
     expect(res.body.error).toMatch(/X-API-Key/i);
   });
 
-  test('shim authorized → returns tenant + apiKey + capabilities', async () => {
+  test("shim authorized → returns tenant + apiKey + capabilities", async () => {
     const app = makeApp();
-    const res = await request(app).get('/api/v1/external/me');
+    const res = await request(app).get("/api/v1/external/me");
 
     expect(res.status).toBe(200);
     expect(res.body.tenant.id).toBe(7);
-    expect(res.body.tenant.name).toBe('Acme Wellness');
-    expect(res.body.tenant.vertical).toBe('wellness');
-    expect(res.body.tenant.defaultCurrency).toBe('INR');
+    expect(res.body.tenant.name).toBe("Acme Wellness");
+    expect(res.body.tenant.vertical).toBe("wellness");
+    expect(res.body.tenant.defaultCurrency).toBe("INR");
     expect(res.body.apiKey.id).toBe(42);
-    expect(res.body.apiKey.name).toBe('callified-prod');
+    expect(res.body.apiKey.name).toBe("callified-prod");
     expect(res.body.capabilities.wellness).toBe(true);
   });
 });
 
-describe('router.param :id — INVALID_ID guard', () => {
-  test('GET /contacts/abc → 400 INVALID_ID', async () => {
+describe("router.param :id — INVALID_ID guard", () => {
+  test("GET /contacts/abc → 400 INVALID_ID", async () => {
     const app = makeApp();
-    const res = await request(app).get('/api/v1/external/contacts/abc');
+    const res = await request(app).get("/api/v1/external/contacts/abc");
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({
-      error: 'id must be a positive integer',
-      code: 'INVALID_ID',
+      error: "id must be a positive integer",
+      code: "INVALID_ID",
     });
     // Short-circuited before Prisma.
     expect(prisma.contact.findFirst).not.toHaveBeenCalled();
   });
 
-  test('GET /contacts/0 → 400 INVALID_ID (n < 1)', async () => {
+  test("GET /contacts/0 → 400 INVALID_ID (n < 1)", async () => {
     const app = makeApp();
-    const res = await request(app).get('/api/v1/external/contacts/0');
+    const res = await request(app).get("/api/v1/external/contacts/0");
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_ID');
+    expect(res.body.code).toBe("INVALID_ID");
   });
 
-  test('PATCH /calls/-5 → 400 INVALID_ID (negative)', async () => {
+  test("PATCH /calls/-5 → 400 INVALID_ID (negative)", async () => {
     const app = makeApp();
     const res = await request(app)
-      .patch('/api/v1/external/calls/-5')
-      .send({ status: 'COMPLETED' });
+      .patch("/api/v1/external/calls/-5")
+      .send({ status: "COMPLETED" });
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_ID');
+    expect(res.body.code).toBe("INVALID_ID");
     expect(prisma.callLog.findFirst).not.toHaveBeenCalled();
   });
 });
 
-describe('GET /api/v1/external/contacts/lookup', () => {
-  test('no phone, no email → 400 MISSING_QUERY', async () => {
+describe("GET /api/v1/external/contacts/lookup", () => {
+  test("no phone, no email → 400 MISSING_QUERY", async () => {
     const app = makeApp();
-    const res = await request(app).get('/api/v1/external/contacts/lookup');
+    const res = await request(app).get("/api/v1/external/contacts/lookup");
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({
-      error: 'phone or email required',
-      code: 'MISSING_QUERY',
+      error: "phone or email required",
+      code: "MISSING_QUERY",
     });
     expect(prisma.contact.findFirst).not.toHaveBeenCalled();
   });
 
-  test('?phone=... happy path → returns contact', async () => {
+  test("?phone=... happy path → returns contact", async () => {
     prisma.contact.findFirst.mockResolvedValueOnce({
       id: 101,
-      name: 'Anjali Sharma',
-      email: 'anjali@example.com',
-      phone: '+919811234567',
-      status: 'Lead',
-      source: 'web',
+      name: "Anjali Sharma",
+      email: "anjali@example.com",
+      phone: "+919811234567",
+      status: "Lead",
+      source: "web",
       company: null,
       aiScore: 72,
       assignedToId: 4,
-      createdAt: new Date('2026-01-01T00:00:00Z'),
+      createdAt: new Date("2026-01-01T00:00:00Z"),
     });
     const app = makeApp();
 
     const res = await request(app)
-      .get('/api/v1/external/contacts/lookup')
-      .query({ phone: '+919811234567' });
+      .get("/api/v1/external/contacts/lookup")
+      .query({ phone: "+919811234567" });
 
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(101);
-    expect(res.body.name).toBe('Anjali Sharma');
+    expect(res.body.name).toBe("Anjali Sharma");
 
     // Where clause uses phoneMatches { contains: '9811234567' } + tenantId.
     const args = prisma.contact.findFirst.mock.calls[0][0];
     expect(args.where.tenantId).toBe(7);
-    expect(args.where.phone).toEqual({ contains: '9811234567' });
+    expect(args.where.phone).toEqual({ contains: "9811234567" });
   });
 });
 
-describe('GET /api/v1/external/contacts/:id', () => {
-  test('not-in-tenant → 404', async () => {
+describe("GET /api/v1/external/contacts/:id", () => {
+  test("not-in-tenant → 404", async () => {
     prisma.contact.findFirst.mockResolvedValueOnce(null);
     const app = makeApp();
 
-    const res = await request(app).get('/api/v1/external/contacts/999');
+    const res = await request(app).get("/api/v1/external/contacts/999");
 
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found/i);
@@ -410,47 +478,69 @@ describe('GET /api/v1/external/contacts/:id', () => {
   });
 });
 
-describe('GET /api/v1/external/leads — list shape', () => {
+describe("GET /api/v1/external/leads — list shape", () => {
   test('returns { data, total, since } with tenantId + status:"Lead" filter', async () => {
     prisma.contact.findMany.mockResolvedValueOnce([
-      { id: 1, name: 'A', email: 'a@x.test', phone: null, source: 'web', firstTouchSource: 'web', status: 'Lead', aiScore: 50, createdAt: new Date() },
-      { id: 2, name: 'B', email: 'b@x.test', phone: null, source: 'web', firstTouchSource: 'web', status: 'Lead', aiScore: 70, createdAt: new Date() },
+      {
+        id: 1,
+        name: "A",
+        email: "a@x.test",
+        phone: null,
+        source: "web",
+        firstTouchSource: "web",
+        status: "Lead",
+        aiScore: 50,
+        createdAt: new Date(),
+      },
+      {
+        id: 2,
+        name: "B",
+        email: "b@x.test",
+        phone: null,
+        source: "web",
+        firstTouchSource: "web",
+        status: "Lead",
+        aiScore: 70,
+        createdAt: new Date(),
+      },
     ]);
     const app = makeApp();
 
     const res = await request(app)
-      .get('/api/v1/external/leads')
-      .query({ since: '2026-05-01T00:00:00Z' });
+      .get("/api/v1/external/leads")
+      .query({ since: "2026-05-01T00:00:00Z" });
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(2);
     expect(res.body.total).toBe(2);
-    expect(res.body.since).toBe('2026-05-01T00:00:00Z');
+    expect(res.body.since).toBe("2026-05-01T00:00:00Z");
 
     const args = prisma.contact.findMany.mock.calls[0][0];
     expect(args.where.tenantId).toBe(7);
-    expect(args.where.status).toBe('Lead');
-    expect(args.where.createdAt).toEqual({ gte: new Date('2026-05-01T00:00:00Z') });
+    expect(args.where.status).toBe("Lead");
+    expect(args.where.createdAt).toEqual({
+      gte: new Date("2026-05-01T00:00:00Z"),
+    });
   });
 });
 
-describe('POST /api/v1/external/leads — create pipeline', () => {
-  test('no name/phone/email → 400 INSUFFICIENT_IDENTITY', async () => {
+describe("POST /api/v1/external/leads — create pipeline", () => {
+  test("no name/phone/email → 400 INSUFFICIENT_IDENTITY", async () => {
     const app = makeApp();
     const res = await request(app)
-      .post('/api/v1/external/leads')
-      .send({ source: 'callified' });
+      .post("/api/v1/external/leads")
+      .send({ source: "callified" });
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({
-      error: 'name, phone, or email required',
-      code: 'INSUFFICIENT_IDENTITY',
+      error: "name, phone, or email required",
+      code: "INSUFFICIENT_IDENTITY",
     });
     expect(classifyLeadMock).not.toHaveBeenCalled();
     expect(prisma.contact.create).not.toHaveBeenCalled();
   });
 
-  test('happy path → classifyLead + pickAssignee + computeFirstResponseDueAt invoked, Contact + Activity created, 201 returned with envelope extras', async () => {
+  test("happy path → classifyLead + pickAssignee + computeFirstResponseDueAt invoked, Contact + Activity created, 201 returned with envelope extras", async () => {
     classifyLeadMock.mockResolvedValueOnce({
       isJunk: false,
       score: 80,
@@ -458,22 +548,22 @@ describe('POST /api/v1/external/leads — create pipeline', () => {
     });
     pickAssigneeMock.mockResolvedValueOnce({
       userId: 11,
-      reason: 'matched cat=injectables (drHarsh)',
+      reason: "matched cat=injectables (drHarsh)",
     });
-    const dueAt = new Date('2026-06-01T10:05:00Z');
+    const dueAt = new Date("2026-06-01T10:05:00Z");
     computeFirstResponseDueAtMock.mockResolvedValueOnce({
       dueAt,
-      tier: 'high',
+      tier: "high",
       minutes: 5,
     });
     prisma.contact.findFirst.mockResolvedValueOnce(null); // not deduped
     const createdContact = {
       id: 555,
-      name: 'Priya Iyer',
-      email: 'priya@example.com',
-      phone: '+919900112233',
-      status: 'Lead',
-      source: 'callified',
+      name: "Priya Iyer",
+      email: "priya@example.com",
+      phone: "+919900112233",
+      status: "Lead",
+      source: "callified",
       aiScore: 80,
       assignedToId: 11,
       firstResponseDueAt: dueAt,
@@ -481,29 +571,37 @@ describe('POST /api/v1/external/leads — create pipeline', () => {
       createdAt: new Date(),
     };
     prisma.contact.create.mockResolvedValueOnce(createdContact);
+    prisma.tenant.findUnique.mockResolvedValue({
+      vertical: "wellness",
+      callifiedAutoCampaignId: null,
+    });
 
     const app = makeApp();
-    const res = await request(app).post('/api/v1/external/leads').send({
-      name: 'Priya Iyer',
-      phone: '+919900112233',
-      email: 'priya@example.com',
-      source: 'callified',
-      note: 'Asked about hydrafacial pricing',
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "Priya Iyer",
+      phone: "+919900112233",
+      email: "priya@example.com",
+      source: "callified",
+      note: "Asked about hydrafacial pricing",
     });
 
     expect(res.status).toBe(201);
     expect(res.body.id).toBe(555);
-    expect(res.body.name).toBe('Priya Iyer');
+    expect(res.body.name).toBe("Priya Iyer");
     // Envelope extras stamped onto the response
-    expect(res.body._verdict).toEqual({ isJunk: false, score: 80, reasons: [] });
+    expect(res.body._verdict).toEqual({
+      isJunk: false,
+      score: 80,
+      reasons: [],
+    });
     expect(res.body._routing.userId).toBe(11);
-    expect(res.body._sla.tier).toBe('high');
+    expect(res.body._sla.tier).toBe("high");
 
     // classifyLead invoked with the inbound payload + tenantId
     expect(classifyLeadMock).toHaveBeenCalledOnce();
     const verdictArgs = classifyLeadMock.mock.calls[0][0];
     expect(verdictArgs.tenantId).toBe(7);
-    expect(verdictArgs.name).toBe('Priya Iyer');
+    expect(verdictArgs.name).toBe("Priya Iyer");
 
     // pickAssignee invoked since verdict.isJunk=false
     expect(pickAssigneeMock).toHaveBeenCalledOnce();
@@ -514,43 +612,499 @@ describe('POST /api/v1/external/leads — create pipeline', () => {
     // Contact.create called with expected mapping
     const cArgs = prisma.contact.create.mock.calls[0][0].data;
     expect(cArgs.tenantId).toBe(7);
-    expect(cArgs.email).toBe('priya@example.com');
-    expect(cArgs.phone).toBe('+919900112233');
-    expect(cArgs.source).toBe('callified');
-    expect(cArgs.firstTouchSource).toBe('callified');
-    expect(cArgs.status).toBe('Lead');
+    expect(cArgs.email).toBe("priya@example.com");
+    expect(cArgs.phone).toBe("+919900112233");
+    expect(cArgs.source).toBe("callified");
+    expect(cArgs.firstTouchSource).toBe("callified");
+    expect(cArgs.status).toBe("Lead");
     expect(cArgs.aiScore).toBe(80);
     expect(cArgs.assignedToId).toBe(11);
     expect(cArgs.firstResponseDueAt).toBe(dueAt);
+    // No default Callified campaign configured for this tenant
+    expect(cArgs.callifiedCampaignId).toBeUndefined();
 
     // Activity (system Note) written because note was provided
     expect(prisma.activity.create).toHaveBeenCalledOnce();
     const aArgs = prisma.activity.create.mock.calls[0][0].data;
-    expect(aArgs.type).toBe('Note');
+    expect(aArgs.type).toBe("Note");
     expect(aArgs.contactId).toBe(555);
     expect(aArgs.tenantId).toBe(7);
-    expect(aArgs.description).toContain('Asked about hydrafacial pricing');
+    expect(aArgs.description).toContain("Asked about hydrafacial pricing");
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 7,
+      contact: createdContact,
+    }));
   });
 
-  test('junk verdict → status="Junk", pickAssignee SKIPPED, Activity.type="JunkFilter"', async () => {
+  test("blocked partner origin → 403 ORIGIN_NOT_ALLOWED and admin notification", async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      vertical: "wellness",
+      callifiedAutoCampaignId: null,
+      embedAllowlistJson: JSON.stringify(["https://allowed.example.com"]),
+    });
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "Blocked Origin Lead",
+      phone: "+919900112233",
+      email: "blocked@example.com",
+      source: "website-form",
+      partnerOrigin: "https://blocked.example.com",
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: "Partner origin is not allowed",
+      code: "ORIGIN_NOT_ALLOWED",
+    });
+    expect(classifyLeadMock).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(notifyAdminsOfBlockedLeadOriginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 7,
+        origin: "https://blocked.example.com",
+      }),
+    );
+    expect(notifyAdminsOfNewLeadMock).not.toHaveBeenCalled();
+  });
+
+  test("origin header only (no partnerOrigin body field) is still enforced", async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      vertical: "wellness",
+      callifiedAutoCampaignId: null,
+      embedAllowlistJson: JSON.stringify(["https://allowed.example.com"]),
+    });
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 61,
+      reasons: [],
+    });
+    pickAssigneeMock.mockResolvedValueOnce({
+      userId: 11,
+      reason: "matched cat=website",
+    });
+    computeFirstResponseDueAtMock.mockResolvedValueOnce({
+      dueAt: new Date("2026-06-01T10:05:00Z"),
+      tier: "medium",
+      minutes: 30,
+    });
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({
+      id: 777,
+      name: "Allowed Header Lead",
+      email: "allowed-header@example.com",
+      phone: "+919900112299",
+      status: "Lead",
+      source: "website-form",
+      aiScore: 61,
+      assignedToId: 11,
+      tenantId: 7,
+      createdAt: new Date(),
+    });
+
+    const app = makeApp();
+    const res = await request(app)
+      .post("/api/v1/external/leads")
+      .set("Origin", "https://allowed.example.com")
+      .send({
+        name: "Allowed Header Lead",
+        phone: "+919900112299",
+        email: "allowed-header@example.com",
+        source: "website-form",
+      });
+
+    expect(res.status).toBe(201);
+    expect(notifyAdminsOfBlockedLeadOriginMock).not.toHaveBeenCalled();
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("configured allowlist with no origin evidence returns ORIGIN_REQUIRED", async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      vertical: "wellness",
+      callifiedAutoCampaignId: null,
+      embedAllowlistJson: JSON.stringify(["https://allowed.example.com"]),
+    });
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "Missing Origin Lead",
+      phone: "+919900112233",
+      email: "missing-origin@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: "Partner origin is required",
+      code: "ORIGIN_REQUIRED",
+    });
+    expect(classifyLeadMock).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(notifyAdminsOfBlockedLeadOriginMock).not.toHaveBeenCalled();
+  });
+
+  test("soft-deleted same email is restored so re-registered external lead is visible", async () => {
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 74,
+      reasons: [],
+    });
+    const deletedContact = {
+      id: 889,
+      name: "Deleted Lead",
+      email: "restore-ext@example.com",
+      phone: "+919900112244",
+      status: "Lead",
+      source: "old-source",
+      aiScore: 10,
+      assignedToId: null,
+      tenantId: 7,
+      deletedAt: new Date("2026-08-01T10:00:00Z"),
+      createdAt: new Date(),
+    };
+    const restoredContact = {
+      ...deletedContact,
+      name: "External Restored Lead",
+      source: "website-form",
+      firstTouchSource: "website-form",
+      aiScore: 74,
+      deletedAt: null,
+    };
+    prisma.contact.findFirst.mockResolvedValueOnce(deletedContact);
+    prisma.contact.update.mockResolvedValueOnce(restoredContact);
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "External Restored Lead",
+      phone: "+919900112244",
+      email: "restore-ext@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 889, _deduped: true, deletedAt: null });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 889 },
+      data: expect.objectContaining({
+        name: "External Restored Lead",
+        email: "restore-ext@example.com",
+        status: "Lead",
+        source: "website-form",
+        firstTouchSource: "website-form",
+        deletedAt: null,
+      }),
+    });
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 7,
+      contact: restoredContact,
+    }));
+
+  });
+  test("Callified campaign is auto-assigned by rule for new Lead", async () => {
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => {
+      const key = where?.tenantId_key?.key;
+      if (key === "feature.callified.auto_dial_new_leads.enabled") return { value: "true" };
+      if (key === "feature.callified.auto_campaign_rules") {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: "source", value: "website-form", campaignId: 42 }],
+          }),
+        };
+      }
+      return null;
+    });
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 70,
+      reasons: [],
+    });
+    prisma.tenant.findUnique
+      .mockReset()
+      .mockResolvedValueOnce({ vertical: "generic", callifiedAutoCampaignId: null });
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({
+      id: 556,
+      name: "External Lead",
+      email: "ext@example.com",
+      phone: "+919900112234",
+      status: "Lead",
+      source: "website-form",
+      aiScore: 70,
+      assignedToId: 11,
+      callifiedCampaignId: 42,
+      tenantId: 7,
+      createdAt: new Date(),
+    });
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "External Lead",
+      phone: "+919900112234",
+      email: "ext@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(201);
+    expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
+      where: { id: 7 },
+      select: { vertical: true, callifiedAutoCampaignId: true, embedAllowlistJson: true },
+    });
+    const cArgs = prisma.contact.create.mock.calls[0][0].data;
+    expect(cArgs.status).toBe("Lead");
+    expect(cArgs.callifiedCampaignId).toBe(42);
+    expect(autoDialEnqueueMock).toHaveBeenCalledWith({
+      tenantId: 7,
+      contactId: 556,
+      campaignId: 42,
+      userId: null,
+    });
+  });
+
+  test("backfills Callified campaign on existing lead when rule matches", async () => {
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => {
+      const key = where?.tenantId_key?.key;
+      if (key === "feature.callified.auto_dial_new_leads.enabled") return { value: "false" };
+      if (key === "feature.callified.auto_campaign_rules") {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: "source", value: "website-form", campaignId: 42 }],
+          }),
+        };
+      }
+      return null;
+    });
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 70,
+      reasons: [],
+    });
+    prisma.tenant.findUnique
+      .mockReset()
+      .mockResolvedValueOnce({ vertical: "generic", callifiedAutoCampaignId: null });
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      id: 557,
+      name: "Existing Lead",
+      email: "ext@example.com",
+      phone: "+919900112234",
+      status: "Lead",
+      source: "website-form",
+      callifiedCampaignId: null,
+      tenantId: 7,
+    });
+    prisma.contact.update.mockResolvedValueOnce({
+      id: 557,
+      name: "Existing Lead",
+      email: "ext@example.com",
+      phone: "+919900112234",
+      status: "Lead",
+      source: "website-form",
+      callifiedCampaignId: 42,
+      tenantId: 7,
+    });
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "Existing Lead",
+      phone: "+919900112234",
+      email: "ext@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 557 },
+      data: expect.objectContaining({ callifiedCampaignId: 42 }),
+    });
+  });
+
+  test("auto-dial is skipped when tenant disables auto-dial new leads", async () => {
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => {
+      const key = where?.tenantId_key?.key;
+      if (key === "feature.callified.auto_dial_new_leads.enabled") return { value: "false" };
+      if (key === "feature.callified.auto_campaign_rules") {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: "source", value: "website-form", campaignId: 42 }],
+          }),
+        };
+      }
+      return null;
+    });
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 70,
+      reasons: [],
+    });
+    prisma.tenant.findUnique
+      .mockReset()
+      .mockResolvedValueOnce({ vertical: "generic", callifiedAutoCampaignId: null });
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({
+      id: 556,
+      name: "External Lead",
+      email: "ext@example.com",
+      phone: "+919900112234",
+      status: "Lead",
+      source: "website-form",
+      aiScore: 70,
+      assignedToId: 11,
+      callifiedCampaignId: 42,
+      tenantId: 7,
+      createdAt: new Date(),
+    });
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "External Lead",
+      phone: "+919900112234",
+      email: "ext@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(201);
+    expect(autoDialEnqueueMock).not.toHaveBeenCalled();
+  });
+  test("custom keys are preserved in response, activity, and full payload storage", async () => {
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 77,
+      reasons: [],
+    });
+    pickAssigneeMock.mockResolvedValueOnce({
+      userId: 12,
+      reason: "matched service keyword",
+    });
+    computeFirstResponseDueAtMock.mockResolvedValueOnce({
+      dueAt: new Date("2026-06-01T11:05:00Z"),
+      tier: "high",
+      minutes: 5,
+    });
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValueOnce([
+      { id: 31, fieldKey: "total_number_of_employees", fieldType: "number" },
+      { id: 32, fieldKey: "select_a_product", fieldType: "text" },
+      { id: 33, fieldKey: "utm_source", fieldType: "text" },
+      { id: 34, fieldKey: "utm_medium", fieldType: "text" },
+      { id: 35, fieldKey: "submit_source", fieldType: "text" },
+    ]);
+    prisma.leadCustomFieldValue.upsert.mockResolvedValue({ id: 1 });
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({
+      id: 888,
+      name: "Neha Kapoor",
+      email: "neha@example.com",
+      phone: "+919877665544",
+      company: "Testing",
+      status: "Lead",
+      source: "website-form",
+      aiScore: 77,
+      assignedToId: 12,
+      firstResponseDueAt: new Date("2026-06-01T11:05:00Z"),
+      tenantId: 7,
+      createdAt: new Date(),
+    });
+
+    const app = makeApp();
+    const res = await request(app)
+      .post("/api/v1/external/leads")
+      .send({
+        name: "Neha Kapoor",
+        phone: "+919877665544",
+        email: "neha@example.com",
+        company: "Testing",
+        source: "website-form",
+        note: "Interested in a consultation",
+        cf_total_number_of_employees: "11",
+        cf_select_a_product: "HRMS",
+        cf_utm_source: "google",
+        cf_utm_medium: "cpc",
+        cf_submit_source: "contact-us",
+        work_number: "",
+        custom_field_one: "any value",
+        custom_field_two: { nested: true },
+        preferredLanguage: "Hindi",
+        campaignCode: "EW-2026",
+        partnerMeta: { landingPage: "hero", branch: "south" },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.company).toBe("Testing");
+    expect(res.body._customFields).toEqual({
+      company: "Testing",
+      cf_total_number_of_employees: "11",
+      cf_select_a_product: "HRMS",
+      cf_utm_source: "google",
+      cf_utm_medium: "cpc",
+      cf_submit_source: "contact-us",
+      work_number: "",
+      custom_field_one: "any value",
+      custom_field_two: { nested: true },
+      preferredLanguage: "Hindi",
+      campaignCode: "EW-2026",
+      partnerMeta: { landingPage: "hero", branch: "south" },
+    });
+    expect(res.body._verdict.score).toBe(77);
+
+    const cArgs = prisma.contact.create.mock.calls[0][0].data;
+    expect(cArgs.company).toBe("Testing");
+    expect(cArgs.externalPayloadJson).toContain("\"work_number\":\"\"");
+    expect(cArgs.externalPayloadJson).toContain("\"custom_field_two\"");
+    expect(cArgs.externalPayloadJson).toContain("\"cf_select_a_product\":\"HRMS\"");
+
+    const aArgs = prisma.activity.create.mock.calls[0][0].data;
+    expect(aArgs.description).toContain("customFields=");
+    expect(aArgs.description).toContain("cf_total_number_of_employees");
+    expect(aArgs.description).toContain("partnerMeta");
+
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 7,
+        fieldKey: {
+          in: [
+            "company",
+            "total_number_of_employees",
+            "select_a_product",
+            "utm_source",
+            "utm_medium",
+            "submit_source",
+            "work_number",
+            "custom_field_one",
+            "custom_field_two",
+            "preferredLanguage",
+            "campaignCode",
+            "partnerMeta",
+          ],
+        },
+      },
+    });
+    expect(prisma.leadCustomFieldValue.upsert).toHaveBeenCalledTimes(5);
+    expect(prisma.leadCustomFieldValue.upsert.mock.calls.map((call) => call[0].create.fieldId)).toEqual([31, 32, 33, 34, 35]);
+  });
+
+  test("junk verdict → status=\"Junk\", pickAssignee SKIPPED, Activity.type=\"JunkFilter\"", async () => {
     classifyLeadMock.mockResolvedValueOnce({
       isJunk: true,
       score: 5,
-      reasons: ['gibberish-name', 'foreign-phone'],
+      reasons: ["gibberish-name", "foreign-phone"],
     });
     computeFirstResponseDueAtMock.mockResolvedValueOnce({
-      dueAt: new Date('2026-06-01T10:30:00Z'),
-      tier: 'low',
+      dueAt: new Date("2026-06-01T10:30:00Z"),
+      tier: "low",
       minutes: 120,
     });
     prisma.contact.findFirst.mockResolvedValueOnce(null);
     prisma.contact.create.mockResolvedValueOnce({
       id: 777,
-      name: 'xyzz qwerty',
+      name: "xyzz qwerty",
       email: null,
-      phone: '+10000000000',
-      status: 'Junk',
-      source: 'callified',
+      phone: "+10000000000",
+      company: null,
+      status: "Junk",
+      source: "callified",
       aiScore: 5,
       assignedToId: null,
       tenantId: 7,
@@ -558,10 +1112,10 @@ describe('POST /api/v1/external/leads — create pipeline', () => {
     });
 
     const app = makeApp();
-    const res = await request(app).post('/api/v1/external/leads').send({
-      name: 'xyzz qwerty',
-      phone: '+10000000000',
-      source: 'callified',
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "xyzz qwerty",
+      phone: "+10000000000",
+      source: "callified",
     });
 
     expect(res.status).toBe(201);
@@ -569,27 +1123,24 @@ describe('POST /api/v1/external/leads — create pipeline', () => {
     expect(res.body._routing.userId).toBeNull();
     expect(res.body._routing.reason).toMatch(/junk/i);
 
-    // pickAssignee MUST NOT have been called when junk
     expect(pickAssigneeMock).not.toHaveBeenCalled();
-
-    // Contact created with status='Junk'
     const cArgs = prisma.contact.create.mock.calls[0][0].data;
-    expect(cArgs.status).toBe('Junk');
+    expect(cArgs.status).toBe("Junk");
     expect(cArgs.assignedToId).toBeNull();
-
-    // Activity created with type='JunkFilter' since reasons[] is non-empty
     expect(prisma.activity.create).toHaveBeenCalledOnce();
     const aArgs = prisma.activity.create.mock.calls[0][0].data;
-    expect(aArgs.type).toBe('JunkFilter');
-    expect(aArgs.description).toContain('junk-filter');
+    expect(aArgs.type).toBe("JunkFilter");
+    expect(aArgs.description).toContain("junk-filter");
+    // Junk lead should not notify admins.
+    expect(notifyAdminsOfNewLeadMock).not.toHaveBeenCalled();
   });
 });
 
-describe('POST /api/v1/external/calls', () => {
-  test('no phone/contactId/callerNumber/calleeNumber → 400', async () => {
+describe("POST /api/v1/external/calls", () => {
+  test("no phone/contactId/callerNumber/calleeNumber → 400", async () => {
     const app = makeApp();
-    const res = await request(app).post('/api/v1/external/calls').send({
-      direction: 'INBOUND',
+    const res = await request(app).post("/api/v1/external/calls").send({
+      direction: "INBOUND",
       durationSec: 30,
     });
 
@@ -598,27 +1149,27 @@ describe('POST /api/v1/external/calls', () => {
     expect(prisma.callLog.create).not.toHaveBeenCalled();
   });
 
-  test('happy path → 201 + CallLog row created with tenantId + direction', async () => {
+  test("happy path → 201 + CallLog row created with tenantId + direction", async () => {
     prisma.callLog.create.mockResolvedValueOnce({
       id: 333,
-      direction: 'INBOUND',
+      direction: "INBOUND",
       duration: 47,
-      status: 'COMPLETED',
+      status: "COMPLETED",
       tenantId: 7,
-      callerNumber: '+919811000001',
+      callerNumber: "+919811000001",
       calleeNumber: null,
-      provider: 'callified-prod',
-      recordingUrl: 'https://callified.test/r/abc.mp3',
+      provider: "callified-prod",
+      recordingUrl: "https://callified.test/r/abc.mp3",
     });
 
     const app = makeApp();
-    const res = await request(app).post('/api/v1/external/calls').send({
-      phone: '+919811000001',
-      direction: 'INBOUND',
-      durationSec: '47',
-      recordingUrl: 'https://callified.test/r/abc.mp3',
-      status: 'completed',
-      providerCallId: 'cf_xyz',
+    const res = await request(app).post("/api/v1/external/calls").send({
+      phone: "+919811000001",
+      direction: "INBOUND",
+      durationSec: "47",
+      recordingUrl: "https://callified.test/r/abc.mp3",
+      status: "completed",
+      providerCallId: "cf_xyz",
     });
 
     expect(res.status).toBe(201);
@@ -626,17 +1177,17 @@ describe('POST /api/v1/external/calls', () => {
 
     const args = prisma.callLog.create.mock.calls[0][0].data;
     expect(args.tenantId).toBe(7);
-    expect(args.direction).toBe('INBOUND');
+    expect(args.direction).toBe("INBOUND");
     expect(args.duration).toBe(47);
-    expect(args.status).toBe('COMPLETED'); // uppercased
-    expect(args.callerNumber).toBe('+919811000001'); // INBOUND copies phone → callerNumber
+    expect(args.status).toBe("COMPLETED"); // uppercased
+    expect(args.callerNumber).toBe("+919811000001"); // INBOUND copies phone → callerNumber
     expect(args.calleeNumber).toBeNull();
     // provider falls back to apiKey.name when unspecified
-    expect(args.provider).toBe('callified-prod');
+    expect(args.provider).toBe("callified-prod");
   });
 });
 
-describe('GET /api/v1/external/patients/lookup — S104 firstName + lastName parity', () => {
+describe("GET /api/v1/external/patients/lookup — S104 firstName + lastName parity", () => {
   // S104 audit summary
   // ──────────────────
   //   The External Partner API (Callified.ai, Globus Phone, AdsGPT) does
@@ -659,25 +1210,25 @@ describe('GET /api/v1/external/patients/lookup — S104 firstName + lastName par
   //   (e) the no-auth gate still applies, (f) MISSING_QUERY when
   //   neither phone nor email supplied.
 
-  test('select includes firstName + lastName (regression pin against S100 drop)', async () => {
+  test("select includes firstName + lastName (regression pin against S100 drop)", async () => {
     prisma.patient.findFirst.mockResolvedValueOnce({
       id: 1001,
-      name: 'Anjali Sharma',
-      firstName: 'Anjali',
-      lastName: 'Sharma',
-      email: 'anjali@example.com',
-      phone: '+919811234567',
-      gender: 'F',
-      dob: new Date('1990-06-15'),
-      source: 'callified',
+      name: "Anjali Sharma",
+      firstName: "Anjali",
+      lastName: "Sharma",
+      email: "anjali@example.com",
+      phone: "+919811234567",
+      gender: "F",
+      dob: new Date("1990-06-15"),
+      source: "callified",
       locationId: 1,
-      createdAt: new Date('2026-06-01T00:00:00Z'),
+      createdAt: new Date("2026-06-01T00:00:00Z"),
     });
     const app = makeApp();
 
     const res = await request(app)
-      .get('/api/v1/external/patients/lookup')
-      .query({ phone: '+919811234567' });
+      .get("/api/v1/external/patients/lookup")
+      .query({ phone: "+919811234567" });
 
     expect(res.status).toBe(200);
 
@@ -685,74 +1236,74 @@ describe('GET /api/v1/external/patients/lookup — S104 firstName + lastName par
     // SDKs see them. This is the regression-pin: if a future refactor
     // drops these from the select, this test catches it.
     const selectArgs = prisma.patient.findFirst.mock.calls[0][0].select;
-    expect(selectArgs).toHaveProperty('firstName', true);
-    expect(selectArgs).toHaveProperty('lastName', true);
-    expect(selectArgs).toHaveProperty('name', true); // canonical stays too
+    expect(selectArgs).toHaveProperty("firstName", true);
+    expect(selectArgs).toHaveProperty("lastName", true);
+    expect(selectArgs).toHaveProperty("name", true); // canonical stays too
   });
 
-  test('returns firstName + lastName when populated (S100 intake flow)', async () => {
+  test("returns firstName + lastName when populated (S100 intake flow)", async () => {
     prisma.patient.findFirst.mockResolvedValueOnce({
       id: 1002,
-      name: 'Priya Iyer',
-      firstName: 'Priya',
-      lastName: 'Iyer',
-      email: 'priya@example.com',
-      phone: '+919900112233',
-      gender: 'F',
+      name: "Priya Iyer",
+      firstName: "Priya",
+      lastName: "Iyer",
+      email: "priya@example.com",
+      phone: "+919900112233",
+      gender: "F",
       dob: null,
-      source: 'web',
+      source: "web",
       locationId: 1,
       createdAt: new Date(),
     });
     const app = makeApp();
 
     const res = await request(app)
-      .get('/api/v1/external/patients/lookup')
-      .query({ phone: '+919900112233' });
+      .get("/api/v1/external/patients/lookup")
+      .query({ phone: "+919900112233" });
 
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(1002);
-    expect(res.body.name).toBe('Priya Iyer');
-    expect(res.body.firstName).toBe('Priya');
-    expect(res.body.lastName).toBe('Iyer');
+    expect(res.body.name).toBe("Priya Iyer");
+    expect(res.body.firstName).toBe("Priya");
+    expect(res.body.lastName).toBe("Iyer");
   });
 
-  test('returns null firstName + null lastName for legacy rows (pre-S100 intake)', async () => {
+  test("returns null firstName + null lastName for legacy rows (pre-S100 intake)", async () => {
     prisma.patient.findFirst.mockResolvedValueOnce({
       id: 1003,
-      name: 'Legacy Patient',
+      name: "Legacy Patient",
       firstName: null,
       lastName: null,
-      email: 'legacy@example.com',
-      phone: '+919811000000',
+      email: "legacy@example.com",
+      phone: "+919811000000",
       gender: null,
       dob: null,
       source: null,
       locationId: null,
-      createdAt: new Date('2024-01-01T00:00:00Z'),
+      createdAt: new Date("2024-01-01T00:00:00Z"),
     });
     const app = makeApp();
 
     const res = await request(app)
-      .get('/api/v1/external/patients/lookup')
-      .query({ email: 'legacy@example.com' });
+      .get("/api/v1/external/patients/lookup")
+      .query({ email: "legacy@example.com" });
 
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(1003);
-    expect(res.body.name).toBe('Legacy Patient');
+    expect(res.body.name).toBe("Legacy Patient");
     expect(res.body.firstName).toBeNull();
     expect(res.body.lastName).toBeNull();
   });
 
-  test('tenant-scoped lookup (no cross-tenant leak)', async () => {
+  test("tenant-scoped lookup (no cross-tenant leak)", async () => {
     prisma.patient.findFirst.mockResolvedValueOnce(null);
     externalAuthState.tenantId = 99; // override default
     externalAuthState.tenant = { ...externalAuthState.tenant, id: 99 };
     const app = makeApp();
 
     const res = await request(app)
-      .get('/api/v1/external/patients/lookup')
-      .query({ phone: '+919811234567' });
+      .get("/api/v1/external/patients/lookup")
+      .query({ phone: "+919811234567" });
 
     expect(res.status).toBe(404); // not found (correctly scoped to tenant 99)
 
@@ -760,26 +1311,26 @@ describe('GET /api/v1/external/patients/lookup — S104 firstName + lastName par
     // from a different tenant.
     const whereArgs = prisma.patient.findFirst.mock.calls[0][0].where;
     expect(whereArgs.tenantId).toBe(99);
-    expect(whereArgs.phone).toEqual({ contains: '9811234567' });
+    expect(whereArgs.phone).toEqual({ contains: "9811234567" });
   });
 
   test('no phone + no email → 400 "phone or email required"', async () => {
     const app = makeApp();
 
-    const res = await request(app).get('/api/v1/external/patients/lookup');
+    const res = await request(app).get("/api/v1/external/patients/lookup");
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/phone or email required/i);
     expect(prisma.patient.findFirst).not.toHaveBeenCalled();
   });
 
-  test('auth gate fires when shim unauthorized → 401', async () => {
+  test("auth gate fires when shim unauthorized → 401", async () => {
     externalAuthState.unauthorize = true;
     const app = makeApp();
 
     const res = await request(app)
-      .get('/api/v1/external/patients/lookup')
-      .query({ phone: '+919811234567' });
+      .get("/api/v1/external/patients/lookup")
+      .query({ phone: "+919811234567" });
 
     expect(res.status).toBe(401);
     expect(res.body.error).toMatch(/X-API-Key/i);
@@ -787,15 +1338,27 @@ describe('GET /api/v1/external/patients/lookup — S104 firstName + lastName par
   });
 });
 
-describe('GET /api/v1/external/services + appointments — catalog shape', () => {
-  test('GET /services → { data, total } with tenantId + isActive filter', async () => {
+describe("GET /api/v1/external/services + appointments — catalog shape", () => {
+  test("GET /services → { data, total } with tenantId + isActive filter", async () => {
     prisma.service.findMany.mockResolvedValueOnce([
-      { id: 1, name: 'HydraFacial', isActive: true, ticketTier: 'high', basePrice: 5000 },
-      { id: 2, name: 'Botox', isActive: true, ticketTier: 'high', basePrice: 12000 },
+      {
+        id: 1,
+        name: "HydraFacial",
+        isActive: true,
+        ticketTier: "high",
+        basePrice: 5000,
+      },
+      {
+        id: 2,
+        name: "Botox",
+        isActive: true,
+        ticketTier: "high",
+        basePrice: 12000,
+      },
     ]);
 
     const app = makeApp();
-    const res = await request(app).get('/api/v1/external/services');
+    const res = await request(app).get("/api/v1/external/services");
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(2);
@@ -806,15 +1369,15 @@ describe('GET /api/v1/external/services + appointments — catalog shape', () =>
     expect(args.where.isActive).toBe(true);
   });
 
-  test('GET /appointments?from=...&to=... → date-range filter applied, returns { data, total }', async () => {
+  test("GET /appointments?from=...&to=... → date-range filter applied, returns { data, total }", async () => {
     prisma.visit.findMany.mockResolvedValueOnce([
-      { id: 50, visitDate: new Date('2026-06-02T10:00:00Z'), status: 'booked' },
+      { id: 50, visitDate: new Date("2026-06-02T10:00:00Z"), status: "booked" },
     ]);
 
     const app = makeApp();
     const res = await request(app)
-      .get('/api/v1/external/appointments')
-      .query({ from: '2026-06-01T00:00:00Z', to: '2026-06-30T23:59:59Z' });
+      .get("/api/v1/external/appointments")
+      .query({ from: "2026-06-01T00:00:00Z", to: "2026-06-30T23:59:59Z" });
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
@@ -822,7 +1385,9 @@ describe('GET /api/v1/external/services + appointments — catalog shape', () =>
 
     const args = prisma.visit.findMany.mock.calls[0][0];
     expect(args.where.tenantId).toBe(7);
-    expect(args.where.visitDate.gte).toEqual(new Date('2026-06-01T00:00:00Z'));
-    expect(args.where.visitDate.lte).toEqual(new Date('2026-06-30T23:59:59Z'));
+    expect(args.where.visitDate.gte).toEqual(new Date("2026-06-01T00:00:00Z"));
+    expect(args.where.visitDate.lte).toEqual(new Date("2026-06-30T23:59:59Z"));
   });
 });
+
+

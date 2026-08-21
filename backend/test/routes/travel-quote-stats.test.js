@@ -65,6 +65,7 @@ prisma.tenant.findUnique = vi.fn().mockResolvedValue({
 });
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   create: vi.fn().mockResolvedValue({ id: 1 }),
@@ -118,6 +119,7 @@ beforeEach(() => {
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);

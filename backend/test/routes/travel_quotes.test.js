@@ -50,11 +50,16 @@ prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   slug: 'test-travel',
 });
 prisma.user = prisma.user || {};
-prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+prisma.user.findUnique = vi.fn().mockResolvedValue({ id: 7, role: 'ADMIN', subBrandAccess: null });
+prisma.user.findFirst = vi.fn().mockResolvedValue(null);
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
+prisma.contact = prisma.contact || {};
+prisma.contact.findMany = vi.fn();
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   create: vi.fn().mockResolvedValue({ id: 1 }),
   findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
 };
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
@@ -71,6 +76,7 @@ prisma.travelDiagnostic = {
 prisma.visaApplication = {
   ...(prisma.visaApplication || {}),
   findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
 };
 
 import express from 'express';
@@ -120,9 +126,23 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
-  prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+  prisma.user.findUnique.mockReset().mockResolvedValue({ id: 7, role: 'ADMIN', subBrandAccess: null });
+  prisma.user.findFirst.mockReset().mockResolvedValue(null);
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
+  prisma.contact.findMany.mockReset().mockImplementation(async ({ where } = {}) => {
+    const ids = Array.isArray(where?.id?.in) ? where.id.in : [];
+    const byId = {
+      5: { id: 5, name: 'Alice Smith' },
+      6: { id: 6, name: 'Bob Jones' },
+      7: { id: 7, name: 'Carol White' },
+      8: { id: 8, name: 'Dan Brown' },
+      99: { id: 99, name: 'RFU Client' },
+    };
+    return ids.map((id) => byId[id]).filter(Boolean);
+  });
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
+  prisma.auditLog.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnostic.count.mockReset().mockResolvedValue(1);
   prisma.visaApplication.findFirst.mockReset().mockResolvedValue(null);
 });
@@ -228,6 +248,52 @@ describe('POST /api/travel/quotes', () => {
     expect(res.body.error).toMatch(/future|today/i);
     expect(prisma.travelQuote.create).not.toHaveBeenCalled();
   });
+
+  test('accepts and persists tripDate (Issue 11)', async () => {
+    const tripDateIso = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+    prisma.travelQuote.create.mockResolvedValue({
+      id: 44, tenantId: 1, subBrand: 'tmc', contactId: 99,
+      status: 'Draft', totalAmount: '45000.00', currency: 'INR',
+      validUntil: tomorrow, tripDate: new Date(tripDateIso),
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/quotes')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        totalAmount: '45000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        validUntil: tomorrowIso,
+        tripDate: tripDateIso,
+      });
+    expect(res.status).toBe(201);
+    expect(prisma.travelQuote.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tripDate: new Date(tripDateIso),
+        }),
+      }),
+    );
+  });
+
+  test('rejects invalid tripDate with 400 INVALID_TRIP_DATE', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/quotes')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        totalAmount: '45000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        validUntil: tomorrowIso,
+        tripDate: 'not-a-date',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_TRIP_DATE' });
+    expect(prisma.travelQuote.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/travel/quotes', () => {
@@ -246,13 +312,103 @@ describe('GET /api/travel/quotes', () => {
     expect(res.body.quotes).toHaveLength(1);
     expect(res.body.quotes[0]).toMatchObject({ contactId: 5, contact: { id: 5, name: 'Alice Smith' } });
     // The where clause MUST include tenantId from req.user.tenantId and the
-    // full-shape path MUST join the contact name.
+    // list query now hydrates contact/assignee rows separately so the
+    // frontend keeps seeing the same response shape without the brittle
+    // relation join.
     expect(prisma.travelQuote.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ tenantId: 1 }),
-        include: { contact: { select: { id: true, name: true } } },
+        select: expect.objectContaining({
+          id: true,
+          tenantId: true,
+          subBrand: true,
+          contactId: true,
+          status: true,
+          totalAmount: true,
+          currency: true,
+          assignedToUserId: true,
+          validUntil: true,
+          createdAt: true,
+        }),
       }),
     );
+    expect(prisma.contact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 1 }),
+      }),
+    );
+  });
+
+
+  test('USER sees only quotes they created when creator audit exists', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 11, role: 'USER', subBrandAccess: JSON.stringify(['rfu']) });
+    prisma.travelQuote.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, subBrand: 'rfu', contactId: 5, status: 'Draft', totalAmount: '100.00', currency: 'INR', validUntil: null },
+      { id: 2, tenantId: 1, subBrand: 'rfu', contactId: 6, status: 'Sent', totalAmount: '200.00', currency: 'INR', validUntil: null },
+    ]);
+    prisma.auditLog.findMany.mockResolvedValue([
+      { entityId: 1, userId: 11, createdAt: new Date('2026-01-01T00:00:00Z') },
+      { entityId: 2, userId: 99, createdAt: new Date('2026-01-01T00:00:01Z') },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes?subBrand=rfu')
+      .set('Authorization', `Bearer ${tokenFor('USER', { userId: 11 })}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.quotes.map((q) => q.id)).toEqual([1]);
+  });
+
+
+  test('USER can see an admin-created quote after it is assigned to them', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 11, role: 'USER', subBrandAccess: JSON.stringify(['rfu']) });
+    prisma.travelQuote.findMany.mockResolvedValue([
+      { id: 3, tenantId: 1, subBrand: 'rfu', assignedToUserId: 11, contactId: 5, status: 'Draft', totalAmount: '100.00', currency: 'INR', validUntil: null },
+      { id: 4, tenantId: 1, subBrand: 'rfu', assignedToUserId: null, contactId: 6, status: 'Draft', totalAmount: '200.00', currency: 'INR', validUntil: null },
+    ]);
+    prisma.auditLog.findMany.mockResolvedValue([
+      { entityId: 3, userId: 1, createdAt: new Date('2026-01-01T00:00:00Z') },
+      { entityId: 4, userId: 1, createdAt: new Date('2026-01-01T00:00:01Z') },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes?subBrand=rfu')
+      .set('Authorization', `Bearer ${tokenFor('USER', { userId: 11 })}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.quotes.map((q) => q.id)).toEqual([3]);
+  });
+
+  test('MANAGER sees team quotes in managed sub-brand but not admin-created quotes', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 20, role: 'MANAGER', subBrandAccess: JSON.stringify(['rfu']) });
+    prisma.user.findMany.mockResolvedValue([
+      { id: 20, role: 'MANAGER', subBrandAccess: JSON.stringify(['rfu']) },
+      { id: 21, role: 'USER', subBrandAccess: JSON.stringify(['rfu']) },
+      { id: 22, role: 'USER', subBrandAccess: JSON.stringify(['tmc']) },
+      { id: 1, role: 'ADMIN', subBrandAccess: null },
+    ]);
+    prisma.travelQuote.findMany.mockResolvedValue([
+      { id: 10, tenantId: 1, subBrand: 'rfu', contactId: 5, status: 'Draft', totalAmount: '100.00', currency: 'INR', validUntil: null },
+      { id: 11, tenantId: 1, subBrand: 'rfu', contactId: 6, status: 'Sent', totalAmount: '200.00', currency: 'INR', validUntil: null },
+      { id: 12, tenantId: 1, subBrand: 'rfu', contactId: 7, status: 'Sent', totalAmount: '300.00', currency: 'INR', validUntil: null },
+      { id: 13, tenantId: 1, subBrand: 'rfu', contactId: 8, status: 'Sent', totalAmount: '400.00', currency: 'INR', validUntil: null },
+    ]);
+    prisma.auditLog.findMany.mockResolvedValue([
+      { entityId: 10, userId: 20, createdAt: new Date('2026-01-01T00:00:00Z') },
+      { entityId: 11, userId: 21, createdAt: new Date('2026-01-01T00:00:01Z') },
+      { entityId: 12, userId: 1, createdAt: new Date('2026-01-01T00:00:02Z') },
+      { entityId: 13, userId: 22, createdAt: new Date('2026-01-01T00:00:03Z') },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes?subBrand=rfu')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER', { userId: 20 })}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.quotes.map((q) => q.id)).toEqual([10, 11]);
   });
 
   test('?status filter narrows the where clause', async () => {
@@ -283,6 +439,60 @@ describe('GET /api/travel/quotes/:id', () => {
         where: expect.objectContaining({ id: 9999, tenantId: 1 }),
       }),
     );
+  });
+
+  test('USER cannot fetch a quote created by another user', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 11, role: 'USER', subBrandAccess: JSON.stringify(['rfu']) });
+    prisma.travelQuote.findFirst.mockResolvedValue({
+      id: 2, tenantId: 1, subBrand: 'rfu', contactId: 6,
+      status: 'Sent', totalAmount: '200.00', currency: 'INR',
+    });
+    prisma.auditLog.findMany.mockResolvedValue([
+      { entityId: 2, userId: 99, createdAt: new Date('2026-01-01T00:00:00Z') },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/2')
+      .set('Authorization', `Bearer ${tokenFor('USER', { userId: 11 })}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+
+describe('PUT /api/travel/quotes/:id/assignment', () => {
+  test('assigns a visible quote to an active non-admin user in the same sub-brand', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue({
+      id: 5, tenantId: 1, subBrand: 'rfu', assignedToUserId: null, contactId: 99,
+      status: 'Draft', totalAmount: '100.00', currency: 'INR',
+    });
+    prisma.user.findFirst.mockResolvedValue({
+      id: 21, name: 'RFU Advisor', email: 'rfu@test.local', role: 'USER', subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelQuote.update.mockResolvedValue({
+      id: 5, tenantId: 1, subBrand: 'rfu', assignedToUserId: 21,
+      assignedToUser: { id: 21, name: 'RFU Advisor', email: 'rfu@test.local' },
+    });
+
+    const res = await request(makeApp())
+      .put('/api/travel/quotes/5/assignment')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ assignedToUserId: 21 });
+
+    expect(res.status).toBe(200);
+    expect(prisma.travelQuote.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 5 },
+      data: { assignedToUserId: 21 },
+    }));
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        entity: 'TravelQuote',
+        action: 'TRAVEL_QUOTE_ASSIGNED',
+        entityId: 5,
+      }),
+    }));
+    expect(res.body.quote).toMatchObject({ id: 5, assignedToUserId: 21 });
   });
 });
 

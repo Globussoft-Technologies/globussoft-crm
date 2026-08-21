@@ -74,6 +74,14 @@ function renderEstimates() {
   );
 }
 
+function openCreateEstimateForm() {
+  fireEvent.click(screen.getAllByRole('button', { name: /^Create Estimate$/i })[0]);
+}
+
+function getCreateEstimateSubmitButton() {
+  return screen.getAllByRole('button', { name: /^Create Estimate$/i }).at(-1);
+}
+
 const sampleEstimates = [
   {
     id: 1,
@@ -137,16 +145,19 @@ describe('<Estimates /> — page surface', () => {
     fetchApiMock.mockImplementation(defaultFetchMock);
   });
 
-  it('renders the heading + Create Estimate form + Estimate Ledger', async () => {
+  it('renders the heading + Create Estimate action + Estimate Ledger', async () => {
     renderEstimates();
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /^Estimates$/i })).toBeInTheDocument();
     });
-    // "Create Estimate" appears as both the form-panel heading AND the
-    // submit button label, so use getAllByText with length >= 2.
-    expect(screen.getAllByText(/Create Estimate/i).length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByLabelText(/Estimate title/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Estimate Ledger/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create Estimate/i })).toBeInTheDocument();
+
+    openCreateEstimateForm();
+
+    expect(screen.getByLabelText(/Estimate title/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Create Estimate/i).length).toBeGreaterThanOrEqual(2);
   });
 
   it('renders one row per estimate with estimateNum, title, contact, total, and status', async () => {
@@ -207,6 +218,7 @@ describe('<Estimates /> — page surface', () => {
   it('submitting the create form POSTs /api/estimates with title and lineItems', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/estimates' && opts?.method === 'POST') {
@@ -230,7 +242,7 @@ describe('<Estimates /> — page surface', () => {
       target: { value: '100' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Create Estimate/i }));
+    fireEvent.click(getCreateEstimateSubmitButton());
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -251,6 +263,7 @@ describe('<Estimates /> — page surface', () => {
   it('out-of-range discount disables submit and surfaces an "out of range" message', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
 
     // Set a discount above the cap (100).
     fireEvent.change(screen.getByLabelText(/Line item 1 discount percent/i), {
@@ -263,7 +276,7 @@ describe('<Estimates /> — page surface', () => {
     });
 
     // The submit button is disabled.
-    const submitBtn = screen.getByRole('button', { name: /Create Estimate/i });
+    const submitBtn = getCreateEstimateSubmitButton();
     expect(submitBtn).toBeDisabled();
   });
 
@@ -333,6 +346,7 @@ describe('<Estimates /> — page surface', () => {
   it('"+ Add Line Item" adds a second line; X button removes it', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
 
     // Initially there is one line item (index 1).
     expect(screen.getByLabelText(/Line item 1 description/i)).toBeInTheDocument();
@@ -355,6 +369,7 @@ describe('<Estimates /> — page surface', () => {
   it('removing the last remaining line item is a no-op (keeps at least one)', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
 
     // Click remove on line 1 — should NOT remove it, since prev.length <= 1.
     fireEvent.click(screen.getByRole('button', { name: /Remove line item 1/i }));
@@ -366,6 +381,7 @@ describe('<Estimates /> — page surface', () => {
   it('Save: discount is folded into unitPrice before submit (10% off ₹100 → ₹90)', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/estimates' && opts?.method === 'POST') {
@@ -390,7 +406,7 @@ describe('<Estimates /> — page surface', () => {
       target: { value: '10' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Create Estimate/i }));
+    fireEvent.click(getCreateEstimateSubmitButton());
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -408,6 +424,7 @@ describe('<Estimates /> — page surface', () => {
   it('Save: contactId/dealId/validUntil/notes pass through the body when set; omitted otherwise', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/estimates' && opts?.method === 'POST') {
@@ -422,7 +439,7 @@ describe('<Estimates /> — page surface', () => {
     fireEvent.change(screen.getByLabelText(/Line item 1 description/i), {
       target: { value: 'Item' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Create Estimate/i }));
+    fireEvent.click(getCreateEstimateSubmitButton());
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -442,6 +459,7 @@ describe('<Estimates /> — page surface', () => {
   it('Save: after a successful POST the form + line items reset to initial state', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
 
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
@@ -457,7 +475,7 @@ describe('<Estimates /> — page surface', () => {
       target: { value: 'X' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Create Estimate/i }));
+    fireEvent.click(getCreateEstimateSubmitButton());
 
     await waitFor(() => {
       // After reset, the title input is empty again.
@@ -470,6 +488,7 @@ describe('<Estimates /> — page surface', () => {
   it('Save: hasInvalidLine short-circuits POST and surfaces a range-error toast', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation(defaultFetchMock);
 
@@ -484,7 +503,7 @@ describe('<Estimates /> — page surface', () => {
     });
 
     // Button is disabled — click should NOT POST.
-    const submitBtn = screen.getByRole('button', { name: /Create Estimate/i });
+    const submitBtn = getCreateEstimateSubmitButton();
     expect(submitBtn).toBeDisabled();
     fireEvent.click(submitBtn);
 
@@ -500,6 +519,7 @@ describe('<Estimates /> — page surface', () => {
   it('Grand Total reflects qty * price * (1 - disc%) when valid', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
 
     fireEvent.change(screen.getByLabelText(/Line item 1 quantity/i), {
       target: { value: '4' },
@@ -523,6 +543,7 @@ describe('<Estimates /> — page surface', () => {
   it('Contact <select> is populated with options for each /api/contacts entry', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
 
     // The contact select has 2 options + the placeholder.
     const contactSelect = screen.getByLabelText('Contact');
@@ -537,6 +558,7 @@ describe('<Estimates /> — page surface', () => {
   it('Deal <select> is populated with options for each /api/deals entry', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
+    openCreateEstimateForm();
 
     const dealSelect = screen.getByLabelText(/Associated deal/i);
     expect(dealSelect.tagName).toBe('SELECT');

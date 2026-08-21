@@ -31,6 +31,7 @@ const express = require("express");
 const multer = require("multer");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { writeAudit } = require("../lib/audit");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const {
@@ -39,6 +40,13 @@ const {
   canAccessSubBrand,
 } = require("../middleware/travelGuards");
 const { uploadImage } = require("../services/s3Service");
+const {
+  serializeRows,
+  parseCsv,
+  buildErrorReport,
+  setCsvDownloadHeaders,
+} = require("../lib/csvHelpers");
+const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -50,6 +58,137 @@ const upload = multer({
   },
 });
 
+router.use(express.text({ type: ["text/csv", "text/plain"], limit: "5mb" }));
+
+const MAX_IMPORT_ROWS = 5000;
+const VALID_SUB_BRANDS = new Set(["tmc", "rfu", "travelstall", "visasure"]);
+const TEMPLATE_HEADERS = [
+  "destinationName",
+  "name",
+  "category",
+  "subBrand",
+  "latitude",
+  "longitude",
+  "durationMinutes",
+  "priceReferenceMinor",
+  "currency",
+  "description",
+  "imageUrl",
+  "notes",
+  "isActive",
+];
+const TEMPLATE_ROWS = [
+  {
+    destinationName: "# Required",
+    name: "# Required",
+    category: "Optional: monument, religious, museum, nature, adventure, food, shopping",
+    subBrand: "Optional: tmc, rfu, travelstall, visasure",
+    latitude: "Optional decimal, e.g. 21.422500",
+    longitude: "Optional decimal, e.g. 39.826200",
+    durationMinutes: "Optional integer, e.g. 90",
+    priceReferenceMinor: "Optional integer, e.g. 50000 for INR 500.00",
+    currency: "Optional 3-letter ISO, e.g. INR",
+    description: "Optional description",
+    imageUrl: "Optional public image URL",
+    notes: "Optional internal notes",
+    isActive: "Optional true/false (defaults true)",
+  },
+  {
+    destinationName: "Makkah",
+    name: "Masjid al-Haram",
+    category: "religious",
+    subBrand: "rfu",
+    latitude: "21.422500",
+    longitude: "39.826200",
+    durationMinutes: "120",
+    priceReferenceMinor: "0",
+    currency: "SAR",
+    description: "The holiest mosque in Islam.",
+    imageUrl: "",
+    notes: "Tenant-wide rows can leave subBrand blank.",
+    isActive: "true",
+  },
+];
+
+function isXlsxUpload(file) {
+  if (!file) return false;
+  const name = String(file.originalname || "").toLowerCase();
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")) return true;
+  const mt = String(file.mimetype || "").toLowerCase();
+  return (
+    mt === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mt === "application/vnd.ms-excel"
+  );
+}
+
+function readUploadedRows(req) {
+  if (req.file?.buffer?.length > 0) {
+    if (isXlsxUpload(req.file)) return parseXlsxBuffer(req.file.buffer);
+    return parseCsv(req.file.buffer.toString("utf8"));
+  }
+  if (typeof req.body === "string" && req.body.length > 0) {
+    return parseCsv(req.body);
+  }
+  if (req.body && typeof req.body.csv === "string" && req.body.csv.length > 0) {
+    return parseCsv(req.body.csv);
+  }
+  return null;
+}
+
+function parseOptionalInteger(value, fieldName) {
+  if (value == null || value === "") return null;
+  const num = Number(value);
+  if (!Number.isFinite(num) || !Number.isInteger(num) || num < 0) {
+    throw new Error(`${fieldName} must be a non-negative integer`);
+  }
+  return num;
+}
+
+function parseOptionalCoordinate(value, fieldName, min, max) {
+  if (value == null || value === "") return null;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < min || num > max) {
+    throw new Error(`${fieldName} must be between ${min} and ${max}`);
+  }
+  return Math.round(num * 1e6) / 1e6;
+}
+
+function parseOptionalBoolean(value) {
+  if (value == null || value === "") return true;
+  const raw = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "y"].includes(raw)) return true;
+  if (["false", "0", "no", "n"].includes(raw)) return false;
+  throw new Error("isActive must be true or false");
+}
+
+function normalizeOptionalString(value) {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed ? trimmed : null;
+}
+
+function validateSubBrandForImport(raw, allowed) {
+  const subBrand = normalizeOptionalString(raw);
+  if (!subBrand) return null;
+  if (!VALID_SUB_BRANDS.has(subBrand)) {
+    throw new Error(`invalid subBrand: ${subBrand}`);
+  }
+  if (!canAccessSubBrand(allowed, subBrand)) {
+    throw new Error(`sub-brand access denied: ${subBrand}`);
+  }
+  return subBrand;
+}
+
+function writeImportAudit(req, summary) {
+  return writeAudit(
+    "TravelSightseeing",
+    "CSV_IMPORT",
+    null,
+    req.user.userId,
+    req.travelTenant.id,
+    { ...summary, source: "csv" },
+  );
+}
 // Whitelist of fields a caller may set on POST / PATCH. tenantId / id /
 // createdAt / updatedAt are intentionally absent (also stripped by the
 // global stripDangerous middleware, but defence-in-depth at the route).
@@ -58,6 +197,8 @@ const MUTABLE_FIELDS = [
   "name",
   "description",
   "imageUrl",
+  "latitude",
+  "longitude",
   "durationMinutes",
   "priceReferenceMinor",
   "currency",
@@ -85,6 +226,189 @@ function validateCurrency(currency) {
   }
   return currency;
 }
+
+router.get(
+  "/import-template",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const format = String(req.query.format || "csv").toLowerCase();
+      if (format !== "csv" && format !== "xlsx") {
+        return res.status(400).json({
+          error: "format must be csv or xlsx",
+          code: "INVALID_FORMAT",
+        });
+      }
+
+      if (format === "xlsx") {
+        const buf = toXlsxBuffer(
+          TEMPLATE_HEADERS,
+          TEMPLATE_ROWS,
+          "Sightseeing Template",
+        );
+        res.setHeader(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="travel-sightseeing-template.xlsx"',
+        );
+        return res.send(buf);
+      }
+
+      const csv = serializeRows(
+        TEMPLATE_HEADERS.map((header) => ({ key: header, header })),
+        TEMPLATE_ROWS,
+      );
+      setCsvDownloadHeaders(res, "travel-sightseeing-template.csv");
+      return res.send(csv);
+    } catch (err) {
+      console.error("[sightseeing] import-template error:", err.message);
+      return res.status(500).json({
+        error: "Failed to download sightseeing template",
+        code: "SIGHTSEEING_TEMPLATE_FAILED",
+      });
+    }
+  },
+);
+
+router.post(
+  "/import.csv",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("sightseeing", "write"),
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const parsed = readUploadedRows(req);
+      if (!parsed) {
+        return res.status(400).json({
+          error: "No CSV/Excel body or file uploaded",
+          code: "NO_CSV",
+        });
+      }
+      const { rows } = parsed;
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
+      }
+      if (rows.length > MAX_IMPORT_ROWS) {
+        return res.status(413).json({
+          error: `Too many rows. Max ${MAX_IMPORT_ROWS}`,
+          code: "TOO_MANY_ROWS",
+        });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      let imported = 0;
+      let updated = 0;
+      const errors = [];
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNumber = i + 2;
+        try {
+          const destinationName = normalizeOptionalString(row.destinationName);
+          const name = normalizeOptionalString(row.name);
+          if (
+            String(row.destinationName || "").trim().startsWith("#") ||
+            String(row.name || "").trim().startsWith("#")
+          ) {
+            continue;
+          }
+          if (!destinationName || !name) {
+            errors.push({
+              rowNumber,
+              reason: "missing destinationName or name",
+            });
+            continue;
+          }
+
+          const subBrand = validateSubBrandForImport(row.subBrand, allowed);
+          const currency = normalizeOptionalString(row.currency)?.toUpperCase() || null;
+          validateCurrency(currency);
+
+          const data = {
+            destinationName,
+            name,
+            category: normalizeOptionalString(row.category),
+            subBrand,
+            latitude: parseOptionalCoordinate(row.latitude, "latitude", -90, 90),
+            longitude: parseOptionalCoordinate(row.longitude, "longitude", -180, 180),
+            durationMinutes: parseOptionalInteger(
+              row.durationMinutes,
+              "durationMinutes",
+            ),
+            priceReferenceMinor: parseOptionalInteger(
+              row.priceReferenceMinor,
+              "priceReferenceMinor",
+            ),
+            currency,
+            description: normalizeOptionalString(row.description),
+            imageUrl: normalizeOptionalString(row.imageUrl),
+            notes: normalizeOptionalString(row.notes),
+            isActive: parseOptionalBoolean(row.isActive),
+          };
+
+          const existing = await prisma.travelSightseeing.findFirst({
+            where: {
+              tenantId: req.travelTenant.id,
+              destinationName,
+              name,
+              subBrand,
+            },
+            orderBy: { id: "asc" },
+          });
+
+          if (existing) {
+            await prisma.travelSightseeing.update({
+              where: { id: existing.id },
+              data,
+            });
+            updated += 1;
+          } else {
+            await prisma.travelSightseeing.create({
+              data: { tenantId: req.travelTenant.id, ...data },
+            });
+            imported += 1;
+          }
+        } catch (rowErr) {
+          errors.push({ rowNumber, reason: rowErr.message });
+        }
+      }
+
+      await writeImportAudit(req, {
+        rowCount: rows.length,
+        imported,
+        updated,
+        errorCount: errors.length,
+      });
+
+      if (req.query.errorReport === "csv" && errors.length > 0) {
+        setCsvDownloadHeaders(res, "travel-sightseeing-errors.csv");
+        return res.send(buildErrorReport(errors));
+      }
+
+      return res.json({
+        total: rows.length,
+        imported,
+        updated,
+        skipped: errors.length,
+        errors,
+      });
+    } catch (err) {
+      if (err.status) {
+        return res.status(err.status).json({ error: err.message, code: err.code });
+      }
+      console.error("[sightseeing] import error:", err.message);
+      return res.status(500).json({
+        error: "Failed to import sightseeing entries",
+        code: "SIGHTSEEING_IMPORT_FAILED",
+      });
+    }
+  },
+);
 
 // POST /api/travel/sightseeing/upload-image — S3 image upload for POI photos.
 // MUST be declared before /:id so Express matches the literal path first.
@@ -121,15 +445,28 @@ router.post(
 router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const destinationName = String(req.query.destinationName || "").trim();
+    const q = String(req.query.q || "").trim();
 
-    if (req.query.destinationName) {
-      where.destinationName = String(req.query.destinationName);
+    if (destinationName) {
+      where.destinationName = { contains: destinationName };
     }
     if (req.query.category) {
       where.category = String(req.query.category);
     }
     if (req.query.isActive !== undefined) {
       where.isActive = String(req.query.isActive) === "true";
+    }
+    if (q) {
+      where.AND = [
+        {
+          OR: [
+            { name: { contains: q } },
+            { description: { contains: q } },
+            { notes: { contains: q } },
+          ],
+        },
+      ];
     }
 
     // Clamp pagination: limit ∈ [1, 200]; offset ≥ 0.
@@ -145,6 +482,7 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
     if (allowed instanceof Set && allowed.size === 0) {
       return res.json({ items: [], total: 0, limit, offset });
     }
+    const includeTenantWide = String(req.query.includeTenantWide || "") === "true";
     if (allowed instanceof Set) {
       if (req.query.subBrand) {
         if (!canAccessSubBrand(allowed, String(req.query.subBrand))) {
@@ -153,7 +491,14 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
             code: "FORBIDDEN_SUB_BRAND",
           });
         }
-        where.subBrand = String(req.query.subBrand);
+        if (includeTenantWide) {
+          where.OR = [
+            { subBrand: null },
+            { subBrand: String(req.query.subBrand) },
+          ];
+        } else {
+          where.subBrand = String(req.query.subBrand);
+        }
       } else {
         where.OR = [
           { subBrand: null },
@@ -161,13 +506,22 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
         ];
       }
     } else if (req.query.subBrand) {
-      where.subBrand = String(req.query.subBrand);
+      if (includeTenantWide) {
+        where.OR = [
+          { subBrand: null },
+          { subBrand: String(req.query.subBrand) },
+        ];
+      } else {
+        where.subBrand = String(req.query.subBrand);
+      }
     }
 
     const [items, total] = await Promise.all([
       prisma.travelSightseeing.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy: q
+          ? [{ name: "asc" }]
+          : [{ createdAt: "desc" }],
         take: limit,
         skip: offset,
       }),
@@ -228,6 +582,14 @@ router.post(
           name: body.name,
           description: body.description ?? null,
           imageUrl: body.imageUrl ?? null,
+          latitude:
+            body.latitude != null
+              ? parseOptionalCoordinate(body.latitude, "latitude", -90, 90)
+              : null,
+          longitude:
+            body.longitude != null
+              ? parseOptionalCoordinate(body.longitude, "longitude", -180, 180)
+              : null,
           durationMinutes:
             body.durationMinutes != null ? Number(body.durationMinutes) : null,
           priceReferenceMinor:
@@ -1066,6 +1428,18 @@ router.patch(
 
       // Coerce numeric fields when they're present.
       const data = { ...body };
+      if (data.latitude !== undefined) {
+        data.latitude =
+          data.latitude == null || data.latitude === ""
+            ? null
+            : parseOptionalCoordinate(data.latitude, "latitude", -90, 90);
+      }
+      if (data.longitude !== undefined) {
+        data.longitude =
+          data.longitude == null || data.longitude === ""
+            ? null
+            : parseOptionalCoordinate(data.longitude, "longitude", -180, 180);
+      }
       if (data.durationMinutes !== undefined && data.durationMinutes !== null) {
         data.durationMinutes = Number(data.durationMinutes);
       }

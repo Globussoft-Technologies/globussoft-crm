@@ -1,0 +1,406 @@
+<!doctype html>
+
+<html lang="en">
+
+<head>
+
+  <meta charset="utf-8" />
+
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+
+  <title>Web Form</title>
+
+  <style>
+
+    *,*::before,*::after{box-sizing:border-box}
+
+    html,body{margin:0;padding:0;background:#fff;color:#111827;font-family:var(--gbs-font,Inter,system-ui,sans-serif)}
+
+    body{padding:16px}
+
+    .wrap{max-width:720px;margin:0 auto}
+
+    .panel{background:var(--gbs-form,#fff);border:1px solid rgba(148,163,184,.25);border-radius:18px;padding:24px;box-shadow:0 16px 48px rgba(15,23,42,.08)}
+
+    .logo{max-height:52px;max-width:220px;object-fit:contain;display:block;margin-bottom:12px}
+
+    h1{margin:0 0 8px;color:var(--gbs-title,#000);font-size:1.6rem;line-height:1.2}
+
+    p.desc{margin:0 0 18px;color:var(--gbs-text,#111827);opacity:.9;line-height:1.6}
+
+    .field{margin-bottom:14px}
+
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+
+    .half{grid-column:span 1}
+
+    .full{grid-column:1/-1}
+
+    label{display:block;font-size:.82rem;color:var(--gbs-label,#666);font-weight:600;margin-bottom:6px}
+
+    input,select,textarea{width:100%;border:1px solid rgba(148,163,184,.35);border-radius:10px;padding:.72rem .8rem;font:inherit;background:#fff;color:#111827}
+
+    textarea{min-height:104px;resize:vertical}
+
+    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--gbs-accent,#12344D);box-shadow:0 0 0 3px rgba(18,52,77,.12)}
+
+    .check{display:inline-flex;align-items:flex-start;gap:8px;color:var(--gbs-text,#111827);font-size:.95rem;cursor:pointer;text-align:left;margin-bottom:0;width:fit-content;max-width:100%}
+
+    .check input{flex-shrink:0;width:auto;margin-top:2px}
+
+    .choices{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+
+    .choices .check span{line-height:1.35}
+
+    .optin a{color:var(--gbs-accent,#12344D);text-decoration:underline}
+
+    .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
+
+    button{border:0;border-radius:10px;padding:.8rem 1rem;font:inherit;font-weight:700;cursor:pointer}
+
+    .primary{background:var(--gbs-button,#12344D);color:#fff;min-width:140px}
+
+    .note{margin-top:14px;font-size:.82rem;color:var(--gbs-text,#111827);opacity:.75}
+
+    .note a{color:inherit;text-decoration:none}
+
+    .note a:hover,.note a:focus-visible{text-decoration:underline}
+
+    .error,.success{border-radius:12px;padding:12px 14px;margin-bottom:14px}
+
+    .error{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+
+    .success{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+
+    .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:8px}
+
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    @media (max-width:640px){body{padding:12px}.panel{padding:18px}.grid{grid-template-columns:1fr}.half,.full{grid-column:1/-1}}
+
+  </style>
+
+</head>
+
+<body>
+
+  <div class="wrap">
+
+    <div id="app"></div>
+
+  </div>
+
+  <script>
+
+    (function(){
+
+      var params = new URLSearchParams(location.search);
+
+      var slug = params.get('slug') || '';
+
+      var apiBase = (params.get('api') || location.origin).replace(/\/+$/,'');
+
+      var root = document.getElementById('app');
+
+      var formData = null;
+
+      var busy = false;
+
+      var resizeTimer = null;
+
+
+
+      function esc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g,function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+
+      function getFieldOptions(field){
+        var raw = Array.isArray(field && field.options) ? field.options.slice() : [];
+        if (!raw.length && field && typeof field.optionsText === 'string') raw = field.optionsText.split(',');
+        return raw.map(function(v){ return String(v == null ? '' : v).trim(); }).filter(Boolean);
+      }
+
+      function postSize(){ try{ parent.postMessage({ source:'gbs-web-form', type:'size', height: document.body.scrollHeight }, '*'); }catch(e){} }
+
+      function scheduleSize(){ clearTimeout(resizeTimer); resizeTimer = setTimeout(postSize, 20); }
+
+      if (typeof ResizeObserver !== 'undefined') { new ResizeObserver(scheduleSize).observe(document.body); }
+
+
+
+      function styleVars(style){
+
+        style = style || {};
+
+        return [
+
+          '--gbs-font:' + (style.fontFamily || 'Inter, system-ui, sans-serif'),
+
+          '--gbs-bg:' + (style.backgroundColor || '#EBEFF3'),
+
+          '--gbs-form:' + (style.formColor || '#FFFFFF'),
+
+          '--gbs-title:' + (style.titleColor || '#000000'),
+
+          '--gbs-text:' + (style.textColor || '#111827'),
+
+          '--gbs-label:' + (style.fieldLabelColor || '#666666'),
+
+          '--gbs-button:' + (style.buttonColor || '#12344D'),
+
+          '--gbs-accent:' + (style.accentColor || '#12344D'),
+
+        ].join(';');
+
+      }
+
+      function fieldHtml(field){
+
+        var name = esc(field.sourceKey || field.id || 'field');
+
+        if (field.hidden) {
+
+          var hiddenValue = esc(field.defaultValue || '');
+
+          return '<input type="hidden" name="' + name + '" value="' + hiddenValue + '" />';
+
+        }
+
+        var required = field.required ? 'required' : '';
+
+        var requiredMark = field.required ? ' <span class="required-star" aria-hidden="true">*</span>' : '';
+
+        var widthClass = field.width === 'half' ? 'half' : 'full';
+
+        var label = esc(field.label || 'Field');
+
+        var help = field.helpText ? '<div class="note" style="margin-top:6px">' + esc(field.helpText) + '</div>' : '';
+
+        var placeholder = esc(field.placeholder || '');
+
+        if (field.fieldType === 'textarea') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><textarea id="f-' + name + '" name="' + name + '" ' + required + ' placeholder="' + placeholder + '"></textarea>' + help + '</div>';
+
+        if (field.fieldType === 'number') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="number" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
+
+        if (field.fieldType === 'date') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="date" name="' + name + '" ' + required + ' />' + help + '</div>';
+
+        if (field.fieldType === 'url') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="url" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
+
+        if (field.fieldType === 'checkbox') return '<div class="field ' + widthClass + '"><label class="check"><input type="checkbox" name="' + name + '" value="true" ' + required + ' /><span>' + label + requiredMark + '</span></label>' + help + '</div>';
+
+        if (field.fieldType === 'dropdown') {
+
+          var opts = getFieldOptions(field);
+
+          return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><select id="f-' + name + '" name="' + name + '" ' + required + '><option value="">Select one</option>' + opts.map(function(o){ return '<option value="' + esc(o) + '">' + esc(o) + '</option>'; }).join('') + '</select>' + help + '</div>';
+
+        }
+
+        if (field.fieldType === 'radio') {
+
+          var ropts = getFieldOptions(field);
+
+          return '<div class="field ' + widthClass + '"><label>' + label + requiredMark + '</label><div class="choices">' + ropts.map(function(o, i){ var id = 'r-' + name + '-' + i; return '<label class="check" for="' + id + '"><input id="' + id + '" type="radio" name="' + name + '" value="' + esc(o) + '" ' + required + ' /><span>' + esc(o) + '</span></label>'; }).join('') + '</div>' + help + '</div>';
+
+        }
+
+        if (field.fieldType === 'multiselect') {
+
+          var mopts = getFieldOptions(field);
+
+          return '<div class="field ' + widthClass + '"><label>' + label + requiredMark + '</label><div class="choices">' + mopts.map(function(o, i){ var id = 'm-' + name + '-' + i; return '<label class="check" for="' + id + '"><input id="' + id + '" type="checkbox" name="' + name + '" value="' + esc(o) + '" /><span>' + esc(o) + '</span></label>'; }).join('') + '</div>' + help + '</div>';
+
+        }
+
+        if (field.fieldType === 'file') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="file" name="' + name + '" ' + required + ' />' + help + '</div>';
+
+        return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="text" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
+
+      }
+
+      function setMessage(kind, text){
+
+        root.innerHTML = '<div class="panel"><div class="' + kind + '">' + esc(text) + '</div></div>';
+
+        scheduleSize();
+
+      }
+
+
+
+      function renderForm(data){
+
+        formData = data || {};
+
+        var style = formData.style || {};
+
+        document.body.style.background = style.backgroundColor || '#EBEFF3';
+
+        document.documentElement.style.cssText = styleVars(style);
+
+        var fields = Array.isArray(formData.fields) ? formData.fields : [];
+
+        var title = esc(formData.name || 'Web form');
+
+        var desc = esc(formData.description || '');
+
+        var button = esc((formData.settings && formData.settings.submitButtonLabel) || 'Submit');
+
+        var logo = style.logoUrl ? '<img class="logo" src="' + esc(style.logoUrl) + '" alt="Logo" />' : '';
+
+        var optIn = '';
+
+        if (formData.settings && formData.settings.optInEnabled) {
+          var rawConsent = formData.settings.optInText || 'I agree to receive communication on newsletters, promotional content, offers and events.';
+          var markdownLink = rawConsent.match(/\[([^\]]+)\]\(([^)]+)\)\s*$/);
+          var linkText = formData.settings.optInLinkText || (markdownLink ? markdownLink[1] : '');
+          var linkUrl = formData.settings.optInLinkUrl || (markdownLink ? markdownLink[2] : '');
+          var baseConsent = markdownLink ? rawConsent.replace(/\s*\[[^\]]+\]\([^)]+\)\s*$/, '') : rawConsent;
+          var consentText = esc(baseConsent);
+          var linkHtml = linkText && linkUrl ? ' <a href="' + esc(linkUrl) + '" target="_blank" rel="noopener noreferrer">' + esc(linkText) + '</a>' : '';
+          optIn = '<div class="field full optin"><label class="check"><input type="checkbox" name="optInConsent" value="true" /><span>' + consentText + linkHtml + '</span></label></div>';
+        }
+
+        var footerLink = '<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>';
+
+        root.innerHTML = '<div class="panel">' + logo + '<h1>' + title + '</h1>' + (desc ? '<p class="desc">' + desc + '</p>' : '') + '<div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(fieldHtml).join('') + '</div>' + optIn + '<div class="actions"><button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form><div class="note">' + footerLink + '</div></div>';
+
+        scheduleSize();
+
+        var formEl = document.getElementById('gbs-form');
+
+        formEl.addEventListener('submit', submitForm);
+
+      }
+
+
+
+      function showBusy(flag){
+
+        busy = flag;
+
+        var btn = document.getElementById('submit-btn');
+
+        if (!btn) return;
+
+        btn.disabled = flag;
+
+        btn.innerHTML = flag ? '<span class="spinner"></span>Sending' : esc((formData.settings && formData.settings.submitButtonLabel) || 'Submit');
+
+      }
+
+
+
+      async function submitForm(event){
+
+        event.preventDefault();
+
+        if (busy) return;
+
+        showBusy(true);
+
+        var fd = new FormData(event.target);
+
+        try {
+
+          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug) + '/submit', { method: 'POST', body: fd });
+
+          var json = await res.json().catch(function(){ return {}; });
+
+          if (!res.ok) throw new Error(json.error || 'Submit failed');
+
+          if (json.redirectUrl || (formData.settings && formData.settings.afterSubmitAction === 'redirect' && formData.settings.redirectUrl)) {
+
+            window.location.href = json.redirectUrl || formData.settings.redirectUrl;
+
+            return;
+
+          }
+
+          setMessage('success', (json.message || (formData.settings && formData.settings.successMessage) || 'Thank you.'));
+
+          if (json.message) scheduleSize();
+
+        } catch (err) {
+
+          var msg = document.getElementById('msg');
+
+          if (msg) msg.innerHTML = '<div class="error">' + esc(err.message || 'Something went wrong') + '</div>';
+
+          scheduleSize();
+
+        } finally {
+
+          showBusy(false);
+
+        }
+
+      }
+
+
+
+      async function load(){
+
+        var previewData = '';
+
+        if (location.hash && location.hash.indexOf('preview=') === 1) {
+
+          previewData = decodeURIComponent(location.hash.substring(9));
+
+        }
+
+        if (previewData) {
+
+          try {
+
+            renderForm(JSON.parse(previewData));
+
+            return;
+
+          } catch (err) {
+
+            setMessage('error', err.message || 'Invalid preview data');
+
+            return;
+
+          }
+
+        }
+
+        if (!slug) {
+
+          setMessage('error', 'Missing form slug.');
+
+          return;
+
+        }
+
+        try {
+
+          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug));
+
+          var json = await res.json();
+
+          if (!res.ok) throw new Error(json.error || 'Form not found');
+
+          renderForm(json);
+
+        } catch (err) {
+
+          setMessage('error', err.message || 'Unable to load form');
+
+        }
+
+      }
+
+
+
+      load();
+
+    })();
+
+  </script>
+
+</body>
+
+</html>
+
+

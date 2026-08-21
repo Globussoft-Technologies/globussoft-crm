@@ -22,7 +22,10 @@
 
 import { useContext, useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { Plus, Trash2, Loader, ListChecks, ArrowUp, ArrowDown, Pencil, Check, X } from "lucide-react";
+import { Plus, Trash2, Loader, ListChecks, ArrowUp, ArrowDown, Pencil, GripVertical } from "lucide-react";
+import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { AuthContext } from "../../App";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -45,9 +48,238 @@ const FIELD_TYPES_WITH_OPTIONS = new Set(["dropdown", "radio", "multiselect"]);
 
 const FIELD_TYPE_LABELS = Object.fromEntries(FIELD_TYPE_OPTIONS.map((o) => [o.value, o.label]));
 
-const th = { padding: "0.75rem 1rem", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-secondary)", fontWeight: 600 };
+const th = {
+  padding: "0.75rem 1rem",
+  fontSize: "0.78rem",
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  color: "var(--text-secondary)",
+  fontWeight: 600,
+  // Theme-driven, not a fixed dark hex. --subtle-bg composites over the
+  // table body's --bg-color to sit a shade apart from the rows in BOTH
+  // themes (white 5% over near-black in dark, black 4% over #f0f2f5 in
+  // light). A hardcoded #23262d kept the header dark under the light
+  // theme while the text colours followed the theme and went dark too,
+  // leaving the labels unreadable.
+  background: "var(--subtle-bg)",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+};
 const td = { padding: "0.75rem 1rem", fontSize: "0.9rem" };
 const iconBtn = { background: "var(--subtle-bg)", border: "1px solid var(--border-color)", borderRadius: 6, padding: "0.375rem 0.5rem", cursor: "pointer", display: "inline-flex", alignItems: "center" };
+
+function normalizeFieldOrder(list) {
+  return list.map((field, displayOrder) => ({ ...field, displayOrder }));
+}
+
+function SortableLeadFieldRow({
+  field,
+  index,
+  total,
+  reordering,
+  onMove,
+  onEdit,
+  onDelete,
+  onToggleRequired,
+  deletingId,
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: String(field.id) });
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={{
+        borderTop: "1px solid var(--border-color)",
+        display: "table",
+        width: "100%",
+        tableLayout: "fixed",
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.88 : 1,
+        boxShadow: isDragging ? "0 10px 22px rgba(0, 0, 0, 0.22)" : "none",
+        background: isDragging ? "rgba(37, 99, 235, 0.06)" : "transparent",
+      }}>
+      <td style={{ ...td, display: "flex", gap: "0.15rem", alignItems: "center" }}>
+        <button
+          type="button"
+          aria-label={`Drag ${field.label} to reorder`}
+          title="Drag to reorder"
+          disabled={reordering}
+          {...attributes}
+          {...listeners}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: "none",
+            border: "1px solid transparent",
+            padding: "0.2rem",
+            color: reordering ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: reordering ? "not-allowed" : "grab",
+            touchAction: "none",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <GripVertical size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onMove(index, -1)}
+          disabled={index === 0 || reordering}
+          aria-label={`Move ${field.label} up`}
+          title="Move up"
+          style={{
+            background: "none",
+            border: "none",
+            padding: "0.2rem",
+            color: index === 0 ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: index === 0 ? "default" : "pointer",
+          }}
+        >
+          <ArrowUp size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onMove(index, 1)}
+          disabled={index === total - 1 || reordering}
+          aria-label={`Move ${field.label} down`}
+          title="Move down"
+          style={{
+            background: "none",
+            border: "none",
+            padding: "0.2rem",
+            color: index === total - 1 ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: index === total - 1 ? "default" : "pointer",
+          }}
+        >
+          <ArrowDown size={14} />
+        </button>
+      </td>
+      <td style={{ ...td, fontWeight: 500 }}>{field.label}</td>
+      <td style={td}>{FIELD_TYPE_LABELS[field.fieldType] || field.fieldType}</td>
+      <td title={`cf_${field.fieldKey}`} style={{ ...td, fontFamily: "monospace", color: "var(--text-secondary)", whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: "170px" }}>{`cf_${field.fieldKey}`}</td>
+      <td style={{ ...td, color: "var(--text-secondary)" }}>
+        {FIELD_TYPES_WITH_OPTIONS.has(field.fieldType) ? (Array.isArray(field.options) ? field.options.join(", ") : "") : ""}
+      </td>
+      <td style={td}>
+        <input
+          type="checkbox"
+          checked={Boolean(field.isRequired)}
+          onChange={() => onToggleRequired(field)}
+          style={{ cursor: "pointer" }}
+        />
+      </td>
+      <td style={{ ...td, textAlign: "right" }}>
+        <div style={{ display: "inline-flex", gap: "0.4rem" }}>
+          <button
+            type="button"
+            onClick={() => onEdit(field)}
+            aria-label={`Edit ${field.label}`}
+            title="Edit field"
+            style={iconBtn}
+          >
+            <Pencil size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(field)}
+            disabled={deletingId === field.id}
+            aria-label={`Delete ${field.label}`}
+            title="Delete field"
+            style={{ ...iconBtn, color: "var(--danger-color, #ef4444)" }}
+          >
+            {deletingId === field.id ? <Loader size={14} className="spin" /> : <Trash2 size={14} />}
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function getOptionsText(options) {
+  return Array.isArray(options) ? options.join(", ") : "";
+}
+
+function renderFieldPreview(field, optionsText) {
+  const previewOptions = optionsText.split(",").map((o) => o.trim()).filter(Boolean);
+  const sharedProps = {
+    className: "input-field",
+    disabled: true,
+    placeholder: field.placeholder || "",
+    style: { width: "100%" },
+  };
+
+  if (field.fieldType === "textarea") {
+    return <textarea {...sharedProps} rows={4} />;
+  }
+  if (field.fieldType === "number") {
+    return <input {...sharedProps} type="number" />;
+  }
+  if (field.fieldType === "date") {
+    return <input {...sharedProps} type="date" />;
+  }
+  if (field.fieldType === "url") {
+    return <input {...sharedProps} type="url" />;
+  }
+  if (field.fieldType === "checkbox") {
+    return (
+      <label style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", color: "var(--text-secondary)" }}>
+        <input type="checkbox" disabled />
+        Yes / No
+      </label>
+    );
+  }
+  if (field.fieldType === "dropdown") {
+    return (
+      <select {...sharedProps} defaultValue="">
+        <option value="">{field.placeholder || "Select an option"}</option>
+        {previewOptions.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    );
+  }
+  if (field.fieldType === "multiselect") {
+    return (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+        {previewOptions.length ? previewOptions.map((option) => (
+          <span
+            key={option}
+            style={{
+              padding: "0.3rem 0.6rem",
+              borderRadius: 999,
+              background: "var(--subtle-bg)",
+              border: "1px solid var(--border-color)",
+              color: "var(--text-secondary)",
+              fontSize: "0.85rem",
+            }}
+          >
+            {option}
+          </span>
+        )) : <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Add options to preview this field.</span>}
+      </div>
+    );
+  }
+  if (field.fieldType === "radio") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        {previewOptions.length ? previewOptions.map((option) => (
+          <label key={option} style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", color: "var(--text-secondary)" }}>
+            <input type="radio" disabled name={`preview-radio-${field.id}`} />
+            {option}
+          </label>
+        )) : <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Add options to preview this field.</span>}
+      </div>
+    );
+  }
+  return <input {...sharedProps} type="text" />;
+}
 
 export default function LeadFields() {
   const { tenant } = useContext(AuthContext) || {};
@@ -76,16 +308,20 @@ export default function LeadFields() {
   const [editingOptionsId, setEditingOptionsId] = useState(null);
   const [editingOptionsText, setEditingOptionsText] = useState("");
   const [savingOptions, setSavingOptions] = useState(false);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
-  const load = async () => {
-    setLoading(true);
+  const load = async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const data = await fetchApi("/api/lead-custom-fields");
       setFields(Array.isArray(data) ? data : []);
     } catch (err) {
       notify.error(err?.message || "Failed to load lead fields");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -144,7 +380,7 @@ export default function LeadFields() {
       });
       notify.success("Field created");
       resetCreateForm();
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to create field");
     } finally {
@@ -164,7 +400,7 @@ export default function LeadFields() {
     try {
       await fetchApi(`/api/lead-custom-fields/${field.id}`, { method: "DELETE" });
       notify.success("Field deleted");
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to delete field");
     } finally {
@@ -178,42 +414,59 @@ export default function LeadFields() {
         method: "PUT",
         body: JSON.stringify({ isRequired: !field.isRequired }),
       });
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to update field");
     }
   };
 
-  // Swaps this field's displayOrder with its neighbour in `direction`
-  // (-1 = up, +1 = down). No bulk /reorder endpoint exists for this
-  // resource (unlike Pipeline Stages), so this swaps the two rows'
-  // displayOrder via two calls to the existing per-field PUT — fine at the
-  // scale a settings page like this operates at (a handful of fields).
-  // Optimistic UI update first so the row visibly moves immediately;
-  // reload() on failure undoes it and surfaces the error.
-  const handleMoveField = async (index, direction) => {
-    const swapIndex = index + direction;
-    if (swapIndex < 0 || swapIndex >= fields.length || reordering) return;
-    const a = fields[index];
-    const b = fields[swapIndex];
-    const reordered = [...fields];
-    [reordered[index], reordered[swapIndex]] = [reordered[swapIndex], reordered[index]];
-    setFields(reordered);
+  // No bulk /reorder endpoint exists for this resource, so we sync the full
+  // ordering through the existing per-field PUT. The field set is small enough
+  // that the extra calls are an acceptable tradeoff for a much smoother UX.
+  const syncFieldOrder = async (nextFields) => {
+    if (!Array.isArray(nextFields) || !nextFields.length || reordering) return;
+    const orderedFields = normalizeFieldOrder(nextFields);
+    setFields(orderedFields);
     setReordering(true);
     try {
-      await Promise.all([
-        fetchApi(`/api/lead-custom-fields/${a.id}`, { method: "PUT", body: JSON.stringify({ displayOrder: b.displayOrder }) }),
-        fetchApi(`/api/lead-custom-fields/${b.id}`, { method: "PUT", body: JSON.stringify({ displayOrder: a.displayOrder }) }),
-      ]);
-      await load();
+      await Promise.all(
+        orderedFields.map((field) =>
+          fetchApi(`/api/lead-custom-fields/${field.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ displayOrder: field.displayOrder }),
+          }),
+        ),
+      );
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to reorder fields");
-      await load();
+      await load({ silent: true });
     } finally {
       setReordering(false);
     }
   };
 
+  const handleMoveField = async (index, direction) => {
+    const swapIndex = index + direction;
+    if (swapIndex < 0 || swapIndex >= fields.length || reordering) return;
+    await syncFieldOrder(arrayMove(fields, index, swapIndex));
+  };
+
+  const handleDragEnd = async ({ active, over }) => {
+    if (!over || active.id === over.id || reordering) return;
+    const oldIndex = fields.findIndex((field) => String(field.id) === String(active.id));
+    const newIndex = fields.findIndex((field) => String(field.id) === String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    await syncFieldOrder(arrayMove(fields, oldIndex, newIndex));
+  };
+
+  const openEditModal = (field) => {
+    if (FIELD_TYPES_WITH_OPTIONS.has(field.fieldType)) {
+      openOptionsEditor(field);
+      return;
+    }
+    notify.info("Editing is currently available for option-based fields from this table.");
+  };
   const openOptionsEditor = (field) => {
     setEditingOptionsId(field.id);
     setEditingOptionsText(Array.isArray(field.options) ? field.options.join(", ") : "");
@@ -249,7 +502,7 @@ export default function LeadFields() {
       });
       notify.success("Options updated");
       cancelOptionsEditor();
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to update options");
     } finally {
@@ -258,7 +511,7 @@ export default function LeadFields() {
   };
 
   return (
-    <div style={{ padding: "2rem", maxWidth: "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}>
+    <div style={{ padding: "2rem", paddingBottom: "3rem", maxWidth: "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}>
       <h1 style={{ fontSize: "1.5rem", fontWeight: "bold", marginBottom: "0.25rem" }}>Lead Fields</h1>
       <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
         Add extra fields to your Leads. Once created, a field appears on every lead&rsquo;s create/edit form and detail view for your organization only.
@@ -279,127 +532,44 @@ export default function LeadFields() {
             body="Add your first field below to start capturing extra details on every lead."
           />
         ) : (
-          <div style={{ marginTop: "0.75rem" }}>
-          <TopScrollSync>
-            <table className="stable-table" style={{ borderCollapse: "collapse", width: "100%" }}>
-              <thead>
-                <tr style={{ background: "var(--subtle-bg)" }}>
-                  <th style={{ ...th, width: "72px" }}>Order</th>
-                  <th style={th}>Label</th>
-                  <th style={th}>Type</th>
-                  <th style={th}>Options</th>
-                  <th style={th}>Required</th>
-                  <th style={{ ...th, textAlign: "right" }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {fields.map((f, index) => (
-                  <tr key={f.id} style={{ borderTop: "1px solid var(--border-color)" }}>
-                    <td style={{ ...td, display: "flex", gap: "0.15rem" }}>
-                      <button
-                        onClick={() => handleMoveField(index, -1)}
-                        disabled={index === 0 || reordering}
-                        aria-label={`Move ${f.label} up`}
-                        title="Move up"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          padding: "0.2rem",
-                          color: index === 0 ? "var(--border-color)" : "var(--text-secondary)",
-                          cursor: index === 0 ? "default" : "pointer",
-                        }}
-                      >
-                        <ArrowUp size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleMoveField(index, 1)}
-                        disabled={index === fields.length - 1 || reordering}
-                        aria-label={`Move ${f.label} down`}
-                        title="Move down"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          padding: "0.2rem",
-                          color: index === fields.length - 1 ? "var(--border-color)" : "var(--text-secondary)",
-                          cursor: index === fields.length - 1 ? "default" : "pointer",
-                        }}
-                      >
-                        <ArrowDown size={14} />
-                      </button>
-                    </td>
-                    <td style={{ ...td, fontWeight: 500 }}>{f.label}</td>
-                    <td style={td}>{FIELD_TYPE_LABELS[f.fieldType] || f.fieldType}</td>
-                    <td style={{ ...td, color: "var(--text-secondary)" }}>
-                      {editingOptionsId === f.id ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                          <input
-                            type="text"
-                            className="input-field"
-                            value={editingOptionsText}
-                            onChange={(e) => setEditingOptionsText(e.target.value)}
-                            placeholder="Comma-separated options"
-                            style={{ minWidth: "220px", padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
-                            autoFocus
+          <div style={{ marginTop: "0.75rem", paddingBottom: "0.5rem" }}>
+            <TopScrollSync>
+              <div style={{ background: "var(--bg-color)" }}>
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <table className="stable-table" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", tableLayout: "fixed" }}>
+                    <thead>
+                      <tr style={{ background: "var(--subtle-bg)", display: "table", width: "100%", tableLayout: "fixed" }}>
+                        <th style={{ ...th, width: "88px" }}>Order</th>
+                        <th style={th}>Label</th>
+                        <th style={th}>Type</th>
+                        <th style={th}>Key</th>
+                        <th style={th}>Options</th>
+                        <th style={th}>Required</th>
+                        <th style={{ ...th, textAlign: "right" }}></th>
+                      </tr>
+                    </thead>
+                    <SortableContext items={fields.map((field) => String(field.id))} strategy={verticalListSortingStrategy}>
+                      <tbody style={{ display: "block", maxHeight: "clamp(280px, calc(100vh - 430px), 720px)", overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
+                        {fields.map((field, index) => (
+                          <SortableLeadFieldRow
+                            key={field.id}
+                            field={field}
+                            index={index}
+                            total={fields.length}
+                            reordering={reordering}
+                            onMove={handleMoveField}
+                            onEdit={openEditModal}
+                            onDelete={handleDelete}
+                            onToggleRequired={handleToggleRequired}
+                            deletingId={deletingId}
                           />
-                          <button
-                            onClick={() => handleSaveOptions(f)}
-                            disabled={savingOptions}
-                            aria-label="Save options"
-                            title="Save"
-                            style={{ ...iconBtn, color: "var(--success-color, #22c55e)" }}
-                          >
-                            {savingOptions ? <Loader size={14} className="spin" /> : <Check size={14} />}
-                          </button>
-                          <button
-                            onClick={cancelOptionsEditor}
-                            disabled={savingOptions}
-                            aria-label="Cancel editing options"
-                            title="Cancel"
-                            style={iconBtn}
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ) : FIELD_TYPES_WITH_OPTIONS.has(f.fieldType) ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                          <span>{Array.isArray(f.options) ? f.options.join(", ") : "—"}</span>
-                          <button
-                            onClick={() => openOptionsEditor(f)}
-                            aria-label={`Edit options for ${f.label}`}
-                            title="Edit options"
-                            style={iconBtn}
-                          >
-                            <Pencil size={12} />
-                          </button>
-                        </div>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td style={td}>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(f.isRequired)}
-                        onChange={() => handleToggleRequired(f)}
-                        style={{ cursor: "pointer" }}
-                      />
-                    </td>
-                    <td style={{ ...td, textAlign: "right" }}>
-                      <button
-                        onClick={() => handleDelete(f)}
-                        disabled={deletingId === f.id}
-                        aria-label={`Delete ${f.label}`}
-                        title="Delete field"
-                        style={{ ...iconBtn, color: "var(--danger-color, #ef4444)" }}
-                      >
-                        {deletingId === f.id ? <Loader size={14} className="spin" /> : <Trash2 size={14} />}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TopScrollSync>
+                        ))}
+                      </tbody>
+                    </SortableContext>
+                  </table>
+                </DndContext>
+              </div>
+            </TopScrollSync>
           </div>
         )}
       </div>
@@ -503,3 +673,9 @@ export default function LeadFields() {
     </div>
   );
 }
+
+
+
+
+
+

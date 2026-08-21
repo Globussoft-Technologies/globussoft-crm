@@ -1,30 +1,30 @@
-// Travel CRM — Diagnostic Detail (advisor brief surface, PRD §4.1 + §4.2 + §7).
+// Travel CRM  Diagnostic Detail (advisor brief surface, PRD 4.1 + 4.2 + 7).
 //
 // Lands at /travel/diagnostics/:id. Closes the loop on two LLM-router
 // consumer endpoints that have shipped backend-only:
 //
-//   • POST /api/travel/diagnostics/:id/talking-points/regen
-//       commit cf876af — writes TravelDiagnostic.talkingPointsJson envelope
+//    POST /api/travel/diagnostics/:id/talking-points/regen
+//       commit cf876af  writes TravelDiagnostic.talkingPointsJson envelope
 //       { text, model, generatedAt, stub }
-//   • POST /api/travel/diagnostics/:id/form-vs-call/compare
-//       commits 4a7c623 + 8b97fd5 — returns { classification, scorePercent,
+//    POST /api/travel/diagnostics/:id/form-vs-call/compare
+//       commits 4a7c623 + 8b97fd5  returns { classification, scorePercent,
 //       summary, model, stub, perFieldDiff }
 //
-// Page layout (top → bottom):
+// Page layout (top  bottom):
 //   1. Header: id, sub-brand badge, classification chip, back link
-//   2. Answers + classification — question/answer joined from the bank
+//   2. Answers + classification  question/answer joined from the bank
 //      snapshot stored in TravelDiagnostic.questionsJson + answersJson;
 //      score + recommendedTier line; optional report PDF download link
-//   3. Talking-points brief — renders the persisted envelope or shows
+//   3. Talking-points brief  renders the persisted envelope or shows
 //      an empty-state Generate button. Stub badge surfaces when the LLM
 //      router returned a synthetic response (Q11 keys not yet wired).
 //      Regenerate button is ADMIN/MANAGER only.
-//   4. Form-vs-call comparison — textarea for the call transcript +
+//   4. Form-vs-call comparison  textarea for the call transcript +
 //      Compare button POSTs the comparison endpoint and renders the
 //      classification badge (color-coded match/review/mismatch/unknown),
 //      scorePercent, summary prose, and perFieldDiff table.
 //
-// ── TMC §3.3.7 human_pick recorder (PRD T11 / DD-5.7) ──
+//  TMC 3.3.7 human_pick recorder (PRD T11 / DD-5.7) 
 // For TMC diagnostics (subBrand === 'tmc'), the page surfaces a
 // human-pick recorder section above the talking-points brief:
 //
@@ -52,10 +52,10 @@
 import { useCallback, useEffect, useState, useContext } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
-  ChevronLeft, ClipboardCheck, RefreshCw, FileText, Send,
+  ChevronLeft, ClipboardCheck, RefreshCw, FileText, Send, Copy, Share2,
   AlertTriangle, Sparkles, CheckCircle, XCircle, Eye, EyeOff, UserCheck,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 
@@ -74,7 +74,7 @@ const CLASS_COLORS = {
 };
 
 function fmtDate(d) {
-  if (!d) return "—";
+  if (!d) return "";
   try {
     return new Date(d).toLocaleString();
   } catch {
@@ -115,7 +115,7 @@ function parseTalkingPointsEnvelope(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-// G104 — DD-5.7 blind-collapsed section parser. Splits the LLM-returned
+// G104  DD-5.7 blind-collapsed section parser. Splits the LLM-returned
 // brief text into named sections so each can render in its own collapsed
 // <details>. The brief may carry an explicit `sections` array (real LLM
 // output) OR be flat prose with markdown-ish headings (`## Lead with`,
@@ -123,7 +123,7 @@ function parseTalkingPointsEnvelope(raw) {
 // when no structural cues are present.
 function parseBriefSections(envelope) {
   if (!envelope) return [];
-  // Explicit array — preferred shape when the LLM router returns structured JSON.
+  // Explicit array  preferred shape when the LLM router returns structured JSON.
   if (Array.isArray(envelope.sections)) {
     return envelope.sections
       .filter((s) => s && (s.key || s.title) && (s.body || s.text))
@@ -173,22 +173,35 @@ function parseBriefSections(envelope) {
 }
 
 function formatAnswer(value) {
-  if (value === null || value === undefined || value === "") return "—";
+  if (value === null || value === undefined || value === "") return "";
   if (Array.isArray(value)) return value.join(", ");
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
 
-// Back-compat: older diagnostics stored /uploads/diagnostics/... which is
-// served by the backend static mount, but in production the frontend SPA
-// catches /uploads/* before it reaches the backend. Rewrite to the canonical
-// /api/uploads/... path that the API proxy always forwards to the backend.
+// Back-compat: older diagnostics may store either /uploads/diagnostics/... or
+// /api/uploads/diagnostics/... depending on when the PDF was generated.
+// Normalize both forms to the canonical /api/uploads/diagnostics/... path.
 function normalizeDiagnosticPdfUrl(url) {
   if (!url || typeof url !== "string") return url;
   if (url.startsWith("/uploads/diagnostics/")) {
-    return `/api/uploads/diagnostics/${url.slice("/uploads/diagnostics/".length)}`;
+    return `/api${url}`;
+  }
+  if (url.startsWith("/api/uploads/diagnostics/")) {
+    return url;
   }
   return url;
+}
+
+function getDiagnosticPdfFilename(url, fallback = "diagnostic-report.pdf") {
+  if (!url || typeof url !== "string") return fallback;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.pathname.split("/").filter(Boolean).pop() || fallback;
+  } catch {
+    const cleaned = url.split("?")[0].split("#")[0];
+    return cleaned.split("/").filter(Boolean).pop() || fallback;
+  }
 }
 
 export default function DiagnosticDetail() {
@@ -196,7 +209,7 @@ export default function DiagnosticDetail() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const canRegen = user?.role === "ADMIN" || user?.role === "MANAGER";
-  // PRD §3.3.7 + DD-5.7 — human_pick is senior-role-gated to ADMIN only.
+  // PRD 3.3.7 + DD-5.7  human_pick is senior-role-gated to ADMIN only.
   // MANAGER + USER see prior pick as read-only display; only ADMIN can
   // edit. Engine output is collapsed for ADMIN until pick recorded.
   const canEditHumanPick = user?.role === "ADMIN";
@@ -208,6 +221,14 @@ export default function DiagnosticDetail() {
 
   const [regenInFlight, setRegenInFlight] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfDownloadBusy, setPdfDownloadBusy] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareInfo, setShareInfo] = useState(null);
+  const [shareEmailEnabled, setShareEmailEnabled] = useState(false);
+  const [shareWhatsappEnabled, setShareWhatsappEnabled] = useState(false);
+  const [shareEmail, setShareEmail] = useState("");
+  const [sharePhone, setSharePhone] = useState("");
 
   const [callTranscript, setCallTranscript] = useState("");
   const [compareInFlight, setCompareInFlight] = useState(false);
@@ -218,7 +239,7 @@ export default function DiagnosticDetail() {
   const [humanPickSaving, setHumanPickSaving] = useState(false);
   const [catalogue, setCatalogue] = useState([]);
 
-  // G104 — DD-5.7 blind-collapsed sales brief. Each parsed section starts
+  // G104  DD-5.7 blind-collapsed sales brief. Each parsed section starts
   // closed; per-section reveal-click fires a fire-and-forget audit POST
   // so we can prove "advisor saw section X at time Y" without re-billing
   // the LLM. The Set tracks already-revealed keys (deduped audit emits).
@@ -251,10 +272,128 @@ export default function DiagnosticDetail() {
   };
   useEffect(load, [diagId]);
 
+  useEffect(() => {
+    const email = String(diag?.contact?.email || "").trim();
+    const phone = String(diag?.contact?.phone || "").trim();
+    if (email) {
+      setShareEmail((prev) => prev || email);
+      setShareEmailEnabled(true);
+    }
+    if (phone) {
+      setSharePhone((prev) => prev || phone);
+      setShareWhatsappEnabled(true);
+    }
+  }, [diag?.contact?.email, diag?.contact?.phone]);
+
   // (Re)generate the branded report PDF on demand. Submission-time generation
   // is best-effort and can leave reportPdfUrl null; this rebuilds it and opens
   // the result in a new tab.
-  const regenReportPdf = async () => {
+
+  const copyShareLink = async () => {
+    const url = shareInfo?.shareUrl;
+    if (!url) {
+      notify.error("Generate a share link first.");
+      return;
+    }
+    try {
+      await navigator.clipboard?.writeText(url);
+      notify.success("Share link copied.");
+    } catch {
+      notify.error("Copy failed. Select the link manually.");
+    }
+  };
+
+  const confirmShare = async () => {
+    if (!diagId) {
+      notify.error("Diagnostic not loaded.");
+      return;
+    }
+    const email = shareEmail.trim();
+    const phone = sharePhone.trim();
+    const emailRequested = Boolean(shareEmailEnabled);
+    const whatsappRequested = Boolean(shareWhatsappEnabled);
+    const channel = emailRequested && whatsappRequested
+      ? "auto"
+      : emailRequested
+        ? "email"
+        : whatsappRequested
+          ? "whatsapp"
+          : "manual";
+
+    setShareBusy(true);
+    try {
+      const res = await fetchApi(`/api/travel/diagnostics/${diagId}/share`, {
+        method: "POST",
+        body: JSON.stringify({
+          channel,
+          frontendBase: window.location.origin,
+          email: emailRequested ? email : undefined,
+          phone: whatsappRequested ? phone : undefined,
+        }),
+      });
+      if (res?.shareUrl) setShareInfo(res);
+      setShareOpen(true);
+      if (res?.channel && res.channel !== "none") {
+        const parts = [];
+        if (res.channel.includes("email")) parts.push("email");
+        if (res.channel.includes("whatsapp")) parts.push("WhatsApp");
+        notify.success(`Readiness report shared via ${parts.join(" + ")}`);
+      } else {
+        notify.info("Share link created. Copy it and send it manually.");
+      }
+    } catch (e) {
+      notify.error(e?.data?.error || e?.body?.error || e?.message || "Failed to share readiness report");
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const fetchDiagnosticPdfBlob = async (url) => {
+    const normalized = normalizeDiagnosticPdfUrl(url);
+    const token = typeof getAuthToken === "function" ? getAuthToken() : null;
+    const res = await fetch(normalized, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body?.error) detail = body.error;
+      } catch {
+        // ignore non-JSON error bodies
+      }
+      throw new Error(detail);
+    }
+    return res.blob();
+  };
+
+  const downloadBlob = (blob, filename) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  };
+
+  const downloadReportPdf = async () => {
+    const url = normalizeDiagnosticPdfUrl(diag?.reportPdfUrl);
+    if (!url) {
+      notify.error("No report PDF is available yet.");
+      return;
+    }
+    setPdfDownloadBusy(true);
+    try {
+      const blob = await fetchDiagnosticPdfBlob(url);
+      downloadBlob(blob, getDiagnosticPdfFilename(url));
+    } finally {
+      setPdfDownloadBusy(false);
+    }
+  };
+
+  const regenReportPdf = async ({ successMessage = "Report PDF generated" } = {}) => {
     setPdfBusy(true);
     try {
       const res = await fetchApi(`/api/travel/diagnostics/${diagId}/report-pdf/regen`, {
@@ -264,8 +403,9 @@ export default function DiagnosticDetail() {
       if (res?.reportPdfUrl) {
         const normalized = normalizeDiagnosticPdfUrl(res.reportPdfUrl);
         setDiag((d) => (d ? { ...d, reportPdfUrl: normalized } : d));
-        notify.success("Report PDF generated");
-        window.open(normalized, "_blank", "noopener,noreferrer");
+        notify.success(successMessage);
+        const blob = await fetchDiagnosticPdfBlob(normalized);
+        downloadBlob(blob, getDiagnosticPdfFilename(normalized));
       } else {
         notify.error("PDF generation returned no URL");
       }
@@ -306,7 +446,7 @@ export default function DiagnosticDetail() {
         setCatalogue(items.filter((r) => r?.status === "active"));
       })
       .catch(() => {
-        // Non-fatal — the dropdown still ships "other" + "no_rec" options.
+        // Non-fatal  the dropdown still ships "other" + "no_rec" options.
         setCatalogue([]);
       })
       .finally(() => setCatalogueLoading(false));
@@ -332,10 +472,10 @@ export default function DiagnosticDetail() {
       if (next && typeof next === "object" && next.id) {
         setDiag(next);
       } else {
-        // Server returned an envelope we don't recognize — refetch to be safe.
+        // Server returned an envelope we don't recognize  refetch to be safe.
         setDiag((prev) => (prev ? { ...prev, humanPick: humanPickDraft } : prev));
       }
-      notify.success("Human pick recorded — engine output unlocked.");
+      notify.success("Human pick recorded  engine output unlocked.");
       setEngineExpanded(true);
     } catch (e) {
       notify.error(e?.body?.error || e?.message || "Failed to save human pick");
@@ -444,7 +584,7 @@ export default function DiagnosticDetail() {
   const questions = parseQuestionList(diag?.questionsJson);
   const answers = parseAnswers(diag?.answersJson);
   const envelope = parseTalkingPointsEnvelope(diag?.talkingPointsJson);
-  const subBrandLabel = SUB_BRAND_LABEL[diag?.subBrand] || diag?.subBrand || "—";
+  const subBrandLabel = SUB_BRAND_LABEL[diag?.subBrand] || diag?.subBrand || "";
   const classKey = (comparison?.classification || "unknown").toLowerCase();
   const classColor = CLASS_COLORS[classKey] || CLASS_COLORS.unknown;
 
@@ -454,7 +594,7 @@ export default function DiagnosticDetail() {
         <ChevronLeft size={16} aria-hidden /> Back to diagnostics
       </Link>
 
-      {/* ── Header ─────────────────────────────────────────────────── */}
+      {/*  Header  */}
       <header style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", margin: "8px 0 16px" }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
           <ClipboardCheck size={28} aria-hidden /> Diagnostic #{diag.id}
@@ -477,22 +617,22 @@ export default function DiagnosticDetail() {
         </span>
       </header>
 
-      {/* ── Customer — who took this diagnostic ──────────────────── */}
+      {/*  Customer  who took this diagnostic  */}
       {(diag.contact?.name || diag.contact?.email || diag.contact?.phone || diag.contactId) && (
         <section style={card}>
           <h2 style={cardTitle}>Customer</h2>
           <div style={summaryRow}>
             <div>
               <span style={kvLabel}>Name</span>
-              <span style={{ marginLeft: 8 }}>{diag.contact?.name || "—"}</span>
+              <span style={{ marginLeft: 8 }}>{diag.contact?.name || ""}</span>
             </div>
             <div>
               <span style={kvLabel}>Email</span>
-              <span style={{ marginLeft: 8 }}>{diag.contact?.email || "—"}</span>
+              <span style={{ marginLeft: 8 }}>{diag.contact?.email || ""}</span>
             </div>
             <div>
               <span style={kvLabel}>Phone</span>
-              <span style={{ marginLeft: 8 }}>{diag.contact?.phone || "—"}</span>
+              <span style={{ marginLeft: 8 }}>{diag.contact?.phone || ""}</span>
             </div>
             {diag.contactId && (
               <div>
@@ -504,7 +644,7 @@ export default function DiagnosticDetail() {
         </section>
       )}
 
-      {/* ── Section 1: answers + classification ──────────────────── */}
+      {/*  Section 1: answers + classification  */}
       <section style={card}>
         <h2 style={cardTitle}>
           <ClipboardCheck size={18} aria-hidden /> Answers &amp; classification
@@ -513,46 +653,128 @@ export default function DiagnosticDetail() {
           <div>
             <span style={kvLabel}>Score</span>
             <span style={{ marginLeft: 8 }}>
-              {diag.score != null ? Number(diag.score).toFixed(2) : "—"}
+              {diag.score != null ? Number(diag.score).toFixed(2) : ""}
             </span>
           </div>
           <div>
             <span style={kvLabel}>Recommended tier</span>
-            <span style={{ marginLeft: 8 }}>{diag.recommendedTier || "—"}</span>
+            <span style={{ marginLeft: 8 }}>{diag.recommendedTier || ""}</span>
           </div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {diag.reportPdfUrl && (
-              <a
-                href={normalizeDiagnosticPdfUrl(diag.reportPdfUrl)}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={pdfLink}
+              <button
+                type="button"
+                onClick={downloadReportPdf}
+                disabled={pdfDownloadBusy}
+                style={{
+                  ...pdfLink,
+                  cursor: pdfDownloadBusy ? "not-allowed" : "pointer",
+                  opacity: pdfDownloadBusy ? 0.7 : 1,
+                  background: "none",
+                }}
               >
-                <FileText size={14} aria-hidden /> Download report PDF
-              </a>
+                <FileText size={14} aria-hidden /> {pdfDownloadBusy ? "Downloading..." : "Download report PDF"}
+              </button>
             )}
             <button
               type="button"
-              onClick={regenReportPdf}
+              onClick={() => regenReportPdf()}
               disabled={pdfBusy}
               title="Build the branded report PDF from this diagnostic"
               style={{
-                ...pdfLink,
-                background: "none",
-                border: "1px solid var(--border-color, #2a2a2a)",
+                ...reportSecondaryBtn,
                 cursor: pdfBusy ? "not-allowed" : "pointer",
                 opacity: pdfBusy ? 0.6 : 1,
               }}
             >
-              <RefreshCw size={14} aria-hidden />{" "}
+              <RefreshCw size={15} aria-hidden />
               {pdfBusy
-                ? "Generating…"
+                ? "Generating..."
                 : diag.reportPdfUrl
                   ? "Regenerate PDF"
                   : "Generate report PDF"}
             </button>
+            <button
+              type="button"
+              onClick={() => setShareOpen((open) => !open)}
+              title="Open the share panel"
+              style={reportGhostBtn}
+            >
+              <Share2 size={15} aria-hidden />
+              {shareOpen ? "Hide share panel" : "Share report"}
+            </button>
           </div>
         </div>
+        {shareOpen && (
+          <section style={sharePanel} aria-label="Share readiness report">
+            <div style={sharePanelHeader}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Share2 size={14} aria-hidden />
+                <strong>Share readiness report</strong>
+              </div>
+              <span style={shareHint}>
+                {shareInfo?.channel && shareInfo.channel !== "none"
+                  ? `Delivered via ${shareInfo.channel.replace("+", " + ")}`
+                  : "Create a link for manual sharing or send it directly"}
+              </span>
+            </div>
+            <div style={shareGrid}>
+              <label style={shareField}>
+                <span style={kvLabel}>Email</span>
+                <input
+                  type="email"
+                  value={shareEmail}
+                  onChange={(e) => setShareEmail(e.target.value)}
+                  placeholder="advisor@example.com"
+                  style={input}
+                />
+              </label>
+              <label style={shareField}>
+                <span style={kvLabel}>WhatsApp number</span>
+                <input
+                  type="tel"
+                  value={sharePhone}
+                  onChange={(e) => setSharePhone(e.target.value)}
+                  placeholder="+91 9876543210"
+                  style={input}
+                />
+              </label>
+            </div>
+            <div style={shareToggles}>
+              <label style={shareToggle}>
+                <input
+                  type="checkbox"
+                  checked={shareEmailEnabled}
+                  onChange={(e) => setShareEmailEnabled(e.target.checked)}
+                />
+                <span>Email delivery</span>
+              </label>
+              <label style={shareToggle}>
+                <input
+                  type="checkbox"
+                  checked={shareWhatsappEnabled}
+                  onChange={(e) => setShareWhatsappEnabled(e.target.checked)}
+                />
+                <span>WhatsApp delivery</span>
+              </label>
+            </div>
+            <div style={shareActions}>
+              <button type="button" onClick={copyShareLink} style={secondaryBtn}>
+                <Copy size={14} aria-hidden /> Copy link
+              </button>
+              <button type="button" onClick={confirmShare} disabled={shareBusy} style={primaryBtn}>
+                <Send size={14} aria-hidden />
+                {shareBusy ? "Sharing..." : "Send share"}
+              </button>
+            </div>
+            {shareInfo?.shareUrl && (
+              <div style={shareResult}>
+                <span style={shareResultLabel}>Public link</span>
+                <code style={shareCode}>{shareInfo.shareUrl}</code>
+              </div>
+            )}
+          </section>
+        )}
         {questions.length === 0 ? (
           <div style={{ color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" }}>
             No question snapshot found on this diagnostic. Answers map:{" "}
@@ -583,7 +805,7 @@ export default function DiagnosticDetail() {
         )}
       </section>
 
-      {/* ── TMC human_pick recorder + engine output (PRD T11 / DD-5.7) ── */}
+      {/*  TMC human_pick recorder + engine output (PRD T11 / DD-5.7)  */}
       {diag.subBrand === "tmc" && (
         <HumanPickSection
           diag={diag}
@@ -599,7 +821,7 @@ export default function DiagnosticDetail() {
         />
       )}
 
-      {/* ── Section 2: talking-points brief ──────────────────────── */}
+      {/*  Section 2: talking-points brief  */}
       <section style={{ ...card, marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <h2 style={{ ...cardTitle, margin: 0 }}>
@@ -620,7 +842,7 @@ export default function DiagnosticDetail() {
             >
               <RefreshCw size={14} aria-hidden />
               {regenInFlight
-                ? "Working…"
+                ? "Working"
                 : envelope
                 ? "Regenerate"
                 : "Generate brief"}
@@ -630,7 +852,7 @@ export default function DiagnosticDetail() {
         {envelope ? (
           <>
             {(() => {
-              // G104 — DD-5.7 blind-collapsed UX. Each Job-B sales-brief
+              // G104  DD-5.7 blind-collapsed UX. Each Job-B sales-brief
               // section starts CLOSED. Per-section reveal-click fires an
               // audit POST (deduped per session). Open-all / Close-all
               // toggles bulk the section state.
@@ -686,7 +908,7 @@ export default function DiagnosticDetail() {
                         color: "var(--text-secondary)",
                       }}
                     >
-                      Sections start collapsed (DD-5.7 blind-collapsed UX —
+                      Sections start collapsed (DD-5.7 blind-collapsed UX 
                       open as you read).
                     </span>
                     {sections.length > 1 && (
@@ -770,7 +992,7 @@ export default function DiagnosticDetail() {
         )}
       </section>
 
-      {/* ── Section 3: form-vs-call comparison ───────────────────── */}
+      {/*  Section 3: form-vs-call comparison  */}
       <section style={{ ...card, marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <h2 style={{ ...cardTitle, margin: 0 }}>
@@ -781,7 +1003,7 @@ export default function DiagnosticDetail() {
               fontSize: 12, color: "var(--text-secondary)",
               cursor: "help",
             }}
-            title="Paste the AI qualification call transcript and we'll reconcile it against the form answers above (PRD §4.1 80/60 threshold ladder)."
+            title="Paste the AI qualification call transcript and we'll reconcile it against the form answers above (PRD 4.1 80/60 threshold ladder)."
             aria-label="What is this?"
           >
             (what is this?)
@@ -796,7 +1018,7 @@ export default function DiagnosticDetail() {
           value={callTranscript}
           onChange={(e) => setCallTranscript(e.target.value)}
           rows={6}
-          placeholder="Paste the call transcript here…"
+          placeholder="Paste the call transcript here"
           style={textarea}
           aria-label="Call transcript"
         />
@@ -812,7 +1034,7 @@ export default function DiagnosticDetail() {
             aria-label="Compare form vs call"
           >
             <Send size={14} aria-hidden />
-            {compareInFlight ? "Comparing…" : "Compare"}
+            {compareInFlight ? "Comparing" : "Compare"}
           </button>
         </div>
 
@@ -831,7 +1053,7 @@ export default function DiagnosticDetail() {
                 {comparison.classification || "unknown"}
               </span>
               <span style={{ fontSize: 14 }}>
-                <strong>{comparison.scorePercent != null ? `${comparison.scorePercent}%` : "—"}</strong>{" "}
+                <strong>{comparison.scorePercent != null ? `${comparison.scorePercent}%` : ""}</strong>{" "}
                 <span style={{ color: "var(--text-secondary)" }}>confidence</span>
               </span>
               {comparison.stub && (
@@ -891,11 +1113,20 @@ export default function DiagnosticDetail() {
   );
 }
 
-// ─── TMC human_pick recorder + engine output (DD-5.7 collapsible) ────
+// ? TMC human_pick recorder + engine output (DD-5.7 collapsible) ?
 //
 // Senior reviewers (ADMIN) pick one of the 5 starter trips, "other", or
-// "no_rec" BLIND to the engine's recommendation. The engine output stays
-// COLLAPSED until they save — DD-5.7's load-bearing constraint. Once a
+// "no_rec" blind to the engine's recommendation. The engine output stays
+// collapsed until they save ? DD-5.7's load-bearing constraint. Once a
+// pick is recorded the engine output unlocks (auto-expanded) and the
+// reviewer can compare their pick against the engine's primary/alternative
+// recommendations + per-signal scores for ?3.3.7 disagreement triage.
+
+// — TMC human_pick recorder + engine output (DD-5.7 collapsible) —
+//
+// Senior reviewers (ADMIN) pick one of the 5 starter trips, "other", or
+// "no_rec" blind to the engine's recommendation. The engine output stays
+// collapsed until they save — DD-5.7's load-bearing constraint. Once a
 // pick is recorded the engine output unlocks (auto-expanded) and the
 // reviewer can compare their pick against the engine's primary/alternative
 // recommendations + per-signal scores for §3.3.7 disagreement triage.
@@ -1063,7 +1294,6 @@ function HumanPickSection({
     </section>
   );
 }
-
 function EngineKV({ label, value }) {
   return (
     <div>
@@ -1073,7 +1303,7 @@ function EngineKV({ label, value }) {
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────
+// ? Styles ?
 
 const backLink = {
   display: "inline-flex", alignItems: "center", gap: 4,
@@ -1140,7 +1370,7 @@ const metaLine = {
   color: "var(--text-secondary)",
 };
 
-// G104 — DD-5.7 blind-collapsed UX styles.
+// G104  DD-5.7 blind-collapsed UX styles.
 const detailsStyle = {
   border: "1px solid var(--border-light)",
   borderRadius: 8,
@@ -1187,6 +1417,174 @@ const errorBox = {
   color: "var(--text-primary)", fontSize: 14,
 };
 
+
+const sharePanel = {
+  marginTop: 12,
+  padding: 16,
+  borderRadius: 12,
+  border: "1px solid var(--border-light)",
+  background: "var(--subtle-bg)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 14,
+};
+
+const sharePanelHeader = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: 10,
+  justifyContent: "space-between",
+};
+
+const shareHint = {
+  fontSize: 12,
+  color: "var(--text-secondary)",
+};
+
+const shareGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))",
+  gap: 12,
+};
+
+const shareField = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+};
+
+const shareToggles = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 16,
+  alignItems: "center",
+};
+
+const shareToggle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 13,
+  color: "var(--text-primary)",
+};
+
+const shareActions = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+  alignItems: "center",
+};
+
+const shareResult = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  paddingTop: 4,
+};
+
+const shareResultLabel = {
+  ...kvLabel,
+};
+
+const shareCode = {
+  display: "block",
+  padding: "8px 10px",
+  borderRadius: 6,
+  border: "1px solid var(--border-color)",
+  background: "var(--bg-color)",
+  fontSize: 12,
+  wordBreak: "break-all",
+};
+const reportActionsCard = {
+  marginTop: 14,
+  padding: 18,
+  borderRadius: 16,
+  border: "1px solid color-mix(in srgb, var(--primary-color) 24%, var(--border-color))",
+  background: "linear-gradient(135deg, color-mix(in srgb, var(--primary-color) 12%, var(--surface-color)) 0%, var(--surface-color) 58%, color-mix(in srgb, var(--accent-color, var(--primary-color)) 8%, var(--surface-color)) 100%)",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 18,
+  alignItems: "center",
+  justifyContent: "space-between",
+};
+const reportEyebrow = {
+  ...kvLabel,
+  color: "var(--primary-color)",
+};
+const reportTitleRow = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10,
+  alignItems: "center",
+};
+const reportHelperText = {
+  margin: 0,
+  color: "var(--text-secondary)",
+  fontSize: 13,
+  lineHeight: 1.5,
+  maxWidth: 560,
+};
+const reportPillBase = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "4px 10px",
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.3,
+  whiteSpace: "nowrap",
+};
+const reportReadyPill = {
+  ...reportPillBase,
+  background: "rgba(47, 122, 77, 0.14)",
+  color: "#2F7A4D",
+  border: "1px solid rgba(47, 122, 77, 0.32)",
+};
+const reportDraftPill = {
+  ...reportPillBase,
+  background: "rgba(200, 154, 78, 0.16)",
+  color: "#9A6F2E",
+  border: "1px solid rgba(154, 111, 46, 0.3)",
+};
+const reportActionsRow = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10,
+  alignItems: "center",
+  justifyContent: "flex-end",
+};
+const reportButtonBase = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  minHeight: 42,
+  padding: "9px 14px",
+  borderRadius: 999,
+  fontWeight: 700,
+  fontSize: 13,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+};
+const reportPrimaryLink = {
+  ...reportButtonBase,
+  background: "var(--primary-color, var(--accent-color))",
+  color: "#fff",
+  border: "1px solid transparent",
+};
+const reportSecondaryBtn = {
+  ...reportButtonBase,
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-color)",
+};
+const reportGhostBtn = {
+  ...reportButtonBase,
+  background: "transparent",
+  color: "var(--primary-color)",
+  border: "1px dashed color-mix(in srgb, var(--primary-color) 44%, var(--border-color))",
+  cursor: "pointer",
+};
 const pdfLink = {
   marginLeft: "auto",
   display: "inline-flex", alignItems: "center", gap: 6,

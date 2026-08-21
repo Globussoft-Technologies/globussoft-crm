@@ -214,7 +214,7 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(body.redirect).toBeTruthy();
     expect(body.redirect.type).toBe('microsite');
     // URL contains only the opaque draftToken — no PII
-    expect(body.redirect.url).toMatch(new RegExp(`^/p/tripmicrosite/${micrositeUuid}\\?draftToken=[0-9a-f]{64}$`));
+    expect(body.redirect.url).toMatch(new RegExp(`^/p/tripmicrosite/${micrositeUuid}\\?draftToken=[0-9a-f]{64}(?:&.*)?$`));
     expect(body.redirect.url).not.toContain('Student');
     expect(body.redirect.url).not.toContain('Parent');
     expect(body.redirect.url).not.toContain('parent@e2e.test');

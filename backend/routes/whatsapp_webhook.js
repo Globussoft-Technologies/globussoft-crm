@@ -111,17 +111,21 @@ router.get("/", async (req, res) => {
       return res.status(403).json({ error: "Verification failed" });
     }
 
-    // Resolution 1: platform-wide env token.
-    if (META_VERIFY_TOKEN && providedToken === META_VERIFY_TOKEN) {
-      whLog("← 200 verify (matched META_VERIFY_TOKEN)", { echoChallenge: !!challenge });
-      return res.status(200).send(challenge);
-    }
-
-    // Resolution 2: per-tenant override. Look for an EXACT match across
-    // active configs. Decrypt before compare (the column is AES-256-GCM
-    // when WELLNESS_FIELD_KEY is set).
+    // Resolution 1: per-tenant token FIRST. Each tenant brings their own Meta
+    // app, so their own verify token is the authoritative source; the platform
+    // env var is only a shared fallback for tenants who never set one. Checking
+    // env first (the pre-existing order) meant a tenant who deliberately
+    // configured their own token could still be verified by a platform-wide
+    // secret they don't control — the same "global credential wins" coupling
+    // the per-tenant work exists to remove.
+    //
+    // Look for an EXACT match across configs, decrypting before compare (the
+    // column is AES-256-GCM when the field-encryption key is set). Rows are
+    // NOT filtered on isActive: verification is exactly the step that happens
+    // *before* a config is activated, so requiring isActive would make a
+    // first-time Meta handshake unverifiable.
     const candidates = await prisma.whatsAppConfig.findMany({
-      where: { isActive: true, webhookVerifyToken: { not: null } },
+      where: { webhookVerifyToken: { not: null } },
       select: { id: true, tenantId: true, webhookVerifyToken: true },
     });
     for (const c of candidates) {
@@ -130,6 +134,13 @@ router.get("/", async (req, res) => {
         whLog("← 200 verify (matched per-tenant webhookVerifyToken)", { tenantId: c.tenantId, configId: c.id });
         return res.status(200).send(challenge);
       }
+    }
+
+    // Resolution 2: platform-wide env token — shared fallback for tenants with
+    // no per-tenant token of their own.
+    if (META_VERIFY_TOKEN && providedToken === META_VERIFY_TOKEN) {
+      whLog("← 200 verify (matched META_VERIFY_TOKEN)", { echoChallenge: !!challenge });
+      return res.status(200).send(challenge);
     }
 
     // Resolution 3: legacy fallback — process.env.WHATSAPP_VERIFY_TOKEN
@@ -267,6 +278,16 @@ async function handleMessagesEvent(value, tenantId, req) {
   const statuses = Array.isArray(value.statuses) ? value.statuses : [];
   const metadata = value.metadata || {};
   const queue = getQueue();
+
+  // Meta includes the sender's WhatsApp display name on the event as
+  // `value.contacts[].profile.name`, keyed to the message's `from` by `wa_id`.
+  // This handler otherwise ignores it; auto-lead capture uses it so a captured
+  // lead is named "Priya Sharma" rather than "WhatsApp +919876543210".
+  const profileNameByWaId = new Map();
+  for (const c of Array.isArray(value.contacts) ? value.contacts : []) {
+    const nm = c?.profile?.name;
+    if (c?.wa_id && nm) profileNameByWaId.set(String(c.wa_id), String(nm));
+  }
 
   // Inbound messages
   for (const msg of messages) {
@@ -467,6 +488,30 @@ async function handleMessagesEvent(value, tenantId, req) {
         timestamp: msg.timestamp,
         tenantId,
       });
+    }
+
+    // Generic-vertical auto-lead capture. The Meta webhook previously invoked NO
+    // lead capture at all — the only wiring was travelWhatsappLeadCapture called
+    // from services/whatsappWebClient.js (the WhatsApp Web QR transport), and
+    // that module self-gates to vertical === 'travel'. So a generic tenant on
+    // Meta Cloud got a thread and contact-linking but never a lead.
+    //
+    // The module self-gates on vertical === 'generic' (travel + wellness are
+    // no-ops here and keep their own paths), waits for a few inbound messages of
+    // context, and never duplicates or re-statuses an existing contact by
+    // default. Fire-and-forget + never-throws: the message is already persisted
+    // and emitted above, and lead capture must never delay or break ingestion.
+    if (normalizedFrom && thread?.id) {
+      require("../lib/genericWhatsappLeadCapture")
+        .safeMaybeCaptureLead({
+          tenantId,
+          phone: normalizedFrom,
+          // Meta keys contacts by wa_id, which is `from` without the leading '+'.
+          name: profileNameByWaId.get(String(from)) || profileNameByWaId.get(String(from).replace(/^\+/, "")) || null,
+          threadId: thread.id,
+          isGroup: false,
+        })
+        .catch(() => {});
     }
   }
 

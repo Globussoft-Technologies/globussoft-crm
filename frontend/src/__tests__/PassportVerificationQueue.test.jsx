@@ -21,7 +21,7 @@
  * are stable references; otherwise useCallback / useEffect deps cause
  * infinite re-renders.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -38,6 +38,7 @@ const notifyObj = {
   confirm: vi.fn(() => Promise.resolve(true)),
   prompt: () => Promise.resolve(''),
 };
+const scrollIntoViewMock = vi.fn();
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
@@ -106,6 +107,12 @@ function defaultFetchImpl(rows = SAMPLE_PENDING, passportRows = []) {
         source: '',
       });
     }
+    if (url.match(/\/api\/travel\/passport\/participants\/\d+\/view-url$/)) {
+      return Promise.resolve({ url: 'https://signed.example.com/participant-passport.jpg' });
+    }
+    if (url.match(/\/api\/travel\/passport\/customer-travellers\/\d+\/view-url$/)) {
+      return Promise.resolve({ url: 'https://signed.example.com/customer-passport.jpg' });
+    }
     if (url.match(/\/api\/travel\/passport\/participants\/\d+\/passport-verify$/) && opts?.method === 'POST') {
       return Promise.resolve({ ok: true });
     }
@@ -121,6 +128,15 @@ beforeEach(() => {
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
   notifyObj.info.mockReset();
+  scrollIntoViewMock.mockReset();
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: scrollIntoViewMock,
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 function renderPage() {
@@ -355,6 +371,212 @@ describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
     expect(screen.getByText('P7654321')).toBeTruthy();
     // Previously-rejected badge surfaces for row 2.
     expect(screen.getByText(/Previously rejected/i)).toBeTruthy();
+  });
+
+  it('opens a signed passport image from the verification queue instead of the raw upload path', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_PENDING));
+    renderPage();
+    await screen.findByText('Jane Doe');
+
+    fireEvent.click(screen.getByRole('button', { name: /View passport image for Jane Doe/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/participants/55/view-url');
+    });
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        'https://signed.example.com/participant-passport.jpg',
+        '_blank',
+        'noopener,noreferrer',
+      );
+    });
+
+    openSpy.mockRestore();
+  });
+
+  it('keeps the View action visible in the verification queue even when the image URL is missing', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    fetchApiMock.mockImplementation(defaultFetchImpl([
+      {
+        ...SAMPLE_PENDING[0],
+        imageUrl: null,
+      },
+    ]));
+    renderPage();
+    await screen.findByText('Jane Doe');
+
+    const viewBtn = screen.getByRole('button', { name: /View passport image for Jane Doe/i });
+    fireEvent.click(viewBtn);
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/participants/55/view-url');
+    });
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        'https://signed.example.com/participant-passport.jpg',
+        '_blank',
+        'noopener,noreferrer',
+      );
+    });
+
+    openSpy.mockRestore();
+  });
+
+  it('opens a signed passport image from the Passport List tab', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const passportRows = [
+      {
+        kind: 'customer',
+        id: 7,
+        fullName: 'Ahmed Khan',
+        subBrand: 'rfu',
+        passportNumber: 'P9999999',
+        extractedAt: '2026-06-11T10:00:00.000Z',
+        verifiedAt: null,
+        status: 'pending',
+        imageUrl: '/api/uploads/passport-ocr/c.jpg',
+      },
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/passport/verification-queue') {
+        return Promise.resolve({ pending: [], total: 0 });
+      }
+      if (url.startsWith('/api/travel/passport/passport-list?')) {
+        return Promise.resolve({
+          passports: passportRows,
+          total: passportRows.length,
+          page: 1,
+          pageSize: 3,
+          totalPages: 1,
+          hasPrev: false,
+          hasNext: false,
+          q: '',
+          status: '',
+          source: '',
+        });
+      }
+      if (url.match(/\/api\/travel\/passport\/customer-travellers\/7\/view-url$/)) {
+        return Promise.resolve({ url: 'https://signed.example.com/customer-passport.jpg' });
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Passport List tab/i }));
+    await screen.findByText('Ahmed Khan');
+
+    fireEvent.click(screen.getByRole('button', { name: /View passport image for Ahmed Khan/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/customer-travellers/7/view-url');
+    });
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        'https://signed.example.com/customer-passport.jpg',
+        '_blank',
+        'noopener,noreferrer',
+      );
+    });
+
+    openSpy.mockRestore();
+  });
+
+  it('keeps View visible and opens the verification editor from Passport List edit', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const listRow = {
+      kind: 'customer',
+      id: 807,
+      fullName: 'Imported passport',
+      subBrand: 'passport_inbox',
+      relationship: 'bulk_import_inbox',
+      passportNumber: 'P9999999',
+      extractedAt: '2026-06-11T10:00:00.000Z',
+      verifiedAt: null,
+      status: 'pending',
+      importInbox: true,
+      contactId: 0,
+      imageUrl: null,
+    };
+    const queueRow = {
+      kind: 'customer',
+      id: 807,
+      fullName: 'Imported passport',
+      subBrand: 'passport_inbox',
+      relationship: 'bulk_import_inbox',
+      extractedAt: '2026-06-11T10:00:00.000Z',
+      rejectedAt: null,
+      extraction: {
+        passportNumber: 'P9999999',
+        surname: 'SINGH',
+        givenNames: 'RAJ',
+        dateOfBirth: '1992-01-01',
+        dateOfExpiry: '2030-01-01',
+      },
+      confidence: 0.91,
+      provider: 'stub-mode-v1',
+      imageUrl: null,
+      trip: null,
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/passport/verification-queue') {
+        return Promise.resolve({ pending: [queueRow], total: 1 });
+      }
+      if (url.startsWith('/api/travel/passport/passport-list?')) {
+        return Promise.resolve({
+          passports: [listRow],
+          total: 1,
+          page: 1,
+          pageSize: 3,
+          totalPages: 1,
+          hasPrev: false,
+          hasNext: false,
+          q: '',
+          status: '',
+          source: '',
+        });
+      }
+      if (url.match(/\/api\/travel\/passport\/customer-travellers\/807\/view-url$/)) {
+        return Promise.resolve({ url: 'https://signed.example.com/customer-passport.jpg' });
+      }
+      if (url.match(/\/api\/travel\/passport\/customer-travellers\/807\/passport-verify$/) && opts?.method === 'POST') {
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Passport List tab/i }));
+    await screen.findByText('Imported passport');
+
+    const viewBtn = screen.getByRole('button', { name: /View passport image for Imported passport/i });
+    expect(viewBtn).toBeEnabled();
+    fireEvent.click(viewBtn);
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/customer-travellers/807/view-url');
+    });
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        'https://signed.example.com/customer-passport.jpg',
+        '_blank',
+        'noopener,noreferrer',
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Edit passport for Imported passport/i }));
+
+    await waitFor(() => {
+      expect(scrollIntoViewMock).toHaveBeenCalled();
+    });
+    expect(await screen.findByRole('button', { name: /Save & approve/i })).toBeTruthy();
+    const numInput = await screen.findByLabelText(/Edit passport number/i);
+    expect(numInput).toHaveValue('P9999999');
+
+    const activeRow = screen.getByText('Imported passport').closest('[data-passport-row-key]');
+    expect(activeRow?.getAttribute('data-passport-row-active')).toBe('true');
+
+    openSpy.mockRestore();
   });
 
 

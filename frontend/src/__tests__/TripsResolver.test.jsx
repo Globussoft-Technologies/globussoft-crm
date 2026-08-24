@@ -1,34 +1,54 @@
 /**
- * TripsResolver.test.jsx — RTL coverage of the /trips dynamic entry
- * point.
+ * TripsResolver.test.jsx - RTL coverage of the /trips public entry.
  *
  * SUT: frontend/src/pages/public/TripsResolver.jsx
  *
- * Resolution flow (updated):
- *   1. GET /api/landing-pages/public/featured-html (no auth, Accept: text/html).
- *      Returns rendered HTML of the live trip, or 404 if nothing published.
- *   2. On 200 → write the HTML into the current document via document.open() /
- *      document.write() / document.close(). URL stays at /trips.
- *   3. On 404 / error → render the hardcoded TripsLanding fallback.
+ * Resolution flow:
+ *   1. GET /api/landing-pages/public/featured-full?vertical=travel (no auth).
+ *      Returns the full featured published travel page, or 404 if nothing
+ *      is featured yet.
+ *   2. On 200 -> render the page in place at /trips.
+ *   3. On 404 / error -> render the hardcoded TripsLanding fallback.
  *
- * global.fetch is stubbed per test. document.open/write/close are stubbed so
- * jsdom doesn't actually blow away the test document.
+ * The route stays on /trips instead of bouncing through /p/<slug>.
  */
-import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 
 // Stub the lazy-imported fallback so we don't load the full TripsLanding page.
 vi.mock('../pages/public/TripsLanding', () => ({
   default: () => <div data-testid="trips-fallback">FALLBACK TripsLanding</div>,
 }));
 
+vi.mock('../components/landing-page-renderers', () => ({
+  LandingPageReactRenderer: ({ landingPage }) => (
+    <div
+      data-testid="landing-page-renderer"
+      data-slug={landingPage?.slug ?? ''}
+      data-public-submit={String(Boolean(landingPage?.publicSubmit))}
+    >
+      {landingPage?.title ?? ''}
+    </div>
+  ),
+}));
+
 import TripsResolver from '../pages/public/TripsResolver';
 
-function renderResolver() {
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <div
+      data-testid="location-probe"
+      data-path={`${location.pathname}${location.search}${location.hash}`}
+    />
+  );
+}
+
+function renderResolver(initialEntries = ['/trips']) {
   return render(
-    <MemoryRouter initialEntries={['/trips']}>
+    <MemoryRouter initialEntries={initialEntries}>
+      <LocationProbe />
       <Routes>
         <Route path="/trips" element={<TripsResolver />} />
       </Routes>
@@ -37,50 +57,43 @@ function renderResolver() {
 }
 
 describe('<TripsResolver />', () => {
-  let documentOpen;
-  let documentWrite;
-  let documentClose;
-  let origOpen;
-  let origWrite;
-  let origClose;
-
   beforeEach(() => {
     global.fetch = vi.fn();
-    // Stub document.open/write/close so the test document isn't replaced.
-    // Use direct property assignment on the real document object rather than
-    // vi.stubGlobal('document', {...}) — the latter replaces the entire
-    // document reference, which breaks RTL's render() because it needs the
-    // real document.body.appendChild to mount the React tree.
-    origOpen = document.open.bind(document);
-    origWrite = document.write.bind(document);
-    origClose = document.close.bind(document);
-    documentOpen = vi.fn();
-    documentWrite = vi.fn();
-    documentClose = vi.fn();
-    document.open = documentOpen;
-    document.write = documentWrite;
-    document.close = documentClose;
   });
 
-  afterEach(() => {
-    document.open = origOpen;
-    document.write = origWrite;
-    document.close = origClose;
-  });
-
-  it('writes the server-rendered HTML into the document when featured-html returns 200', async () => {
-    const TRIP_HTML = '<html><body><h1>Japan 2026</h1></body></html>';
+  it('renders the featured page in place at /trips when the featured page resolves', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
-      text: async () => TRIP_HTML,
+      json: async () => ({
+        id: 51,
+        slug: 'japan-2026',
+        title: 'Japan 2026',
+        status: 'PUBLISHED',
+        templateType: 'travel_destination',
+        destination: 'Japan',
+        subBrand: 'travelstall',
+        metaTitle: 'Japan 2026',
+        metaDescription: 'Visit Japan',
+        content: [],
+        cssOverrides: '',
+        tripId: 51,
+      }),
     });
-    renderResolver();
-    await waitFor(() => {
-      expect(documentOpen).toHaveBeenCalled();
-      expect(documentWrite).toHaveBeenCalledWith(TRIP_HTML);
-      expect(documentClose).toHaveBeenCalled();
+
+    renderResolver(['/trips?utm_source=demo#section']);
+
+    expect(await screen.findByTestId('landing-page-renderer')).toBeInTheDocument();
+    expect(screen.getByTestId('location-probe')).toHaveAttribute(
+      'data-path',
+      '/trips?utm_source=demo#section',
+    );
+    expect(screen.getByTestId('landing-page-renderer')).toHaveAttribute('data-slug', 'japan-2026');
+    expect(screen.getByTestId('landing-page-renderer')).toHaveAttribute('data-public-submit', 'true');
+    expect(screen.getByTestId('landing-page-renderer')).toHaveTextContent('Japan 2026');
+    expect(global.fetch).toHaveBeenCalledWith('/api/landing-pages/public/featured-full?vertical=travel', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
     });
-    // The fallback should NOT have rendered (document.write replaced the page).
     expect(screen.queryByTestId('trips-fallback')).not.toBeInTheDocument();
   });
 
@@ -89,44 +102,63 @@ describe('<TripsResolver />', () => {
       ok: false,
       status: 404,
     });
+
     renderResolver();
-    await waitFor(() => {
-      expect(screen.getByTestId('trips-fallback')).toBeInTheDocument();
-    });
-    expect(documentWrite).not.toHaveBeenCalled();
+
+    expect(await screen.findByTestId('trips-fallback')).toBeInTheDocument();
+    expect(screen.getByTestId('location-probe')).toHaveAttribute('data-path', '/trips');
+    expect(screen.queryByTestId('landing-page-renderer')).not.toBeInTheDocument();
   });
 
   it('falls back to the hardcoded TripsLanding on network error', async () => {
     global.fetch.mockRejectedValueOnce(new Error('Network down'));
+
     renderResolver();
-    await waitFor(() => {
-      expect(screen.getByTestId('trips-fallback')).toBeInTheDocument();
-    });
-    expect(documentWrite).not.toHaveBeenCalled();
+
+    expect(await screen.findByTestId('trips-fallback')).toBeInTheDocument();
+    expect(screen.getByTestId('location-probe')).toHaveAttribute('data-path', '/trips');
+    expect(screen.queryByTestId('landing-page-renderer')).not.toBeInTheDocument();
   });
 
-  it('falls back when the response is 200 but the HTML body is empty', async () => {
+  it('falls back when the response is 200 but the payload is missing a slug', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
-      text: async () => '',
+      json: async () => ({ title: 'Featured trip without slug' }),
     });
+
     renderResolver();
-    await waitFor(() => {
-      expect(screen.getByTestId('trips-fallback')).toBeInTheDocument();
-    });
-    expect(documentWrite).not.toHaveBeenCalled();
+
+    expect(await screen.findByTestId('trips-fallback')).toBeInTheDocument();
+    expect(screen.getByTestId('location-probe')).toHaveAttribute('data-path', '/trips');
+    expect(screen.queryByTestId('landing-page-renderer')).not.toBeInTheDocument();
   });
 
-  it('calls /api/landing-pages/public/featured-html with GET + Accept: text/html', async () => {
+  it('calls /api/landing-pages/public/featured-full with GET + Accept: application/json', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
-      text: async () => '<html><body>trip</body></html>',
+      json: async () => ({
+        id: 52,
+        slug: 'manali-2026',
+        title: 'Manali 2026',
+        status: 'PUBLISHED',
+        templateType: 'travel_destination',
+        destination: 'Manali',
+        subBrand: 'travelstall',
+        metaTitle: 'Manali 2026',
+        metaDescription: 'Visit Manali',
+        content: [],
+        cssOverrides: '',
+        tripId: 52,
+      }),
     });
+
     renderResolver();
-    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    await screen.findByTestId('landing-page-renderer');
+
     const [url, opts] = global.fetch.mock.calls[0];
-    expect(url).toBe('/api/landing-pages/public/featured-html?vertical=travel');
+    expect(url).toBe('/api/landing-pages/public/featured-full?vertical=travel');
     expect(opts?.method).toBe('GET');
-    expect(opts?.headers?.Accept).toBe('text/html');
+    expect(opts?.headers?.Accept).toBe('application/json');
   });
 });

@@ -784,6 +784,63 @@ describe('GET /verification-queue — union with CustomerTraveller', () => {
 });
 
 // -----------------------------------------------------------------------------
+// GET /participants/:id/view-url + /customer-travellers/:id/view-url
+// -----------------------------------------------------------------------------
+
+describe('GET /api/travel/passport/.../view-url', () => {
+  test('returns a signed disk URL for a staff-uploaded participant passport image', async () => {
+    prisma.tripParticipant.findFirst.mockResolvedValue({
+      id: 55,
+      fullName: 'Jane Doe',
+      passportExtractionJson: JSON.stringify({
+        imageFilename: 'abc.jpg',
+        imageUrl: '/api/uploads/passport-ocr/abc.jpg',
+      }),
+      trip: { id: 100, tenantId: 1, tripCode: 'bali2026', destination: 'Bali' },
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/passport/participants/55/view-url')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toMatch(/^\/uploads\/passport-ocr\/abc\.jpg\?t=/);
+    expect(res.body.expiresInSeconds).toBe(300);
+  });
+
+  test('returns a signed S3 URL for a portal-backed customer passport image', async () => {
+    vi.spyOn(s3Service, 'getSignedUrl').mockResolvedValue('https://signed.example.com/passport-ocr/portal-a.jpg');
+    prisma.customerTraveller.findFirst.mockResolvedValue({
+      id: 7,
+      tenantId: 1,
+      fullName: 'Ahmed Khan',
+      passportExtractionJson: JSON.stringify({
+        storage: 's3',
+        imageKey: 'passport-ocr/portal-a.jpg',
+        imageUrl: 'https://s3.test/passport-ocr/portal-a.jpg',
+      }),
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/passport/customer-travellers/7/view-url')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toBe('https://signed.example.com/passport-ocr/portal-a.jpg');
+    expect(s3Service.getSignedUrl).toHaveBeenCalledWith('passport-ocr/portal-a.jpg', 300);
+  });
+
+  test('USER role gets 403 RBAC_DENIED', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .get('/api/travel/passport/participants/55/view-url')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
+  });
+});
+
+// -----------------------------------------------------------------------------
 // POST /customer-travellers/:id/assign-contact
 // -----------------------------------------------------------------------------
 

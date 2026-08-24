@@ -132,10 +132,13 @@ const ItineraryPaymentSuccess = lazy(
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
 // Public marketing landing page entry point  /trips. Resolves the
 // admin-selected featured LandingPage via /api/landing-pages/public/
-// featured and forwards the browser to /p/<slug>. When no page is
-// featured yet, falls back to the hardcoded TripsLanding (Japan).
-// No auth  renders outside the AuthContext shell.
+// featured-full and renders it in place. When no page is featured yet,
+// falls back to the hardcoded TripsLanding (Japan). No auth, renders
+// outside the AuthContext shell.
 const TripsResolver = lazy(() => import("./pages/public/TripsResolver"));
+// Public travel share page  /trips/:id-or-slug. SPA route so direct
+// share links render the public landing page without bouncing through /p.
+const TripsShareResolver = lazy(() => import("./pages/public/TripsShareResolver"));
 // Cross-vertical staff attendance dashboard  visible to wellness + travel
 // tenants. Backend (/api/attendance/list + /summary) is role-gated to
 // ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
@@ -1438,13 +1441,12 @@ export default function App() {
                     />
                     {/* Public flyer share + iframe-embed viewer (no auth; JWT in ?t=). */}
                     <Route path="/p/flyer/:slug" element={<FlyerView />} />
-                    {/* Dynamic /trips entry point  resolves to the admin-
-                      selected featured LandingPage via the public
-                      /api/landing-pages/public/featured endpoint and
-                      forwards the browser to /p/<slug>. Falls back to the
-                      hardcoded Japan TripsLanding if no page is featured
-                      yet (lazy-imported by the resolver). */}
+                    {/* Dynamic /trips entry point. Direct browser loads are
+                      served by the backend/Nginx proxy so the public page
+                      matches production HTML. The SPA resolver is only a
+                      fallback for client-side navigation or local tests. */}
                     <Route path="/trips" element={<TripsResolver />} />
+                    <Route path="/trips/:tripRef" element={<TripsShareResolver />} />
                     <Route
                       path="/landing-sites/:slug"
                       element={<LandingSiteResolver />}

@@ -3,6 +3,8 @@
  * Mirrors backend/services/landingPageRenderer.js logic for client-side use.
  */
 
+import { SUB_BRAND_IDS } from './travelSubBrand';
+
 /**
  * Safely validate and normalize URLs based on context (image, link, iframe).
  * Implements the same allowlist as the backend renderer (#447).
@@ -145,4 +147,68 @@ export function parseContentJson(landingPage) {
 export function formatCurrency(amount, currency = '₹') {
   if (amount == null || amount === '') return null;
   return `${currency}${amount}`;
+}
+
+function isGenericLandingSite(landingPage) {
+  return typeof landingPage?.templateType === 'string' && landingPage.templateType.startsWith('generic-site-');
+}
+
+function getLandingPageIdentifier(landingPage) {
+  if (landingPage?.id != null && landingPage.id !== '') return String(landingPage.id);
+  if (landingPage?.slug != null && landingPage.slug !== '') return String(landingPage.slug);
+  return '';
+}
+
+const TRAVEL_TEMPLATE_TYPES = new Set([
+  'travel_destination',
+  'wanderlux-v1',
+  'educational-trip-v1',
+  'religious-tour-v1',
+  'family-trip-v1',
+  'luxury-tour-v1',
+  'travel-premium-v1',
+]);
+
+export function isTravelLandingPage(landingPage) {
+  const subBrand = typeof landingPage?.subBrand === 'string' ? landingPage.subBrand.toLowerCase() : '';
+  const templateType = typeof landingPage?.templateType === 'string' ? landingPage.templateType.toLowerCase() : '';
+  return SUB_BRAND_IDS.includes(subBrand) || TRAVEL_TEMPLATE_TYPES.has(templateType);
+}
+
+/**
+ * Resolve the public share path for a landing page.
+ *
+ * Draft pages keep the editor preview path. Published generic landing sites
+ * stay under /landing-sites/:slug. Published travel pages use /trips for the
+ * single featured page and /trips/:id for every other published travel page.
+ */
+export function getLandingPageSharePath(landingPage) {
+  const slug = landingPage?.slug ? String(landingPage.slug) : '';
+
+  if (landingPage?.status !== 'PUBLISHED') {
+    return slug ? `/p/${slug}` : '/p/';
+  }
+
+  if (isGenericLandingSite(landingPage)) {
+    return slug ? `/landing-sites/${slug}` : '/landing-sites/';
+  }
+
+  if (isTravelLandingPage(landingPage) && landingPage?.isFeatured) {
+    return '/trips';
+  }
+
+  if (isTravelLandingPage(landingPage)) {
+    const identifier = getLandingPageIdentifier(landingPage);
+    return identifier ? `/trips/${identifier}` : '/trips/';
+  }
+
+  return slug ? `/p/${slug}` : '/p/';
+}
+
+/**
+ * Resolve the full public share URL for a landing page.
+ */
+export function getLandingPageShareUrl(landingPage, origin = typeof window !== 'undefined' ? window.location.origin : '') {
+  const path = getLandingPageSharePath(landingPage);
+  return origin ? `${origin}${path}` : path;
 }

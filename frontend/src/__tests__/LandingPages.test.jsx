@@ -85,6 +85,8 @@ const samplePages = [
     status: 'PUBLISHED',
     visits: 100,
     submissions: 7,
+    subBrand: 'travelstall',
+    isFeatured: false,
   },
   {
     id: 12,
@@ -362,6 +364,28 @@ describe('<LandingPages /> — index page surface', () => {
     expect(screen.getByRole('button', { name: /^Unpublish$/i })).toBeInTheDocument();
   });
 
+  it('published travel rows expose a copyable /trips/<id> share URL while drafts stay hidden', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    const card = screen.getByText('Spring Launch').closest('.card');
+    expect(card).toBeTruthy();
+
+    const publicUrlInput = card.querySelector('input[readonly]');
+    expect(publicUrlInput).toBeTruthy();
+    expect(publicUrlInput.value).toMatch(/\/trips\/11$/);
+    const copyBtn = card.querySelector('button[title="Copy public URL"]');
+    expect(copyBtn).toBeTruthy();
+    expect(card.querySelector('a[title="Open public page in new tab"]')?.getAttribute('href')).toMatch(/\/trips\/11$/);
+    expect(card.querySelector('button[title="Make this trip the featured /trips page"]')).toBeTruthy();
+
+    fetchApiMock.mockClear();
+    copyBtn && fireEvent.click(copyBtn);
+    await waitFor(() => {
+      expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringMatching(/\/trips\/11$/));
+    });
+  });
+
   it('clicking Unpublish fires POST /api/landing-pages/:id/unpublish', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
@@ -409,25 +433,26 @@ describe('<LandingPages /> — index page surface', () => {
     });
   });
 
-  it('when another page is PUBLISHED the Publish button is disabled (hard-block UX)', async () => {
+  it('when another travel page is PUBLISHED the Publish button stays enabled and still POSTs /publish', async () => {
     // samplePages has id=11 as PUBLISHED and id=12 as DRAFT.
-    // The SUT disables the Publish button — this IS the hard-block. The operator
-    // cannot click it; no API call can ever fire. That is the full contract.
+    // The travel page still publishes even when another travel page is already
+    // live; featuring is now a separate action, so publish only changes the
+    // page's own status and share URL.
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
 
     const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
-    expect(publishBtn).toBeDisabled();
+    expect(publishBtn).not.toBeDisabled();
+    expect(publishBtn.title).toMatch(/make it live at \/p\/winter-promo/i);
 
-    // The tooltip names the currently-live page so the operator knows why.
-    expect(publishBtn.title).toMatch(/Spring Launch/);
-
-    // Confirm no publish API call fires (button is disabled — nothing can fire it).
     fetchApiMock.mockClear();
-    const publishCall = fetchApiMock.mock.calls.find(
-      ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
-    );
-    expect(publishCall).toBeUndefined();
+    fireEvent.click(publishBtn);
+    await waitFor(() => {
+      const publishCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
+      );
+      expect(publishCall).toBeTruthy();
+    });
   });
 
   it('clicking the header Create Page button opens the template picker with templates + Blank Page tile', async () => {
@@ -489,12 +514,11 @@ describe('<LandingPages /> — index page surface', () => {
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     // Find the delete button for the PUBLISHED page. The Trash icon button
     // has no accessible name, so locate it by sibling-button position
-    // within the published card. Per the post-merge Publish-also-features
-    // collapse, the page renders Edit (link) + Unpublish + duplicate +
-    // delete; the delete button is the only one styled with red color,
-    // but in the DOM the easiest unique pin is by walking from the
-    // Spring Launch <h3> up to its card ancestor and querying buttons
-    // inside.
+    // within the published card. The page renders Edit (link) + Unpublish
+    // + Feature + Duplicate + Delete; the delete button is the only one
+    // styled with red color, but in the DOM the easiest unique pin is by
+    // walking from the Spring Launch <h3> up to its card ancestor and
+    // querying buttons inside.
     const cardTitle = screen.getByText('Spring Launch');
     const card = cardTitle.closest('.card');
     expect(card).toBeTruthy();
@@ -514,7 +538,7 @@ describe('<LandingPages /> — index page surface', () => {
     const msg = confirmMock.mock.calls[0][0];
     expect(msg).toMatch(/Spring Launch/);
     expect(msg).toMatch(/PUBLISHED/i);
-    expect(msg).toMatch(/\/p\/spring-launch/);
+    expect(msg).toMatch(/\/trips\/11/);
 
     // Cancel path → DELETE never fires.
     const deleteCall = fetchApiMock.mock.calls.find(

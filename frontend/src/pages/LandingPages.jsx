@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Star, Sparkles, AlertCircle, ExternalLink, Search, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
+import { getLandingPageSharePath, getLandingPageShareUrl, isTravelLandingPage } from '../utils/landingPageUtils';
 import { useNotify } from '../utils/notify';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
@@ -151,6 +152,7 @@ export default function LandingPages() {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
   const [copiedId, setCopiedId] = useState(null);
+  const [featuringId, setFeaturingId] = useState(null);
   const cardSurfaceStyle = getLandingPageCardStyle(isDarkTheme);
   const metricTileStyle = getLandingPageMetricTileStyle(isDarkTheme);
   useEffect(() => {
@@ -298,24 +300,15 @@ export default function LandingPages() {
   };
 
   const handlePublish = async (id, action) => {
-    // Hard-block: only one page can be live at a time.
-    // If another page is already PUBLISHED, block publish entirely —
-    // the admin must unpublish the live page first.
-    if (action === 'publish') {
-      const target = pages.find((p) => p.id === id);
-      const currentLive = pages.find(
-        (p) => p.status === 'PUBLISHED' && p.id !== id,
-      );
-      if (currentLive) {
-        notify.error(
-          `"${currentLive.title}" is currently live. Unpublish it before publishing "${target?.title || 'this page'}". You can save this as a draft in the meantime.`,
-        );
-        return;
-      }
-    }
     try {
       await fetchApi(`/api/landing-pages/${id}/${action}`, { method: 'POST' });
-      if (action === 'publish') notify.success('Published — page is live at /trips.');
+      const currentPage = pages.find((p) => p.id === id) || {};
+      const publishPath = getLandingPageSharePath({
+        ...currentPage,
+        status: 'PUBLISHED',
+        isFeatured: Boolean(currentPage.isFeatured),
+      });
+      if (action === 'publish') notify.success(`Published — page is live at ${publishPath}.`);
       else notify.success('Unpublished — page is no longer live.');
       loadPages();
     } catch (err) {
@@ -344,15 +337,15 @@ export default function LandingPages() {
   };
 
   const handleCopyUrl = (page) => {
-    const url = `${window.location.origin}/trips`;
+    const url = getLandingPageShareUrl(page);
     navigator.clipboard.writeText(url).then(() => {
       setCopiedId(page.id);
       setTimeout(() => setCopiedId(null), 2000);
     });
   };
 
-  /* legacy featured toggle removed; keep the block here only if the action returns.
-    if (featuringId) return;
+  const handleFeature = async (page) => {
+    if (!page?.id || featuringId) return;
     setFeaturingId(page.id);
     try {
       if (page.isFeatured) {
@@ -366,7 +359,7 @@ export default function LandingPages() {
     } finally {
       setFeaturingId(null);
     }
-  */
+  };
 
   // PR-B — AI Generate flow. Posts to /generate-from-destination with
   // autoCreate=true so the backend creates the DRAFT row + returns its
@@ -448,11 +441,12 @@ export default function LandingPages() {
     const page = pages.find(p => p.id === id) || {};
     const name = page.title || `page ${id}`;
     const isPublished = page.status === 'PUBLISHED';
+    const publicPath = getLandingPageSharePath(page);
     const submissionsLine = page.submissions > 0
       ? `\n\nThis page has ${page.submissions} submission${page.submissions === 1 ? '' : 's'} (kept in the contacts/deals tables; only the page record is removed).`
       : '';
     const publishedLine = isPublished
-      ? `\n\n⚠ This page is currently PUBLISHED. Deleting takes the public URL /p/${page.slug} offline.`
+      ? `\n\n⚠ This page is currently PUBLISHED. Deleting takes the public URL ${publicPath} offline.`
       : '';
     const msg = `Delete "${name}"?${publishedLine}${submissionsLine}\n\nThis cannot be undone.`;
     if (!await notify.confirm(msg)) return;
@@ -684,7 +678,7 @@ export default function LandingPages() {
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Conv.</div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <Link to={`/landing-pages/builder/${page.id}`} state={builderNavigationState} className="btn-primary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}>
                     <FileEdit size={13} /> Edit
                   </Link>
@@ -695,34 +689,29 @@ export default function LandingPages() {
                       the Edit builder already serves the same need
                       (renders the live page via /:id/preview without
                       leaving the admin shell), and the public URL is
-                      always reachable directly at <host>/p/<slug>. */}
-                  {/* Single Publish/Unpublish button. The backend's
-                      /publish endpoint also features the page on /trips
-                      (auto-demoting any sibling currently featured in
-                      the same tenant + subBrand scope), so one button
-                      covers both make-it-live and put-it-on-/trips in
-                      lockstep — matching the operator's actual
-                      single-page-live workflow. */}
-                  {(() => {
-                    const anotherLive = page.status !== 'PUBLISHED' && pages.some(p => p.status === 'PUBLISHED' && p.id !== page.id);
-                    const liveTitle = anotherLive ? (pages.find(p => p.status === 'PUBLISHED' && p.id !== page.id)?.title || 'Another page') : null;
-                    return (
-                      <button
-                        onClick={() => handlePublish(page.id, page.status === 'PUBLISHED' ? 'unpublish' : 'publish')}
-                        disabled={anotherLive}
-                        title={
-                          page.status === 'PUBLISHED'
-                            ? 'Take this page down — /trips will no longer serve it'
-                            : anotherLive
-                              ? `"${liveTitle}" is currently live. Unpublish it first.`
-                              : 'Publish this page and make it live at /trips'
-                        }
-                        style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : anotherLive ? 'var(--text-secondary)' : '#10b981', cursor: anotherLive ? 'not-allowed' : 'pointer', opacity: anotherLive ? 0.5 : 1 }}
-                      >
-                        <Globe size={13} /> {page.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
-                      </button>
-                    );
-                  })()}
+                      always reachable directly at <host>/trips or
+                      <host>/trips/<id> for published travel pages. */}
+                  <button
+                    onClick={() => handlePublish(page.id, page.status === 'PUBLISHED' ? 'unpublish' : 'publish')}
+                    title={
+                      page.status === 'PUBLISHED'
+                        ? 'Take this page down — its public URL will no longer serve it'
+                        : `Publish this page and make it live at ${getLandingPageSharePath({ ...page, status: 'PUBLISHED', isFeatured: Boolean(page.isFeatured) })}`
+                    }
+                    style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : '#10b981', cursor: 'pointer' }}
+                  >
+                    <Globe size={13} /> {page.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
+                  </button>
+                  {page.status === 'PUBLISHED' && isTravelLandingPage(page) && (
+                    <button
+                      onClick={() => handleFeature(page)}
+                      disabled={featuringId === page.id}
+                      title={page.isFeatured ? 'Remove this trip from /trips' : 'Make this trip the featured /trips page'}
+                      style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: page.isFeatured ? 'rgba(245, 158, 11, 0.08)' : 'none', color: page.isFeatured ? '#f59e0b' : '#10b981', cursor: featuringId === page.id ? 'wait' : 'pointer' }}
+                    >
+                      <Star size={13} /> {page.isFeatured ? 'Unfeature' : 'Feature'}
+                    </button>
+                  )}
                   <button onClick={() => handleDuplicate(page.id)} title="Duplicate" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
                     <Copy size={13} />
                   </button>
@@ -741,7 +730,7 @@ export default function LandingPages() {
                     <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.6rem' }}>
                       <input
                         readOnly
-                        value={`${window.location.origin}/trips`}
+                        value={getLandingPageShareUrl(page)}
                         onClick={e => e.target.select()}
                         style={{ flex: 1, fontSize: '0.72rem', padding: '5px 8px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', minWidth: 0, cursor: 'text' }}
                       />
@@ -753,7 +742,7 @@ export default function LandingPages() {
                         <Copy size={11} /> {copiedId === page.id ? 'Copied!' : 'Copy'}
                       </button>
                       <a
-                        href={`${window.location.origin}/trips`}
+                        href={getLandingPageShareUrl(page)}
                         target="_blank"
                         rel="noreferrer"
                         title="Open public page in new tab"

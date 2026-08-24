@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback, useContext } from 'react';
 import { useParams, useSearchParams, useLocation, Link } from 'react-router-dom';
-import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns, MapPin, Building2, Sparkles, ListChecks, CalendarDays, IndianRupee, HelpCircle, MessageSquare, AlertCircle, CheckCircle2, Globe, Film, Shield, FileDown, PhoneCall, History, X, RotateCcw, UserPlus, Search, Copy, Star, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns, MapPin, Building2, Sparkles, ListChecks, CalendarDays, IndianRupee, HelpCircle, MessageSquare, AlertCircle, CheckCircle2, Globe, Film, Shield, FileDown, PhoneCall, History, X, RotateCcw, UserPlus, Search, Copy, ExternalLink } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { isUploadedS3Url } from '../utils/uploadDisplay';
 import UploadedAssetChip from '../components/UploadedAssetChip';
 import { PRESETS as REG_FORM_PRESETS, listPresets as listRegFormPresets, defaultPropsFor as regFormDefaultPropsFor } from '../utils/travelRegistrationPresets';
+import { getLandingPageSharePath, getLandingPageShareUrl, isTravelLandingPage } from '../utils/landingPageUtils';
 import LandingPageTemplateEditor from './LandingPageTemplateEditor';
 import LandingPageWanderluxEditor, { LayoutPanel as WanderluxLayoutPanel } from './LandingPageWanderluxEditor';
 import LandingPageWellnessEditor from './LandingPageWellnessEditor';
@@ -243,7 +244,6 @@ export default function LandingPageBuilder() {
   const [restoringVersionId, setRestoringVersionId] = useState(null);
   const [selectedVersion, setSelectedVersion] = useState(null);
   const [urlCopied, setUrlCopied] = useState(false);
-  const [featuringPage, setFeaturingPage] = useState(false);
   // Track all pages so we can warn when another live page exists.
   const [allPages, setAllPages] = useState([]);
   const currentPublishedLandingSite = isGenericLandingSites
@@ -499,11 +499,29 @@ export default function LandingPageBuilder() {
     setPublishing(true);
     try {
       if (isDirty) await handleSave(false);
-      await fetchApi(`/api/landing-pages/${page.id}/publish`, { method: 'POST' });
-      setPage({ ...page, status: 'PUBLISHED', publishedAt: new Date().toISOString() });
+      const publishedPage = await fetchApi(`/api/landing-pages/${page.id}/publish`, { method: 'POST' });
+      const nextPage = publishedPage && typeof publishedPage === 'object'
+        ? { ...page, ...publishedPage }
+        : {
+            ...page,
+            status: 'PUBLISHED',
+            publishedAt: new Date().toISOString(),
+            isFeatured: Boolean(page.isFeatured),
+            featuredAt: page.isFeatured ? (page.featuredAt || new Date().toISOString()) : null,
+          };
+      if (nextPage.status !== 'PUBLISHED') {
+        nextPage.isFeatured = false;
+        nextPage.featuredAt = null;
+      } else if (nextPage.isFeatured) {
+        nextPage.featuredAt = nextPage.featuredAt || new Date().toISOString();
+      } else {
+        nextPage.isFeatured = false;
+        nextPage.featuredAt = null;
+      }
+      setPage(nextPage);
       setPublishIssues({ ok: true, issues: [] });
       setShowPublishModal(false);
-      notify.success(isGenericLandingSites ? `Published. Public URL is /landing-sites/${page?.slug || ''}.` : `Published. Public URL is /trips.`);
+      notify.success(`Published. Public URL is ${getLandingPageSharePath(nextPage)}.`);
     } catch (err) {
       if (err?.status === 409 && err?.code === 'PUBLISH_GATE_FAILED') {
         setPublishIssues({ ok: false, issues: err.data?.issues || [] });
@@ -523,39 +541,21 @@ export default function LandingPageBuilder() {
     const ok = await notify.confirm(`Unpublish "${page.title}"? This will take the page offline. You can re-publish it any time.`);
     if (!ok) return;
     try {
-      await fetchApi(`/api/landing-pages/${page.id}/unpublish`, { method: 'POST' });
-      setPage({ ...page, status: 'DRAFT' });
+      const unpublishedPage = await fetchApi(`/api/landing-pages/${page.id}/unpublish`, { method: 'POST' });
+      const nextPage = unpublishedPage && typeof unpublishedPage === 'object'
+        ? { ...page, ...unpublishedPage }
+        : { ...page, status: 'DRAFT', isFeatured: false, featuredAt: null };
+      nextPage.isFeatured = false;
+      nextPage.featuredAt = null;
+      setPage(nextPage);
       notify.success('Unpublished.');
     } catch (err) {
       notify.error(err?.message || 'Unpublish failed.');
     }
   };
 
-  // -- Feature / unfeature ------------------------------------------
-  const handleSetFeatured = async () => {
-    if (!page?.id || featuringPage) return;
-    setFeaturingPage(true);
-    try {
-      if (page.isFeatured) {
-        await fetchApi(`/api/landing-pages/${page.id}/unfeature`, { method: 'POST' });
-        setPage({ ...page, isFeatured: false, featuredAt: null });
-        notify.success('Removed as featured trip.');
-      } else {
-        await fetchApi(`/api/landing-pages/${page.id}/feature`, { method: 'POST' });
-        setPage({ ...page, isFeatured: true, featuredAt: new Date().toISOString() });
-        notify.success('Set as featured! /trips now points to this page.');
-      }
-    } catch (err) {
-      notify.error(err?.message || 'Failed to update featured status.');
-    } finally {
-      setFeaturingPage(false);
-    }
-  };
-
   const handleCopyUrl = () => {
-    const url = page?.status === 'PUBLISHED'
-      ? (isGenericLandingSites ? `${window.location.origin}/landing-sites/${page?.slug || ''}` : `${window.location.origin}/trips`)
-      : `${window.location.origin}/p/${page?.slug || ''}`;
+    const url = getLandingPageShareUrl(page);
     navigator.clipboard.writeText(url).then(() => {
       setUrlCopied(true);
       setTimeout(() => setUrlCopied(false), 2000);
@@ -781,7 +781,7 @@ export default function LandingPageBuilder() {
           <Eye size={14} /> Preview
         </button>
         {page.status === 'PUBLISHED' && (
-          <a href={isGenericLandingSites ? (window.location.origin + '/landing-sites/' + (page?.slug || '')) : (window.location.origin + '/trips')} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-primary)', textDecoration: 'none' }}>
+          <a href={getLandingPageShareUrl(page)} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-primary)', textDecoration: 'none' }}>
             <Globe size={14} /> Open live
           </a>
         )}
@@ -949,7 +949,7 @@ export default function LandingPageBuilder() {
                   <div style={{ display: 'flex', gap: 4, marginBottom: '0.5rem' }}>
                     <input
                       readOnly
-                      value={isGenericLandingSites ? (window.location.origin + '/landing-sites/' + (page?.slug || '')) : (window.location.origin + '/trips')}
+                      value={getLandingPageShareUrl(page)}
                       style={{ flex: 1, fontSize: '0.72rem', padding: '5px 7px', borderRadius: 5, border: '1px solid var(--border-color)', background: 'var(--subtle-bg, #f9fafb)', color: 'var(--text-primary)', minWidth: 0, cursor: 'text' }}
                       onClick={(e) => e.target.select()}
                     />
@@ -963,17 +963,19 @@ export default function LandingPageBuilder() {
                     </button>
                   </div>
                   <a
-                    href={isGenericLandingSites ? (window.location.origin + '/landing-sites/' + (page?.slug || '')) : (window.location.origin + '/trips')}
+                    href={getLandingPageShareUrl(page)}
                     target="_blank"
                     rel="noreferrer"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.72rem', color: 'var(--accent-color)', textDecoration: 'none', marginBottom: '0.7rem' }}
                   >
                     <ExternalLink size={11} /> Open in new tab
                   </a>
-                  {!isGenericLandingSites && (
+                  {!isGenericLandingSites && isTravelLandingPage(page) && (
                     <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.6rem' }}>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                        <span style={{ color: '#f59e0b', fontWeight: 600 }}>/trips is pointing here</span>
+                        <span style={{ color: '#f59e0b', fontWeight: 600 }}>
+                          {page.isFeatured ? '/trips is pointing here' : '/trips points to the featured trip'}
+                        </span>
                       </div>
                     </div>
                   )}

@@ -610,6 +610,32 @@ describe('POST /api/landing-pages/:id/publish | /unpublish | /duplicate', () => 
     expect(res.body.publishedAt).toBeTruthy();
   });
 
+  test('publish travel page keeps featuring separate from publish', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50,
+      tenantId: 1,
+      status: 'DRAFT',
+      title: 'Umrah Launch',
+      slug: 'umrah-launch',
+      templateType: 'travel_destination',
+      subBrand: 'rfu',
+      content: JSON.stringify([{ type: 'heading', props: { text: 'Hi' } }]),
+    });
+    prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data }));
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/publish?force=true')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('PUBLISHED');
+    expect(prisma.landingPage.updateMany).not.toHaveBeenCalled();
+    const updateArgs = prisma.landingPage.update.mock.calls[0]?.[0];
+    expect(updateArgs?.where).toEqual({ id: 50 });
+    expect(updateArgs?.data).toMatchObject({
+      status: 'PUBLISHED',
+    });
+    expect(updateArgs?.data).not.toHaveProperty('isFeatured');
+  });
+
   test('publish: blocks a second generic landing site while one is already published', async () => {
     prisma.landingPage.findFirst.mockImplementation(async (args) => {
       if (args.where?.id === 50) {
@@ -710,12 +736,12 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  test('feature on PUBLISHED page → demotes siblings + sets isFeatured + returns the updated row', async () => {
+  test('feature on PUBLISHED page → demotes travel siblings + sets isFeatured + returns the updated row', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
-      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: false, subBrand: 'tmc',
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: false, subBrand: 'rfu',
     });
     prisma.landingPage.findUnique.mockResolvedValue({
-      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true, featuredAt: new Date(), subBrand: 'tmc',
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true, featuredAt: new Date(), subBrand: 'rfu',
     });
     const res = await request(makeApp())
       .post('/api/landing-pages/50/feature')
@@ -724,10 +750,13 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
     expect(res.body.isFeatured).toBe(true);
     // Transaction is what enforces the invariant — must have been called.
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    // updateMany should target the same scope EXCLUDING the target row.
+    // updateMany should target the travel bucket EXCLUDING the target row.
     const updateManyArgs = prisma.landingPage.updateMany.mock.calls[0]?.[0];
     expect(updateManyArgs?.where?.tenantId).toBe(1);
-    expect(updateManyArgs?.where?.subBrand).toBe('tmc');
+    expect(updateManyArgs?.where?.OR).toEqual([
+      { subBrand: { in: ['tmc', 'rfu', 'travelstall', 'visasure'] } },
+      { templateType: { in: ['travel_destination', 'wanderlux-v1', 'educational-trip-v1', 'religious-tour-v1', 'family-trip-v1', 'luxury-tour-v1', 'travel-premium-v1'] } },
+    ]);
     expect(updateManyArgs?.where?.isFeatured).toBe(true);
     expect(updateManyArgs?.where?.NOT?.id).toBe(50);
   });
@@ -735,7 +764,7 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
   test('feature is idempotent — already-featured page is a no-op (no transaction)', async () => {
     const existing = {
       id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true,
-      featuredAt: new Date('2026-06-01T00:00:00Z'), subBrand: 'tmc',
+      featuredAt: new Date('2026-06-01T00:00:00Z'), subBrand: 'travelstall',
     };
     prisma.landingPage.findFirst.mockResolvedValue(existing);
     const res = await request(makeApp())

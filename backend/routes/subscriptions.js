@@ -3,6 +3,7 @@ const PDFDocument = require('pdfkit');
 const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const razorpayService = require('../services/razorpayService');
+const { reconcileSubscriptions, fulfillSubscriptionOrder } = require('../lib/subscriptionFulfillment');
 const { formatMoney } = require('../utils/formatMoney');
 // Shared rupee-glyph fix: registers the embedded Poppins family under the Helvetica
 // names so the rupee sign renders as rupee instead of "AA1" (built-in WinAnsi gap).
@@ -36,62 +37,11 @@ const requireOwner = (req, res, next) => {
 // The new period is queued to start the instant the current one ends, so two
 // back-to-back one-month buys give two consecutive months, never overlapping.
 //
-// reconcileSubscriptions is a lazy, read-time state machine (no cron needed):
-// it expires periods whose endDate has passed and promotes the next queued
-// (SCHEDULED) period to ACTIVE once its startDate arrives. Call it before
-// reading a user's subscription state. Returns the resolved user-level status.
-async function reconcileSubscriptions(userId, tenantId) {
-  return await prisma.$transaction(async (tx) => {
-    const now = new Date();
-
-    // Walk forward through the user's timeline: expire elapsed periods, then
-    // promote the earliest queued period that has reached its start. Loop so a
-    // chain of short back-to-back periods all settle in one pass.
-    let resolvedStatus = null;
-    // Bounded: each iteration either settles (breaks) or promotes exactly one
-    // queued period. The cap is a safety backstop against an unexpected cycle.
-    for (let guard = 0; guard < 100; guard++) {
-      // Expire any ACTIVE period whose window has fully elapsed.
-      await tx.subscription.updateMany({
-        where: { userId, tenantId, status: 'ACTIVE', endDate: { lte: now } },
-        data: { status: 'EXPIRED' },
-      });
-
-      // Is a period currently active (window covers now)?
-      const active = await tx.subscription.findFirst({
-        where: { userId, tenantId, status: 'ACTIVE' },
-        orderBy: { startDate: 'asc' },
-      });
-      if (active) {
-        resolvedStatus = 'ACTIVE';
-        break;
-      }
-
-      // No active period - promote the earliest queued period that has started.
-      const due = await tx.subscription.findFirst({
-        where: { userId, tenantId, status: 'SCHEDULED', startDate: { lte: now } },
-        orderBy: { startDate: 'asc' },
-      });
-      if (!due) {
-        // Nothing active and nothing due to start yet. If a future-dated queued
-        // period exists the user is still effectively ACTIVE (their current paid
-        // period just hasn't been created as a separate row) - but in practice
-        // the prior period would still be ACTIVE in that case, so falling here
-        // means the user has no live coverage.
-        resolvedStatus = null;
-        break;
-      }
-
-      await tx.subscription.update({
-        where: { id: due.id },
-        data: { status: 'ACTIVE' },
-      });
-      // Loop again: the just-promoted period might itself already be elapsed.
-    }
-
-    return resolvedStatus;
-  });
-}
+// reconcileSubscriptions + fulfillSubscriptionOrder now live in
+// lib/subscriptionFulfillment.js, shared with the /webhook/razorpay handler
+// in routes/payments.js so a Subscription row is created exactly once
+// whichever path (client callback or Razorpay webhook) reports the payment
+// first. See that file for the state-machine/stacking-model comment.
 
 // Get current user's subscription status. ADMIN-only - the tenant admin is
 // the one who buys + manages the subscription. Managers/staff don't see
@@ -359,6 +309,7 @@ router.delete('/plans/:id', verifyToken, requireOwner, async (req, res) => {
 // passed or when the plan has no `pricing` JSON populated yet.
 router.post('/create-order', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
   try {
+    const { userId, tenantId } = req.user;
     const { planId, currency: bodyCurrency, billingPeriod } = req.body;
 
     if (!planId) {
@@ -400,10 +351,21 @@ router.post('/create-order', verifyToken, verifyRole(['ADMIN']), async (req, res
       }
     }
 
+    // Stamp tenant/user/billing context into the Razorpay order's notes so
+    // the /webhook/razorpay handler (server-to-server, no req.user) can
+    // fulfill the subscription on its own if the browser never calls back to
+    // /verify-payment (tab closed, network drop, JS error after payment).
     const order = await razorpayService.createOrder(
       chargeAmount,
       parseInt(planId),
-      chargeCurrency
+      chargeCurrency,
+      {
+        kind: 'subscription',
+        tenantId: String(tenantId),
+        userId: String(userId),
+        billingPeriod: billingPeriod ? String(billingPeriod) : '',
+        requestedCurrency: bodyCurrency ? String(bodyCurrency) : '',
+      }
     );
 
     res.json({
@@ -443,122 +405,33 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
       return res.status(400).json({ error: 'Invalid payment signature' });
     }
 
-    // Check if subscription already exists for this order
-    const existing = await prisma.subscription.findUnique({
-      where: { razorpayOrderId }
-    });
+    // fulfillSubscriptionOrder is idempotent on razorpayOrderId - if the
+    // /webhook/razorpay handler already fulfilled this order (e.g. it beat
+    // this client callback to it), this just returns alreadyExists: true
+    // instead of creating a duplicate Subscription row.
+    let result;
+    try {
+      result = await fulfillSubscriptionOrder({
+        tenantId,
+        userId,
+        planId,
+        razorpayOrderId,
+        razorpayPaymentId,
+        currency: bodyCurrency,
+        billingPeriod,
+      });
+    } catch (e) {
+      if (e.message === 'Plan not found') {
+        return res.status(404).json({ error: 'Plan not found' });
+      }
+      throw e;
+    }
 
-    if (existing) {
+    if (result.alreadyExists) {
       return res.status(400).json({ error: 'Subscription already exists for this order' });
     }
 
-    // Get plan
-    const plan = await prisma.subscriptionPlan.findUnique({
-      where: { id: parseInt(planId) }
-    });
-
-    if (!plan) {
-      return res.status(404).json({ error: 'Plan not found' });
-    }
-
-    const now = new Date();
-    let chargeAmount = parseFloat(plan.price);
-    let chargeCurrency = plan.currency;
-    const period = String(billingPeriod || (plan.billingIntervalDays === 365 ? 'annual' : 'monthly')).toLowerCase() === 'annual' ? 'annual' : 'monthly';
-    const rawCurrency = String(bodyCurrency || plan.currency || 'INR').toLowerCase();
-    if (plan.pricing && rawCurrency && period) {
-      try {
-        const parsed = JSON.parse(plan.pricing);
-        const bucket = parsed[rawCurrency];
-        if (bucket && bucket[period] != null) {
-          const raw = String(bucket[period]).replace(/,/g, '').trim();
-          const parsedAmount = parseFloat(raw);
-          if (!Number.isNaN(parsedAmount) && parsedAmount > 0) {
-            chargeAmount = period === 'annual' ? parsedAmount * 12 : parsedAmount;
-            chargeCurrency = rawCurrency === 'usd' ? 'USD' : 'INR';
-          }
-        }
-      } catch {}
-    }
-    const billingDays = period === 'annual' ? 365 : (plan.billingIntervalDays || 30);
-
-    // Settle any elapsed/queued periods first so we stack onto the true tail.
-    await reconcileSubscriptions(userId, tenantId);
-
-    // Find the latest period the user still has coverage for (ACTIVE or already
-    // SCHEDULED). If its end is in the future, this purchase is QUEUED to begin
-    // the instant that period ends - so buying again mid-cycle (intentionally
-    // or by mistake) never overlaps or wastes time; it appends a full period to
-    // the tail. e.g. active 1st to 1st, buy on the 6th to new runs 1st to next-1st.
-    const latest = await prisma.subscription.findFirst({
-      where: { userId, tenantId, status: { in: ['ACTIVE', 'SCHEDULED'] } },
-      orderBy: { endDate: 'desc' },
-    });
-
-    const hasFutureCoverage = latest && latest.endDate && new Date(latest.endDate) > now;
-    const startDate = hasFutureCoverage ? new Date(latest.endDate) : now;
-    const endDate = new Date(startDate.getTime() + billingDays * 24 * 60 * 60 * 1000);
-    const newStatus = hasFutureCoverage ? 'SCHEDULED' : 'ACTIVE';
-
-    // Create subscription
-    const subscription = await prisma.subscription.create({
-      data: {
-        userId,
-        planId: parseInt(planId),
-        planName: plan.name,
-        status: newStatus,
-        amount: chargeAmount,
-        currency: chargeCurrency,
-        billingIntervalDays: billingDays,
-        startDate: startDate,
-        endDate: endDate,
-        renewalDate: endDate,
-        razorpayOrderId,
-        razorpayPaymentId,
-        features: plan.features,
-        tenantId
-      }
-    });
-
-    // The admin always has live coverage after a successful purchase - either
-    // the new period started now, or an existing period is still running with
-    // this one queued behind it.
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        subscriptionStatus: 'ACTIVE',
-        trialEndsAt: null
-      }
-    });
-
-    // Log the subscription spend in two places, both best-effort (never block
-    // the purchase):
-    //   1. Expense Management ledger (/expenses) - NOT shift-scoped, so it
-    //      lands reliably in every environment. This is the canonical record.
-    //   2. POS Cash Register Expenses tab - only when a drawer shift is OPEN,
-    //      so it's deducted from the live cash drawer.
-    let expenseRecorded = false;
-    let posExpenseRecorded = false;
-    try {
-      const { recordSubscriptionExpenseEntry, recordSubscriptionExpense } = require('../lib/posExpense');
-      const exp = await recordSubscriptionExpenseEntry({
-        tenantId,
-        userId,
-        amount: subscription.amount,
-        planName: subscription.planName,
-      });
-      expenseRecorded = !!exp.recorded;
-
-      const pos = await recordSubscriptionExpense({
-        tenantId,
-        userId,
-        amount: subscription.amount,
-        reason: `Subscription: ${subscription.planName}`,
-      });
-      posExpenseRecorded = !!pos.recorded;
-    } catch (e) {
-      console.error('[subscriptions.verify-payment] expense log failed:', e.message);
-    }
+    const { subscription, expenseRecorded, posExpenseRecorded } = result;
 
     res.json({
       success: true,

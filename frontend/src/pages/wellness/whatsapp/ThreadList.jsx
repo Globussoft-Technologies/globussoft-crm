@@ -1,5 +1,5 @@
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   MessageCircle,
   Search,
@@ -7,6 +7,8 @@ import {
   Plus,
   Ban,
   UserCheck,
+  CheckSquare,
+  Trash2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useWhatsAppThreads } from './WhatsAppThreadsContext';
@@ -88,9 +90,52 @@ export default function ThreadList() {
     // route the templates link to their own surface. Wellness's
     // WhatsAppThreads.jsx doesn't set it → default preserved.
     templatesPath,
+    // Bulk delete. Optional — a host that doesn't provide it simply gets no
+    // Select affordance (travel's Wati chat is on a different backend).
+    bulkDeleteThreads,
+    bulkDeleting,
   } = useWhatsAppThreads();
 
   const tplPath = templatesPath || '/wellness/whatsapp/templates';
+
+  // ── Multi-select for bulk delete ──────────────────────────────────────────
+  // Off by default; the "Select" button in the header turns it on. While it is
+  // on, clicking a row toggles its checkbox instead of opening the thread, so
+  // there is no way to nuke a conversation with a stray click in normal use.
+  const [selectMode, setSelectMode] = useState(false);
+  const [checked, setChecked] = useState(() => new Set());
+  const canBulkDelete = isAdmin && typeof bulkDeleteThreads === 'function';
+
+  // Only real threads are selectable. Blocked-number rows are synthetic
+  // opt-out entries with a string id ("optout-12"), not conversations.
+  const isSelectable = (t) => !t._blocked && Number.isFinite(Number(t.id));
+  const selectable = threads.filter(isSelectable);
+  const allSelected = selectable.length > 0 && selectable.every((t) => checked.has(t.id));
+
+  // Drop checks for rows that scrolled out of the current filter/search. A
+  // "Delete 12" button while only 3 rows are visible is a footgun — the user
+  // can no longer see what they are about to destroy.
+  useEffect(() => {
+    setChecked((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(threads.map((t) => t.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [threads]);
+
+  const toggleOne = (id) => setChecked((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAll = () => setChecked(allSelected ? new Set() : new Set(selectable.map((t) => t.id)));
+  const exitSelectMode = () => { setSelectMode(false); setChecked(new Set()); };
+  const runBulkDelete = async () => {
+    // Only leave select mode on success — a cancelled confirm or a failed
+    // request keeps the selection so the user doesn't have to rebuild it.
+    if (await bulkDeleteThreads([...checked])) exitSelectMode();
+  };
 
   return (
     <aside style={{
@@ -139,6 +184,22 @@ export default function ThreadList() {
               >
                 <Plus size={14} /> New
               </button>
+              {canBulkDelete && (
+                <button
+                  onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+                  title={selectMode ? 'Exit selection' : 'Select chats to delete'}
+                  style={{
+                    display: 'flex', alignItems: 'center',
+                    padding: '0.4rem 0.55rem',
+                    background: selectMode ? 'var(--card-bg-hover, rgba(59,130,246,0.12))' : 'transparent',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-color)', borderRadius: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <CheckSquare size={14} />
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -186,6 +247,52 @@ export default function ThreadList() {
             <RefreshCw size={14} />
           </button>
         </div>
+
+        {selectMode && (
+          <div style={{
+            marginTop: 8, padding: '0.5rem 0.6rem',
+            border: '1px solid var(--border-color)', borderRadius: 6,
+            background: 'var(--card-bg-hover, rgba(59,130,246,0.06))',
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={allSelected}
+                disabled={selectable.length === 0}
+                onChange={toggleAll}
+              />
+              All
+            </label>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              {checked.size} selected
+            </span>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+              <button
+                onClick={exitSelectMode}
+                className="btn-secondary"
+                style={{ padding: '0.3rem 0.6rem', fontSize: '0.78rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={runBulkDelete}
+                disabled={checked.size === 0 || bulkDeleting}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  padding: '0.3rem 0.7rem', borderRadius: 6, border: 'none',
+                  fontSize: '0.78rem', fontWeight: 600, color: '#fff',
+                  background: checked.size === 0 || bulkDeleting
+                    ? 'var(--border-color)'
+                    : 'var(--danger-color, #dc2626)',
+                  cursor: checked.size === 0 || bulkDeleting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                <Trash2 size={13} /> {bulkDeleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -199,18 +306,44 @@ export default function ThreadList() {
           threads.map((t) => {
             const isSelected = t.id === selectedId;
             const displayName = t.contact?.name || t.contactName || t.patient?.name || t.contactPhone;
+            const selectableRow = isSelectable(t);
+            const isChecked = checked.has(t.id);
             return (
               <div
                 key={t.id}
-                onClick={() => (t._blocked ? openBlockedThread(t.contactPhone) : setSelectedId(t.id))}
+                onClick={() => {
+                  // In select mode a row click means "tick this", never "open
+                  // this" — otherwise picking chats to delete would keep
+                  // yanking the reading pane around.
+                  if (selectMode) {
+                    if (selectableRow) toggleOne(t.id);
+                    return;
+                  }
+                  if (t._blocked) openBlockedThread(t.contactPhone);
+                  else setSelectedId(t.id);
+                }}
                 style={{
                   padding: '0.85rem 1rem',
                   borderBottom: '1px solid var(--border-color)',
-                  cursor: 'pointer',
-                  background: isSelected ? 'var(--card-bg-hover, rgba(59,130,246,0.08))' : 'transparent',
+                  cursor: selectMode && !selectableRow ? 'default' : 'pointer',
+                  background: (selectMode ? isChecked : isSelected)
+                    ? 'var(--card-bg-hover, rgba(59,130,246,0.08))'
+                    : 'transparent',
+                  opacity: selectMode && !selectableRow ? 0.5 : 1,
                   display: 'flex', alignItems: 'center', gap: 10,
                 }}
               >
+                {selectMode && (
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    disabled={!selectableRow}
+                    title={selectableRow ? undefined : 'Blocked numbers are not conversations'}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => toggleOne(t.id)}
+                    style={{ width: 16, height: 16, flexShrink: 0 }}
+                  />
+                )}
                 <ThreadAvatar url={t.contactAvatar} label={displayName} size={42} />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>

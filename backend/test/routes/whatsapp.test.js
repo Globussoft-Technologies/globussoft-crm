@@ -484,3 +484,121 @@ describe('POST /webhook — tombstone (real handler lives in routes/whatsapp_web
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
   });
 });
+
+// ─── POST /threads/bulk-delete (batch conversation delete) ──────────────────
+//
+// Pins the contract the inbox rail's "select N chats → Delete" depends on:
+// ADMIN-only, tenant-scoped on the READ (so a foreign id can never reach the
+// delete), partial-success buckets, the 100-id cap, and one audit row per
+// deleted thread.
+describe('POST /threads/bulk-delete', () => {
+  function armDeleteMocks() {
+    prisma.whatsAppMessage.deleteMany = vi.fn().mockResolvedValue({ count: 12 });
+    prisma.whatsAppThread.deleteMany = vi.fn().mockResolvedValue({ count: 2 });
+    prisma.$transaction = vi.fn((ops) => Promise.all(ops));
+  }
+
+  test('400 INVALID_IDS when ids is not an array', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/whatsapp/threads/bulk-delete')
+      .send({ ids: 'all' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_IDS');
+  });
+
+  test('400 EMPTY_IDS on an empty array', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/whatsapp/threads/bulk-delete')
+      .send({ ids: [] });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('EMPTY_IDS');
+  });
+
+  test('400 TOO_MANY_IDS above the 100-id cap', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/whatsapp/threads/bulk-delete')
+      .send({ ids: Array.from({ length: 101 }, (_, i) => i + 1) });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('TOO_MANY_IDS');
+  });
+
+  test('400 INVALID_IDS when an id is not an integer', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/whatsapp/threads/bulk-delete')
+      .send({ ids: [1, 'optout-4'] });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_IDS');
+  });
+
+  test('403 for a non-ADMIN caller (verifyRole is real here)', async () => {
+    const app = makeApp({ role: 'MANAGER' });
+    const res = await request(app)
+      .post('/api/whatsapp/threads/bulk-delete')
+      .send({ ids: [1, 2] });
+    expect(res.status).toBe(403);
+    expect(prisma.whatsAppThread.findMany).not.toHaveBeenCalled();
+  });
+
+  test('deletes the tenant\u2019s threads, dedupes, and buckets unknown ids as notFound', async () => {
+    armDeleteMocks();
+    prisma.whatsAppThread.findMany.mockResolvedValue([
+      { id: 1, contactPhone: '+911111111111' },
+      { id: 2, contactPhone: '+922222222222' },
+    ]);
+
+    const app = makeApp({ tenantId: 17, userId: 7, role: 'ADMIN' });
+    const res = await request(app)
+      .post('/api/whatsapp/threads/bulk-delete')
+      // 1 is repeated — it must not be counted twice; 99 belongs to nobody.
+      .send({ ids: [1, 2, 1, 99] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toEqual([1, 2]);
+    expect(res.body.notFound).toEqual([99]);
+    expect(res.body.deletedThreads).toBe(2);
+    expect(res.body.deletedMessages).toBe(12);
+
+    // Tenant scope is enforced on the read, and the delete only ever sees the
+    // ids that read resolved — never the caller's raw list.
+    expect(prisma.whatsAppThread.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: [1, 2, 99] }, tenantId: 17 },
+      }),
+    );
+    expect(prisma.whatsAppMessage.deleteMany).toHaveBeenCalledWith({
+      where: { threadId: { in: [1, 2] }, tenantId: 17 },
+    });
+    expect(prisma.whatsAppThread.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: [1, 2] }, tenantId: 17 },
+    });
+
+    // One audit row per thread, same entity/action as the single delete.
+    expect(auditMod.writeAudit).toHaveBeenCalledTimes(2);
+    expect(auditMod.writeAudit).toHaveBeenCalledWith(
+      'WhatsAppThread', 'DELETE', 1, 7, 17,
+      expect.objectContaining({ contactPhone: '+911111111111', bulk: true }),
+    );
+  });
+
+  test('a batch of only foreign ids deletes nothing and never opens a transaction', async () => {
+    armDeleteMocks();
+    prisma.whatsAppThread.findMany.mockResolvedValue([]); // all on another tenant
+
+    const app = makeApp({ tenantId: 17 });
+    const res = await request(app)
+      .post('/api/whatsapp/threads/bulk-delete')
+      .send({ ids: [501, 502] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toEqual([]);
+    expect(res.body.notFound).toEqual([501, 502]);
+    expect(res.body.deletedThreads).toBe(0);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.whatsAppThread.deleteMany).not.toHaveBeenCalled();
+    expect(auditMod.writeAudit).not.toHaveBeenCalled();
+  });
+});

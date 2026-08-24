@@ -17,6 +17,7 @@ const {
   getTenantRazorpayCreds,
   NOT_CONFIGURED_MESSAGE,
 } = require("../lib/tenantPaymentGateway");
+const { fulfillSubscriptionOrder } = require("../lib/subscriptionFulfillment");
 
 const router = express.Router();
 
@@ -133,7 +134,14 @@ async function resolveRazorpayWebhookSecret(event) {
       (paymentEnt && paymentEnt.notes) ||
       (orderEnt && orderEnt.notes) ||
       null;
-    const notesTenantId = notes && Number(notes.tenantId);
+    // Platform subscription orders (routes/subscriptions.js create-order)
+    // also stamp notes.tenantId — but for fulfillment addressing, not BYOK
+    // credential lookup. Those are always signed with the PLATFORM secret
+    // (they're charged on the platform's own Razorpay account), so this
+    // tenant-secret fallback must not apply to them — skip straight to
+    // envSecret below instead of misresolving the tenant's own gateway.
+    const notesTenantId =
+      notes && notes.kind !== "subscription" ? Number(notes.tenantId) : NaN;
     if (Number.isFinite(notesTenantId) && notesTenantId > 0) {
       const creds = await getTenantRazorpayCreds(notesTenantId);
       if (creds && creds.keySecret) return creds.keySecret;
@@ -486,6 +494,36 @@ router.post(
       ) {
         const orderId = ent && ent.order_id;
         const paymentId = ent && ent.id;
+        const notes = ent && ent.notes;
+
+        // Platform subscription purchase (routes/subscriptions.js create-order
+        // stamps notes.kind = 'subscription' + tenantId/userId/billingPeriod
+        // on the Razorpay order — no Payment row exists for these, that model
+        // is reserved for tenant customer invoices). This is the server-side
+        // counterpart to /api/subscriptions/verify-payment's client-driven
+        // call: whichever of the two reports the payment first fulfills the
+        // order; fulfillSubscriptionOrder is idempotent on razorpayOrderId,
+        // so the other is a safe no-op even if both events fire (Razorpay
+        // sends payment.authorized then payment.captured for the same order).
+        if (notes && notes.kind === "subscription" && orderId && paymentId) {
+          try {
+            await fulfillSubscriptionOrder({
+              tenantId: Number(notes.tenantId),
+              userId: Number(notes.userId),
+              planId: notes.planId,
+              razorpayOrderId: orderId,
+              razorpayPaymentId: paymentId,
+              currency: notes.requestedCurrency || undefined,
+              billingPeriod: notes.billingPeriod || undefined,
+            });
+          } catch (e) {
+            console.error(
+              "[Payments] webhook subscription fulfillment failed:",
+              e.message
+            );
+          }
+        }
+
         if (orderId) {
           const payment = await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: orderId },

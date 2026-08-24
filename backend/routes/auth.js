@@ -16,6 +16,11 @@ const { writeAudit } = require("../lib/audit");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
 const { getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
+// Canonicalises a self-entered phone to E.164 so downstream dialer / SMS /
+// WhatsApp keys all see the same shape.
+const { toE164 } = require("../utils/deduplication");
+// Pushes a saved account change onto the caller's linked wellness Patient row.
+const { syncPatientFromUser } = require("../lib/selfBookingPatient");
 // Module-object require so vi.mock-style replacement of the exports at
 // test time is observable here (the destructured form captures function
 // references at require-time and bypasses any later patching).
@@ -793,11 +798,22 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create CUSTOMER user
+    // `phone` arrives on the phone-verified registration path and was
+    // previously read for the OTP check and then dropped on the floor — the
+    // User row was created without it, so a customer who verified by SMS still
+    // had no reachable number afterwards. Persist it, canonicalised the same
+    // way PUT /me does.
+    const registrationPhone =
+      phone && typeof phone === "string" && phone.trim()
+        ? toE164(phone.trim()) || phone.trim()
+        : null;
+
     const user = await prisma.user.create({
       data: {
         email,
         password: hashedPassword,
         name: name || email.split('@')[0],
+        phone: registrationPhone,
         userType: 'CUSTOMER',
         role: 'CUSTOMER', // Legacy field for backward compat
         tenantId,
@@ -1191,7 +1207,7 @@ router.get("/me", verifyToken, async (req, res) => {
       // ssoProvider + twoFactorEnabled are additive (no consumer strips the
       // envelope) — the Profile danger zone uses them to decide whether the
       // delete-account flow asks for a current password and/or a TOTP code.
-      select: { id: true, name: true, email: true, role: true, wellnessRole: true, subBrandAccess: true, profilePicture: true, tenantId: true, createdAt: true, ssoProvider: true, twoFactorEnabled: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      select: { id: true, name: true, email: true, phone: true, role: true, wellnessRole: true, subBrandAccess: true, profilePicture: true, tenantId: true, createdAt: true, ssoProvider: true, twoFactorEnabled: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -1311,10 +1327,32 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
 // Update current user profile
 router.put("/me", verifyToken, async (req, res) => {
   try {
-    const { name, email, currentPassword, newPassword } = req.body;
+    const { name, email, phone, currentPassword, newPassword } = req.body;
     const updateData = {};
 
     if (name) updateData.name = name;
+
+    // Self-service contact number. `""` is a deliberate clear (the user wiped
+    // the field and saved), which is why this branch tests for `undefined`
+    // rather than truthiness the way name/email do.
+    if (phone !== undefined) {
+      const trimmed = String(phone || "").trim();
+      if (trimmed === "") {
+        updateData.phone = null;
+      } else {
+        const digits = trimmed.replace(/\D/g, "");
+        // 10 digits is a full Indian national number; 15 is the E.164 ceiling.
+        // Anything outside that is a typo, and storing it would produce an
+        // appointment nobody can actually call.
+        if (digits.length < 10 || digits.length > 15) {
+          return res.status(400).json({
+            error: "Enter a valid phone number (10 to 15 digits).",
+            code: "INVALID_PHONE",
+          });
+        }
+        updateData.phone = toE164(trimmed) || trimmed;
+      }
+    }
 
     if (email) {
       // Email is unique per-tenant — only block if another account IN THE
@@ -1360,8 +1398,29 @@ router.put("/me", verifyToken, async (req, res) => {
     const updatedUser = await prisma.user.update({
       where: { id: req.user.userId },
       data: updateData,
-      select: { id: true, name: true, email: true, role: true, profilePicture: true, createdAt: true, sessionVersion: true }
+      select: { id: true, name: true, email: true, phone: true, role: true, profilePicture: true, createdAt: true, sessionVersion: true }
     });
+
+    // Mirror self-service contact details onto the caller's own wellness
+    // Patient row when their account is linked to one (Patient.userId — the
+    // self-booking link). Without this the number a customer just saved stays
+    // invisible to the clinic: appointment lists, reminders, and the
+    // Callified calling flow all read Patient.phone, so a self-booked visit
+    // would still show "no phone on file". Best-effort — a failure here must
+    // not fail the profile save the user already sees as successful.
+    if (updateData.phone !== undefined || updateData.name || updateData.email) {
+      try {
+        await syncPatientFromUser({
+          userId: req.user.userId,
+          tenantId: req.user.tenantId,
+        });
+      } catch (mirrorErr) {
+        console.error(
+          "[auth/me] patient mirror failed (profile save still succeeded):",
+          mirrorErr && mirrorErr.message,
+        );
+      }
+    }
 
     // #179: audit profile changes. CRITICAL: never include the password value
     // (or its hash) in the details blob — log only that a password change

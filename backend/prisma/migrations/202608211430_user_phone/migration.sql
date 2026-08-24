@@ -1,0 +1,11 @@
+-- User.phone — self-service contact number on /profile.
+--
+-- Nullable and non-unique by design: it is a contactability field, not an
+-- identity key (email + tenantId remains identity). Adding a NULL column is
+-- non-destructive; existing rows are unchanged and read back as NULL.
+--
+-- Motivation: a CUSTOMER account had no way to supply a phone number, so a
+-- self-booked appointment reached the clinic with nothing to call. PUT
+-- /api/auth/me mirrors this onto the linked Patient.phone so the wellness
+-- Appointments calling flow can reach them.
+ALTER TABLE `User` ADD COLUMN `phone` VARCHAR(191) NULL;

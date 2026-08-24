@@ -611,91 +611,16 @@ async function maybeAutoCreditLoyalty(visit, tenantId) {
 
 // Helper: ensure a wellness Patient is backed by a CRM Contact so that
 // invoice-based payment flows (Razorpay Payment Links, etc.) can reuse the
-// generic billing model. If the patient already has a contactId, verify it
-// still exists; otherwise create a contact from the patient's name/email/phone
-// and back-link it. Failures are thrown so the caller can decide whether to
-// abort the parent operation.
-async function ensurePatientContact(patient, tenantId) {
-  if (!patient) throw new Error("Patient not found");
-
-  const desiredName = patient.name || "Unnamed patient";
-  const desiredEmail = patient.email || null;
-  const desiredPhone = patient.phone || null;
-
-  if (patient.contactId) {
-    const existing = await prisma.contact.findUnique({
-      where: { id: patient.contactId },
-    });
-    if (existing) {
-      if (
-        existing.name !== desiredName ||
-        existing.email !== desiredEmail ||
-        existing.phone !== desiredPhone
-      ) {
-        return await prisma.contact.update({
-          where: { id: existing.id },
-          data: {
-            name: desiredName,
-            email: desiredEmail,
-            phone: desiredPhone,
-          },
-        });
-      }
-      return existing;
-    }
-  }
-
-  const contactData = {
-    name: desiredName,
-    email: desiredEmail,
-    phone: desiredPhone,
-    tenantId,
-    status: "lead",
-  };
-
-  try {
-    const contact = await prisma.contact.create({ data: contactData });
-    await prisma.patient.update({
-      where: { id: patient.id },
-      data: { contactId: contact.id },
-    });
-    return contact;
-  } catch (err) {
-    // If the create failed because a contact with this email/phone already
-    // exists, link to that one instead of leaving the patient orphaned.
-    const existing = await prisma.contact.findFirst({
-      where: {
-        tenantId,
-        OR: [
-          ...(desiredEmail ? [{ email: desiredEmail }] : []),
-          ...(desiredPhone ? [{ phone: desiredPhone }] : []),
-        ],
-      },
-    });
-    if (existing) {
-      await prisma.patient.update({
-        where: { id: patient.id },
-        data: { contactId: existing.id },
-      });
-      if (
-        existing.name !== desiredName ||
-        existing.email !== desiredEmail ||
-        existing.phone !== desiredPhone
-      ) {
-        return await prisma.contact.update({
-          where: { id: existing.id },
-          data: {
-            name: desiredName,
-            email: desiredEmail,
-            phone: desiredPhone,
-          },
-        });
-      }
-      return existing;
-    }
-    throw err;
-  }
-}
+// generic billing model. Promoted to lib/patientContactLink.js when Callified
+// calling became the third consumer (invoices, payment links, calling) — the
+// behaviour is unchanged; re-bound here so the ~4 call sites below keep
+// reading the same way.
+const { ensurePatientContact } = require("../lib/patientContactLink");
+// Self-booking Patient ↔ User identity sync. Promoted out of the three
+// byte-similar copies that used to live in this file (booking, book-and-pay,
+// confirm-payment) — all three synced name + email and none synced phone, so a
+// self-booked patient could never have a number the clinic could call.
+const { resolveSelfBookingPatient } = require("../lib/selfBookingPatient");
 
 // Attach invoice status to already-fetched visit rows without relying on a
 // Prisma back-reference. Some wellness visit payloads need to know whether the
@@ -7527,6 +7452,253 @@ router.delete(
 // relationship (which clinics is this user geofenced to), so it's namespaced
 // under /location-assignments/:userId rather than /staff/:userId/locations
 // to stay clear of that guard and the org/clinical split it enforces.
+// -- Bulk staff assignment for ONE location -------------------------
+//
+// The per-user PUT below answers "which clinics is this person geofenced
+// to". These two answer the opposite, and far more common, question: an
+// admin has just drawn a geofence around a clinic and now needs to attach
+// the twenty people who work there. Doing that one staff-edit-modal at a
+// time is twenty round trips through a form that also edits their role and
+// password.
+//
+// Route ordering: both literal paths are declared BEFORE
+// "/location-assignments/:userId" so Express cannot bind "bulk" or
+// "by-location" as a :userId value (see AGENTS.md, Express routing).
+//
+// Why the roster is served here rather than reusing GET /api/staff:
+// that route applies PII masking for some viewers, which replaces numeric
+// ids with hashed tokens. A picker built on masked ids cannot post back a
+// usable userId. This endpoint is already admin/manager-gated, returns only
+// what the picker renders, and - critically - carries the assignment state
+// per row so the UI does not need N extra calls to discover it.
+// GET /location-assignments/counts -> { counts: { [locationId]: n } }
+//
+// One request that answers "how many staff are attached to each clinic", so
+// the Locations page can badge every card without N round trips. The number
+// matters more than it looks: a clinic with a geofence drawn but ZERO staff
+// assigned enforces nothing at all (attendanceGeofence.js deliberately treats
+// a user with no UserLocation rows as un-geofenced), and that combination is
+// invisible unless the count is on screen.
+//
+// Declared before "/location-assignments/:userId" so Express cannot bind
+// "counts" as a :userId value.
+router.get(
+  "/location-assignments/counts",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
+    try {
+      const grouped = await prisma.userLocation.groupBy({
+        by: ["locationId"],
+        where: { location: { tenantId: req.user.tenantId } },
+        _count: { _all: true },
+      });
+      const counts = {};
+      for (const row of grouped) counts[row.locationId] = row._count._all;
+      res.json({ counts });
+    } catch (e) {
+      console.error("[wellness] location assignment counts error:", e.message);
+      res.status(500).json({ error: "Failed to load staff assignment counts" });
+    }
+  },
+);
+
+router.get(
+  "/location-assignments/by-location/:locationId",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
+    try {
+      const locationId = parseInt(req.params.locationId, 10);
+      if (!Number.isFinite(locationId)) {
+        return res.status(400).json({ error: "Invalid location id", code: "INVALID_LOCATION_ID" });
+      }
+      const location = await prisma.location.findFirst({
+        where: { id: locationId, tenantId: req.user.tenantId },
+        select: {
+          id: true, name: true, city: true,
+          latitude: true, longitude: true, geofenceRadiusM: true,
+        },
+      });
+      if (!location) {
+        return res.status(404).json({ error: "Location not found", code: "LOCATION_NOT_FOUND" });
+      }
+
+      const [staff, assignments] = await Promise.all([
+        prisma.user.findMany({
+          where: {
+            tenantId: req.user.tenantId,
+            userType: { in: ["STAFF", "OWNER"] },
+            role: { not: "CUSTOMER" },
+          },
+          select: {
+            id: true, name: true, email: true, role: true,
+            wellnessRole: true, deactivatedAt: true,
+          },
+          orderBy: { name: "asc" },
+        }),
+        // Every assignment for this tenant's staff, not just this location -
+        // the picker warns before "replace" wipes somebody's OTHER clinics,
+        // and it cannot warn about what it was never told.
+        prisma.userLocation.findMany({
+          where: { location: { tenantId: req.user.tenantId } },
+          select: { userId: true, locationId: true },
+        }),
+      ]);
+
+      const byUser = new Map();
+      for (const a of assignments) {
+        if (!byUser.has(a.userId)) byUser.set(a.userId, []);
+        byUser.get(a.userId).push(a.locationId);
+      }
+
+      res.json({
+        location,
+        // A location with no coordinates enforces nothing - attendanceGeofence
+        // fails open on it. Say so here so the UI can warn BEFORE an admin
+        // assigns twenty people to a geofence that does not exist.
+        geofenceActive: location.latitude !== null && location.longitude !== null,
+        staff: staff.map((u) => {
+          const mine = byUser.get(u.id) || [];
+          return {
+            ...u,
+            assignedHere: mine.includes(locationId),
+            otherLocationCount: mine.filter((id) => id !== locationId).length,
+          };
+        }),
+      });
+    } catch (e) {
+      console.error("[wellness] location roster error:", e.message);
+      res.status(500).json({ error: "Failed to load staff for this location" });
+    }
+  },
+);
+
+router.post(
+  "/location-assignments/bulk",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
+    try {
+      const { locationId, userIds, mode = "add" } = req.body || {};
+
+      if (!["add", "remove", "replace"].includes(mode)) {
+        return res.status(400).json({
+          error: 'mode must be one of "add", "remove", "replace"',
+          code: "INVALID_MODE",
+        });
+      }
+      const locId = parseInt(locationId, 10);
+      if (!Number.isFinite(locId)) {
+        return res.status(400).json({ error: "locationId is required", code: "MISSING_FIELDS" });
+      }
+      if (!Array.isArray(userIds)) {
+        return res.status(400).json({ error: "userIds must be an array", code: "MISSING_FIELDS" });
+      }
+      const ids = [...new Set(userIds.map((n) => parseInt(n, 10)))].filter(Number.isFinite);
+      if (ids.length === 0) {
+        return res.status(400).json({ error: "Select at least one staff member", code: "NO_STAFF_SELECTED" });
+      }
+
+      const location = await prisma.location.findFirst({
+        where: { id: locId, tenantId: req.user.tenantId },
+        select: { id: true, name: true, latitude: true, longitude: true },
+      });
+      if (!location) {
+        return res.status(404).json({ error: "Location not found", code: "LOCATION_NOT_FOUND" });
+      }
+
+      // Every id must be a staff user in THIS tenant. Without this an admin
+      // could attach another tenant's user to their clinic by posting a
+      // guessed id, which would then geofence a stranger's attendance.
+      const owned = await prisma.user.findMany({
+        where: {
+          id: { in: ids },
+          tenantId: req.user.tenantId,
+          userType: { in: ["STAFF", "OWNER"] },
+          role: { not: "CUSTOMER" },
+        },
+        select: { id: true },
+      });
+      if (owned.length !== ids.length) {
+        return res.status(400).json({
+          error: "One or more staff members not found in this tenant",
+          code: "INVALID_USER_ID",
+        });
+      }
+
+      const existing = await prisma.userLocation.findMany({
+        where: { userId: { in: ids }, locationId: locId },
+        select: { userId: true },
+      });
+      const alreadyHere = new Set(existing.map((r) => r.userId));
+
+      let added = 0;
+      let removed = 0;
+      let clearedElsewhere = 0;
+
+      if (mode === "remove") {
+        const r = await prisma.userLocation.deleteMany({
+          where: { userId: { in: ids }, locationId: locId },
+        });
+        removed = r.count;
+      } else {
+        const toAdd = ids.filter((id) => !alreadyHere.has(id));
+        const ops = [];
+        if (mode === "replace") {
+          // "These people work ONLY here" - drop their other clinics too.
+          // Counted separately from `added` so the response can tell the
+          // admin exactly how much collateral the choice caused.
+          clearedElsewhere = await prisma.userLocation.count({
+            where: { userId: { in: ids }, locationId: { not: locId } },
+          });
+          ops.push(
+            prisma.userLocation.deleteMany({
+              where: { userId: { in: ids }, locationId: { not: locId } },
+            }),
+          );
+        }
+        for (const userId of toAdd) {
+          ops.push(prisma.userLocation.create({ data: { userId, locationId: locId } }));
+        }
+        if (ops.length > 0) await prisma.$transaction(ops);
+        added = toAdd.length;
+      }
+
+      try {
+        await writeAudit(
+          "UserLocation",
+          "BULK_ASSIGN",
+          locId,
+          req.user.userId,
+          req.user.tenantId,
+          { locationName: location.name, mode, userIds: ids, added, removed, clearedElsewhere },
+        );
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
+      }
+
+      res.json({
+        ok: true,
+        mode,
+        locationId: locId,
+        locationName: location.name,
+        requested: ids.length,
+        added,
+        removed,
+        clearedElsewhere,
+        // Already-assigned rows are a no-op, not an error - bulk actions are
+        // routinely re-run over an overlapping selection.
+        unchanged: mode === "add" ? ids.length - added : 0,
+        // A geofence with no coordinates is not enforced at all. The caller
+        // gets told, so the UI does not report success on a rule that will
+        // never fire.
+        geofenceActive: location.latitude !== null && location.longitude !== null,
+      });
+    } catch (e) {
+      console.error("[wellness] bulk location assign error:", e.message);
+      res.status(500).json({ error: "Failed to assign staff to this location" });
+    }
+  },
+);
+
 router.get(
   "/location-assignments/:userId",
   adminOrPerm("settings", "manage"),
@@ -16630,38 +16802,10 @@ async function resolveBookingPatient(req, tenantId) {
     return patient;
   }
 
-  // Always use the current user's profile name for self-booking patients.
-  // This prevents the appointment list from showing stale or admin names.
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { name: true, email: true },
-  });
-  const userName = user?.name || user?.email || "Patient";
-  const userEmail = user?.email || null;
-
-  let patient = await prisma.patient.findFirst({
-    where: { tenant: { id: tenantId }, user: { id: userId } },
-  });
-
-  if (!patient) {
-    patient = await prisma.patient.create({
-      data: {
-        name: userName,
-        email: userEmail,
-        source: "self-booking",
-        tenant: { connect: { id: tenantId } },
-        user: { connect: { id: userId } },
-      },
-    });
-  } else if (patient.name !== userName || patient.email !== userEmail) {
-    patient = await prisma.patient.update({
-      where: { id: patient.id },
-      data: {
-        name: userName,
-        email: userEmail,
-      },
-    });
-  }
+  // Always mirror the current user's profile onto self-booking patients.
+  // This prevents the appointment list from showing stale or admin names, and
+  // carries the phone number through so the clinic can actually reach them.
+  let patient = await resolveSelfBookingPatient({ userId, tenantId });
 
   return patient;
 }
@@ -16796,33 +16940,7 @@ router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
       const contact = await ensurePatientContact(patient, tenantId);
       resolvedContactId = contact.id;
     } else {
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { name: true, email: true },
-      });
-      const userName = user?.name || user?.email || "Patient";
-      const userEmail = user?.email || null;
-
-      let patient = await prisma.patient.findFirst({
-        where: { tenant: { id: tenantId }, user: { id: userId } },
-      });
-
-      if (!patient) {
-        patient = await prisma.patient.create({
-          data: {
-            name: userName,
-            email: userEmail,
-            source: "self-booking",
-            tenant: { connect: { id: tenantId } },
-            user: { connect: { id: userId } },
-          },
-        });
-      } else if (patient.name !== userName || patient.email !== userEmail) {
-        patient = await prisma.patient.update({
-          where: { id: patient.id },
-          data: { name: userName, email: userEmail },
-        });
-      }
+      const patient = await resolveSelfBookingPatient({ userId, tenantId });
 
       const contact = await ensurePatientContact(patient, tenantId);
       resolvedContactId = contact.id;
@@ -16984,38 +17102,10 @@ router.post("/appointments/confirm-payment", verifyToken, async (req, res) => {
         return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
       }
     } else {
-      // Always use the current user's profile name for self-booking patients.
-      // This prevents the appointment list from showing stale or admin names.
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { name: true, email: true },
-      });
-      const userName = user?.name || user?.email || "Patient";
-      const userEmail = user?.email || null;
-
-      patient = await prisma.patient.findFirst({
-        where: { tenant: { id: tenantId }, user: { id: userId } },
-      });
-
-      if (!patient) {
-        patient = await prisma.patient.create({
-          data: {
-            name: userName,
-            email: userEmail,
-            source: "self-booking",
-            tenant: { connect: { id: tenantId } },
-            user: { connect: { id: userId } },
-          },
-        });
-      } else if (patient.name !== userName || patient.email !== userEmail) {
-        patient = await prisma.patient.update({
-          where: { id: patient.id },
-          data: {
-            name: userName,
-            email: userEmail,
-          },
-        });
-      }
+      // Always mirror the current user's profile onto self-booking patients,
+      // so the appointment list never shows a stale or admin name and the
+      // clinic has a number it can actually call.
+      patient = await resolveSelfBookingPatient({ userId, tenantId });
     }
 
     // Create the visit using the same service that backs /appointments/book.

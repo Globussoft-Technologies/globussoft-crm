@@ -41,7 +41,7 @@ function logApiCall({ endpoint, status, durationMs, errorMessage }) {
   }
 }
 
-async function createOrder(amount, planId, currency = 'INR') {
+async function createOrder(amount, planId, currency = 'INR', extraNotes = {}) {
   const razorpay = getRazorpay();
   const startedAt = Date.now();
   try {
@@ -51,7 +51,7 @@ async function createOrder(amount, planId, currency = 'INR') {
     const order = await razorpay.orders.create({
       amount: Math.round(amount * 100),
       currency,
-      notes: { planId: planId.toString() }
+      notes: { planId: planId.toString(), ...extraNotes }
     });
     logApiCall({ endpoint: 'orders.create', status: 'success', durationMs: Date.now() - startedAt });
     return order;

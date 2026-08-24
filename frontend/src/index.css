@@ -3960,3 +3960,71 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
     width: auto;
   }
 }
+
+/* ------------------------------------------------------------------
+   GeofencePicker (components/GeofencePicker.jsx)
+
+   Leaflet renders vector layers as SVG <path> elements, so the "pulse"
+   is a CSS animation on SVG presentation attributes (stroke-width,
+   stroke-opacity) rather than a transform. Deliberately NOT a scale()
+   transform: an SVG path has no useful transform-origin here, so
+   scaling would drift the ring off the pin AND would show a radius
+   that is not the one actually enforced. Breathing the stroke keeps
+   the ring exactly on the enforced boundary at every frame.
+   ------------------------------------------------------------------ */
+.geofence-pulse-ring {
+  animation: geofence-pulse 2.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes geofence-pulse {
+  0%   { stroke-opacity: 0.85; stroke-width: 2; }
+  50%  { stroke-opacity: 0.15; stroke-width: 9; }
+  100% { stroke-opacity: 0.85; stroke-width: 2; }
+}
+
+.geofence-spin {
+  animation: spin 0.9s linear infinite;
+}
+
+/* Range slider — the browser default renders as a washed-out grey bar on
+   the dark glass panels. Track/thumb are styled per-engine because there
+   is still no cross-browser standard for either pseudo-element. */
+.geofence-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary-color, var(--accent-color)), #ef4444);
+  outline: none;
+  margin: 0.35rem 0 0.15rem;
+}
+.geofence-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid #ef4444;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.geofence-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid #ef4444;
+  cursor: pointer;
+}
+.geofence-range:disabled::-webkit-slider-thumb { border-color: #6b7280; cursor: not-allowed; }
+.geofence-range:disabled::-moz-range-thumb { border-color: #6b7280; cursor: not-allowed; }
+
+/* Respect a reduced-motion preference — a continuously breathing ring is
+   exactly the kind of motion that triggers vestibular discomfort. The
+   ring stays visible, it just stops animating. */
+@media (prefers-reduced-motion: reduce) {
+  .geofence-pulse-ring { animation: none; stroke-opacity: 0.85; }
+  .geofence-spin { animation: none; }
+}

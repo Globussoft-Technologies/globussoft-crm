@@ -302,7 +302,11 @@ describe('POST /api/wellness/appointments/book — patient resolution', () => {
       email: 'demo@example.com',
     };
     prisma.patient.findFirst.mockImplementation(async (args) => {
-      if (args.where.user?.id === 7) return ownPatient;
+      // Accept either query shape: the flat scalar form used by
+      // lib/selfBookingPatient.js (which matches @@index([tenantId, userId]))
+      // or the older relation-filter form. The behaviour under test is that
+      // the caller gets their OWN patient row, not how the row is looked up.
+      if (args.where.user?.id === 7 || args.where.userId === 7) return ownPatient;
       return null;
     });
 
@@ -332,7 +336,11 @@ describe('POST /api/wellness/appointments/book — patient resolution', () => {
       email: 'staff@example.com',
     };
     prisma.patient.findFirst.mockImplementation(async (args) => {
-      if (args.where.user?.id === 7) return ownPatient;
+      // Accept either query shape: the flat scalar form used by
+      // lib/selfBookingPatient.js (which matches @@index([tenantId, userId]))
+      // or the older relation-filter form. The behaviour under test is that
+      // the caller gets their OWN patient row, not how the row is looked up.
+      if (args.where.user?.id === 7 || args.where.userId === 7) return ownPatient;
       return null;
     });
 
@@ -450,7 +458,11 @@ describe('POST /api/wellness/appointments/book-and-pay + confirm-payment — pat
       email: 'staff@example.com',
     };
     prisma.patient.findFirst.mockImplementation(async (args) => {
-      if (args.where.user?.id === 7) return ownPatient;
+      // Accept either query shape: the flat scalar form used by
+      // lib/selfBookingPatient.js (which matches @@index([tenantId, userId]))
+      // or the older relation-filter form. The behaviour under test is that
+      // the caller gets their OWN patient row, not how the row is looked up.
+      if (args.where.user?.id === 7 || args.where.userId === 7) return ownPatient;
       return null;
     });
     prisma.payment.findFirst.mockResolvedValue({

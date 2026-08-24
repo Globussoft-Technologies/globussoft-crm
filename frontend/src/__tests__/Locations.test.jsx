@@ -503,3 +503,62 @@ describe('<Locations /> — Active/Inactive toggle', () => {
     );
   });
 });
+
+// ── Geofencing tab ───────────────────────────────────────────────────
+//
+// Zones are a standalone concept (backend/prisma/schema.prisma's
+// GeofenceZone, decoupled from clinic Location) rendered on a second tab of
+// this same page rather than a second route. Deep behaviour (zone
+// CRUD, the Global toggle, staff assignment) lives in
+// GeofenceZonesPanel.test.jsx — this block only pins the switch itself:
+// clicking the tab swaps the header + body, and clinic state underneath
+// survives the round trip.
+describe('<Locations /> — Geofencing tab', () => {
+  it('defaults to the Clinic Locations tab', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getAllByText('Ranchi').length).toBeGreaterThanOrEqual(1);
+    });
+    expect(screen.getByRole('tab', { name: /Clinic Locations/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /Geofencing/i })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('switching to Geofencing swaps the header and hides the clinic list', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getAllByText('Ranchi').length).toBeGreaterThanOrEqual(1);
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Geofencing/i }));
+
+    // The clinic-only heading and its "New location" CTA disappear —
+    // GeofenceZonesPanel owns its own "New zone" button instead.
+    expect(screen.queryByText('Clinic locations')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /New location/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Ranchi')).not.toBeInTheDocument();
+
+    // GeofenceZonesPanel's own chrome is now on screen.
+    expect(await screen.findByRole('button', { name: /New zone/i })).toBeInTheDocument();
+  });
+
+  it('switching back to Clinic Locations restores the clinic list without a fresh fetch', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getAllByText('Ranchi').length).toBeGreaterThanOrEqual(1);
+    });
+    const callsBeforeSwitch = fetchApiMock.mock.calls.filter(([u]) => u === '/api/wellness/locations').length;
+
+    fireEvent.click(screen.getByRole('tab', { name: /Geofencing/i }));
+    await screen.findByRole('button', { name: /New zone/i });
+    fireEvent.click(screen.getByRole('tab', { name: /Clinic Locations/i }));
+
+    expect(await screen.findAllByText('Ranchi')).not.toHaveLength(0);
+    // Clinic data lives in this page's own state, not re-fetched on every
+    // tab flip — the list was never unmounted, just hidden.
+    const callsAfterSwitch = fetchApiMock.mock.calls.filter(([u]) => u === '/api/wellness/locations').length;
+    expect(callsAfterSwitch).toBe(callsBeforeSwitch);
+  });
+});

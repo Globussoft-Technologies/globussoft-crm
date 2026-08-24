@@ -75,6 +75,18 @@ prisma.tenant = {
   findMany: vi.fn().mockResolvedValue([]),
   create: vi.fn(),
 };
+prisma.contact = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  findUnique: vi.fn().mockResolvedValue(null),
+  create: vi.fn(),
+  update: vi.fn(),
+  upsert: vi.fn(),
+};
+prisma.patient = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  create: vi.fn(),
+  update: vi.fn(),
+};
 prisma.auditLog = {
   findFirst: vi.fn().mockResolvedValue(null),
   create: vi.fn().mockResolvedValue({}),
@@ -167,11 +179,20 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset().mockResolvedValue(null);
   prisma.tenant.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.create.mockReset();
+  prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findUnique.mockReset().mockResolvedValue(null);
+  prisma.contact.create.mockReset();
+  prisma.contact.update.mockReset();
+  prisma.contact.upsert.mockReset();
+  prisma.patient.findFirst.mockReset().mockResolvedValue(null);
+  prisma.patient.create.mockReset();
+  prisma.patient.update.mockReset();
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({});
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.revokedToken.upsert.mockReset().mockResolvedValue({});
   prisma.smsConfig.findFirst.mockReset().mockResolvedValue(null);
+  emailOtp.enforceRegistrationOtp.mockReset().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
   // T37 / Class B6 — keep self-heal seam permissive across tests.
   prisma.userRole.count.mockReset().mockResolvedValue(1);
   prisma.userRole.findUnique.mockReset().mockResolvedValue(null);
@@ -425,6 +446,52 @@ describe('POST /api/auth/register', () => {
   });
 });
 
+// ── POST /api/auth/customer/register ─────────────────────────────────
+
+describe('POST /api/auth/customer/register', () => {
+  test('existing contact email in the selected tenant → 409 before OTP or create', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'wellness' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue({ id: 77 });
+    prisma.patient.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/auth/customer/register')
+      .send({
+        email: 'dupe@example.com',
+        password: 'Secret123',
+        name: 'Dupe Person',
+        registrationTenantId: 45,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error: 'This email already exists. Sign in to your account.',
+      code: 'EMAIL_ALREADY_EXISTS',
+    });
+    expect(emailOtp.enforceRegistrationOtp).not.toHaveBeenCalled();
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.user.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'dupe@example.com',
+          tenantId: 45,
+          deactivatedAt: null,
+        }),
+      }),
+    );
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'dupe@example.com',
+          tenantId: 45,
+          deletedAt: null,
+        }),
+      }),
+    );
+  });
+});
+
 // ── POST /api/auth/check-email ───────────────────────────────────────
 
 describe('POST /api/auth/check-email', () => {
@@ -439,6 +506,66 @@ describe('POST /api/auth/check-email', () => {
     expect(res.body).toEqual({ exists: true });
     expect(prisma.user.count).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ email: 'known@example.com', deactivatedAt: null }) })
+    );
+  });
+
+  test('known active email within a tenant → 200 { exists: true } scoped by registrationTenantId', async () => {
+    prisma.user.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'known@example.com', registrationTenantId: 42 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+    expect(prisma.user.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'known@example.com',
+          tenantId: 42,
+          deactivatedAt: null,
+        })
+      })
+    );
+  });
+
+  test('known patient email within a tenant → 200 { exists: true } scoped by registrationTenantId', async () => {
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.patient.findFirst.mockResolvedValue({ id: 501 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'duke@tafmail.com', registrationTenantId: 42 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+    expect(prisma.user.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'duke@tafmail.com',
+          tenantId: 42,
+          deactivatedAt: null,
+        })
+      })
+    );
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'duke@tafmail.com',
+          tenantId: 42,
+          deletedAt: null,
+        })
+      })
+    );
+    expect(prisma.patient.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'duke@tafmail.com',
+          tenantId: 42,
+          deletedAt: null,
+        })
+      })
     );
   });
 

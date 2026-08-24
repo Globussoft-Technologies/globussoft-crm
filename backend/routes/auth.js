@@ -181,14 +181,50 @@ router.get("/public/tenants", async (req, res) => {
   }
 });
 
-// Marketing /get-started wizard: check whether an email already belongs to
-// any active user in the system. Returns { exists: boolean } so the frontend
-// can route existing users to /login and new users into the register flow.
-// Intentionally scoped globally (not per-tenant) for the landing-page funnel.
+// Marketing /get-started wizard and customer-register preflight: check whether
+// an email already belongs to an active user. Returns { exists: boolean } so
+// the frontend can route existing users to /login and new users into the
+// register flow. When `registrationTenantId` is supplied we scope the lookup to
+// that tenant and broaden the check to the CRM identity tables that represent
+// a person in this flow (User, Contact, Patient), so customer registration can
+// fail fast before OTP is sent.
+async function customerRegistrationEmailExists(email, tenantId) {
+  const [userCount, contact, patient] = await Promise.all([
+    prisma.user.count({
+      where: {
+        email,
+        tenantId,
+        deactivatedAt: null,
+      },
+    }),
+    prisma.contact.findFirst({
+      where: {
+        email,
+        tenantId,
+        deletedAt: null,
+      },
+      select: { id: true },
+    }),
+    prisma.patient.findFirst({
+      where: {
+        email,
+        tenantId,
+        deletedAt: null,
+      },
+      select: { id: true },
+    }),
+  ]);
+
+  return userCount > 0 || !!contact || !!patient;
+}
+
 router.post("/check-email", async (req, res) => {
   try {
     const rawEmail = req.body?.email;
     const email = typeof rawEmail === "string" ? rawEmail.toLowerCase().trim() : "";
+    const rawTenantId = req.body?.registrationTenantId;
+    const tenantId = Number(rawTenantId);
+    const scopedTenantId = Number.isInteger(tenantId) && tenantId > 0 ? tenantId : null;
 
     // Consistent-timing guard: even invalid emails run a short fixed delay
     // so response timing does not leak whether an email exists. 80 ms is
@@ -197,13 +233,17 @@ router.post("/check-email", async (req, res) => {
 
     let exists = false;
     if (email && email.includes("@")) {
-      const count = await prisma.user.count({
-        where: {
-          email,
-          deactivatedAt: null,
-        },
-      });
-      exists = count > 0;
+      if (scopedTenantId) {
+        exists = await customerRegistrationEmailExists(email, scopedTenantId);
+      } else {
+        const count = await prisma.user.count({
+          where: {
+            email,
+            deactivatedAt: null,
+          },
+        });
+        exists = count > 0;
+      }
     }
 
     const elapsed = Date.now() - checkStart;
@@ -732,11 +772,37 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     // standing rules), so a `tenantId` field would always arrive undefined
     // and registration would 400. `registrationTenantId` is not on the strip
     // list, so it passes through intact.
-    const { email, phone, password, name, registrationTenantId, verificationToken } = req.body || {};
+    const { email: rawEmail, phone, password, name, registrationTenantId, verificationToken } = req.body || {};
+    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 
     // Input validation — email is always required (it's the login credential and a required DB field)
     if (!email || typeof email !== "string" || !email.includes("@") || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email, password, and registrationTenantId are required" });
+    }
+
+    // Coerce to a number — JSON sends it numeric, but accept a numeric string
+    // defensively. Reject anything that isn't a positive integer.
+    const tenantId = Number(registrationTenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "registrationTenantId must be a valid number" });
+    }
+
+    // Check tenant exists
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) {
+      return res.status(400).json({ error: "Invalid tenant ID" });
+    }
+
+    // Fail fast before OTP and password validation when the address already
+    // belongs to any live identity in this tenant. This keeps the UX aligned
+    // with the preflight check and prevents an unnecessary verification loop
+    // for people who are already in the CRM.
+    const existingPerson = await customerRegistrationEmailExists(email, tenantId);
+    if (existingPerson) {
+      return res.status(409).json({
+        error: "This email already exists. Sign in to your account.",
+        code: "EMAIL_ALREADY_EXISTS",
+      });
     }
 
     // Verification gate — token may be email-verified or phone-verified.
@@ -770,30 +836,9 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
       emailVerifiedAt = otpGate.emailVerifiedAt;
     }
 
-    // Coerce to a number — JSON sends it numeric, but accept a numeric string
-    // defensively. Reject anything that isn't a positive integer.
-    const tenantId = Number(registrationTenantId);
-    if (!Number.isInteger(tenantId) || tenantId <= 0) {
-      return res.status(400).json({ error: "registrationTenantId must be a valid number" });
-    }
-
     // Password complexity check
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
-
-    // Check tenant exists
-    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
-    if (!tenant) {
-      return res.status(400).json({ error: "Invalid tenant ID" });
-    }
-
-    // Check email isn't already registered IN THIS ORG. Email is unique
-    // per-tenant, so the same address may register at another org — we only
-    // block a duplicate within the same tenant.
-    const existingUser = await prisma.user.findFirst({ where: { email, tenantId } });
-    if (existingUser) {
-      return res.status(400).json({ error: "Email already registered" });
-    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 

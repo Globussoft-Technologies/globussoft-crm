@@ -2,19 +2,19 @@
  * Signup.jsx — vitest + RTL coverage for the /signup page.
  *
  * Scope: pins the page-surface invariants for the organization-creation
- * entry point. The page is 121 LOC and has ONE primary surface:
- *   - a 4-field form (Organization Name / Your Full Name / Email /
- *     Secure Password) that POSTs /api/auth/register, seeds the auth
- *     context on success, and navigates to /dashboard. On failure it
- *     surfaces the server's `message` (or `error`) in a red banner.
+ * entry point. The page has ONE primary surface:
+ *   - an email-only OTP-gated form that POSTs /api/auth/register,
+ *     seeds the auth context on success, and navigates to /dashboard.
+ *     On failure it surfaces the server's `message` (or `error`) in a
+ *     red banner.
  *
  * Contracts pinned here
  * ─────────────────────
  *   1. Initial render: "Globussoft CRM" heading + "Create your
- *      organization" subhead + 4 inputs (organization / name / email /
- *      password) + "Create Organization" submit + "Sign in" link to
- *      /login.
- *   2. The four inputs are individually required (browser-native
+ *      organization" subhead + organization / name / email / password
+ *      inputs + "Create Organization" submit + "Sign in" link to
+ *      /login, with no phone verification UI anywhere on the page.
+ *   2. The four primary inputs are individually required (browser-native
  *      `required` attribute) and the password input enforces
  *      minLength=6 via the browser-native constraint.
  *   3. Successful register POSTs /api/auth/register with the four
@@ -52,7 +52,6 @@
  *     those, so the spec exercises the submit path and verifies the
  *     POST shape, not the native-validation gating itself.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -103,7 +102,7 @@ function fetchResponse(body, status = 200) {
 }
 
 // Route the email-OTP endpoints to success and delegate /api/auth/register
-// to the caller's handler. The page now gates "Create Organization" behind
+// to the caller's handler. The page gates "Create Organization" behind
 // email verification, so every happy/failure path must verify first.
 function routeFetch(onRegister) {
   global.fetch.mockImplementation((url, opts) => {
@@ -142,7 +141,7 @@ describe('<Signup /> — page surface', () => {
     global.fetch = originalFetch;
   });
 
-  it('renders the heading, create-organization subhead, all four inputs, the submit button, and the sign-in link', () => {
+  it('renders the heading, create-organization subhead, the email-only verification flow, the submit button, and the sign-in link', () => {
     renderSignup();
     expect(screen.getByRole('img', { name: /Globussoft CRM/i })).toBeInTheDocument();
     expect(screen.getByText(/Create your organization/i)).toBeInTheDocument();
@@ -150,10 +149,13 @@ describe('<Signup /> — page surface', () => {
     expect(screen.getByPlaceholderText('John Doe')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('name@company.com')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('••••••••')).toBeInTheDocument();
-    // The email field now has a Validate (OTP) button, and the submit button
-    // is gated until the email is verified.
+    expect(screen.queryByRole('button', { name: /^Phone$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Phone Number/i)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/\+91 98765 43210/i)).not.toBeInTheDocument();
+    // The email field has a Validate (OTP) button, and the submit button is
+    // gated until the email is verified.
     expect(screen.getByTestId('otp-validate')).toBeInTheDocument();
-    const submit = screen.getByRole('button', { name: /Verify your email or phone to continue/i });
+    const submit = screen.getByRole('button', { name: /Verify your email to continue/i });
     expect(submit).toBeDisabled();
     // Sign-in link routes back to /login.
     const signInLink = screen.getByRole('link', { name: /Sign in/i });
@@ -183,7 +185,7 @@ describe('<Signup /> — page surface', () => {
     fireEvent.change(screen.getByPlaceholderText('John Doe'), { target: { value: 'Priya Sharma' } });
     fireEvent.change(screen.getByPlaceholderText('name@company.com'), { target: { value: 'priya@acme.example' } });
     fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'sup3rsecret' } });
-    expect(screen.getByRole('button', { name: /Verify your email or phone to continue/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Verify your email to continue/i })).toBeDisabled();
     // Verify → the submit unlocks.
     fireEvent.click(screen.getByTestId('otp-validate'));
     fireEvent.change(await screen.findByTestId('otp-code'), { target: { value: '123456' } });
@@ -227,6 +229,7 @@ describe('<Signup /> — page surface', () => {
       organizationName: 'Acme Inc.',
       verificationToken: 'vtok-123',
     }));
+    expect(JSON.parse(registerCall[1].body)).not.toHaveProperty('phone');
   });
 
   it('successful register with no tenant in the payload still navigates but does NOT fire setTenant', async () => {

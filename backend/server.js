@@ -1604,12 +1604,12 @@ app.use("/p", landingPagesPublic);
 // Public legal/policy pages — rendered from Markdown (no auth)
 app.use(require("./routes/legal"));
 
-// Public /trips marketing surface — root still resolves the featured
-// travel page when one exists, while /trips/:id-or-slug serves the direct
-// share link for other published travel trips. When no featured page
-// exists, /trips falls through to the SPA shell so the frontend
-// TripsResolver can show the hardcoded Japan TripsLanding fallback
-// instead of a bare 404. No nginx changes are required for this flow.
+// Public /trips marketing surface — root renders the featured travel
+// page when one exists, while /trips/:id-or-slug serves the direct share
+// link for other published travel trips. When no featured page exists,
+// /trips falls through to the SPA shell so the frontend TripsResolver can
+// show the hardcoded Japan TripsLanding fallback instead of a bare 404.
+// No nginx changes are required for this flow.
 app.use("/trips", require("./routes/trips_public").router);
 
 // #917 slice S119 (FR-3.X) — CSP-nonce static-file middleware.
@@ -1857,6 +1857,7 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
 // never hit this path — their signed URL points straight at AWS.) Registered
 // BEFORE the static mounts so it intercepts first.
 const visaDocStore = require("./lib/visaDocStore");
+const passportFileStore = require("./lib/passportFileStore");
 const gateVisaDocs = (req, res, next) => {
   if (visaDocStore.verifyDiskToken(path.basename(req.path || ""), req.query.t))
     return next();
@@ -1869,6 +1870,17 @@ const gateVisaDocs = (req, res, next) => {
 };
 app.use("/uploads/visa-docs", gateVisaDocs);
 app.use("/api/uploads/visa-docs", gateVisaDocs);
+const gatePassportScans = (req, res, next) => {
+  if (passportFileStore.verifyDiskToken(path.basename(req.path || ""), req.query.t))
+    return next();
+  return res
+    .status(403)
+    .json({
+      error:
+        "Forbidden — open this passport image from the passport screen.",
+    });
+};
+app.use("/uploads/passport-ocr", gatePassportScans);
 app.use("/api/uploads", require("./routes/file-uploads"));
 // Web-form attachments: force download + nosniff so a forged HTML/JS file
 // cannot execute in the user's browser if the upload mimetype was spoofed.

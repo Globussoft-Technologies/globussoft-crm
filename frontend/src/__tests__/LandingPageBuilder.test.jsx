@@ -38,8 +38,9 @@
  *  12. Slug validation — entering an invalid slug ("Invalid Slug!")
  *      gets normalized to lowercase-with-hyphens by the SUT's
  *      normalizeSlug helper (lowercased + non-[a-z0-9-] coerced to "-").
- *  13. The Preview link is rendered ONLY when page.status === 'PUBLISHED'
- *      (and points at /p/<slug>). A DRAFT page does NOT show the link.
+  *  13. The Preview link is rendered ONLY when page.status === 'PUBLISHED'
+  *      (and points at /trips/<id> for travel pages). A DRAFT page does
+  *      NOT show the link.
  *  14. The desktop/mobile preview-mode toggle buttons are both rendered
  *      via aria-label so the operator can flip preview viewports.
  *
@@ -57,8 +58,8 @@
  *
  * What this test DOES NOT cover
  * ─────────────────────────────
- *   - Public /p/<slug> render path — covered by services/landingPageRenderer.js
- *     in landing-pages-api.spec.js.
+  *   - Public render path — covered by services/landingPageRenderer.js in
+  *     landing-pages-api.spec.js.
  *   - Multipart upload via the Image block — covered by route-level tests
  *     against /api/landing-pages/upload.
  *   - Drag-and-drop reordering — see CLAUDE.md "DO NOT test HTML5 DnD".
@@ -109,6 +110,9 @@ const samplePagePublished = {
   ...samplePageDraft,
   id: 43,
   status: "PUBLISHED",
+  subBrand: "rfu",
+  isFeatured: false,
+  featuredAt: null,
 };
 
 const sampleRules = [
@@ -436,13 +440,13 @@ describe("<LandingPageBuilder /> — page surface", () => {
     expect(slugInput.value).toBe("invalid-slug-");
   });
 
-  it('PUBLISHED page renders the "Open live" link to /trips; DRAFT does not', async () => {
+  it('PUBLISHED travel page renders the "Open live" link to /trips/<id> when not featured; DRAFT does not', async () => {
     // The builder distinguishes two related surfaces (PR-E preview wiring):
     //   - The "Preview" BUTTON (always visible) mints a 5-min preview
     //     token and opens /api/landing-pages/:id/preview in a new tab.
     //     Works for DRAFT + PUBLISHED — production renderer either way.
     //   - The "Open live" LINK appears ONLY when status=PUBLISHED and
-    //     points at the public /p/<slug> URL.
+    //     points at the public share URL for the current travel page.
     // Render the DRAFT first — no "Open live" link.
     const { unmount } = renderBuilder("/landing-pages/42");
     await waitFor(() =>
@@ -462,7 +466,23 @@ describe("<LandingPageBuilder /> — page surface", () => {
 
     const openLive = screen.getByRole("link", { name: /Open live/i });
     expect(openLive).toBeInTheDocument();
-    // Public marketing URL is /trips (renders the currently featured page).
+    // Non-featured travel pages get their canonical /trips/<id> share URL.
+    expect(openLive.getAttribute("href")).toMatch(/\/trips\/43$/);
+  });
+
+  it('featured travel pages keep the "Open live" link at /trips', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/landing-pages/43" && (!opts || !opts.method || opts.method === "GET")) {
+        return Promise.resolve({ ...samplePagePublished, isFeatured: true, featuredAt: "2026-06-22T10:00:00.000Z" });
+      }
+      return defaultFetch(url, opts);
+    });
+    renderBuilder("/landing-pages/43");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Page title")).toBeInTheDocument(),
+    );
+
+    const openLive = screen.getByRole("link", { name: /Open live/i });
     expect(openLive.getAttribute("href")).toMatch(/\/trips$/);
   });
 

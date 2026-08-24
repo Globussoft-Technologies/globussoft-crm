@@ -20,13 +20,6 @@ import EmailOtpField from "../components/EmailOtpField";
 // Tenant list is fetched from GET /api/auth/customer/tenants (public). New
 // orgs created via /api/auth/signup appear automatically once active.
 
-function tenantLabel(t) {
-  if (t.vertical === "wellness") return `${t.name} (Wellness Clinic)`;
-  if (t.vertical === "travel") return `${t.name} (Travel Agency)`;
-  if (t.vertical === "generic") return `${t.name} (Generic CRM)`;
-  return t.name;
-}
-
 function passwordStrength(p) {
   let s = 0;
   if (p.length >= 8) s += 1;
@@ -36,6 +29,10 @@ function passwordStrength(p) {
   if (/[^A-Za-z0-9]/.test(p)) s += 1;
   return s;
 }
+
+const EXISTING_EMAIL_MESSAGE = "This email already exists. Sign in to your account.";
+const SELECT_ORG_MESSAGE = "Select your organization first to verify email availability.";
+const EMAIL_CHECK_FAILED_MESSAGE = "Unable to check email availability. Please try again.";
 
 export default function CustomerRegister() {
   const navigate = useNavigate();
@@ -99,11 +96,32 @@ export default function CustomerRegister() {
           ? prev
           : { ...prev, tenantId: String(match.id), organization: match.name }
       );
+      setVerificationToken(null);
     }
   }, [tenantSlugParam, tenants]);
 
   const update = (field) => (e) =>
     setForm({ ...form, [field]: e.target.value });
+
+  const clearEmailAvailabilityError = () => {
+    setErrors((prev) => {
+      if (!prev.email) return prev;
+      const next = { ...prev };
+      delete next.email;
+      return next;
+    });
+  };
+
+  const setEmailAvailabilityError = (message) => {
+    setErrors((prev) => ({ ...prev, email: message }));
+    setSubmitError("");
+  };
+
+  const handleEmailChange = (e) => {
+    update("email")(e);
+    clearEmailAvailabilityError();
+    setSubmitError("");
+  };
 
   const normalizeOrg = (s) => s.trim().toLowerCase().replace(/\s+/g, "");
 
@@ -112,12 +130,58 @@ export default function CustomerRegister() {
     const match = tenants.find(
       (t) => normalizeOrg(t.name) === normalizeOrg(text)
     );
+    const nextTenantId = match ? String(match.id) : "";
+    const previousTenantId = form.tenantId;
     setForm((prev) => ({
       ...prev,
       organization: text,
-      tenantId: match ? String(match.id) : "",
+      tenantId: nextTenantId,
     }));
+    clearEmailAvailabilityError();
+    setSubmitError("");
+    if (previousTenantId !== nextTenantId) {
+      setVerificationToken(null);
+    }
   };
+
+  const checkEmailAvailability = async ({ email: rawEmail } = {}) => {
+    const email = (rawEmail || form.email || "").trim().toLowerCase();
+    const tenantId = Number(form.tenantId);
+
+    if (!tenantId) {
+      setEmailAvailabilityError(SELECT_ORG_MESSAGE);
+      return false;
+    }
+
+    if (!email || !email.includes("@")) {
+      return true;
+    }
+
+    try {
+      const res = await fetch("/api/auth/check-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          registrationTenantId: tenantId,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error("Email availability check failed");
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data.exists) {
+        setEmailAvailabilityError(EXISTING_EMAIL_MESSAGE);
+        return false;
+      }
+      clearEmailAvailabilityError();
+      return true;
+    } catch {
+      setEmailAvailabilityError(EMAIL_CHECK_FAILED_MESSAGE);
+      return false;
+    }
+  };
+
   const strength = passwordStrength(form.password);
   const strengthLabel =
     strength <= 2
@@ -162,6 +226,7 @@ export default function CustomerRegister() {
     ev.preventDefault();
     setSubmitError("");
     if (!validate()) return;
+    if (!(await checkEmailAvailability())) return;
     setIsLoading(true);
     try {
       // Travel orgs use the Customer Portal registration API (Contact-based),
@@ -187,7 +252,7 @@ export default function CustomerRegister() {
         if (!pres.ok) {
           const msg = String(pdata?.error || "");
           if (pres.status === 409 || /already/i.test(msg)) {
-            setErrors((prev) => ({ ...prev, email: "This email is already registered" }));
+            setEmailAvailabilityError(EXISTING_EMAIL_MESSAGE);
           } else if (pres.status === 400) {
             setSubmitError(msg || "Please check your inputs and try again.");
           } else {
@@ -222,10 +287,7 @@ export default function CustomerRegister() {
       if (!res.ok) {
         const msg = String(data?.error || "");
         if (res.status === 409 || /already/i.test(msg)) {
-          setErrors((prev) => ({
-            ...prev,
-            email: "This email is already registered",
-          }));
+          setEmailAvailabilityError(EXISTING_EMAIL_MESSAGE);
         } else if (res.status === 400) {
           setSubmitError(msg || "Please check your inputs and try again.");
         } else {
@@ -317,13 +379,15 @@ export default function CustomerRegister() {
           <div style={{ marginBottom: "1rem" }}>
             <EmailOtpField
               value={form.email}
-              onChange={update("email")}
+              onChange={handleEmailChange}
               purpose="customer-register"
               onVerifiedChange={setVerificationToken}
               label="Email Address"
               placeholder="name@company.com"
               inputClassName="input-field"
+              beforeRequest={checkEmailAvailability}
               disabled={isLoading}
+              key={form.tenantId || "no-tenant"}
             />
             {errors.email && (
               <div style={{ color: "var(--danger-color, #ef4444)", fontSize: "0.78rem", marginTop: 4 }}>{errors.email}</div>
@@ -451,7 +515,7 @@ export default function CustomerRegister() {
                 ) : (
                   <>
                     <XCircle size={14} aria-hidden />
-                    <span>Passwords don't match</span>
+                    <span>Passwords do not match</span>
                   </>
                 )}
               </div>

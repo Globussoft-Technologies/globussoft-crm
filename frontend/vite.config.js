@@ -1,53 +1,42 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import path from 'path'
-import { execSync } from 'child_process'
-import { readFileSync } from 'fs'
-import { fileURLToPath } from 'url'
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import path from "path";
+import { execSync } from "child_process";
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
 
-// #634: build-time version + commit-sha injection so the app shell footer can
-// show a build identifier ("v3.4.14 · f5453fc"). Source-of-truth for the
-// version is backend/package.json (per the 44747b4 standing rule — /api/health
-// reads from the same file). The frontend package.json may drift out of sync;
-// reading the canonical backend file keeps both surfaces aligned.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function readBackendVersion() {
   try {
-    const pkg = JSON.parse(readFileSync(path.resolve(__dirname, '../backend/package.json'), 'utf8'));
-    return pkg.version || '0.0.0';
+    const pkg = JSON.parse(
+      readFileSync(path.resolve(__dirname, "../backend/package.json"), "utf8"),
+    );
+    return pkg.version || "0.0.0";
   } catch {
-    return '0.0.0';
+    return "0.0.0";
   }
 }
 
 function readGitSha() {
-  // Prefer an explicit env var (CI may inject one without git available);
-  // fall back to git rev-parse. Empty string if neither works — the footer
-  // gracefully degrades to version-only.
   if (process.env.VITE_GIT_SHA) return process.env.VITE_GIT_SHA;
   try {
-    return execSync('git rev-parse --short HEAD', { cwd: __dirname }).toString().trim();
+    return execSync("git rev-parse --short HEAD", { cwd: __dirname })
+      .toString()
+      .trim();
   } catch {
-    return '';
+    return "";
   }
 }
 
 const APP_VERSION = readBackendVersion();
 const APP_GIT_SHA = readGitSha();
 
-// SRI plugin disabled — computes hashes from ctx.bundle (in-memory) which
-// differ from actual files on disk (trailing newlines), causing integrity
-// mismatches and blank pages. Re-enable only after fixing to hash files on
-// disk in writeBundle instead of ctx.bundle in transformIndexHtml.
-// See: https://github.com/Globussoft-Technologies/globussoft-crm/issues/1152
-
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      "@": path.resolve(__dirname, "./src"),
     },
   },
   define: {
@@ -56,22 +45,22 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': {
-        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
+      "/api": {
+        target: process.env.VITE_API_PROXY_TARGET || "http://localhost:5000",
         changeOrigin: true,
-        rewrite: (path) => path,
+        rewrite: (p) => p,
       },
-      '/uploads': {
-        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
+      "/uploads": {
+        target: process.env.VITE_API_PROXY_TARGET || "http://localhost:5000",
         changeOrigin: true,
-        rewrite: (path) => path,
+        rewrite: (p) => p,
       },
       // Raw WebSocket endpoints served by Express (Callified agent bridge at
       // /ws/callified-agent). `ws: true` is what makes Vite forward the
       // upgrade handshake instead of answering with the SPA shell. socket.io
       // is untouched — it uses its own /socket.io path and its own client.
-      '/ws': {
-        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
+      "/ws": {
+        target: process.env.VITE_API_PROXY_TARGET || "http://localhost:5000",
         changeOrigin: true,
         ws: true,
       },
@@ -81,35 +70,35 @@ export default defineConfig({
       // Vite falls through to the SPA's 404 page. Excludes the SPA routes
       // under /p/ (itinerary, quote, payment-success, review, etc.) so the
       // React router can render them.
-      '^/p/(?!(tripmicrosite|itinerary|tmc|quote|review|payment|flyer)(/|$))': {
-        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
+      "^/p/(?!(tripmicrosite|itinerary|tmc|quote|review|payment|flyer)(/|$))": {
+        target: process.env.VITE_API_PROXY_TARGET || "http://localhost:5000",
         changeOrigin: true,
-        rewrite: (path) => path,
+        rewrite: (p) => p,
       },
-      // /trips is NOT proxied — Vite serves the SPA shell here.
-      // TripsResolver fetches /api/landing-pages/public/featured:
-      //   - featured page exists → window.location.replace('/trips') hits
-      //     Express directly (port 5000) via the backend, serves HTML inline.
-      //   - no featured page → TripsLanding fallback renders in the SPA.
-    }
+      "^/trips(?:/|$)": {
+        target: process.env.VITE_API_PROXY_TARGET || "http://localhost:5000",
+        changeOrigin: true,
+        rewrite: (p) => p,
+      },
+    },
   },
   build: {
     rollupOptions: {
       output: {
         manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-charts': ['recharts'],
-          'vendor-flow': ['reactflow'],
-          'vendor-icons': ['lucide-react']
-        }
-      }
+          "vendor-react": ["react", "react-dom", "react-router-dom"],
+          "vendor-charts": ["recharts"],
+          "vendor-flow": ["reactflow"],
+          "vendor-icons": ["lucide-react"],
+        },
+      },
     },
-    chunkSizeWarningLimit: 800
+    chunkSizeWarningLimit: 800,
   },
   test: {
-    environment: 'jsdom',
+    environment: "jsdom",
     globals: true,
-    setupFiles: ['./vitest.setup.js'],
+    setupFiles: ["./vitest.setup.js"],
     css: false,
   },
-})
+});

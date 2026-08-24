@@ -2973,6 +2973,31 @@ router.get("/:id", verifyToken, async (req, res) => {
 // silently storing the wrong bucket.
 
 const VALID_TRAVEL_SUB_BRANDS = new Set(["tmc", "rfu", "travelstall", "visasure"]);
+const TRAVEL_TEMPLATE_TYPES = new Set([
+  "travel_destination",
+  "wanderlux-v1",
+  "educational-trip-v1",
+  "religious-tour-v1",
+  "family-trip-v1",
+  "luxury-tour-v1",
+  "travel-premium-v1",
+]);
+
+function isTravelLandingPage(page) {
+  const subBrand = typeof page?.subBrand === "string" ? page.subBrand.toLowerCase() : "";
+  const templateType = typeof page?.templateType === "string" ? page.templateType.toLowerCase() : "";
+  return VALID_TRAVEL_SUB_BRANDS.has(subBrand) || TRAVEL_TEMPLATE_TYPES.has(templateType);
+}
+
+function travelFeaturedScope(tenantId) {
+  return {
+    tenantId,
+    OR: [
+      { subBrand: { in: [...VALID_TRAVEL_SUB_BRANDS] } },
+      { templateType: { in: [...TRAVEL_TEMPLATE_TYPES] } },
+    ],
+  };
+}
 
 
 
@@ -4972,65 +4997,14 @@ router.post("/:id/publish", verifyToken, async (req, res) => {
 
 
 
-    // Single-page-live workflow: publishing ALSO features the page so
-
-    // /trips resolves to it. Any sibling (same tenantId + subBrand)
-
-    // currently featured gets demoted in the same transaction � the
-
-    // invariant "at most ONE featured page per (tenant, subBrand)"
-
-    // still holds. Pre-merge this required two button clicks (Publish
-
-    // then Feature); the user opted to collapse the workflow because
-
-    // they only ever want one landing page live at a time.
-
-    const scope = {
-
-      tenantId: req.user.tenantId,
-
-      subBrand: existing.subBrand,
-
-    };
-
     const now = new Date();
-
-    const [, published] = await prisma.$transaction([
-
-      prisma.landingPage.updateMany({
-
-        where: { ...scope, isFeatured: true, NOT: { id: existing.id } },
-
-        data: { isFeatured: false, featuredAt: null },
-
-      }),
-
-      prisma.landingPage.update({
-
-        where: { id: existing.id },
-
-        data: {
-
-          status: "PUBLISHED",
-
-          publishedAt: now,
-
-          isFeatured: true,
-
-          // Preserve the original featuredAt on re-publish so admin can
-
-          // see WHEN this page first became the /trips destination; only
-
-          // set it now if it was never featured before.
-
-          featuredAt: existing.featuredAt || now,
-
-        },
-
-      }),
-
-    ]);
+    const published = await prisma.landingPage.update({
+      where: { id: existing.id },
+      data: {
+        status: "PUBLISHED",
+        publishedAt: now,
+      },
+    });
 
     await snapshotSafe(prisma, published, VERSION_SOURCES.PUBLISH, req.user);
 
@@ -5158,13 +5132,12 @@ router.post("/:id/feature", verifyToken, async (req, res) => {
 
     // treats `null` correctly in updateMany WHERE clauses.
 
-    const scope = {
-
-      tenantId: req.user.tenantId,
-
-      subBrand: existing.subBrand,
-
-    };
+    const scope = isTravelLandingPage(existing)
+      ? travelFeaturedScope(req.user.tenantId)
+      : {
+          tenantId: req.user.tenantId,
+          subBrand: existing.subBrand,
+        };
 
 
 

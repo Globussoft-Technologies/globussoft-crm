@@ -16,7 +16,7 @@ require("dotenv").config({
 // loaded without grepping logs for fail-soft messages later.
 console.log(
   `[env] AI keys: GEMINI=${process.env.GEMINI_API_KEY ? "set" : "MISSING"} ` +
-    `OPENAI=${process.env.OPENAI_API_KEY ? "set" : "MISSING"}`,
+  `OPENAI=${process.env.OPENAI_API_KEY ? "set" : "MISSING"}`,
 );
 
 // Fail fast in production if JWT secrets are missing — refuses to boot rather than
@@ -179,8 +179,8 @@ const ALLOWED_ORIGINS = [
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
   ...(process.env.CORS_ALLOWED_ORIGINS
     ? process.env.CORS_ALLOWED_ORIGINS.split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
+      .map((s) => s.trim())
+      .filter(Boolean)
     : []),
 ];
 app.use(
@@ -553,6 +553,16 @@ try {
     e.message,
   );
 }
+
+// Plain HTTP requests to the WebSocket bridge path must not fall through to
+// the SPA shell. The upgrade listener above handles WebSocket handshakes;
+// anything else on this path is a client error.
+app.all("/ws/callified-agent", (_req, res) => {
+  res.status(426).json({
+    error: "Upgrade Required",
+    code: "UPGRADE_REQUIRED",
+  });
+});
 
 const io = new Server(server, { cors: { origin: "*" } });
 const presenceColors = [

@@ -522,35 +522,30 @@ test.describe('Wellness API — POST /patients (create + validation)', () => {
     expect([401, 403]).toContain(res.status());
   });
 
-  // #401 — DB-level dedup gate. The Patient model has @@unique([tenantId,
-  // normalizedPhone]) which Prisma enforces at create time. Pre-this-
-  // constraint, the demo box had Kavita Reddy × 10 etc. growing +11/min
-  // during QA sessions because the in-route findFirst dedup was best-
-  // effort and bypassable. Now the second create with the same phone
-  // (after normalisation: country code + last-10 digits) returns 409
-  // with code: DUPLICATE_PHONE.
-  test('409 DUPLICATE_PHONE when a second patient is created with the same phone', async ({ request }) => {
+  // Product decision (#1375, migration 202608211700): several patients in one
+  // clinic legitimately share a phone (a couple, a parent booking for a child,
+  // one household landline). The Patient model's DB-level
+  // @@unique([tenantId, normalizedPhone]) was relaxed to a plain index, so
+  // creating two patients with the same normalized phone is now allowed.
+  test('201 when a second patient is created with the same phone', async ({ request }) => {
     const phone = nextPhone();
     const first = await authPost(request, '/api/wellness/patients', {
       name: `E2E ${RUN_TAG} dup-phone-1`,
       phone,
     });
-    expect(first.status(), `first create: ${await first.text()}`).toBe(201);
+    expect(first.status()).toBe(201);
 
     const second = await authPost(request, '/api/wellness/patients', {
       name: `E2E ${RUN_TAG} dup-phone-2`,
-      phone, // same phone — should collide on (tenantId, normalizedPhone)
+      phone, // same phone — allowed after the unique constraint was relaxed
     });
-    expect(second.status()).toBe(409);
-    const body = await second.json();
-    expect(body.code).toBe('DUPLICATE_PHONE');
-    expect(body.error).toMatch(/already exists/i);
+    expect(second.status()).toBe(201);
   });
 
-  test('409 DUPLICATE_PHONE when phone differs only in formatting (normalised)', async ({ request }) => {
+  test('201 when phone differs only in formatting (normalised)', async ({ request }) => {
     // Phones "+91 98765 12345", "+919876512345", "9876512345" all
-    // normalise to "919876512345". Second create with any spacing
-    // variant of the first phone must still collide.
+    // normalise to the same value. After relaxing the unique constraint,
+    // a second create with any spacing variant is allowed.
     const phone = nextPhone();
     const first = await authPost(request, '/api/wellness/patients', {
       name: `E2E ${RUN_TAG} dup-fmt-1`,
@@ -558,14 +553,13 @@ test.describe('Wellness API — POST /patients (create + validation)', () => {
     });
     expect(first.status()).toBe(201);
 
-    // Insert spaces + dashes: "+919876512345" → "+91 98765 12345"
+    // Insert spaces: "+919876512345" → "+91 98765 12345"
     const reformatted = phone.replace(/^(\+?\d{2})(\d{5})(\d{5})$/, '$1 $2 $3');
     const second = await authPost(request, '/api/wellness/patients', {
       name: `E2E ${RUN_TAG} dup-fmt-2`,
       phone: reformatted,
     });
-    expect(second.status()).toBe(409);
-    expect((await second.json()).code).toBe('DUPLICATE_PHONE');
+    expect(second.status()).toBe(201);
   });
 
   // ── S100 — structured firstName + lastName intake ──────────────────
@@ -627,7 +621,7 @@ test.describe('Wellness API — POST /patients (create + validation)', () => {
     expect(created.lastName).toBeNull();
   });
 
-  test('PUT /patients/:id with another patient phone returns 409 DUPLICATE_PHONE', async ({ request }) => {
+  test('PUT /patients/:id with another patient phone now succeeds', async ({ request }) => {
     const phoneA = nextPhone();
     const phoneB = nextPhone();
     const a = await authPost(request, '/api/wellness/patients', {
@@ -640,14 +634,20 @@ test.describe('Wellness API — POST /patients (create + validation)', () => {
     });
     expect(a.status()).toBe(201);
     expect(b.status()).toBe(201);
+    const aBody = await a.json();
     const bId = (await b.json()).id;
 
-    // Now try to edit B's phone to A's phone — should 409.
+    // After relaxing the unique constraint, editing B's phone to A's phone
+    // is allowed; both patients can share the same phone. The route returns
+    // the canonicalised E.164 value, so compare normalizedPhone instead of
+    // the raw input string.
     const collide = await authPut(request, `/api/wellness/patients/${bId}`, {
       phone: phoneA,
     });
-    expect(collide.status()).toBe(409);
-    expect((await collide.json()).code).toBe('DUPLICATE_PHONE');
+    expect(collide.status()).toBe(200);
+    const updated = await collide.json();
+    expect(updated.normalizedPhone).toBe(aBody.normalizedPhone);
+    expect(updated.phone).toBeTruthy();
   });
 });
 
@@ -2882,16 +2882,14 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
     }
   });
 
-  // ── #265/#401 — Duplicate phone 409 lock-in (cross-shape) ─────────
+  // ── #265/#401 — Duplicate phone no longer blocks creation (cross-shape) ─
   //
-  // Already pinned at line ~497-557 with two POST shapes + a PUT
-  // shape. This re-asserts the contract from a different angle:
-  // the response code field is exactly DUPLICATE_PHONE (not
-  // PHONE_DUPLICATE / DUP_PHONE / etc.) and the HTTP status is
-  // exactly 409 (not 422 / 400). Locks the public contract for
-  // any frontend / partner integration that switches on the code.
+  // The DB-level @@unique([tenantId, normalizedPhone]) was relaxed to a
+  // plain index in migration 202608211700. This test now locks the new
+  // contract: two patients with the same phone both return 201 and the
+  // response shape carries the created patient, not a DUPLICATE_PHONE error.
 
-  test('#265/#401 DUPLICATE_PHONE response shape: status=409, code=DUPLICATE_PHONE, error matches /already exists/i', async ({ request }) => {
+  test('#265/#401 same-phone second patient now returns 201, not DUPLICATE_PHONE', async ({ request }) => {
     const phone = nextPhone();
     const first = await authPost(request, '/api/wellness/patients', {
       name: `E2E ${RUN_TAG} dup-shape-1`,
@@ -2903,15 +2901,13 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
       name: `E2E ${RUN_TAG} dup-shape-2`,
       phone,
     });
-    // Three pinned facets — every public consumer of this 409 cares
-    // about all three.
-    expect(second.status()).toBe(409);
+    // New contract: the relaxed index allows duplicate phones.
+    expect(second.status()).toBe(201);
     const body = await second.json();
-    expect(body.code).toBe('DUPLICATE_PHONE');
-    expect(body.error).toMatch(/already exists/i);
-    // No raw Prisma leakage in the user-facing error string.
-    expect(body.error).not.toMatch(/P2002|prisma|UNIQUE constraint/i);
-    expect(body.error).not.toMatch(/normalizedPhone/);
+    expect(body.code).not.toBe('DUPLICATE_PHONE');
+    expect(body.error).toBeUndefined();
+    expect(body.id).toBeTruthy();
+    expect(body.phone).toBe((await first.json()).phone);
   });
 });
 

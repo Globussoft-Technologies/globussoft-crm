@@ -634,15 +634,20 @@ test.describe('Wellness API — POST /patients (create + validation)', () => {
     });
     expect(a.status()).toBe(201);
     expect(b.status()).toBe(201);
+    const aBody = await a.json();
     const bId = (await b.json()).id;
 
     // After relaxing the unique constraint, editing B's phone to A's phone
-    // is allowed; both patients can share the same phone.
+    // is allowed; both patients can share the same phone. The route returns
+    // the canonicalised E.164 value, so compare normalizedPhone instead of
+    // the raw input string.
     const collide = await authPut(request, `/api/wellness/patients/${bId}`, {
       phone: phoneA,
     });
     expect(collide.status()).toBe(200);
-    expect((await collide.json()).phone).toBe(phoneA);
+    const updated = await collide.json();
+    expect(updated.normalizedPhone).toBe(aBody.normalizedPhone);
+    expect(updated.phone).toBeTruthy();
   });
 });
 

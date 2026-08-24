@@ -13,6 +13,7 @@ export function HeadingBlock({ props = {} }) {
   const text = props.text || '';
   const variant = props.variant || '';
   const HeadingTag = level;
+  
 
   const variantStyle = variant === 'wellness-logo'
     ? { fontSize: '0.92rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 800, margin: '0' }

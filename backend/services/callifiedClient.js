@@ -105,6 +105,12 @@ async function getCallifiedConfig(tenantId) {
     password,
     baseUrl: baseUrl.replace(/\/$/, ''),
     webhookSecret,
+    // Agent-bridge escape hatch: the documented surface does not say how the
+    // /ws/agent socket authenticates, so lib/callifiedAgentBridge.js sends the
+    // JWT as a bearer header AND as a `token` query param. A tenant whose
+    // deployment rejects the query param sets this to false in
+    // Integration.settings and only the header is sent.
+    agentBridgeTokenInQuery: settings.agentBridgeTokenInQuery !== false,
     isActive: !!row?.isActive || !!(apiKey || (email && password)),
   };
 }
@@ -976,6 +982,60 @@ async function dialCampaign(tenantId, campaignId, leadId) {
 }
 
 /**
+ * Trigger a browser (agent-bridge) call for a lead inside a campaign.
+ *
+ * Unlike dialLead/dialCampaign — where Callified's own AI agent speaks to the
+ * customer — this places the outbound leg and bridges its audio to a human
+ * agent sitting in a browser. Callified returns a `call_sid` plus a relative
+ * `agent_url` (`/ws/agent?call_sid=...`) that the agent's browser connects to.
+ *
+ * The endpoint is campaign-scoped, so the lead MUST be enrolled in the
+ * campaign first (see initiateBrowserCallForContact).
+ *
+ * @param {number} tenantId
+ * @param {number} campaignId
+ * @param {number} leadId
+ * @param {{exotelAccountId?: number, scheduledCallId?: number}} [opts]
+ * @returns {Promise<{call_sid?: string, agent_url?: string, status?: string}>}
+ */
+async function browserCall(tenantId, campaignId, leadId, opts = {}) {
+  const payload = {};
+  if (opts.exotelAccountId) payload.exotel_account_id = Number(opts.exotelAccountId);
+  if (opts.scheduledCallId) payload.scheduled_call_id = Number(opts.scheduledCallId);
+
+  return await callifiedJson(
+    tenantId,
+    `/api/campaigns/${campaignId}/leads/${leadId}/browser-call`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+/**
+ * Resolve the absolute WebSocket URL for a Callified agent bridge.
+ *
+ * Callified returns `agent_url` as a path relative to its own host. The CRM
+ * browser never talks to that host directly (it holds no Callified JWT and we
+ * do not want to hand one out) — the backend relay in
+ * lib/callifiedAgentBridge.js is the client. This helper turns the relative
+ * path into the absolute ws(s):// URL that the relay dials.
+ *
+ * @param {number} tenantId
+ * @param {string} agentUrl  relative or absolute agent_url from browserCall
+ * @returns {Promise<string>}
+ */
+async function resolveAgentSocketUrl(tenantId, agentUrl) {
+  const config = await module.exports.getCallifiedConfig(tenantId);
+  const raw = String(agentUrl || '').trim();
+  if (/^wss?:\/\//i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw.replace(/^http/i, 'ws');
+  const base = config.baseUrl.replace(/^http/i, 'ws');
+  return `${base}${raw.startsWith('/') ? raw : `/${raw}`}`;
+}
+
+/**
  * Fetch all transcripts for a Callified lead.
  */
 async function getLeadTranscripts(tenantId, callifiedLeadId) {
@@ -1029,17 +1089,24 @@ function computeAiScoreFromReview(review) {
 }
 
 /**
- * Full outbound call flow for a CRM contact.
+ * Shared preflight for every outbound Callified call on a CRM contact.
  *
- * 1. Creates or reuses a Callified lead.
- * 2. Triggers an AI dial via the single-lead dial endpoint (no campaign
- *    enrollment required, so leads mapped under a different org/campaign can
- *    still be called from the CRM).
- * 3. Persists a CallLog row in the CRM.
+ * Runs the tenant feature-flag + budget-cap gates, loads and validates the
+ * contact, normalizes the phone into the format Callified's dialer accepts,
+ * and hands back a `buildLead()` closure that resolves (reuses or creates)
+ * the matching Callified lead.
  *
- * Returns the Callified leadId and the CRM CallLog id.
+ * Both call modes go through this so the AI dial flow
+ * (`initiateCallForContact`) and the human agent-bridge flow
+ * (`initiateBrowserCallForContact`) share one lead-mapping lifecycle instead
+ * of each growing their own.
+ *
+ * @param {{tenantId: number, contactId: number|string, campaignId: number|string,
+ *          interest?: string, source?: string}} params
+ * @returns {Promise<{contact: object, normalizedPhone: string, firstName: string,
+ *                    lastName: string, buildLead: () => Promise<object>}>}
  */
-async function initiateCallForContact({ tenantId, contactId, campaignId, userId, interest }) {
+async function prepareContactCall({ tenantId, contactId, campaignId, interest, source }) {
   if (!tenantId) throw new Error('tenantId required');
   if (!contactId) throw new Error('contactId required');
   if (!campaignId) throw new Error('campaignId required');
@@ -1080,6 +1147,12 @@ async function initiateCallForContact({ tenantId, contactId, campaignId, userId,
   const firstName = nameParts[0] || contact.name || '';
   const lastName = nameParts.slice(1).join(' ') || '';
 
+  // createLead is the "ensure lead" primitive: it reuses a stored phone →
+  // Callified-lead mapping when one exists, recovers the remote id when
+  // Callified rejects the create with a 409 duplicate-phone, and only creates
+  // a brand-new lead when neither path yields a dialable one. BOTH call modes
+  // (AI dial and browser/agent bridge) go through it, so a customer never
+  // accumulates duplicate Callified leads.
   async function buildLead() {
     return module.exports.createLead(tenantId, {
       firstName,
@@ -1088,29 +1161,62 @@ async function initiateCallForContact({ tenantId, contactId, campaignId, userId,
       email: contact.email,
       company: contact.company,
       interest: interest || 'CRM outbound call',
-      source: 'Globussoft CRM',
+      source: source || 'Globussoft CRM',
       campaignId: Number(campaignId),
       contactId: contact.id,
     });
   }
 
+  return { contact, normalizedPhone, firstName, lastName, buildLead };
+}
+
+/**
+ * Enroll a lead into a campaign, treating "already enrolled" as success.
+ *
+ * Callified has no idempotent enroll, and re-enrolling an existing member
+ * returns an error whose only signal is the message text. Any other failure
+ * (e.g. the lead belongs to a different org) is re-thrown so the caller can
+ * fall back to a campaign-less dial or rebuild the lead.
+ */
+async function enrollLeadTolerant(tenantId, campaignId, leadId) {
+  try {
+    await module.exports.enrollLead(tenantId, campaignId, leadId);
+    console.log(`[callifiedClient] enrollLeadTolerant: enrolled lead ${leadId} in campaign ${campaignId}`);
+    return { enrolled: true, alreadyEnrolled: false };
+  } catch (e) {
+    const msg = String(e.message).toLowerCase();
+    if (msg.includes('already') || msg.includes('duplicate') || msg.includes('exists')) {
+      console.log(`[callifiedClient] enrollLeadTolerant: lead ${leadId} already in campaign ${campaignId}: ${e.message}`);
+      return { enrolled: false, alreadyEnrolled: true };
+    }
+    console.log(`[callifiedClient] enrollLeadTolerant: enrollment failed for lead ${leadId}: ${e.message}`);
+    throw e;
+  }
+}
+
+/**
+ * Full outbound AI call flow for a CRM contact.
+ *
+ * 1. Creates or reuses a Callified lead (shared preflight).
+ * 2. Enrolls it in the chosen campaign and triggers the campaign AI dial,
+ *    falling back to the single-lead dial endpoint (no campaign enrollment
+ *    required) so leads mapped under a different org/campaign can still be
+ *    called from the CRM.
+ * 3. Persists a CallLog row in the CRM.
+ *
+ * Returns the Callified leadId and the CRM CallLog id.
+ */
+async function initiateCallForContact({ tenantId, contactId, campaignId, userId, interest }) {
+  const { contact, normalizedPhone, buildLead } = await module.exports.prepareContactCall({
+    tenantId,
+    contactId,
+    campaignId,
+    interest,
+  });
+
   async function tryCampaignDial(leadId) {
     console.log(`[callifiedClient] initiateCallForContact: enrolling lead ${leadId} in campaign ${campaignId}`);
-    try {
-      await module.exports.enrollLead(tenantId, campaignId, leadId);
-      console.log(`[callifiedClient] initiateCallForContact: enrolled lead ${leadId}, triggering campaign dial`);
-    } catch (e) {
-      const msg = String(e.message).toLowerCase();
-      // If the lead is already enrolled, treat it as success and dial anyway.
-      if (msg.includes('already') || msg.includes('duplicate') || msg.includes('exists')) {
-        console.log(`[callifiedClient] initiateCallForContact: enrollment skipped (lead ${leadId} already in campaign ${campaignId}): ${e.message}`);
-      } else {
-        // Enrollment may fail if the lead belongs to a different org/campaign.
-        // Re-throw so caller can fall back to single-lead dial or recreate.
-        console.log(`[callifiedClient] initiateCallForContact: enrollment failed for lead ${leadId}: ${e.message}`);
-        throw e;
-      }
-    }
+    await module.exports.enrollLeadTolerant(tenantId, campaignId, leadId);
     return await module.exports.dialCampaign(tenantId, campaignId, leadId);
   }
 
@@ -1181,6 +1287,127 @@ async function initiateCallForContact({ tenantId, contactId, campaignId, userId,
     contactId: contact.id,
     callLogId: callLog.id,
     dialResult,
+  };
+}
+
+/**
+ * Full outbound HUMAN call flow for a CRM contact (browser / agent bridge).
+ *
+ * Same lead lifecycle as initiateCallForContact — reuse-or-create the
+ * Callified lead through the shared preflight — but instead of handing the
+ * conversation to Callified's AI agent, Callified places the customer leg and
+ * bridges its audio to a WebSocket that a human agent's browser joins.
+ *
+ * Unlike the AI dial there is no campaign-less fallback: the documented
+ * browser-call endpoint is campaign-scoped, so the lead must be enrolled
+ * first. A 404 on either step means the mapped lead is stale, so we clear the
+ * mapping, rebuild the lead once, and retry.
+ *
+ * Returns the Callified call_sid + agent_url alongside the CRM CallLog id.
+ * The caller is responsible for handing the browser a relay URL — the raw
+ * agent_url points at Callified's host and needs a Callified JWT, which the
+ * browser never receives (see lib/callifiedAgentBridge.js).
+ */
+async function initiateBrowserCallForContact({
+  tenantId,
+  contactId,
+  campaignId,
+  userId,
+  interest,
+  exotelAccountId,
+  scheduledCallId,
+}) {
+  const { contact, normalizedPhone, buildLead } = await module.exports.prepareContactCall({
+    tenantId,
+    contactId,
+    campaignId,
+    interest: interest || 'CRM manual call',
+  });
+
+  async function tryBrowserCall(leadId) {
+    console.log(
+      `[callifiedClient] initiateBrowserCallForContact: enrolling lead ${leadId} in campaign ${campaignId}`,
+    );
+    await module.exports.enrollLeadTolerant(tenantId, campaignId, leadId);
+    return await module.exports.browserCall(tenantId, campaignId, leadId, {
+      exotelAccountId,
+      scheduledCallId,
+    });
+  }
+
+  let lead = await buildLead();
+  let callifiedLeadId = lead.id;
+  if (!callifiedLeadId) {
+    const err = new Error('Callified did not return a lead id');
+    err.code = 'CALLIFIED_MISSING_LEAD_ID';
+    throw err;
+  }
+
+  let bridgeResult;
+  try {
+    bridgeResult = await tryBrowserCall(callifiedLeadId);
+  } catch (firstErr) {
+    if (firstErr.status !== 404) throw firstErr;
+
+    console.log(
+      `[callifiedClient] initiateBrowserCallForContact: lead ${callifiedLeadId} unreachable, clearing mapping and rebuilding for ${normalizedPhone}`,
+    );
+    await clearCallifiedLeadMapping(tenantId, normalizedPhone);
+    lead = await buildLead();
+    callifiedLeadId = lead.id;
+    if (!callifiedLeadId) {
+      const err = new Error('Callified did not return a lead id on retry');
+      err.code = 'CALLIFIED_MISSING_LEAD_ID';
+      throw err;
+    }
+    bridgeResult = await tryBrowserCall(callifiedLeadId);
+  }
+
+  const callSid = bridgeResult?.call_sid || bridgeResult?.callSid || null;
+  const agentUrl = bridgeResult?.agent_url || bridgeResult?.agentUrl || null;
+  if (!callSid) {
+    const err = new Error('Callified did not return a call_sid for the browser call');
+    err.code = 'CALLIFIED_MISSING_CALL_SID';
+    throw err;
+  }
+
+  const initiatedAt = new Date().toISOString();
+  const callLog = await prisma.callLog.create({
+    data: {
+      tenantId,
+      contactId: contact.id,
+      userId: userId || null,
+      provider: 'callified',
+      // Kept as the Callified lead id (not the call_sid) so the existing
+      // details / attempts / call-status lookups, which all key on the lead,
+      // see browser calls the same way they see AI calls.
+      providerCallId: String(callifiedLeadId),
+      calleeNumber: normalizedPhone,
+      direction: 'OUTBOUND',
+      status: 'INITIATED',
+      duration: 0,
+      notes: JSON.stringify({
+        mode: 'browser',
+        campaignId: Number(campaignId),
+        callifiedLeadId,
+        callSid,
+        agentUrl,
+        dialResult: bridgeResult,
+        initiatedAt,
+      }),
+    },
+  });
+
+  return {
+    mode: 'browser',
+    callifiedLeadId,
+    campaignId: Number(campaignId),
+    contactId: contact.id,
+    callLogId: callLog.id,
+    callSid,
+    agentUrl,
+    status: bridgeResult?.status || 'dialing',
+    initiatedAt,
   };
 }
 
@@ -1578,12 +1805,17 @@ module.exports = {
   listCampaigns,
   createLead,
   enrollLead,
+  enrollLeadTolerant,
   dialLead,
   dialCampaign,
+  browserCall,
+  resolveAgentSocketUrl,
   getLeadTranscripts,
   getTranscriptReview,
   getCallDetails,
+  prepareContactCall,
   initiateCallForContact,
+  initiateBrowserCallForContact,
   fetchAndStoreCallDetails,
   syncPendingCallifiedStatuses,
   inferCallStatus,

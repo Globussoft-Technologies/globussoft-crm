@@ -535,6 +535,25 @@ app.use("/api", (req, res, next) => {
   });
 });
 
+// Callified agent-bridge relay (human/manual browser calls).
+//
+// MUST be attached BEFORE socket.io: engine.io snapshots the HTTP server's
+// existing 'upgrade' listeners when it attaches and delegates every
+// non-socket.io upgrade back to them. A listener registered after socket.io
+// would race engine.io's own abortConnection for unknown paths and the
+// upgrade would be destroyed out from under it.
+try {
+  const {
+    attachCallifiedAgentBridge,
+  } = require("./lib/callifiedAgentBridge");
+  attachCallifiedAgentBridge(server);
+} catch (e) {
+  console.error(
+    "[server] callified agent bridge attach failed (non-fatal):",
+    e.message,
+  );
+}
+
 const io = new Server(server, { cors: { origin: "*" } });
 const presenceColors = [
   "#ef4444",
@@ -838,6 +857,11 @@ const inventoryRoutes = require("./routes/inventory");
 // /api/wellness/ai-provider-config.
 const supportChatRoutes = require("./routes/support_chat");
 const wellnessAiConfigRoutes = require("./routes/wellness_ai_config");
+// Wellness ↔ Callified calling — AI dial + human browser (agent bridge) calls
+// from the Appointments page. Thin wellness-shaped entry point over the SAME
+// services/callifiedClient.js the generic CRM Leads page uses; declares only
+// /callified/* paths that wellness.js does NOT own.
+const wellnessCallifiedRoutes = require("./routes/wellness_callified");
 // Wave 2 Agent II — POS / cash register / shift / sale backbone.
 const posRoutes = require("./routes/pos");
 // D16 Wallet Top-up Arc 1 slice 2-partial — read-only wallet endpoints
@@ -1460,6 +1484,10 @@ app.use(
 );
 app.use("/api/travel/sightseeing", require("./routes/travel_sightseeing"));
 app.use("/api/travel/pois", require("./routes/travel_pois"));
+// Vertical-neutral place search / reverse geocoding (Photon-backed, no
+// API key). Shared by the travel itinerary editor and the wellness
+// clinic geofence picker — see lib/geocodeProxy.js.
+app.use("/api/geocode", require("./routes/geocode"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
 app.use("/api/travel-school-terms", travelSchoolTermRoutes);
@@ -1483,6 +1511,12 @@ app.use("/api/support-chat", supportChatRoutes);
 // sits beside the other wellness admin surfaces; declares only
 // /ai-provider-config paths that wellness.js does NOT own.
 app.use("/api/wellness", wellnessAiConfigRoutes);
+// Callified calling for the wellness Appointments page (/callified/* paths).
+app.use("/api/wellness", wellnessCallifiedRoutes);
+// Standalone geofence zones + bulk staff assignment (/geofence-zones,
+// /geofence-zone-assignments/* paths). Decoupled from clinic Location — see
+// routes/wellness_geofence_zones.js for the global-fallback design.
+app.use("/api/wellness", require("./routes/wellness_geofence_zones"));
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths
 // like /api/wellness/inventory/receipts work; declares only paths wellness.js
 // does NOT own (product-categories, vendors, inventory/receipts,

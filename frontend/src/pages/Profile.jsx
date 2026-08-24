@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User, Mail, Key, Save, Stethoscope, Download, FileText, Camera, Trash2, AlertTriangle } from 'lucide-react';
+import { User, Mail, Phone, Key, Save, Stethoscope, Download, FileText, Camera, Trash2, AlertTriangle } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { AuthContext } from '../App';
 import { useNotify } from '../utils/notify';
@@ -27,6 +27,7 @@ const Profile = () => {
   const [profile, setProfile] = useState(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -97,6 +98,7 @@ const Profile = () => {
       setProfile(data);
       setName(data.name || '');
       setEmail(data.email || '');
+      setPhone(data.phone || '');
     } catch (err) {
       setProfileMsg({ text: 'Failed to load profile', type: 'error' });
     }
@@ -130,11 +132,16 @@ const Profile = () => {
     // and pollutes audit logs with no-op rows.
     const trimmedName = (name || '').trim();
     const trimmedEmail = (email || '').trim();
+    const trimmedPhone = (phone || '').trim();
     const baselineName = (profile?.name || '').trim();
     const baselineEmail = (profile?.email || '').trim();
+    const baselinePhone = (profile?.phone || '').trim();
     const changed = {};
     if (trimmedName !== baselineName) changed.name = trimmedName;
     if (trimmedEmail !== baselineEmail) changed.email = trimmedEmail;
+    // Sent even when empty — an empty string is how the user clears a number
+    // they no longer want on file, which the backend maps to NULL.
+    if (trimmedPhone !== baselinePhone) changed.phone = trimmedPhone;
     if (Object.keys(changed).length === 0) {
       setProfileMsg({ text: 'No changes to save', type: 'info' });
       return;
@@ -147,8 +154,12 @@ const Profile = () => {
         body: JSON.stringify(changed)
       });
       setProfile(updated);
+      // Reflect the server's canonical form (e.g. "9876543210" saved back as
+      // "+919876543210") so the field shows what is actually stored and a
+      // second save is correctly detected as a no-op.
+      setPhone(updated.phone || '');
       if (setAuthUser && authUser) {
-        setAuthUser({ ...authUser, name: updated.name, email: updated.email });
+        setAuthUser({ ...authUser, name: updated.name, email: updated.email, phone: updated.phone });
       }
       setProfileMsg({ text: 'Profile updated successfully', type: 'success' });
     } catch (err) {
@@ -626,6 +637,27 @@ const Profile = () => {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Your email"
             />
+          </div>
+          <div style={{ marginBottom: '1rem' }}>
+            <label
+              htmlFor="profile-phone"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}
+            >
+              <Phone size={14} /> Phone
+            </label>
+            <input
+              id="profile-phone"
+              type="tel"
+              className="input-field"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="e.g. 9876543210"
+              autoComplete="tel"
+              data-testid="profile-phone-input"
+            />
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+              Used to reach you about your appointments. Leave blank to remove it.
+            </div>
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>

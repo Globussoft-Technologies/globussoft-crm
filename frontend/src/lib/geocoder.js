@@ -157,6 +157,62 @@ export async function reverseGeocode(lat, lng) {
 }
 
 /**
+ * Forward-geocode to a RANKED LIST of candidates, for typeahead pickers.
+ *
+ * Unlike geocode() — which resolves one query to one best-guess point and is
+ * used for unattended auto-pinning — this is the interactive path: the user
+ * sees every candidate and picks the right one, so ambiguity is a feature,
+ * not a failure. It hits the vertical-neutral /api/geocode mount rather than
+ * /api/travel/pois/geocode, because the wellness clinic geofence picker is a
+ * caller and has no business inside the travel namespace.
+ *
+ * Results carry address components (city/state/postcode) alongside the
+ * coordinates so a form can pre-fill sibling fields from one pick.
+ *
+ * @param {string} query
+ * @param {number} [limit=6] — backend clamps to 1..10
+ * @param {object} [opts]
+ * @param {string} [opts.bbox] — "minLon,minLat,maxLon,maxLat". Upstream this
+ *        is a HARD filter, so callers that pass one must be willing to retry
+ *        without it (see GeofencePicker, which falls back to a worldwide
+ *        search when the in-country box comes back empty).
+ * @returns {Promise<Array<{lat:number, lng:number, display_name:string, name:string, street:string, city:string, district:string, county:string, state:string, country:string, postcode:string}>>}
+ *          Empty array on no-match OR on any network/upstream failure —
+ *          a typeahead must never throw into a keystroke handler.
+ */
+export async function geocodeSuggest(query, limit = 6, opts = {}) {
+  const key = normalizeQuery(query);
+  if (!key) return [];
+
+  const bbox = opts.bbox || '';
+  // bbox is part of the cache key: the same text inside vs. outside a box is
+  // a genuinely different query, and collapsing them would serve worldwide
+  // results to a caller that asked to stay in-country (or vice versa).
+  const cacheKey = `sug:${limit}:${bbox}:${key}`;
+  const cached = lruGet(cacheKey);
+  if (cached !== undefined) return cached;
+
+  let results = [];
+  try {
+    const data = await fetchApi(
+      `/api/geocode?q=${encodeURIComponent(key)}&limit=${limit}`
+        + (bbox ? `&bbox=${encodeURIComponent(bbox)}` : ''),
+      { silent: true },
+    );
+    if (Array.isArray(data?.results)) {
+      results = data.results.filter(
+        (r) => Number.isFinite(r?.lat) && Number.isFinite(r?.lng),
+      );
+    }
+  } catch (err) {
+    console.warn('[geocoder] suggest proxy error:', err?.message || err);
+  }
+
+  lruSet(cacheKey, results);
+  return results;
+}
+
+/**
  * Test-only — empties the LRU cache.
  */
 export function clearCache() {

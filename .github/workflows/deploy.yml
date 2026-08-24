@@ -366,6 +366,9 @@ jobs:
             tests/push-api.spec.js \
             tests/communications-api.spec.js \
             tests/notifications-api.spec.js \
+            tests/geocode-api.spec.js \
+            tests/wellness-location-assignments-api.spec.js \
+            tests/wellness-geofence-zones-api.spec.js \
             tests/contacts-api.spec.js \
             tests/deals-api.spec.js \
             tests/surveys-api.spec.js \
@@ -541,6 +544,7 @@ jobs:
             tests/travel-brochures-models-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/callified-campaign-api.spec.js \
+            tests/wellness-callified-api.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"
 

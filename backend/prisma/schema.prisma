@@ -179,6 +179,8 @@ model Tenant {
   serviceConsumptions  ServiceConsumption[]
   agentRecommendations AgentRecommendation[]
   locations            Location[]
+  // Standalone geofence zones (wellness) — not tied to any clinic Location.
+  geofenceZones        GeofenceZone[]
   // Agent B: waitlist
   waitlists            Waitlist[]
   // Agent D: loyalty + referrals
@@ -531,6 +533,13 @@ model User {
   role            String    @default("USER") // ADMIN, USER, MANAGER
   userType        String    @default("STAFF") // STAFF | OWNER | CUSTOMER
   name            String
+  // Contact number the user maintains themselves on /profile. Nullable and
+  // NOT unique on purpose: it is a convenience/contactability field, not an
+  // identity key (email + tenantId remains the identity). For a CUSTOMER
+  // whose account is linked to a wellness Patient row, PUT /api/auth/me
+  // mirrors this onto Patient.phone so the clinic — and the Callified
+  // calling flow on Appointments — can actually reach them.
+  phone           String?
   createdAt       DateTime  @default(now())
 
   // 2FA
@@ -650,6 +659,13 @@ model User {
   // the punch is within radius of ANY one of them. Empty/no rows = geofence
   // NOT enforced for this user (falls back to today's unenforced behaviour).
   assignedLocations UserLocation[]
+
+  // Geo-tagged attendance (wellness only) — standalone geofence zones this
+  // staff member is assigned to, independent of any clinic. Same "ANY ONE
+  // of them" semantics as assignedLocations above; see GeofenceZone's
+  // schema comment for how a tenant-wide Global zone falls back for anyone
+  // with neither of these two assignment types.
+  assignedGeofenceZones UserGeofenceZone[]
 
   // Wave 2 Agent II — POS cashier shifts.
   cashierShifts Shift[] @relation("CashierShifts")
@@ -4011,15 +4027,21 @@ model Patient {
   // Patient-portal notification inbox (additive — see PatientNotification).
   patientNotifications PatientNotification[]
 
-  /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
-  // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
-  // lived in lib/leadJunkFilter + the route handler's best-effort
-  // findFirst — both bypassable. With @@unique enforced, Prisma throws
-  // P2002 on the second create with the same (tenant, normalizedPhone)
-  // pair; the route handler's catch translates to HTTP 409 with code
-  // DUPLICATE_PHONE. Backfill + merge MUST run before this can apply
-  // — see backend/scripts/backfill-patient-normalized-phone.js.
-  @@unique([tenantId, normalizedPhone], name: "patient_tenant_normalized_phone_unique")
+  /// Lookup index on (tenant, normalized phone number). NOT unique — several patients in one clinic may legitimately share a number (a couple, a parent booking for a child, one household landline).
+  // #401 originally made this @@unique as a DB-level dedup gate: Prisma threw
+  // P2002 on the second create with the same (tenant, normalizedPhone) pair
+  // and the route handlers translated that to HTTP 409 DUPLICATE_PHONE.
+  //
+  // Reverted to a plain index by product decision — a shared phone number is
+  // normal in a clinic and must not block a booking or a profile save.
+  //
+  // WHAT THIS GIVES UP: the database no longer refuses duplicate-phone
+  // patients, so the P2002 → 409 DUPLICATE_PHONE path in the intake routes
+  // can no longer fire. Dedup is back to being application-level and
+  // best-effort (lib/leadJunkFilter + the route handlers' findFirst lookups),
+  // which is what it was before #401. The index is kept because those
+  // best-effort lookups — and the reminder / dialer paths — query on it.
+  @@index([tenantId, normalizedPhone])
   // safe-unique: replaces the single-column `userId @unique` removed in
   // d8aab25; 0c9b59a already verified zero duplicate userId in the live
   // Patient table, and (tenantId, userId) is strictly ≤ as strict.
@@ -4523,6 +4545,72 @@ model UserLocation {
 
   @@unique([userId, locationId])
   @@index([locationId])
+}
+
+// Standalone geofenced check-in zone (wellness only) — deliberately NOT a
+// Location. Location owns a full clinic identity (address, patients, visits,
+// resources); a GeofenceZone owns nothing but a pin and a radius, so an
+// admin can draw "the warehouse", "the training center", or a temporary
+// pop-up camp without inventing a fake clinic row to hang it off.
+//
+// isGlobal: at most one active zone per tenant may be true at a time
+// (enforced in routes/wellness_geofence_zones.js, not the DB — MySQL has no
+// clean partial-unique-index syntax for "unique where isGlobal = true"; the
+// route wraps the flip in a transaction that clears any prior global zone
+// first). It is the fallback radius applied to a staff member who has NO
+// specific assignment at all — neither a UserLocation (clinic) row nor a
+// UserGeofenceZone row. The moment a specific one is assigned, it wins over
+// the global fallback for that person; see resolveGeofenceContext in
+// routes/attendance.js. Because only one zone can be global at a time,
+// "the latest zone marked global overrides the previous one" falls out for
+// free — there is only ever one to find.
+model GeofenceZone {
+  id       Int    @id @default(autoincrement())
+  name     String
+
+  latitude  Float
+  longitude Float
+  // Mirrors Location.geofenceRadiusM's default — see
+  // lib/attendanceGeofence.js DEFAULT_RADIUS_M. Non-null here (unlike
+  // Location's) because a zone has no OTHER purpose than to be a geofence;
+  // there is no "clinic without a fence yet" state to represent.
+  radiusM   Int    @default(150)
+
+  isGlobal Boolean @default(false)
+  isActive Boolean @default(true)
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  assignedUsers UserGeofenceZone[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  // Looked up on every unassigned punch (resolveGeofenceContext's fallback
+  // path) — one row scan instead of a table scan for "the" global zone.
+  @@index([tenantId, isGlobal])
+}
+
+// Geo-tagged attendance (wellness only) — many-to-many User↔GeofenceZone
+// assignment, the standalone-zone sibling of UserLocation above. Same "ANY
+// ONE of them" semantics: a user assigned to multiple zones (and/or
+// clinics) can punch in from any one. See GeofenceZone's own comment for
+// how this interacts with the tenant's Global zone.
+model UserGeofenceZone {
+  id Int @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  zoneId Int
+  zone   GeofenceZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, zoneId])
+  @@index([zoneId])
 }
 
 // Per-tenant wellness role catalog. Replaces the hard-coded

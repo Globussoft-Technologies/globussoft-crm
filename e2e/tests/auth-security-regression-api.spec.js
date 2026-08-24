@@ -188,7 +188,7 @@ test.describe('#186/#342 — security headers (tightened pins)', () => {
   //   x-frame-options:           DENY                                    (#921 slice S4)
   //   x-content-type-options:    nosniff
   //   referrer-policy:           strict-origin-when-cross-origin
-  //   permissions-policy:        camera=(), microphone=(), geolocation=(self), interest-cohort=()
+  //   permissions-policy:        camera=(), microphone=(self), geolocation=(self), interest-cohort=()
   //   strict-transport-security: max-age=31536000; includeSubDomains     (HTTPS only)
   //   cross-origin-resource-policy: cross-origin
   //
@@ -225,7 +225,10 @@ test.describe('#186/#342 — security headers (tightened pins)', () => {
       const pp = headers['permissions-policy'] || '';
       expect(pp, 'Permissions-Policy missing (#342)').toBeTruthy();
       expect(pp).toContain('camera=()');
-      expect(pp).toContain('microphone=()');
+      // microphone=(self) since Callified manual calls stream the agent's
+      // mic to the customer. Pin self-only so a wildcard regression is loud.
+      expect(pp).toContain('microphone=(self)');
+      expect(pp).not.toContain('microphone=*');
       expect(pp).toContain('geolocation=(self)');
       expect(pp).toContain('interest-cohort=()');
 

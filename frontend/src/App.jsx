@@ -1911,7 +1911,11 @@ export default function App() {
                         visibility comes from the `/whatsapp` catalog row
                         (vertical: 'generic') in backend/lib/pageCatalog.js.
                         Travel keeps its own Wati surface at /travel/whatsapp. */}
-                      <Route path="whatsapp" element={<WellnessWhatsAppThreads transport="meta" />} />
+                      {/* showThreadList — the conversation rail (list + search +
+                        status filter + "+ New" + Templates) is generic-only. It was
+                        dropped from the shared page in 3f3ff602; wellness has run
+                        rail-less since and stays that way, so only this mount opts in. */}
+                      <Route path="whatsapp" element={<WellnessWhatsAppThreads transport="meta" showThreadList />} />
                       <Route path="whatsapp/templates" element={<WellnessWhatsAppTemplates />} />
                       <Route
                         path="wellness/reports"

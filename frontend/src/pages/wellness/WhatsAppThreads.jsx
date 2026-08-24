@@ -39,12 +39,19 @@ import { useNotify } from '../../utils/notify';
 import WhatsAppWebConnect from './whatsapp/WhatsAppWebConnect';
 import WhatsAppMetaConnectBar from './whatsapp/WhatsAppMetaConnectBar';
 import { WhatsAppThreadsContext } from './whatsapp/WhatsAppThreadsContext';
+import { ImageLightbox } from './whatsapp/ImageLightbox';
+import ThreadList from './whatsapp/ThreadList';
 import ThreadDetail from './whatsapp/ThreadDetail';
 import MessageContextMenu from './whatsapp/MessageContextMenu';
 import UnblockModal from './whatsapp/UnblockModal';
 import NewMessageModal from './whatsapp/NewMessageModal';
 
-export default function WhatsAppThreads({ transport = 'web' }) {
+// `showThreadList` — render the left conversation rail (list + search + status
+// filter + unread toggle + the "+ New" and Templates buttons). OFF by default:
+// the rail was dropped from this page in 3f3ff602 and wellness has run without
+// it since, so only the generic mount opts back in. Wellness keeps the
+// rail-less layout it has today.
+export default function WhatsAppThreads({ transport = 'web', showThreadList = false }) {
   const notify = useNotify();
   // Transport routing for the SEND side only (see the import block above).
   // Both routers expose /send and /send-media with the same request shape, so
@@ -100,6 +107,7 @@ export default function WhatsAppThreads({ transport = 'web' }) {
   // Inline rename state — when the user clicks the pencil next to the contact
   // name, this flips on and a small input box appears. Save -> POST to the
   // rename-contact route -> re-fetch detail.
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);
@@ -272,8 +280,11 @@ export default function WhatsAppThreads({ transport = 'web' }) {
   // periodic re-render the thread badge would freeze on whatever value
   // it had when the list was last fetched. A cheap 30-second tick keeps
   // the relative timestamps current without needing to refetch the list.
-  // The wellness WhatsApp thread sidebar is hidden; open the first available
-  // conversation automatically so the chat pane is usable without the rail.
+  // Open the first available conversation on load so the chat pane is never an
+  // empty shell on arrival. LOAD-BEARING wherever showThreadList is false
+  // (wellness): with no rail there is nothing else to select a thread with.
+  // Where the rail IS shown (generic) it is just a convenience. Either way it
+  // only fires while nothing is selected, so it never fights a user's click.
   useEffect(() => {
     if (loadingList || selectedId) return;
     const firstThread = threads.find((t) => !t._blocked);
@@ -857,6 +868,52 @@ export default function WhatsAppThreads({ transport = 'web' }) {
     }
   };
 
+  // --- Bulk delete -------------------------------------------
+  // Drives the rail's "select N chats → Delete". Chunked at 100 to match the
+  // endpoint's per-request cap, so a "select all" over a big inbox still goes
+  // through instead of 400-ing. Returns true only if every chunk landed, so
+  // the caller knows whether it may clear its selection.
+  const bulkDeleteThreads = async (ids) => {
+    // Blocked-number rows in the rail are synthetic (`id: "optout-<n>"`), not
+    // real threads — anything non-numeric is dropped here rather than sent to
+    // the API to come back as notFound.
+    const numericIds = [...new Set((ids || []).map((n) => Number(n)).filter((n) => Number.isFinite(n)))];
+    if (numericIds.length === 0) return false;
+    const plural = numericIds.length === 1 ? 'conversation' : 'conversations';
+    if (!await notify.confirm(
+      `Delete ${numericIds.length} ${plural}? This permanently removes every message in them from your CRM and cannot be undone. It does not delete anything on the recipients' phones.`
+    )) return false;
+    setBulkDeleting(true);
+    try {
+      let deleted = 0;
+      for (let i = 0; i < numericIds.length; i += 100) {
+        const chunk = numericIds.slice(i, i + 100);
+        // Sequential on purpose: each chunk is one transaction plus a run of
+        // chained audit writes, so firing them concurrently would contend on
+        // the same rows for no wall-clock win.
+        const resp = await fetchApi('/api/whatsapp/threads/bulk-delete', {
+          method: 'POST',
+          body: JSON.stringify({ ids: chunk }),
+        });
+        deleted += Array.isArray(resp?.deleted) ? resp.deleted.length : 0;
+      }
+      // Clear the reading pane if the open thread was in the batch, otherwise
+      // it keeps rendering a conversation that no longer exists.
+      if (selectedId != null && numericIds.includes(Number(selectedId))) {
+        setSelectedId(null);
+        setDetail(null);
+      }
+      notify.info(`${deleted} ${deleted === 1 ? 'conversation' : 'conversations'} deleted.`);
+      loadList();
+      return true;
+    } catch (err) {
+      notify.error(err.message || 'Failed to delete conversations.');
+      return false;
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
   const snoozeThread = async () => {
     if (!detail?.thread) return;
     const hours = await notify.prompt?.('Snooze for how many hours?', '4') || '4';
@@ -1164,6 +1221,8 @@ export default function WhatsAppThreads({ transport = 'web' }) {
     saveRename,
     closeThread,
     deleteThread,
+    bulkDeleteThreads,
+    bulkDeleting,
     snoozeThread,
     replyToMessage,
     forwardMessage,
@@ -1175,6 +1234,12 @@ export default function WhatsAppThreads({ transport = 'web' }) {
     submitUnblock,
     optOutContact,
     countPlaceholders,
+    // Where the sub-components' "Templates" links point. The templates PAGE is
+    // one component mounted at two paths (App.jsx): /wellness/whatsapp/templates
+    // is wrapped in <WellnessOnly>, /whatsapp/templates is not. A generic tenant
+    // sent to the wellness path gets bounced, so pick by transport — meta is the
+    // generic mount, web is the wellness one. (Travel passes its own Wati path.)
+    templatesPath: isMeta ? '/whatsapp/templates' : '/wellness/whatsapp/templates',
   };
 
   return (
@@ -1201,9 +1266,14 @@ export default function WhatsAppThreads({ transport = 'web' }) {
         )}
 
         <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}>
+          {showThreadList && <ThreadList />}
           <ThreadDetail />
         </div>
 
+        {/* Full-screen image viewer. openImage() — called by the chat-list
+            avatars and by in-chat image bubbles — is a NO-OP until this is
+            mounted, so without it clicking a photo silently does nothing. */}
+        <ImageLightbox />
         <MessageContextMenu />
         <UnblockModal />
         <NewMessageModal />

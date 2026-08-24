@@ -407,11 +407,19 @@ describe('POST /create-order - Razorpay order creation', () => {
       planId: 2,
       planName: 'Pro',
     });
-    // The route passes `(chargeAmount, planId, chargeCurrency)` - the
-    // currency argument was added when /pricing gained the USD/INR toggle.
+    // The route passes `(chargeAmount, planId, chargeCurrency, extraNotes)` -
+    // the currency argument was added when /pricing gained the USD/INR
+    // toggle; extraNotes stamps tenant/user/billing context onto the Razorpay
+    // order so the /webhook/razorpay handler can fulfill it without req.user.
     // When the body doesn't pass `currency` + `billingPeriod`, chargeCurrency
     // falls back to the plan's own `currency` column.
-    expect(razorpayService.createOrder).toHaveBeenCalledWith(1999, 2, 'INR');
+    expect(razorpayService.createOrder).toHaveBeenCalledWith(1999, 2, 'INR', {
+      kind: 'subscription',
+      tenantId: '1',
+      userId: '7',
+      billingPeriod: '',
+      requestedCurrency: '',
+    });
   });
 
   test('annual billing period multiplies the per-month rate x 12 before charging Razorpay', async () => {
@@ -443,7 +451,13 @@ describe('POST /create-order - Razorpay order creation', () => {
 
     expect(res.status).toBe(200);
     // chargeAmount must be 499 x 12 = 5988, not 499.
-    expect(razorpayService.createOrder).toHaveBeenCalledWith(5988, 1, 'INR');
+    expect(razorpayService.createOrder).toHaveBeenCalledWith(5988, 1, 'INR', {
+      kind: 'subscription',
+      tenantId: '1',
+      userId: '7',
+      billingPeriod: 'annual',
+      requestedCurrency: 'inr',
+    });
   });
 
   test('monthly billing period charges the per-month rate as-is (no x12)', async () => {
@@ -471,7 +485,13 @@ describe('POST /create-order - Razorpay order creation', () => {
 
     expect(res.status).toBe(200);
     // Monthly rate used as-is  no multiplication.
-    expect(razorpayService.createOrder).toHaveBeenCalledWith(649, 1, 'INR');
+    expect(razorpayService.createOrder).toHaveBeenCalledWith(649, 1, 'INR', {
+      kind: 'subscription',
+      tenantId: '1',
+      userId: '7',
+      billingPeriod: 'monthly',
+      requestedCurrency: 'inr',
+    });
   });
 });
 

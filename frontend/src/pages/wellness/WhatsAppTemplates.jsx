@@ -12,7 +12,7 @@
 // the daily whatsappTemplateSyncEngine cron.
 
 import { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   MessageSquare,
   Plus,
@@ -72,6 +72,12 @@ function StatusBadge({ status }) {
 export default function WhatsAppTemplates() {
   const notify = useNotify();
   const navigate = useNavigate();
+  // This page is mounted at BOTH /wellness/whatsapp/templates (wellness, wrapped
+  // in <WellnessOnly>) and /whatsapp/templates (generic). Send "Back to Threads"
+  // to the inbox the user actually came from — a generic tenant pushed at the
+  // wellness path gets bounced by the vertical guard.
+  const { pathname } = useLocation();
+  const inboxPath = pathname.startsWith('/wellness/') ? '/wellness/whatsapp' : '/whatsapp';
 
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -178,7 +184,7 @@ export default function WhatsAppTemplates() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: '1.5rem', flexWrap: 'wrap' }}>
         <div>
           <button
-            onClick={() => navigate('/wellness/whatsapp')}
+            onClick={() => navigate(inboxPath)}
             style={{
               background: 'transparent', border: 'none', cursor: 'pointer',
               color: 'var(--text-secondary)', fontSize: '0.85rem',

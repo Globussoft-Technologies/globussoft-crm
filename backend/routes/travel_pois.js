@@ -526,62 +526,15 @@ router.get(
 // USER+ allowed. Query: q (required, forward) or reverse=1&lat=&lng=
 // (reverse). Returns { results: [{lat, lng, display_name}] }.
 // ───────────────────────────────────────────────────────────────────
-const https = require("https");
-
-// Geocoding via Photon (photon.komoot.io) — same OSM data as Nominatim
-// but no API key, no strict User-Agent requirement, and much more lenient
-// rate limits. Nominatim was banning the server IP on every page load
-// because the auto-geocode effect fires one request per itinerary item.
-//
-// Photon response shape (GeoJSON):
-//   { features: [{ geometry: { coordinates: [lng, lat] }, properties: { name, city, country } }] }
-// Note: GeoJSON coordinates are [longitude, latitude], not [lat, lng].
-
-function geocoderFetch(url) {
-  return new Promise((resolve, reject) => {
-    https
-      .get(
-        url,
-        {
-          headers: {
-            "User-Agent": "GlobussoftCRM/1.0 (https://crm.globusdemos.com)",
-            Accept: "application/json",
-          },
-        },
-        (resp) => {
-          let raw = "";
-          resp.on("data", (chunk) => { raw += chunk; });
-          resp.on("end", () => {
-            if (resp.statusCode !== 200) {
-              return reject(
-                Object.assign(new Error(`Geocoder HTTP ${resp.statusCode}`), {
-                  status: 502,
-                }),
-              );
-            }
-            try {
-              resolve(JSON.parse(raw));
-            } catch (e) {
-              reject(e);
-            }
-          });
-        },
-      )
-      .on("error", reject);
-  });
-}
-
-function parsePhotonResults(data, fallbackQuery) {
-  return (data?.features || [])
-    .map((f) => {
-      const [lng, lat] = f.geometry?.coordinates || [];
-      const p = f.properties || {};
-      const display_name = [p.name, p.city, p.country].filter(Boolean).join(", ")
-        || fallbackQuery;
-      return { lat: parseFloat(lat), lng: parseFloat(lng), display_name };
-    })
-    .filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
-}
+// Delegates to lib/geocodeProxy.js — the same Photon upstream + parser is
+// now shared with the vertical-neutral /api/geocode mount, so there is one
+// place to fix when Photon changes its response shape. Response shape here
+// is unchanged: { results: [{ lat, lng, display_name, ... }] } for forward,
+// { lat, lng, display_name } for reverse.
+const {
+  forwardGeocode: photonForward,
+  reverseGeocode: photonReverse,
+} = require("../lib/geocodeProxy");
 
 router.get("/geocode", verifyToken, async (req, res) => {
   // Reverse geocode: ?reverse=1&lat=...&lng=...
@@ -593,11 +546,9 @@ router.get("/geocode", verifyToken, async (req, res) => {
         .status(400)
         .json({ error: "lat and lng required for reverse geocode", code: "MISSING_FIELDS" });
     }
-    const url = `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}`;
     try {
-      const data = await geocoderFetch(url);
-      const results = parsePhotonResults(data, `${lat},${lng}`);
-      return res.json({ lat, lng, display_name: results[0]?.display_name || null });
+      const { display_name } = await photonReverse(lat, lng);
+      return res.json({ lat, lng, display_name });
     } catch (e) {
       console.error("[travel-pois] reverse geocode error:", e.message);
       return res
@@ -609,16 +560,14 @@ router.get("/geocode", verifyToken, async (req, res) => {
   // Forward geocode: ?q=...
   const q = (req.query.q || "").trim();
   if (!q) {
-    return res
-      .status(400)
-      .json({ error: "q required", code: "MISSING_FIELDS" });
+    return res.status(400).json({ error: "q required", code: "MISSING_FIELDS" });
   }
-  const limit = Math.min(parseInt(req.query.limit, 10) || 1, 5);
-  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=${limit}`;
 
   try {
-    const data = await geocoderFetch(url);
-    const results = parsePhotonResults(data, q);
+    // Historic cap for this route was 5; keep it so an existing caller
+    // passing limit=99 still gets 5 rather than silently widening to 10.
+    const limit = Math.min(parseInt(req.query.limit, 10) || 1, 5);
+    const results = await photonForward(q, limit);
     return res.json({ results });
   } catch (e) {
     console.error("[travel-pois] geocode proxy error:", e.message);

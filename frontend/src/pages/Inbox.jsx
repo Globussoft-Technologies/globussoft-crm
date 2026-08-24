@@ -1522,7 +1522,7 @@ export default function Inbox() {
             left: 0,
             right: 0,
             bottom: 0,
-            background: "var(--overlay-bg)",
+            background: "var(--catalogue-modal-backdrop)",
             backdropFilter: "blur(8px)",
             display: "flex",
             alignItems: "center",

@@ -55,6 +55,23 @@ describe('openAIEmbedClient — embedText', () => {
     );
   });
 
+  test('does not double-prefix /v1 when config.baseUrl already includes it', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }),
+    });
+    const result = await embedClient.embedText('hello', { baseUrl: 'https://api.openai.com/v1' });
+    expect(result).toEqual([0.1, 0.2, 0.3]);
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.openai.com/v1/embeddings',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ authorization: 'Bearer sk-test' }),
+        body: expect.stringContaining('text-embedding-3-small'),
+      }),
+    );
+  });
+
   test('returns null on fetch failure and logs', async () => {
     fetch.mockRejectedValue(new Error('network'));
     const result = await embedClient.embedText('hello');

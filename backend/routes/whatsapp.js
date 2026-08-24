@@ -22,6 +22,7 @@
 //   POST   /threads/:id/close         — set status=CLOSED
 //   POST   /threads/:id/snooze        — set status=SNOOZED + snoozedUntil
 //   POST   /threads/:id/mark-read     — zero unreadCount
+//   POST   /threads/bulk-delete       — batch-delete conversations (admin)
 //   POST   /opt-outs                  — manual opt-out (admin/manager)
 //   GET    /opt-outs                  — list opt-outs (filter by phone)
 //   DELETE /opt-outs/:id              — re-opt-in (admin)
@@ -1460,6 +1461,135 @@ router.post("/threads/:id/mark-read", verifyToken, async (req, res) => {
     res.status(500).json({ error: "Failed to mark thread read" });
   }
 });
+
+// POST /threads/bulk-delete body { ids: [int, ...] }
+//
+// Batch counterpart to DELETE /threads/:id below — same ADMIN-only gate, same
+// tenant scope, same "CRM-side delete only" semantics (Meta cannot remove
+// messages from the recipient's phone). Drives the inbox rail's
+// "select N chats → Delete" affordance.
+//
+// Why a dedicated endpoint instead of looping DELETE /threads/:id N times:
+//   (1) One round-trip instead of N. Clearing out a test/demo inbox is the
+//       realistic case and that is 20-200 threads.
+//   (2) The audit rows share one operator intent + wall-clock, so a bulk
+//       purge reads as one action in the audit report rather than N
+//       indistinguishable singletons.
+//   (3) The message+thread deletes run in ONE transaction for the whole
+//       batch, so a mid-batch failure can't leave some threads gone and
+//       others half-deleted with orphaned messages.
+//
+// Partial-success contract, mirroring /bulk-archive in the travel routes:
+// ids that don't exist or belong to another tenant land in `notFound` and do
+// NOT roll back the rest. 200 even on partial success.
+//
+// Route ordering: declared BEFORE the /threads/:id family. There is no bare
+// POST /threads/:id today so "bulk-delete" would not actually be captured as
+// an :id, but the literal-path-first convention is what keeps that true if
+// someone adds one later.
+//
+// Cap: 100 ids per request (the bulk-* cap convention across the route
+// files). The frontend chunks a larger selection rather than raising this —
+// an unbounded batch means an unbounded transaction holding row locks.
+router.post(
+  "/threads/bulk-delete",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const { ids } = req.body || {};
+
+      if (!Array.isArray(ids)) {
+        return res
+          .status(400)
+          .json({ error: "ids must be an array of thread ids", code: "INVALID_IDS" });
+      }
+      if (ids.length === 0) {
+        return res
+          .status(400)
+          .json({ error: "ids must contain at least one thread id", code: "EMPTY_IDS" });
+      }
+      if (ids.length > 100) {
+        return res.status(400).json({
+          error: "ids must contain at most 100 thread ids per request",
+          code: "TOO_MANY_IDS",
+        });
+      }
+
+      // Dedupe first: a repeated id would otherwise land in neither bucket
+      // cleanly and would inflate the audit-row count.
+      const parsed = ids.map((n) => parseInt(n, 10));
+      if (parsed.some((n) => !Number.isFinite(n))) {
+        return res
+          .status(400)
+          .json({ error: "ids must all be integers", code: "INVALID_IDS" });
+      }
+      const uniqueIds = [...new Set(parsed)];
+
+      // Tenant scope is enforced HERE, on the read — everything downstream
+      // operates on this resolved list, never on the caller's raw ids.
+      const threads = await prisma.whatsAppThread.findMany({
+        where: { id: { in: uniqueIds }, tenantId: req.user.tenantId },
+        select: { id: true, contactPhone: true },
+      });
+      const foundIds = threads.map((t) => t.id);
+      const foundSet = new Set(foundIds);
+      const notFound = uniqueIds.filter((id) => !foundSet.has(id));
+
+      if (foundIds.length === 0) {
+        return res.json({
+          success: true,
+          deleted: [],
+          notFound,
+          deletedThreads: 0,
+          deletedMessages: 0,
+        });
+      }
+
+      // Messages first — the thread→message relation is onDelete: SetNull, so
+      // deleting the threads alone would orphan the rows with a null threadId
+      // instead of removing them. Child WaOutboundJob / WaMediaJob rows
+      // cascade from the message delete. Same two-step the single-thread
+      // handler uses, one transaction for the whole batch.
+      const [{ count: deletedMessages }, { count: deletedThreads }] =
+        await prisma.$transaction([
+          prisma.whatsAppMessage.deleteMany({
+            where: { threadId: { in: foundIds }, tenantId: req.user.tenantId },
+          }),
+          prisma.whatsAppThread.deleteMany({
+            where: { id: { in: foundIds }, tenantId: req.user.tenantId },
+          }),
+        ]);
+
+      // One audit row per thread, matching the single-delete handler so a
+      // bulk purge and N single deletes are indistinguishable to a reviewer
+      // querying by entityId. SEQUENTIAL, not Promise.all: writeAudit chains
+      // each row's prevHash off the tenant's current chain tail (#558), so
+      // concurrent writes for one tenant would race and fork the chain.
+      for (const t of threads) {
+        await writeAudit(
+          "WhatsAppThread",
+          "DELETE",
+          t.id,
+          req.user.userId,
+          req.user.tenantId,
+          { contactPhone: t.contactPhone, bulk: true, batchSize: threads.length },
+        );
+      }
+
+      res.json({
+        success: true,
+        deleted: foundIds,
+        notFound,
+        deletedThreads,
+        deletedMessages,
+      });
+    } catch (err) {
+      console.error("WhatsApp thread bulk-delete error:", err);
+      res.status(500).json({ error: "Failed to delete threads" });
+    }
+  },
+);
 
 // DELETE /threads/:id — permanently delete a conversation (the thread + all
 // its messages). ADMIN-only, matching the other irreversible WhatsApp action

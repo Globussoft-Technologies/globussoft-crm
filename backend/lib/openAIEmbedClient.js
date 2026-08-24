@@ -18,16 +18,22 @@ const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const DEFAULT_MODEL = "text-embedding-3-small";
 const VECTOR_SIZE = 1536;
 
-function getApiKey() {
-  return process.env.OPENAI_API_KEY || null;
+function getApiKey(config) {
+  return config?.apiKey || process.env.OPENAI_API_KEY || null;
 }
 
-function isEnabled() {
-  return Boolean(getApiKey());
+function isEnabled(config) {
+  return Boolean(getApiKey(config));
 }
 
-async function fetchEmbeddings(inputs, model = DEFAULT_MODEL) {
-  const apiKey = getApiKey();
+async function fetchEmbeddings(inputs, config = {}) {
+  const apiKey = getApiKey(config);
+  const model = config.model || DEFAULT_MODEL;
+  const rawBase = (config.baseUrl || "https://api.openai.com").replace(/\/$/, "");
+  // aiProviderManagement normalizes OpenAI base URLs to .../v1, while direct
+  // callers may pass the raw https://api.openai.com. Build the embeddings path
+  // without double-prefixing /v1.
+  const baseUrl = rawBase.endsWith("/v1") ? rawBase : `${rawBase}/v1`;
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not set");
   }
@@ -46,7 +52,7 @@ async function fetchEmbeddings(inputs, model = DEFAULT_MODEL) {
     dimensions: VECTOR_SIZE,
   };
 
-  const res = await fetch(OPENAI_EMBED_URL, {
+  const res = await fetch(`${baseUrl}/embeddings`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -72,11 +78,12 @@ async function fetchEmbeddings(inputs, model = DEFAULT_MODEL) {
  * Embed a single text string. Returns null on failure.
  *
  * @param {string} text
+ * @param {object} [config]
  * @returns {Promise<number[]|null>}
  */
-async function embedText(text) {
+async function embedText(text, config = {}) {
   try {
-    const results = await fetchEmbeddings([text]);
+    const results = await fetchEmbeddings([text], config);
     return results[0]?.embedding || null;
   } catch (e) {
     console.error("[openAIEmbedClient] embedText failed:", e.message);
@@ -89,9 +96,10 @@ async function embedText(text) {
  * Empty inputs return an empty map. The caller can decide whether to retry.
  *
  * @param {string[]} texts
+ * @param {object} [config]
  * @returns {Promise<{embeddings: Map<number, number[]>, errors: Map<number, Error>}>}
  */
-async function embedTexts(texts) {
+async function embedTexts(texts, config = {}) {
   const embeddings = new Map();
   const errors = new Map();
   if (!Array.isArray(texts) || texts.length === 0) {
@@ -99,7 +107,7 @@ async function embedTexts(texts) {
   }
 
   try {
-    const results = await fetchEmbeddings(texts);
+    const results = await fetchEmbeddings(texts, config);
     for (const r of results) {
       if (r.embedding && r.embedding.length === VECTOR_SIZE) {
         embeddings.set(r.index, r.embedding);

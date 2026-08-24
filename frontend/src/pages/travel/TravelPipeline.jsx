@@ -16,14 +16,16 @@
 // itinerary's detail page (/travel/itineraries/:id).
 
 import { useContext, useEffect, useMemo, useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useLocation, useSearchParams } from "react-router-dom";
 import {
-  Plane, Plus, Download, RefreshCw, Pencil, Trash2, X,
+  Plane, Plus, Upload, Download, RefreshCw, Pencil, Trash2, X, ArrowUpDown, ChevronUp, ChevronDown,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 import {
   accessibleSubBrands,
   defaultSubBrandFor,
@@ -33,12 +35,13 @@ import {
 // ─── Constants ────────────────────────────────────────────────────────────
 
 const SUB_BRAND_OPTIONS = [
-  { value: "", label: "All companies" },
+  { value: "all", label: "All companies" },
   { value: "tmc", label: "TMC" },
   { value: "rfu", label: "RFU" },
   { value: "travelstall", label: "TravelStall" },
   { value: "visasure", label: "Visa Sure" },
 ];
+const LAST_LIST_URL_KEY = "travel.pipeline.lastListUrl";
 
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },
@@ -51,6 +54,11 @@ const STATUS_OPTIONS = [
   { value: "rejected", label: "Rejected" },
   { value: "expired", label: "Expired" },
 ];
+const STATUS_SORT_RANK = new Map(
+  STATUS_OPTIONS
+    .filter((option) => option.value)
+    .map((option, index) => [option.value, index]),
+);
 
 // Editable statuses — the inline dropdown only shows these so advisors
 // can advance/withdraw a quote without accidentally setting edge-case
@@ -73,6 +81,7 @@ const WON_STATUSES = new Set(["accepted", "advance_paid", "fully_paid"]);
 const NEGOTIATION_STATUSES = new Set(["sent", "revised"]);
 // "Lost" = closed-negative.
 const LOST_STATUSES = new Set(["rejected", "expired"]);
+const API_STATUSES = new Set(EDITABLE_STATUSES.map((option) => option.value));
 
 const LIGHT_THEME = "light";
 const DARK_THEME = "dark";
@@ -148,6 +157,16 @@ function getSubBrandTone(theme, value) {
   return palette[value] || { ...palette.tmc, label: value };
 }
 
+function labelForStatus(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "Draft";
+  const known = EDITABLE_STATUSES.find((option) => option.value === normalized);
+  if (known) return known.label;
+  return normalized
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 // ??? Helpers ??????????????????????????????????????????????????????????????
 
 function fmtMoney(amt, currency = "INR") {
@@ -207,6 +226,9 @@ const EMPTY_FORM = {
 
 export default function TravelPipeline() {
   const { user } = useContext(AuthContext);
+  const { activeSubBrand } = useActiveSubBrand();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const notify = useNotify();
   const navigate = useNavigate();
   const theme = useTravelTheme();
@@ -219,10 +241,50 @@ export default function TravelPipeline() {
   const LIMIT = 100;
 
   // Filters
-  const [filterSubBrand,   setFilterSubBrand]   = useState("");
-  const [filterStatus,     setFilterStatus]     = useState("");
-  const [search,           setSearch]           = useState("");
-  const [filterContact,  setFilterContact]  = useState("");
+  const [filterSubBrand,   setFilterSubBrand]   = useState(searchParams.get("subBrand") || activeSubBrand || "");
+  const [filterStatus,     setFilterStatus]     = useState(searchParams.get("status") || "");
+  const [search,           setSearch]           = useState(searchParams.get("search") || "");
+  const [filterContact,  setFilterContact]  = useState(searchParams.get("contact") || "");
+  const [sortKey, setSortKey] = useState(searchParams.get("sortKey") || null);
+  const [sortDirection, setSortDirection] = useState(searchParams.get("sortDirection") || null);
+  const updateSubBrandFilter = (value) => {
+    setFilterSubBrand(value);
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set("subBrand", value);
+    else next.delete("subBrand");
+    setSearchParams(next, { replace: true });
+  };
+
+  const updateListParam = (key, value) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value); else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
+
+  const handleSort = (key) => {
+    const next = new URLSearchParams(searchParams);
+    const direction = sortKey !== key ? "asc" : sortDirection === "asc" ? "desc" : null;
+    setSortKey(direction ? key : null);
+    setSortDirection(direction);
+    if (direction) { next.set("sortKey", key); next.set("sortDirection", direction); }
+    else { next.delete("sortKey"); next.delete("sortDirection"); }
+    setSearchParams(next, { replace: true });
+  };
+
+  const sortHeader = (label, key) => {
+    const active = sortKey === key;
+    const Icon = active ? (sortDirection === "asc" ? ChevronUp : ChevronDown) : ArrowUpDown;
+    return <button type="button" onClick={() => handleSort(key)} aria-label={`Sort ${label}`} style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}><span>{label}</span><Icon size={14} aria-hidden /></button>;
+  };
+
+  useEffect(() => {
+    if (!searchParams.get("subBrand")) setFilterSubBrand(activeSubBrand || "");
+  }, [activeSubBrand]);
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/pipeline") return;
+    try { window.sessionStorage.setItem(LAST_LIST_URL_KEY, `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
 
   // Inline status update
   const [updatingId, setUpdatingId] = useState(null);
@@ -255,7 +317,7 @@ export default function TravelPipeline() {
   const load = (resetOffset = true) => {
     setLoading(true);
     const qs = new URLSearchParams();
-    if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     if (filterStatus)   qs.set("status", filterStatus);
     const newOffset = resetOffset ? 0 : offset;
     qs.set("limit", String(LIMIT));
@@ -281,7 +343,7 @@ export default function TravelPipeline() {
     setOffset(newOffset);
     setLoading(true);
     const qs = new URLSearchParams();
-    if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    if (filterSubBrand && filterSubBrand !== "all") qs.set("subBrand", filterSubBrand);
     if (filterStatus)   qs.set("status", filterStatus);
     qs.set("limit", String(LIMIT));
     qs.set("offset", String(newOffset));
@@ -308,8 +370,24 @@ export default function TravelPipeline() {
     if (cq) rows = rows.filter((r) =>
       (r.contact?.name || "").toLowerCase().includes(cq),
     );
+    if (sortKey) {
+      const getValue = (row) => {
+        if (sortKey === "contact") return row.contact?.name || "";
+        if (sortKey === "amount") return Number(row.totalAmount || 0);
+        if (sortKey === "status") {
+          const status = String(row.status || "draft").trim().toLowerCase();
+          return STATUS_SORT_RANK.get(status) ?? STATUS_SORT_RANK.size;
+        }
+        return row[sortKey] || "";
+      };
+      rows = [...rows].sort((a, b) => {
+        const left = getValue(a); const right = getValue(b);
+        const result = typeof left === "number" ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+        return sortDirection === "desc" ? -result : result;
+      });
+    }
     return rows;
-  }, [itineraries, search, filterContact]);
+  }, [itineraries, search, filterContact, sortKey, sortDirection]);
 
   // ── KPI tiles ───────────────────────────────────────────────────────
   const kpis = useMemo(() => {
@@ -326,6 +404,10 @@ export default function TravelPipeline() {
 
   // ── Inline status update ─────────────────────────────────────────────
   const updateStatus = async (id, newStatus) => {
+    if (!API_STATUSES.has(newStatus)) {
+      notify.error("Status cannot be updated to that value");
+      return;
+    }
     setUpdatingId(id);
     try {
       await fetchApi(`/api/travel/itineraries/${id}`, {
@@ -441,6 +523,7 @@ export default function TravelPipeline() {
           </div>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>
             Travel Pipeline
+            <CountBadge count={visible.length} title={`${visible.length.toLocaleString()} deals in view`} />
           </h1>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -451,7 +534,7 @@ export default function TravelPipeline() {
             aria-label="Export pipeline as CSV"
             title="Export to CSV"
           >
-            <Download size={14} /> Export
+            <Upload size={14} /> Export
           </button>
           <button
             type="button"
@@ -475,7 +558,7 @@ export default function TravelPipeline() {
             </span>
           ))
         }.{" "}
-        <strong style={{ color: "var(--text-primary)" }}>{total}</strong> deal{total !== 1 ? "s" : ""}.
+        Sales pipeline data matches the filters currently applied.
       </p>
 
       {/* Filters */}
@@ -488,7 +571,7 @@ export default function TravelPipeline() {
       }}>
         <select
           value={filterSubBrand}
-          onChange={(e) => setFilterSubBrand(e.target.value)}
+          onChange={(e) => updateSubBrandFilter(e.target.value)}
           style={selectStyle}
           aria-label="Filter by sub-brand"
         >
@@ -498,7 +581,7 @@ export default function TravelPipeline() {
         </select>
         <select
           value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
+          onChange={(e) => { setFilterStatus(e.target.value); updateListParam("status", e.target.value); }}
           style={selectStyle}
           aria-label="Filter by status"
         >
@@ -509,7 +592,7 @@ export default function TravelPipeline() {
         <input
           type="search"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => { setSearch(e.target.value); updateListParam("search", e.target.value); }}
           placeholder="Filter by tour title..."
           aria-label="Filter by tour title"
           style={{ ...selectStyle, minWidth: 180 }}
@@ -517,7 +600,7 @@ export default function TravelPipeline() {
         <input
           type="search"
           value={filterContact}
-          onChange={(e) => setFilterContact(e.target.value)}
+          onChange={(e) => { setFilterContact(e.target.value); updateListParam("contact", e.target.value); }}
           placeholder="Filter by contact name..."
           aria-label="Filter by contact name"
           style={{ ...selectStyle, minWidth: 170 }}
@@ -579,9 +662,10 @@ export default function TravelPipeline() {
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 780 }}>
               <thead>
                 <tr>
-                  {["Tour title", "Contact", "Company", "Package cost", "Travel date", "Status", "Actions"].map((h) => (
-                    <th key={h} style={thStyle}>{h}</th>
+                  {[["Tour title", "destination"], ["Contact", "contact"], ["Company", "company"], ["Package cost", "amount"], ["Travel date", "startDate"], ["Status", "status"]].map(([h, key]) => (
+                    <th key={h} style={thStyle}>{sortHeader(h, key)}</th>
                   ))}
+                  <th style={thStyle}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -758,7 +842,7 @@ export default function TravelPipeline() {
                   onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
                   style={inputStyle}
                 >
-                  {SUB_BRAND_OPTIONS.filter((o) => o.value).map((o) => (
+                  {SUB_BRAND_OPTIONS.filter((o) => o.value && o.value !== "all").map((o) => (
                     <option key={o.value} value={o.value}
                       disabled={allowedSubBrands && allowedSubBrands.length > 0 && !allowedSubBrands.includes(o.value)}
                     >
@@ -854,10 +938,17 @@ export default function TravelPipeline() {
 // When `disabled` is true (update in flight) it shows a spinner-like faded
 // state.
 function StatusDropdown({ id: _id, current, disabled, onChange, theme }) {
+  const normalizedCurrent = String(current || "draft").trim() || "draft";
   const s = getStatusTone(theme, current);
+  const options = EDITABLE_STATUSES.some((option) => option.value === normalizedCurrent)
+    ? EDITABLE_STATUSES
+    : [
+        { value: normalizedCurrent, label: labelForStatus(normalizedCurrent) },
+        ...EDITABLE_STATUSES,
+      ];
   return (
     <select
-      value={current || ""}
+      value={normalizedCurrent}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       aria-label="Change status"
@@ -871,16 +962,13 @@ function StatusDropdown({ id: _id, current, disabled, onChange, theme }) {
         fontWeight: 600,
         cursor: disabled ? "wait" : "pointer",
         opacity: disabled ? 0.6 : 1,
-        appearance: "none",
-        WebkitAppearance: "none",
-        backgroundImage: `linear-gradient(45deg, transparent 50%, ${s.color} 50%), linear-gradient(135deg, ${s.color} 50%, transparent 50%)`,
-        backgroundRepeat: "no-repeat",
-        backgroundPosition: "calc(100% - 14px) calc(50% - 1px), calc(100% - 10px) calc(50% - 1px)",
-        backgroundSize: "4px 4px, 4px 4px",
         minWidth: 120,
+        lineHeight: 1.25,
+        textAlign: "left",
+        colorScheme: theme,
       }}
     >
-      {EDITABLE_STATUSES.map((o) => (
+      {options.map((o) => (
         <option
           key={o.value}
           value={o.value}
@@ -936,6 +1024,13 @@ const thStyle = {
   whiteSpace: "nowrap",
 };
 
+const sortButtonStyle = {
+  display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6,
+  width: "100%", padding: "4px 8px", border: "none", borderRadius: 999,
+  background: "transparent", color: "inherit", font: "inherit", cursor: "pointer", textAlign: "left",
+};
+const sortButtonActiveStyle = { color: "var(--primary-color)", background: "var(--accent-bg)" };
+
 const tdStyle = {
   padding: "12px 14px",
   fontSize: 13.5,
@@ -960,7 +1055,7 @@ const iconBtnStyle = {
 
 const overlayStyle = {
   position: "fixed", inset: 0,
-  background: "rgba(0,0,0,0.55)",
+  background: "var(--catalogue-modal-backdrop)",
   backdropFilter: "blur(4px)",
   WebkitBackdropFilter: "blur(4px)",
   display: "flex", alignItems: "center", justifyContent: "center",

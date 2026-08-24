@@ -51,6 +51,7 @@ import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { AuthContext } from '../../../App';
 import CsvImportExportToolbar from '../../../components/wellness/CsvImportExportToolbar';
+import CountBadge from '../../../components/CountBadge';
 
 const SEVERITIES = ['info', 'warning', 'blocker'];
 const PAGE_SIZE = 10;
@@ -134,6 +135,7 @@ export default function EmbassyRulesAdmin() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
 
@@ -221,6 +223,7 @@ export default function EmbassyRulesAdmin() {
 
       rulesRef.current = nextRules;
       setRules(nextRules);
+      setTotal(totalCount);
       setOffset(nextOffset);
       setHasMore(nextHasMore);
       offsetRef.current = nextOffset;
@@ -230,6 +233,7 @@ export default function EmbassyRulesAdmin() {
       if (reset) {
         setRules([]);
         rulesRef.current = [];
+        setTotal(0);
         setOffset(0);
         setHasMore(false);
         offsetRef.current = 0;
@@ -454,12 +458,17 @@ export default function EmbassyRulesAdmin() {
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 10,
+              gap: 12,
               margin: 0,
               marginBottom: 4,
+              fontSize: '1.75rem',
+              fontWeight: 600,
+              lineHeight: 1.15,
+              flexWrap: 'wrap',
             }}
           >
             <Shield size={28} aria-hidden /> Embassy Rules
+            <CountBadge count={total} title={`${total.toLocaleString()} rules`} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
             Per-destination quirks for the Visa Sure risk-flag engine. Rules drive

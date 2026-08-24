@@ -33,12 +33,16 @@ import { useLocation, useParams, Link } from "react-router-dom";
 import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Plus, Pencil, Trash2, X, Sparkles, Share2, Download, Check, XCircle, Copy,
-  Calendar, ChevronDown, ChevronRight,
+  Calendar, ChevronLeft, ChevronDown, ChevronRight,
   Train, Bus, Car, Camera, Utensils, Package,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { geocode } from "../../lib/geocoder";
+import {
+  buildItineraryGeocodeQuery,
+  deriveItineraryItemLocation,
+} from "../../lib/travelLocationResolver";
 import { AuthContext } from "../../App";
 // S127 — MapPreview wire-in for the detail surface. The /api/travel/itineraries/:id
 // GET already includes items with latitude/longitude/dayNumber, so the spatial
@@ -47,6 +51,19 @@ import { AuthContext } from "../../App";
 // partially-geocoded itinerary still maps the subset that has coords.
 // Mirrors the S81 list-page wire-in pattern.
 import MapPreview from "../../components/MapPreview";
+
+const ITINERARIES_LAST_LIST_URL_KEY = "travel.itineraries.lastListUrl";
+
+function getItinerariesListUrl() {
+  try {
+    const savedUrl = window.sessionStorage.getItem(ITINERARIES_LAST_LIST_URL_KEY);
+    return savedUrl && savedUrl.startsWith("/travel/itineraries")
+      ? savedUrl
+      : "/travel/itineraries";
+  } catch {
+    return "/travel/itineraries";
+  }
+}
 
 // Item types cover both fly + non-fly (domestic) trips and general expenses.
 // Keep in sync with VALID_ITEM_TYPES in backend/routes/travel_itineraries.js.
@@ -68,6 +85,25 @@ const ITEM_ICONS = {
   visa: FileText,
   insurance: Shield,
   other: Package,
+};
+
+// Per-item-type description hint. Previously a single hardcoded flight
+// example stayed on screen no matter which type was selected (e.g. still
+// showing "IndiGo 6E-237 BLR → MAA" for a hotel or train row) — confusing
+// for anything that wasn't a flight.
+const DESCRIPTION_PLACEHOLDERS = {
+  flight: "e.g. IndiGo 6E-237 BLR → MAA",
+  train: "e.g. Rajdhani Express 12951, New Delhi → Mumbai",
+  bus: "e.g. Volvo AC sleeper, Bengaluru → Goa",
+  cab: "e.g. Private cab, airport pickup to hotel",
+  transfer: "e.g. Shared coach transfer, hotel to city tour",
+  hotel: "e.g. Taj Exotica Goa — Deluxe Room, 3 nights",
+  sightseeing: "e.g. Golden Triangle guided city tour",
+  activity: "e.g. Scuba diving session, 2 hours",
+  meals: "e.g. Welcome dinner at hotel restaurant",
+  visa: "e.g. Schengen visa processing fee",
+  insurance: "e.g. Travel insurance, family cover",
+  other: "e.g. Miscellaneous service charge",
 };
 
 const STATUS_COLORS = {
@@ -393,8 +429,9 @@ function StatusBadge({ status }) {
 export default function ItineraryDetail() {
   const { id } = useParams();
   const location = useLocation();
-  const backTo = location.state?.backTo || null;
-  const backLabel = location.state?.backLabel || "Back";
+  const [savedListUrl] = useState(getItinerariesListUrl);
+  const backTo = location.state?.backTo || savedListUrl;
+  const backLabel = location.state?.backLabel || "Back to itineraries";
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
@@ -517,8 +554,12 @@ export default function ItineraryDetail() {
 
     const items = Array.isArray(itin.items) ? itin.items : [];
     // Seed immediately with existing data so already-geocoded items show at once.
-    // Normalise locationName from description so MapPreview popup has a label.
-    setMapItems(items.map((it) => ({ ...it, locationName: it.description || '' })));
+    // Resolve a human place label up-front so the popup reads like a location,
+    // not a whole itinerary sentence.
+    setMapItems(items.map((it) => ({
+      ...it,
+      locationName: deriveItineraryItemLocation(it, itin.destination),
+    })));
     setDestCenter(null);
 
     let cancelled = false;
@@ -528,16 +569,19 @@ export default function ItineraryDetail() {
         const r = await geocode(itin.destination).catch(() => null);
         if (!cancelled && r) setDestCenter({ lat: r.lat, lng: r.lng });
       }
-      // 2. Geocode each item that has a description but no coordinates yet.
+      // 2. Geocode each item that has a resolvable place label but no coordinates yet.
       for (const it of items) {
         if (cancelled) break;
-        if (!it.description) continue;
         if (it.latitude != null && it.longitude != null) continue;
-        const r = await geocode(it.description).catch(() => null);
+        const query = buildItineraryGeocodeQuery(it, itin.destination);
+        if (!query) continue;
+        const r = await geocode(query).catch(() => null);
         if (!cancelled && r) {
           setMapItems((prev) =>
             prev.map((m) =>
-              m.id === it.id ? { ...m, latitude: r.lat, longitude: r.lng } : m
+              m.id === it.id
+                ? { ...m, latitude: r.lat, longitude: r.lng, locationName: query }
+                : m
             )
           );
         }
@@ -770,7 +814,8 @@ export default function ItineraryDetail() {
       } else if (newItem.description && newItem.description.trim()) {
         setGeocoding(true);
         try {
-          const hit = await geocode(newItem.description);
+          const query = buildItineraryGeocodeQuery(newItem, itin.destination);
+          const hit = query ? await geocode(query) : null;
           if (hit && Number.isFinite(hit.lat) && Number.isFinite(hit.lng)) {
             body.latitude = hit.lat;
             body.longitude = hit.lng;
@@ -920,7 +965,8 @@ export default function ItineraryDetail() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
           <div>
             {backTo && (
-              <Link to={backTo} style={{ ...secondaryBtn, textDecoration: "none", marginBottom: 10 }}>
+              <Link to={backTo} style={{ ...backLink, marginBottom: 10 }}>
+                <ChevronLeft size={16} aria-hidden />
                 {backLabel}
               </Link>
             )}
@@ -1021,7 +1067,7 @@ export default function ItineraryDetail() {
         <div style={contextGrid}>
           <div style={contextCard}>
             <div style={contextCardHeader}>
-              <div>
+              <div style={contextCardHeaderTitle}>
                 <div style={contextEyebrow}>Diagnostic</div>
                 <strong>Latest diagnostic context</strong>
               </div>
@@ -1047,7 +1093,7 @@ export default function ItineraryDetail() {
 
           <div style={contextCard}>
             <div style={contextCardHeader}>
-              <div>
+              <div style={contextCardHeaderTitle}>
                 <div style={contextEyebrow}>Curriculum Fit</div>
                 <strong>TMC recommendation carry-over</strong>
               </div>
@@ -1079,7 +1125,7 @@ export default function ItineraryDetail() {
 
           <div style={contextCard}>
             <div style={contextCardHeader}>
-              <div>
+              <div style={contextCardHeaderTitle}>
                 <div style={contextEyebrow}>Sightseeing</div>
                 <strong>Nearby master entries</strong>
               </div>
@@ -1107,7 +1153,7 @@ export default function ItineraryDetail() {
 
           <div style={contextCard}>
             <div style={contextCardHeader}>
-              <div>
+              <div style={contextCardHeaderTitle}>
                 <div style={contextEyebrow}>Quote / Proposal</div>
                 <strong>Commercial context</strong>
               </div>
@@ -1828,7 +1874,7 @@ function ItemFields({ values, suppliers = [], onChange }) {
           value={values.description ?? ""}
           onChange={(e) => onChange({ description: e.target.value })}
           style={input}
-          placeholder="e.g. IndiGo 6E-237 BLR → MAA"
+          placeholder={DESCRIPTION_PLACEHOLDERS[values.itemType] || DESCRIPTION_PLACEHOLDERS.other}
         />
       </Field>
 
@@ -2018,12 +2064,24 @@ const contextCard = {
   display: "grid",
   gap: 10,
   alignContent: "start",
+  // Guarantees the card's own boundary is never visually breached, even if
+  // a future label/link combination is too wide for the flex row below.
+  overflow: "hidden",
 };
 const contextCardHeader = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "flex-start",
+  // Wrap instead of overflow: at narrow grid widths (cards can shrink to
+  // 240px), a long nowrap link like "Open curriculum mappings" doesn't fit
+  // next to the title on one line — without wrap, flex's default
+  // min-width:auto lets the row grow past the card's rendered width and
+  // the link text bleeds into the next grid column.
+  flexWrap: "wrap",
   gap: 10,
+};
+const contextCardHeaderTitle = {
+  minWidth: 0,
 };
 const contextEyebrow = {
   fontSize: 11,
@@ -2083,6 +2141,12 @@ const primaryBtn = {
   background: "var(--primary-color, var(--accent-color))", color: "#fff",
   border: "none", cursor: "pointer",
 };
+const backLink = {
+  display: "inline-flex", alignItems: "center", gap: 4,
+  fontSize: 13, color: "var(--text-secondary)", textDecoration: "none",
+  padding: "4px 8px", borderRadius: 4,
+};
+
 const secondaryBtn = {
   display: "inline-flex", alignItems: "center", gap: 6,
   padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,

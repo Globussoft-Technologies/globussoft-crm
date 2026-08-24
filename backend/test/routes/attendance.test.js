@@ -83,6 +83,16 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.userLocation = prisma.userLocation || {};
 prisma.userLocation.findMany = vi.fn();
+// Standalone geofence zones (decoupled from clinic Location) — the
+// specific-zone-assignment + tenant-wide-global-fallback sibling to
+// userLocation above. See the dedicated describe block below for the
+// override-semantics coverage; every OTHER test in this file defaults both
+// to empty/null, which reproduces resolveGeofenceContext's pre-zones
+// behaviour exactly (specific=[] falls straight through to unenforced).
+prisma.userGeofenceZone = prisma.userGeofenceZone || {};
+prisma.userGeofenceZone.findMany = vi.fn();
+prisma.geofenceZone = prisma.geofenceZone || {};
+prisma.geofenceZone.findFirst = vi.fn();
 prisma.biometricDevice = prisma.biometricDevice || {};
 prisma.biometricDevice.findMany = vi.fn();
 prisma.biometricDevice.findFirst = vi.fn();
@@ -153,14 +163,19 @@ beforeEach(() => {
   prisma.biometricDevice.delete.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.userLocation.findMany.mockReset();
+  prisma.userGeofenceZone.findMany.mockReset();
+  prisma.geofenceZone.findFirst.mockReset();
   prisma.attendance.findMany.mockResolvedValue([]);
   prisma.attendance.findUnique.mockResolvedValue(null);
   prisma.biometricDevice.findMany.mockResolvedValue([]);
   // Default: non-wellness tenant → resolveGeofenceContext short-circuits
-  // before ever querying userLocation, matching every pre-existing test's
-  // assumption of unconditional-accept clock-in/out.
+  // before ever querying userLocation/userGeofenceZone/geofenceZone,
+  // matching every pre-existing test's assumption of unconditional-accept
+  // clock-in/out.
   prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
   prisma.userLocation.findMany.mockResolvedValue([]);
+  prisma.userGeofenceZone.findMany.mockResolvedValue([]);
+  prisma.geofenceZone.findFirst.mockResolvedValue(null);
 });
 
 // ── /clock-in ──────────────────────────────────────────────────────────
@@ -454,6 +469,125 @@ describe('Geo-tagged attendance (wellness only)', () => {
 
       expect(res.status).toBe(200);
       expect(prisma.attendance.update).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Standalone geofence zones (GeofenceZone/UserGeofenceZone) — decoupled
+  // from clinic Location. Covers resolveGeofenceContext's three-tier
+  // resolution: specific (clinic ∪ zone) → tenant Global zone → unenforced.
+  // The override behaviour ("assigning someone a specific zone/clinic makes
+  // them skip the Global fallback from then on") is the exact product
+  // decision this feature was built to, so it gets dedicated coverage
+  // rather than being implied by the merge alone.
+  describe('standalone geofence zones + Global fallback', () => {
+    const RANCHI_ZONE = { id: 501, name: 'Ranchi Warehouse', latitude: 23.3441, longitude: 85.3096, radiusM: 100 };
+    const GLOBAL_ZONE = { id: 900, name: 'HQ Default', latitude: 23.3441, longitude: 85.3096, radiusM: 500 };
+
+    test('a standalone zone alone (no clinic) enforces exactly like a clinic assignment does', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([]);
+      prisma.userGeofenceZone.findMany.mockResolvedValue([{ zone: RANCHI_ZONE }]);
+      prisma.attendance.create.mockResolvedValue({ id: 960, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const inside = await authedReq('post', '/api/attendance/clock-in').send(NEARBY_COORDS);
+      expect(inside.status).toBe(201);
+
+      const outside = await authedReq('post', '/api/attendance/clock-in').send(FAR_COORDS);
+      expect(outside.status).toBe(403);
+      expect(outside.body.code).toBe('OUTSIDE_RADIUS');
+    });
+
+    test('a clinic AND a zone both assigned → accepted if within radius of EITHER', async () => {
+      const farClinic = { id: 2, name: 'Delhi Clinic', latitude: 28.6139, longitude: 77.2090, geofenceRadiusM: null };
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: farClinic }]);
+      prisma.userGeofenceZone.findMany.mockResolvedValue([{ zone: RANCHI_ZONE }]);
+      prisma.attendance.create.mockResolvedValue({ id: 961, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send(NEARBY_COORDS);
+
+      expect(res.status).toBe(201);
+      // A user with ANY specific assignment must never fall through to the
+      // Global zone lookup — it would be dead weight on every single punch.
+      expect(prisma.geofenceZone.findFirst).not.toHaveBeenCalled();
+    });
+
+    test('no clinic, no zone, but a tenant Global zone exists → enforced against the Global zone', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([]);
+      prisma.userGeofenceZone.findMany.mockResolvedValue([]);
+      prisma.geofenceZone.findFirst.mockResolvedValue(GLOBAL_ZONE);
+      prisma.attendance.create.mockResolvedValue({ id: 962, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const inside = await authedReq('post', '/api/attendance/clock-in').send(NEARBY_COORDS);
+      expect(inside.status).toBe(201);
+
+      // Global zone's radius is 500m — the "FAR_COORDS" fixture (~1.1km from
+      // the clinic's own too-far test) must ALSO fail against the wider
+      // Global radius, proving the fallback actually enforces its own
+      // radius rather than accepting everything unconditionally.
+      const outside = await authedReq('post', '/api/attendance/clock-in')
+        .send({ latitude: 23.6, longitude: 85.9, accuracy: 20 });
+      expect(outside.status).toBe(403);
+      expect(outside.body.code).toBe('OUTSIDE_RADIUS');
+    });
+
+    test('no clinic, no zone, no Global zone → unenforced (unchanged fail-open default)', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([]);
+      prisma.userGeofenceZone.findMany.mockResolvedValue([]);
+      prisma.geofenceZone.findFirst.mockResolvedValue(null);
+      prisma.attendance.create.mockResolvedValue({ id: 963, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send({});
+
+      expect(res.status).toBe(201);
+    });
+
+    test('the OVERRIDE: a user covered only by Global gets a specific zone → Global no longer applies', async () => {
+      // This is the exact behaviour the feature was built around: the
+      // instant a specific assignment exists, the Global fallback query
+      // isn't even reached, regardless of what it would have returned.
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userGeofenceZone.findMany.mockResolvedValue([{ zone: RANCHI_ZONE }]);
+      // Global zone is still configured tenant-wide, but must be irrelevant
+      // now that this user has a specific zone of their own.
+      prisma.geofenceZone.findFirst.mockResolvedValue(GLOBAL_ZONE);
+      prisma.attendance.create.mockResolvedValue({ id: 964, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send(NEARBY_COORDS);
+
+      expect(res.status).toBe(201);
+      expect(prisma.geofenceZone.findFirst).not.toHaveBeenCalled();
+    });
+
+    test('an inactive zone assignment does not count as specific and does not enforce', async () => {
+      // isActive:false is filtered in the query itself (userGeofenceZone
+      // .findMany's where clause), so an inactive zone simply never appears
+      // in the mocked result — this pins that the ROUTE treats an empty
+      // zone list as "no specific zone assignment", falling through to
+      // Global exactly like a user with zero zone rows at all.
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([]);
+      prisma.userGeofenceZone.findMany.mockResolvedValue([]);
+      prisma.geofenceZone.findFirst.mockResolvedValue(GLOBAL_ZONE);
+      prisma.attendance.create.mockResolvedValue({ id: 965, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send(NEARBY_COORDS);
+
+      expect(res.status).toBe(201);
+      expect(prisma.geofenceZone.findFirst).toHaveBeenCalledTimes(1);
+    });
+
+    test('travel tenant never queries zones or the Global zone (short-circuits like it already did for clinics)', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+      prisma.attendance.create.mockResolvedValue({ id: 966, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send({});
+
+      expect(res.status).toBe(201);
+      expect(prisma.userGeofenceZone.findMany).not.toHaveBeenCalled();
+      expect(prisma.geofenceZone.findFirst).not.toHaveBeenCalled();
     });
   });
 });

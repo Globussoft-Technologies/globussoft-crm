@@ -297,10 +297,10 @@ const Login = () => {
 
   // Travel customer-portal fallback. Staff (User table) and travel customers
   // (Contact.portalPasswordHash) are two separate auth systems on two
-  // endpoints — but they share this one login page. When staff auth fails we
-  // try the portal with the same credentials; a customer is then handed off to
-  // /travel/portal (which reads the PORTAL token from localStorage). Returns
-  // true if the portal login succeeded (and navigation was triggered).
+  // endpoints — but they share this one login page. We only try the portal
+  // after a 401 from staff auth; rate limits and other errors should surface
+  // directly on the staff login path. Returns true if the portal login
+  // succeeded (and navigation was triggered).
   const tryPortalLogin = async (loginEmail, loginPassword) => {
     try {
       const res = await fetch("/api/portal/login", {
@@ -345,11 +345,11 @@ const Login = () => {
           return;
         }
         finalizeLogin(data);
-      } else {
-        // Not a staff account — maybe a travel customer. Try the portal with
-        // the same credentials before surfacing an error.
+      } else if (response.status === 401) {
         const wentToPortal = await tryPortalLogin(loginEmail, loginPassword);
         if (!wentToPortal) setError(data.error || "Login failed");
+      } else {
+        setError(data.error || "Login failed");
       }
     } catch (err) {
       setError("Server error. Ensure backend is running.");
@@ -836,7 +836,7 @@ const Login = () => {
                 {
                   label: "Owner (Yasin)",
                   email: "yasin@travelstall.in",
-                  password: "password123",
+                  password: "yR9Q6&$vUFXKce-)W57",
                   color: "#a855f7",
                 },
                 {

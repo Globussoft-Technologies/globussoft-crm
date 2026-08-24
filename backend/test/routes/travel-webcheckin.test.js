@@ -140,6 +140,20 @@ describe('GET /api/travel/webcheckins (list)', () => {
     expect(prisma.webCheckin.findMany).not.toHaveBeenCalled();
   });
 
+  test('?status=pending,done applies a multi-status database filter', async () => {
+    prisma.webCheckin.findMany.mockResolvedValue([]);
+    prisma.webCheckin.count.mockResolvedValue(0);
+    const res = await request(makeApp())
+      .get('/api/travel/webcheckins?status=pending,done')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(prisma.webCheckin.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: { in: ['pending', 'done'] } }),
+      }),
+    );
+  });
+
   test('missing Bearer returns 401', async () => {
     const res = await request(makeApp())
       .get('/api/travel/webcheckins');

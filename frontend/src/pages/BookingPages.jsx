@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, Copy, Edit, Trash2, Clock, Check, X as XIcon, Link as LinkIcon, Image, Upload, GripVertical, Phone, Mail, Code2, Download } from 'lucide-react';
+import { Calendar, Plus, Copy, Edit, Trash2, Clock, Check, X as XIcon, Link as LinkIcon, Image, Upload, GripVertical, Phone, Mail, Code2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -167,7 +167,7 @@ export default function BookingPages() {
             title="Download every booking across all booking pages as CSV"
             style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy ? 'not-allowed' : 'pointer', opacity: csvBusy ? 0.6 : 1 }}
           >
-            <Download size={16} /> Export Bookings CSV
+            <Upload size={16} /> Export Bookings CSV
           </button>
           <button
             className="btn-primary"

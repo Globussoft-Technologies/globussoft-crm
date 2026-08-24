@@ -96,12 +96,12 @@ test.describe('Auth/Security — security headers (#186, #342)', () => {
 // ── #191: login rate limit wired ─────────────────────────────────────
 
 test.describe('Auth/Security — login rate limit wired (#191)', () => {
-  // We assert the RateLimit-* headers exist + the configured max=5
-  // rather than actually triggering 429. Triggering 429 burns the
-  // CI runner's IP budget for the next 15 minutes and would 429
-  // every other spec's intentional-401 attempts. The header check
-  // is sufficient regression coverage: if someone removes the limiter
-  // middleware, the headers disappear.
+  // We assert the RateLimit-* headers exist rather than actually
+  // triggering 429. Triggering 429 burns the CI runner's IP budget for
+  // the next 15 minutes and would 429 every other spec's intentional-401
+  // attempts. The account limiter is bypassed on demo/local hosts, so
+  // the header check is still sufficient regression coverage: if someone
+  // removes the limiter middleware, the headers disappear.
   test('POST /api/auth/login emits RateLimit-* headers (limiter wired)', async ({ request }) => {
     const res = await request.post(`${API}/auth/login`, {
       // Unique email so the per-username limiter doesn't pre-empt

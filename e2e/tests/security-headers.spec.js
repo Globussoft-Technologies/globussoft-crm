@@ -15,7 +15,7 @@
  *        x-frame-options:               DENY  (#921 slice S4 — was SAMEORIGIN)
  *        referrer-policy:               strict-origin-when-cross-origin
  *        strict-transport-security:     max-age=31536000; includeSubDomains
- *        permissions-policy:            camera=(), microphone=(), geolocation=(self), interest-cohort=()
+ *        permissions-policy:            camera=(), microphone=(self), geolocation=(self), interest-cohort=()
  *        cross-origin-resource-policy:  cross-origin     (embed-widget contract — #342 fix)
  *
  *   2. `x-powered-by` is REMOVED. Helmet's hidePoweredBy default strips
@@ -89,7 +89,7 @@ const PINNED_HEADERS = {
   'referrer-policy': 'strict-origin-when-cross-origin',
   'cross-origin-resource-policy': 'cross-origin',
   'permissions-policy':
-    'camera=(), microphone=(), geolocation=(self), interest-cohort=()',
+    'camera=(), microphone=(self), geolocation=(self), interest-cohort=()',
 };
 
 // Routes that should carry the full helmet header set. Both are unauthenticated
@@ -202,7 +202,7 @@ test.describe('Security headers gate (G-25) — Helmet/CSP regression detection'
       'x-permitted-cross-domain-policies': 'none',
       'x-xss-protection': '0',
       'permissions-policy':
-        'camera=(), microphone=(), geolocation=(self), interest-cohort=()',
+        'camera=(), microphone=(self), geolocation=(self), interest-cohort=()',
     });
 
     // HSTS asserted separately (regex match, not exact equality, because

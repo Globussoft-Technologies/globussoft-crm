@@ -26,6 +26,7 @@ import RoleGuard from "./components/RoleGuard";
 import { NotifyProvider } from "./utils/notify";
 import { ActiveSubBrandProvider } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
+import { SearchQueryProvider } from "./components/search/SearchQueryContext";
 import {
   setAuthToken,
   getAuthToken,
@@ -78,6 +79,9 @@ const SuperAdminAiManagement = lazy(
 const SuperAdminAiPlans = lazy(
   () => import("./pages/superadmin/SuperAdminAiPlans"),
 );
+const SuperAdminApiKeyManagement = lazy(
+  () => import("./pages/superadmin/SuperAdminApiKeyManagement"),
+);
 const SuperAdminTenantManagement = lazy(
   () => import("./pages/superadmin/SuperAdminTenantManagement"),
 );
@@ -105,6 +109,13 @@ const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
 // PRD 3.5 / slice T10  public 10-section readiness report page.
 const TmcReadinessReport = lazy(
   () => import("./pages/public/TmcReadinessReport"),
+);
+// Public branded diagnostic form + report (Travel CRM v3.9.4).
+const TravelDiagnosticPublicForm = lazy(
+  () => import("./pages/public/TravelDiagnosticPublicForm"),
+);
+const TravelDiagnosticPublicReport = lazy(
+  () => import("./pages/public/TravelDiagnosticPublicReport"),
 );
 // PRD_TRAVEL_QUOTE_BUILDER 3.7 / slice C9  public quote-accept landing.
 const QuoteAcceptLanding = lazy(
@@ -1232,26 +1243,29 @@ export default function App() {
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       <AuthContext.Provider value={authValue}>
-        <NotifyProvider>
-          <ActiveSubBrandProvider>
-            <BrowserRouter>
-              <RouteErrorBoundary>
-                <Suspense
-                  fallback={
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "center",
-                        alignItems: "center",
-                        height: "100vh",
-                        color: "var(--text-primary)",
-                      }}
-                    >
-                      Loading...
-                    </div>
-                  }
-                >
-                  <Routes>
+        <SearchQueryProvider
+          resetKey={`${user?.userId ?? "anonymous"}:${tenant?.id ?? "none"}`}
+        >
+          <NotifyProvider>
+            <ActiveSubBrandProvider>
+              <BrowserRouter>
+                <RouteErrorBoundary>
+                  <Suspense
+                    fallback={
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "center",
+                          alignItems: "center",
+                          height: "100vh",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        Loading...
+                      </div>
+                    }
+                  >
+                    <Routes>
                     <Route
                       path="/login"
                       element={
@@ -1345,6 +1359,7 @@ export default function App() {
                       be mounted BEFORE the /:tenantId detail route so Express/
                       React Router doesn't treat "plans" as a tenantId param. */}
                     <Route path="ai-management/plans" element={<SuperAdminAiPlans />} />
+                    <Route path="ai-management/api-keys" element={<SuperAdminApiKeyManagement />} />
                     <Route path="ai-management" element={<SuperAdminAiManagement />} />
                     <Route path="ai-management/:tenantId" element={<SuperAdminAiManagement />} />
                     <Route path="tenant-management" element={<SuperAdminTenantManagement />} />
@@ -1399,6 +1414,15 @@ export default function App() {
                     <Route
                       path="/p/tmc/report/:slug"
                       element={<TmcReadinessReport />}
+                    />
+                    {/* Public branded diagnostic form + report (Travel CRM v3.9.4). */}
+                    <Route
+                      path="/diagnostic-form/:tenantSlug/:subBrand"
+                      element={<TravelDiagnosticPublicForm />}
+                    />
+                    <Route
+                      path="/diagnostic-form/:tenantSlug/:subBrand/report/:slug"
+                      element={<TravelDiagnosticPublicReport />}
                     />
                     {/* PRD_TRAVEL_QUOTE_BUILDER 3.7 / slice C9  customer-accept landing. */}
                     <Route
@@ -1887,7 +1911,11 @@ export default function App() {
                         visibility comes from the `/whatsapp` catalog row
                         (vertical: 'generic') in backend/lib/pageCatalog.js.
                         Travel keeps its own Wati surface at /travel/whatsapp. */}
-                      <Route path="whatsapp" element={<WellnessWhatsAppThreads transport="meta" />} />
+                      {/* showThreadList — the conversation rail (list + search +
+                        status filter + "+ New" + Templates) is generic-only. It was
+                        dropped from the shared page in 3f3ff602; wellness has run
+                        rail-less since and stays that way, so only this mount opts in. */}
+                      <Route path="whatsapp" element={<WellnessWhatsAppThreads transport="meta" showThreadList />} />
                       <Route path="whatsapp/templates" element={<WellnessWhatsAppTemplates />} />
                       <Route
                         path="wellness/reports"
@@ -3476,12 +3504,13 @@ export default function App() {
                   show a real 404 with a path suggestion when applicable. */}
                       <Route path="*" element={<NotFound />} />
                     </Route>
-                  </Routes>
-                </Suspense>
-              </RouteErrorBoundary>
-            </BrowserRouter>
-          </ActiveSubBrandProvider>
-        </NotifyProvider>
+                    </Routes>
+                  </Suspense>
+                </RouteErrorBoundary>
+              </BrowserRouter>
+            </ActiveSubBrandProvider>
+          </NotifyProvider>
+        </SearchQueryProvider>
       </AuthContext.Provider>
     </ThemeContext.Provider>
   );

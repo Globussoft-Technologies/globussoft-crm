@@ -31,6 +31,7 @@ import {
   Send,
   CheckCircle2,
   GraduationCap,
+  Loader2,
 } from "lucide-react";
 
 const DEFAULT_TENANT_SLUG = "tmc";
@@ -688,8 +689,17 @@ export default function TmcReadiness() {
             disabled={submitting}
             style={primaryBtn}
           >
-            <Send size={16} aria-hidden />
-            {submitting ? "Sending…" : "See my readiness report"}
+            {submitting ? (
+              <>
+                <Loader2 size={16} aria-hidden style={{ animation: "spin 1s linear infinite" }} />
+                Analyzing your curriculum needs
+              </>
+            ) : (
+              <>
+                <Send size={16} aria-hidden />
+                See my readiness report
+              </>
+            )}
           </button>
         )}
       </nav>

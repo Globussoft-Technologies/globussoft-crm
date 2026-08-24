@@ -19,14 +19,6 @@ import {
   subBrandShortLabel,
 } from "../../utils/travelSubBrand";
 
-const SUB_BRANDS = [
-  { value: "", label: "All sub-brands" },
-  { value: "tmc", label: "TMC" },
-  { value: "rfu", label: "RFU" },
-  { value: "travelstall", label: "Travel Stall" },
-  { value: "visasure", label: "Visa Sure" },
-];
-
 const ACTIVE_FILTERS = [
   { value: "", label: "Active + inactive" },
   { value: "true", label: "Active only" },
@@ -67,7 +59,6 @@ export default function ReligiousPackets() {
 
   const [packets, setPackets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [subBrand, setSubBrand] = useState("");
   const [isActive, setIsActive] = useState("");
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -77,7 +68,7 @@ export default function ReligiousPackets() {
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
-    if (subBrand) qs.set("subBrand", subBrand);
+    qs.set("subBrand", "rfu");
     if (isActive) qs.set("isActive", isActive);
     fetchApi(`/api/travel/religious-packets?${qs.toString()}`)
       .then((res) => setPackets(Array.isArray(res?.packets) ? res.packets : []))
@@ -88,7 +79,7 @@ export default function ReligiousPackets() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(load, [subBrand, isActive]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [isActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const add = async () => {
     const channels = channelsToString(form.channels);
@@ -203,9 +194,6 @@ export default function ReligiousPackets() {
       </div>
 
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 12, marginBottom: 16, flexWrap: "wrap" }}>
-        <select value={subBrand} onChange={(e) => setSubBrand(e.target.value)} style={selectStyle} aria-label="Filter by sub-brand">
-          {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-        </select>
         <select value={isActive} onChange={(e) => setIsActive(e.target.value)} style={selectStyle} aria-label="Filter by active state">
           {ACTIVE_FILTERS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>

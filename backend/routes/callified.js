@@ -35,6 +35,8 @@ const {
   clearDnpRetryState,
   scheduleDnpRetry,
 } = require("../lib/callifiedDnpRetryEngine");
+const { startBrowserCall } = require("../lib/callifiedAgentBridge");
+const { sendCallifiedError } = require("../lib/callifiedErrors");
 const { KEYS, getSetting, setSetting } = require("../lib/tenantSettings");
 
 // Sub-brand isolation guard imported from ../lib/subBrandResolve (tick #106
@@ -44,26 +46,18 @@ const { KEYS, getSetting, setSetting } = require("../lib/tenantSettings");
 // their scope and mismatching body rejected as 403 SUB_BRAND_MISMATCH;
 // operator JWT callers pass body through. See lib for full JSDoc.
 
-// Minimum time between AI calls to the same CRM contact (default 1 minute for testing).
-const REDIAL_COOLDOWN_MS = Number(process.env.CALLIFIED_REDIAL_COOLDOWN_MS) || 60 * 1000;
+// Minimum time between AI calls to the same CRM contact (default 1 minute for
+// testing). Promoted to lib/callifiedRedialGuard.js when the wellness calling
+// surface became the second consumer of the same guarantee.
+const {
+  REDIAL_COOLDOWN_MS,
+  wasRecentlyDialed,
+  redialCooldownError,
+} = require("../lib/callifiedRedialGuard");
 const DIAL_ALL_DELAY_MS = Number(process.env.CALLIFIED_DIAL_ALL_DELAY_MS) || 800;
 
 function normalizeForDial(phone) {
   return callifiedClient.normalizeCallifiedPhone(phone);
-}
-
-async function wasRecentlyDialed(tenantId, contactId, sinceMs = REDIAL_COOLDOWN_MS) {
-  const since = new Date(Date.now() - sinceMs);
-  const recent = await prisma.callLog.findFirst({
-    where: {
-      tenantId,
-      contactId: Number(contactId),
-      provider: 'callified',
-      createdAt: { gte: since },
-    },
-    orderBy: { createdAt: 'desc' },
-  });
-  return recent ? recent.createdAt : null;
 }
 
 function pickLatestReview(parsed) {
@@ -365,6 +359,78 @@ router.post(
       }
       console.error("[callified] leads/:leadId/call error:", e.message);
       res.status(500).json({ error: "Failed to initiate call" });
+    }
+  },
+);
+
+/**
+ * POST /api/callified/leads/:leadId/browser-call
+ *
+ * Manual (human) call: Callified places the customer leg and bridges its
+ * audio to a WebSocket that the agent's browser joins, so a real person —
+ * not the AI agent — has the conversation.
+ *
+ * Body: { campaignId (required), interest?, exotelAccountId?, scheduledCallId? }
+ *
+ * The response carries a single-use `bridgeTicket` for the relay at
+ * /ws/callified-agent. The raw Callified `agentUrl` is returned for
+ * observability only — the browser must NOT dial it directly, because it
+ * needs the tenant's Callified JWT (see lib/callifiedAgentBridge.js).
+ */
+router.post(
+  "/leads/:leadId/browser-call",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const { leadId } = req.params;
+      const { campaignId, interest, exotelAccountId, scheduledCallId } =
+        req.body || {};
+
+      if (!campaignId) {
+        return res
+          .status(400)
+          .json({ error: "campaignId is required", code: "MISSING_CAMPAIGN_ID" });
+      }
+
+      // Same double-dial backstop the AI path has — a browser call reaches
+      // the same real customer and costs the same real money.
+      const recentDial = await wasRecentlyDialed(req.user.tenantId, leadId);
+      if (recentDial) {
+        return res.status(429).json(redialCooldownError(recentDial));
+      }
+
+      const result = await startBrowserCall({
+        tenantId: req.user.tenantId,
+        contactId: leadId,
+        campaignId,
+        userId: req.user.userId,
+        interest,
+        exotelAccountId,
+        scheduledCallId,
+      });
+
+      await writeAudit(
+        "CallifiedCall",
+        "BROWSER_CALL",
+        String(result.callifiedLeadId),
+        req.user.userId,
+        req.user.tenantId,
+        {
+          contactId: Number(leadId),
+          campaignId: Number(campaignId),
+          callSid: result.callSid,
+        },
+      );
+
+      res.json(result);
+    } catch (e) {
+      sendCallifiedError(
+        res,
+        e,
+        "[callified] leads/:leadId/browser-call",
+        "Failed to start the manual call",
+      );
     }
   },
 );

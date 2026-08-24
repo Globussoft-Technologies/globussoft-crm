@@ -28,7 +28,7 @@ const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const syncEngine = require("../lib/travelKnowledgeBaseSync");
 const qdrant = require("../lib/qdrantClient");
-const embedClient = require("../lib/openAIEmbedClient");
+const embedClient = require("../lib/embedClient");
 const oauth = require("../lib/googleDriveOAuth");
 const {
   requireTravelTenant,
@@ -65,7 +65,15 @@ async function setRootFolderId(tenantId, rootFolderId) {
 router.get("/config", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const rootFolderId = await getRootFolderId(req.travelTenant.id);
-    res.json({ rootFolderId, qdrantEnabled: qdrant.isEnabled() });
+    const embedCfg = await embedClient.resolveEmbedConfig(req.travelTenant.id);
+    res.json({
+      rootFolderId,
+      qdrantEnabled: qdrant.isEnabled(),
+      embedEnabled: Boolean(embedCfg),
+      embedProvider: embedCfg?.providerId || null,
+      embedModel: embedCfg ? embedClient.getDefaultModel(embedCfg.providerId) : null,
+      vectorSize: embedCfg ? embedClient.getVectorSize(embedCfg.providerId) : null,
+    });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-kb] get config error:", e.message);
@@ -137,8 +145,12 @@ router.post(
       if (!qdrant.isEnabled()) {
         return res.status(503).json({ error: "Qdrant is not configured", code: "QDRANT_NOT_CONFIGURED" });
       }
-      if (!embedClient.isEnabled()) {
-        return res.status(503).json({ error: "OpenAI is not configured", code: "OPENAI_NOT_CONFIGURED" });
+      const embedCfg = await embedClient.resolveEmbedConfig(req.travelTenant.id);
+      if (!embedCfg) {
+        return res.status(503).json({
+          error: "No supported AI provider is configured for embeddings. Configure OpenAI or Gemini in AI Settings.",
+          code: "EMBEDDING_PROVIDER_NOT_CONFIGURED",
+        });
       }
       const rootFolderId =
         String(req.body?.rootFolderId || "").trim() ||
@@ -156,11 +168,89 @@ router.post(
       syncEngine
         .runSync({ tenantId: req.travelTenant.id, rootFolderId, job })
         .catch((e) => console.error("[travel-kb] background sync failed:", e.message));
-      res.status(202).json({ jobId: job.id, status: "running", startedAt: job.startedAt });
+      res.status(202).json({
+        jobId: job.id,
+        status: "running",
+        startedAt: job.startedAt,
+        providerId: embedCfg.providerId,
+        vectorSize: embedClient.getVectorSize(embedCfg.providerId),
+      });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-kb] sync/jobs error:", e.message);
       res.status(500).json({ error: e.message || "Sync failed", code: e.code || "SYNC_FAILED" });
+    }
+  },
+);
+
+// POST /api/travel/knowledge-base/sync/wipe-and-resync
+// Wipes all indexed data for this tenant (all provider collections + the file
+// registry) and starts a fresh sync from the supplied or saved root folder.
+// Use this when switching to a completely different Drive folder and you want
+// old folder data removed from the RAG index.
+router.post(
+  "/sync/wipe-and-resync",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      if (!qdrant.isEnabled()) {
+        return res.status(503).json({ error: "Qdrant is not configured", code: "QDRANT_NOT_CONFIGURED" });
+      }
+      const embedCfg = await embedClient.resolveEmbedConfig(req.travelTenant.id);
+      if (!embedCfg) {
+        return res.status(503).json({
+          error: "No supported AI provider is configured for embeddings. Configure OpenAI or Gemini in AI Settings.",
+          code: "EMBEDDING_PROVIDER_NOT_CONFIGURED",
+        });
+      }
+      const rootFolderId =
+        String(req.body?.rootFolderId || "").trim() ||
+        (await getRootFolderId(req.travelTenant.id));
+      if (!rootFolderId) {
+        return res.status(400).json({
+          error: "Drive root folder id is required. Save it in config or pass it in the body.",
+          code: "MISSING_FOLDER_ID",
+        });
+      }
+      const tenantId = req.travelTenant.id;
+
+      // Stop any in-flight syncs for this tenant.
+      const runningJobs = await prisma.travelKnowledgeBaseSyncJob.findMany({
+        where: { tenantId, status: "running" },
+      });
+      for (const job of runningJobs) syncEngine.stopSyncJob(job.id);
+      await prisma.travelKnowledgeBaseSyncJob.updateMany({
+        where: { tenantId, status: "running" },
+        data: { status: "stopped", completedAt: new Date() },
+      });
+
+      // Wipe Qdrant points across all supported provider collections.
+      for (const providerId of embedClient.getSupportedProviders()) {
+        await qdrant.deleteByTenant(tenantId, providerId);
+      }
+
+      // Wipe the file registry so the next sync re-indexes every PDF.
+      await prisma.travelKnowledgeBaseFile.deleteMany({ where: { tenantId } });
+
+      const job = await prisma.travelKnowledgeBaseSyncJob.create({
+        data: { tenantId, rootFolderId, status: "running" },
+      });
+      syncEngine
+        .runSync({ tenantId, rootFolderId, job })
+        .catch((e) => console.error("[travel-kb] background wipe-and-resync failed:", e.message));
+      res.status(202).json({
+        jobId: job.id,
+        status: "running",
+        startedAt: job.startedAt,
+        providerId: embedCfg.providerId,
+        vectorSize: embedClient.getVectorSize(embedCfg.providerId),
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-kb] wipe-and-resync error:", e.message);
+      res.status(500).json({ error: e.message || "Wipe and resync failed", code: e.code || "WIPE_RESYNC_FAILED" });
     }
   },
 );
@@ -216,15 +306,63 @@ router.post(
   },
 );
 
+// POST /api/travel/knowledge-base/sync/stop-all
+// Stops every sync job still marked "running" for this tenant. Useful when a
+// previous process died and left a zombie "running" row, or when multiple
+// workers started overlapping jobs.
+router.post(
+  "/sync/stop-all",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const runningJobs = await prisma.travelKnowledgeBaseSyncJob.findMany({
+        where: { tenantId: req.travelTenant.id, status: "running" },
+      });
+      for (const job of runningJobs) {
+        syncEngine.stopSyncJob(job.id);
+      }
+      // Mark all running rows as stopped, even if the in-memory controller is gone.
+      const { count } = await prisma.travelKnowledgeBaseSyncJob.updateMany({
+        where: { tenantId: req.travelTenant.id, status: "running" },
+        data: { status: "stopped", completedAt: new Date() },
+      });
+      res.json({ stopped: count });
+    } catch (e) {
+      console.error("[travel-kb] stop all syncs error:", e.message);
+      res.status(500).json({ error: "Failed to stop running syncs" });
+    }
+  },
+);
+
 // GET /api/travel/knowledge-base/status
 router.get("/status", verifyToken, requireTravelTenant, async (req, res) => {
   try {
-    const stats = await syncEngine.getStats(req.travelTenant.id);
+    const tenantId = req.travelTenant.id;
+    const embedCfg = await embedClient.resolveEmbedConfig(tenantId);
+    const activeProvider = embedCfg?.providerId || null;
+
+    // Per-provider Qdrant chunk counts so the UI can warn when the active
+    // provider's collection is empty but another provider's collection has data.
+    const providerChunks = {};
+    for (const providerId of embedClient.getSupportedProviders()) {
+      providerChunks[providerId] = await qdrant.countPoints(tenantId, undefined, providerId);
+    }
+
+    const stats = await syncEngine.getStats(tenantId, activeProvider || "openai");
     const lastJob = await prisma.travelKnowledgeBaseSyncJob.findFirst({
-      where: { tenantId: req.travelTenant.id },
+      where: { tenantId },
       orderBy: { startedAt: "desc" },
     });
-    res.json({ stats, lastJob });
+    res.json({
+      activeProvider,
+      activeVectorSize: activeProvider ? embedClient.getVectorSize(activeProvider) : null,
+      activeEmbedModel: activeProvider ? embedClient.getDefaultModel(activeProvider) : null,
+      providerChunks,
+      stats,
+      lastJob,
+    });
   } catch (e) {
     console.error("[travel-kb] status error:", e.message);
     res.status(500).json({ error: "Failed to read status" });
@@ -253,6 +391,51 @@ router.get("/jobs", verifyToken, requireTravelTenant, async (req, res) => {
     res.status(500).json({ error: "Failed to list jobs" });
   }
 });
+
+// POST /api/travel/knowledge-base/jobs/bulk-delete
+// Bulk-delete sync-job history rows. Running jobs must be stopped first
+// (use /sync/:jobId/stop or /sync/stop-all) so operators don't accidentally
+// delete an in-flight job whose background worker is still writing points.
+router.post(
+  "/jobs/bulk-delete",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter((id) => Number.isFinite(Number(id))) : [];
+      if (ids.length === 0) {
+        return res.status(400).json({ error: "ids must be a non-empty array", code: "INVALID_IDS" });
+      }
+
+      const jobs = await prisma.travelKnowledgeBaseSyncJob.findMany({
+        where: { id: { in: ids }, tenantId: req.travelTenant.id },
+      });
+      const foundIds = new Set(jobs.map((j) => j.id));
+      const missing = ids.filter((id) => !foundIds.has(id));
+      if (missing.length > 0) {
+        return res.status(404).json({ error: "Some jobs were not found", code: "NOT_FOUND", missing });
+      }
+
+      const running = jobs.filter((j) => j.status === "running");
+      if (running.length > 0) {
+        return res.status(409).json({
+          error: "Stop running jobs before deleting them",
+          code: "JOBS_RUNNING",
+          runningIds: running.map((j) => j.id),
+        });
+      }
+
+      const { count } = await prisma.travelKnowledgeBaseSyncJob.deleteMany({
+        where: { id: { in: ids }, tenantId: req.travelTenant.id },
+      });
+      res.json({ deleted: count });
+    } catch (e) {
+      console.error("[travel-kb] bulk-delete jobs error:", e.message);
+      res.status(500).json({ error: "Failed to delete jobs" });
+    }
+  },
+);
 
 // GET /api/travel/knowledge-base/files
 router.get("/files", verifyToken, requireTravelTenant, async (req, res) => {
@@ -317,6 +500,53 @@ router.delete(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-kb] delete file error:", e.message);
       res.status(500).json({ error: "Failed to delete file" });
+    }
+  },
+);
+
+// POST /api/travel/knowledge-base/files/bulk-delete
+// Remove multiple indexed files from Qdrant and the file registry in one call.
+// Each file is validated for tenant + sub-brand access before deletion.
+router.post(
+  "/files/bulk-delete",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter((id) => Number.isFinite(Number(id))) : [];
+      if (ids.length === 0) {
+        return res.status(400).json({ error: "ids must be a non-empty array", code: "INVALID_IDS" });
+      }
+
+      const files = await prisma.travelKnowledgeBaseFile.findMany({
+        where: { id: { in: ids }, tenantId: req.travelTenant.id },
+      });
+      const foundIds = new Set(files.map((f) => f.id));
+      const missing = ids.filter((id) => !foundIds.has(id));
+      if (missing.length > 0) {
+        return res.status(404).json({ error: "Some files were not found", code: "NOT_FOUND", missing });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const denied = files.filter((f) => !canAccessSubBrand(allowed, f.subBrand));
+      if (denied.length > 0) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED", deniedIds: denied.map((f) => f.id) });
+      }
+
+      for (const file of files) {
+        await syncEngine.deleteFileFromIndex({
+          tenantId: file.tenantId,
+          subBrand: file.subBrand,
+          driveFileId: file.driveFileId,
+        });
+      }
+
+      res.json({ deleted: files.length });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-kb] bulk-delete files error:", e.message);
+      res.status(500).json({ error: "Failed to delete files" });
     }
   },
 );

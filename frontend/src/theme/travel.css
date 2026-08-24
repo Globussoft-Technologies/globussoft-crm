@@ -22,6 +22,9 @@
   --modal-bg:        #FFFFFF;
   --subtle-bg:       rgba(18, 38, 71, 0.04);
   --subtle-bg-3:     rgba(18, 38, 71, 0.08);
+  --page-header-count-bg: rgba(18, 38, 71, 0.08);
+  --page-header-count-text: #122647;
+  --page-header-count-border: rgba(18, 38, 71, 0.14);
 
   --primary-color:   #122647;        /* deep navy — placeholder pending Q22 */
   --primary-hover:   #0C1B33;
@@ -79,6 +82,9 @@ html[data-theme="dark"][data-vertical="travel"],
   --modal-bg:        #19243A;
   --subtle-bg:       rgba(200, 154, 78, 0.08);
   --subtle-bg-3:     rgba(200, 154, 78, 0.14);
+  --page-header-count-bg: rgba(200, 154, 78, 0.16);
+  --page-header-count-text: #F4EFDF;
+  --page-header-count-border: rgba(200, 154, 78, 0.28);
 
   --primary-color:   #C89A4E;        /* gold pops on dark navy */
   --primary-hover:   #DDB36A;
@@ -301,6 +307,29 @@ html[data-theme="dark"][data-vertical="travel"],
 [data-theme="dark"] [data-vertical="travel"] .tier-badge--premium {
   background: #3A2E18;
   color: #E0C088;
+}
+
+/* Diagnostics list polish.
+ * Keeps the current data behavior intact while giving the list a clearer
+ * interactive affordance and a slightly stronger tier badge treatment. */
+.diagnostics-row {
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.diagnostics-row:hover {
+  background: rgba(79, 70, 229, 0.035);
+}
+.diagnostics-table thead th {
+  vertical-align: middle;
+}
+.diagnostics-tier-badge {
+  min-width: 78px;
+  justify-content: center;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+}
+
+[data-theme="dark"][data-vertical="travel"] .diagnostics-row:hover,
+[data-theme="dark"] [data-vertical="travel"] .diagnostics-row:hover {
+  background: rgba(168, 181, 200, 0.08);
 }
 
 /* #871 — Inbox conversation-list bubbles + status pills + avatars (Phase 1
@@ -1227,4 +1256,70 @@ html[data-theme="dark"][data-vertical="travel"],
   color: var(--text-primary) !important;
   border: 1px solid rgba(200, 154, 78, 0.20) !important;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+}
+/* Travel file pickers â€” style the native "Choose file" control so upload
+ * surfaces feel deliberate instead of browser-default. This hits every
+ * visible file input in the travel vertical, including import modals and
+ * ad-hoc document upload rows.
+ */
+[data-vertical="travel"] input[type="file"] {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 46px !important;
+  padding: 0.35rem !important;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 14px !important;
+  background: var(--surface-color) !important;
+  box-shadow: var(--shadow-sm) !important;
+  color: var(--text-secondary) !important;
+  font: inherit !important;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+[data-vertical="travel"] input[type="file"]::file-selector-button,
+[data-vertical="travel"] input[type="file"]::-webkit-file-upload-button {
+  margin-right: 0.9rem;
+  padding: 0.58rem 1rem !important;
+  border: 1px solid transparent !important;
+  border-radius: 999px !important;
+  background: var(--primary-color) !important;
+  color: var(--accent-text) !important;
+  font: inherit !important;
+  font-size: 0.88rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+[data-vertical="travel"] input[type="file"]:hover {
+  border-color: var(--accent-color) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+[data-vertical="travel"] input[type="file"]:focus,
+[data-vertical="travel"] input[type="file"]:focus-visible {
+  outline: none;
+  border-color: var(--accent-color) !important;
+  box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-sm) !important;
+}
+
+[data-vertical="travel"] input[type="file"]:hover::file-selector-button,
+[data-vertical="travel"] input[type="file"]:hover::-webkit-file-upload-button {
+  background: var(--primary-hover) !important;
+  transform: translateY(-1px);
+}
+
+[data-vertical="travel"] input[type="file"]:active::file-selector-button,
+[data-vertical="travel"] input[type="file"]:active::-webkit-file-upload-button {
+  transform: translateY(0);
+}
+
+[data-theme="dark"][data-vertical="travel"] input[type="file"],
+[data-theme="dark"] [data-vertical="travel"] input[type="file"] {
+  background: rgba(25, 36, 58, 0.82) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
 }

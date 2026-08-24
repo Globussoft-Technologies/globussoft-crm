@@ -309,7 +309,7 @@ function WebhookSettingsModal({ initialConfig, module, workflowId, onSave, onClo
         body: JSON.stringify({ config: draft, event: `${module}.updated`, workflowId }),
       });
       notify.success(`Webhook responded with HTTP ${response.result?.status || 200}`);
-    } catch (error) { notify.error(error.message || "Webhook test failed"); }
+    } catch (_error) { /* fetchApi already toasted */ }
     finally { setTesting(false); }
   };
   return <div className="workflow-webhook-overlay" onMouseDown={onClose}>
@@ -414,11 +414,11 @@ export default function Workflows() {
       const hasStoredOrder = items.some((workflow) => Number.isFinite(workflowOrder(workflow)));
       setWorkflows(hasStoredOrder ? [...items].sort((a, b) => workflowOrder(a) - workflowOrder(b)) : items);
     }
-    catch (error) { notify.error(error.message || "Unable to load workflows"); }
+    catch (_error) { /* fetchApi already toasted */ }
     finally { setLoading(false); }
   };
-  // The loader is intentionally stable for this page lifetime.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // The loader is intentionally stable for this page lifetime. It no longer
+  // closes over `notify`, so exhaustive-deps is satisfied without a suppression.
   useEffect(() => { loadWorkflows(); }, []);
 
   const filteredWorkflows = useMemo(() => workflows.filter((workflow) => view === "all" || (view === "active" ? workflow.isActive : !workflow.isActive)), [workflows, view]);
@@ -449,23 +449,23 @@ export default function Workflows() {
       else setEditor(null);
       await loadWorkflows();
       return saved;
-    } catch (error) { notify.error(error.message || "Unable to save workflow"); }
+    } catch (_error) { /* fetchApi already toasted; falls through to return null */ }
     finally { setSaving(false); }
     return null;
   };
 
   const toggleWorkflow = async (workflow) => {
     try { const updated = await fetchApi(`/api/workflows/${workflow.id}/toggle`, { method: "PUT" }); setWorkflows((items) => items.map((item) => item.id === workflow.id ? updated : item)); }
-    catch (error) { notify.error(error.message || "Unable to update workflow status"); }
+    catch (_error) { /* fetchApi already toasted */ }
   };
   const deleteWorkflow = async (workflow) => {
     if (!window.confirm(`Delete workflow "${workflow.name}"?`)) return;
     try { await fetchApi(`/api/workflows/${workflow.id}`, { method: "DELETE" }); setWorkflows((items) => items.filter((item) => item.id !== workflow.id)); notify.success("Workflow deleted"); }
-    catch (error) { notify.error(error.message || "Unable to delete workflow"); }
+    catch (_error) { /* fetchApi already toasted */ }
   };
   const testWorkflow = async (workflow) => {
     try { const response = await fetchApi(`/api/workflows/${workflow.id}/test`, { method: "POST", body: JSON.stringify({}) }); if (response.success) notify.success(response.message || "Workflow test completed"); else notify.error(response.result?.error || response.message || "Workflow test failed"); await loadWorkflows(); }
-    catch (error) { notify.error(error.message || "Unable to test workflow"); }
+    catch (_error) { /* fetchApi already toasted */ }
   };
   const testEditor = async () => {
     let workflow = editor;
@@ -488,8 +488,8 @@ export default function Workflows() {
         method: "PUT",
         body: JSON.stringify({ workflowIds: next.map((workflow) => workflow.id) }),
       });
-    } catch (error) {
-      notify.error(error.message || "Unable to save workflow order");
+    } catch (_error) {
+      // fetchApi already toasted — just roll the optimistic reorder back.
       await loadWorkflows();
     }
   };

@@ -836,6 +836,20 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'diagnostics', action: 'read' }],
   },
   {
+    path: '/travel/pipeline',
+    label: 'Pipeline',
+    description: 'Deal pipeline across all travel sub-brands',
+    category: 'Travel Sales',
+    requiredPermissions: [{ module: 'pipeline', action: 'read' }],
+  },
+  {
+    path: '/travel/trip-knowledge',
+    label: 'Travel Knowledge',
+    description: 'Google Drive-backed travel knowledge base',
+    category: 'Travel Sales',
+    requiredPermissions: [{ module: 'diagnostics', action: 'write' }],
+  },
+  {
     path: '/travel/itineraries',
     label: 'Itineraries',
     description: 'Day-by-day itinerary builder + library',
@@ -974,6 +988,13 @@ const PAGE_CATALOG = [
     description: 'Cross-invoice payment-milestone dashboard',
     category: 'Travel Quotes & Invoicing',
     requiredPermissions: [{ module: 'invoices', action: 'read' }],
+  },
+  {
+    path: '/travel/tally',
+    label: 'Tally',
+    description: 'Tally accounting, XML and CA exports',
+    category: 'Travel Quotes & Invoicing',
+    requiredPermissions: [{ module: 'invoices', action: 'export' }],
   },
   {
     path: '/travel/visa',

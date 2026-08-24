@@ -215,6 +215,7 @@ describe('<ItineraryTemplates /> â€” page chrome', () => {
     expect(
       screen.getByRole('heading', { name: /Itinerary Template Library/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/templates/i)).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Add template/i }),
     ).toBeInTheDocument();

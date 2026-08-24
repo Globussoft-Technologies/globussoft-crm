@@ -19,6 +19,19 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
+const TRIPS_LAST_LIST_URL_KEY = "travel.trips.lastListUrl";
+
+function getTripsListUrl() {
+  try {
+    const savedUrl = window.sessionStorage.getItem(TRIPS_LAST_LIST_URL_KEY);
+    return savedUrl && savedUrl.startsWith("/travel/trips")
+      ? savedUrl
+      : "/travel/trips";
+  } catch {
+    return "/travel/trips";
+  }
+}
+
 const TABS = [
   { key: "overview", label: "Overview", icon: Luggage },
   // Per decision #7, Participants is the SINGLE home for both
@@ -34,6 +47,24 @@ const TABS = [
   // operational portal). Tab key stays "microsite" for URL back-compat.
   { key: "microsite", label: "Public Experience", icon: Globe },
 ];
+
+function buildLandingPagesReturnState(trip, tripState = {}) {
+  return {
+    returnTo: { label: "TMC Trips", path: `/travel/trips/${trip.id}?tab=overview` },
+    currentLabel: "Public experience",
+    currentPath: `/travel/trips/${trip.id}?tab=microsite`,
+    backTo: tripState.backTo || "/travel/trips",
+    backLabel: tripState.backLabel || "Trips",
+    tripContext: {
+      tripId: trip.id,
+      tripCode: trip.tripCode,
+      destination: trip.destination || "",
+      durationDays: tripDurationDays(trip),
+      audience: "School students",
+      subBrand: "tmc",
+    },
+  };
+}
 
 function fmt(d) {
   if (!d) return "—";
@@ -70,12 +101,14 @@ export default function TripDetail() {
   const { id } = useParams();
   const location = useLocation();
   const notify = useNotify();
-  const [tab, setTab] = useState("overview");
+  const requestedTab = location.state?.tab || new URLSearchParams(location.search).get("tab") || "overview";
+  const [tab, setTab] = useState(() => requestedTab);
+  const [savedListUrl] = useState(getTripsListUrl);
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
   const hasLoadedRef = useRef(false);
-  const backTo = location.state?.backTo || "/travel/trips";
-  const backLabel = location.state?.backLabel || "Trips";
+  const backTo = location.state?.backTo || savedListUrl;
+  const backLabel = location.state?.backLabel || "Back to trips";
 
   const load = useCallback(() => {
     // Keep the current trip visible on refreshes so tab-local state
@@ -94,6 +127,9 @@ export default function TripDetail() {
     hasLoadedRef.current = false;
   }, [id]);
   useEffect(load, [load]);
+  useEffect(() => {
+    setTab(requestedTab);
+  }, [requestedTab]);
 
 
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
@@ -821,7 +857,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
             </div>
           </div>
           <button type="button" onClick={openBulkImportModal} style={{ ...secondaryBtn, alignSelf: "center" }}>
-            <Upload size={14} /> Import file
+            <Download size={14} /> Import file
           </button>
         </div>
         {bulkImportResult && (
@@ -2692,8 +2728,10 @@ function MicrositeCard({ trip, onChange, notify }) {
 // registration-draft branch fire — without it the wizard submission
 // falls back to the legacy lead-capture path.
 function LandingPageCard({ trip, notify }) {
+  const location = useLocation();
   const [page, setPage] = useState(null);
   const [loading, setLoading] = useState(true);
+  const landingPagesReturnState = buildLandingPagesReturnState(trip, location.state || {});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2745,6 +2783,7 @@ function LandingPageCard({ trip, notify }) {
           </div>
           <Link
             to="/landing-pages"
+            state={landingPagesReturnState}
             data-testid="goto-landing-pages-link"
             style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
           >
@@ -2769,6 +2808,7 @@ function LandingPageCard({ trip, notify }) {
           </div>
           <Link
             to={`/landing-pages/builder/${page.id}`}
+            state={landingPagesReturnState}
             data-testid="manage-landing-page-link"
             style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
           >

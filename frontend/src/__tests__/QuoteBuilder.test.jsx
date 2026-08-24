@@ -115,6 +115,13 @@ import QuoteBuilder from '../pages/travel/QuoteBuilder';
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
 const USER_USER = { userId: 2, name: 'Plain User', email: 'u@x.com', role: 'USER' };
 
+function ymdOffset(days = 0) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function renderPage(user = ADMIN_USER) {
   return render(
     <MemoryRouter>
@@ -258,6 +265,22 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     // Contact names + emails are visible in the inline results.
     expect(screen.getByRole('button', { name: /Ahmed Khan.*ahmed@example.com/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Bharat Pilgrim/i })).toBeInTheDocument();
+  });
+
+  it('rejects a past trip start date', async () => {
+    mockRouteId = undefined;
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Leaving from'), { target: { value: 'Bangalore' } });
+    fireEvent.change(screen.getByLabelText('Trip start date'), { target: { value: ymdOffset(-1) } });
+    fireEvent.change(screen.getByLabelText('Destination city 1'), { target: { value: 'Makkah' } });
+    fireEvent.click(screen.getByRole('button', { name: /Suggest flights & hotels/i }));
+
+    expect(notifyError).toHaveBeenCalledWith('Trip start date must be today or later');
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([url, opts]) => url === '/api/travel/search/flights' && opts?.method === 'POST',
+      ),
+    ).toBe(false);
   });
 });
 
@@ -1287,7 +1310,7 @@ describe('<QuoteBuilder /> — TBO flight/hotel search', () => {
     renderPage();
     fireEvent.change(screen.getByLabelText('Flight from'), { target: { value: 'Delhi' } });
     fireEvent.change(screen.getByLabelText('Flight to'), { target: { value: 'Jeddah' } });
-    fireEvent.change(screen.getByLabelText('Flight date'), { target: { value: '2026-08-02' } });
+    fireEvent.change(screen.getByLabelText('Flight date'), { target: { value: ymdOffset(1) } });
     fireEvent.click(screen.getByRole('button', { name: /Search flights/i }));
 
     // Result row appears (GDS-style board: airline + flight number rendered).
@@ -1312,8 +1335,8 @@ describe('<QuoteBuilder /> — TBO flight/hotel search', () => {
     });
     renderPage();
     fireEvent.change(screen.getByLabelText('Hotel city'), { target: { value: 'Jeddah' } });
-    fireEvent.change(screen.getByLabelText('Check-in'), { target: { value: '2026-08-02' } });
-    fireEvent.change(screen.getByLabelText('Check-out'), { target: { value: '2026-08-04' } });
+    fireEvent.change(screen.getByLabelText('Check-in'), { target: { value: ymdOffset(1) } });
+    fireEvent.change(screen.getByLabelText('Check-out'), { target: { value: ymdOffset(3) } });
     fireEvent.click(screen.getByRole('button', { name: /Search hotels/i }));
 
     await screen.findByText(/Jeddah Grand Hotel/);
@@ -1344,7 +1367,7 @@ describe('<QuoteBuilder /> — TBO flight/hotel search', () => {
     });
     renderPage();
     fireEvent.change(screen.getByLabelText('Leaving from'), { target: { value: 'Bangalore' } });
-    fireEvent.change(screen.getByLabelText('Trip start date'), { target: { value: '2026-08-02' } });
+    fireEvent.change(screen.getByLabelText('Trip start date'), { target: { value: ymdOffset(1) } });
     fireEvent.change(screen.getByLabelText('Destination city 1'), { target: { value: 'Makkah' } });
     fireEvent.click(screen.getByRole('button', { name: /Suggest flights & hotels/i }));
 

@@ -46,7 +46,7 @@
 // rather than crashing.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Wallet, Search } from "lucide-react";
+import { Wallet, Search, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
@@ -54,6 +54,7 @@ import { formatMoney } from "../../utils/money";
 import { useActiveSubBrand } from "../../utils/subBrand";
 // Branding Wave 4 G102: per-sub-brand brand-kit lookup for active-chip tint.
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
+import CountBadge from "../../components/CountBadge";
 
 const STATUS_CHIPS = [
   { value: "", label: "All" },
@@ -64,7 +65,7 @@ const STATUS_CHIPS = [
 ];
 
 const SUB_BRANDS = [
-  { value: "", label: "All sub-brands" },
+  { value: "all", label: "All sub-brands" },
   { value: "tmc", label: "TMC (schools)" },
   { value: "rfu", label: "RFU (Umrah)" },
   { value: "travelstall", label: "Travel Stall" },
@@ -96,6 +97,7 @@ const STATUS_COLOR = {
 };
 
 const PAGE_SIZE = 50;
+const LAST_LIST_URL_KEY = "travel.payables.lastListUrl";
 
 function formatDate(iso) {
   if (!iso) return "—";
@@ -126,6 +128,7 @@ export default function Payables() {
   // G102: branded primary accent from the active sub-brand's BrandKit (or
   // the CSS-var fallback when no kit configured).
   const { activeSubBrand } = useActiveSubBrand();
+  const initialSearchParams = new URLSearchParams(window.location.search);
   const { brandKit } = useBrandKit(activeSubBrand);
   const primaryTint = brandPrimaryColor(brandKit);
   const [payables, setPayables] = useState([]);
@@ -142,11 +145,11 @@ export default function Payables() {
   const [hasMore, setHasMore] = useState(true);
 
   // Server-side filter state.
-  const [status, setStatus] = useState("");
-  const [subBrand, setSubBrand] = useState("");
-  const [supplierCategory, setSupplierCategory] = useState("");
-  const [dueFrom, setDueFrom] = useState("");
-  const [dueTo, setDueTo] = useState("");
+  const [status, setStatus] = useState(initialSearchParams.get("status") || "");
+  const [subBrand, setSubBrand] = useState(initialSearchParams.get("subBrand") || activeSubBrand || "");
+  const [supplierCategory, setSupplierCategory] = useState(initialSearchParams.get("supplierCategory") || "");
+  const [dueFrom, setDueFrom] = useState(initialSearchParams.get("dueFrom") || "");
+  const [dueTo, setDueTo] = useState(initialSearchParams.get("dueTo") || "");
   const today = new Date().toISOString().slice(0, 10);
   const payablesRef = useRef([]);
   const offsetRef = useRef(0);
@@ -155,7 +158,42 @@ export default function Payables() {
   const hasMoreRef = useRef(true);
   // Client-side filter — supplier-name substring; the endpoint doesn't
   // accept this yet (future slice).
-  const [supplierSearch, setSupplierSearch] = useState("");
+  const [supplierSearch, setSupplierSearch] = useState(initialSearchParams.get("supplier") || "");
+  const [sortKey, setSortKey] = useState(initialSearchParams.get("sortKey") || null);
+  const [sortDirection, setSortDirection] = useState(initialSearchParams.get("sortDirection") === "desc" ? "desc" : "asc");
+  const handleSort = (key) => {
+    const next = new URLSearchParams(window.location.search);
+    const direction = sortKey !== key ? "asc" : sortDirection === "asc" ? "desc" : null;
+    setSortKey(direction ? key : null); setSortDirection(direction || "asc");
+    if (direction) { next.set("sortKey", key); next.set("sortDirection", direction); } else { next.delete("sortKey"); next.delete("sortDirection"); }
+    window.history.replaceState({}, "", `${window.location.pathname}?${next}`);
+  };
+  const sortHeader = (label, key) => {
+    const active = sortKey === key;
+    const Icon = active ? (sortDirection === "asc" ? ChevronUp : ChevronDown) : ArrowUpDown;
+    return <button type="button" onClick={() => handleSort(key)} aria-label={`Sort ${label}`} style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}><span>{label}</span><Icon size={14} aria-hidden /></button>;
+  };
+  const updateListParam = (key, value) => {
+    const next = new URLSearchParams(window.location.search);
+    if (value) next.set(key, value); else next.delete(key);
+    window.history.replaceState({}, "", `${window.location.pathname}${next.toString() ? `?${next}` : ""}`);
+  };
+  const updateSubBrandFilter = (value) => {
+    setSubBrand(value);
+    const next = new URLSearchParams(window.location.search);
+    if (value) next.set("subBrand", value);
+    else next.delete("subBrand");
+    window.history.replaceState({}, "", `${window.location.pathname}${next.toString() ? `?${next}` : ""}`);
+  };
+
+  useEffect(() => {
+    if (!new URLSearchParams(window.location.search).get("subBrand")) setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand]);
+
+  useEffect(() => {
+    if (window.location.pathname !== "/travel/payables") return;
+    try { window.sessionStorage.setItem(LAST_LIST_URL_KEY, `${window.location.pathname}${window.location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [status, subBrand, supplierCategory, supplierSearch, dueFrom, dueTo, sortKey, sortDirection]);
 
   const load = ({ reset = false } = {}) => {
     if (reset) {
@@ -174,7 +212,7 @@ export default function Payables() {
 
     const qs = new URLSearchParams();
     if (status) qs.set("status", status);
-    if (subBrand) qs.set("subBrand", subBrand);
+    if (subBrand && subBrand !== "all") qs.set("subBrand", subBrand);
     if (supplierCategory) qs.set("supplierCategory", supplierCategory);
     if (dueFrom) qs.set("dueAfter", dueFrom);
     if (dueTo) qs.set("dueBefore", dueTo);
@@ -256,12 +294,18 @@ export default function Payables() {
   // server-returned page further.
   const filtered = useMemo(() => {
     const term = supplierSearch.trim().toLowerCase();
-    if (!term) return payables;
-    return payables.filter((r) => {
+    const rows = !term ? payables : payables.filter((r) => {
       const name = (r.supplierName || "").toLowerCase();
       return name.includes(term);
     });
-  }, [payables, supplierSearch]);
+    if (!sortKey) return rows;
+    const value = (row) => sortKey === "amount" ? Number(row.amount || 0) : row[sortKey] || "";
+    return [...rows].sort((a, b) => {
+      const left = value(a); const right = value(b);
+      const result = typeof left === "number" ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+      return sortDirection === "desc" ? -result : result;
+    });
+  }, [payables, supplierSearch, sortKey, sortDirection]);
 
   const pendingCount = summary.byStatus?.pending || 0;
   const scheduledCount = summary.byStatus?.scheduled || 0;
@@ -271,6 +315,16 @@ export default function Payables() {
   const handleRefresh = () => {
   setDueFrom("");
   setDueTo("");
+  updateListParam("dueFrom", null);
+  updateListParam("dueTo", null);
+  load({ reset: true });
+  };
+
+  const resetFilters = () => {
+    setStatus(""); setSubBrand(activeSubBrand || ""); setSupplierCategory(""); setSupplierSearch(""); setDueFrom(""); setDueTo(""); setSortKey(null); setSortDirection("asc");
+    const next = new URLSearchParams(window.location.search);
+    ["subBrand", "status", "supplierCategory", "supplier", "dueFrom", "dueTo", "sortKey", "sortDirection"].forEach((key) => next.delete(key));
+    window.history.replaceState({}, "", `${window.location.pathname}${next.toString() ? `?${next}` : ""}`);
   };
 
   return (
@@ -278,9 +332,10 @@ export default function Payables() {
       <header style={{ marginBottom: 16 }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
           <Wallet size={26} aria-hidden /> All Payables
+          <CountBadge count={filtered.length} title={`${filtered.length.toLocaleString()} payables in view`} />
         </h1>
         <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-          Cross-supplier A/P ledger — every payable across every supplier in one view. {total.toLocaleString()} payable{total === 1 ? "" : "s"} match.
+          Cross-supplier A/P ledger — every payable across every supplier in one view.
         </p>
       </header>
 
@@ -321,7 +376,7 @@ export default function Payables() {
               <button
                 key={c.value || "all"}
                 type="button"
-                onClick={() => setStatus(c.value)}
+                onClick={() => { setStatus(c.value); updateListParam("status", c.value); }}
                 aria-pressed={active}
                 aria-label={`Filter by status: ${c.label}`}
                 style={{
@@ -339,7 +394,7 @@ export default function Payables() {
 
         <select
           value={subBrand}
-          onChange={(e) => setSubBrand(e.target.value)}
+          onChange={(e) => updateSubBrandFilter(e.target.value)}
           style={inputStyle}
           aria-label="Filter by sub-brand"
         >
@@ -350,7 +405,7 @@ export default function Payables() {
 
         <select
           value={supplierCategory}
-          onChange={(e) => setSupplierCategory(e.target.value)}
+          onChange={(e) => { setSupplierCategory(e.target.value); updateListParam("supplierCategory", e.target.value); }}
           style={inputStyle}
           aria-label="Filter by supplier category"
         >
@@ -365,7 +420,7 @@ export default function Payables() {
             type="text"
             placeholder="Search supplier"
             value={supplierSearch}
-            onChange={(e) => setSupplierSearch(e.target.value)}
+            onChange={(e) => { setSupplierSearch(e.target.value); updateListParam("supplier", e.target.value); }}
             style={inputStyle}
             aria-label="Search supplier"
           />
@@ -384,6 +439,7 @@ export default function Payables() {
             }
         
             setDueFrom(value);
+            updateListParam("dueFrom", value);
           }}
           style={inputStyle}
           aria-label="Due date from"
@@ -402,6 +458,7 @@ export default function Payables() {
             }
         
             setDueTo(value);
+            updateListParam("dueTo", value);
           }}
           style={inputStyle}
           aria-label="Due date to"
@@ -418,6 +475,9 @@ export default function Payables() {
 >
   Refresh
 </button>
+<button type="button" onClick={resetFilters} style={{ ...inputStyle, cursor: "pointer", minWidth: "auto", fontWeight: 600 }}>
+  Reset filters
+</button>
       </div>
 
       {/* Table */}
@@ -430,13 +490,13 @@ export default function Payables() {
           <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th style={{ ...th, width: "24%" }}>Supplier</th>
-                <th style={{ ...th, width: "13%" }}>PO #</th>
-                <th style={{ ...th, width: "27%" }}>Description</th>
-                <th style={{ ...th, width: "14%" }}>Amount</th>
-                <th style={{ ...th, width: "10%" }}>Due date</th>
-                <th style={{ ...th, width: "10%" }}>Status</th>
-                <th style={{ ...th, width: "12%" }}>Days until due</th>
+                <th style={{ ...th, width: "24%" }}>{sortHeader("Supplier", "supplierName")}</th>
+                <th style={{ ...th, width: "13%" }}>{sortHeader("PO #", "poNumber")}</th>
+                <th style={{ ...th, width: "27%" }}>{sortHeader("Description", "description")}</th>
+                <th style={{ ...th, width: "14%" }}>{sortHeader("Amount", "amount")}</th>
+                <th style={{ ...th, width: "10%" }}>{sortHeader("Due date", "dueDate")}</th>
+                <th style={{ ...th, width: "10%" }}>{sortHeader("Status", "status")}</th>
+                <th style={{ ...th, width: "12%" }}>{sortHeader("Days until due", "daysUntilDue")}</th>
               </tr>
             </thead>
             <tbody>
@@ -594,6 +654,12 @@ const th = {
   whiteSpace: "normal",
   overflowWrap: "anywhere",
 };
+const sortButtonStyle = {
+  display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6,
+  width: "100%", padding: "4px 8px", border: "none", borderRadius: 999,
+  background: "transparent", color: "inherit", font: "inherit", cursor: "pointer", textAlign: "left",
+};
+const sortButtonActiveStyle = { color: "var(--primary-color)", background: "var(--accent-bg)" };
 const td = {
   padding: "10px 12px",
   fontSize: 14,

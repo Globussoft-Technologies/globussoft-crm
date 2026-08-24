@@ -244,8 +244,11 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     const pages = getCatalogForVertical('travel');
     const paths = pages.map((p) => p.path);
     expect(paths).toContain('/travel');
+    expect(paths).toContain('/travel/pipeline');
     expect(paths).toContain('/travel/itineraries');
     expect(paths).toContain('/travel/suppliers-admin');
+    expect(paths).toContain('/travel/trip-knowledge');
+    expect(paths).toContain('/travel/tally');
   });
 
   it('travel vertical keeps only the travel commission profiles page', () => {
@@ -525,9 +528,12 @@ describe('Vertical isolation — getAccessiblePages with opts.vertical', () => {
   });
 
   it('travel: surfaces /travel/* pages when the role holds the matching perm', () => {
-    const perms = new Set(['itineraries.read']);
+    const perms = new Set(['itineraries.read', 'pipeline.read', 'diagnostics.write', 'invoices.export']);
     const onTravel = getAccessiblePages(perms, { vertical: 'travel' });
+    expect(onTravel.find((p) => p.path === '/travel/pipeline')).toBeDefined();
     expect(onTravel.find((p) => p.path === '/travel/itineraries')).toBeDefined();
+    expect(onTravel.find((p) => p.path === '/travel/trip-knowledge')).toBeDefined();
+    expect(onTravel.find((p) => p.path === '/travel/tally')).toBeDefined();
   });
 
   it('wellness: hides /travel/* pages even when the role holds the matching perm', () => {

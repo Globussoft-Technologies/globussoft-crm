@@ -3,7 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import TopScrollSync from '../components/TopScrollSync';
-import { Trophy, Users, TrendingUp, Phone, Mail, CheckSquare, Download, Calendar } from 'lucide-react';
+import { Trophy, Users, TrendingUp, Phone, Mail, CheckSquare, Upload, Calendar } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 
@@ -114,10 +114,10 @@ export default function AgentReports() {
             <input type="date" className="input-field" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: '0.5rem', fontSize: '0.8rem' }} />
           </div>
           <button className="btn-secondary" onClick={handleExportCSV} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Download size={16} /> CSV
+            <Upload size={16} /> CSV
           </button>
           <button className="btn-primary" onClick={handleExportPDF} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Download size={16} /> PDF
+            <Upload size={16} /> PDF
           </button>
         </div>
       </header>

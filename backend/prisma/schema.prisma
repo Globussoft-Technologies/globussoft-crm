@@ -179,6 +179,8 @@ model Tenant {
   serviceConsumptions  ServiceConsumption[]
   agentRecommendations AgentRecommendation[]
   locations            Location[]
+  // Standalone geofence zones (wellness) — not tied to any clinic Location.
+  geofenceZones        GeofenceZone[]
   // Agent B: waitlist
   waitlists            Waitlist[]
   // Agent D: loyalty + referrals
@@ -191,6 +193,7 @@ model Tenant {
   // cascade behavior lives on each child via @relation onDelete).
   travelDiagnostics                   TravelDiagnostic[]
   travelDiagQuestionBanks             TravelDiagnosticQuestionBank[]
+  travelDiagnosticPublicForms       TravelDiagnosticPublicForm[]
   itineraries                         Itinerary[]
   // #907 slice 4 — Itinerary template library (Pre-loaded ~50, expand over time).
   // Subsequent slices: CRUD route + admin library UI + "Create from template" hook.
@@ -530,6 +533,13 @@ model User {
   role            String    @default("USER") // ADMIN, USER, MANAGER
   userType        String    @default("STAFF") // STAFF | OWNER | CUSTOMER
   name            String
+  // Contact number the user maintains themselves on /profile. Nullable and
+  // NOT unique on purpose: it is a convenience/contactability field, not an
+  // identity key (email + tenantId remains the identity). For a CUSTOMER
+  // whose account is linked to a wellness Patient row, PUT /api/auth/me
+  // mirrors this onto Patient.phone so the clinic — and the Callified
+  // calling flow on Appointments — can actually reach them.
+  phone           String?
   createdAt       DateTime  @default(now())
 
   // 2FA
@@ -649,6 +659,13 @@ model User {
   // the punch is within radius of ANY one of them. Empty/no rows = geofence
   // NOT enforced for this user (falls back to today's unenforced behaviour).
   assignedLocations UserLocation[]
+
+  // Geo-tagged attendance (wellness only) — standalone geofence zones this
+  // staff member is assigned to, independent of any clinic. Same "ANY ONE
+  // of them" semantics as assignedLocations above; see GeofenceZone's
+  // schema comment for how a tenant-wide Global zone falls back for anyone
+  // with neither of these two assignment types.
+  assignedGeofenceZones UserGeofenceZone[]
 
   // Wave 2 Agent II — POS cashier shifts.
   cashierShifts Shift[] @relation("CashierShifts")
@@ -1310,7 +1327,15 @@ model AutomationRule {
   name        String
   triggerType String
   actionType  String
-  targetState String?
+  // targetState holds the ENTIRE workflow-builder state as one JSON blob —
+  // module, execution mode, description, and the full actions[] array with
+  // each action's config (email bodies, webhook URLs + headers, ...). Before
+  // this was `@db.Text` it mapped to MySQL varchar(191), so every save of a
+  // non-trivial workflow died with Prisma P2000 ("value too long for the
+  // column") and surfaced as a bare HTTP 500 in the builder UI. A minimal
+  // skeleton is ~102 chars; a single email action with to/subject/body is
+  // already ~233. Text, not varchar.
+  targetState String? @db.Text
   // #20: optional JSON-encoded array of clauses, AND-joined.
   // Format: [{"field":"deal.amount","op":"gt","value":50000}, ...]
   // Operators: eq, neq, gt, gte, lt, lte, in, nin, contains, startsWith.
@@ -2242,7 +2267,6 @@ model WhatsAppMessage {
   direction     String    @default("OUTBOUND")
   status        String    @default("QUEUED") // QUEUED, SENT, DELIVERED, READ, FAILED
   providerMsgId String?
-  templateName  String?
   errorMessage  String?
   read          Boolean   @default(false)
   // Soft-delete for "Delete for me" — hides the message from the
@@ -4003,15 +4027,21 @@ model Patient {
   // Patient-portal notification inbox (additive — see PatientNotification).
   patientNotifications PatientNotification[]
 
-  /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
-  // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
-  // lived in lib/leadJunkFilter + the route handler's best-effort
-  // findFirst — both bypassable. With @@unique enforced, Prisma throws
-  // P2002 on the second create with the same (tenant, normalizedPhone)
-  // pair; the route handler's catch translates to HTTP 409 with code
-  // DUPLICATE_PHONE. Backfill + merge MUST run before this can apply
-  // — see backend/scripts/backfill-patient-normalized-phone.js.
-  @@unique([tenantId, normalizedPhone], name: "patient_tenant_normalized_phone_unique")
+  /// Lookup index on (tenant, normalized phone number). NOT unique — several patients in one clinic may legitimately share a number (a couple, a parent booking for a child, one household landline).
+  // #401 originally made this @@unique as a DB-level dedup gate: Prisma threw
+  // P2002 on the second create with the same (tenant, normalizedPhone) pair
+  // and the route handlers translated that to HTTP 409 DUPLICATE_PHONE.
+  //
+  // Reverted to a plain index by product decision — a shared phone number is
+  // normal in a clinic and must not block a booking or a profile save.
+  //
+  // WHAT THIS GIVES UP: the database no longer refuses duplicate-phone
+  // patients, so the P2002 → 409 DUPLICATE_PHONE path in the intake routes
+  // can no longer fire. Dedup is back to being application-level and
+  // best-effort (lib/leadJunkFilter + the route handlers' findFirst lookups),
+  // which is what it was before #401. The index is kept because those
+  // best-effort lookups — and the reminder / dialer paths — query on it.
+  @@index([tenantId, normalizedPhone])
   // safe-unique: replaces the single-column `userId @unique` removed in
   // d8aab25; 0c9b59a already verified zero duplicate userId in the live
   // Patient table, and (tenantId, userId) is strictly ≤ as strict.
@@ -4515,6 +4545,72 @@ model UserLocation {
 
   @@unique([userId, locationId])
   @@index([locationId])
+}
+
+// Standalone geofenced check-in zone (wellness only) — deliberately NOT a
+// Location. Location owns a full clinic identity (address, patients, visits,
+// resources); a GeofenceZone owns nothing but a pin and a radius, so an
+// admin can draw "the warehouse", "the training center", or a temporary
+// pop-up camp without inventing a fake clinic row to hang it off.
+//
+// isGlobal: at most one active zone per tenant may be true at a time
+// (enforced in routes/wellness_geofence_zones.js, not the DB — MySQL has no
+// clean partial-unique-index syntax for "unique where isGlobal = true"; the
+// route wraps the flip in a transaction that clears any prior global zone
+// first). It is the fallback radius applied to a staff member who has NO
+// specific assignment at all — neither a UserLocation (clinic) row nor a
+// UserGeofenceZone row. The moment a specific one is assigned, it wins over
+// the global fallback for that person; see resolveGeofenceContext in
+// routes/attendance.js. Because only one zone can be global at a time,
+// "the latest zone marked global overrides the previous one" falls out for
+// free — there is only ever one to find.
+model GeofenceZone {
+  id       Int    @id @default(autoincrement())
+  name     String
+
+  latitude  Float
+  longitude Float
+  // Mirrors Location.geofenceRadiusM's default — see
+  // lib/attendanceGeofence.js DEFAULT_RADIUS_M. Non-null here (unlike
+  // Location's) because a zone has no OTHER purpose than to be a geofence;
+  // there is no "clinic without a fence yet" state to represent.
+  radiusM   Int    @default(150)
+
+  isGlobal Boolean @default(false)
+  isActive Boolean @default(true)
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  assignedUsers UserGeofenceZone[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  // Looked up on every unassigned punch (resolveGeofenceContext's fallback
+  // path) — one row scan instead of a table scan for "the" global zone.
+  @@index([tenantId, isGlobal])
+}
+
+// Geo-tagged attendance (wellness only) — many-to-many User↔GeofenceZone
+// assignment, the standalone-zone sibling of UserLocation above. Same "ANY
+// ONE of them" semantics: a user assigned to multiple zones (and/or
+// clinics) can punch in from any one. See GeofenceZone's own comment for
+// how this interacts with the tenant's Global zone.
+model UserGeofenceZone {
+  id Int @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  zoneId Int
+  zone   GeofenceZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, zoneId])
+  @@index([zoneId])
 }
 
 // Per-tenant wellness role catalog. Replaces the hard-coded
@@ -5882,8 +5978,44 @@ model AiSubscriptionPlan {
 
   tenantSubscriptions AiTenantSubscription[]
   creditOrders        AiCreditOrder[]
+  planKeys            AiSubscriptionPlanKey[]
 
   @@index([isActive, displayOrder])
+}
+
+// CRM-managed AI provider keys configured by the super admin. These keys can
+// be attached to one or more AiSubscriptionPlan rows and are only used for
+// tenants on a subscription that includes them.
+model AiManagedApiKey {
+  id             Int      @id @default(autoincrement())
+  providerId     String   // gemini | openai | groq | moonshot | ...
+  label          String   // human-readable name shown to super admin
+  apiKey         String   @db.Text // encrypted at application layer
+  baseUrl        String?  @db.Text // null = use provider default
+  model          String?  @db.Text // optional override; null = provider default model
+  isEnabled      Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  planKeys       AiSubscriptionPlanKey[]
+
+  @@index([providerId, isEnabled])
+}
+
+// Many-to-many join between subscription plans and managed API keys, with a
+// per-plan enable/disable toggle so a key can be active globally but excluded
+// from a specific plan.
+model AiSubscriptionPlanKey {
+  planId     Int
+  plan       AiSubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  keyId      Int
+  apiKey     AiManagedApiKey      @relation(fields: [keyId], references: [id], onDelete: Cascade)
+  isEnabled  Boolean @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([planId, keyId])
+  @@index([planId, isEnabled])
 }
 
 model AiTenantSubscription {
@@ -6266,18 +6398,30 @@ model TravelDiagnostic {
   curriculumFitJson      String? @db.Text
 
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  // Public-form provenance (additive). Values: "public_form", "portal",
+  // "manual", "tmc_public". Nullable so legacy rows remain untouched.
+  source              String?   @db.VarChar(50)
+  // Random token (16 hex chars) minted when a public diagnostic-form report
+  // slug is issued (see travel_diagnostics_public.js buildReportSlug). The
+  // public report endpoint requires the full slug (id + this token) to
+  // match before returning the report, so a diagnostic id alone can't be
+  // enumerated to read someone else's report. Null when no public-form
+  // report link has been generated for this diagnostic.
+  reportSlugToken     String?   @db.VarChar(32)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([tenantId, subBrand, contactId])
   @@index([tenantId, subBrand, classification])
   @@index([tenantId, subBrand, engineState])
+  @@index([tenantId, source])
 }
 
 model TravelDiagnosticQuestionBank {
   id               Int      @id @default(autoincrement())
   tenantId         Int      @default(1)
   subBrand         String
+  templateName     String?  @db.VarChar(120)
   version          Int      @default(1)
   questionsJson    String   @db.Text // ordered Qs + weights + branching rules
   scoringRulesJson String   @db.Text // band thresholds + classification labels
@@ -6290,7 +6434,54 @@ model TravelDiagnosticQuestionBank {
   @@index([tenantId, subBrand, isActive])
 }
 
-// ── Itinerary (multi-product trips: RFU + Travel Stall) ──────────────
+// Public diagnostic form configuration (Travel CRM). One active published form
+// per (tenant, sub-brand). Stores styling + brand-kit link + identity-field
+// flags so the public URL can render a branded, responsive form without auth.
+model TravelDiagnosticPublicForm {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subBrand          String   @db.VarChar(50)
+  // Snapshot of the active question-bank id at publish time. The public endpoint
+  // always resolves the latest active bank, but this column records intent.
+  bankId            Int?
+  // Linked BrandKit for logo/colors/fonts. Kept as an Int reference so existing
+  // BrandKit rows are not disturbed.
+  brandKitId        Int?
+  isActive          Boolean  @default(false)
+  isPublished       Boolean  @default(false)
+  title             String?  @db.VarChar(200)
+  subtitle          String?  @db.Text
+  headerHtml        String?  @db.Text
+  footerHtml        String?  @db.Text
+  thankYouMessage   String?  @db.Text
+  primaryColor      String?  @db.VarChar(20)
+  bgColor           String?  @db.VarChar(20)
+  textColor         String?  @db.VarChar(20)
+  fontFamily        String?  @db.VarChar(100)
+  logoUrl           String?  @db.VarChar(500)
+  // top-center | top-left | top-right | inline
+  logoPlacement     String?  @db.VarChar(20)
+  coverImageUrl     String?  @db.VarChar(500)
+  // Catch-all for future styling knobs (margins, border radius, button shape, etc.)
+  stylingConfigJson String?  @db.Text
+  // Identity fields shown to public submitters by default; can be toggled off.
+  includeName       Boolean  @default(true)
+  includeEmail      Boolean  @default(true)
+  includePhone      Boolean  @default(true)
+  nameRequired      Boolean  @default(true)
+  emailRequired     Boolean  @default(true)
+  phoneRequired     Boolean  @default(false)
+  // Optional custom slug suffix for future vanity URLs; unused in v1.
+  publicSlug        String?  @db.VarChar(100)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([tenantId, subBrand])
+  @@index([tenantId, subBrand, isPublished])
+}
+
+// Itinerary (multi-product trips: RFU + Travel Stall)
 model Itinerary {
   id                      Int             @id @default(autoincrement())
   tenantId                Int             @default(1)
@@ -8695,6 +8886,10 @@ model TravelCurriculumMapping {
   mappingSource       String   @default("manual") @db.VarChar(32)
   // Advisor's free-text explanation of why this destination fits this outcome.
   fitRationale        String?  @db.Text
+  // Optional public brochure PDF for this mapped destination/outcome. When a
+  // diagnostic matches the row, the generated report can surface a download
+  // link on the curriculum-fit recommendation.
+  brochurePdfUrl      String?  @db.VarChar(512)
   // Soft-disable a mapping without deleting (preserves history).
   isActive            Boolean  @default(true)
   // Review metadata populated when a proposal becomes an approved mapping.

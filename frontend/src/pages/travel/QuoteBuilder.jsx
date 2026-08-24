@@ -127,6 +127,7 @@ import TopScrollSync from "../../components/TopScrollSync";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import { useActiveSubBrand } from "../../utils/subBrand";
 
 const STATUS_BG = {
   Draft: "rgba(148, 163, 184, 0.18)",
@@ -388,6 +389,41 @@ function fmt(n) {
   });
 }
 
+function ymd(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (!Number.isFinite(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function addDaysYmd(value, days) {
+  if (!value) return "";
+  const d = new Date(`${value}T00:00:00`);
+  if (!Number.isFinite(d.getTime())) return "";
+  d.setDate(d.getDate() + days);
+  return ymd(d);
+}
+
+function openDatePicker(e) {
+  try {
+    e.currentTarget.showPicker?.();
+  } catch {
+    // Browsers without showPicker still open the native picker from its icon.
+  }
+}
+
+function preventDateTyping(e) {
+  if (e.key === "Tab") return;
+  e.preventDefault();
+  if (e.key === "Enter" || e.key === " ") openDatePicker(e);
+}
+
+const pickerOnlyProps = {
+  onClick: openDatePicker,
+  onKeyDown: preventDateTyping,
+  onPaste: (e) => e.preventDefault(),
+  onDrop: (e) => e.preventDefault(),
+};
+
 function countTemplateLines(linesJson) {
   try {
     const arr = JSON.parse(linesJson || "[]");
@@ -476,6 +512,7 @@ export default function QuoteBuilder() {
   const isEdit = !!routeId;
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
 
   const [loading, setLoading] = useState(isEdit);
@@ -493,7 +530,11 @@ export default function QuoteBuilder() {
   const [customers, setCustomers] = useState([]);
   const [contactsById, setContactsById] = useState({});
   const [currency, setCurrency] = useState("INR");
-  const [subBrand, setSubBrand] = useState("tmc");
+  const [subBrand, setSubBrand] = useState(activeSubBrand || "tmc");
+
+  useEffect(() => {
+    if (activeSubBrand) setSubBrand(activeSubBrand);
+  }, [activeSubBrand]);
   const [validUntil, setValidUntil] = useState("");
   const [discountPct, setDiscountPct] = useState(0);
   const [taxPct, setTaxPct] = useState(0);
@@ -984,6 +1025,12 @@ export default function QuoteBuilder() {
       ? { fg: "var(--danger-color, #f43f5e)", bg: "rgba(244, 63, 94, 0.12)" }
       : { fg: "var(--primary-color, var(--accent-color))", bg: "rgba(59, 130, 246, 0.12)" };
 
+  useEffect(() => {
+    if (hSearch.checkIn && hSearch.checkOut && hSearch.checkOut <= hSearch.checkIn) {
+      setHSearch((prev) => ({ ...prev, checkOut: "" }));
+    }
+  }, [hSearch.checkIn, hSearch.checkOut]);
+
   const addLine = () => setDraftLines([...draftLines, EMPTY_DRAFT()]);
 
   // ── TBO search → draft line ─────────────────────────────────────
@@ -994,6 +1041,10 @@ export default function QuoteBuilder() {
     }
     if (!fSearch.departDate) {
       notify.error("Pick a flight date");
+      return;
+    }
+    if (fSearch.departDate < ymd()) {
+      notify.error("Flight date must be today or later");
       return;
     }
     setFLoading(true);
@@ -1034,6 +1085,14 @@ export default function QuoteBuilder() {
     }
     if (!hSearch.checkIn || !hSearch.checkOut) {
       notify.error("Pick hotel check-in and check-out");
+      return;
+    }
+    if (hSearch.checkIn < ymd()) {
+      notify.error("Hotel check-in must be today or later");
+      return;
+    }
+    if (hSearch.checkOut <= hSearch.checkIn) {
+      notify.error("Hotel check-out must be after check-in");
       return;
     }
     setHLoading(true);
@@ -1172,6 +1231,10 @@ export default function QuoteBuilder() {
       notify.error("Enter transfer from and to");
       return;
     }
+    if (tSearch.date && tSearch.date < ymd()) {
+      notify.error("Transfer date must be today or later");
+      return;
+    }
     setTLoading(true);
     setTResults([]);
     setTMeta(null);
@@ -1216,8 +1279,8 @@ export default function QuoteBuilder() {
   // city → leaving-from) + a hotel per staying city, dates derived from nights.
   // Each leg/city is best-effort — a leg that can't resolve is skipped, not
   // fatal. Reuses the same /search endpoints (TBO → AI web → sample).
-  const ymd = (d) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // Reuses the shared local date formatter so all quote-builder searches
+  // compare against the same "today" boundary.
 
   // Rebuild the _suggested draft lines from the current selection set (called on
   // first suggest + every Change flight/hotel). Keeps manually-added lines.
@@ -1339,6 +1402,10 @@ export default function QuoteBuilder() {
     const start = new Date(tripStart);
     if (Number.isNaN(start.getTime())) {
       notify.error("Invalid start date");
+      return;
+    }
+    if (tripStart < ymd()) {
+      notify.error("Trip start date must be today or later");
       return;
     }
     setSuggesting(true);
@@ -2902,7 +2969,9 @@ export default function QuoteBuilder() {
             type="date"
             value={tripStart}
             onChange={(e) => setTripStart(e.target.value)}
-            style={inputStyle}
+            {...pickerOnlyProps}
+            min={ymd()}
+            style={{ ...inputStyle, cursor: "pointer" }}
             aria-label="Trip start date"
           />
           <input
@@ -3095,7 +3164,9 @@ export default function QuoteBuilder() {
             onChange={(e) =>
               setFSearch({ ...fSearch, departDate: e.target.value })
             }
-            style={inputStyle}
+            {...pickerOnlyProps}
+            min={ymd()}
+            style={{ ...inputStyle, cursor: "pointer" }}
             aria-label="Flight date"
           />
           <select
@@ -3178,7 +3249,9 @@ export default function QuoteBuilder() {
             onChange={(e) =>
               setHSearch({ ...hSearch, checkIn: e.target.value })
             }
-            style={inputStyle}
+            {...pickerOnlyProps}
+            min={ymd()}
+            style={{ ...inputStyle, cursor: "pointer" }}
             aria-label="Check-in"
           />
           <input
@@ -3187,7 +3260,9 @@ export default function QuoteBuilder() {
             onChange={(e) =>
               setHSearch({ ...hSearch, checkOut: e.target.value })
             }
-            style={inputStyle}
+            {...pickerOnlyProps}
+            min={hSearch.checkIn ? addDaysYmd(hSearch.checkIn, 1) : ymd()}
+            style={{ ...inputStyle, cursor: "pointer" }}
             aria-label="Check-out"
           />
           <input
@@ -3283,7 +3358,9 @@ export default function QuoteBuilder() {
             type="date"
             value={tSearch.date}
             onChange={(e) => setTSearch({ ...tSearch, date: e.target.value })}
-            style={inputStyle}
+            {...pickerOnlyProps}
+            min={ymd()}
+            style={{ ...inputStyle, cursor: "pointer" }}
             aria-label="Transfer date"
           />
           <button

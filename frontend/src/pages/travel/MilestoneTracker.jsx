@@ -44,6 +44,8 @@ import { Bell, CalendarClock, AlertTriangle, CheckCircle2, Clock, Send } from "l
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
+import CountBadge from "../../components/CountBadge";
+import { useActiveSubBrand } from "../../utils/subBrand";
 
 // Sub-brand selector — mirror of the four canonical travel sub-brands.
 // Keep in lockstep with the backend's VALID_SUB_BRANDS list; mismatch
@@ -124,6 +126,7 @@ function daysCellText(days) {
 
 export default function MilestoneTracker() {
   const notify = useNotify();
+  const { activeSubBrand } = useActiveSubBrand();
   const [milestones, setMilestones] = useState([]);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState({ byStatus: {}, totalExpected: "0.00", totalReceived: "0.00", currencyBreakdown: {} });
@@ -133,8 +136,12 @@ export default function MilestoneTracker() {
 
   const [status, setStatus] = useState("");
   const [within, setWithin] = useState("all");
-  const [subBrand, setSubBrand] = useState("");
+  const [subBrand, setSubBrand] = useState(activeSubBrand || "");
   const [overdueOnly, setOverdueOnly] = useState(false);
+
+  useEffect(() => {
+    setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand]);
   const milestonesRef = useRef([]);
   const offsetRef = useRef(0);
   const requestIdRef = useRef(0);
@@ -286,11 +293,12 @@ export default function MilestoneTracker() {
   return (
     <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <header style={{ marginBottom: 16 }}>
-        <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+        <h1 style={{ display: "flex", alignItems: "center", gap: 12, margin: 0, fontSize: "1.75rem", fontWeight: 600, lineHeight: 1.15, flexWrap: "wrap" }}>
           <CalendarClock size={26} aria-hidden /> Milestone Tracker
+          <CountBadge count={total} title={`${total.toLocaleString()} milestones`} />
         </h1>
         <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-          Cross-invoice payment milestones — pending, partial, paid, overdue. {total.toLocaleString()} milestone{total === 1 ? "" : "s"} match.
+          Cross-invoice payment milestones — pending, partial, paid, overdue.
         </p>
       </header>
 

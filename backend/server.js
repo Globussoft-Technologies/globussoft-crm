@@ -71,6 +71,7 @@ const rateLimit = require("express-rate-limit");
 // below — that's why this block sits up here, not down by the route mounts.
 const { validateNumericId } = require("./middleware/validateNumericId");
 const { resolveSubscriptionAccess } = require("./lib/subscriptionAccess");
+const { shouldSkipLoginAccountLimiter } = require("./lib/loginLimiterPolicy");
 {
   const _RouterFactory = express.Router;
   // express.Router is a callable factory (not a class). Wrap it to attach
@@ -302,10 +303,12 @@ const apiLimiter = rateLimit({
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
 // Login brute-force defense (#191):
-// Two stacked limiters on POST /api/auth/login. Successful logins (2xx) do
-// NOT count toward the limit, so a legitimate user who fat-fingers and then
-// succeeds doesn't burn budget. The per-username limiter keys on the lowercased
-// email so an attacker can't escape it by rotating IPs.
+// Keep the IP limiter everywhere, but skip the account bucket on the shared
+// demo/local login hosts so repeated QA attempts do not lock the demo out.
+// Successful logins (2xx) do NOT count toward the limit, so a legitimate user
+// who fat-fingers and then succeeds doesn't burn budget. The per-username
+// limiter keys on the lowercased email so an attacker can't escape it by
+// rotating IPs.
 // IMPORTANT: only applied to /api/auth/login itself — /api/auth/2fa/verify
 // is a separate endpoint with its own threat model.
 const { ipKeyGenerator } = require("express-rate-limit");
@@ -345,13 +348,18 @@ const loginUsernameLimiter = rateLimit({
   },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
+const loginAccountLimiter = (req, res, next) => {
+  if (shouldSkipLoginAccountLimiter(req)) return next();
+  return loginUsernameLimiter(req, res, next);
+};
 // Order matters: per-IP first (cheap, blocks scrapers), per-username second
-// (catches distributed attacks against one account). Both must pass before
-// the route handler runs. Scoped to POST so OPTIONS preflight isn't counted.
+// (catches distributed attacks against one account). The account limiter is
+// bypassed on demo/local hosts, but the IP limiter still runs before the
+// route handler. Scoped to POST so OPTIONS preflight isn't counted.
 app.post(
   "/api/auth/login",
   loginIpLimiter,
-  loginUsernameLimiter,
+  loginAccountLimiter,
   (req, res, next) => next(),
 );
 
@@ -524,6 +532,35 @@ app.use("/api", (req, res, next) => {
     code: "UNSUPPORTED_MEDIA_TYPE",
     received: ct,
     expected: SUPPORTED_CONTENT_TYPES,
+  });
+});
+
+// Callified agent-bridge relay (human/manual browser calls).
+//
+// MUST be attached BEFORE socket.io: engine.io snapshots the HTTP server's
+// existing 'upgrade' listeners when it attaches and delegates every
+// non-socket.io upgrade back to them. A listener registered after socket.io
+// would race engine.io's own abortConnection for unknown paths and the
+// upgrade would be destroyed out from under it.
+try {
+  const {
+    attachCallifiedAgentBridge,
+  } = require("./lib/callifiedAgentBridge");
+  attachCallifiedAgentBridge(server);
+} catch (e) {
+  console.error(
+    "[server] callified agent bridge attach failed (non-fatal):",
+    e.message,
+  );
+}
+
+// Plain HTTP requests to the WebSocket bridge path must not fall through to
+// the SPA shell. The upgrade listener above handles WebSocket handshakes;
+// anything else on this path is a client error.
+app.all("/ws/callified-agent", (_req, res) => {
+  res.status(426).json({
+    error: "Upgrade Required",
+    code: "UPGRADE_REQUIRED",
   });
 });
 
@@ -742,6 +779,8 @@ const emailThreadingRoutes = require("./routes/email_threading");
 // Hosts TMC (school trips), RFU (Umrah), Travel Stall, Visa Sure sub-brands.
 const travelRoutes = require("./routes/travel");
 const travelDiagnosticsRoutes = require("./routes/travel_diagnostics");
+const travelDiagnosticsPublicRoutes = require("./routes/travel_diagnostics_public");
+const diagnosticPagesPublicRoutes = require("./routes/diagnostic_pages_public");
 const travelKnowledgeBaseRoutes = require("./routes/travel_knowledge_base");
 const travelVisaAnalyticsRoutes = require("./routes/travel_visa_analytics");
 const travelVisaRoutes = require("./routes/travel_visa");
@@ -828,6 +867,11 @@ const inventoryRoutes = require("./routes/inventory");
 // /api/wellness/ai-provider-config.
 const supportChatRoutes = require("./routes/support_chat");
 const wellnessAiConfigRoutes = require("./routes/wellness_ai_config");
+// Wellness ↔ Callified calling — AI dial + human browser (agent bridge) calls
+// from the Appointments page. Thin wellness-shaped entry point over the SAME
+// services/callifiedClient.js the generic CRM Leads page uses; declares only
+// /callified/* paths that wellness.js does NOT own.
+const wellnessCallifiedRoutes = require("./routes/wellness_callified");
 // Wave 2 Agent II — POS / cash register / shift / sale backbone.
 const posRoutes = require("./routes/pos");
 // D16 Wallet Top-up Arc 1 slice 2-partial — read-only wallet endpoints
@@ -965,6 +1009,7 @@ app.use("/api", (req, res, next) => {
     "/attendance/biometric/webhook",
     "/travel/microsites/public",
     "/travel/diagnostics/public",
+    "/diagnostic-pages/public",
     "/travel/itineraries/public",
     "/travel/payment-portal",
     "/travel/destination-photos/public",
@@ -1322,6 +1367,8 @@ app.use("/api/travel", travelCsvIoRoutes);
 app.use("/api/travel", travelDashboardRoutes);
 app.use("/api/travel", travelReportsRoutes);
 app.use("/api/travel", travelDiagnosticsRoutes);
+app.use("/api/travel", travelDiagnosticsPublicRoutes);
+app.use("/api/diagnostic-pages", diagnosticPagesPublicRoutes);
 app.use("/api/travel/knowledge-base", travelKnowledgeBaseRoutes);
 app.use("/api/travel/visa/analytics", travelVisaAnalyticsRoutes);
 app.use("/api/travel/visa", travelVisaRoutes);
@@ -1447,6 +1494,10 @@ app.use(
 );
 app.use("/api/travel/sightseeing", require("./routes/travel_sightseeing"));
 app.use("/api/travel/pois", require("./routes/travel_pois"));
+// Vertical-neutral place search / reverse geocoding (Photon-backed, no
+// API key). Shared by the travel itinerary editor and the wellness
+// clinic geofence picker — see lib/geocodeProxy.js.
+app.use("/api/geocode", require("./routes/geocode"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
 app.use("/api/travel-school-terms", travelSchoolTermRoutes);
@@ -1470,6 +1521,12 @@ app.use("/api/support-chat", supportChatRoutes);
 // sits beside the other wellness admin surfaces; declares only
 // /ai-provider-config paths that wellness.js does NOT own.
 app.use("/api/wellness", wellnessAiConfigRoutes);
+// Callified calling for the wellness Appointments page (/callified/* paths).
+app.use("/api/wellness", wellnessCallifiedRoutes);
+// Standalone geofence zones + bulk staff assignment (/geofence-zones,
+// /geofence-zone-assignments/* paths). Decoupled from clinic Location — see
+// routes/wellness_geofence_zones.js for the global-fallback design.
+app.use("/api/wellness", require("./routes/wellness_geofence_zones"));
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths
 // like /api/wellness/inventory/receipts work; declares only paths wellness.js
 // does NOT own (product-categories, vendors, inventory/receipts,
@@ -1547,59 +1604,13 @@ app.use("/p", landingPagesPublic);
 // Public legal/policy pages — rendered from Markdown (no auth)
 app.use(require("./routes/legal"));
 
-// Public /trips marketing surface — renders the currently featured
-// PUBLISHED landing page when one exists. When no featured page is set,
-// falls through to the SPA shell so the frontend TripsResolver can show
-// the hardcoded Japan TripsLanding fallback instead of a bare 404.
-app.get("/trips", async (req, res, next) => {
-  try {
-    const prismaClient = require("./lib/prisma");
-    const page = await prismaClient.landingPage.findFirst({
-      where: { status: "PUBLISHED", isFeatured: true, subBrand: "tmc" },
-      orderBy: { featuredAt: "desc" },
-    });
-    if (!page) {
-      // No featured page yet — fall through to the SPA shell so the frontend
-      // TripsResolver can render the hardcoded Japan TripsLanding fallback.
-      return next();
-    }
-
-    prismaClient.landingPage.update({
-      where: { id: page.id },
-      data: { visits: { increment: 1 } },
-    }).catch((e) => console.warn("[trips] visit increment skipped:", e.message));
-    prismaClient.landingPageAnalytics.create({
-      data: {
-        landingPageId: page.id,
-        eventType: "VISIT",
-        visitorIp: req.ip,
-        userAgent: req.headers["user-agent"],
-        referrer: req.headers["referer"],
-        tenantId: page.tenantId || 1,
-      },
-    }).catch((e) => console.warn("[trips] analytics write skipped:", e.message));
-    const { renderPage } = require("./services/landingPageRenderer");
-    const html = renderPage(page);
-    if (page.templateType === "wanderlux-v1") {
-      res.set("Content-Security-Policy", [
-        "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
-        "font-src 'self' data: https://fonts.gstatic.com",
-        "img-src 'self' data: blob: https:",
-        "media-src 'self' https: blob:",
-        "connect-src 'self' https://image.pollinations.ai",
-        "frame-src 'self' https://www.youtube.com https://player.vimeo.com https://fast.wistia.net https://*.wistia.com",
-        "object-src 'none'",
-      ].join("; "));
-    }
-    res.set("Content-Type", "text/html");
-    return res.send(html);
-  } catch (err) {
-    console.error("[Trips] Render error:", err);
-    res.status(500).send("<h1>Server error</h1>");
-  }
-});
+// Public /trips marketing surface — root still resolves the featured
+// travel page when one exists, while /trips/:id-or-slug serves the direct
+// share link for other published travel trips. When no featured page
+// exists, /trips falls through to the SPA shell so the frontend
+// TripsResolver can show the hardcoded Japan TripsLanding fallback
+// instead of a bare 404. No nginx changes are required for this flow.
+app.use("/trips", require("./routes/trips_public").router);
 
 // #917 slice S119 (FR-3.X) — CSP-nonce static-file middleware.
 // Substitutes `__CSP_NONCE__` placeholders in the SPA index.html with the
@@ -1615,6 +1626,64 @@ app.get("/trips", async (req, res, next) => {
 //   - AFTER `/p` public landing-page route (rendered HTML must win)
 //   - AFTER `/legal` public Markdown pages
 //   - BEFORE the final SPA catch-all/static fallback (so we substitute nonce)
+
+// Travel CRM — public diagnostic-form embed iframe-ancestors override.
+//
+// The published branded diagnostic form (/diagnostic-form/:tenantSlug/:subBrand
+// and its /report/:slug sibling) is an SPA route with no dedicated Express
+// handler — it's served by cspNonceStaticMiddleware just below, which sends
+// the same global CSP that every other app page gets: frame-ancestors 'none'
+// + X-Frame-Options: DENY (S4, commit 6561bdc). That's correct for the app
+// itself but wrong for this ONE route: it's meant to be iframed into a
+// tenant's own external site via the standalone embed HTML
+// (frontend/public/embed/diagnostic-page.html) exactly like the existing
+// /embed/lead-form.html widget below. Verified locally (2026-08-20): without
+// this override, a client-hosted embed page gets a hard
+// ERR_BLOCKED_BY_RESPONSE on the iframe navigation — the JSON describer call
+// succeeds (CORS is a separate concern, handled in diagnostic_pages_public.js)
+// but the actual form never renders.
+//
+// Reuses the SAME per-tenant Tenant.embedAllowlistJson column + admin UI
+// (frontend/src/pages/admin/EmbedAllowlist.jsx) already built for the
+// lead-form widget below — a tenant self-services which of their OWN domains
+// may frame their public content, no server code change/deploy needed per
+// new client site. Unlike the lead-form mount's back-compat wildcard
+// default, this is a brand-new surface with nothing depending on open-by-
+// default behaviour, so an unconfigured tenant defaults to `'self'` (i.e.
+// not embeddable anywhere external) until they explicitly add a domain via
+// that admin page.
+//
+// Must run BEFORE cspNonceStaticMiddleware — that middleware terminates the
+// response (res.send) for any SPA-shell path, so header mutations have to
+// land first. Resolving the tenant from the :tenantSlug path segment (unlike
+// /embed/*'s ?key= indirection) because this URL always carries it already.
+app.use("/diagnostic-form/:tenantSlug", async (req, res, next) => {
+  let allowList = ["'self'"];
+  try {
+    const tenantSlug = req.params.tenantSlug;
+    if (tenantSlug) {
+      const prismaClient = require("./lib/prisma");
+      const tenant = await prismaClient.tenant.findFirst({
+        where: { slug: tenantSlug, vertical: "travel", isActive: true },
+        select: { id: true },
+      });
+      if (tenant) {
+        const perTenant = await readTenantEmbedAllowlist(prismaClient, tenant.id);
+        if (Array.isArray(perTenant) && perTenant.length > 0) {
+          allowList = perTenant;
+        }
+      }
+    }
+  } catch (e) {
+    // Fail-soft, matching the /embed/* mount below: a lookup error must
+    // never turn into a 500 on a public, unauthenticated route. Falls back
+    // to the 'self' default rather than the /embed mount's wildcard — this
+    // route has no existing consumers to preserve back-compat for.
+    console.warn("[diagnostic-form] embed allowlist lookup failed:", e.message);
+  }
+  return allowIframeEmbedding({ allowList })(req, res, next);
+});
+
 app.use(cspNonceStaticMiddleware);
 
 // #921 slice S38 → S66 → S129 — wire the iframe-embedding override on /embed/*

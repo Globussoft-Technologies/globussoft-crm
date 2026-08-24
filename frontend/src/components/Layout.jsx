@@ -5,11 +5,14 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // to /profile. Logout is already a separate sibling button, so the simplest
 // honest fix is to drop the chevron rather than add a dropdown that
 // duplicates the logout button.
-import { LogOut, Menu, Building2, Sun, Moon, Monitor } from "lucide-react";
+import { LogOut, Menu, Building2, Sun, Moon, Monitor, Info } from "lucide-react";
 import Sidebar from "./Sidebar";
 import Omnibar from "./Omnibar";
 import Presence from "./Presence";
 import Softphone from "./Softphone";
+import TravelKeyboardShortcuts, {
+  TRAVEL_KEYBOARD_SHORTCUTS_EVENT,
+} from "./travel/TravelKeyboardShortcuts";
 // Wellness Admin Support Chatbot — wellness-vertical counterpart to the
 // Softphone FAB (wellness hides the softphone; it gets the help widget).
 import SupportChatWidget from "./SupportChatWidget";
@@ -22,6 +25,7 @@ import TrialBanner from "./TrialBanner";
 // user cannot dismiss it until they pay (or sign out).
 import SubscriptionGate from "./SubscriptionGate";
 import { AuthContext, ThemeContext } from "../App";
+import { useSearchQuery } from "./search/SearchQueryContext";
 import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
 import { setupPush } from "../utils/pushSetup";
@@ -146,6 +150,7 @@ const Layout = () => {
   // in the app, addressing the QA observation that the only theme control
   // was buried in /settings.
   const { theme, toggleTheme } = useContext(ThemeContext) || {};
+  const { clearQuery: clearSearchQuery } = useSearchQuery();
   const notify = useNotify();
   const navigate = useNavigate();
   const location = useLocation();
@@ -158,9 +163,15 @@ const Layout = () => {
     location.pathname === "/whatsapp" ||
     location.pathname === "/travel/whatsapp" ||
     location.pathname === "/gmail";
+  const isTravelShortcutPath =
+    location.pathname === "/travel" ||
+    location.pathname.startsWith("/travel/") ||
+    location.pathname === "/travel-stall" ||
+    location.pathname.startsWith("/travel-stall/");
   // T2.1 (extends #228): drawer state for the mobile sidebar (<900px). Desktop
   // (>=900px) ignores this — CSS keeps the sidebar statically positioned.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [popupScrollLocked, setPopupScrollLocked] = useState(false);
   // Track viewport so we can apply role="dialog" + aria-modal only when the
   // sidebar is actually rendering as a drawer. SSR-safe initial value: assume
   // desktop, then sync on mount via the resize listener below.
@@ -184,6 +195,58 @@ const Layout = () => {
     mql.addListener(update);
     return () => mql.removeListener(update);
   }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+      return undefined;
+    }
+
+    let frame = null;
+    const hasVisibleModal = () =>
+      Array.from(
+        document.querySelectorAll(
+          '[role="dialog"][aria-modal="true"], [data-scroll-lock="true"]',
+        ),
+      ).some((el) => {
+        if (!el.isConnected) return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        return el.getClientRects().length > 0;
+      });
+
+    const sync = () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        setPopupScrollLocked(hasVisibleModal());
+      });
+    };
+
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-modal", "role", "style", "class", "hidden"],
+    });
+    window.addEventListener("resize", sync);
+
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", sync);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!popupScrollLocked) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [popupScrollLocked]);
 
   // When the drawer closes (either via backdrop, ESC, route change, or the
   // user resizing back to desktop), return focus to the hamburger so keyboard
@@ -275,8 +338,14 @@ const Layout = () => {
     // so users mid-migration don't end up with a ghost bearer hanging around.
     setUser(null);
     setToken(null);
+    clearSearchQuery();
     try {
       localStorage.removeItem("token");
+    } catch {
+      /* ignore */
+    }
+    try {
+      sessionStorage.clear();
     } catch {
       /* ignore */
     }
@@ -356,6 +425,38 @@ const Layout = () => {
               consuming the available header width. Ctrl/Cmd+K focuses it
               and a dropdown panel surfaces beneath as the user types. */}
           <Omnibar />
+          {isTravelShortcutPath && (
+            <button
+              type="button"
+              onClick={() => {
+                window.dispatchEvent(new Event(TRAVEL_KEYBOARD_SHORTCUTS_EVENT));
+              }}
+              title="Show keyboard shortcuts. You can also press Ctrl+/."
+              aria-label="Show travel keyboard shortcuts"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "var(--text-secondary)",
+                padding: "6px 8px",
+                borderRadius: "6px",
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+                e.currentTarget.style.color = "var(--text-primary)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "none";
+                e.currentTarget.style.color = "var(--text-secondary)";
+              }}
+            >
+              <Info size={16} aria-hidden />
+            </button>
+          )}
           <TenantChip tenant={tenant} />
           <NotificationBell />
           <button
@@ -474,11 +575,12 @@ const Layout = () => {
             flex: 1,
             minWidth: 0,
             overflowX: "hidden",
-            overflowY: "auto",
+            overflowY: popupScrollLocked ? "hidden" : "auto",
             padding: "0",
             backgroundColor: "transparent",
           }}
         >
+          <TravelKeyboardShortcuts />
           <Outlet />
         </main>
         {/* Hard subscription paywall — renders a non-dismissable overlay

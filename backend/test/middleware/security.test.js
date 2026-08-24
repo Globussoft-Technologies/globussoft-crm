@@ -282,17 +282,21 @@ describe('permissionsPolicyMiddleware', () => {
     permissionsPolicyMiddleware(req, res, next);
     expect(res.setHeader).toHaveBeenCalledWith(
       'Permissions-Policy',
-      'camera=(), microphone=(), geolocation=(self), interest-cohort=()'
+      'camera=(), microphone=(self), geolocation=(self), interest-cohort=()'
     );
     expect(next).toHaveBeenCalledOnce();
   });
 
-  test('disables camera, microphone, FLoC; allows geolocation only on self', () => {
+  test('disables camera and FLoC; allows microphone + geolocation only on self', () => {
     const { req, res, next } = makeReqRes();
     permissionsPolicyMiddleware(req, res, next);
     const policy = res.headers['Permissions-Policy'];
     expect(policy).toContain('camera=()');
-    expect(policy).toContain('microphone=()');
+    // microphone=(self) — Callified manual (human) calls stream the staff
+    // member's mic to the customer. Self-only: third-party iframes still get
+    // nothing, and the browser prompt still gates the first use.
+    expect(policy).toContain('microphone=(self)');
+    expect(policy).not.toContain('microphone=*');
     expect(policy).toContain('geolocation=(self)');
     expect(policy).toContain('interest-cohort=()');
   });

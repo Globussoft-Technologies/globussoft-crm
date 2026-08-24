@@ -66,6 +66,15 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path,
       },
+      // Raw WebSocket endpoints served by Express (Callified agent bridge at
+      // /ws/callified-agent). `ws: true` is what makes Vite forward the
+      // upgrade handshake instead of answering with the SPA shell. socket.io
+      // is untouched — it uses its own /socket.io path and its own client.
+      '/ws': {
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
+        changeOrigin: true,
+        ws: true,
+      },
       // Public landing pages (/p/<slug>) are server-rendered HTML
       // emitted by Express. In production Nginx routes /p/* to the
       // backend; in dev we need to proxy it explicitly, otherwise

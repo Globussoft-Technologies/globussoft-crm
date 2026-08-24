@@ -243,10 +243,15 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
   it('renders heading + sub-brand filter + classification filter + Refresh + add-diagnostic CTA', async () => {
     renderPage(REGULAR_USER);
     expect(screen.getByRole('heading', { name: /Diagnostics/i })).toBeInTheDocument();
+    // Anchored to end-of-string: a second unrelated title ("...AI-powered
+    // diagnostics can recommend trips from your catalog", the Google Drive
+    // connect button) also contains "diagnostics" but doesn't END with it —
+    // only the count badge's "<N> diagnostics" title does.
+    expect(screen.getByTitle(/diagnostics$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Reset filters/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
     // Wait for the mount-time GET to settle.
     await waitFor(() => {
@@ -264,6 +269,12 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalled();
     });
+  });
+
+  it('links to Travel Knowledge for brochure management', async () => {
+    renderPage(REGULAR_USER);
+    const link = await screen.findByRole('link', { name: /Manage brochure knowledge base/i });
+    expect(link.getAttribute('href')).toBe('/travel/trip-knowledge');
   });
 });
 
@@ -350,10 +361,83 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
 
     expect(table.style.width).toBe('100%');
     expect(table.style.tableLayout).toBe('fixed');
-    expect(table.querySelectorAll('col').length).toBe(7);
+    expect(table.querySelectorAll('col').length).toBe(6);
     expect(screen.queryByTestId('diagnostics-table-scroll')).toBeNull();
     expect(screen.queryByText('travelstall')).toBeNull();
   });
+
+  it('cycles submitted sort through ascending, descending, then default on the third click', async () => {
+    renderPage();
+    await screen.findByText('tmc');
+
+    const submittedSort = screen.getByRole('button', { name: /Sort Submitted default/i });
+    fireEvent.click(submittedSort);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Sort Submitted ascending/i })).toBeInTheDocument();
+      expect(fetchApiMock.mock.calls.some(([u]) => typeof u === 'string' && u.includes('sortBy=submitted') && u.includes('sortOrder=asc'))).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Sort Submitted ascending/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Sort Submitted descending/i })).toBeInTheDocument();
+      expect(fetchApiMock.mock.calls.some(([u]) => typeof u === 'string' && u.includes('sortBy=submitted') && u.includes('sortOrder=desc'))).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Sort Submitted descending/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Sort Submitted default/i })).toBeInTheDocument();
+      expect(fetchApiMock.mock.calls.some(([u]) => typeof u === 'string' && u.includes('/api/travel/diagnostics?') && !u.includes('sortBy='))).toBe(true);
+    });
+  });
+
+  it('sorts tier by business order instead of alphabetically', async () => {
+    installFetchMock({
+      list: {
+        diagnostics: [
+          makeDiagnostic({
+            id: 801,
+            subBrand: 'tmc',
+            classification: 'level_1',
+            classificationLabel: 'Entry Row',
+            recommendedTier: 'premium',
+            contact: { name: 'Premium Lead' },
+            createdAt: '2026-05-20T10:00:00.000Z',
+          }),
+          makeDiagnostic({
+            id: 802,
+            subBrand: 'rfu',
+            classification: 'level_2',
+            classificationLabel: 'Entry Row',
+            recommendedTier: 'entry',
+            contact: { name: 'Entry Lead' },
+            createdAt: '2026-05-21T10:00:00.000Z',
+          }),
+          makeDiagnostic({
+            id: 803,
+            subBrand: 'visasure',
+            classification: 'level_3',
+            classificationLabel: 'Primary Row',
+            recommendedTier: 'primary',
+            contact: { name: 'Primary Lead' },
+            createdAt: '2026-05-22T10:00:00.000Z',
+          }),
+        ],
+      },
+    });
+
+    renderPage();
+    await screen.findByText('Premium Lead');
+
+    fireEvent.click(screen.getByRole('button', { name: /Sort Tier default/i }));
+
+    await waitFor(() => {
+      const rows = screen.getByRole('table', { name: /Diagnostics results/i }).querySelectorAll('tbody tr');
+      expect(rows[0]).toHaveTextContent('Entry Lead');
+      expect(rows[1]).toHaveTextContent('Primary Lead');
+      expect(rows[2]).toHaveTextContent('Premium Lead');
+    });
+  });
+
   it('renders empty-state copy when diagnostics=[] (SUT lines 138-140)', async () => {
     installFetchMock({ list: { diagnostics: [] } });
     renderPage(REGULAR_USER);
@@ -377,6 +461,44 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     renderPage();
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Failed to load diagnostics');
+    });
+  });
+
+  it('renders table columns in the order Submitted → Contact → Sub-brand → Classification → Tier → Score', async () => {
+    renderPage();
+    await screen.findByText('tmc');
+
+    const headerCells = screen.getAllByRole('columnheader');
+    // Skip the optional checkbox column (first when admin).
+    const labels = headerCells.map((th) => th.textContent.trim());
+    const dataLabels = labels.filter((label) => label !== '');
+    expect(dataLabels).toEqual([
+      'Submitted',
+      'Contact',
+      'Sub-brand',
+      'Classification',
+      'Tier',
+      'Score',
+    ]);
+  });
+
+  it('notifies when new diagnostic submissions appear after a refresh', async () => {
+    installFetchMock({ list: { diagnostics: [DIAGNOSTICS_DEFAULT[0]], total: 1 } });
+    renderPage();
+    await screen.findByText('tmc');
+
+    fetchApiMock.mockClear();
+    installFetchMock({
+      list: {
+        diagnostics: [DIAGNOSTICS_DEFAULT[0], makeDiagnostic({ id: 999, subBrand: 'rfu' })],
+        total: 2,
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Reload list/i }));
+
+    await waitFor(() => {
+      expect(notifyInfo).toHaveBeenCalledWith('1 new diagnostic submission');
     });
   });
 });
@@ -413,7 +535,7 @@ describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', (
     });
   });
 
-  it('clicking Refresh re-fetches with the current filter values', async () => {
+  it('clicking Reset filters re-fetches with the current filter values', async () => {
     renderPage();
     await screen.findByText('tmc');
     fetchApiMock.mockClear();
@@ -422,6 +544,79 @@ describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', (
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(([u]) =>
         typeof u === 'string' && u.startsWith('/api/travel/diagnostics'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('clicking Reset filters clears the applied filters and re-fetches', async () => {
+    renderPage();
+    await screen.findByText('tmc');
+
+    fetchApiMock.mockClear();
+    installFetchMock({ list: { diagnostics: [DIAGNOSTICS_DEFAULT[0]] } });
+
+    fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), {
+      target: { value: 'rfu' },
+    });
+    fireEvent.change(screen.getByLabelText(/Filter by classification/i), {
+      target: { value: 'level_2' },
+    });
+
+    await waitFor(() => {
+      const filteredCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('subBrand=rfu') && u.includes('classification=level_2'),
+      );
+      expect(filteredCall).toBeTruthy();
+    });
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Reset filters/i }));
+
+    await waitFor(() => {
+      const resetCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' &&
+        u.startsWith('/api/travel/diagnostics?') &&
+        !u.includes('classification=level_2') &&
+        !u.includes('subBrand=rfu'),
+      );
+      expect(resetCall).toBeTruthy();
+    });
+  });
+
+  it('clicking Reset filters resets the active sort back to default', async () => {
+    renderPage();
+    await screen.findByText('tmc');
+    const pager = await screen.findByTestId('diagnostics-pager');
+    const pageSizeTrigger = within(pager).getByRole('button', { name: /Per page:/i });
+    fireEvent.click(pageSizeTrigger);
+    fireEvent.click(within(pager).getByRole('menuitem', { name: '10' }));
+    fireEvent.click(screen.getByRole('button', { name: /Reset filters/i }));
+    await waitFor(() => {
+      expect(within(screen.getByTestId('diagnostics-pager')).getByRole('button', { name: /Per page:/i })).toHaveTextContent('20');
+    });
+  });
+
+  it('setting a date range through the calendar re-fetches with date query params', async () => {
+    renderPage();
+    await screen.findByText('tmc');
+    fetchApiMock.mockClear();
+    installFetchMock();
+
+    fireEvent.click(screen.getByRole('button', { name: /All time/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /Select date range/i })).toBeInTheDocument();
+    });
+
+    const dayButtons = screen.getAllByRole('button', { name: /^\d+$/ });
+    expect(dayButtons.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(dayButtons[10]);
+    fireEvent.click(dayButtons[15]);
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('fromDate=') && u.includes('toDate='),
       );
       expect(call).toBeTruthy();
     });
@@ -447,7 +642,8 @@ describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', (
 describe('<Diagnostics /> — admin bulk delete', () => {
   it('renders selection controls for ADMIN users', async () => {
     renderPage();
-    expect(await screen.findByLabelText(/Select all visible diagnostics/i)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /Select diagnostics/i }));
+    expect(await screen.findByRole('button', { name: /Select all visible/i })).toBeInTheDocument();
   });
 
   it('hides selection controls for non-admin users', async () => {
@@ -464,6 +660,7 @@ describe('<Diagnostics /> — admin bulk delete', () => {
     renderPage();
     await screen.findByText('tmc');
 
+    fireEvent.click(screen.getByRole('button', { name: /Select diagnostics/i }));
     fireEvent.click(screen.getByLabelText(/Select diagnostic #701/i));
     fireEvent.click(screen.getByLabelText(/Select diagnostic #702/i));
     fireEvent.click(screen.getByRole('button', { name: /Delete selected diagnostics/i }));
@@ -622,6 +819,26 @@ describe('<Diagnostics /> — row rendering (badges + scores + classification fa
     renderPage();
     const row = (await screen.findByText('rfu')).closest('tr');
     expect(within(row).getByText('noname@x.com')).toBeInTheDocument();
+  });
+
+  it('contact column links to /contacts/<contactId> when contactId is present', async () => {
+    installFetchMock({
+      list: {
+        diagnostics: [
+          makeDiagnostic({
+            id: 713,
+            subBrand: 'tmc',
+            contactId: 5003,
+            contact: { id: 5003, name: 'Ravi Kumar', email: 'ravi@x.com', phone: null },
+          }),
+        ],
+      },
+    });
+    renderPage();
+    const link = await screen.findByRole('link', { name: /Open contact #5003/i });
+    expect(link.getAttribute('href')).toBe('/contacts/5003');
+    expect(within(link).getByText('Ravi Kumar')).toBeInTheDocument();
+    expect(within(link).getByText('ravi@x.com')).toBeInTheDocument();
   });
 });
 

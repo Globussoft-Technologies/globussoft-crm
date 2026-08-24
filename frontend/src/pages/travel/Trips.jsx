@@ -8,7 +8,7 @@
 // No creation flow here — trips spawn from the linked Deal in the sales
 // pipeline (Day 7+ Deal-extension lands later).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   Luggage,
@@ -19,11 +19,16 @@ import {
   X,
   Trash2,
   Search,
+  ChevronDown,
+  ChevronUp,
+  ArrowUpDown,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 import TripPager from "./TripPager";
+import SearchHighlight from "../../components/ui/SearchHighlight";
 
 // School is captured as free-text so the operator doesn't have to pre-create
 // a Contact row for every new school. The backend POST /api/travel/trips
@@ -80,9 +85,30 @@ const DEFAULT_PAGE_SIZE = 20;
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 const MAX_PAGE_SIZE = 200;
 const TRIPS_TABLE_MIN_WIDTH = 1640;
+const TRIPS_LAST_LIST_URL_KEY = "travel.trips.lastListUrl";
+const TRIP_SORT_KEYS = new Set([
+  "tripCode", "destination", "dates", "school",
+  "participants", "perStudent", "status",
+]);
 
 function readPageParam(params) {
   return Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
+}
+
+function readPageSizeParam(params) {
+  const value = parseInt(params.get("pageSize") || String(DEFAULT_PAGE_SIZE), 10);
+  return Math.min(MAX_PAGE_SIZE, Math.max(1, value || DEFAULT_PAGE_SIZE));
+}
+
+function tripSortValue(trip, key) {
+  if (key === "tripCode") return String(trip.tripCode || "").toLowerCase();
+  if (key === "destination") return String(trip.destination || "").toLowerCase();
+  if (key === "dates") return new Date(trip.departDate || 0).getTime();
+  if (key === "school") return String(trip.schoolName || "").toLowerCase();
+  if (key === "participants") return Number(trip._count?.participants || 0);
+  if (key === "perStudent") return Number(trip.pricePerStudent || 0);
+  if (key === "status") return String(trip.status || "").toLowerCase();
+  return "";
 }
 
 export default function Trips() {
@@ -95,10 +121,18 @@ export default function Trips() {
   const [status, setStatus] = useState(searchParams.get("status") || "");
   const [search, setSearch] = useState(searchParams.get("search") || "");
   const [total, setTotal] = useState(0);
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [pageSize, setPageSize] = useState(() => readPageSizeParam(searchParams));
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
   const [customPageSize, setCustomPageSize] = useState("");
   const [reloadTick, setReloadTick] = useState(0);
+  const [sortKey, setSortKey] = useState(() => {
+    const value = searchParams.get("sortKey");
+    return TRIP_SORT_KEYS.has(value) ? value : null;
+  });
+  const [sortDirection, setSortDirection] = useState(() => {
+    const value = searchParams.get("sortDirection");
+    return value === "asc" || value === "desc" ? value : null;
+  });
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -130,13 +164,39 @@ export default function Trips() {
   useEffect(() => {
     const nextStatus = searchParams.get("status") || "";
     const nextSearch = searchParams.get("search") || "";
+    const nextPageSize = readPageSizeParam(searchParams);
+    const nextSortKey = searchParams.get("sortKey");
+    const nextSortDirection = searchParams.get("sortDirection");
     setStatus((current) => (current === nextStatus ? current : nextStatus));
     setSearch((current) => (current === nextSearch ? current : nextSearch));
+    setPageSize((current) => (current === nextPageSize ? current : nextPageSize));
+    setSortKey((current) => (
+      current === (TRIP_SORT_KEYS.has(nextSortKey) ? nextSortKey : null)
+        ? current
+        : (TRIP_SORT_KEYS.has(nextSortKey) ? nextSortKey : null)
+    ));
+    setSortDirection((current) => {
+      const next = nextSortDirection === "asc" || nextSortDirection === "desc"
+        ? nextSortDirection
+        : null;
+      return current === next ? current : next;
+    });
   }, [searchParams]);
 
   const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
   const safePage = Math.min(page, pageCount);
   const hasActiveFilters = Boolean(status || search.trim());
+  const sortedTrips = useMemo(() => {
+    if (!sortKey || !sortDirection) return trips;
+    const direction = sortDirection === "asc" ? 1 : -1;
+    return [...trips].sort((left, right) => {
+      const a = tripSortValue(left, sortKey);
+      const b = tripSortValue(right, sortKey);
+      if (a < b) return -1 * direction;
+      if (a > b) return 1 * direction;
+      return 0;
+    });
+  }, [sortDirection, sortKey, trips]);
 
   const openCreate = () => {
     setForm(EMPTY_FORM);
@@ -256,10 +316,80 @@ export default function Trips() {
   const setPageSizeAndReset = useCallback(
     (nextPageSize) => {
       setPageSize(nextPageSize);
-      updateParams({ page: 1 });
+      updateParams({ page: 1, pageSize: nextPageSize });
     },
     [updateParams],
   );
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/trips") return;
+    try {
+      window.sessionStorage.setItem(
+        TRIPS_LAST_LIST_URL_KEY,
+        `${location.pathname}${location.search}`,
+      );
+    } catch {
+      // The URL still preserves the active list state if storage is unavailable.
+    }
+  }, [location.pathname, location.search]);
+
+  const resetFilters = useCallback(() => {
+    setStatus("");
+    setSearch("");
+    setPageSize(DEFAULT_PAGE_SIZE);
+    setIsCustomPageSize(false);
+    setCustomPageSize("");
+    setSortKey(null);
+    setSortDirection(null);
+    updateParams({
+      status: null,
+      search: null,
+      sortKey: null,
+      sortDirection: null,
+      pageSize: null,
+      page: 1,
+    });
+    setReloadTick((tick) => tick + 1);
+  }, [updateParams]);
+
+  const toggleSort = useCallback((key) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDirection("asc");
+      updateParams({ sortKey: key, sortDirection: "asc", page: 1 });
+    } else if (sortDirection === "asc") {
+      setSortDirection("desc");
+      updateParams({ sortKey: key, sortDirection: "desc", page: 1 });
+    } else {
+      setSortKey(null);
+      setSortDirection(null);
+      updateParams({ sortKey: null, sortDirection: null, page: 1 });
+    }
+  }, [sortDirection, sortKey, updateParams]);
+
+  const sortButton = (key, label) => {
+    const active = sortKey === key;
+    const Icon = active && sortDirection === "asc"
+      ? ChevronUp
+      : active && sortDirection === "desc"
+        ? ChevronDown
+        : ArrowUpDown;
+    return (
+      <button
+        type="button"
+        onClick={() => toggleSort(key)}
+        aria-label={`Sort ${label} ${active ? sortDirection : "default"}`}
+        style={{
+          ...sortButtonStyle,
+          background: active ? "var(--subtle-bg-3, var(--subtle-bg))" : "transparent",
+          borderRadius: 6,
+          padding: "4px 6px",
+        }}
+      >
+        <span>{label}</span><Icon size={14} aria-hidden />
+      </button>
+    );
+  };
 
   // Track which trip is currently being deleted so we can disable its
   // row's trash button (prevents double-click race) without disabling
@@ -336,6 +466,7 @@ export default function Trips() {
             }}
           >
             <Luggage size={28} aria-hidden /> TMC Trips
+            <CountBadge count={total} title={`${total.toLocaleString()} trips`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
             School educational trips. Operational view per trip — participants,
@@ -408,6 +539,9 @@ export default function Trips() {
             </option>
           ))}
         </select>
+        <button type="button" onClick={resetFilters} style={refreshBtn} aria-label="Reset filters">
+          Reset filters
+        </button>
         <button
           type="button"
           onClick={() => load({ reset: true })}
@@ -458,15 +592,15 @@ export default function Trips() {
                 </colgroup>
                 <thead>
                   <tr>
-                    <th style={th}>Trip code</th>
-                    <th style={th}>Destination</th>
+                    <th style={th}>{sortButton("tripCode", "Trip code")}</th>
+                    <th style={th}>{sortButton("destination", "Destination")}</th>
                     <th style={th}>Brand</th>
                     <th style={th}>Sub-brand</th>
-                    <th style={th}>Dates</th>
-                    <th style={th}>School</th>
-                    <th style={th}>Participants</th>
-                    <th style={th}>Per-student</th>
-                    <th style={th}>Status</th>
+                    <th style={th}>{sortButton("dates", "Dates")}</th>
+                    <th style={th}>{sortButton("school", "School")}</th>
+                    <th style={th}>{sortButton("participants", "Participants")}</th>
+                    <th style={th}>{sortButton("perStudent", "Per-student")}</th>
+                    <th style={th}>{sortButton("status", "Status")}</th>
                     <th
                       style={{ ...th, width: 60, textAlign: "right" }}
                       aria-label="Actions"
@@ -474,7 +608,7 @@ export default function Trips() {
                   </tr>
                 </thead>
                 <tbody>
-                  {trips.map((t) => {
+                  {sortedTrips.map((t) => {
                     const sc = STATUS_COLORS[t.status] || {
                       bg: "var(--subtle-bg)",
                       color: "var(--text-secondary)",
@@ -499,15 +633,17 @@ export default function Trips() {
                               fontWeight: 600,
                             }}
                           >
-                            {t.tripCode}
+                            <SearchHighlight text={t.tripCode} query={search} />
                           </Link>
                         </td>
-                        <td style={{ ...td, minWidth: 0 }}>{t.destination}</td>
+                        <td style={{ ...td, minWidth: 0 }}>
+                          <SearchHighlight text={t.destination} query={search} />
+                        </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
                           <span style={brandBadge}>{BRAND_LABEL}</span>
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
-                          {SUB_BRAND_LABEL}
+                          <SearchHighlight text={SUB_BRAND_LABEL} query={search} />
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
                           <span
@@ -522,10 +658,15 @@ export default function Trips() {
                           </span>
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
-                          {t.schoolName ||
-                            (t.schoolContactId
-                              ? `School #${t.schoolContactId}`
-                              : "?")}
+                          <SearchHighlight
+                            text={
+                              t.schoolName ||
+                              (t.schoolContactId
+                                ? `School #${t.schoolContactId}`
+                                : "?")
+                            }
+                            query={search}
+                          />
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
                           <span
@@ -617,7 +758,7 @@ export default function Trips() {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.75)",
+            background: "var(--catalogue-modal-backdrop)",
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
             display: "flex",
@@ -806,6 +947,22 @@ const refreshBtn = {
   color: "var(--text-primary)",
   fontSize: 13,
   cursor: "pointer",
+};
+const sortButtonStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 6,
+  width: "100%",
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: "inherit",
+  font: "inherit",
+  textTransform: "inherit",
+  letterSpacing: "inherit",
+  cursor: "pointer",
+  textAlign: "left",
 };
 const primaryBtn = {
   display: "inline-flex",

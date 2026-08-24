@@ -25,11 +25,12 @@
 //   - Prompt referenced pagination; this page keeps the backend offset+limit
 //     contract and drives page-based requests from the footer pager.
 
-import React, { useState, useEffect, useCallback, useContext, useRef } from 'react';
-import { Link } from 'react-router-dom';
-import { Download, Edit2, Filter, MapPin, Plus, Trash2, Upload, X } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useContext, useRef, useMemo } from 'react';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { Download, Edit2, Filter, MapPin, Plus, Trash2, Upload, X, ChevronDown, ChevronUp, ArrowUpDown } from 'lucide-react';
 import { fetchApi, getActiveTenantId, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import CountBadge from '../../components/CountBadge';
 import { AuthContext } from '../../App';
 import PatientPager from '../wellness/patients/PatientPager';
 import { useActiveSubBrand } from '../../utils/subBrand';
@@ -52,6 +53,8 @@ const CATEGORIES = [
 ];
 
 const PAGE_SIZE = 20;
+const SIGHTSEEING_LAST_LIST_URL_KEY = 'travel.sightseeing.lastListUrl';
+const SIGHTSEEING_SORT_KEYS = new Set(['destinationName', 'name', 'category', 'durationMinutes', 'priceReferenceMinor', 'subBrand']);
 
 const EMPTY_FORM = {
   destinationName: '',
@@ -84,6 +87,8 @@ function displayAmountToMinor(value) {
 
 export default function SightseeingMaster() {
   const notify = useNotify();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
 
@@ -96,17 +101,28 @@ export default function SightseeingMaster() {
 
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
+  const [pageSize, setPageSize] = useState(Number(searchParams.get('pageSize')) || PAGE_SIZE);
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
   const [customPageSize, setCustomPageSize] = useState('');
   const [reloadTick, setReloadTick] = useState(0);
   const [loading, setLoading] = useState(true);
 
   // Filter state
-  const [destinationFilter, setDestinationFilter] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [activeOnly, setActiveOnly] = useState(true);
+  const [destinationFilter, setDestinationFilter] = useState(searchParams.get('destination') || '');
+  const [categoryFilter, setCategoryFilter] = useState(searchParams.get('category') || '');
+  const [activeOnly, setActiveOnly] = useState(searchParams.get('active') !== 'false');
+  const [sortKey, setSortKey] = useState(searchParams.get('sortKey') || null);
+  const [sortDirection, setSortDirection] = useState(searchParams.get('sortDirection') || null);
+
+  const updateParams = (patch) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value === null || value === undefined || value === '' || value === false) next.delete(key);
+      else next.set(key, String(value));
+    });
+    setSearchParams(next, { replace: true });
+  };
 
   // Form state
   const [showForm, setShowForm] = useState(false);
@@ -168,6 +184,31 @@ export default function SightseeingMaster() {
   useEffect(() => {
     fetchItems(page, pageSize);
   }, [fetchItems, page, pageSize, reloadTick]);
+
+  useEffect(() => {
+    if (location.pathname !== '/travel/sightseeing') return;
+    try { window.sessionStorage.setItem(SIGHTSEEING_LAST_LIST_URL_KEY, `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
+
+  const sortedItems = useMemo(() => {
+    if (!sortKey || !sortDirection) return items;
+    return [...items].sort((a, b) => {
+      const left = ['durationMinutes', 'priceReferenceMinor'].includes(sortKey) ? Number(a[sortKey] || 0) : String(a[sortKey] || '').toLowerCase();
+      const right = ['durationMinutes', 'priceReferenceMinor'].includes(sortKey) ? Number(b[sortKey] || 0) : String(b[sortKey] || '').toLowerCase();
+      return (left > right ? 1 : left < right ? -1 : 0) * (sortDirection === 'desc' ? -1 : 1);
+    });
+  }, [items, sortDirection, sortKey]);
+
+  const resetFilters = () => {
+    setDestinationFilter(''); setCategoryFilter(''); setActiveOnly(true); setPage(1); setPageSize(PAGE_SIZE); setSortKey(null); setSortDirection(null);
+    updateParams({ destination: null, category: null, active: null, page: 1, pageSize: null, sortKey: null, sortDirection: null });
+  };
+
+  const sortButton = (key, label) => {
+    const active = sortKey === key;
+    const Icon = active && sortDirection === 'asc' ? ChevronUp : active && sortDirection === 'desc' ? ChevronDown : ArrowUpDown;
+    return <button type="button" onClick={() => { const next = !active ? 'asc' : sortDirection === 'asc' ? 'desc' : null; setSortKey(next ? key : null); setSortDirection(next); updateParams({ sortKey: next ? key : null, sortDirection: next }); }} aria-label={`Sort ${label}`} style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}><span>{label}</span><Icon size={14} /></button>;
+  };
 
   const reloadFirstPage = useCallback(() => {
     setPage(1);
@@ -392,8 +433,9 @@ export default function SightseeingMaster() {
         }}
       >
         <div>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
+          <h1 style={{ display: 'flex', alignItems: 'center', gap: 12, margin: 0, fontSize: '1.75rem', fontWeight: 600, lineHeight: 1.15, flexWrap: 'wrap' }}>
             <MapPin size={28} aria-hidden /> Sightseeing Master
+            <CountBadge count={total} title={`${total.toLocaleString()} sightseeing entries`} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
             Destination → POI catalog with description, image, duration, indicative price.{' '}
@@ -417,7 +459,7 @@ export default function SightseeingMaster() {
             disabled={importing}
             title="Bulk-import sightseeing rows from CSV or Excel using the shared template."
           >
-            <Upload size={14} /> {importing ? 'Importing...' : 'Import CSV/Excel'}
+            <Download size={14} /> {importing ? 'Importing...' : 'Import CSV/Excel'}
           </button>
           <input
             ref={importInputRef}
@@ -484,6 +526,7 @@ export default function SightseeingMaster() {
             onChange={(e) => {
               setDestinationFilter(e.target.value);
               setPage(1);
+              updateParams({ destination: e.target.value, page: 1 });
             }}
             placeholder="Filter by destination"
             aria-label="Destination filter"
@@ -495,6 +538,7 @@ export default function SightseeingMaster() {
           onChange={(e) => {
             setCategoryFilter(e.target.value);
             setPage(1);
+            updateParams({ category: e.target.value, page: 1 });
           }}
           aria-label="Category filter"
           style={selectStyle}
@@ -514,11 +558,16 @@ export default function SightseeingMaster() {
             onChange={(e) => {
               setActiveOnly(e.target.checked);
               setPage(1);
+              updateParams({ active: e.target.checked ? null : 'false', page: 1 });
             }}
             aria-label="Active only"
           />
           Active only
         </label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => setReloadTick((t) => t + 1)} style={secondaryBtn}>Refresh</button>
+          <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
+        </div>
       </div>
 
       {/* Add / edit form */}
@@ -819,19 +868,19 @@ export default function SightseeingMaster() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={th}>Destination</th>
-                <th style={th}>POI name</th>
-                <th style={th}>Category</th>
-                <th style={th}>Duration</th>
-                <th style={th}>Price ref.</th>
+                <th style={th}>{sortButton('destinationName', 'Destination')}</th>
+                <th style={th}>{sortButton('name', 'POI name')}</th>
+                <th style={th}>{sortButton('category', 'Category')}</th>
+                <th style={th}>{sortButton('durationMinutes', 'Duration')}</th>
+                <th style={th}>{sortButton('priceReferenceMinor', 'Price ref.')}</th>
                 <th style={th}>Map</th>
-                <th style={th}>Sub-brand</th>
+                <th style={th}>{sortButton('subBrand', 'Sub-brand')}</th>
                 <th style={th}>Active</th>
                 <th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
+              {sortedItems.map((item) => (
                 <tr
                   key={item.id}
                   style={{
@@ -902,10 +951,11 @@ export default function SightseeingMaster() {
           total={total}
           page={page}
           pageSize={pageSize}
-          onPageChange={setPage}
+          onPageChange={(nextPage) => { setPage(nextPage); updateParams({ page: nextPage }); }}
           onPageSizeChange={(nextSize) => {
             setPageSize(nextSize);
             setPage(1);
+            updateParams({ pageSize: nextSize, page: 1 });
           }}
           isCustomPageSize={isCustomPageSize}
           setIsCustomPageSize={setIsCustomPageSize}
@@ -968,6 +1018,8 @@ const th = {
   zIndex: 2,
   boxShadow: '0 1px 0 var(--border-color)',
 };
+const sortButtonStyle = { display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, width: '100%', padding: '4px 8px', border: 'none', borderRadius: 999, background: 'transparent', color: 'inherit', font: 'inherit', textTransform: 'inherit', letterSpacing: 'inherit', cursor: 'pointer', textAlign: 'left', transition: 'background-color 0.15s ease, color 0.15s ease' };
+const sortButtonActiveStyle = { color: 'var(--primary-color)' };
 const td = { padding: '10px 12px', fontSize: 14, color: 'var(--text-primary)' };
 const brandBadge = {
   padding: '2px 8px',

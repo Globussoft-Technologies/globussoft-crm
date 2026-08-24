@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Outlet, useNavigate, NavLink } from "react-router-dom";
-import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, TrendingUp } from "lucide-react";
+import { Outlet, useNavigate, NavLink, useLocation } from "react-router-dom";
+import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, TrendingUp, Key } from "lucide-react";
 import {
   getSuperAdminToken,
   getSuperAdminUsername,
@@ -15,6 +15,7 @@ const MODULES = [
   { path: "/super-admin/cron-analytics", label: "Cron Analytics", icon: BarChart3 },
   { path: "/super-admin/api-analytics", label: "API Analytics", icon: Activity },
   { path: "/super-admin/ai-management", label: "AI Management", icon: Bot },
+  { path: "/super-admin/ai-management/api-keys", label: "API Key Management", icon: Key },
   { path: "/super-admin/ai-management/plans", label: "AI Subscription Plans", icon: CreditCard },
   { path: "/super-admin/tenant-management", label: "Tenant Management", icon: Building2 },
   { path: "/super-admin/revenue", label: "Revenue Analytics", icon: TrendingUp },
@@ -26,8 +27,16 @@ function getThemeIcon(theme) {
   return Monitor;
 }
 
+function isModuleActive(pathname, modulePath) {
+  if (modulePath === "/super-admin/ai-management") {
+    return pathname === modulePath || /^\/super-admin\/ai-management\/\d+$/.test(pathname);
+  }
+  return pathname === modulePath;
+}
+
 export default function SuperAdminLayout() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [theme, setTheme] = useState(() => {
     const stored = localStorage.getItem("theme");
     if (stored) return stored;
@@ -96,26 +105,30 @@ export default function SuperAdminLayout() {
         </div>
 
         <nav style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
-          {MODULES.map((m) => (
-            <NavLink
-              key={m.path}
-              to={m.path}
-              style={({ isActive }) => ({
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "0.55rem 0.6rem",
-                borderRadius: 8,
-                fontSize: "0.85rem",
-                textDecoration: "none",
-                color: isActive ? "var(--accent-color, #3b82f6)" : "var(--text-primary, #fff)",
-                background: isActive ? "rgba(59,130,246,0.12)" : "transparent",
-              })}
-            >
-              <m.icon size={16} />
-              {m.label}
-            </NavLink>
-          ))}
+          {MODULES.map((m) => {
+            const active = isModuleActive(location.pathname, m.path);
+            return (
+              <NavLink
+                key={m.path}
+                to={m.path}
+                aria-current={active ? "page" : undefined}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "0.55rem 0.6rem",
+                  borderRadius: 8,
+                  fontSize: "0.85rem",
+                  textDecoration: "none",
+                  color: active ? "var(--accent-color, #3b82f6)" : "var(--text-primary, #fff)",
+                  background: active ? "rgba(59,130,246,0.12)" : "transparent",
+                }}
+              >
+                <m.icon size={16} />
+                {m.label}
+              </NavLink>
+            );
+          })}
         </nav>
 
         <div style={{ borderTop: "1px solid var(--border-color, rgba(255,255,255,0.08))", paddingTop: "0.75rem", marginTop: "0.75rem" }}>

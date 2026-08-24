@@ -273,6 +273,7 @@ describe('<CancellationPolicies /> — page chrome + filter bar', () => {
     expect(
       await screen.findByRole('heading', { name: /Cancellation Policies/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/policies/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(
       screen.getByLabelText(/Filter by active status/i),

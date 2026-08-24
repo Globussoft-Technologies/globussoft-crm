@@ -12,7 +12,7 @@ import {
   Tag as TagIcon,
   Filter,
   Trash2,
-  Download,
+  Upload,
   UserPlus,
   Tags as BulkTagIcon,
 } from "lucide-react";
@@ -754,7 +754,7 @@ export default function Patients() {
               aria-haspopup="menu"
               aria-expanded={bulkExportMenuOpen}
             >
-              <Download size={14} /> Export Selected <ChevronDown size={12} />
+              <Upload size={14} /> Export Selected <ChevronDown size={12} />
             </button>
             {bulkExportMenuOpen && (
               <div role="menu" style={dropdownMenuStyle}>

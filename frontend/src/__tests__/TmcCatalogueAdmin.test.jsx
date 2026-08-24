@@ -69,6 +69,7 @@ import TmcCatalogueAdmin from '../pages/travel/TmcCatalogueAdmin';
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'admin@x.com', role: 'ADMIN' };
 const MANAGER_USER = { userId: 2, name: 'Mgr', email: 'mgr@x.com', role: 'MANAGER' };
 const REGULAR_USER = { userId: 3, name: 'User', email: 'user@x.com', role: 'USER' };
+const OWNER_USER = { userId: 4, name: 'Owner', email: 'owner@x.com', role: 'OWNER' };
 
 function makeRow(overrides = {}) {
   return {
@@ -204,6 +205,7 @@ describe('<TmcCatalogueAdmin /> — page chrome + initial load', () => {
     expect(
       screen.getByRole('heading', { name: /TMC Trip Catalogue/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/catalogue items/i)).toBeInTheDocument();
 
     expect(await screen.findByText('Golden Triangle Heritage Trail')).toBeInTheDocument();
     expect(screen.getByText('Madhya Pradesh Wildlife Trail')).toBeInTheDocument();
@@ -355,6 +357,15 @@ describe('<TmcCatalogueAdmin /> — promote-to-active visibility', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Promote Europe Heritage Loop to active/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('Promote-to-active button visible on archived rows for OWNER', async () => {
+    renderPage(OWNER_USER);
+    await screen.findByText('Golden Triangle Heritage Trail');
+    fireEvent.click(screen.getByRole('tab', { name: /Archived/i }));
+    expect(
+      await screen.findByRole('button', { name: /Promote USA STEM Immersion to active/i }),
     ).toBeInTheDocument();
   });
 
@@ -621,6 +632,32 @@ describe('<TmcCatalogueAdmin /> — theme + role gating', () => {
     expect(
       screen.queryByRole('button', { name: /Promote USA STEM Immersion to active/i }),
     ).toBeNull();
+  });
+
+  it('OWNER sees admin catalogue controls that manage the recommendation set', async () => {
+    renderPage(OWNER_USER);
+    await screen.findByText('Golden Triangle Heritage Trail');
+
+    expect(
+      screen.getByRole('button', { name: /Add catalogue entry/i }),
+    ).toBeInTheDocument();
+    // TMC configuration panel is deliberately commented out in the SUT per
+    // UI cleanup request (see TmcCatalogueAdmin.jsx ~line 657) — no longer
+    // rendered for any role, so this assertion doesn't apply.
+    expect(screen.getByTestId('tmc-catalogue-bulk-import')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Download CSV template/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Download XLSX template/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Import file/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Edit Golden Triangle Heritage Trail/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Archive Golden Triangle Heritage Trail/i }),
+    ).toBeInTheDocument();
   });
 });
 

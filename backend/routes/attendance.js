@@ -51,10 +51,31 @@ const { evaluatePunchGeofence } = require("../lib/attendanceGeofence");
 
 const router = express.Router();
 
-// Resolve the punching user's tenant vertical + assigned clinics in one
-// round trip. Returns { vertical, assignedLocations } — assignedLocations
-// is [] for non-wellness tenants (never queried) or wellness users with no
-// UserLocation rows (evaluatePunchGeofence treats [] as "not enforced").
+// Resolve the punching user's tenant vertical + effective geofence set in
+// one round trip. Returns { vertical, assignedLocations } — the name is a
+// holdover from before standalone zones existed; the array can now hold a
+// mix of clinic Locations AND GeofenceZones (both normalized to the same
+// {id, name, latitude, longitude, geofenceRadiusM} shape), because
+// evaluatePunchGeofence/checkWithinAnyRadius only ever cares about that
+// shape, not which table a point came from.
+//
+// Resolution order (product decision — see GeofenceZone's schema comment
+// in prisma/schema.prisma for the full rationale):
+//   1. SPECIFIC assignments — this user's UserLocation rows (clinics) UNION
+//      their UserGeofenceZone rows (standalone zones). If either exists,
+//      the punch is enforced against ANY ONE of them, exactly like today's
+//      multi-clinic behaviour. Nothing here changed for a user who only
+//      ever had clinic assignments.
+//   2. GLOBAL fallback — only reached when #1 is completely empty. The
+//      tenant's one GeofenceZone with isGlobal=true, if any is set.
+//      Assigning a specific clinic or zone to this user later makes them
+//      skip this branch on their very next punch — "the latest specific
+//      assignment overrides the global one" needs no extra code, it's just
+//      #1 no longer being empty.
+//   3. Unenforced — no specific assignment AND no global zone. Same
+//      fail-open behaviour this function has always had.
+//
+// [] = not enforced, same contract evaluatePunchGeofence has always had.
 async function resolveGeofenceContext(tenantId, userId) {
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
   const vertical = tenant ? tenant.vertical : null;
@@ -62,13 +83,52 @@ async function resolveGeofenceContext(tenantId, userId) {
 
   // userId is always req.user.userId (the caller's own JWT-derived id, never
   // attacker-supplied) so this can't leak another user's assignments — the
-  // location.tenantId filter is defense-in-depth against a UserLocation row
-  // ever pointing at a Location outside the caller's own tenant.
-  const rows = await prisma.userLocation.findMany({
-    where: { userId, location: { tenantId } },
-    select: { location: { select: { id: true, name: true, latitude: true, longitude: true, geofenceRadiusM: true } } },
+  // tenantId filter on both queries is defense-in-depth against a join row
+  // ever pointing at a Location/Zone outside the caller's own tenant.
+  const [locationRows, zoneRows] = await Promise.all([
+    prisma.userLocation.findMany({
+      where: { userId, location: { tenantId } },
+      select: { location: { select: { id: true, name: true, latitude: true, longitude: true, geofenceRadiusM: true } } },
+    }),
+    prisma.userGeofenceZone.findMany({
+      where: { userId, zone: { tenantId, isActive: true } },
+      select: { zone: { select: { id: true, name: true, latitude: true, longitude: true, radiusM: true } } },
+    }),
+  ]);
+
+  const specific = [
+    ...locationRows.map((r) => r.location),
+    // Zone ids and Location ids are separate autoincrement sequences, so a
+    // zone id CAN collide with a location id here. That's harmless today —
+    // nothing downstream reads evaluatePunchGeofence's matchedLocationId —
+    // but if a future caller starts persisting it, disambiguate by source
+    // (e.g. a "zone:" id prefix) before trusting it as a Location FK.
+    ...zoneRows.map((r) => ({
+      id: r.zone.id,
+      name: r.zone.name,
+      latitude: r.zone.latitude,
+      longitude: r.zone.longitude,
+      geofenceRadiusM: r.zone.radiusM,
+    })),
+  ];
+  if (specific.length > 0) return { vertical, assignedLocations: specific };
+
+  const globalZone = await prisma.geofenceZone.findFirst({
+    where: { tenantId, isGlobal: true, isActive: true },
+    select: { id: true, name: true, latitude: true, longitude: true, radiusM: true },
   });
-  return { vertical, assignedLocations: rows.map((r) => r.location) };
+  if (!globalZone) return { vertical, assignedLocations: [] };
+
+  return {
+    vertical,
+    assignedLocations: [{
+      id: globalZone.id,
+      name: globalZone.name,
+      latitude: globalZone.latitude,
+      longitude: globalZone.longitude,
+      geofenceRadiusM: globalZone.radiusM,
+    }],
+  };
 }
 
 function summarizeGeofenceAssignment(vertical, assignedLocations) {

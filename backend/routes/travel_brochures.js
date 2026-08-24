@@ -39,6 +39,57 @@ const prisma = require("../lib/prisma");
 const brochureEngine = require("../services/brochureEngineBridge");
 const { sanitizeBrandKit } = require("../lib/brochureBrandKit");
 const brochureS3Store = require("../lib/brochureS3Store");
+const aiProviderManagement = require("../lib/aiProviderManagement");
+const { buildEngineEnv } = require("../lib/brochureEngineProviderEnv");
+
+/**
+ * Merge a saved BrandKit (from /api/brand-kits) into the brand form coming from the
+ * brochure UI. Kit values form the base layer; explicit UI edits in `bodyBrand`
+ * override them so the user can still tweak the loaded identity. Only kit-shaped
+ * fields are merged — placement, cover logos, interior band and QR remain fully
+ * custom. Returns { mergedBrand, existingBrandKitId }.
+ */
+async function mergeExistingBrandKit(bodyBrand, existingBrandKitId, tenantId) {
+  const id = Number(existingBrandKitId);
+  if (!Number.isFinite(id) || id <= 0) return { mergedBrand: bodyBrand, existingBrandKitId: null };
+
+  const kit = await prisma.brandKit.findFirst({
+    where: { id, tenantId },
+  });
+  if (!kit) return { mergedBrand: bodyBrand, existingBrandKitId: null };
+
+  const base = {};
+  const logo = kit.logoUrl || kit.logoDarkUrl || "";
+  if (logo) base.logoUrl = logo;
+  if (kit.tagline) base.tagline = kit.tagline;
+  const colorSource = kit.accentColor || kit.primaryColor || "";
+  if (colorSource && /^#[0-9a-fA-F]{6}$/.test(colorSource.trim())) {
+    base.colors = { accent: colorSource.trim() };
+  }
+  const contact = [];
+  if (kit.supportPhone) contact.push(kit.supportPhone);
+  if (kit.supportEmail) contact.push(kit.supportEmail);
+  if (contact.length) base.contact = contact;
+
+  let socials = [];
+  try {
+    const parsed = typeof kit.socialLinksJson === "string" ? JSON.parse(kit.socialLinksJson) : kit.socialLinksJson;
+    if (Array.isArray(parsed)) {
+      socials = parsed
+        .map((s) => (s && (typeof s.network === "string" ? s.network : typeof s.name === "string" ? s.name : "")) || "")
+        .filter(Boolean);
+    }
+  } catch {
+    /* ignore malformed JSON */
+  }
+  if (socials.length) base.socials = socials;
+
+  // Kit values form the base; explicit body overrides win so placement / QR / cover
+  // logos / interior band remain under operator control.
+  const mergedBrand = { ...base, ...(bodyBrand && typeof bodyBrand === "object" ? bodyBrand : {}) };
+
+  return { mergedBrand, existingBrandKitId: id };
+}
 
 // SSE note: EventSource (the browser SSE client) intentionally rejects
 // custom request headers, so the operator UI passes the JWT on the URL as
@@ -92,8 +143,9 @@ function sendOne(res, event) {
 }
 
 // ─── POST /brochures/runs ─────────────────────────────────────────────────
-// Start ONE orchestration. Returns the runId synchronously; the operator UI
-// then opens the SSE stream to watch live trace events.
+// Start ONE orchestration. Resolves the tenant's AI provider config first and
+// injects isolated credentials into the engine subprocess, then returns the runId
+// synchronously; the operator UI then opens the SSE stream to watch live trace events.
 router.post(
   "/brochures/runs",
   verifyToken,
@@ -110,10 +162,20 @@ router.post(
         typeof req.body.styleKey === "string" && req.body.styleKey.trim()
           ? req.body.styleKey.trim()
           : undefined;
+      const existingBrandKitId =
+        typeof req.body.existingBrandKitId === "number" ? req.body.existingBrandKitId : undefined;
+      // Merge any selected existing BrandKit into the form before the trust boundary.
+      // Kit values form the base; UI edits override them so custom placement/QR stay
+      // under operator control while logo/accent/contacts/socials come from the kit.
+      const { mergedBrand, existingBrandKitId: resolvedKitId } = await mergeExistingBrandKit(
+        req.body.brand,
+        existingBrandKitId,
+        req.user.tenantId,
+      );
       // Trust boundary: the engine forwards `brand` verbatim into the render
       // subprocess, so it MUST be sanitized here (raster-only logo, length caps,
       // clamped placement). Invalid input is dropped → undefined, never rejected.
-      const brand = sanitizeBrandKit(req.body.brand);
+      const brand = sanitizeBrandKit(mergedBrand);
       // Switchable models: an optional per-tier model id map, OR a strategy
       // preset ('recommended' | 'cheapest' | 'smartest'). The engine applies
       // `models` first and falls back to `strategy`; both are validated there
@@ -140,6 +202,16 @@ router.post(
           .json({ error: "goal exceeds 8000 characters", code: "GOAL_TOO_LONG" });
       }
 
+      const providerConfig = await aiProviderManagement.resolveProviderConfig(req.travelTenant.id);
+      if (!providerConfig) {
+        const state = await aiProviderManagement.getTenantAiState(req.travelTenant.id);
+        return res.status(403).json({
+          error: state.friendlyMessage,
+          code: state.unavailableReason === "CREDITS_EXHAUSTED" ? "AI_CREDITS_EXHAUSTED" : "AI_NOT_CONFIGURED",
+        });
+      }
+      const providerEnv = buildEngineEnv(providerConfig);
+
       const runId = newRunId();
       const tenantId = req.travelTenant.id;
       const userId = req.user.userId;
@@ -159,8 +231,11 @@ router.post(
           itineraryId: itineraryId || null,
           // Snapshot the SANITIZED brand for audit / replay (column already
           // exists on the model). Stored post-sanitization so a replay can't
-          // resurrect un-hardened input.
-          brandJson: brand ? JSON.stringify(brand) : null,
+          // resurrect un-hardened input. Record which existing BrandKit (if any)
+          // seeded the identity so history is traceable.
+          brandJson: brand
+            ? JSON.stringify({ ...brand, _existingBrandKitId: resolvedKitId || undefined })
+            : null,
         },
       });
 
@@ -188,6 +263,7 @@ router.post(
           brand,
           models,
           strategy,
+          providerEnv,
           onEvent: (event) => pushEvent(runId, event),
         })
         .then(async ({ result, billedUsd, pdfUrl }) => {
@@ -413,12 +489,13 @@ router.get(
 );
 
 // ─── GET /brochures/models ────────────────────────────────────────────────
-// Model catalog for the operator UI's picker + pre-run cost estimate. Shells
-// into the engine's CATALOG mode (BROCHURE_MODE=catalog, no LLM call) and
-// returns { tiers, strategies, defaults, models:[…] }. `available` reflects
-// which providers the configured keys can actually reach. If the engine isn't
-// vendored / installed, this returns 503 with a hint rather than 500 so the UI
-// can degrade to the strategy presets without a hard error.
+// Model catalog for the operator UI's picker + pre-run cost estimate. Resolves
+// the tenant's AI provider config (BYOK or CRM-managed) first, then shells into
+// the engine's CATALOG mode with isolated provider env vars so the catalog only
+// shows models the configured key can reach. If no provider is available, degrade
+// to 503 ENGINE_UNAVAILABLE with empty arrays so the UI falls back to strategy
+// presets — this keeps the route contract stable in CI where the engine is not
+// installed and no AI keys are configured.
 router.get(
   "/brochures/models",
   verifyToken,
@@ -426,8 +503,22 @@ router.get(
   requirePermission("marketing", "read"),
   async (req, res) => {
     try {
-      const catalog = await brochureEngine.listModels();
-      return res.json(catalog);
+      const providerConfig = await aiProviderManagement.resolveProviderConfig(req.travelTenant.id);
+      if (!providerConfig) {
+        return res.status(503).json({
+          error: "Model catalog unavailable — no AI provider is configured for this tenant.",
+          code: "ENGINE_UNAVAILABLE",
+          models: [],
+          tiers: [],
+          strategies: [],
+        });
+      }
+      const providerEnv = buildEngineEnv(providerConfig);
+      const catalog = await brochureEngine.listModels(providerEnv);
+      return res.json({
+        ...catalog,
+        provider: { id: providerConfig.providerId, label: providerConfig.providerLabel },
+      });
     } catch (e) {
       console.error("[brochures] list models error:", e.message);
       return res.status(503).json({
@@ -904,3 +995,4 @@ router.delete(
 
 
 module.exports = router;
+module.exports.mergeExistingBrandKit = mergeExistingBrandKit;

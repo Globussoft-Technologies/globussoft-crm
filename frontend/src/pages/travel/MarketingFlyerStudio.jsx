@@ -430,8 +430,7 @@ export default function MarketingFlyerStudio() {
             : "AI copy inserted",
         );
       } catch (err) {
-        if (!err?.status)
-          notify?.error?.(err?.message || "Failed to generate copy");
+        notify?.error?.(err?.body?.error || err?.message || "Failed to generate copy");
       } finally {
         setAiBusy(false);
       }
@@ -511,8 +510,7 @@ export default function MarketingFlyerStudio() {
             : "AI image inserted — save the template soon (DALL-E URLs expire in ~1h)",
         );
       } catch (err) {
-        if (!err?.status)
-          notify?.error?.(err?.message || "Failed to generate image");
+        notify?.error?.(err?.body?.error || err?.message || "Failed to generate image");
       } finally {
         setAiBusy(false);
       }

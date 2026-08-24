@@ -42,6 +42,7 @@ import { Inbox, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 
 // Channels mirror VALID_CHANNELS in backend/routes/travel_inbound_leads.js:61
 // (voyagr / webform / whatsapp / ads / adsgpt / metaads / manual). The
@@ -222,9 +223,10 @@ export default function InboundLeads() {
       <header style={{ marginBottom: 16 }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
           <Inbox size={26} aria-hidden /> Inbound Leads
+          <CountBadge count={filtered.length} title={`${filtered.length.toLocaleString()} inbound leads`} />
         </h1>
         <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-          Real-time lead ingestion from external channels — {filtered.length.toLocaleString()} lead{filtered.length === 1 ? "" : "s"} match.
+          Real-time lead ingestion from external channels.
         </p>
       </header>
 

@@ -196,6 +196,7 @@ describe('<MilestoneTracker /> — page chrome', () => {
     expect(
       screen.getByRole('heading', { name: /Milestone Tracker/i }),
     ).toBeInTheDocument();
+    expect(screen.getByTitle(/milestones/i)).toBeInTheDocument();
     // KPI labels appear as both card text AND status chip — use getAllByText.
     expect(screen.getAllByText(/Pending/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Partial/i).length).toBeGreaterThanOrEqual(1);
@@ -636,7 +637,7 @@ describe('<MilestoneTracker /> — extended coverage (cron-extension)', () => {
     expect(overdueCard).toHaveTextContent('2');
   });
 
-  it('header copy pluralises: total=1 reads "1 milestone match" (singular); total=5 reads "5 milestones match"', async () => {
+  it('header count badge shows transformed title for total=1 and total=5', async () => {
     installFetchMock(
       makeResponse({
         milestones: [makeMilestone({ id: 31, invoiceNum: 'TINV-P-001' })],
@@ -645,12 +646,10 @@ describe('<MilestoneTracker /> — extended coverage (cron-extension)', () => {
     );
     const { unmount } = renderPage();
     await screen.findByText('TINV-P-001');
-    expect(screen.getByText(/1 milestone match/i)).toBeInTheDocument();
-    // Ensure it's the SINGULAR form — "1 milestones match" must not appear.
-    expect(screen.queryByText(/1 milestones match/i)).toBeNull();
+    expect(screen.getByTitle('1 Total Milestones')).toBeInTheDocument();
     unmount();
 
-    // Re-mount with total=5 to assert plural form.
+    // Re-mount with total=5 to assert the count badge updates with the new total.
     fetchApiMock.mockReset();
     installFetchMock(
       makeResponse({
@@ -660,7 +659,7 @@ describe('<MilestoneTracker /> — extended coverage (cron-extension)', () => {
     );
     renderPage();
     await screen.findByText('TINV-P-002');
-    expect(screen.getByText(/5 milestones match/i)).toBeInTheDocument();
+    expect(screen.getByTitle('5 Total Milestones')).toBeInTheDocument();
   });
 
   it('"All" chip click after a status filter is set clears ?status= from the next fetch', async () => {

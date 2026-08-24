@@ -1,10 +1,12 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, Search, Filter, RefreshCw, UserPlus } from 'lucide-react';
+import { Calendar, Search, Filter, RefreshCw, UserPlus, Phone } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
 import { useNotify } from '../../utils/notify';
 import { AssignDoctorModal, displayStatus } from './Calendar';
+import CallifiedCallDialog from '../../components/CallifiedCallDialog';
+import CallifiedCallDetailsDrawer from '../../components/CallifiedCallDetailsDrawer';
 
 /**
  * Appointments - tenant-wide list view.
@@ -42,6 +44,13 @@ export default function Appointments() {
   const visitsRef = useRef([]);
 
   const [assignTarget, setAssignTarget] = useState(null);
+
+  // Callified calling. `null` while we are still asking whether the tenant has
+  // the integration configured — the Call action stays hidden until we know,
+  // so nobody is offered a button that can only fail.
+  const [callifiedReady, setCallifiedReady] = useState(null);
+  const [callTarget, setCallTarget] = useState(null);
+  const [historyContact, setHistoryContact] = useState(null);
 
   const today = useMemo(() => todayLocalDate(), []);
   const oneWeekFromToday = useMemo(() => addDaysLocal(today, 7), [today]);
@@ -149,6 +158,23 @@ export default function Appointments() {
     };
   }, [isOrg]);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetchApi('/api/wellness/callified/status', { silent: true })
+      .then((res) => {
+        if (cancelled) return;
+        setCallifiedReady(Boolean(res?.configured && res?.enabled));
+      })
+      // A 403 here just means this role may not place calls; a 503 means the
+      // tenant has no Callified credentials. Either way: no call action.
+      .catch(() => {
+        if (!cancelled) setCallifiedReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const visibleRows = useMemo(() => {
     let rows = visits;
     if (status === 'pending') {
@@ -205,7 +231,7 @@ export default function Appointments() {
       >
         <div>
           <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Calendar size={22} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
+            <Calendar size={22} style={{ color: 'var(--accent-color)' }} />
             Appointments
           </h1>
           <p style={{ margin: '0.2rem 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
@@ -454,15 +480,29 @@ export default function Appointments() {
                           <UserPlus size={13} /> Assign doctor
                         </button>
                       )}
+                      {callifiedReady && (
+                        <CallAction
+                          visit={v}
+                          onCall={() => setCallTarget(v)}
+                        />
+                      )}
                       <Link
                         to={`/wellness/calendar?focus=${v.id}${v.visitDate ? `&date=${isoLocalDate(v.visitDate)}` : ''}`}
                         style={{
                           fontSize: '0.8rem',
-                          color: 'var(--primary-color, var(--accent-color))',
-                          textDecoration: 'none',
+                          // Was --primary-color, which is #1F2220 charcoal in
+                          // BOTH wellness modes — 1.2:1 on the dark surface,
+                          // i.e. invisible. --accent-color fixes dark (8.7:1)
+                          // but drops light to 2.1:1, so for TEXT we use
+                          // --text-primary instead: 17:1 dark, 12:1 light.
+                          // Underline carries the link affordance that the
+                          // colour cue no longer does.
+                          color: 'var(--text-primary)',
+                          textDecoration: 'underline',
+                          textUnderlineOffset: '2px',
                         }}
                       >
-                        Open in calendar 
+                        Open in calendar
                       </Link>
                     </div>
                   </Td>
@@ -510,7 +550,83 @@ export default function Appointments() {
           }}
         />
       )}
+
+      {callTarget && (
+        <CallifiedCallDialog
+          customer={{
+            name: callTarget.patient?.name,
+            phone: callTarget.patient?.phone,
+            subtitle: callTarget.service?.name || null,
+          }}
+          endpoints={{
+            context: `/api/wellness/callified/visits/${callTarget.id}/context`,
+            campaigns: '/api/wellness/callified/campaigns',
+            aiCall: `/api/wellness/callified/visits/${callTarget.id}/ai-call`,
+            manualCall: `/api/wellness/callified/visits/${callTarget.id}/manual-call`,
+          }}
+          onClose={() => setCallTarget(null)}
+          onViewHistory={(contactId) => {
+            setHistoryContact({
+              id: contactId,
+              name: callTarget.patient?.name,
+              phone: callTarget.patient?.phone,
+            });
+            setCallTarget(null);
+          }}
+        />
+      )}
+
+      {historyContact && (
+        <CallifiedCallDetailsDrawer
+          lead={historyContact}
+          onClose={() => setHistoryContact(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Per-row call action.
+ *
+ * A patient with no dialable number still gets the control, disabled with a
+ * reason — silently hiding it reads as a missing feature, and the operator
+ * needs to know WHY they cannot call so they can go fix the phone number.
+ */
+function CallAction({ visit, onCall }) {
+  const phone = visit.patient?.phone || '';
+  const dialable = phone.replace(/\D/g, '').length >= 10;
+
+  return (
+    <button
+      type="button"
+      // btn-secondary carries the theme-aware pairing: --surface-color fill
+      // with --text-primary label, both redefined per light/dark. Only the
+      // sizing is overridden here — hand-picking colours is what made this
+      // button invisible on dark (see the accent note below).
+      className="btn-secondary"
+      onClick={onCall}
+      disabled={!dialable}
+      data-testid={`appointments-call-${visit.id}`}
+      title={dialable ? `Call ${visit.patient?.name || 'customer'}` : 'No valid phone number on file'}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.3rem',
+        padding: '0.3rem 0.6rem',
+        borderRadius: 6,
+        fontSize: '0.78rem',
+        cursor: dialable ? 'pointer' : 'not-allowed',
+        opacity: dialable ? 1 : 0.55,
+      }}
+    >
+      {/* --accent-color, NOT --primary-color: in the wellness theme
+          --primary-color is #1F2220 charcoal in BOTH modes (it is the
+          sidebar/hero background), so using it as a foreground renders
+          charcoal-on-black. --accent-color is a true accent and IS
+          redefined per mode (gold #C9A063 light / #D9A468 dark). */}
+      <Phone size={13} style={{ color: 'var(--accent-color)' }} /> Call
+    </button>
   );
 }
 

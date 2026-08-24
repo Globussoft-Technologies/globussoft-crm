@@ -354,7 +354,7 @@ export default function VisaChecklists() {
             />
           </label>
           <button type="button" onClick={handleImport} disabled={importing || !importFile} style={{ ...primaryBtn, opacity: importing || !importFile ? 0.6 : 1 }}>
-            <Upload size={14} aria-hidden /> {importing ? "Importing..." : "Import rows"}
+            <Download size={14} aria-hidden /> {importing ? "Importing..." : "Import rows"}
           </button>
         </div>
         {importSummary && (

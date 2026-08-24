@@ -21,8 +21,17 @@
 //   server-side via getSubBrandAccessSet.
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Receipt, Pencil, Trash2, Calculator, UserPlus } from "lucide-react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  Receipt,
+  Pencil,
+  Trash2,
+  Calculator,
+  UserPlus,
+  ArrowUpDown,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
@@ -35,9 +44,10 @@ import {
 import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 import TopScrollSync from "../../components/TopScrollSync";
+import CountBadge from "../../components/CountBadge";
 
 const SUB_BRANDS = [
-  { value: "", label: "All sub-brands" },
+  { value: "all", label: "All sub-brands" },
   { value: "tmc", label: "TMC (schools)" },
   { value: "rfu", label: "RFU (Umrah)" },
   { value: "travelstall", label: "Travel Stall" },
@@ -54,6 +64,21 @@ const QUOTE_STATUSES = [
   { value: "Rejected", label: "Rejected" },
   { value: "Expired", label: "Expired" },
 ];
+
+const QUOTE_STATUS_SORT_ORDER = [
+  "Draft",
+  "Sent",
+  "Accepted",
+  "advance_paid",
+  "fully_paid",
+  "Rejected",
+  "Expired",
+];
+
+const QUOTE_SORT_KEYS = [
+  "contact", "status", "total", "currency", "validUntil", "subBrand", "assignedTo", "created",
+];
+const LAST_LIST_URL_KEY = "travel.quotes.lastListUrl";
 
 // SUB_BRAND_BG now imported from ../../utils/travelSubBrand (rule-of-3
 // promotion 2026-05-24 tick #99 — inline copy was a verbatim mirror of
@@ -107,6 +132,7 @@ export default function QuotesAdmin() {
   const navigate = useNavigate();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
+  const [searchParams, setSearchParams] = useSearchParams();
   // G102: BrandKit lookup. Module-level cache means re-mounts of QuotesAdmin
   // never re-fetch; safe to call unconditionally here.
   // Permission-driven action visibility. Backend routes already gate
@@ -146,9 +172,86 @@ export default function QuotesAdmin() {
   const openedFromReports = initialQuery.get("source") === "reports";
   const reportsBackTo = "/travel/reports";
   const quotesListPath = `${location.pathname}${location.search}`;
-  const [subBrand, setSubBrand] = useState(openedFromReports ? (initialQuery.get("subBrand") || "") : "");
-  const [status, setStatus] = useState(openedFromReports ? (initialQuery.get("status") || "") : "");
-  const [nameFilter, setNameFilter] = useState("");
+  const [subBrand, setSubBrand] = useState(initialQuery.get("subBrand") || (openedFromReports ? "" : activeSubBrand || ""));
+  const [status, setStatus] = useState(initialQuery.get("status") || "");
+  const [nameFilter, setNameFilter] = useState(initialQuery.get("name") || "");
+  const initialSortDirection = initialQuery.get("sortDirection") === "desc" ? "desc" : "asc";
+  const [sortKey, setSortKey] = useState(
+    QUOTE_SORT_KEYS.includes(initialQuery.get("sortKey")) ? initialQuery.get("sortKey") : null,
+  );
+  const [sortDirection, setSortDirection] = useState(
+    QUOTE_SORT_KEYS.includes(initialQuery.get("sortKey")) ? initialSortDirection : null,
+  );
+  const updateSubBrandFilter = (value) => {
+    setSubBrand(value);
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set("subBrand", value);
+    else next.delete("subBrand");
+    setSearchParams(next, { replace: true });
+  };
+
+  const updateListParam = (key, value) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value); else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
+
+  const resetFilters = () => {
+    const next = new URLSearchParams(searchParams);
+    ["subBrand", "status", "name", "sortKey", "sortDirection"].forEach((key) => next.delete(key));
+    setSubBrand(activeSubBrand || "");
+    setStatus("");
+    setNameFilter("");
+    setSortKey(null);
+    setSortDirection(null);
+    setSearchParams(next, { replace: true });
+    load({ reset: true });
+  };
+
+  const handleSort = (key) => {
+    const next = new URLSearchParams(searchParams);
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDirection("asc");
+      next.set("sortKey", key);
+      next.set("sortDirection", "asc");
+    } else if (sortDirection === "asc") {
+      setSortDirection("desc");
+      next.set("sortDirection", "desc");
+    } else {
+      setSortKey(null);
+      setSortDirection(null);
+      next.delete("sortKey");
+      next.delete("sortDirection");
+    }
+    setSearchParams(next, { replace: true });
+  };
+
+  const sortHeader = (label, key) => {
+    const active = sortKey === key;
+    const Icon = active
+      ? sortDirection === "asc" ? ChevronUp : ChevronDown
+      : ArrowUpDown;
+    const sortStateLabel = !active
+      ? "default"
+      : sortDirection === "desc" ? "descending" : "ascending";
+    return (
+      <button
+        type="button"
+        onClick={() => handleSort(key)}
+        aria-label={`Sort ${label} ${sortStateLabel}`}
+        style={{
+          ...sortButtonStyle,
+          ...(active ? sortButtonActiveStyle : null),
+        }}
+      >
+        <span>{label}</span>
+        <Icon size={14} aria-hidden />
+      </button>
+    );
+  };
+
+  const statusSortHeader = () => sortHeader("Status", "status");
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -199,7 +302,7 @@ export default function QuotesAdmin() {
       setLoadingMore(true);
     }
     const qs = new URLSearchParams();
-    if (subBrand) qs.set("subBrand", subBrand);
+    if (subBrand && subBrand !== "all") qs.set("subBrand", subBrand);
     if (status && status !== "Expired") qs.set("status", status);
     const pageSize = status === "Expired" ? 200 : PAGE_SIZE;
     qs.set("limit", String(pageSize));
@@ -245,11 +348,33 @@ export default function QuotesAdmin() {
   // The backend now joins contact.name, so we filter directly on it.
   const visibleQuotes = useMemo(() => {
     const needle = nameFilter.trim().toLowerCase();
-    if (!needle) return quotes;
-    return quotes.filter((q) =>
+    const filtered = !needle ? quotes : quotes.filter((q) =>
       (q.contact?.name || "").toLowerCase().includes(needle),
     );
-  }, [quotes, nameFilter]);
+    if (!sortKey) return filtered;
+    const direction = sortDirection === "desc" ? -1 : 1;
+    return [...filtered].sort((left, right) => {
+      if (sortKey === "status") {
+        const leftRank = QUOTE_STATUS_SORT_ORDER.indexOf(left.status);
+        const rightRank = QUOTE_STATUS_SORT_ORDER.indexOf(right.status);
+        return ((leftRank === -1 ? QUOTE_STATUS_SORT_ORDER.length : leftRank)
+          - (rightRank === -1 ? QUOTE_STATUS_SORT_ORDER.length : rightRank)) * direction;
+      }
+      const getValue = (quote) => {
+        if (sortKey === "contact") return quote.contact?.name || "";
+        if (sortKey === "total") return Number(quote.totalAmount || 0);
+        if (sortKey === "assignedTo") return quote.assignedToUser?.name || quote.assignedToUser?.email || "Unassigned";
+        if (sortKey === "created") return quote.createdAt || "";
+        return quote[sortKey] || "";
+      };
+      const leftValue = getValue(left);
+      const rightValue = getValue(right);
+      const result = sortKey === "total"
+        ? leftValue - rightValue
+        : String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: "base" });
+      return result * direction;
+    });
+  }, [quotes, nameFilter, sortKey, sortDirection]);
 
   // Sync the global sub-brand selector (sidebar) into the local filter so this
   // list re-scopes when the user switches brand — consistent with InvoicesAdmin
@@ -262,12 +387,17 @@ export default function QuotesAdmin() {
       setStatus(query.get("status") || "");
       return;
     }
-    setSubBrand(activeSubBrand || "");
+    if (!query.get("subBrand")) setSubBrand(activeSubBrand || "");
   }, [activeSubBrand, location.search]);
 
   useEffect(() => {
     load({ reset: true });
   }, [load]);
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/quotes-admin") return;
+    try { window.sessionStorage.setItem(LAST_LIST_URL_KEY, `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
   useEffect(() => {
     if (!canAssign) {
       setAssignableUsers([]);
@@ -415,9 +545,10 @@ export default function QuotesAdmin() {
           )}
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
             <Receipt size={26} aria-hidden /> Travel Quotes
+            <CountBadge count={visibleQuotes.length} title={`${visibleQuotes.length.toLocaleString()} quotes in view`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-            Customer quotes — Draft / Sent / Accepted / Rejected. {total.toLocaleString()} quote{total === 1 ? "" : "s"}.
+            Customer quotes — Draft / Sent / Accepted / Rejected.
           </p>
         </div>
         {/* Quotes are created in the Quote Builder (/travel/quotes/builder),
@@ -436,20 +567,22 @@ export default function QuotesAdmin() {
           flexWrap: "wrap",
         }}
       >
-        <select value={subBrand} onChange={(e) => setSubBrand(e.target.value)} style={selectStyle} aria-label="Filter by sub-brand">
+        <select value={subBrand} onChange={(e) => updateSubBrandFilter(e.target.value)} style={selectStyle} aria-label="Filter by sub-brand">
           {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={status} onChange={(e) => setStatus(e.target.value)} style={selectStyle} aria-label="Filter by status">
+        <select value={status} onChange={(e) => { setStatus(e.target.value); updateListParam("status", e.target.value); }} style={selectStyle} aria-label="Filter by status">
           {QUOTE_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <input
           type="text"
           placeholder="Filter by customer name…"
           value={nameFilter}
-          onChange={(e) => setNameFilter(e.target.value)}
+          onChange={(e) => { setNameFilter(e.target.value); updateListParam("name", e.target.value); }}
           style={{ ...selectStyle, minWidth: 200 }}
           aria-label="Filter by customer name"
         />
+        <button type="button" onClick={() => load({ reset: true })} style={secondaryBtn}>Refresh</button>
+        <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
 
       {showForm && (
@@ -576,14 +709,14 @@ export default function QuotesAdmin() {
             </colgroup>
             <thead>
               <tr>
-                <th style={{ ...th, whiteSpace: "nowrap" }}>Contact</th>
-                <th style={th}>Status</th>
-                <th style={th}>Total</th>
-                <th style={th}>Currency</th>
-                <th style={{ ...th, whiteSpace: "nowrap" }}>Valid Until</th>
-                <th style={th}>Sub-brand</th>
-                <th style={th}>Assigned to</th>
-                <th style={{ ...th, whiteSpace: "nowrap" }}>Created</th>
+                <th style={{ ...th, whiteSpace: "nowrap" }}>{sortHeader("Contact", "contact")}</th>
+                <th style={th}>{statusSortHeader()}</th>
+                <th style={th}>{sortHeader("Total", "total")}</th>
+                <th style={th}>{sortHeader("Currency", "currency")}</th>
+                <th style={{ ...th, whiteSpace: "nowrap" }}>{sortHeader("Valid Until", "validUntil")}</th>
+                <th style={th}>{sortHeader("Sub-brand", "subBrand")}</th>
+                <th style={th}>{sortHeader("Assigned to", "assignedTo")}</th>
+                <th style={{ ...th, whiteSpace: "nowrap" }}>{sortHeader("Created", "created")}</th>
                 {canWrite && <th style={{ ...th, textAlign: "center" }}>Actions</th>}
               </tr>
             </thead>
@@ -735,6 +868,28 @@ const th = {
   backgroundClip: "padding-box",
   boxShadow: "inset 0 -1px 0 var(--border-color)",
   fontWeight: 600,
+};
+const sortButtonStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 6,
+  width: "100%",
+  padding: "4px 8px",
+  border: "none",
+  borderRadius: 999,
+  background: "transparent",
+  color: "inherit",
+  font: "inherit",
+  textTransform: "inherit",
+  letterSpacing: "inherit",
+  cursor: "pointer",
+  textAlign: "left",
+  transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease",
+};
+const sortButtonActiveStyle = {
+  color: "var(--primary-color)",
+  background: "var(--accent-bg)",
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };

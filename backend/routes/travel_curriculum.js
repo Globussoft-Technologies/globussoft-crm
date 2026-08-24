@@ -58,11 +58,14 @@
 
 const express = require("express");
 const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
 const router = express.Router();
-const { verifyToken, verifyRole } = require("../middleware/auth");
+const { verifyToken } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { sanitizeText } = require("../lib/sanitizeJson");
+const { uploadFile } = require("../services/s3Service");
 const {
   parseCsv: parseCurriculumCsv,
   serializeCsv: serializeCurriculumCsv,
@@ -75,6 +78,14 @@ const curriculumUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
 });
+
+const brochureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+
+const CURRICULUM_BROCHURE_UPLOAD_DIR = path.join(__dirname, "..", "uploads", "travel-curriculum");
+const S3_BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME;
 
 // Scoped text-body parser for /import.csv when the client posts a raw
 // text/csv body (vs. multipart/form-data). Mounted at /import.csv path
@@ -150,6 +161,22 @@ function normalizeOptionalString(input) {
   if (input === undefined || input === null) return null;
   const value = sanitizeText(String(input));
   return value ? value : null;
+}
+
+function normalizeOptionalUrl(input) {
+  const value = normalizeOptionalString(input);
+  if (!value) return null;
+  if (
+    value.startsWith("/uploads/") ||
+    value.startsWith("/api/uploads/") ||
+    /^https?:\/\//i.test(value)
+  ) {
+    return value;
+  }
+  const err = new Error("brochurePdfUrl must be an http(s) or uploads URL");
+  err.status = 400;
+  err.code = "INVALID_BROCHURE_URL";
+  throw err;
 }
 
 function buildDestinationKey(destinationId, destinationLabel) {
@@ -893,6 +920,7 @@ router.post(
           confidenceScore: r.confidenceScore == null ? 50 : r.confidenceScore,
           mappingSource: r.mappingSource ? sanitizeText(r.mappingSource) : "imported",
           fitRationale: r.fitRationale ? sanitizeText(r.fitRationale) : null,
+          brochurePdfUrl: r.brochurePdfUrl ? normalizeOptionalUrl(r.brochurePdfUrl) : null,
           isActive: r.isActive == null ? true : r.isActive,
           createdById: req.user.userId,
         };
@@ -908,6 +936,7 @@ router.post(
           confidenceScore: r.confidenceScore == null ? 50 : r.confidenceScore,
           mappingSource: r.mappingSource ? sanitizeText(r.mappingSource) : "imported",
           fitRationale: r.fitRationale ? sanitizeText(r.fitRationale) : null,
+          brochurePdfUrl: r.brochurePdfUrl ? normalizeOptionalUrl(r.brochurePdfUrl) : null,
           isActive: r.isActive == null ? true : r.isActive,
         };
 
@@ -1427,6 +1456,64 @@ router.post(
   },
 );
 
+router.post(
+  "/brochure/upload",
+  verifyToken,
+  requirePermission("curriculum", "write"),
+  brochureUpload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded", code: "NO_FILE" });
+      }
+      const mime = String(req.file.mimetype || "").toLowerCase();
+      const original = String(req.file.originalname || "curriculum-brochure.pdf");
+      if (mime !== "application/pdf" && !original.toLowerCase().endsWith(".pdf")) {
+        return res.status(400).json({
+          error: "Only PDF brochures are supported",
+          code: "INVALID_FILE_TYPE",
+        });
+      }
+
+      const safeName = original
+        .toLowerCase()
+        .replace(/[^a-z0-9.-]/g, "_")
+        .slice(0, 80) || "curriculum-brochure.pdf";
+      const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const filename = `${stamp}-${safeName}`;
+      let url;
+
+      if (S3_BUCKET_NAME) {
+        url = await uploadFile(
+          req.file.buffer,
+          filename,
+          "application/pdf",
+          `travel-curriculum/${req.user.tenantId}`,
+          { contentDisposition: `attachment; filename="${safeName.replace(/"/g, "")}"` },
+        );
+      } else {
+        const targetDir = path.join(CURRICULUM_BROCHURE_UPLOAD_DIR, String(req.user.tenantId));
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.writeFileSync(path.join(targetDir, filename), req.file.buffer);
+        url = `/api/uploads/travel-curriculum/${req.user.tenantId}/${filename}`;
+      }
+
+      return res.status(201).json({
+        url,
+        mime: "application/pdf",
+        sizeBytes: req.file.size,
+        filename,
+      });
+    } catch (e) {
+      if (e instanceof multer.MulterError) {
+        return res.status(400).json({ error: e.message, code: e.code || "UPLOAD_ERROR" });
+      }
+      console.error("[travel-curriculum] brochure upload error:", e.message);
+      return res.status(500).json({ error: "Failed to upload curriculum brochure" });
+    }
+  },
+);
+
 router.get("/:id", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -1471,6 +1558,7 @@ router.post(
         fitScore,
         confidenceScore,
         fitRationale,
+        brochurePdfUrl,
         isActive,
       } = req.body || {};
 
@@ -1506,6 +1594,7 @@ router.post(
         mappingSource: "manual",
         fitRationale:
           fitRationale == null ? null : sanitizeText(String(fitRationale)),
+        brochurePdfUrl: normalizeOptionalUrl(brochurePdfUrl),
         isActive: isActive === undefined ? true : Boolean(isActive),
         createdById: req.user.userId,
       };
@@ -1563,6 +1652,7 @@ router.put(
         fitScore,
         confidenceScore,
         fitRationale,
+        brochurePdfUrl,
         isActive,
       } = req.body || {};
 
@@ -1613,6 +1703,9 @@ router.put(
       if (fitRationale !== undefined) {
         data.fitRationale =
           fitRationale == null ? null : sanitizeText(String(fitRationale));
+      }
+      if (brochurePdfUrl !== undefined) {
+        data.brochurePdfUrl = normalizeOptionalUrl(brochurePdfUrl);
       }
       if (isActive !== undefined) {
         data.isActive = Boolean(isActive);

@@ -219,19 +219,20 @@ describe('WebCheckinQueue â€” operator queue (PRD Â§4.6)', () => {
     });
   });
 
-  it('status filter changes the fetch URL', async () => {
+  it('status filter supports multiple selections in the fetch URL', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
     await screen.findByText('ABC123');
 
-    const filterSelect = screen.getByLabelText(/Filter by status/i);
-    fireEvent.change(filterSelect, { target: { value: 'done' } });
+    fireEvent.click(screen.getByLabelText(/^Filter by status$/i));
+    fireEvent.click(screen.getByLabelText(/Filter status Pending/i));
+    fireEvent.click(screen.getByLabelText(/Filter status Done/i));
 
     await waitFor(() => {
-      const doneCall = fetchApiMock.mock.calls.find(
-        ([u]) => typeof u === 'string' && u.includes('status=done'),
+      const multiStatusCall = fetchApiMock.mock.calls.find(
+        ([u]) => typeof u === 'string' && u.includes('status=pending%2Cdone'),
       );
-      expect(doneCall).toBeTruthy();
+      expect(multiStatusCall).toBeTruthy();
     });
   });
 
@@ -251,25 +252,30 @@ describe('WebCheckinQueue â€” operator queue (PRD Â§4.6)', () => {
     });
   });
 
-  it('table width shrinks to content instead of leaving blank horizontal runway', async () => {
+  it('keeps a stable minimum table width so zoomed layouts still overflow horizontally', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
     await screen.findByText('ABC123');
 
     const table = document.querySelector('table.webcheckins-table');
     expect(table).toBeTruthy();
-    expect(table.style.width).toBe('max-content');
-    expect(table.style.minWidth).toBe('');
+    expect(table.style.width).toBe('100%');
+    expect(table.style.minWidth).toBe('1340px');
   });
-  it('keeps the scroll wrapper shrink-wrapped while preserving horizontal overflow', async () => {
+  it('renders a visible horizontal scrollbar shell for macOS and zoomed layouts', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
     await screen.findByText('ABC123');
 
     const scrollArea = screen.getByTestId('webcheckins-table-scroll');
-    expect(scrollArea.style.display).toBe('inline-block');
-    expect(scrollArea.style.minWidth).toBe('100%');
-    expect(scrollArea.style.overflowX).toBe('auto');
+    const topScroll = document.querySelector('.top-scroll-sync__top');
+    const bottomScroll = document.querySelector('.top-scroll-sync__bottom');
+
+    expect(scrollArea).toBeTruthy();
+    expect(topScroll).toBeTruthy();
+    expect(bottomScroll).toBeTruthy();
+    expect(topScroll.style.overflowX).toBe('scroll');
+    expect(bottomScroll.style.overflowX).toBe('scroll');
   });
   it('renders pager controls for the current single-page result and keeps them disabled', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));

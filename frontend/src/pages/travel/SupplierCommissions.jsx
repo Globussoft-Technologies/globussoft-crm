@@ -17,7 +17,7 @@
 
 import { useEffect, useState, useContext, useMemo } from "react";
 import { useParams } from "react-router-dom";
-import { TrendingUp, Plus, CheckCircle2, XCircle, Download, AlertTriangle } from "lucide-react";
+import { TrendingUp, Plus, CheckCircle2, XCircle, Upload, AlertTriangle } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
@@ -235,7 +235,7 @@ export default function SupplierCommissions() {
             cursor: "pointer",
           }}
         >
-          <Download size={14} />
+          <Upload size={14} />
           Export CSV
         </button>
       </div>

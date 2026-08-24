@@ -30,7 +30,7 @@
 // isAdmin gates so non-write users see read-only chrome (no Create /
 // Edit / Delete / Promote buttons) but still browse the catalogue.
 
-import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   Edit2,
   Plus,
@@ -40,9 +40,13 @@ import {
   X,
   Calendar,
   Settings,
+  FileDown,
+  FileSpreadsheet,
+  Import,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import { AuthContext } from "../../App";
 
 // Server-side enum values per backend/routes/travel_tmc_catalogue.js
@@ -126,7 +130,7 @@ export default function TmcCatalogueAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const role = user?.role || "USER";
-  const isAdmin = role === "ADMIN";
+  const isAdmin = role === "ADMIN" || role === "OWNER";
   const canWrite = isAdmin || role === "MANAGER";
 
   const [tab, setTab] = useState(STATUS_ACTIVE); // active | archived
@@ -149,7 +153,9 @@ export default function TmcCatalogueAdmin() {
   const [bulkImportResult, setBulkImportResult] = useState(null);
   const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
   const [pendingReviewTripIds, setPendingReviewTripIds] = useState(() => new Set());
+  const [titleSearch, setTitleSearch] = useState("");
   const listContainerRef = useRef(null);
+  const formRef = useRef(null);
   const requestSeqRef = useRef(0);
   const bulkFileInputRef = useRef(null);
   const rowsRef = useRef([]);
@@ -260,6 +266,15 @@ export default function TmcCatalogueAdmin() {
     load({ reset: true });
   }, [load]);
 
+  const normalizedTitleSearch = titleSearch.trim().toLowerCase();
+  const visibleRows = normalizedTitleSearch
+    ? rows.filter((row) =>
+        String(row.title || row.tripId || "")
+          .toLowerCase()
+          .includes(normalizedTitleSearch),
+      )
+    : rows;
+
   const handleListScroll = useCallback((e) => {
     const el = e.currentTarget;
     if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
@@ -283,6 +298,14 @@ export default function TmcCatalogueAdmin() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setShowForm(true);
+    if (tab !== STATUS_ACTIVE) {
+      setTab(STATUS_ACTIVE);
+    }
+    // Scroll to the form once it has rendered so the user can see where
+    // the new entry is being added.
+    setTimeout(() => {
+      formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   };
 
   const handleEdit = (row) => {
@@ -600,12 +623,16 @@ export default function TmcCatalogueAdmin() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: 12,
               margin: 0,
               fontSize: 22,
+              fontWeight: 600,
+              lineHeight: 1.15,
+              flexWrap: "wrap",
             }}
           >
             <ShieldCheck size={26} aria-hidden /> TMC Trip Catalogue
+            <CountBadge count={total} title={`${total.toLocaleString()} catalogue items`} />
           </h1>
           <p
             style={{
@@ -615,13 +642,13 @@ export default function TmcCatalogueAdmin() {
               maxWidth: 720,
             }}
           >
-            Manage the TMC diagnostic engine's recommendation set. New rows land
+            Manage the TMC diagnostic engine&apos;s recommendation set. New rows land
             in <strong>Archived</strong> per the human-verify gate; an ADMIN{" "}
-            <em>Promote to active</em> flips a reviewed row into the engine's
+            <em>Promote to active</em> flips a reviewed row into the engine&apos;s
             matching pool.
           </p>
         </div>
-        {canWrite && !showForm && (
+        {canWrite && (tab !== STATUS_ACTIVE || !showForm) && (
           <button
             type="button"
             onClick={handleAdd}
@@ -637,7 +664,9 @@ export default function TmcCatalogueAdmin() {
           booking-link URL). Renders only when the operator can write
           (ADMIN+MANAGER for the standing-facts override; ADMIN-only for
           the booking-link save per backend gate). */}
+      {/* TMC configuration panel hidden per UI cleanup request.
       {canWrite && <TmcConfigPanel notify={notify} isAdmin={isAdmin} />}
+      */}
 
       {canWrite && (
         <section
@@ -669,21 +698,21 @@ export default function TmcCatalogueAdmin() {
               onClick={() => downloadTemplate("csv")}
               style={secondaryBtn}
             >
-              Download CSV template
+              <FileDown size={14} aria-hidden /> Download CSV template
             </button>
             <button
               type="button"
               onClick={() => downloadTemplate("xlsx")}
               style={secondaryBtn}
             >
-              Download XLSX template
+              <FileSpreadsheet size={14} aria-hidden /> Download XLSX template
             </button>
             <button
               type="button"
               onClick={openBulkImportModal}
               style={secondaryBtn}
             >
-              Import file
+              <Import size={14} aria-hidden /> Import file
             </button>
           </div>
 
@@ -812,6 +841,26 @@ export default function TmcCatalogueAdmin() {
           gap: 16,
         }}
       >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-start",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <input
+          type="search"
+          value={titleSearch}
+          onChange={(e) => setTitleSearch(e.target.value)}
+          placeholder="Search by title..."
+          aria-label="Search catalogue by title"
+          style={{
+            ...inputStyle,
+            width: 220,
+          }}
+        />
+      </div>
       {/* Tabs */}
       <div role="tablist" aria-label="Catalogue status tabs" style={tabRow}>
         <button
@@ -844,20 +893,51 @@ export default function TmcCatalogueAdmin() {
         >
           <RotateCw size={14} /> Refresh
         </button>
+        <span
+          aria-live="polite"
+          style={{ color: "var(--text-secondary)", fontSize: 12, whiteSpace: "nowrap", marginLeft: 8 }}
+        >
+          {visibleRows.length === 0
+            ? `Showing 0 of ${total.toLocaleString()}`
+            : `Showing 1–${Math.min(visibleRows.length, total).toLocaleString()} of ${total.toLocaleString()}`}
+        </span>
       </div>
 
-      {/* Create / edit form */}
-      {showForm && (
+      {/* Create / edit form — only shown inside the Active tab so it does
+          not appear under Archived as well. */}
+      {showForm && tab === STATUS_ACTIVE && (
         <form
+          ref={formRef}
           onSubmit={handleSubmit}
+          onClick={(e) => { if (e.target === e.currentTarget) resetForm(); }}
           style={{
-            background: "var(--bg-color, #111318)",
+            position: "fixed",
+            inset: 0,
+            zIndex: 1200,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             padding: 16,
-            borderRadius: 8,
-            border: "1px solid var(--border-color)",
-            marginBottom: 16,
+            background: "var(--catalogue-modal-backdrop)",
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+            overflowY: "auto",
           }}
         >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(1440px, 100%)",
+              maxHeight: "calc(100vh - 32px)",
+              overflowY: "auto",
+              boxSizing: "border-box",
+              background: "var(--bg-color, #111318)",
+              padding: 16,
+              borderRadius: 12,
+              border: "1px solid var(--border-color)",
+              boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+            }}
+          >
           <div
             style={{
               display: "flex",
@@ -1168,6 +1248,7 @@ export default function TmcCatalogueAdmin() {
               Cancel
             </button>
           </div>
+          </div>
         </form>
       )}
 
@@ -1181,9 +1262,11 @@ export default function TmcCatalogueAdmin() {
         >
           {loadError}
         </div>
-      ) : rows.length === 0 ? (
+      ) : visibleRows.length === 0 ? (
         <div style={emptyStyle}>
-          {tab === STATUS_ACTIVE
+          {rows.length > 0 && normalizedTitleSearch
+            ? "No catalogue entries match this title."
+            : tab === STATUS_ACTIVE
             ? "No active catalogue entries. Newly-created rows land in Archived — promote them to active here."
             : "No archived catalogue entries. New entries appear here for review before promotion."}
         </div>
@@ -1208,7 +1291,7 @@ export default function TmcCatalogueAdmin() {
               "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
           }}
         >
-          {rows.map((row) => (
+          {visibleRows.map((row) => (
             <div
               key={row.id}
               role="listitem"
@@ -1429,6 +1512,8 @@ function plainTextToFactsJson(text) {
   return trimmed ? JSON.stringify({ plainText: trimmed }) : null;
 }
 
+// Component kept in source but currently hidden from the UI below.
+// eslint-disable-next-line no-unused-vars
 function TmcConfigPanel({ notify, isAdmin }) {
   const [collapsed, setCollapsed] = useState(true);
   // G105

@@ -339,14 +339,22 @@ function helmetStrictReportOnlyMiddleware(req, res, next) {
 }
 
 // 1b. Permissions-Policy — helmet 8.x doesn't ship this header, so set it
-// manually. Camera/mic OFF (consent canvas is pointer-events, not getUserMedia;
-// softphone uses Twilio's voice SDK which negotiates separately and we'll
-// re-enable per-route if needed). Geolocation only on self (booking page may
-// want city auto-fill). interest-cohort=() opts out of FLoC/Topics tracking.
+// manually. Camera OFF (the consent canvas is pointer-events, not
+// getUserMedia). Geolocation only on self (booking page may want city
+// auto-fill). interest-cohort=() opts out of FLoC/Topics tracking.
+//
+// microphone: this was `()` — a hard block — with the note "we'll re-enable
+// per-route if needed". It is needed now: Callified manual (human) calls
+// bridge the staff member's microphone to the customer over a WebSocket, and
+// getUserMedia({audio:true}) rejects outright while the mic is denied. The
+// header governs the DOCUMENT, and the SPA shell is one document for the
+// whole app, so per-route granularity is not available here — `(self)` is
+// the narrowest grant that works. Third-party iframes still get nothing,
+// and the browser still shows its own permission prompt on first use.
 function permissionsPolicyMiddleware(req, res, next) {
   res.setHeader(
     "Permissions-Policy",
-    "camera=(), microphone=(), geolocation=(self), interest-cohort=()",
+    "camera=(), microphone=(self), geolocation=(self), interest-cohort=()",
   );
   next();
 }

@@ -9,7 +9,8 @@ const {
   superAdminAdjustCredits,
   superAdminSetSubscriptionStatus,
 } = require("../lib/aiProviderManagement");
-const { listAllPlans, createPlan, updatePlan, deactivatePlan } = require("../lib/aiSubscriptionPlans");
+const { listAllPlans, createPlan, updatePlan, deactivatePlan, getPlanSubscriberAnalytics } = require("../lib/aiSubscriptionPlans");
+const aiManagedApiKeys = require("../lib/aiManagedApiKeys");
 
 // ── AI Subscription Plan catalog (replaces the old manual per-tenant
 // custom-price approval) ────────────────────────────────────────────────
@@ -32,6 +33,25 @@ router.post("/plans", async (req, res) => {
     console.error("[super-admin-ai] plan create error:", err.message);
     const status = err.code === "INVALID_PLAN_INPUT" ? 400 : 500;
     res.status(status).json({ error: err.message || "Failed to create AI subscription plan", code: err.code || "PLAN_CREATE_FAILED" });
+  }
+});
+
+router.get("/plans/:planId/subscribers", async (req, res) => {
+  try {
+    const planId = Number(req.params.planId);
+    if (!Number.isFinite(planId)) return res.status(400).json({ error: "Invalid plan id", code: "INVALID_PLAN_ID" });
+    const analytics = await getPlanSubscriberAnalytics(planId, {
+      from: req.query.from,
+      to: req.query.to,
+    });
+    res.json(analytics);
+  } catch (err) {
+    console.error("[super-admin-ai] plan subscribers error:", err.message);
+    const status = err.code === "PLAN_NOT_FOUND" ? 404 : err.code === "INVALID_DATE" ? 400 : 500;
+    res.status(status).json({
+      error: err.message || "Failed to load plan subscribers",
+      code: err.code || "PLAN_SUBSCRIBERS_FAILED",
+    });
   }
 });
 
@@ -154,6 +174,56 @@ router.post("/tenants/:tenantId/resume", async (req, res) => {
     console.error("[super-admin-ai] resume error:", err.message);
     const status = err.code === "NO_ELIGIBLE_SUBSCRIPTION" ? 400 : 500;
     res.status(status).json({ error: err.message || "Failed to resume AI access", code: err.code || "RESUME_FAILED" });
+  }
+});
+
+// ── Managed AI API Keys ─────────────────────────────────────────────────
+// Reusable provider keys that can be attached to AI subscription plans.
+
+router.get("/api-keys", async (_req, res) => {
+  try {
+    const keys = await aiManagedApiKeys.listKeys();
+    res.json({ keys });
+  } catch (err) {
+    console.error("[super-admin-ai] api-keys list error:", err.message);
+    res.status(500).json({ error: "Failed to load managed API keys" });
+  }
+});
+
+router.post("/api-keys", async (req, res) => {
+  try {
+    const key = await aiManagedApiKeys.createKey(req.body || {});
+    res.status(201).json({ key });
+  } catch (err) {
+    console.error("[super-admin-ai] api-key create error:", err.message);
+    const status = err.code === "INVALID_KEY_INPUT" ? 400 : 500;
+    res.status(status).json({ error: err.message || "Failed to create API key", code: err.code || "API_KEY_CREATE_FAILED" });
+  }
+});
+
+router.put("/api-keys/:keyId", async (req, res) => {
+  try {
+    const keyId = Number(req.params.keyId);
+    if (!Number.isFinite(keyId)) return res.status(400).json({ error: "Invalid key id" });
+    const key = await aiManagedApiKeys.updateKey(keyId, req.body || {});
+    res.json({ key });
+  } catch (err) {
+    console.error("[super-admin-ai] api-key update error:", err.message);
+    const status = err.code === "INVALID_KEY_INPUT" ? 400 : err.code === "INVALID_KEY_ID" ? 400 : err.code === "P2025" ? 404 : 500;
+    res.status(status).json({ error: err.message || "Failed to update API key", code: err.code || "API_KEY_UPDATE_FAILED" });
+  }
+});
+
+router.delete("/api-keys/:keyId", async (req, res) => {
+  try {
+    const keyId = Number(req.params.keyId);
+    if (!Number.isFinite(keyId)) return res.status(400).json({ error: "Invalid key id" });
+    await aiManagedApiKeys.deleteKey(keyId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[super-admin-ai] api-key delete error:", err.message);
+    const status = err.code === "INVALID_KEY_ID" ? 400 : err.code === "P2025" ? 404 : 500;
+    res.status(status).json({ error: err.message || "Failed to delete API key", code: err.code || "API_KEY_DELETE_FAILED" });
   }
 });
 

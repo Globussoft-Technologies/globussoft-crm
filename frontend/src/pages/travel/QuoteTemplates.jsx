@@ -30,7 +30,18 @@
 // admin-curated library.
 
 import { useEffect, useState, useContext } from "react";
-import { FileText, Plus, Pencil, Trash2, Sparkles, Loader2 } from "lucide-react";
+import { useLocation, useSearchParams } from "react-router-dom";
+import {
+  FileText,
+  Plus,
+  Pencil,
+  Trash2,
+  Sparkles,
+  Loader2,
+  ArrowUpDown,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import {
@@ -41,10 +52,11 @@ import {
 } from "../../utils/travelSubBrand";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
+import CountBadge from "../../components/CountBadge";
 import TopScrollSync from "../../components/TopScrollSync";
 
 const SUB_BRANDS = [
-  { value: "", label: "All sub-brands" },
+  { value: "all", label: "All sub-brands" },
   { value: "tmc", label: "TMC (schools)" },
   { value: "rfu", label: "RFU (Umrah)" },
   { value: "travelstall", label: "Travel Stall" },
@@ -61,6 +73,9 @@ const CATEGORIES = [
   { value: "School-trip", label: "School trip" },
   { value: "Other", label: "Other" },
 ];
+
+const QUOTE_TEMPLATE_SORT_KEYS = ["name", "category", "currency", "lines", "updated"];
+const LAST_LIST_URL_KEY = "travel.quoteTemplates.lastListUrl";
 
 const ACTIVE_FILTER = [
   { value: "", label: "All (active + inactive)" },
@@ -122,8 +137,10 @@ function countLines(linesJson) {
 
 export default function QuoteTemplates() {
   const notify = useNotify();
+  const location = useLocation();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
+  const [searchParams, setSearchParams] = useSearchParams();
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
   const canDelete = user?.role === "ADMIN";
 
@@ -136,9 +153,66 @@ export default function QuoteTemplates() {
   const [loading, setLoading] = useState(true);
   const [permissionDenied, setPermissionDenied] = useState(false);
 
-  const [subBrand, setSubBrand] = useState("");
-  const [category, setCategory] = useState("");
-  const [isActiveFilter, setIsActiveFilter] = useState("true");
+  const [subBrand, setSubBrand] = useState(searchParams.get("subBrand") || activeSubBrand || "");
+  const [category, setCategory] = useState(searchParams.get("category") || "");
+  const [isActiveFilter, setIsActiveFilter] = useState(searchParams.get("isActive") || "true");
+  const initialSortKey = QUOTE_TEMPLATE_SORT_KEYS.includes(searchParams.get("sortKey"))
+    ? searchParams.get("sortKey")
+    : null;
+  const [sortKey, setSortKey] = useState(initialSortKey);
+  const [sortDirection, setSortDirection] = useState(
+    initialSortKey && searchParams.get("sortDirection") === "desc" ? "desc" : initialSortKey ? "asc" : null,
+  );
+  const updateSubBrandFilter = (value) => {
+    setSubBrand(value);
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set("subBrand", value);
+    else next.delete("subBrand");
+    setSearchParams(next, { replace: true });
+  };
+
+  const updateListParam = (key, value) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value); else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
+
+  const resetFilters = () => {
+    setSubBrand(activeSubBrand || "");
+    setCategory("");
+    setIsActiveFilter("true");
+    setSortKey(null);
+    setSortDirection(null);
+    const next = new URLSearchParams(searchParams);
+    ["subBrand", "category", "isActive", "sortKey", "sortDirection"].forEach((key) => next.delete(key));
+    setSearchParams(next, { replace: true });
+  };
+
+  const handleSort = (key) => {
+    const next = new URLSearchParams(searchParams);
+    if (sortKey !== key) {
+      setSortKey(key); setSortDirection("asc");
+      next.set("sortKey", key); next.set("sortDirection", "asc");
+    } else if (sortDirection === "asc") {
+      setSortDirection("desc"); next.set("sortDirection", "desc");
+    } else {
+      setSortKey(null); setSortDirection(null);
+      next.delete("sortKey"); next.delete("sortDirection");
+    }
+    setSearchParams(next, { replace: true });
+  };
+
+  const sortHeader = (label, key) => {
+    const active = sortKey === key;
+    const Icon = active ? (sortDirection === "asc" ? ChevronUp : ChevronDown) : ArrowUpDown;
+    return (
+      <button type="button" onClick={() => handleSort(key)}
+        aria-label={`Sort ${label} ${!active ? "default" : sortDirection === "desc" ? "descending" : "ascending"}`}
+        style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}>
+        <span>{label}</span><Icon size={14} aria-hidden />
+      </button>
+    );
+  };
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -155,7 +229,7 @@ export default function QuoteTemplates() {
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
-    if (subBrand) qs.set("subBrand", subBrand);
+    if (subBrand && subBrand !== "all") qs.set("subBrand", subBrand);
     if (category) qs.set("category", category);
     if (isActiveFilter) qs.set("isActive", isActiveFilter);
     const url = `/api/travel/quote-templates${qs.toString() ? `?${qs.toString()}` : ""}`;
@@ -176,6 +250,25 @@ export default function QuoteTemplates() {
 
   useEffect(load, [subBrand, category, isActiveFilter]);
 
+  useEffect(() => {
+    if (!searchParams.get("subBrand")) setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand, searchParams]);
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/quote-templates") return;
+    try { window.sessionStorage.setItem(LAST_LIST_URL_KEY, `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
+
+  const sortedTemplates = [...templates].sort((left, right) => {
+    if (!sortKey) return 0;
+    const leftValue = sortKey === "lines" ? countLines(left.linesJson) : sortKey === "updated" ? (left.updatedAt || left.createdAt || "") : left[sortKey];
+    const rightValue = sortKey === "lines" ? countLines(right.linesJson) : sortKey === "updated" ? (right.updatedAt || right.createdAt || "") : right[sortKey];
+    const result = typeof leftValue === "number" && typeof rightValue === "number"
+      ? leftValue - rightValue
+      : String(leftValue ?? "").localeCompare(String(rightValue ?? ""), undefined, { numeric: true, sensitivity: "base" });
+    return sortDirection === "desc" ? -result : result;
+  });
+
   const resetForm = () => {
     setForm(EMPTY_FORM);
     setEditingId(null);
@@ -192,7 +285,7 @@ export default function QuoteTemplates() {
         body: JSON.stringify({ prompt: aiPrompt, category: form.category, currency: form.currency }),
       });
       setLines(parseLines(result.linesJson));
-      if (result.stub) notify.info("AI is in stub mode — these are sample lines. Add a GEMINI_API_KEY for real generation.");
+      if (result.stub) notify.info("AI keys are not configured for this travel feature. Set GEMINI_API_KEY to enable real generation.");
     } catch (err) {
       notify.error(err?.message || "Failed to generate lines");
     } finally {
@@ -299,12 +392,12 @@ export default function QuoteTemplates() {
         }}
       >
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+          <h1 style={{ display: "flex", alignItems: "center", gap: 12, margin: 0, fontSize: "1.75rem", fontWeight: 600, lineHeight: 1.15, flexWrap: "wrap" }}>
             <FileText size={26} aria-hidden /> Quote Templates
+            <CountBadge count={total} title={`${total.toLocaleString()} templates`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
             Pre-filled line sets for common itineraries — Umrah / India / Visa / etc.
-            {" "}{total.toLocaleString()} template{total === 1 ? "" : "s"}.
           </p>
         </div>
         {canWrite && (
@@ -325,15 +418,17 @@ export default function QuoteTemplates() {
           flexWrap: "wrap",
         }}
       >
-        <select value={subBrand} onChange={(e) => setSubBrand(e.target.value)} style={selectStyle} aria-label="Filter by sub-brand">
+        <select value={subBrand} onChange={(e) => updateSubBrandFilter(e.target.value)} style={selectStyle} aria-label="Filter by sub-brand">
           {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={category} onChange={(e) => setCategory(e.target.value)} style={selectStyle} aria-label="Filter by category">
+        <select value={category} onChange={(e) => { setCategory(e.target.value); updateListParam("category", e.target.value); }} style={selectStyle} aria-label="Filter by category">
           {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
         </select>
-        <select value={isActiveFilter} onChange={(e) => setIsActiveFilter(e.target.value)} style={selectStyle} aria-label="Filter by active status">
+        <select value={isActiveFilter} onChange={(e) => { setIsActiveFilter(e.target.value); updateListParam("isActive", e.target.value); }} style={selectStyle} aria-label="Filter by active status">
           {ACTIVE_FILTER.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
         </select>
+        <button type="button" onClick={load} style={secondaryBtn}>Refresh</button>
+        <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
       </div>
 
       {showForm && (
@@ -512,18 +607,18 @@ export default function QuoteTemplates() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                <th style={th}>Name</th>
-                <th style={th}>Category</th>
+                <th style={th}>{sortHeader("Name", "name")}</th>
+                <th style={th}>{sortHeader("Category", "category")}</th>
                 <th style={th}>Sub-brand</th>
-                <th style={th}>Currency</th>
-                <th style={th}>Lines</th>
+                <th style={th}>{sortHeader("Currency", "currency")}</th>
+                <th style={th}>{sortHeader("Lines", "lines")}</th>
                 <th style={th}>Active</th>
-                <th style={th}>Updated</th>
+                <th style={th}>{sortHeader("Updated", "updated")}</th>
                 {canWrite && <th style={{ ...th, textAlign: "center" }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {templates.map((t) => (
+              {sortedTemplates.map((t) => (
                 <tr key={t.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                   <td style={td}><strong>{t.name}</strong></td>
                   <td style={td}>{t.category || "—"}</td>
@@ -619,6 +714,13 @@ const th = {
   background: "var(--subtle-bg)",
   fontWeight: 600,
 };
+const sortButtonStyle = {
+  display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6,
+  width: "100%", padding: "4px 8px", border: "none", borderRadius: 999,
+  background: "transparent", color: "inherit", font: "inherit", textTransform: "inherit",
+  letterSpacing: "inherit", cursor: "pointer", textAlign: "left",
+};
+const sortButtonActiveStyle = { color: "var(--primary-color)", background: "var(--accent-bg)" };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const inputStyle = {

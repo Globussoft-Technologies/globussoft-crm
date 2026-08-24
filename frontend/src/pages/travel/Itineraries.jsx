@@ -34,10 +34,13 @@ import {
   Utensils,
   Search,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
+  ArrowUpDown,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import CountBadge from "../../components/CountBadge";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { AuthContext } from "../../App";
 import PermissionGate from "../../components/PermissionGate";
@@ -57,7 +60,10 @@ import {
 // rows without lat/lng — so a partially-geocoded itinerary still maps the
 // rows that do have coordinates.
 import MapPreview from "../../components/MapPreview";
+import { destinationGeoQueries } from "../../lib/travelLocationResolver";
+import LocationAutocomplete from "../../components/travel/LocationAutocomplete";
 import TripPager from "./TripPager";
+import SearchHighlight from "../../components/ui/SearchHighlight";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -123,6 +129,40 @@ const TIER_VARIANT = {
   primary: "primary",
   premium: "premium",
 };
+
+const STATUS_SORT_ORDER = {
+  draft: 0,
+  sent: 1,
+  revised: 2,
+  accepted: 3,
+  advance_paid: 4,
+  fully_paid: 5,
+  rejected: 6,
+  expired: 7,
+  requested: 8,
+  cancelled: 9,
+  refunded: 10,
+};
+
+const TIER_SORT_ORDER = {
+  entry: 0,
+  primary: 1,
+  premium: 2,
+};
+
+const ITINERARY_SORT_KEYS = new Set([
+  "destination",
+  "subBrand",
+  "contact",
+  "dates",
+  "items",
+  "total",
+  "status",
+  "tier",
+  "updated",
+]);
+
+const ITINERARIES_LAST_LIST_URL_KEY = "travel.itineraries.lastListUrl";
 
 const ITEM_ICONS = {
   flight: Plane,
@@ -294,6 +334,38 @@ function fmt(d) {
   return new Date(d).toLocaleDateString();
 }
 
+function localTodayIso() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function nextDateIso(dateIso) {
+  const [year, month, day] = dateIso.split("-").map(Number);
+  const date = new Date(year, month - 1, day + 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function openDatePicker(e) {
+  try {
+    e.currentTarget.showPicker?.();
+  } catch {
+    // Browsers without showPicker still open the native picker from its icon.
+  }
+}
+
+function preventDateTyping(e) {
+  if (e.key === "Tab") return;
+  e.preventDefault();
+  if (e.key === "Enter" || e.key === " ") openDatePicker(e);
+}
+
+const pickerOnlyProps = {
+  onClick: openDatePicker,
+  onKeyDown: preventDateTyping,
+  onPaste: (e) => e.preventDefault(),
+  onDrop: (e) => e.preventDefault(),
+};
+
 function fmtMoney(amt, currency = "INR") {
   if (amt == null) return "—";
   const n = Number(amt);
@@ -332,8 +404,96 @@ function TierBadge({ tier }) {
   );
 }
 
+function itinerarySortValue(itinerary, key) {
+  if (key === "destination") return String(itinerary.destination || "").toLowerCase();
+  if (key === "subBrand") return String(itinerary.subBrand || "").toLowerCase();
+  if (key === "contact") {
+    return String(
+      itinerary.contact?.name ||
+      itinerary.contact?.email ||
+      itinerary.contact?.id ||
+      itinerary.contactId ||
+      "",
+    ).toLowerCase();
+  }
+  if (key === "dates") {
+    return new Date(itinerary.startDate || itinerary.endDate || 0).getTime();
+  }
+  if (key === "items") return Array.isArray(itinerary.items) ? itinerary.items.length : 0;
+  if (key === "total") return Number(itinerary.totalAmount || 0);
+  if (key === "status") {
+    const statusKey = itinerary.cancellationStatus || itinerary.status || "";
+    return statusKey ? (STATUS_SORT_ORDER[statusKey] ?? Number.MAX_SAFE_INTEGER) : null;
+  }
+  if (key === "tier") {
+    const tier = String(itinerary.productTier || "").toLowerCase();
+    return tier ? (TIER_SORT_ORDER[tier] ?? Number.MAX_SAFE_INTEGER) : null;
+  }
+  if (key === "updated") return new Date(itinerary.updatedAt || 0).getTime();
+  return "";
+}
+
+function compareItineraries(a, b, key, direction) {
+  const left = itinerarySortValue(a, key);
+  const right = itinerarySortValue(b, key);
+  const leftEmpty = left === null || left === "";
+  const rightEmpty = right === null || right === "";
+  if (leftEmpty || rightEmpty) {
+    if (leftEmpty && rightEmpty) return Number(b.id || 0) - Number(a.id || 0);
+    return leftEmpty ? 1 : -1;
+  }
+  const result = typeof left === "number" && typeof right === "number"
+    ? left - right
+    : String(left).localeCompare(String(right));
+  return (direction === "desc" ? -1 : 1) * (result || Number(b.id || 0) - Number(a.id || 0));
+}
+
+function parsePageParam(value) {
+  const parsed = Number.parseInt(value || "1", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function parsePageSizeParam(value) {
+  const parsed = Number.parseInt(value || "20", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 20;
+}
+
+function buildItinerariesSearchParams({
+  baseSearch = "",
+  subBrand = "",
+  status = "",
+  searchQuery = "",
+  sortKey = null,
+  sortDirection = null,
+  page = 1,
+  pageSize = 20,
+}) {
+  const qs = new URLSearchParams(baseSearch);
+  [
+    "subBrand",
+    "status",
+    "search",
+    "sortKey",
+    "sortDirection",
+    "page",
+    "pageSize",
+  ].forEach((key) => qs.delete(key));
+  if (subBrand === "all") qs.set("subBrand", "all");
+  else if (subBrand) qs.set("subBrand", subBrand);
+  if (status) qs.set("status", status);
+  if (searchQuery.trim()) qs.set("search", searchQuery.trim());
+  if (sortKey && sortDirection && ITINERARY_SORT_KEYS.has(sortKey)) {
+    qs.set("sortKey", sortKey);
+    qs.set("sortDirection", sortDirection);
+  }
+  if (page > 1) qs.set("page", String(page));
+  if (pageSize > 0 && pageSize !== 20) qs.set("pageSize", String(pageSize));
+  return qs;
+}
+
 export default function Itineraries() {
   const notify = useNotify();
+  const todayIso = localTodayIso();
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useContext(AuthContext) || {};
@@ -348,23 +508,38 @@ export default function Itineraries() {
   const initialQuery = new URLSearchParams(location.search);
   const openedFromReports = initialQuery.get("source") === "reports";
   const itinerariesListPath = `${location.pathname}${location.search}`;
-  const [subBrand, setSubBrand] = useState(
-    openedFromReports ? initialQuery.get("subBrand") || "" : "",
+  const querySubBrand = initialQuery.get("subBrand") === "all"
+    ? "all"
+    : initialQuery.get("subBrand") || "";
+  const queryStatus = initialQuery.get("status") || "";
+  const initialSortKey = initialQuery.get("sortKey");
+  const initialSortDirection = initialQuery.get("sortDirection");
+  const [sortKey, setSortKey] = useState(
+    ITINERARY_SORT_KEYS.has(initialSortKey) ? initialSortKey : null,
   );
-  const [status, setStatus] = useState(
-    openedFromReports ? initialQuery.get("status") || "" : "",
+  const [sortDirection, setSortDirection] = useState(
+    initialSortDirection === "asc" || initialSortDirection === "desc"
+      ? initialSortDirection
+      : null,
   );
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [subBrand, setSubBrand] = useState(querySubBrand || activeSubBrand || "");
+  const [status, setStatus] = useState(queryStatus);
+  const [page, setPage] = useState(parsePageParam(initialQuery.get("page")));
+  const [pageSize, setPageSize] = useState(
+    parsePageSizeParam(initialQuery.get("pageSize")),
+  );
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
-  const [customPageSize, setCustomPageSize] = useState("");
+  const [customPageSize, setCustomPageSize] = useState(
+    initialQuery.get("pageSize") || "",
+  );
   const [total, setTotal] = useState(0);
   const [selectedItineraryId, setSelectedItineraryId] = useState(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialQuery.get("search") || "");
   const [reloadTick, setReloadTick] = useState(0);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const endDateMin = form.startDate ? nextDateIso(form.startDate) : "";
   const [contacts, setContacts] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -382,6 +557,61 @@ export default function Itineraries() {
         : null,
     [items, selectedItineraryId],
   );
+
+  useEffect(() => {
+    const query = new URLSearchParams(location.search);
+    const nextSubBrand = query.get("subBrand") === "all"
+      ? "all"
+      : query.get("subBrand") || activeSubBrand || "";
+    const nextStatus = query.get("status") || "";
+    const nextSearch = query.get("search") || "";
+    const nextSortKey = query.get("sortKey");
+    const nextSortDirection =
+      query.get("sortDirection") === "asc" ||
+      query.get("sortDirection") === "desc"
+        ? query.get("sortDirection")
+        : null;
+    const nextPage = parsePageParam(query.get("page"));
+    const nextPageSize = parsePageSizeParam(query.get("pageSize"));
+    const nextCustomPageSize = query.get("pageSize") || "";
+
+    setSubBrand((current) => (current === nextSubBrand ? current : nextSubBrand));
+    setStatus((current) => (current === nextStatus ? current : nextStatus));
+    setSearchQuery((current) => (current === nextSearch ? current : nextSearch));
+    setSortKey((current) =>
+      current === nextSortKey || (!nextSortKey && current == null)
+        ? current
+        : ITINERARY_SORT_KEYS.has(nextSortKey)
+          ? nextSortKey
+          : null,
+    );
+    setSortDirection((current) =>
+      current === nextSortDirection ? current : nextSortDirection,
+    );
+    setPage((current) => (current === nextPage ? current : nextPage));
+    setPageSize((current) => (current === nextPageSize ? current : nextPageSize));
+    setCustomPageSize((current) =>
+      current === nextCustomPageSize ? current : nextCustomPageSize,
+    );
+  }, [activeSubBrand, location.search]);
+
+  useEffect(() => {
+    if (location.pathname !== "/travel/itineraries") return;
+    try {
+      window.sessionStorage.setItem(
+        ITINERARIES_LAST_LIST_URL_KEY,
+        `${location.pathname}${location.search}`,
+      );
+    } catch {
+      // Ignore storage failures; URL state still works on its own.
+    }
+  }, [location.pathname, location.search]);
+
+  const activeItems = useMemo(() => {
+    const rows = [...items];
+    if (!sortKey) return rows;
+    return rows.sort((a, b) => compareItineraries(a, b, sortKey, sortDirection));
+  }, [items, sortDirection, sortKey]);
   const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
   const safePage = Math.min(page, pageCount);
   // Items array passed to MapPreview. When the itinerary has geocoded items
@@ -411,11 +641,9 @@ export default function Itineraries() {
       setMapItems(raw);
       return;
     }
-    // Parse destination into city words and geocode each via Nominatim.
-    const words = selectedItinerary.destination
-      .split(/[_\s/,;-]+/)
-      .map((w) => w.trim())
-      .filter(Boolean);
+    // Parse destination into real place tokens only. Splitting into single words
+    // produced nonsense world-map pins for multi-word destinations.
+    const words = destinationGeoQueries(selectedItinerary.destination);
     let cancelled = false;
     (async () => {
       const synth = [];
@@ -500,9 +728,14 @@ export default function Itineraries() {
   };
 
   const handleSubBrandChange = (nextSubBrand) => {
-    setSubBrand(nextSubBrand);
+    setSubBrand(nextSubBrand || "all");
     setPage(1);
   };
+
+  useEffect(() => {
+    if (openedFromReports || querySubBrand) return;
+    setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand, openedFromReports, querySubBrand]);
 
   const handleStatusChange = (nextStatus) => {
     setStatus(nextStatus);
@@ -514,10 +747,65 @@ export default function Itineraries() {
     setPage(1);
   };
 
+  const handleRefresh = () => {
+    resetFilters();
+    setReloadTick((t) => t + 1);
+  };
+
+  const resetFilters = () => {
+    setSortKey(null);
+    setSortDirection(null);
+    setSubBrand(openedFromReports ? "" : activeSubBrand || "");
+    setStatus("");
+    setSearchQuery("");
+    setSelectedItineraryId(null);
+    setPageSize(20);
+    setIsCustomPageSize(false);
+    setCustomPageSize("");
+    setPage(1);
+  };
+
   const handlePageSizeChange = (nextPageSize) => {
     setPageSize(nextPageSize);
     setPage(1);
   };
+
+  useEffect(() => {
+    const nextParams = buildItinerariesSearchParams({
+      baseSearch: location.search,
+      subBrand,
+      status,
+      searchQuery,
+      sortKey,
+      sortDirection,
+      page,
+      pageSize,
+    });
+    const nextSearch = nextParams.toString();
+    const currentSearch = location.search.startsWith("?")
+      ? location.search.slice(1)
+      : location.search;
+    if (nextSearch !== currentSearch) {
+      navigate(
+        {
+          pathname: location.pathname,
+          search: nextSearch ? `?${nextSearch}` : "",
+        },
+        { replace: true },
+      );
+    }
+  }, [
+    location.pathname,
+    location.search,
+    navigate,
+    page,
+    pageSize,
+    searchQuery,
+    sortDirection,
+    sortKey,
+    status,
+    subBrand,
+  ]);
 
   const closeSuggest = () => {
     setSuggesting(false);
@@ -680,6 +968,14 @@ export default function Itineraries() {
       notify.error("Destination is required");
       return;
     }
+    if (form.startDate && form.startDate < todayIso) {
+      notify.error("Start date must be today or a future date");
+      return;
+    }
+    if (form.endDate && (!form.startDate || form.endDate <= form.startDate)) {
+      notify.error("End date must be after the start date");
+      return;
+    }
     setSaving(true);
     try {
       const body = {
@@ -725,7 +1021,7 @@ export default function Itineraries() {
       }
 
       const qs = new URLSearchParams();
-      if (subBrand) qs.set("subBrand", subBrand);
+      if (subBrand && subBrand !== "all") qs.set("subBrand", subBrand);
       if (status) qs.set("status", status);
       if (searchQuery.trim()) qs.set("search", searchQuery.trim());
       qs.set("limit", String(pageSize));
@@ -788,6 +1084,41 @@ export default function Itineraries() {
     return () => window.removeEventListener("keydown", onKey);
   }, [suggesting]);
 
+  const toggleSort = useCallback((key) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDirection("asc");
+      return;
+    }
+    if (sortDirection === "asc") {
+      setSortDirection("desc");
+      return;
+    }
+    setSortKey(null);
+    setSortDirection(null);
+  }, [sortDirection, sortKey]);
+
+  const sortButton = (key, label) => {
+    const active = sortKey === key;
+    const direction = active ? sortDirection : null;
+    const Icon = direction === "asc" ? ChevronUp : direction === "desc" ? ChevronDown : ArrowUpDown;
+    const sortStateLabel = !active ? "default" : direction === "desc" ? "descending" : "ascending";
+    return (
+      <button
+        type="button"
+        onClick={() => toggleSort(key)}
+        aria-label={`Sort ${label} ${sortStateLabel}`}
+        style={{
+          ...sortButtonStyle,
+          ...(active ? sortButtonActiveStyle : null),
+        }}
+      >
+        <span>{label}</span>
+        <Icon size={14} aria-hidden />
+      </button>
+    );
+  };
+
   return (
     <div
       style={{
@@ -812,12 +1143,17 @@ export default function Itineraries() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: 12,
               margin: 0,
               marginBottom: 4,
+              fontSize: "1.75rem",
+              fontWeight: 600,
+              lineHeight: 1.15,
+              flexWrap: "wrap",
             }}
           >
             <Map size={28} aria-hidden /> Itineraries
+            <CountBadge count={total} title={`${total.toLocaleString()} itineraries`} />
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
             Multi-product trip itineraries (RFU + Travel Stall + visa). Create
@@ -873,7 +1209,7 @@ export default function Itineraries() {
           style={{ color: "var(--text-secondary)" }}
         />
         <select
-          value={subBrand}
+          value={subBrand === "all" ? "" : subBrand}
           onChange={(e) => handleSubBrandChange(e.target.value)}
           style={selectStyle}
           aria-label="Filter by sub-brand"
@@ -953,7 +1289,15 @@ export default function Itineraries() {
         </div>
         <button
           type="button"
-          onClick={() => setReloadTick((t) => t + 1)}
+          onClick={resetFilters}
+          style={refreshBtn}
+          aria-label="Reset filters"
+        >
+          Reset filters
+        </button>
+        <button
+          type="button"
+          onClick={handleRefresh}
           style={refreshBtn}
           aria-label="Reload list"
         >
@@ -1047,20 +1391,20 @@ export default function Itineraries() {
                 >
               <thead>
                 <tr>
-                  <th style={th}>Destination</th>
-                  <th style={th}>Sub-brand</th>
-                  <th style={th}>Contact</th>
-                  <th style={th}>Dates</th>
-                  <th style={th}>Items</th>
-                  <th style={th}>Total</th>
-                  <th style={th}>Status</th>
-                  <th style={th}>Tier</th>
-                  <th style={th}>Updated</th>
+                  <th style={th} aria-sort={sortKey === "destination" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("destination", "Destination")}</th>
+                  <th style={th} aria-sort={sortKey === "subBrand" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("subBrand", "Sub-brand")}</th>
+                  <th style={th} aria-sort={sortKey === "contact" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("contact", "Contact")}</th>
+                  <th style={th} aria-sort={sortKey === "dates" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("dates", "Dates")}</th>
+                  <th style={th} aria-sort={sortKey === "items" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("items", "Items")}</th>
+                  <th style={th} aria-sort={sortKey === "total" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("total", "Total")}</th>
+                  <th style={th} aria-sort={sortKey === "status" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("status", "Status")}</th>
+                  <th style={th} aria-sort={sortKey === "tier" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("tier", "Tier")}</th>
+                  <th style={th} aria-sort={sortKey === "updated" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("updated", "Updated")}</th>
                   <th style={th}>Map</th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((it) => {
+                {activeItems.map((it) => {
                   const statusLabel = it.cancellationStatus
                     ? CANCELLATION_LABEL[it.cancellationStatus] ||
                       it.cancellationStatus
@@ -1090,21 +1434,30 @@ export default function Itineraries() {
                       aria-label={`Open itinerary ${it.destination}`}
                     >
                       <td style={td}>
-                        <strong>{it.destination}</strong>
+                        <strong>
+                          <SearchHighlight text={it.destination} query={searchQuery} />
+                        </strong>
                       </td>
                       <td style={td}>
                         <span style={brandBadge}>{it.subBrand}</span>
                       </td>
                       <td style={td}>
-                        {it.contact
-                          ? it.contact.name ||
-                            it.contact.email ||
-                            `#${it.contact.id}`
-                          : "?"}
+                        {it.contact ? (
+                          <SearchHighlight
+                            text={
+                              it.contact.name ||
+                              it.contact.email ||
+                              `#${it.contact.id}`
+                            }
+                            query={searchQuery}
+                          />
+                        ) : (
+                          "?"
+                        )}
                       </td>
                       <td style={td}>
                         {it.startDate || it.endDate
-                          ? `${fmt(it.startDate)} ? ${fmt(it.endDate)}`
+                          ? `${fmt(it.startDate)}, ${fmt(it.endDate)}`
                           : "?"}
                       </td>
                       <td style={td}>
@@ -1283,7 +1636,7 @@ export default function Itineraries() {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.75)",
+            background: "var(--catalogue-modal-backdrop)",
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
             display: "flex",
@@ -1638,15 +1991,14 @@ export default function Itineraries() {
               </label>
               <label style={fieldLabel}>
                 Destination
-                <input
-                  required
-                  type="text"
+                <LocationAutocomplete
                   value={form.destination}
-                  onChange={(e) =>
-                    setForm({ ...form, destination: e.target.value })
-                  }
+                  onChange={(text) => setForm({ ...form, destination: text })}
                   style={inputStyle}
-                  placeholder='e.g. "Andaman Islands"'
+                  inputProps={{
+                    required: true,
+                    placeholder: 'e.g. "Andaman Islands"',
+                  }}
                 />
               </label>
               <div
@@ -1661,10 +2013,17 @@ export default function Itineraries() {
                   <input
                     type="date"
                     value={form.startDate}
-                    onChange={(e) =>
-                      setForm({ ...form, startDate: e.target.value })
-                    }
-                    style={inputStyle}
+                    min={todayIso}
+                    onChange={(e) => {
+                      const startDate = e.target.value;
+                      setForm((current) => ({
+                        ...current,
+                        startDate,
+                        endDate: current.endDate && current.endDate <= startDate ? "" : current.endDate,
+                      }));
+                    }}
+                    {...pickerOnlyProps}
+                    style={{ ...inputStyle, cursor: "pointer" }}
                   />
                 </label>
                 <label style={fieldLabel}>
@@ -1672,10 +2031,17 @@ export default function Itineraries() {
                   <input
                     type="date"
                     value={form.endDate}
+                    min={endDateMin}
+                    disabled={!form.startDate}
                     onChange={(e) =>
                       setForm({ ...form, endDate: e.target.value })
                     }
-                    style={inputStyle}
+                    {...pickerOnlyProps}
+                    style={{
+                      ...inputStyle,
+                      cursor: form.startDate ? "pointer" : "not-allowed",
+                      opacity: form.startDate ? 1 : 0.6,
+                    }}
                   />
                 </label>
               </div>
@@ -1846,25 +2212,22 @@ export default function Itineraries() {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <label style={fieldLabel}>
                 Destination
-                <input
-                  type="text"
+                <LocationAutocomplete
                   value={suggestForm.destination}
-                  onChange={(e) =>
+                  onChange={(text) =>
                     setSuggestForm({
                       ...suggestForm,
-                      destination: e.target.value,
+                      destination: text,
                     })
                   }
                   style={inputStyle}
-                  placeholder='e.g. "Goa", "Paris", "Kyoto"'
-                  aria-invalid={
-                    suggestFieldErrors.destination ? "true" : "false"
-                  }
-                  aria-describedby={
-                    suggestFieldErrors.destination
+                  inputProps={{
+                    placeholder: 'e.g. "Goa", "Paris", "Kyoto"',
+                    "aria-invalid": suggestFieldErrors.destination ? "true" : "false",
+                    "aria-describedby": suggestFieldErrors.destination
                       ? "suggest-dest-error"
-                      : undefined
-                  }
+                      : undefined,
+                  }}
                 />
                 {suggestFieldErrors.destination && (
                   <span id="suggest-dest-error" style={errorTextStyle}>
@@ -1881,18 +2244,19 @@ export default function Itineraries() {
               >
                 <label style={fieldLabel}>
                   Departure city (optional)
-                  <input
-                    type="text"
+                  <LocationAutocomplete
                     value={suggestForm.departureCity}
-                    onChange={(e) =>
+                    onChange={(text) =>
                       setSuggestForm({
                         ...suggestForm,
-                        departureCity: e.target.value,
+                        departureCity: text,
                       })
                     }
                     style={inputStyle}
-                    placeholder='e.g. "Mumbai", "Delhi"'
-                    aria-label="Departure / pickup city"
+                    inputProps={{
+                      placeholder: 'e.g. "Mumbai", "Delhi"',
+                      "aria-label": "Departure / pickup city",
+                    }}
                   />
                 </label>
                 <label style={fieldLabel}>
@@ -1978,13 +2342,15 @@ export default function Itineraries() {
                 <input
                   type="date"
                   value={suggestForm.startDate}
+                  min={todayIso}
                   onChange={(e) =>
                     setSuggestForm({
                       ...suggestForm,
                       startDate: e.target.value,
                     })
                   }
-                  style={inputStyle}
+                  {...pickerOnlyProps}
+                  style={{ ...inputStyle, cursor: "pointer" }}
                 />
                 <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
                   End date is set automatically from the trip length. The
@@ -2510,13 +2876,32 @@ const th = {
   letterSpacing: 0.5,
   color: "var(--text-secondary)",
   borderBottom: "1px solid var(--border-color)",
-  position: "sticky",
-  top: 0,
-  zIndex: 3,
   background: "var(--modal-bg, var(--bg-color))",
   backgroundClip: "padding-box",
   boxShadow: "inset 0 -1px 0 var(--border-color)",
   boxSizing: "border-box",
+};
+
+const sortButtonStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 6,
+  width: "100%",
+  padding: "4px 8px",
+  border: "none",
+  borderRadius: 999,
+  background: "transparent",
+  color: "inherit",
+  font: "inherit",
+  textTransform: "inherit",
+  letterSpacing: "inherit",
+  cursor: "pointer",
+  textAlign: "left",
+};
+
+const sortButtonActiveStyle = {
+  color: "var(--primary-color)",
 };
 
 const td = {
@@ -2613,20 +2998,12 @@ const inputStyle = {
   boxSizing: "border-box",
 };
 
-// Native <select> with a custom chevron (the default OS arrow looks dated). We
-// strip the browser appearance and paint a chevron via an inline SVG background.
-// Used by the Suggest-itinerary modal + create drawer selects.
+// Native <select> styling. Keep the browser arrow intact: forcing a custom
+// chevron with appearance:none caused selected text/arrow overlap on Windows.
 const modalSelectStyle = {
   ...inputStyle,
-  appearance: "none",
-  WebkitAppearance: "none",
-  MozAppearance: "none",
   cursor: "pointer",
   paddingRight: 34,
-  backgroundImage:
-    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23889' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>\")",
-  backgroundRepeat: "no-repeat",
-  backgroundPosition: "right 11px center",
 };
 
 // Redesigned day-card styling for the Suggest-itinerary preview (the operator

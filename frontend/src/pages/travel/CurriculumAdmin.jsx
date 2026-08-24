@@ -53,7 +53,20 @@
  * Sure).
  */
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { GraduationCap, Plus, Edit2, Trash2, X, AlertTriangle, Sparkles } from 'lucide-react';
+import { useLocation, useSearchParams } from 'react-router-dom';
+import {
+  AlertTriangle,
+  ArrowUpDown,
+  ChevronDown,
+  ChevronUp,
+  Edit2,
+  GraduationCap,
+  Plus,
+  Sparkles,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
@@ -63,6 +76,7 @@ import TopScrollSync from '../../components/TopScrollSync';
 // TravelCurriculumMapping.learningOutcome is VarChar(300)).
 const LEARNING_OUTCOME_MAX = 300;
 const PAGE_SIZE = 10;
+const LAST_LIST_URL_KEY = 'travel.curriculumMappings.lastListUrl';
 
 // Common curriculum tokens the academic-team curates. The backend
 // accepts arbitrary non-empty strings; the dropdown is a suggestion
@@ -85,6 +99,7 @@ const EMPTY_FORM = {
   learningOutcome: '',
   destinationId: '',
   destinationLabel: '',
+  brochurePdfUrl: '',
   fitScore: 50,
   confidenceScore: 50,
   fitRationale: '',
@@ -153,6 +168,8 @@ function truncate(text, max = 80) {
 
 export default function CurriculumAdmin() {
   const notify = useNotify();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
 
@@ -164,11 +181,71 @@ export default function CurriculumAdmin() {
   const [hasMore, setHasMore] = useState(true);
 
   // Filter state.
-  const [filterAcademicYear, setFilterAcademicYear] = useState('');
-  const [filterCurriculum, setFilterCurriculum] = useState('');
-  const [filterGrade, setFilterGrade] = useState('');
-  const [filterSubject, setFilterSubject] = useState('');
-  const [filterIsActive, setFilterIsActive] = useState('all'); // all | true | false
+  const [filterAcademicYear, setFilterAcademicYear] = useState(searchParams.get('academicYear') || '');
+  const [filterCurriculum, setFilterCurriculum] = useState(searchParams.get('curriculum') || '');
+  const [filterGrade, setFilterGrade] = useState(searchParams.get('grade') || '');
+  const [filterSubject, setFilterSubject] = useState(searchParams.get('subject') || '');
+  const [filterIsActive, setFilterIsActive] = useState(searchParams.get('isActive') || 'all'); // all | true | false
+  const [sortKey, setSortKey] = useState(searchParams.get('sortKey') || null);
+  const [sortDirection, setSortDirection] = useState(searchParams.get('sortDirection') || null);
+
+  const updateParams = (patch) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value === null || value === undefined || value === '') next.delete(key);
+      else next.set(key, String(value));
+    });
+    setSearchParams(next, { replace: true });
+  };
+
+  const resetFilters = () => {
+    setFilterAcademicYear('');
+    setFilterCurriculum('');
+    setFilterGrade('');
+    setFilterSubject('');
+    setFilterIsActive('all');
+    setSortKey(null);
+    setSortDirection(null);
+    updateParams({
+      academicYear: null,
+      curriculum: null,
+      grade: null,
+      subject: null,
+      isActive: null,
+      sortKey: null,
+      sortDirection: null,
+    });
+  };
+
+  const handleSort = (key) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDirection('asc');
+      updateParams({ sortKey: key, sortDirection: 'asc' });
+    } else if (sortDirection === 'asc') {
+      setSortDirection('desc');
+      updateParams({ sortKey: key, sortDirection: 'desc' });
+    } else {
+      setSortKey(null);
+      setSortDirection(null);
+      updateParams({ sortKey: null, sortDirection: null });
+    }
+  };
+
+  const sortHeader = (label, key) => {
+    const active = sortKey === key;
+    const Icon = active ? (sortDirection === 'asc' ? ChevronUp : ChevronDown) : ArrowUpDown;
+    return (
+      <button
+        type="button"
+        onClick={() => handleSort(key)}
+        aria-label={`Sort ${label} ${!active ? 'default' : sortDirection === 'desc' ? 'descending' : 'ascending'}`}
+        style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}
+      >
+        <span>{label}</span><Icon size={14} aria-hidden style={{ flexShrink: 0 }} />
+      </button>
+    );
+  };
 
   const [proposalPanelOpen, setProposalPanelOpen] = useState(false);
   const [proposals, setProposals] = useState([]);
@@ -184,6 +261,7 @@ export default function CurriculumAdmin() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [brochureUploading, setBrochureUploading] = useState(false);
   const listRef = useRef(null);
   const mappingsRef = useRef([]);
   const loadingRef = useRef(true);
@@ -220,6 +298,17 @@ export default function CurriculumAdmin() {
     if (filterIsActive !== 'all') qs.set('isActive', filterIsActive);
     return qs.toString();
   }, [filterAcademicYear, filterCurriculum, filterGrade, filterSubject, filterIsActive]);
+
+  const sortedMappings = [...mappings].sort((left, right) => {
+    if (!sortKey) return 0;
+    const numeric = sortKey === 'fitScore' || sortKey === 'confidenceScore';
+    const leftValue = numeric ? Number(left[sortKey] ?? -1) : left[sortKey];
+    const rightValue = numeric ? Number(right[sortKey] ?? -1) : right[sortKey];
+    const result = numeric
+      ? leftValue - rightValue
+      : String(leftValue ?? '').localeCompare(String(rightValue ?? ''), undefined, { numeric: true, sensitivity: 'base' });
+    return sortDirection === 'desc' ? -result : result;
+  });
 
   const load = useCallback(async ({ reset = false } = {}) => {
     const startOffset = reset ? 0 : offsetRef.current;
@@ -283,6 +372,11 @@ export default function CurriculumAdmin() {
     load({ reset: true });
   }, [load]);
 
+  useEffect(() => {
+    if (location.pathname !== '/travel/curriculum-mappings') return;
+    try { window.sessionStorage.setItem(LAST_LIST_URL_KEY, `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
+
   const handleListScroll = useCallback((e) => {
     const el = e.currentTarget;
     if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
@@ -315,6 +409,7 @@ export default function CurriculumAdmin() {
       learningOutcome: m.learningOutcome || '',
       destinationId: m.destinationId == null ? '' : String(m.destinationId),
       destinationLabel: m.destinationLabel || '',
+      brochurePdfUrl: m.brochurePdfUrl || '',
       fitScore: m.fitScore == null ? 50 : m.fitScore,
       confidenceScore: m.confidenceScore == null ? 50 : m.confidenceScore,
       fitRationale: m.fitRationale || '',
@@ -327,6 +422,31 @@ export default function CurriculumAdmin() {
   const closeModal = () => {
     setModalOpen(false);
     setFormError(null);
+  };
+
+  const uploadBrochurePdf = async (file) => {
+    if (!file) return;
+    if (file.type && file.type !== 'application/pdf') {
+      notify.error('Only PDF brochures can be uploaded');
+      return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    setBrochureUploading(true);
+    try {
+      const res = await fetchApi('/api/travel-curriculum/brochure/upload', {
+        method: 'POST',
+        body: formData,
+        silent: true,
+      });
+      if (!res?.url) throw new Error('Upload did not return a brochure URL');
+      setForm((prev) => ({ ...prev, brochurePdfUrl: res.url }));
+      notify.success('Brochure PDF uploaded');
+    } catch (err) {
+      notify.error(err?.data?.error || err?.message || 'Failed to upload brochure PDF');
+    } finally {
+      setBrochureUploading(false);
+    }
   };
 
   const submit = async (e) => {
@@ -402,6 +522,7 @@ export default function CurriculumAdmin() {
       learningOutcome: learningOutcome || null,
       destinationId,
       destinationLabel: (form.destinationLabel || '').trim() || null,
+      brochurePdfUrl: (form.brochurePdfUrl || '').trim() || null,
       fitScore: fitScoreNum,
       confidenceScore: confidenceScoreNum,
       fitRationale: (form.fitRationale || '').trim() || null,
@@ -690,7 +811,7 @@ export default function CurriculumAdmin() {
           <input
             type="text"
             value={filterAcademicYear}
-            onChange={(e) => setFilterAcademicYear(e.target.value)}
+            onChange={(e) => { setFilterAcademicYear(e.target.value); updateParams({ academicYear: e.target.value }); }}
             placeholder="e.g. 2026-27"
             style={{ ...inputStyle, minWidth: 110 }}
           />
@@ -699,7 +820,7 @@ export default function CurriculumAdmin() {
           Curriculum
           <select
             value={filterCurriculum}
-            onChange={(e) => setFilterCurriculum(e.target.value)}
+            onChange={(e) => { setFilterCurriculum(e.target.value); updateParams({ curriculum: e.target.value }); }}
             aria-label="Filter by curriculum"
             style={selectStyle}
             data-testid="curriculum-filter-curriculum"
@@ -715,7 +836,7 @@ export default function CurriculumAdmin() {
           <input
             type="text"
             value={filterGrade}
-            onChange={(e) => setFilterGrade(e.target.value)}
+            onChange={(e) => { setFilterGrade(e.target.value); updateParams({ grade: e.target.value }); }}
             placeholder="e.g. 9"
             aria-label="Filter by grade"
             style={{ ...inputStyle, minWidth: 80, width: 90 }}
@@ -727,7 +848,7 @@ export default function CurriculumAdmin() {
           <input
             type="text"
             value={filterSubject}
-            onChange={(e) => setFilterSubject(e.target.value)}
+            onChange={(e) => { setFilterSubject(e.target.value); updateParams({ subject: e.target.value }); }}
             placeholder="e.g. History"
             aria-label="Filter by subject"
             style={{ ...inputStyle, minWidth: 140 }}
@@ -738,7 +859,7 @@ export default function CurriculumAdmin() {
           Active
           <select
             value={filterIsActive}
-            onChange={(e) => setFilterIsActive(e.target.value)}
+            onChange={(e) => { setFilterIsActive(e.target.value); updateParams({ isActive: e.target.value === 'all' ? null : e.target.value }); }}
             aria-label="Filter by active state"
             style={selectStyle}
             data-testid="curriculum-filter-active"
@@ -748,6 +869,12 @@ export default function CurriculumAdmin() {
             <option value="false">Inactive only</option>
           </select>
         </label>
+        <button type="button" onClick={() => load({ reset: true })} style={filterActionBtn}>
+          Refresh
+        </button>
+        <button type="button" onClick={resetFilters} style={filterActionBtn}>
+          Reset filters
+        </button>
       </div>
 
       {proposalPanelOpen && (
@@ -946,21 +1073,21 @@ export default function CurriculumAdmin() {
           <table data-testid="curriculum-mapping-table" style={{ width: '100%', minWidth: '1480px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
-                <th style={{ ...th, width: '8%' }}>Year</th>
-                <th style={{ ...th, width: '10%' }}>Curriculum</th>
-                <th style={{ ...th, width: '6%' }}>Grade</th>
-                <th style={{ ...th, width: '8%' }}>Subject</th>
-                <th style={{ ...th, width: '7%' }}>Code</th>
-                <th style={{ ...th, width: '19%' }}>Learning outcome</th>
-                <th style={{ ...th, width: '17%' }}>Destination</th>
-                <th style={{ ...th, width: '5%' }}>Fit</th>
-                <th style={{ ...th, width: '5%' }}>Conf.</th>
+                <th style={{ ...th, width: '8%' }}>{sortHeader('Year', 'academicYear')}</th>
+                <th style={{ ...th, width: '10%' }}>{sortHeader('Curriculum', 'curriculum')}</th>
+                <th style={{ ...th, width: '6%' }}>{sortHeader('Grade', 'grade')}</th>
+                <th style={{ ...th, width: '8%' }}>{sortHeader('Subject', 'subject')}</th>
+                <th style={{ ...th, width: '7%' }}>{sortHeader('Code', 'learningOutcomeCode')}</th>
+                <th style={{ ...th, width: '19%' }}>{sortHeader('Learning outcome', 'learningOutcome')}</th>
+                <th style={{ ...th, width: '17%' }}>{sortHeader('Destination', 'destinationLabel')}</th>
+                <th style={{ ...th, width: '5%' }}>{sortHeader('Fit', 'fitScore')}</th>
+                <th style={{ ...th, width: '5%' }}>{sortHeader('Conf.', 'confidenceScore')}</th>
                 <th style={{ ...th, width: '5%' }}>Active</th>
                 {isAdmin && <th style={{ ...th, width: '15%' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {mappings.map((m) => (
+              {sortedMappings.map((m) => (
                 <tr key={m.id} style={{ borderTop: '1px solid var(--border-light)' }} data-testid={`curriculum-mapping-row-${m.id}`}>
                   <td style={td}>{m.academicYear || <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>}</td>
                   <td style={td}><strong>{m.curriculum}</strong></td>
@@ -1028,7 +1155,7 @@ export default function CurriculumAdmin() {
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.75)',
+            background: 'var(--catalogue-modal-backdrop)',
             backdropFilter: 'blur(4px)',
             WebkitBackdropFilter: 'blur(4px)',
             display: 'flex',
@@ -1196,6 +1323,43 @@ export default function CurriculumAdmin() {
                 )}
               </label>
 
+              <div style={fieldLabel}>
+                <span>Brochure PDF</span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={form.brochurePdfUrl}
+                    onChange={(e) => setForm({ ...form, brochurePdfUrl: e.target.value })}
+                    placeholder="Upload a PDF or paste a brochure URL"
+                    style={{ ...inputStyle, flex: 1 }}
+                    data-testid="curriculum-form-brochure-url"
+                  />
+                  <label style={{ ...refreshBtn, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: brochureUploading ? 'wait' : 'pointer' }}>
+                    <Upload size={14} />
+                    {brochureUploading ? 'Uploading...' : 'Upload'}
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      disabled={brochureUploading}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        uploadBrochurePdf(file);
+                      }}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                </div>
+                <span style={fieldHintText}>
+                  When this mapping is recommended, the diagnostic PDF will show a brochure download link.
+                </span>
+                {form.brochurePdfUrl && (
+                  <a href={form.brochurePdfUrl} target="_blank" rel="noreferrer" style={linkStyle}>
+                    Open uploaded brochure
+                  </a>
+                )}
+              </div>
+
               <label style={fieldLabel}>
                 Fit score (1-100)
                 <input
@@ -1303,6 +1467,15 @@ const refreshBtn = {
   cursor: 'pointer',
 };
 
+const filterActionBtn = {
+  ...refreshBtn,
+  alignSelf: 'flex-end',
+  minHeight: 34,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
 const primaryBtn = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -1388,6 +1561,14 @@ const fieldHintText = {
   fontStyle: 'italic',
 };
 
+const linkStyle = {
+  color: 'var(--primary-color, var(--accent-color))',
+  fontSize: 12,
+  fontWeight: 600,
+  textDecoration: 'none',
+  width: 'fit-content',
+};
+
 const empty = {
   padding: 32,
   textAlign: 'center',
@@ -1409,6 +1590,29 @@ const th = {
   background: 'var(--bg-color)',
   backgroundClip: 'padding-box',
   boxShadow: 'inset 0 -1px 0 var(--border-color)',
+};
+
+const sortButtonStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 6,
+  width: '100%',
+  padding: '4px 8px',
+  border: 'none',
+  borderRadius: 999,
+  background: 'transparent',
+  color: 'inherit',
+  font: 'inherit',
+  textTransform: 'inherit',
+  letterSpacing: 'inherit',
+  cursor: 'pointer',
+  textAlign: 'left',
+};
+
+const sortButtonActiveStyle = {
+  color: 'var(--primary-color)',
+  background: 'var(--accent-bg)',
 };
 
 const td = {

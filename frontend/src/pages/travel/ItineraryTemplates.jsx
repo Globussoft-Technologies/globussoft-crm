@@ -34,10 +34,11 @@
 // pattern, same notify hook (`../utils/notify`, not `../hooks/useNotify`).
 
 import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
-import { Link } from 'react-router-dom';
-import { Archive, ArchiveRestore, Copy, Download, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Upload, X } from 'lucide-react';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { Archive, ArchiveRestore, Copy, Upload, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Download, X, ChevronDown, ChevronUp, ArrowUpDown } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import CountBadge from '../../components/CountBadge';
 import { AuthContext } from '../../App';
 import { useActiveSubBrand } from '../../utils/subBrand';
 import PatientPager from '../wellness/patients/PatientPager';
@@ -49,7 +50,7 @@ import {
 import MapPreview from '../../components/MapPreview';
 
 const SUB_BRANDS = [
-  { value: '', label: 'All sub-brands' },
+  { value: 'all', label: 'All sub-brands' },
   { value: 'tmc', label: 'TMC' },
   { value: 'rfu', label: 'RFU' },
   { value: 'travelstall', label: 'Travel Stall' },
@@ -83,6 +84,8 @@ const BUDGET_TIERS = [
 ];
 
 const PAGE_SIZE = 20;
+const ITINERARY_TEMPLATES_LAST_LIST_URL_KEY = 'travel.itineraryTemplates.lastListUrl';
+const TEMPLATE_SORT_KEYS = new Set(['name', 'destinationName', 'durationDays', 'category', 'subBrand', 'defaultMarkupPercent', 'basePriceMinor', 'usageCount', 'status']);
 const ITINERARY_TABLE_WIDTH = 1800;
 
 // G061 — Parse the template's `templateJson` (String? @db.LongText holding
@@ -152,6 +155,8 @@ const EMPTY_FORM = {
 
 export default function ItineraryTemplates() {
   const notify = useNotify();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
 
@@ -163,22 +168,29 @@ export default function ItineraryTemplates() {
 
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
+  const [pageSize, setPageSize] = useState(Number(searchParams.get('pageSize')) || PAGE_SIZE);
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
   const [customPageSize, setCustomPageSize] = useState('');
   const [loading, setLoading] = useState(true);
   const [reloadTick, setReloadTick] = useState(0);
 
   // Filter state
-  const [destinationFilter, setDestinationFilter] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [subBrandFilter, setSubBrandFilter] = useState('');
+  const [destinationFilter, setDestinationFilter] = useState(searchParams.get('destination') || '');
+  const [categoryFilter, setCategoryFilter] = useState(searchParams.get('category') || '');
+  const [subBrandFilter, setSubBrandFilter] = useState(searchParams.get('subBrand') || activeSubBrand || '');
   // G061 — Budget-tier facet (PRD FR-3.1.c). One of '' | 'budget' | 'mid' |
   // 'premium' | 'luxury'. Threads to the backend as ?budgetTier=…
-  const [budgetTierFilter, setBudgetTierFilter] = useState('');
-  const [activeOnly, setActiveOnly] = useState(true);
-  const [includeArchived, setIncludeArchived] = useState(false);
+  const [budgetTierFilter, setBudgetTierFilter] = useState(searchParams.get('budgetTier') || '');
+  const [activeOnly, setActiveOnly] = useState(searchParams.get('active') !== 'false');
+  const [includeArchived, setIncludeArchived] = useState(searchParams.get('archived') === '1');
+  const [sortKey, setSortKey] = useState(searchParams.get('sortKey') || null);
+  const [sortDirection, setSortDirection] = useState(searchParams.get('sortDirection') || null);
+  const updateParams = (patch) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(patch).forEach(([key, value]) => { if (value === null || value === undefined || value === '' || value === false) next.delete(key); else next.set(key, String(value)); });
+    setSearchParams(next, { replace: true });
+  };
   // Form state
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -251,7 +263,7 @@ export default function ItineraryTemplates() {
     const qs = new URLSearchParams();
     if (destinationFilter.trim()) qs.set('destinationName', destinationFilter.trim());
     if (categoryFilter) qs.set('category', categoryFilter);
-    if (subBrandFilter) qs.set('subBrand', subBrandFilter);
+    if (subBrandFilter && subBrandFilter !== 'all') qs.set('subBrand', subBrandFilter);
     if (budgetTierFilter) qs.set('budgetTier', budgetTierFilter);
     if (activeOnly) qs.set('isActive', 'true');
     else qs.set('isActive', 'false');
@@ -276,8 +288,41 @@ export default function ItineraryTemplates() {
   }, [destinationFilter, categoryFilter, subBrandFilter, budgetTierFilter, activeOnly, includeArchived, notify, page, pageSize]);
 
   useEffect(() => {
+    if (!searchParams.get('subBrand')) {
+      setSubBrandFilter(activeSubBrand || '');
+      setPage(1);
+    }
+  }, [activeSubBrand]);
+
+  useEffect(() => {
     fetchItems(page, pageSize);
   }, [fetchItems, page, pageSize, reloadTick]);
+
+  useEffect(() => {
+    if (location.pathname !== '/travel/itinerary-templates') return;
+    try { window.sessionStorage.setItem(ITINERARY_TEMPLATES_LAST_LIST_URL_KEY, `${location.pathname}${location.search}`); } catch { /* URL remains authoritative. */ }
+  }, [location.pathname, location.search]);
+
+  const sortedItems = useMemo(() => {
+    if (!sortKey || !sortDirection) return items;
+    return [...items].sort((a, b) => {
+      const numeric = ['durationDays', 'defaultMarkupPercent', 'basePriceMinor', 'usageCount'].includes(sortKey);
+      const left = numeric ? Number(a[sortKey] || 0) : String(a[sortKey] || '').toLowerCase();
+      const right = numeric ? Number(b[sortKey] || 0) : String(b[sortKey] || '').toLowerCase();
+      return (left > right ? 1 : left < right ? -1 : 0) * (sortDirection === 'desc' ? -1 : 1);
+    });
+  }, [items, sortDirection, sortKey]);
+
+  const resetFilters = () => {
+    setDestinationFilter(''); setCategoryFilter(''); setSubBrandFilter(activeSubBrand || ''); setBudgetTierFilter(''); setActiveOnly(true); setIncludeArchived(false); setPage(1); setPageSize(PAGE_SIZE); setSortKey(null); setSortDirection(null);
+    updateParams({ destination: null, category: null, subBrand: null, budgetTier: null, active: null, archived: null, page: 1, pageSize: null, sortKey: null, sortDirection: null });
+  };
+
+  const sortButton = (key, label) => {
+    const active = sortKey === key;
+    const Icon = active && sortDirection === 'asc' ? ChevronUp : active && sortDirection === 'desc' ? ChevronDown : ArrowUpDown;
+    return <button type="button" onClick={() => { const next = !active ? 'asc' : sortDirection === 'asc' ? 'desc' : null; setSortKey(next ? key : null); setSortDirection(next); updateParams({ sortKey: next ? key : null, sortDirection: next }); }} aria-label={`Sort ${label}`} style={{ ...sortButtonStyle, ...(active ? sortButtonActiveStyle : null) }}><span>{label}</span><Icon size={14} /></button>;
+  };
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -587,8 +632,9 @@ export default function ItineraryTemplates() {
         }}
       >
         <div>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
+          <h1 style={{ display: 'flex', alignItems: 'center', gap: 12, margin: 0, fontSize: '1.75rem', fontWeight: 600, lineHeight: 1.15, flexWrap: 'wrap' }}>
             <FileText size={28} aria-hidden /> Itinerary Template Library
+            <CountBadge count={total} title={`${total.toLocaleString()} templates`} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
             Pre-loaded itinerary templates - destination, duration, base price, sub-brand
@@ -609,7 +655,7 @@ export default function ItineraryTemplates() {
             data-testid="export-csv-btn"
             title="Download a CSV with id, name, sub-brand, usage, accepted, avg sale, last used, version"
           >
-            <Download size={14} /> Export CSV
+            <Upload size={14} /> Export CSV
           </button>
           {!showForm && (
             <button type="button" onClick={openCreateForm} style={primaryBtn}>
@@ -642,6 +688,7 @@ export default function ItineraryTemplates() {
             onChange={(e) => {
               setDestinationFilter(e.target.value);
               setPage(1);
+              updateParams({ destination: e.target.value, page: 1 });
             }}
             placeholder="Filter by destination"
             aria-label="Destination filter"
@@ -650,9 +697,10 @@ export default function ItineraryTemplates() {
         </div>
         <select
           value={categoryFilter}
-          onChange={(e) => {
-            setCategoryFilter(e.target.value);
-            setPage(1);
+            onChange={(e) => {
+              setCategoryFilter(e.target.value);
+              setPage(1);
+              updateParams({ category: e.target.value, page: 1 });
           }}
           aria-label="Category filter"
           style={selectStyle}
@@ -665,9 +713,10 @@ export default function ItineraryTemplates() {
         </select>
         <select
           value={subBrandFilter}
-          onChange={(e) => {
-            setSubBrandFilter(e.target.value);
-            setPage(1);
+            onChange={(e) => {
+              setSubBrandFilter(e.target.value);
+              setPage(1);
+              updateParams({ subBrand: e.target.value, page: 1 });
           }}
           aria-label="Sub-brand filter"
           style={selectStyle}
@@ -686,6 +735,7 @@ export default function ItineraryTemplates() {
           onChange={(e) => {
             setBudgetTierFilter(e.target.value);
             setPage(1);
+            updateParams({ budgetTier: e.target.value, page: 1 });
           }}
           aria-label="Budget tier filter"
           data-testid="budget-tier-filter"
@@ -706,6 +756,7 @@ export default function ItineraryTemplates() {
             onChange={(e) => {
               setActiveOnly(e.target.checked);
               setPage(1);
+              updateParams({ active: e.target.checked ? null : 'false', page: 1 });
             }}
             aria-label="Active only"
           />
@@ -718,11 +769,16 @@ export default function ItineraryTemplates() {
             onChange={(e) => {
               setIncludeArchived(e.target.checked);
               setPage(1);
+              updateParams({ archived: e.target.checked ? '1' : null, page: 1 });
             }}
             aria-label="Include archived"
           />
           Include archived
         </label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => setReloadTick((t) => t + 1)} style={secondaryBtn}>Refresh</button>
+          <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
+        </div>
       </div>
 
       {/* Add / edit form */}
@@ -1057,14 +1113,14 @@ export default function ItineraryTemplates() {
             <table style={{ width: '100%', minWidth: ITINERARY_TABLE_WIDTH, borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                <th style={th}>Name</th>
-                <th style={th}>Destination</th>
-                <th style={th}>Duration</th>
-                <th style={th}>Category</th>
-                <th style={th}>Sub-brand</th>
-                <th style={th}>Markup</th>
-                <th style={th}>Base price</th>
-                <th style={th}>Usage</th>
+                <th style={th}>{sortButton('name', 'Name')}</th>
+                <th style={th}>{sortButton('destinationName', 'Destination')}</th>
+                <th style={th}>{sortButton('durationDays', 'Duration')}</th>
+                <th style={th}>{sortButton('category', 'Category')}</th>
+                <th style={th}>{sortButton('subBrand', 'Sub-brand')}</th>
+                <th style={th}>{sortButton('defaultMarkupPercent', 'Markup')}</th>
+                <th style={th}>{sortButton('basePriceMinor', 'Base price')}</th>
+                <th style={th}>{sortButton('usageCount', 'Usage')}</th>
                 {/* G049 — library metrics (PRD FR-3.1.h). Engine-bumped by
                     routes/travel_itineraries.js on clone + accept; the
                     /:id response includes these fields by default. */}
@@ -1081,7 +1137,7 @@ export default function ItineraryTemplates() {
               </tr>
               </thead>
               <tbody>
-                {items.map((item) => (
+                {sortedItems.map((item) => (
                   <tr
                     key={item.id}
                     style={{
@@ -1260,10 +1316,11 @@ export default function ItineraryTemplates() {
           total={total}
           page={page}
           pageSize={pageSize}
-          onPageChange={setPage}
+          onPageChange={(nextPage) => { setPage(nextPage); updateParams({ page: nextPage }); }}
           onPageSizeChange={(nextSize) => {
             setPageSize(nextSize);
             setPage(1);
+            updateParams({ pageSize: nextSize, page: 1 });
           }}
           isCustomPageSize={isCustomPageSize}
           setIsCustomPageSize={setIsCustomPageSize}
@@ -1704,6 +1761,8 @@ const th = {
   backgroundClip: 'padding-box',
   boxShadow: 'inset 0 -1px 0 var(--border-color)',
 };
+const sortButtonStyle = { display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, width: '100%', padding: '4px 8px', border: 'none', borderRadius: 999, background: 'transparent', color: 'inherit', font: 'inherit', textTransform: 'inherit', letterSpacing: 'inherit', cursor: 'pointer', textAlign: 'left', transition: 'background-color 0.15s ease, color 0.15s ease' };
+const sortButtonActiveStyle = { color: 'var(--primary-color)' };
 const td = { padding: '10px 12px', fontSize: 14, color: 'var(--text-primary)' };
 const brandBadge = {
   padding: '2px 8px',

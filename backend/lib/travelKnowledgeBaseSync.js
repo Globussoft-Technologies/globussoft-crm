@@ -34,7 +34,7 @@ const { google } = require("googleapis");
 const crypto = require("crypto");
 const prisma = require("./prisma");
 const qdrant = require("./qdrantClient");
-const embedClient = require("./openAIEmbedClient");
+const embedClient = require("./embedClient");
 const pdfExtractor = require("./pdfTextExtractor");
 const { sanitizeText } = require("./sanitizeJson");
 
@@ -74,6 +74,14 @@ function stopSyncJob(jobId) {
     console.warn("[travelKnowledgeBaseSync] abort failed:", e.message);
   }
   return true;
+}
+
+function throwIfAborted(signal, label = "sync") {
+  if (signal && signal.aborted) {
+    const err = new Error(`${label} stopped by user`);
+    err.code = "STOPPED";
+    throw err;
+  }
 }
 
 async function getDriveClient(tenantId) {
@@ -181,11 +189,11 @@ async function downloadPdf(drive, fileId) {
   return Buffer.from(res.data);
 }
 
-async function embedChunks(chunks) {
+async function embedChunks(chunks, embedConfig) {
   const embeddings = new Map();
   for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
     const batch = chunks.slice(i, i + EMBED_BATCH_SIZE);
-    const { embeddings: batchMap, errors } = await embedClient.embedTexts(batch);
+    const { embeddings: batchMap, errors } = await embedConfig.client.embedTexts(batch, embedConfig);
     for (let j = 0; j < batch.length; j += 1) {
       const globalIndex = i + j;
       if (batchMap.has(j)) {
@@ -199,8 +207,8 @@ async function embedChunks(chunks) {
   return embeddings;
 }
 
-async function buildPoints(tenantId, subBrand, fileMeta, chunks) {
-  const embeddings = await embedChunks(chunks);
+async function buildPoints(tenantId, subBrand, fileMeta, chunks, embedConfig) {
+  const embeddings = await embedChunks(chunks, embedConfig);
   const points = [];
   for (let i = 0; i < chunks.length; i += 1) {
     const vec = embeddings.get(i);
@@ -225,7 +233,8 @@ async function buildPoints(tenantId, subBrand, fileMeta, chunks) {
   return points;
 }
 
-async function indexOneFile({ drive, tenantId, subBrand, fileMeta, syncJobId }) {
+async function indexOneFile({ drive, tenantId, subBrand, fileMeta, syncJobId, embedConfig, providerId, signal }) {
+  throwIfAborted(signal, "indexOneFile");
   const existing = await prisma.travelKnowledgeBaseFile.findUnique({
     where: {
       tenantId_subBrand_driveFileId: {
@@ -240,6 +249,7 @@ async function indexOneFile({ drive, tenantId, subBrand, fileMeta, syncJobId }) 
   // The public webViewLink is stored in Qdrant so the generated diagnostic PDF
   // can embed clickable, access-free Drive links.
   const publicViewLink = await ensurePublicViewLink(drive, fileMeta.id);
+  throwIfAborted(signal, "indexOneFile");
   fileMeta.publicViewLink = publicViewLink;
 
   let buffer;
@@ -250,14 +260,27 @@ async function indexOneFile({ drive, tenantId, subBrand, fileMeta, syncJobId }) 
     await upsertFileRow({ tenantId, subBrand, fileMeta, syncJobId, status: "failed", failureReason: reason });
     return { status: "failed", reason };
   }
+  throwIfAborted(signal, "indexOneFile");
 
   const fileSha256 = sha256(buffer);
   const linkChanged = existing && existing.driveViewLink !== publicViewLink;
+  let existingPointCount = 0;
   if (existing && existing.sha256 === fileSha256 && existing.status === "active" && !linkChanged) {
-    return { status: "unchanged" };
+    // Even if the file metadata has not changed, re-index if the active provider's
+    // collection has no points for it (e.g. after switching from Gemini to OpenAI).
+    existingPointCount = await qdrant.countPointsByDriveFile({
+      tenantId,
+      subBrand,
+      driveFileId: fileMeta.id,
+      providerId,
+    });
+    if (existingPointCount > 0) {
+      return { status: "unchanged" };
+    }
   }
 
   const extracted = await pdfExtractor.extractText(buffer);
+  throwIfAborted(signal, "indexOneFile");
   if (!extracted.text.trim()) {
     const reason = "no text extracted";
     await upsertFileRow({
@@ -274,6 +297,7 @@ async function indexOneFile({ drive, tenantId, subBrand, fileMeta, syncJobId }) 
   }
 
   const chunks = chunkText(extracted.text);
+  throwIfAborted(signal, "indexOneFile");
   if (chunks.length === 0) {
     const reason = "text too short to chunk";
     await upsertFileRow({
@@ -290,9 +314,11 @@ async function indexOneFile({ drive, tenantId, subBrand, fileMeta, syncJobId }) 
   }
 
   // Clean up old points before re-upserting (idempotent).
-  await qdrant.deleteByDriveFile({ tenantId, subBrand, driveFileId: fileMeta.id });
+  await qdrant.deleteByDriveFile({ tenantId, subBrand, driveFileId: fileMeta.id, providerId });
+  throwIfAborted(signal, "indexOneFile");
 
-  const points = await buildPoints(tenantId, subBrand, fileMeta, chunks);
+  const points = await buildPoints(tenantId, subBrand, fileMeta, chunks, embedConfig);
+  throwIfAborted(signal, "indexOneFile");
   if (points.length === 0) {
     const reason = "embedding failed for all chunks";
     await upsertFileRow({
@@ -308,7 +334,8 @@ async function indexOneFile({ drive, tenantId, subBrand, fileMeta, syncJobId }) 
     return { status: "failed", reason };
   }
 
-  const upserted = await qdrant.upsertPoints(points);
+  const upserted = await qdrant.upsertPoints(points, providerId);
+  throwIfAborted(signal, "indexOneFile");
   if (!upserted) {
     const reason = "qdrant upsert failed";
     await upsertFileRow({
@@ -392,11 +419,17 @@ async function runSync({ tenantId, rootFolderId, job: existingJob = null }) {
   if (!qdrant.isEnabled()) {
     throw Object.assign(new Error("QDRANT_URL is not set"), { code: "QDRANT_NOT_CONFIGURED" });
   }
-  if (!embedClient.isEnabled()) {
-    throw Object.assign(new Error("OPENAI_API_KEY is not set"), { code: "OPENAI_NOT_CONFIGURED" });
-  }
 
-  await qdrant.ensureCollection();
+  const embedConfig = await embedClient.resolveEmbedConfig(tenantId);
+  if (!embedConfig) {
+    throw Object.assign(
+      new Error("No supported AI provider is configured for embeddings. Configure OpenAI or Gemini in AI Settings."),
+      { code: "EMBEDDING_PROVIDER_NOT_CONFIGURED" },
+    );
+  }
+  const providerId = embedConfig.providerId;
+
+  await qdrant.ensureCollection(undefined, providerId);
   const drive = await getDriveClient(tenantId);
 
   // Allow callers (background async start) to pre-create the job row so they can
@@ -434,6 +467,9 @@ async function runSync({ tenantId, rootFolderId, job: existingJob = null }) {
           subBrand,
           fileMeta: pdf,
           syncJobId: job.id,
+          embedConfig,
+          providerId,
+          signal: controller.signal,
         });
         if (result.status === "indexed") indexed += 1;
         else if (result.status === "failed") failed += 1;
@@ -459,15 +495,17 @@ async function runSync({ tenantId, rootFolderId, job: existingJob = null }) {
       discovered,
       indexed,
       failed,
+      providerId,
       errorMessage: stopped ? "Stopped by user" : null,
     };
   } catch (e) {
-    errorMessage = e.message;
-    console.error("[travelKnowledgeBaseSync] sync failed:", e.message);
+    const stopped = e?.code === "STOPPED" || controller.signal.aborted;
+    errorMessage = stopped ? "Stopped by user" : e.message;
+    if (!stopped) console.error("[travelKnowledgeBaseSync] sync failed:", e.message);
     await prisma.travelKnowledgeBaseSyncJob.update({
       where: { id: job.id },
       data: {
-        status: "failed",
+        status: stopped ? "stopped" : "failed",
         completedAt: new Date(),
         filesDiscovered: discovered,
         filesIndexed: indexed,
@@ -475,6 +513,17 @@ async function runSync({ tenantId, rootFolderId, job: existingJob = null }) {
         errorMessage: sanitizeText(errorMessage),
       },
     });
+    if (stopped) {
+      return {
+        jobId: job.id,
+        status: "stopped",
+        discovered,
+        indexed,
+        failed,
+        providerId,
+        errorMessage,
+      };
+    }
     throw e;
   } finally {
     activeSyncs.delete(job.id);
@@ -492,7 +541,10 @@ async function runSync({ tenantId, rootFolderId, job: existingJob = null }) {
  * @param {string} opts.driveFileId
  */
 async function deleteFileFromIndex({ tenantId, subBrand, driveFileId }) {
-  await qdrant.deleteByDriveFile({ tenantId, subBrand, driveFileId });
+  // A file may exist in any provider-specific collection; remove it from all of them.
+  for (const providerId of embedClient.getSupportedProviders()) {
+    await qdrant.deleteByDriveFile({ tenantId, subBrand, driveFileId, providerId });
+  }
   await prisma.travelKnowledgeBaseFile.deleteMany({
     where: { tenantId, subBrand, driveFileId },
   });
@@ -504,7 +556,7 @@ async function deleteFileFromIndex({ tenantId, subBrand, driveFileId }) {
  * @param {number} tenantId
  * @returns {Promise<{subBrand:string, filesActive:number, filesFailed:number, chunksInQdrant:number}[]>}
  */
-async function getStats(tenantId) {
+async function getStats(tenantId, providerId = "openai") {
   const files = await prisma.travelKnowledgeBaseFile.groupBy({
     by: ["subBrand", "status"],
     where: { tenantId },
@@ -518,7 +570,7 @@ async function getStats(tenantId) {
   }
   const result = [];
   for (const subBrand of Object.keys(grouped)) {
-    const chunks = await qdrant.countPoints(tenantId, subBrand);
+    const chunks = await qdrant.countPoints(tenantId, subBrand, providerId);
     result.push({
       subBrand,
       filesActive: grouped[subBrand].active,

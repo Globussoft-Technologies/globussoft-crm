@@ -105,6 +105,7 @@ function registerTravelRupeeFont(doc) {
 // same shape.
 const hsnSacMapper = require("../lib/hsnSacMapper");
 const gstCalculation = require("../lib/gstCalculation");
+const { READINESS_LEVELS, getReadinessLevel } = require("../lib/travelDiagnosticScoring");
 
 // ── S51 logo-image fetch + in-memory LRU cache ──────────────────────
 // Contract (called from renderTravelInvoicePdf):
@@ -3449,22 +3450,41 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const metricShadow = "#EEF3F8";
   const headerH = 96;
 
-  function drawMetricCard({ x, y, w, label, value, tone = accent, soft = "#FFFFFF", valueColor = textDark }) {
+  function drawMetricCard({ x, y, w, label, value, note, tone = accent, soft = "#FFFFFF", valueColor = textDark }) {
     const valueText = String(value || "N/A");
     const valueFontSize = valueText.length > 24 ? 10.5 : valueText.length > 16 ? 12.5 : 15;
-    doc.roundedRect(x + 2, y + 4, w, 54, 14).fill(metricShadow);
-    doc.roundedRect(x, y, w, 54, 14).fillAndStroke(soft, borderSoft);
+    const hasNote = note && String(note).trim().length > 0;
+    const cardH = hasNote ? 68 : 54;
+    doc.roundedRect(x + 2, y + 4, w, cardH, 14).fill(metricShadow);
+    doc.roundedRect(x, y, w, cardH, 14).fillAndStroke(soft, borderSoft);
     doc.roundedRect(x + 1, y + 1, w - 2, 7, 12).fill(tone);
     doc.font("Helvetica-Bold").fontSize(8).fillColor(textMuted)
       .text(label, x + 14, y + 15, { width: w - 28, lineBreak: false });
     doc.font("Helvetica-Bold").fontSize(valueFontSize).fillColor(valueColor)
       .text(valueText, x + 14, y + 28, { width: w - 28 });
+    if (hasNote) {
+      doc.font("Helvetica").fontSize(8).fillColor(textMuted)
+        .text(String(note).trim(), x + 14, y + 46, { width: w - 28 });
+    }
   }
 
+  const footerReserve = 58;
+  const contentBottom = () => doc.page.height - doc.page.margins.bottom - footerReserve;
+
   function ensureAnswerSpace(requiredHeight = 96) {
-    if (doc.y + requiredHeight <= doc.page.height - doc.page.margins.bottom) return;
+    if (doc.y + requiredHeight <= contentBottom()) return;
     doc.addPage();
     doc.y = pageMargin;
+  }
+
+  function drawNumberBadge(x, y, value) {
+    const text = String(value);
+    const w = text.length > 1 ? 26 : 20;
+    const h = 20;
+    doc.roundedRect(x, y, w, h, 10).fill(accent);
+    doc.font("Helvetica-Bold").fontSize(text.length > 1 ? 8.2 : 9.5).fillColor("#FFFFFF")
+      .text(text, x, y + 5.5, { width: w, align: "center", lineBreak: false });
+    return w;
   }
 
   doc.rect(0, 0, doc.page.width, headerH).fill(accent);
@@ -3507,7 +3527,7 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const infoCardW = 96;
   const infoCardH = 40;
   const infoGap = 10;
-  const infoStartX = pageMargin + contentW - (infoCardW * 2) - infoGap - 18;
+  const infoStartX = pageMargin + contentW - infoCardW - 18;
   const profileMetaWidth = Math.max(190, infoStartX - pageMargin - 34);
   const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  |  ");
   const infoCardY = profileTop + Math.round((profileH - infoCardH) / 2);
@@ -3525,15 +3545,9 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
 
   doc.roundedRect(infoStartX, infoCardY, infoCardW, infoCardH, 12).fillAndStroke(accentSoft, borderSoft);
   doc.font("Helvetica-Bold").fontSize(7.5).fillColor(textMuted)
-    .text("BANK VERSION", infoStartX + 12, infoCardY + 8, { width: infoCardW - 24, align: "center" });
-  doc.font("Helvetica-Bold").fontSize(11).fillColor(textDark)
-    .text(`v${bank?.version ?? "?"}`, infoStartX + 12, infoCardY + 20, { width: infoCardW - 24, align: "center" });
-
-  doc.roundedRect(infoStartX + infoCardW + infoGap, infoCardY, infoCardW, infoCardH, 12).fillAndStroke(accentSoft, borderSoft);
-  doc.font("Helvetica-Bold").fontSize(7.5).fillColor(textMuted)
-    .text("SUBMITTED", infoStartX + infoCardW + infoGap + 12, infoCardY + 8, { width: infoCardW - 24, align: "center" });
+    .text("SUBMITTED", infoStartX + 12, infoCardY + 8, { width: infoCardW - 24, align: "center" });
   doc.font("Helvetica-Bold").fontSize(10).fillColor(textDark)
-    .text(formatDate(diagnostic.createdAt || new Date()), infoStartX + infoCardW + infoGap + 12, infoCardY + 20, { width: infoCardW - 24, align: "center" });
+    .text(formatDate(diagnostic.createdAt || new Date()), infoStartX + 12, infoCardY + 20, { width: infoCardW - 24, align: "center" });
   doc.y = profileTop + profileH + 14;
 
   doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
@@ -3570,6 +3584,89 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   });
   doc.y = metricsTop + 66;
 
+  let curriculumFit = null;
+  try {
+    curriculumFit = diagnostic.curriculumFitJson ? JSON.parse(diagnostic.curriculumFitJson) : null;
+  } catch { /* ignore a malformed cache; omit the section */ }
+
+  function renderCurriculumRecommendationCard(rec, recIdx) {
+    const destination = rec.destination || "Destination";
+    const reasons = (rec.reasons || [])
+      .filter((reason) => reason?.learningOutcome || reason?.rationale)
+      .slice(0, 4);
+    const titleText = `${recIdx + 1}. ${destination}`;
+    const fit = rec.fitScore != null ? `Fit ${rec.fitScore}/100` : "";
+    doc.font("Helvetica-Bold").fontSize(10.5);
+    const titleH = doc.heightOfString(titleText, { width: contentW - 130, lineGap: 2 });
+    const reasonsH = reasons.reduce((acc, reason) => {
+      const lead = reason.subject ? `${reason.subject}: ` : "";
+      const body = reason.learningOutcome || reason.rationale || "";
+      const line = `- ${lead}${body}`;
+      doc.font("Helvetica").fontSize(9.2);
+      return acc + doc.heightOfString(line, { width: contentW - 70, lineGap: 2 }) + 2;
+    }, 0);
+    const hasBrochure = Boolean(rec.brochurePdfUrl);
+    const cardH = Math.max(58, 22 + titleH + (hasBrochure ? 14 : 0) + (reasons.length ? 12 + reasonsH : 0) + 12);
+    ensureAnswerSpace(cardH + 10);
+    const cardTop = doc.y;
+    doc.roundedRect(pageMargin, cardTop, contentW, cardH, 14).fillAndStroke("#FFFFFF", borderSoft);
+    const badgeW = drawNumberBadge(pageMargin + 12, cardTop + 12, recIdx + 1);
+    const textX = pageMargin + 22 + badgeW;
+    doc.font("Helvetica-Bold").fontSize(10.5).fillColor(textDark)
+      .text(titleText, textX, cardTop + 13, { width: contentW - (textX - pageMargin) - 110, lineGap: 2 });
+    if (fit) {
+      doc.font("Helvetica-Bold").fontSize(8.5).fillColor(accent)
+        .text(fit, pageMargin + contentW - 94, cardTop + 15, { width: 76, align: "right", lineBreak: false });
+    }
+    let cursorY = cardTop + 18 + titleH + 8;
+    if (hasBrochure) {
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(accent)
+        .text("DOWNLOAD BROCHURE", textX, cursorY, {
+          width: 120,
+          lineBreak: false,
+          link: rec.brochurePdfUrl,
+        });
+      cursorY += 14;
+    }
+    reasons.forEach((reason) => {
+      const lead = reason.subject ? `${reason.subject}: ` : "";
+      const body = reason.learningOutcome || reason.rationale || "";
+      const line = `- ${lead}${body}`;
+      const lineH = doc.heightOfString(line, { width: contentW - (textX - pageMargin) - 18, lineGap: 2 });
+      doc.font("Helvetica").fontSize(9.2).fillColor("#333")
+        .text(line, textX, cursorY, { width: contentW - (textX - pageMargin) - 18, lineGap: 2 });
+      cursorY += lineH + 2;
+    });
+    doc.y = cardTop + cardH + 10;
+  }
+
+  if (
+    curriculumFit &&
+    Array.isArray(curriculumFit.recommendations) &&
+    curriculumFit.recommendations.length
+  ) {
+    ensureAnswerSpace(140);
+    doc.moveDown(0.3);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
+      .text("CURRICULUM FIT", pageMargin, doc.y, { characterSpacing: 1.4 });
+    doc.y += 8;
+    doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark)
+      .text("Why these destinations fit your curriculum", pageMargin, doc.y);
+    doc.y += 5;
+    const ctxBits = [curriculumFit.curriculum, curriculumFit.grade, curriculumFit.subject]
+      .filter(Boolean)
+      .join(" | ");
+    if (ctxBits) {
+      doc.font("Helvetica").fontSize(9.5).fillColor(textMuted)
+        .text(ctxBits, pageMargin, doc.y, { width: contentW });
+      doc.y += 6;
+    }
+    curriculumFit.recommendations.forEach((rec, recIdx) => {
+      renderCurriculumRecommendationCard(rec, recIdx);
+    });
+    doc.moveDown(0.4);
+  }
+
   doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark).text("Submitted answers");
   doc.y += 8;
   if (questions.length === 0) {
@@ -3592,50 +3689,17 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
       ensureAnswerSpace(cardH + 10);
       const cardTop = doc.y;
       doc.roundedRect(pageMargin, cardTop, contentW, cardH, 14).fillAndStroke("#FFFFFF", borderSoft);
-      doc.circle(pageMargin + 22, cardTop + 20, 10).fill(accent);
-      doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#FFFFFF")
-        .text(String(num), pageMargin + 18, cardTop + 14, { width: 8, align: "center", lineBreak: false });
+      const badgeW = drawNumberBadge(pageMargin + 12, cardTop + 10, num);
+      const textX = pageMargin + 22 + badgeW;
       doc.font("Helvetica-Bold").fontSize(10.5).fillColor(textDark)
-        .text(qText, pageMargin + 42, cardTop + 12, { width: contentW - 60, lineGap: 2 });
+        .text(qText, textX, cardTop + 12, { width: contentW - (textX - pageMargin) - 18, lineGap: 2 });
       doc.font("Helvetica-Bold").fontSize(8).fillColor(textMuted)
-        .text("RESPONSE", pageMargin + 42, cardTop + 16 + qHeight, { characterSpacing: 1.1 });
+        .text("RESPONSE", textX, cardTop + 16 + qHeight, { characterSpacing: 1.1 });
       doc.font(rupeeAnswerFont).fontSize(10.5).fillColor("#23303F")
-        .text(String(ans || "N/A"), pageMargin + 42, cardTop + 29 + qHeight, { width: contentW - 60, lineGap: 2 });
+        .text(String(ans || "N/A"), textX, cardTop + 29 + qHeight, { width: contentW - (textX - pageMargin) - 18, lineGap: 2 });
       doc.y = cardTop + cardH + 10;
     });
   }
-  let curriculumFit = null;
-  try {
-    curriculumFit = diagnostic.curriculumFitJson ? JSON.parse(diagnostic.curriculumFitJson) : null;
-  } catch { /* ignore a malformed cache — omit the section */ }
-  if (
-    curriculumFit &&
-    Array.isArray(curriculumFit.recommendations) &&
-    curriculumFit.recommendations.length
-  ) {
-    doc.moveDown(1);
-    doc.font("Helvetica-Bold").fontSize(12).fillColor("#111")
-      .text("Why these destinations fit your curriculum");
-    const ctxBits = [curriculumFit.curriculum, curriculumFit.grade, curriculumFit.subject]
-      .filter(Boolean)
-      .join("  •  ");
-    if (ctxBits) doc.font("Helvetica").fontSize(9).fillColor("#777").text(ctxBits);
-    doc.moveDown(0.4);
-    curriculumFit.recommendations.forEach((rec) => {
-      const fit = rec.fitScore != null ? `  (fit ${rec.fitScore}/100)` : "";
-      doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent)
-        .text(`${rec.destination || "Destination"}${fit}`);
-      (rec.reasons || []).forEach((reason) => {
-        const lead = reason.subject ? `${reason.subject}: ` : "";
-        const body = reason.learningOutcome || reason.rationale || "";
-        if (lead || body) {
-          doc.font("Helvetica").fontSize(9.5).fillColor("#333").text(`   • ${lead}${body}`);
-        }
-      });
-      doc.moveDown(0.3);
-    });
-  }
-
   // RAG knowledge-base recommendations — rendered for any travel sub-brand that
   // has a persisted RAG result. Shows a readiness score gauge, a consistent
   // 2-line summary and up to 4 learnings per recommended option, plus a clickable
@@ -3664,22 +3728,46 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   if (ragResult && ragResult.recommendations) {
     const recs = ragResult.recommendations;
     const trips = Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : [];
-    if (trips.length || Number.isFinite(recs.readinessScore)) {
+
+    // Resolve the customer-facing 1-4 readiness level + name. Prefer the
+    // explicit RAG fields; fall back to the diagnostic classification or
+    // legacy 0-10 score.
+    let readinessLevel = null;
+    let readinessName = null;
+    if (Number.isFinite(recs.readinessLevel) && recs.readinessLevel >= 1 && recs.readinessLevel <= 4) {
+      readinessLevel = Math.round(recs.readinessLevel);
+      readinessName = READINESS_LEVELS[readinessLevel];
+    } else if (diagnostic?.classification) {
+      const derived = getReadinessLevel(diagnostic.classification);
+      if (derived) {
+        readinessLevel = derived.level;
+        readinessName = derived.name;
+      }
+    }
+    if (!readinessLevel && Number.isFinite(recs.readinessScore)) {
+      if (recs.readinessScore >= 7.5) { readinessLevel = 1; readinessName = READINESS_LEVELS[1]; }
+      else if (recs.readinessScore >= 5.5) { readinessLevel = 2; readinessName = READINESS_LEVELS[2]; }
+      else if (recs.readinessScore >= 3.5) { readinessLevel = 3; readinessName = READINESS_LEVELS[3]; }
+      else { readinessLevel = 4; readinessName = READINESS_LEVELS[4]; }
+    }
+
+    if (trips.length || readinessLevel) {
       doc.moveDown(0.6);
       doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
-        .text("RECOMMENDED OPTIONS", pageMargin, doc.y, { characterSpacing: 1.4 });
+        .text("CURRICULUM ALIGNMENT RECOMMENDATIONS", pageMargin, doc.y, { characterSpacing: 1.4 });
       doc.y += 10;
       doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark)
-        .text("Recommended options from our brochure library", pageMargin, doc.y);
+        .text("Curriculum alignment recommendations", pageMargin, doc.y);
       doc.y += 8;
 
-      if (Number.isFinite(recs.readinessScore)) {
+      if (readinessLevel) {
         drawMetricCard({
           x: pageMargin,
           y: doc.y,
-          w: Math.min(220, contentW),
-          label: "Readiness score",
-          value: `${recs.readinessScore} / 10`,
+          w: Math.min(260, contentW),
+          label: "Readiness level",
+          value: `${readinessLevel} / 4`,
+          note: readinessName,
           tone: accent,
           soft: accentSoft,
           valueColor: accentDeeper,
@@ -3694,73 +3782,85 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
         return /\b(cancellation|cancel|refund|non-refundable|payment|policy|policies|disclaimer|insurance|booking conditions?)\b/.test(t);
       }
 
-      trips.forEach((trip, tIdx) => {
+      function measureTripCard(trip, tIdx) {
         const tripTitle = `${tIdx + 1}. ${trip.name || "Trip"}`;
         const summaryText = trip.summary || "";
         const cleanLearnings = (trip.learnings || [])
           .filter((learning) => !isPolicyHighlight(learning))
           .slice(0, 4);
 
-        const innerW = contentW - 56;
-        const titleH = doc.heightOfString(tripTitle, { width: innerW - 90, lineGap: 2 });
+        const estimatedBadgeW = String(tIdx + 1).length > 1 ? 26 : 20;
+        const estimatedTextOffset = 22 + estimatedBadgeW;
+        const bodyW = contentW - estimatedTextOffset - 18;
+        const titleW = contentW - estimatedTextOffset - 110;
+        doc.font("Helvetica-Bold").fontSize(10);
+        const titleH = doc.heightOfString(tripTitle, { width: titleW, lineGap: 2 });
+        doc.font("Helvetica").fontSize(9);
         const summaryH = summaryText
-          ? doc.heightOfString(summaryText, { width: innerW, lineGap: 2 })
+          ? doc.heightOfString(summaryText, { width: bodyW, lineGap: 2 })
           : 0;
-        const highlightsH = cleanLearnings.length
-          ? cleanLearnings.reduce(
-              (acc, learning) =>
-                acc +
-                doc.heightOfString(`• ${learning}`, { width: innerW - 12, lineGap: 2 }),
-              0,
-            )
+        doc.font("Helvetica").fontSize(8.6);
+        const safeHighlightsH = cleanLearnings.length
+          ? cleanLearnings.reduce((acc, learning) => {
+              const line = `- ${learning}`;
+              return acc + doc.heightOfString(line, { width: bodyW - 10, lineGap: 2 }) + 2;
+            }, 0)
           : 0;
         const cardH =
-          16 +
+          14 +
           titleH +
-          (summaryText ? 12 + summaryH + 6 : 0) +
-          (cleanLearnings.length ? 12 + highlightsH + 6 : 0) +
-          8;
+          (summaryText ? 11 + summaryH + 8 : 0) +
+          (cleanLearnings.length ? 11 + safeHighlightsH + 8 : 0) +
+          10;
+        return { tripTitle, summaryText, cleanLearnings, titleH, summaryH, cardH };
+      }
 
-        ensureAnswerSpace(cardH + 10);
+      function drawTripCard(trip, tIdx, x, y, cardW, cardH, measured) {
+        const { tripTitle, summaryText, cleanLearnings, titleH, summaryH } = measured;
+        doc.roundedRect(x, y, cardW, cardH, 14).fillAndStroke("#FFFFFF", borderSoft);
+        const badgeW = drawNumberBadge(x + 10, y + 8, tIdx + 1);
+        const textX = x + 20 + badgeW;
+        const bodyW = cardW - (textX - x) - 18;
 
-        const cardTop = doc.y;
-        doc.roundedRect(pageMargin, cardTop, contentW, cardH, 14).fillAndStroke("#FFFFFF", borderSoft);
-        doc.circle(pageMargin + 22, cardTop + 18, 10).fill(accent);
-        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#FFFFFF")
-          .text(String(tIdx + 1), pageMargin + 18, cardTop + 12, { width: 8, align: "center", lineBreak: false });
-
-        doc.font("Helvetica-Bold").fontSize(10.5).fillColor(textDark)
-          .text(tripTitle, pageMargin + 42, cardTop + 10, { width: innerW - 90, lineGap: 2 });
+        doc.font("Helvetica-Bold").fontSize(10).fillColor(textDark)
+          .text(tripTitle, textX, y + 10, { width: cardW - (textX - x) - 110, lineGap: 2 });
 
         if (trip.driveLink) {
           doc.font("Helvetica-Bold").fontSize(8).fillColor(accent)
-            .text("VIEW BROCHURE", pageMargin + contentW - 86, cardTop + 13, { width: 72, align: "right", lineBreak: false, link: trip.driveLink });
+            .text("VIEW BROCHURE", x + cardW - 88, y + 13, { width: 74, align: "right", lineBreak: false, link: trip.driveLink });
         }
 
-        let cursorY = cardTop + 16 + titleH + 6;
+        let cursorY = y + 14 + titleH + 4;
 
         if (summaryText) {
-          doc.font("Helvetica-Bold").fontSize(8).fillColor(textMuted)
-            .text("SUMMARY", pageMargin + 42, cursorY, { characterSpacing: 1.1, lineBreak: false });
-          cursorY += 12;
-          doc.font("Helvetica").fontSize(9.5).fillColor(textDark)
-            .text(summaryText, pageMargin + 42, cursorY, { width: innerW, lineGap: 2 });
-          cursorY += summaryH + 6;
+          doc.font("Helvetica-Bold").fontSize(7.5).fillColor(textMuted)
+            .text("SUMMARY", textX, cursorY, { characterSpacing: 1.1, lineBreak: false });
+          cursorY += 11;
+          doc.font("Helvetica").fontSize(9).fillColor(textDark)
+            .text(summaryText, textX, cursorY, { width: bodyW, lineGap: 2 });
+          cursorY += summaryH + 8;
         }
 
         if (cleanLearnings.length) {
-          doc.font("Helvetica-Bold").fontSize(8).fillColor(textMuted)
-            .text("TRIP HIGHLIGHTS", pageMargin + 42, cursorY, { characterSpacing: 1.1, lineBreak: false });
-          cursorY += 12;
+          doc.font("Helvetica-Bold").fontSize(7.5).fillColor(textMuted)
+            .text("TRIP HIGHLIGHTS", textX, cursorY, { characterSpacing: 1.1, lineBreak: false });
+          cursorY += 11;
           cleanLearnings.forEach((learning) => {
-            const lineH = doc.heightOfString(`• ${learning}`, { width: innerW - 12, lineGap: 2 });
-            doc.font("Helvetica").fontSize(9).fillColor(textDark)
-              .text(`• ${learning}`, pageMargin + 54, cursorY, { width: innerW - 12, lineGap: 2 });
-            cursorY += lineH;
+            const line = `- ${learning}`;
+            const lineH = doc.heightOfString(line, { width: bodyW - 10, lineGap: 2 });
+            doc.font("Helvetica").fontSize(8.6).fillColor(textDark)
+              .text(line, textX + 10, cursorY, { width: bodyW - 10, lineGap: 2 });
+            cursorY += lineH + 2;
           });
         }
+      }
 
-        doc.y = cardTop + cardH + 10;
+      trips.forEach((trip, tIdx) => {
+        const measured = measureTripCard(trip, tIdx);
+        ensureAnswerSpace(measured.cardH + 8);
+        const rowTop = doc.y;
+        drawTripCard(trip, tIdx, pageMargin, rowTop, contentW, measured.cardH, measured);
+        doc.y = rowTop + measured.cardH + 8;
       });
       doc.moveDown(0.3);
     }

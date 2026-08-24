@@ -41,6 +41,7 @@ import {
   Users,
   DollarSign,
   Move,
+  Info,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -185,6 +186,80 @@ CALL TO ACTION:
 Festival-season seats are limited — book by 30 September 2025.`,
 ];
 
+// Empty structured template — headings only, values are placeholders so the
+// operator can fill in their own agency / trip details quickly.
+const PROMPT_TEMPLATE = `Create a [TYPE] travel brochure for my agency.
+AGENCY: [Agency Name — City, Country]
+CONTACT: [Phone] · [Email] · [Website]
+SOCIAL: [Instagram, WhatsApp, Facebook, etc.]
+TRIP: [Trip Name — Duration · Cities · Style]
+DATES / SEASON: [Departures / season]
+GROUP SIZE: [Group size]
+TAGLINE: [Tagline]
+ROUTE (in travel order): [City 1 → City 2 → City 3]
+DAY BY DAY:
+Day 1 — [City]: [Activity]
+Day 2 — [City]: [Activity]
+Day 3 — [City]: [Activity]
+INCLUSIONS:
+[Category]: [Details]
+[Category]: [Details]
+PRICING:
+[Price per person]
+[Upgrade / deposit details]
+CALL TO ACTION:
+[Urgency / deadline]
+MAP:
+[Map instructions]`;
+
+function InfoTip({ text }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      style={{ position: 'relative', display: 'inline-flex', marginLeft: 6, verticalAlign: 'middle' }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      onFocus={() => setShow(true)}
+      onBlur={() => setShow(false)}
+      tabIndex={0}
+    >
+      <Info size={14} style={{ color: 'var(--text-secondary)', cursor: 'help' }} title={text} />
+      {show && (
+        <span
+          style={{
+            position: 'absolute',
+            bottom: '120%',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: 260,
+            padding: 8,
+            borderRadius: 6,
+            background: 'var(--text-primary)',
+            color: 'var(--bg-color)',
+            fontSize: 12,
+            zIndex: 100,
+            boxShadow: '0 4px 12px rgba(0,0,0,.25)',
+            lineHeight: 1.4,
+            pointerEvents: 'none',
+          }}
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function LabelWithInfo({ label, tip, children }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {label}
+      {tip && <InfoTip text={tip} />}
+      {children}
+    </span>
+  );
+}
+
 // ── Model picker / cost estimate constants (ported from settings/page.tsx) ──
 const TIER_INFO = {
   reasoning: { label: 'Reasoning', hint: 'CEO planning + the brochure composer. The quality lever.' },
@@ -328,11 +403,19 @@ export default function BrochureEngine() {
   const [profiles, setProfiles] = useState([]);
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileName, setProfileName] = useState(''); // current slot name — set on load so "Save current" UPDATES it
+  // Existing BrandKit profiles from the Travel CRM brand-kit admin (PRD_TRAVEL_PER_SUBBRAND_BRANDING)
+  const [existingBrandKits, setExistingBrandKits] = useState([]);
+  const [existingBrandKitId, setExistingBrandKitId] = useState(''); // '' = use custom brand kit
+  const [existingBrandKitLoading, setExistingBrandKitLoading] = useState(false);
+  const [loadedBrandKit, setLoadedBrandKit] = useState(null); // full kit from /api/brand-kits/:id
   // Model catalog + selection
   const [catalog, setCatalog] = useState({ tiers: [], strategies: [], defaults: {}, markup: 1.5, models: [] });
   const [strategy, setStrategy] = useState('recommended');
   const [perTier, setPerTier] = useState({}); // advanced overrides { reasoning: id, ... }
   const [modelOpen, setModelOpen] = useState(false);
+  // AI provider state for the brochure engine (BYOK or CRM-managed).
+  const [aiProvider, setAiProvider] = useState(null); // { id, label } | null
+  const [aiError, setAiError] = useState(null); // { error, code } | null
   // Run state
   const [running, setRunning] = useState(false);
   const [activeRunId, setActiveRunId] = useState(null);
@@ -362,8 +445,20 @@ export default function BrochureEngine() {
     })();
     (async () => {
       try {
-        const data = await fetchApi('/api/travel/brochures/models');
-        if (data && Array.isArray(data.models)) {
+        const data = await fetchApi('/api/travel/brochures/models', { silent: true });
+        if (data && (data.code === 'AI_NOT_CONFIGURED' || data.code === 'AI_CREDITS_EXHAUSTED')) {
+          setAiError({ error: data.error || 'AI provider not configured', code: data.code });
+          setAiProvider(null);
+          setCatalog({
+            tiers: ALL_TIERS,
+            strategies: ['recommended', 'cheapest', 'smartest', 'custom'],
+            defaults: {},
+            markup: 1.5,
+            models: [],
+          });
+        } else if (data && Array.isArray(data.models)) {
+          setAiError(null);
+          setAiProvider(data.provider || null);
           setCatalog({
             tiers: Array.isArray(data.tiers) && data.tiers.length ? data.tiers : ALL_TIERS,
             strategies: Array.isArray(data.strategies) && data.strategies.length ? data.strategies : ['recommended', 'cheapest', 'smartest', 'custom'],
@@ -373,12 +468,18 @@ export default function BrochureEngine() {
           });
         }
       } catch (e) {
-        // Engine not installed → 503. The picker degrades to strategy presets.
-        console.warn('[brochures] model catalog unavailable', e);
+        // Engine not installed → 503, or AI not configured → 403. The picker degrades to strategy presets.
+        if (e.code === 'AI_NOT_CONFIGURED' || e.code === 'AI_CREDITS_EXHAUSTED') {
+          setAiError({ error: e.message || 'AI provider not configured', code: e.code });
+          setAiProvider(null);
+        } else {
+          console.warn('[brochures] model catalog unavailable', e);
+        }
       }
     })();
     loadHistory();
     loadProfiles();
+    loadExistingBrandKits();
     // Mount-once: the sector/model/history fetch should not re-run on callback identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -463,6 +564,75 @@ export default function BrochureEngine() {
       setProfiles((list) => list.filter((p) => p.id !== id));
     } catch (err) {
       notify.error(err?.message || 'Failed to delete profile.');
+    }
+  }, [notify]);
+
+  // ─── Existing BrandKit profiles from the Travel CRM brand-kit admin ────────
+  const loadExistingBrandKits = useCallback(async () => {
+    try {
+      const data = await fetchApi('/api/brand-kits?fields=summary');
+      if (data && Array.isArray(data.brandKits)) {
+        setExistingBrandKits(data.brandKits.filter((k) => k.isActive));
+      }
+    } catch (e) {
+      console.warn('[brochures] existing brand-kits load failed', e);
+    }
+  }, []);
+
+  const applyExistingBrandKit = useCallback(async (kitId) => {
+    if (!kitId) {
+      setExistingBrandKitId('');
+      setLoadedBrandKit(null);
+      return;
+    }
+    setExistingBrandKitLoading(true);
+    try {
+      const data = await fetchApi(`/api/brand-kits/${kitId}`);
+      const kit = data?.brandKit || data;
+      if (!kit || !kit.id) {
+        notify.error('Selected brand kit could not be loaded.');
+        setExistingBrandKitId('');
+        return;
+      }
+      const logo = kit.logoUrl || kit.logoDarkUrl || '';
+      const contact = [];
+      if (kit.supportPhone) contact.push(kit.supportPhone);
+      if (kit.supportEmail) contact.push(kit.supportEmail);
+      let socials = [];
+      try {
+        const parsed = typeof kit.socialLinksJson === 'string' ? JSON.parse(kit.socialLinksJson) : kit.socialLinksJson;
+        if (Array.isArray(parsed)) {
+          socials = parsed.map((s) => (s && (s.network || s.name)) || '').filter(Boolean);
+        }
+      } catch {
+        /* ignore malformed JSON */
+      }
+      setBrand((b) => {
+        const imagePool = logo
+          ? Array.from(new Set([logo, ...(b.imagePool || [])])).filter(Boolean)
+          : b.imagePool;
+        return {
+          ...b,
+          name: b.name || '', // agency name stays custom
+          tagline: kit.tagline || b.tagline || '',
+          logoUrl: logo || b.logoUrl || '',
+          accentMode: kit.accentColor ? 'manual' : (b.accentMode || 'auto'),
+          accent: kit.accentColor || b.accent || '#122647',
+          contact: contact.length ? contact : (b.contact || []),
+          socials: socials.length ? socials : (b.socials || []),
+          imagePool,
+          // placement / cover / interior / QR stay as-is so the user can still customise them
+        };
+      });
+      setExistingBrandKitId(String(kit.id));
+      setLoadedBrandKit(kit);
+      notify.info(`Loaded brand kit “${kit.subBrand || 'tenant-wide'}”.`);
+    } catch (err) {
+      console.warn('[brochures] failed to apply existing brand kit', err);
+      notify.error('Failed to load the selected brand kit.');
+      setExistingBrandKitId('');
+    } finally {
+      setExistingBrandKitLoading(false);
     }
   }, [notify]);
 
@@ -582,9 +752,9 @@ export default function BrochureEngine() {
     // Manual mode: send the picked hex (overrides the AI choice in the engine).
     if (brand.accentMode === 'manual' && /^#[0-9a-f]{6}$/i.test(brand.accent || '')) brandPayload.colors = { accent: brand.accent };
     const contacts = (brand.contact || []).map((c) => String(c).trim()).filter(Boolean);
-    if (contacts.length) brandPayload.contact = contacts;
+    brandPayload.contact = contacts;
     const socials = (brand.socials || []).map((s) => String(s).trim()).filter(Boolean);
-    if (socials.length) brandPayload.socials = socials;
+    brandPayload.socials = socials;
     // QR link — backend re-validates (http(s) only); the engine encodes it into the QR.
     if (brand.qrUrl?.trim() && /^https?:\/\//i.test(brand.qrUrl.trim())) brandPayload.qrUrl = brand.qrUrl.trim();
     if (brand.logoUrl && brand.custom) brandPayload.custom = brand.custom;
@@ -613,6 +783,7 @@ export default function BrochureEngine() {
         sectorKey,
         styleKey, // always explicit — one of editorial-sakura | tmc-press
         ...(Object.keys(brandPayload).length ? { brand: brandPayload } : {}),
+        ...(existingBrandKitId ? { existingBrandKitId: Number(existingBrandKitId) } : {}),
         ...modelPayload,
       };
       const res = await fetchApi('/api/travel/brochures/runs', {
@@ -634,7 +805,7 @@ export default function BrochureEngine() {
     }
     // openStream/pollOnce are stable closures declared below; omitted to avoid a TDZ on the dep array.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, goal, sectorKey, styleKey, brand, strategy, perTier, notify, loadHistory]);
+  }, [running, goal, sectorKey, styleKey, brand, strategy, perTier, existingBrandKitId, notify, loadHistory]);
 
   // ─── Stop a running generation (hit Generate by mistake / changed your mind) ──
   // Detach the SSE + free the UI immediately, then ask the backend to kill the
@@ -830,6 +1001,20 @@ export default function BrochureEngine() {
         </div>
       </div>
 
+      {aiError && (
+        <div style={{ ...warningBanner, marginBottom: 16 }} data-testid="ai-provider-error">
+          <AlertTriangle size={18} aria-hidden />
+          <div>
+            <strong>AI provider not ready</strong>
+            <p style={{ margin: '4px 0 0', fontSize: 13 }}>
+              {aiError.error} Configure an AI provider in{' '}
+              <a href="/settings" style={{ color: 'inherit', textDecoration: 'underline' }}>Settings → AI</a>{' '}
+              to generate brochures.
+            </p>
+          </div>
+        </div>
+      )}
+
       {tab === 'generate' && (
         <div style={twoColLayout}>
           {/* ─── Left: Form panel ──────────────────────────────────────── */}
@@ -837,13 +1022,13 @@ export default function BrochureEngine() {
             <h2 style={panelTitle}><FileText size={18} aria-hidden /> Brief</h2>
 
             <div style={fieldLabel}>
-              Sector
+              <LabelWithInfo label="Sector" tip="Brochure content is tuned for travel: itineraries, route maps, inclusions and pricing." />
               <div style={staticField} data-testid="sector-static">Travel</div>
             </div>
             {currentSector?.description && <p style={fieldHint}>{currentSector.description}</p>}
 
             <label style={fieldLabel}>
-              Template / Style
+              <LabelWithInfo label="Template / Style" tip="Chooses the visual layout of the generated PDF. Editorial Sakura is a magazine-style cover; TMC Press uses a bold top band." />
               <select value={styleKey} onChange={(e) => setStyleKey(e.target.value)} style={selectStyle} disabled={running} data-testid="style-select">
                 <option value="editorial-sakura">Editorial Sakura (Default)</option>
                 <option value="tmc-press">TMC Press</option>
@@ -851,7 +1036,7 @@ export default function BrochureEngine() {
             </label>
 
             <label style={fieldLabel}>
-              Brief
+              <LabelWithInfo label="Brief" tip="The main prompt the brochure composer reads. Be specific: agency, trip name, duration, route, day-by-day, inclusions, pricing and call-to-action." />
               <textarea
                 value={goal}
                 onChange={(e) => setGoal(e.target.value)}
@@ -872,6 +1057,9 @@ export default function BrochureEngine() {
                   Prompt {i + 1}
                 </button>
               ))}
+              <button type="button" onClick={() => handleSampleBrief(PROMPT_TEMPLATE)} style={chipBtn} disabled={running} title="Structured template with placeholders">
+                Template
+              </button>
             </div>
 
             {/* Brand kit (collapsible) */}
@@ -894,6 +1082,11 @@ export default function BrochureEngine() {
               onSaveProfile={saveProfile}
               onApplyProfile={applyProfile}
               onDeleteProfile={deleteProfile}
+              existingBrandKits={existingBrandKits}
+              existingBrandKitId={existingBrandKitId}
+              existingBrandKitLoading={existingBrandKitLoading}
+              loadedBrandKit={loadedBrandKit}
+              onExistingBrandKitChange={applyExistingBrandKit}
             />
 
             {/* Model picker (collapsible) */}
@@ -909,13 +1102,15 @@ export default function BrochureEngine() {
               running={running}
               resolvedSelection={resolvedSelection}
               costEstimate={costEstimate}
+              aiProvider={aiProvider}
+              aiError={aiError}
             />
 
             <div style={{ display: 'flex', gap: 10 }}>
               <button
                 type="submit"
-                disabled={running || !goal.trim()}
-                style={running ? disabledPrimaryBtn : primaryBtn}
+                disabled={running || !goal.trim() || aiError}
+                style={running || aiError ? disabledPrimaryBtn : primaryBtn}
                 data-testid="generate-brochure"
               >
                 {running ? <><Loader size={16} className="anim-spin" /> Generating…</> : <><Sparkles size={16} /> Generate brochure</>}
@@ -1101,7 +1296,7 @@ export default function BrochureEngine() {
 }
 
 // ─── Brand kit panel ────────────────────────────────────────────────────────
-function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, onUploadImages, onRemoveImage, onOpenCoverPlacer, onOpenBand, hasLogos = false, profiles = [], profileBusy = false, profileName = '', setProfileName, onSaveProfile, onApplyProfile, onDeleteProfile }) {
+function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, onUploadImages, onRemoveImage, onOpenCoverPlacer, onOpenBand, hasLogos = false, profiles = [], profileBusy = false, profileName = '', setProfileName, onSaveProfile, onApplyProfile, onDeleteProfile, existingBrandKits = [], existingBrandKitId = '', existingBrandKitLoading = false, loadedBrandKit = null, onExistingBrandKitChange }) {
   const setContactLine = (i, v) => setBrand((b) => {
     const contact = [...(b.contact || [])];
     contact[i] = v;
@@ -1117,6 +1312,17 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
   const addSocial = () => setBrand((b) => ({ ...b, socials: [...(b.socials || []), ''] }));
   const removeSocial = (i) => setBrand((b) => ({ ...b, socials: (b.socials || []).filter((_, j) => j !== i) }));
 
+  const kitColors = loadedBrandKit
+    ? [
+        { key: 'primaryColor', label: 'Primary', value: loadedBrandKit.primaryColor },
+        { key: 'secondaryColor', label: 'Secondary', value: loadedBrandKit.secondaryColor },
+        { key: 'accentColor', label: 'Accent', value: loadedBrandKit.accentColor },
+        { key: 'bgColor', label: 'Background', value: loadedBrandKit.bgColor },
+        { key: 'textColor', label: 'Text', value: loadedBrandKit.textColor },
+      ].filter((c) => c.value && /^#[0-9a-fA-F]{6}$/.test(c.value.trim()))
+    : [];
+  const applyKitColor = (hex) => setBrand((b) => ({ ...b, accentMode: 'manual', accent: hex.trim() }));
+
   return (
     <div style={collapsible}>
       <button type="button" onClick={() => setOpen((v) => !v)} style={collapsibleHeader}>
@@ -1126,9 +1332,37 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
       </button>
       {open && (
         <div style={collapsibleBody}>
+          {/* Existing BrandKit from the Travel CRM brand-kit admin */}
+          {existingBrandKits.length > 0 && (
+            <label style={fieldLabel}>
+              <LabelWithInfo
+                label="Use existing brand kit"
+                tip="Load a saved BrandKit from Settings → Brand Kits. Logo, colours, tagline, contacts and socials are copied in; placement and QR stay editable below."
+              />
+              <span style={fieldHint}>Choose a kit or keep Custom to enter everything manually.</span>
+              <select
+                value={existingBrandKitId}
+                onChange={(e) => onExistingBrandKitChange?.(e.target.value)}
+                style={selectStyle}
+                disabled={running || existingBrandKitLoading}
+                data-testid="existing-brand-kit"
+              >
+                <option value="">Custom brand kit</option>
+                {existingBrandKits.map((k) => (
+                  <option key={k.id} value={String(k.id)}>
+                    {k.subBrand ? `${k.subBrand} — ` : ''}v{k.version}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           {/* Saved brand profiles — server-persisted, shared across the agency's team */}
           <div style={fieldLabel}>
-            <span>Saved brand profiles <span style={fieldHint}>(reuse your logo, accent, contacts & QR)</span></span>
+            <LabelWithInfo
+              label="Saved brand profiles"
+              tip="Quick-saved versions of the custom panel below. They include logo, accent, contacts, socials and QR — useful when you reuse the same look across many brochures."
+            />
             {profiles.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '4px 0 6px' }}>
                 {profiles.map((p) => (
@@ -1171,15 +1405,18 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
           </div>
 
           <label style={fieldLabel}>
-            Agency name
+            <LabelWithInfo label="Agency name" tip="The agency name appears on the cover, footer and contact band of the generated brochure." />
             <input type="text" value={brand.name} onChange={(e) => setBrand((b) => ({ ...b, name: e.target.value }))} placeholder="Globus Travels" style={inputStyle} disabled={running} />
           </label>
           <label style={fieldLabel}>
-            Tagline
+            <LabelWithInfo label="Tagline" tip="A short brand line shown under the agency name on the cover. Keep it under 140 characters." />
             <input type="text" value={brand.tagline} onChange={(e) => setBrand((b) => ({ ...b, tagline: e.target.value }))} placeholder="Crafted journeys, since 1998" style={inputStyle} disabled={running} />
           </label>
           <div style={fieldLabel}>
-            <span>Accent colour</span>
+            <LabelWithInfo
+              label="Accent colour"
+              tip="The main brand colour used for highlights, the cover badge and map route. Auto lets the brochure composer infer a colour from the destination; Manual locks it to your choice."
+            />
             <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 2 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, cursor: 'pointer' }}>
                 <input type="radio" name="accentMode" checked={(brand.accentMode || 'auto') === 'auto'} onChange={() => setBrand((b) => ({ ...b, accentMode: 'auto' }))} disabled={running} />
@@ -1193,11 +1430,35 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
                 <input type="color" value={brand.accent} onChange={(e) => setBrand((b) => ({ ...b, accent: e.target.value }))} style={{ ...inputStyle, padding: 2, height: 30, width: 48, marginLeft: 'auto' }} disabled={running} aria-label="Accent colour" />
               )}
             </div>
+            {kitColors.length > 0 && (
+              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={fieldHint}>Colours from selected brand kit — click to use:</span>
+                {kitColors.map((c) => (
+                  <button
+                    key={c.key}
+                    type="button"
+                    onClick={() => applyKitColor(c.value)}
+                    title={`Use ${c.label} (${c.value}) as accent`}
+                    disabled={running}
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: '50%',
+                      border: '2px solid var(--border-color)',
+                      background: c.value,
+                      cursor: 'pointer',
+                      boxShadow: brand.accent === c.value ? '0 0 0 2px var(--text-primary)' : 'none',
+                    }}
+                    aria-label={`Use ${c.label} colour`}
+                  />
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Contacts */}
           <div style={fieldLabel}>
-            <span>Contact lines <span style={fieldHint}>(phone / email — max 4)</span></span>
+            <LabelWithInfo label="Contact lines" tip="Phone numbers, emails or URLs shown in the footer and contact band. Up to 4 lines." />
             {(brand.contact || []).map((c, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
                 <input type="text" value={c} onChange={(e) => setContactLine(i, e.target.value)} placeholder="+91 98765 43210" style={inputStyle} disabled={running} />
@@ -1211,7 +1472,7 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
 
           {/* Socials */}
           <div style={fieldLabel}>
-            <span>Socials <span style={fieldHint}>(handle / network — max 6)</span></span>
+            <LabelWithInfo label="Socials" tip="Social-network names or handles printed near the contact lines (e.g. instagram, facebook). Up to 6." />
             {(brand.socials || []).map((s, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
                 <input type="text" value={s} onChange={(e) => setSocialLine(i, e.target.value)} placeholder="instagram" style={inputStyle} disabled={running} />
@@ -1224,13 +1485,14 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
           </div>
 
           <label style={fieldLabel}>
-            QR link <span style={fieldHint}>(any URL — booking page, website; shown as a scannable QR)</span>
+            <LabelWithInfo label="QR link" tip="A http(s) URL encoded as a scannable QR code on the back page or contact band." />
+            <span style={fieldHint}>Booking page, website, or WhatsApp link.</span>
             <input type="url" value={brand.qrUrl} onChange={(e) => setBrand((b) => ({ ...b, qrUrl: e.target.value }))} placeholder="https://book.sakuratrails.in" style={inputStyle} disabled={running} />
           </label>
 
           {/* Unified image upload — every uploaded image lands in the pool first. */}
           <div style={fieldLabel}>
-            <span>Upload images <span style={fieldHint}>(PNG / JPEG / WebP / GIF · ≤10MB each · upload as many as you need)</span></span>
+            <LabelWithInfo label="Upload images" tip="Logos, hero shots or partner badges. Every image is added to a shared pool; you then choose which ones appear on the cover and inside pages." />
             <input ref={fileInputRef} type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" onChange={(e) => { onUploadImages(e.target.files); e.target.value = ''; }} style={{ flex: 1 }} disabled={running} />
             {(brand.imagePool || []).length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
@@ -1247,7 +1509,7 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
 
           {/* Front cover — opens the cover preview placer. */}
           <div style={fieldLabel}>
-            <span>Front cover <span style={fieldHint}>(place logos freely on the cover preview)</span></span>
+            <LabelWithInfo label="Front cover" tip="Opens a drag-and-drop preview of the front cover so you can position logos and set their size / backing." />
             <button
               type="button"
               onClick={onOpenCoverPlacer}
@@ -1262,7 +1524,7 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
 
           {/* Interior logo band — logos on pages after the cover */}
           <div style={fieldLabel}>
-            <span>Logos on inside pages <span style={fieldHint}>(pick from your logos · header or bottom band · drag to place)</span></span>
+            <LabelWithInfo label="Logos on inside pages" tip="Adds a repeating header or bottom band of logos on interior pages. Drag each logo left/right to align it." />
             <button
               type="button"
               onClick={onOpenBand}
@@ -1285,7 +1547,7 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
 // ─── Model picker panel ──────────────────────────────────────────────────────
 function ModelPickerPanel({
   catalog, availableModels, strategy, setStrategy, perTier, setPerTier,
-  open, setOpen, running, resolvedSelection, costEstimate,
+  open, setOpen, running, resolvedSelection, costEstimate, aiProvider, aiError,
 }) {
   const strategies = catalog.strategies && catalog.strategies.length ? catalog.strategies : ['recommended', 'cheapest', 'smartest', 'custom'];
   const byId = new Map(catalog.models.map((m) => [m.id, m]));
@@ -1303,13 +1565,25 @@ function ModelPickerPanel({
       </button>
       {open && (
         <div style={collapsibleBody}>
+          {aiProvider && (
+            <p style={{ ...fieldHint, marginBottom: 8 }} data-testid="ai-provider-label">
+              Provider: <strong>{aiProvider.label}</strong> · showing models available for this key.
+            </p>
+          )}
+          {aiError && (
+            <p style={{ ...fieldHint, color: '#e06a5a', marginBottom: 8 }} data-testid="ai-provider-picker-error">
+              {aiError.code === 'AI_CREDITS_EXHAUSTED'
+                ? 'CRM-managed AI credits are exhausted. Add your own provider key or purchase more credits.'
+                : 'No AI provider is configured. Set one in Settings → AI to choose models here.'}
+            </p>
+          )}
           {engineMissing && (
             <p style={{ ...fieldHint, marginBottom: 8 }}>
               Model catalog unavailable (the engine may not be installed). Strategy presets still apply at run time.
             </p>
           )}
           <label style={fieldLabel}>
-            Strategy
+            <LabelWithInfo label="Strategy" tip="Recommended lets the engine pick the best model per step; Custom lets you assign a specific model to each tier." />
             <select value={strategy} onChange={(e) => setStrategy(e.target.value)} style={selectStyle} disabled={running}>
               {strategies.map((s) => <option key={s} value={s}>{STRATEGY_LABEL[s] || s}</option>)}
             </select>
@@ -1319,7 +1593,10 @@ function ModelPickerPanel({
           {/* Pre-run cost estimate */}
           <div style={estBox}>
             <div>
-              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-secondary)' }}>Estimated cost · one run</div>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                Estimated cost · one run
+                <InfoTip text="Approximate cost in USD for one brochure run, based on the chosen strategy and the engine's token estimates." />
+              </div>
               <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>~31k in + 13.5k out across tiers</div>
             </div>
             <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
@@ -1337,7 +1614,7 @@ function ModelPickerPanel({
                 const sel = byId.get(selId);
                 return (
                   <label key={tier} style={fieldLabel}>
-                    <span style={{ textTransform: 'capitalize' }}>{info.label} <span style={fieldHint}>— {info.hint}</span></span>
+                    <LabelWithInfo label={info.label} tip={info.hint} />
                     <select
                       value={selId}
                       onChange={(e) => setPerTier((p) => ({ ...p, [tier]: e.target.value }))}
@@ -1345,7 +1622,7 @@ function ModelPickerPanel({
                       disabled={running || !availableModels.length}
                     >
                       {catalog.defaults[tier] && !availableModels.find((m) => m.id === catalog.defaults[tier]) && (
-                        <option value={catalog.defaults[tier]}>{catalog.defaults[tier]} (.env default)</option>
+                        <option value={catalog.defaults[tier]}>{catalog.defaults[tier]} (AI settings default)</option>
                       )}
                       {availableModels.map((m) => (
                         <option key={m.id} value={m.id}>{m.label} · {m.provider} · ${m.inputPer1M}/${m.outputPer1M}/1M</option>
@@ -1419,10 +1696,18 @@ function CoverLogoPlacer({ pool, value, logoUrl, custom, family, templateName, a
   const gesture = useRef(null);
   const dragOffset = useRef({ dx: 0, dy: 0 });
 
+  const modalRef = useRef(null);
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    modalRef.current?.focus();
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = originalOverflow;
+    };
   }, [onClose]);
 
   const norm = (e) => {
@@ -1512,7 +1797,7 @@ function CoverLogoPlacer({ pool, value, logoUrl, custom, family, templateName, a
 
   return (
     <div style={placerOverlay} onClick={onClose}>
-      <div style={placerModal} onClick={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} style={placerModal} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 15 }}>Front cover logos</h3>
@@ -1675,10 +1960,18 @@ function InteriorBandPlacer({ pool, value, family, onSave, onClose }) {
   const canvasRef = useRef(null);
   const dragUrl = useRef(null);
 
+  const modalRef = useRef(null);
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    modalRef.current?.focus();
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = originalOverflow;
+    };
   }, [onClose]);
 
   const effBand = family === 'banded' && band === 'bottom' ? 'header' : band; // banded → header
@@ -1708,7 +2001,7 @@ function InteriorBandPlacer({ pool, value, family, onSave, onClose }) {
 
   return (
     <div style={placerOverlay} onClick={onClose}>
-      <div style={placerModal} onClick={(e) => e.stopPropagation()}>
+      <div ref={modalRef} tabIndex={-1} style={placerModal} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 15 }}>Logos on pages after the cover</h3>
@@ -1890,6 +2183,7 @@ const traceType = { color: 'var(--primary-color, var(--accent-color))', minWidth
 const traceAgent = { color: 'var(--text-primary)', minWidth: 80 };
 const traceData = { color: 'var(--text-secondary)', wordBreak: 'break-word', flex: 1 };
 const errorBox = { marginTop: 8, padding: 10, borderRadius: 6, background: 'rgba(176,0,0,0.08)', border: '1px solid rgba(176,0,0,0.25)', color: '#b00', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 };
+const warningBanner = { padding: 12, borderRadius: 6, background: 'rgba(224, 106, 90, 0.08)', border: '1px solid rgba(224, 106, 90, 0.35)', color: 'var(--text-primary)', fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 10 };
 const resultBox = { marginTop: 12, padding: 10, borderRadius: 6, background: 'var(--subtle-bg)', border: '1px solid var(--border-color)' };
 const resultHeader = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' };
 const costBadge = { padding: '2px 8px', borderRadius: 12, background: 'var(--subtle-bg-3)', color: 'var(--text-primary)', fontSize: 11, fontWeight: 600 };
@@ -1901,5 +2195,5 @@ const th = { textAlign: 'left', padding: '10px 12px', fontSize: 12, textTransfor
 const td = { padding: '10px 12px', fontSize: 14, color: 'var(--text-primary)', verticalAlign: 'top', borderBottom: '1px solid var(--border-color)' };
 const brandBadge = { padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: 'var(--subtle-bg-3)', color: 'var(--primary-color, var(--accent-color))', textTransform: 'uppercase', letterSpacing: 0.5 };
 const ellipsis2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' };
-const placerOverlay = { position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.7)', padding: 16 };
-const placerModal = { maxHeight: '92vh', width: '100%', maxWidth: 760, overflowY: 'auto', borderRadius: 14, border: '1px solid var(--border-color)', background: 'var(--surface-color)', padding: 20 };
+const placerOverlay = { position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', background: 'rgba(0,0,0,0.7)', padding: '4vh 16px', overflowY: 'auto' };
+const placerModal = { maxHeight: '92vh', width: '100%', maxWidth: 760, overflowY: 'auto', borderRadius: 14, border: '1px solid var(--border-color)', background: 'var(--surface-color)', padding: 20, margin: 'auto 0' };

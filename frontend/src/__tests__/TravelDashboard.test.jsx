@@ -206,8 +206,27 @@ const WORKLOAD_DEFAULT = {
   totals: { openTasks: 3, overdueTasks: 1 },
 };
 
-function installFetchMock({ data = DASHBOARD_DEFAULT, workload = WORKLOAD_DEFAULT } = {}) {
+const READINESS_DEFAULT = {
+  readyCount: 5,
+  totalCount: 7,
+  checks: [
+    { id: 'gmail', label: 'Gmail', ready: true, link: '/gmail' },
+    { id: 'calendar', label: 'Calendar', ready: true, link: '/calendar-sync' },
+    { id: 'whatsapp', label: 'WhatsApp Web', ready: false, link: '/travel/whatsapp' },
+    { id: 'drive', label: 'Google Drive', ready: true, link: '/travel/trip-knowledge' },
+    { id: 'ai', label: 'AI Provider', ready: false, link: '/settings/ai' },
+    { id: 'razorpay', label: 'Razorpay', ready: true, link: '/settings/payments' },
+    { id: 'other', label: 'Other', ready: false, link: '/settings' },
+  ],
+};
+
+function installFetchMock({ data = DASHBOARD_DEFAULT, workload = WORKLOAD_DEFAULT, readiness = READINESS_DEFAULT } = {}) {
   fetchApiMock.mockImplementation((url) => {
+    // System-readiness tile fetch.
+    if (url === '/api/travel/dashboard/readiness') {
+      if (readiness instanceof Error) return Promise.reject(readiness);
+      return Promise.resolve(readiness);
+    }
     // Workload panel fetch (managers only) — match with or without ?subBrand=.
     if (url === '/api/travel/dashboard/workload' || url.startsWith('/api/travel/dashboard/workload?')) {
       if (workload instanceof Error) return Promise.reject(workload);
@@ -283,12 +302,14 @@ describe('<TravelDashboard /> — loading / fetch / error', () => {
     renderPage();
     // Await the data-dependent render so we know the GET completed.
     await screen.findByText('47'); // trips.total
-    // ADMIN mounts fire exactly two GETs: the dashboard payload and the
-    // team-workload panel (PRD §4.1 gap A9b). USER-role mounts skip the
-    // workload fetch entirely (endpoint 403s for them).
-    expect(fetchApiMock).toHaveBeenCalledTimes(2);
+    // ADMIN mounts fire three GETs: the dashboard payload, the team-workload
+    // panel (PRD §4.1 gap A9b), and the system-readiness tile. USER-role
+    // mounts skip the workload fetch (endpoint 403s for them) but still fetch
+    // readiness.
+    expect(fetchApiMock).toHaveBeenCalledTimes(3);
     expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard');
     expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard/workload');
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard/readiness');
   });
 
   it('renders the unavailable state and notifies on error', async () => {
@@ -490,15 +511,16 @@ describe('<TravelDashboard /> — Refresh control', () => {
     installFetchMock();
     renderPage();
     await screen.findByText('47');
-    // ADMIN mount = dashboard + workload (PRD §4.1 gap A9b).
-    expect(fetchApiMock).toHaveBeenCalledTimes(2);
+    // ADMIN mount = dashboard + workload + readiness.
+    expect(fetchApiMock).toHaveBeenCalledTimes(3);
 
     const refresh = screen.getByRole('button', { name: /Refresh/i });
     fireEvent.click(refresh);
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(4));
-    // Both endpoints re-fired with the same URLs.
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(6));
+    // All three endpoints re-fired with the same URLs.
     const urls = fetchApiMock.mock.calls.map((c) => c[0]);
     expect(urls.filter((u) => u === '/api/travel/dashboard')).toHaveLength(2);
     expect(urls.filter((u) => u === '/api/travel/dashboard/workload')).toHaveLength(2);
+    expect(urls.filter((u) => u === '/api/travel/dashboard/readiness')).toHaveLength(2);
   });
 });

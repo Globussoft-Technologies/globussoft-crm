@@ -656,6 +656,36 @@ describe('<InvoicesAdmin /> â€” new-invoice modal', () => {
     expect(notifySuccess.mock.calls[0][0]).toMatch(/contact 7/);
   });
 
+  it('due date input opens the calendar on click and blocks typing, paste, and drop', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
+    const dueInput = await screen.findByLabelText(/^Due date$/i);
+
+    const showPicker = vi.fn();
+    Object.defineProperty(dueInput, 'showPicker', {
+      configurable: true,
+      value: showPicker,
+    });
+    fireEvent.click(dueInput);
+    expect(showPicker).toHaveBeenCalled();
+
+    const keyEvent = new KeyboardEvent('keydown', { key: '1', bubbles: true, cancelable: true });
+    const keySpy = vi.spyOn(keyEvent, 'preventDefault');
+    dueInput.dispatchEvent(keyEvent);
+    expect(keySpy).toHaveBeenCalled();
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+    const pasteSpy = vi.spyOn(pasteEvent, 'preventDefault');
+    dueInput.dispatchEvent(pasteEvent);
+    expect(pasteSpy).toHaveBeenCalled();
+
+    const dropEvent = new Event('drop', { bubbles: true, cancelable: true });
+    const dropSpy = vi.spyOn(dropEvent, 'preventDefault');
+    dueInput.dispatchEvent(dropEvent);
+    expect(dropSpy).toHaveBeenCalled();
+  });
+
   it('submitting with missing contactId triggers notify.error and does NOT POST', async () => {
     renderPage();
     await screen.findByText('TINV-2026-0001');

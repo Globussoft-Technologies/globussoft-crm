@@ -34,6 +34,7 @@ import { fetchApi } from "../utils/api";
 import { SEARCH_DEBOUNCE_MS } from "../utils/timing";
 import { formatMoney } from "../utils/money";
 import { usePermissions } from "../hooks/usePermissions";
+import { useSearchQuery } from "./search/SearchQueryContext";
 
 // Inline top-bar global search.
 //
@@ -307,15 +308,21 @@ function scorePageMatch(page, q) {
   return best;
 }
 
+function resultKey(sectionKey, row, idx) {
+  return `${sectionKey}-${row.id ?? row.path ?? idx}`;
+}
+
 export default function Omnibar() {
-  const [query, setQuery] = useState("");
   const [results, setResults] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [pagesIndex, setPagesIndex] = useState([]);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const { query, setQuery, clearQuery } = useSearchQuery();
 
   const inputRef = useRef(null);
   const containerRef = useRef(null);
+  const optionRefs = useRef([]);
   const navigate = useNavigate();
   const { user, tenant } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
@@ -365,7 +372,7 @@ export default function Omnibar() {
       }
       if (e.key === "Escape") {
         if (document.activeElement === inputRef.current || query) {
-          setQuery("");
+          clearQuery();
           setIsFocused(false);
           inputRef.current?.blur();
         }
@@ -386,7 +393,7 @@ export default function Omnibar() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("omnibar:open", handleExternalOpen);
     };
-  }, [query]);
+  }, [query, clearQuery]);
 
   // Close dropdown on outside click. Doesn't blur the input — users can
   // re-focus and resume the same query without retyping.
@@ -479,10 +486,25 @@ export default function Omnibar() {
     );
   }, [resultSet]);
 
+  const flatResults = useMemo(() => {
+    const rows = [];
+    ENTITY_SECTIONS.forEach((section) => {
+      (resultSet[section.key] || []).forEach((row, idx) => {
+        rows.push({
+          section,
+          row,
+          idx,
+          key: resultKey(section.key, row, idx),
+          rendered: section.render(row),
+        });
+      });
+    });
+    return rows;
+  }, [resultSet]);
+
   const handleRowClick = useCallback(
     (to) => {
       if (to) navigate(to);
-      setQuery("");
       setIsFocused(false);
       inputRef.current?.blur();
     },
@@ -490,6 +512,49 @@ export default function Omnibar() {
   );
 
   const showDropdown = isFocused && query.length >= 2;
+  const activeOptionId = activeIndex >= 0 ? `omnibar-option-${flatResults[activeIndex]?.key}` : undefined;
+
+  useEffect(() => {
+    setActiveIndex(flatResults.length > 0 ? 0 : -1);
+  }, [query, flatResults.length]);
+
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    optionRefs.current[activeIndex]?.scrollIntoView?.({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [activeIndex]);
+
+  const handleInputKeyDown = (e) => {
+    if (!showDropdown || flatResults.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((current) => (current + 1) % flatResults.length);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((current) =>
+        current <= 0 ? flatResults.length - 1 : current - 1,
+      );
+      return;
+    }
+    if (e.key === "Home") {
+      e.preventDefault();
+      setActiveIndex(0);
+      return;
+    }
+    if (e.key === "End") {
+      e.preventDefault();
+      setActiveIndex(flatResults.length - 1);
+      return;
+    }
+    if (e.key === "Enter" && activeIndex >= 0) {
+      e.preventDefault();
+      handleRowClick(flatResults[activeIndex]?.rendered?.to);
+    }
+  };
 
   return (
     <div
@@ -553,7 +618,12 @@ export default function Omnibar() {
             setIsFocused(true);
           }}
           onFocus={() => setIsFocused(true)}
+          onKeyDown={handleInputKeyDown}
           aria-label="Global search"
+          aria-autocomplete="list"
+          aria-controls="omnibar-results"
+          aria-expanded={showDropdown}
+          aria-activedescendant={activeOptionId}
           style={{
             flex: 1,
             background: "transparent",
@@ -569,7 +639,7 @@ export default function Omnibar() {
           <button
             type="button"
             onClick={() => {
-              setQuery("");
+              clearQuery();
               inputRef.current?.focus();
             }}
             aria-label="Clear search"
@@ -590,6 +660,7 @@ export default function Omnibar() {
 
       {showDropdown && (
         <div
+          id="omnibar-results"
           role="listbox"
           aria-label="Search results"
           style={{
@@ -659,11 +730,20 @@ export default function Omnibar() {
                       {section.label}
                     </h4>
                     {rows.map((row, idx) => {
-                      const r = section.render(row);
+                      const optionKey = resultKey(section.key, row, idx);
+                      const optionIndex = flatResults.findIndex((item) => item.key === optionKey);
+                      const isActive = optionIndex === activeIndex;
+                      const r = flatResults[optionIndex]?.rendered || section.render(row);
                       return (
                         <button
-                          key={`${section.key}-${row.id ?? row.path ?? idx}`}
+                          key={optionKey}
+                          id={`omnibar-option-${optionKey}`}
+                          ref={(node) => {
+                            if (optionIndex >= 0) optionRefs.current[optionIndex] = node;
+                          }}
                           type="button"
+                          role="option"
+                          aria-selected={isActive}
                           onClick={() => handleRowClick(r.to)}
                           style={{
                             display: "flex",
@@ -671,7 +751,9 @@ export default function Omnibar() {
                             gap: "0.75rem",
                             padding: "0.5rem 0.75rem",
                             width: "100%",
-                            background: "transparent",
+                            background: isActive
+                              ? "var(--hover-bg, var(--subtle-bg))"
+                              : "transparent",
                             border: "none",
                             cursor: "pointer",
                             borderRadius: 8,
@@ -680,11 +762,14 @@ export default function Omnibar() {
                             color: "var(--text-primary)",
                           }}
                           onMouseOver={(e) => {
+                            if (optionIndex >= 0) setActiveIndex(optionIndex);
                             e.currentTarget.style.background =
                               "var(--hover-bg, var(--subtle-bg))";
                           }}
                           onMouseOut={(e) => {
-                            e.currentTarget.style.background = "transparent";
+                            e.currentTarget.style.background = isActive
+                              ? "var(--hover-bg, var(--subtle-bg))"
+                              : "transparent";
                           }}
                         >
                           <div

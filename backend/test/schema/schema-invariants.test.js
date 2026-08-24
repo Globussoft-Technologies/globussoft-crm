@@ -250,6 +250,26 @@ const NON_TENANT_MODELS = new Set([
   // written only by super-admin plan management; tenant queries read the
   // catalog through their own AiTenantSubscription.planId join.
   'AiSubscriptionPlan',
+  // UserGeofenceZone is a user→zone assignment junction, the standalone-zone
+  // sibling of UserLocation above — same rationale applies, twice over: BOTH
+  // parents (User.tenantId and GeofenceZone.tenantId) are already
+  // tenant-scoped, and every read path (routes/attendance.js
+  // resolveGeofenceContext) filters through `zone: { tenantId }` on top of
+  // `userId` already being the caller's own JWT-derived id. A redundant
+  // UserGeofenceZone.tenantId would add a third copy of the same fact with
+  // no query relying on it, and a real risk of it drifting from the zone's
+  // actual tenant.
+  'UserGeofenceZone',
+  // Super-admin-managed AI provider API keys (Gemini/OpenAI/Claude/etc.),
+  // attached to AiSubscriptionPlan rows above. Same rationale: a single
+  // platform-wide key catalog, not per-tenant data — a key becomes
+  // available to a tenant only via their AiTenantSubscription -> plan ->
+  // AiSubscriptionPlanKey join, never queried by tenantId directly.
+  'AiManagedApiKey',
+  // Junction between AiSubscriptionPlan and AiManagedApiKey (which plan
+  // has which keys enabled). Both parents are platform-global per above;
+  // this table inherits the same non-tenant scope.
+  'AiSubscriptionPlanKey',
 ]);
 
 // ── Expected AuditLog shape ──────────────────────────────────────────
@@ -305,8 +325,8 @@ describe('schema invariants — multi-tenant safety net', () => {
     expect(
       violations,
       `Models missing tenantId (data-leak risk):\n  - ${violations.join('\n  - ')}\n\n` +
-        `Either add \`tenantId Int @default(1)\` to the model, or add it to\n` +
-        `NON_TENANT_MODELS in this test file with a comment explaining why.`,
+      `Either add \`tenantId Int @default(1)\` to the model, or add it to\n` +
+      `NON_TENANT_MODELS in this test file with a comment explaining why.`,
     ).toEqual([]);
   });
 
@@ -325,8 +345,8 @@ describe('schema invariants — multi-tenant safety net', () => {
     expect(
       violations,
       `Soft-delete fields must be nullable. The codebase's filter pattern\n` +
-        `is \`{ deletedAt: null }\` for "alive" rows; a required column\n` +
-        `breaks every list/detail route silently.\nViolations:\n  - ${violations.join('\n  - ')}`,
+      `is \`{ deletedAt: null }\` for "alive" rows; a required column\n` +
+      `breaks every list/detail route silently.\nViolations:\n  - ${violations.join('\n  - ')}`,
     ).toEqual([]);
   });
 
@@ -343,10 +363,10 @@ describe('schema invariants — multi-tenant safety net', () => {
     expect(
       missing,
       `AuditLog is missing fields or has the wrong type/nullability:\n` +
-        `  - ${missing.join('\n  - ')}\n\n` +
-        `If this drift is intentional, update EXPECTED_AUDIT_LOG_FIELDS in\n` +
-        `this test file IN THE SAME PR as the schema change. The audit\n` +
-        `viewer + GDPR export both consume the documented shape.`,
+      `  - ${missing.join('\n  - ')}\n\n` +
+      `If this drift is intentional, update EXPECTED_AUDIT_LOG_FIELDS in\n` +
+      `this test file IN THE SAME PR as the schema change. The audit\n` +
+      `viewer + GDPR export both consume the documented shape.`,
     ).toEqual([]);
   });
 
@@ -370,9 +390,9 @@ describe('schema invariants — multi-tenant safety net', () => {
     if (drift.length > 0) {
       console.warn(
         `[schema-invariants] ${drift.length} models have tenantId but no ` +
-          `formal \`tenant Tenant @relation\` line. The data-leak gate is the ` +
-          `column itself; the relation is a convenience. Tracked under ` +
-          `separate [schema] [P1] cleanup issue.\n  - ${drift.join('\n  - ')}`,
+        `formal \`tenant Tenant @relation\` line. The data-leak gate is the ` +
+        `column itself; the relation is a convenience. Tracked under ` +
+        `separate [schema] [P1] cleanup issue.\n  - ${drift.join('\n  - ')}`,
       );
     }
     // Test always passes; it's a reporting checkpoint.
@@ -401,9 +421,9 @@ describe('schema invariants — multi-tenant safety net', () => {
     if (undocumented.length > 0) {
       console.warn(
         `[schema-invariants] ${undocumented.length} @@unique constraints ` +
-          `lack explanatory comments. Load-bearing constraints SHOULD be ` +
-          `documented so future migrations don't silently drop them.\n  - ` +
-          undocumented.join('\n  - '),
+        `lack explanatory comments. Load-bearing constraints SHOULD be ` +
+        `documented so future migrations don't silently drop them.\n  - ` +
+        undocumented.join('\n  - '),
       );
     }
     expect(true).toBe(true);

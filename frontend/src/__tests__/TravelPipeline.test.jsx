@@ -16,6 +16,7 @@
  *   9. Status filter: selecting "Accepted" re-fetches with ?status=accepted
  *  10. Text search filters rows client-side by destination
  *  11. Inline status dropdown: changing status PATCHes /api/travel/itineraries/:id
+ *      and renders unknown/current server statuses instead of a blank pill
  *  12. KPI tiles compute correctly from itinerary data (won/negotiation/lost buckets)
  *  13. Export CSV button fires without error
  *  14. Delete flow: clicking trash → confirm → DELETE /api/travel/itineraries/:id
@@ -36,7 +37,6 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { vi, describe, it, beforeEach, expect } from "vitest";
-import React from "react";
 
 // ── Stable notify mock (CLAUDE.md RTL rule: one object reference) ──────────
 const notifyObj = {
@@ -146,8 +146,13 @@ describe("TravelPipeline", () => {
     expect(screen.getAllByText(/Won/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Lost/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Achieved/).length).toBeGreaterThanOrEqual(1);
-    // deal count appears in the sub-line
-    expect(screen.getByText(String(DEFAULT_ITINS.length))).toBeInTheDocument();
+    // count badge now reads as a compact total chip rather than a second heading
+    expect(
+      screen.getByText((_, node) => {
+        const text = node?.textContent?.replace(/\s+/g, " ").trim();
+        return text === `${DEFAULT_ITINS.length} Total Deals`;
+      }),
+    ).toBeInTheDocument();
   });
 
   // 3. Filter bar
@@ -191,6 +196,48 @@ describe("TravelPipeline", () => {
     expect(screen.getByText("Package cost")).toBeInTheDocument();
     expect(screen.getByText("Travel date")).toBeInTheDocument();
     expect(screen.getByText("Status")).toBeInTheDocument();
+  });
+
+  it("sorts statuses in pipeline lifecycle order", async () => {
+    const statuses = [
+      "expired", "advance_paid", "draft", "rejected",
+      "accepted", "sent", "fully_paid", "revised",
+    ];
+    mockFetch(statuses.map((status, index) => makeItin({
+      id: index + 1,
+      destination: `${status} tour`,
+      status,
+    })));
+    renderPage();
+    await screen.findByText("draft tour");
+
+    const destinations = () => within(screen.getByRole("table"))
+      .getAllByTitle("Open itinerary detail")
+      .map((link) => link.textContent);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort Status" }));
+    expect(destinations()).toEqual([
+      "draft tour",
+      "sent tour",
+      "revised tour",
+      "accepted tour",
+      "advance_paid tour",
+      "fully_paid tour",
+      "rejected tour",
+      "expired tour",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort Status" }));
+    expect(destinations()).toEqual([
+      "expired tour",
+      "rejected tour",
+      "fully_paid tour",
+      "advance_paid tour",
+      "accepted tour",
+      "revised tour",
+      "sent tour",
+      "draft tour",
+    ]);
   });
 
   // 7. Empty state
@@ -256,6 +303,37 @@ describe("TravelPipeline", () => {
       expect(patchCall[0]).toMatch(/\/api\/travel\/itineraries\/1/);
       expect(JSON.parse(patchCall[1].body)).toEqual({ status: "draft" });
     });
+  });
+
+  it("keeps achieved out of writable status options but renders unknown current statuses readably", async () => {
+    mockFetch([
+      makeItin({ id: 11, destination: "Umrah Group Tour", status: "achieved" }),
+      makeItin({ id: 12, destination: "Custom Safari", status: "custom_review" }),
+    ]);
+    renderPage();
+
+    await screen.findByText("Umrah Group Tour");
+    const statusDropdowns = screen.getAllByRole("combobox", { name: /change status/i });
+
+    expect(statusDropdowns[0]).toHaveValue("achieved");
+    expect(within(statusDropdowns[0]).getByRole("option", { name: "Achieved" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /filter by status/i })).not.toHaveTextContent("Achieved");
+
+    expect(statusDropdowns[1]).toHaveValue("custom_review");
+    expect(within(statusDropdowns[1]).getByRole("option", { name: "Custom Review" })).toBeInTheDocument();
+  });
+
+  it("does not PATCH unsupported statuses from a stale dropdown value", async () => {
+    renderPage();
+    await screen.findByText("Bali Honeymoon Special");
+
+    const statusDropdown = screen.getAllByRole("combobox", { name: /change status/i })[0];
+    fireEvent.change(statusDropdown, { target: { value: "achieved" } });
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith("Status cannot be updated to that value");
+    });
+    expect(fetchApi.mock.calls.some((call) => call[1]?.method === "PATCH")).toBe(false);
   });
 
   // 12. KPI tile values
@@ -387,6 +465,8 @@ describe("TravelPipeline", () => {
     const statusSelectLight = screen.getAllByLabelText("Change status")[0];
     expect(statusSelectLight.getAttribute("style")).toContain("rgba(47, 122, 77, 0.12)");
     expect(statusSelectLight.getAttribute("style")).toContain("rgba(47, 122, 77, 0.18)");
+    expect(statusSelectLight.getAttribute("style")).not.toContain("appearance: none");
+    expect(statusSelectLight.getAttribute("style")).not.toContain("background-image");
   });
 
   it("keeps richer tones in dark mode", async () => {

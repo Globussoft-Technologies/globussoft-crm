@@ -2435,8 +2435,8 @@ function ProfileCard({ contact, kyc, loading, verifyLoading, onVerify }) {
 }
 
 const SUB_BRAND_LABELS = {
-  tmc: "TMC",
-  rfu: "RFU",
+  tmc: "The Modern Classroom",
+  rfu: "Ready for Umrah",
   travelstall: "Travel Stall",
   visasure: "Visa Sure",
 };

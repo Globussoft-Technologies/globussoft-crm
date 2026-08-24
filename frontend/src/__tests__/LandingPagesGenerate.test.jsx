@@ -54,13 +54,29 @@ function defaultFetchMock(url, opts) {
   return Promise.resolve(null);
 }
 
-function renderPage() {
+function renderPage(initialEntries = ['/landing-pages']) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <LandingPages />
     </MemoryRouter>,
   );
 }
+
+const TRIP_PAGE_STATE = {
+  returnTo: { label: 'TMC Trips', path: '/travel/trips/101?tab=overview' },
+  currentLabel: 'Public experience',
+  currentPath: '/travel/trips/101?tab=microsite',
+  backTo: '/travel/trips',
+  backLabel: 'Trips',
+  tripContext: {
+    tripId: 101,
+    tripCode: 'TMC-AND-2026-MUMBAI-G7',
+    destination: 'Andaman',
+    durationDays: 7,
+    audience: 'School students',
+    subBrand: 'tmc',
+  },
+};
 
 describe('<LandingPages /> — Generate modal', () => {
   beforeEach(() => {
@@ -79,6 +95,26 @@ describe('<LandingPages /> — Generate modal', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Generate Destination Page/i })).toBeInTheDocument();
     });
+  });
+
+  it('prefills the generate modal from the trip context and keeps audience editable', async () => {
+    const user = userEvent.setup();
+    renderPage([{
+      pathname: '/landing-pages',
+      state: TRIP_PAGE_STATE,
+    }]);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate Destination Page/i })).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Generate Destination Page/i }));
+
+    expect(screen.getByLabelText(/^Destination/)).toHaveValue('Andaman');
+    expect(screen.getByLabelText(/Duration/i)).toHaveValue(7);
+    expect(screen.getByLabelText(/Audience/i)).toHaveValue('School students');
+    expect(screen.getByLabelText(/Sub-brand/i)).toHaveValue('tmc');
+
+    await user.clear(screen.getByLabelText(/Audience/i));
+    await user.type(screen.getByLabelText(/Audience/i), 'School students (Grades 6-12)');
+    expect(screen.getByLabelText(/Audience/i)).toHaveValue('School students (Grades 6-12)');
   });
 
   it('opens the modal with all 4 inputs + the "AI never generates" warning', async () => {

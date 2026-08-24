@@ -454,7 +454,7 @@ export default function GeofencePicker({
                     fontSize: '0.72rem',
                     color: 'var(--warning-color, #f59e0b)',
                     background: 'rgba(245,158,11,0.08)',
-                    borderBottom: '1px solid rgba(255,255,255,0.08)',
+                    borderBottom: '1px solid var(--border-color)',
                   }}
                 >
                   No exact match — showing places near “{relaxedTerm}”. Pick the
@@ -476,7 +476,7 @@ export default function GeofencePicker({
                     cursor: 'pointer',
                     fontSize: '0.82rem',
                     background: i === activeIndex ? 'rgba(99,102,241,0.14)' : 'transparent',
-                    borderBottom: '1px solid rgba(255,255,255,0.05)',
+                    borderBottom: '1px solid var(--border-color)',
                   }}
                 >
                   <MapPin size={13} style={{ marginTop: 2, flexShrink: 0, color: 'var(--accent-color)' }} />
@@ -713,7 +713,7 @@ const mapShellStyle = {
   minWidth: 0,
   borderRadius: 12,
   overflow: 'hidden',
-  border: '1px solid rgba(255,255,255,0.08)',
+  border: '1px solid var(--border-color)',
 };
 
 const labelStyle = {
@@ -725,8 +725,8 @@ const labelStyle = {
 
 const inputStyle = {
   padding: '0.55rem 0.75rem',
-  background: 'rgba(255,255,255,0.05)',
-  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'var(--input-bg)',
+  border: '1px solid var(--border-color)',
   borderRadius: 8,
   color: 'var(--text-primary)',
   fontSize: '0.9rem',
@@ -734,6 +734,13 @@ const inputStyle = {
   boxSizing: 'border-box',
 };
 
+// NOTE: this used to read `var(--card-bg, #1b1b23)` — `--card-bg` is not
+// defined anywhere in index.css (dark or light), so that fallback was
+// ALWAYS winning regardless of theme. In light mode that pinned the
+// dropdown to a near-black background while --text-primary correctly
+// flipped to near-black text, making the whole suggestion list unreadable.
+// --modal-bg is the real theme token for an opaque floating surface and is
+// defined for both themes.
 const dropdownStyle = {
   position: 'absolute',
   top: 'calc(100% + 4px)',
@@ -747,8 +754,8 @@ const dropdownStyle = {
   listStyle: 'none',
   maxHeight: 240,
   overflowY: 'auto',
-  background: 'var(--card-bg, #1b1b23)',
-  border: '1px solid rgba(255,255,255,0.12)',
+  background: 'var(--modal-bg)',
+  border: '1px solid var(--border-color)',
   borderRadius: 8,
   boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
 };
@@ -763,8 +770,8 @@ const basemapToggleStyle = {
   gap: '0.25rem',
   padding: '0.2rem 0.35rem',
   borderRadius: 7,
-  background: 'var(--card-bg, rgba(20,20,26,0.92))',
-  border: '1px solid rgba(255,255,255,0.12)',
+  background: 'var(--modal-bg)',
+  border: '1px solid var(--border-color)',
   color: 'var(--text-primary)',
 };
 

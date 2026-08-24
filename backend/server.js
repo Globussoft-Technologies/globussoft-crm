@@ -554,6 +554,16 @@ try {
   );
 }
 
+// Plain HTTP requests to the WebSocket bridge path must not fall through to
+// the SPA shell. The upgrade listener above handles WebSocket handshakes;
+// anything else on this path is a client error.
+app.all("/ws/callified-agent", (_req, res) => {
+  res.status(426).json({
+    error: "Upgrade Required",
+    code: "UPGRADE_REQUIRED",
+  });
+});
+
 const io = new Server(server, { cors: { origin: "*" } });
 const presenceColors = [
   "#ef4444",

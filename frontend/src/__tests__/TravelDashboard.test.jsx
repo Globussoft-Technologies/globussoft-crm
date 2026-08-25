@@ -318,7 +318,7 @@ describe('<TravelDashboard /> — loading / fetch / error', () => {
     await screen.findByText('Bob Agent');
 
     const staffLink = screen.getByRole('link', { name: /Open staff page for Bob Agent/i });
-    expect(staffLink).toHaveAttribute('href', '/staff');
+    expect(staffLink).toHaveAttribute('href', '/staff?highlight=7');
   });
 
   it('renders the unavailable state and notifies on error', async () => {

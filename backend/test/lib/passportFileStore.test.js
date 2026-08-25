@@ -12,7 +12,7 @@ const store = requireCJS("../../lib/passportFileStore");
 describe("passportFileStore.signDiskUrl + verifyDiskToken", () => {
   it("round-trips a freshly signed URL token for the same file", () => {
     const url = store.signDiskUrl("abc.png", 300);
-    expect(url).toMatch(/^\/uploads\/passport-ocr\/abc\.png\?t=/);
+    expect(url).toMatch(/^\/api\/uploads\/passport-ocr\/abc\.png\?t=/);
     const token = url.split("?t=")[1];
     expect(store.verifyDiskToken("abc.png", token)).toBe(true);
   });
@@ -62,7 +62,7 @@ describe("passportFileStore.resolveViewUrl", () => {
       imageFilename: "y.pdf",
       imageUrl: "/api/uploads/passport-ocr/y.pdf",
     });
-    expect(url).toMatch(/^\/uploads\/passport-ocr\/y\.pdf\?t=/);
+    expect(url).toMatch(/^\/api\/uploads\/passport-ocr\/y\.pdf\?t=/);
     expect(s3Service.getSignedUrl).not.toHaveBeenCalled();
   });
 

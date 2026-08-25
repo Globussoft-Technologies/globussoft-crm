@@ -286,6 +286,53 @@ describe('Contacts.jsx — top-level page contract', () => {
     });
   });
 
+  it('travel agents can reassign contacts and the dropdown excludes admins', async () => {
+    const { AuthContext } = await import('../App');
+    const travelContacts = SEEDED_CONTACTS.map(c =>
+      c.id === 2
+        ? {
+            ...c,
+            subBrand: 'tmc',
+            assignedToId: 7,
+            assignedTo: { name: 'TMC Operator', email: 'operator@travel.test' },
+          }
+        : c,
+    );
+    const travelStaff = [
+      { id: 1, name: 'Yasin Admin', email: 'yasin@travel.test', role: 'ADMIN' },
+      { id: 7, name: 'TMC Operator', email: 'operator@travel.test', role: 'MANAGER' },
+      { id: 8, name: 'Sahil Agent', email: 'sahil@travel.test', role: 'USER' },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(travelContacts);
+      if (url === '/api/staff') return Promise.resolve(travelStaff);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { userId: 7, role: 'MANAGER' }, tenant: { vertical: 'travel' } }}>
+        <MemoryRouter>
+          <Contacts />
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Priya Iyer')).toBeInTheDocument());
+
+    const priyaRow = screen.getByText('Priya Iyer').closest('tr');
+    const assignSelect = within(priyaRow).getByRole('combobox');
+    const optionTexts = Array.from(assignSelect.querySelectorAll('option')).map(option => option.textContent || '');
+    expect(optionTexts.some((text) => /Yasin Admin/i.test(text))).toBe(false);
+
+    fireEvent.change(assignSelect, { target: { value: '8' } });
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts/2/assign' && opts?.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      expect(JSON.parse(putCall[1].body)).toEqual({ assignedToId: '8' });
+    });
+  });
+
   it('bulk actions menu assigns the selected contacts and shows the selected-count badge', async () => {
     renderContacts();
     await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());

@@ -173,11 +173,16 @@ const Contacts = () => {
   };
   const staffOptionLabel = (member) => (member.name || member.email) + staffBrandSuffix(member);
   const assignableStaff = (contact) => {
-    if (!isTravel || !contact?.subBrand) return staff;
-    return staff.filter(
+    let rows = staff;
+    if (isTravel && !isAdmin) {
+      rows = rows.filter((s) => s.role !== 'ADMIN');
+    }
+    if (!isTravel || !contact?.subBrand) return rows;
+    return rows.filter(
       (s) => accessibleSubBrands(s).includes(contact.subBrand) || String(s.id) === String(contact.assignedToId),
     );
   };
+  const canEditAssignedTo = isAdmin || isTravel;
   const [rescoring, setRescoring] = useState(false);
   const [showDupes, setShowDupes] = useState(false);
   const [dupes, setDupes] = useState([]);
@@ -1014,7 +1019,7 @@ const Contacts = () => {
                 ))}
                 {isColVisible('assignedTo') && (
                   <td style={{ padding: '1rem' }}>
-                    {isAdmin ? (
+                    {canEditAssignedTo ? (
                       <select
                         className="input-field"
                         value={contact.assignedToId || ''}

@@ -1623,6 +1623,45 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     expect(screen.getByLabelText('Edit Name for Lily')).toHaveValue('Lily');
   });
 
+  it('travel agents see a reassignment dropdown that excludes admins', async () => {
+    const travelAgentAuth = {
+      tenant: { id: 3, vertical: 'travel', name: 'Travel Co', defaultCurrency: 'INR' },
+      user: { id: 7, role: 'MANAGER', name: 'TMC Operator', email: 'operator@travel.test' },
+    };
+    const travelAgentLeads = [
+      { id: 50, name: 'Lily', email: 'lily@parent.com', subBrand: 'tmc', assignedToId: 7, createdAt: '2026-07-17T10:00:00Z' },
+    ];
+    const travelAgentStaff = [
+      { id: 1, name: 'Yasin Admin', email: 'yasin@travel.test', role: 'ADMIN' },
+      { id: 7, name: 'TMC Operator', email: 'operator@travel.test', role: 'MANAGER' },
+      { id: 8, name: 'Sahil Agent', email: 'sahil@travel.test', role: 'USER' },
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve(travelAgentLeads);
+      }
+      if (url === '/api/staff' && !opts) return Promise.resolve(travelAgentStaff);
+      return travelFetchMock(url, opts);
+    });
+
+    renderLeads(travelAgentAuth);
+    await waitFor(() => expect(screen.getByText('Lily')).toBeInTheDocument());
+
+    const assignSelect = screen.getByLabelText(/Assign Lily to staff/i);
+    const optionTexts = Array.from(assignSelect.querySelectorAll('option')).map((option) => option.textContent || '');
+    expect(optionTexts.some((text) => /Yasin Admin/i.test(text))).toBe(false);
+
+    fireEvent.change(assignSelect, { target: { value: '8' } });
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/50/assign' && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      expect(JSON.parse(putCall[1].body)).toEqual({ assignedToId: '8' });
+    });
+  });
+
   it('shows TMC paid-by-contact amount for a lead with no itinerary advancePaidAmount', async () => {
     // Lily's itinerary has advancePaidAmount=0 (not yet synced to itinerary),
     // but the TMC paid-by-contact endpoint returns 90000 for lily@parent.com.

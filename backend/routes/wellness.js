@@ -185,9 +185,9 @@ async function verifyPatientToken(req, res, next) {
     try {
       const patientRow = await prisma.patient.findUnique({
         where: { id: decoded.patientId },
-        select: { id: true, tenantId: true },
+        select: { id: true, tenantId: true, deletedAt: true },
       });
-      if (!patientRow) {
+      if (!patientRow || patientRow.deletedAt) {
         return res.status(401).json({ error: "Invalid portal token" });
       }
       req.patient = {
@@ -231,16 +231,19 @@ async function verifyPatientToken(req, res, next) {
   if (decoded.userId && decoded.tenantId) {
     try {
       let patient = await prisma.patient.findFirst({
-        where: { userId: decoded.userId, tenantId: decoded.tenantId },
+        where: activePatientWhere({
+          userId: decoded.userId,
+          tenantId: decoded.tenantId,
+        }),
         select: { id: true, phone: true, tenantId: true },
       });
 
       if (!patient && decoded.userType === "CUSTOMER") {
         const userRow = await prisma.user.findUnique({
           where: { id: decoded.userId },
-          select: { name: true, email: true },
+          select: { name: true, email: true, deactivatedAt: true },
         });
-        if (!userRow) {
+        if (!userRow || userRow.deactivatedAt) {
           return res.status(401).json({ error: "Invalid portal token" });
         }
 
@@ -248,11 +251,11 @@ async function verifyPatientToken(req, res, next) {
         // don't fork the clinical record.
         if (userRow.email) {
           const claimable = await prisma.patient.findFirst({
-            where: {
+            where: activePatientWhere({
               tenantId: decoded.tenantId,
               email: userRow.email,
               userId: null,
-            },
+            }),
             select: { id: true, phone: true, tenantId: true },
           });
           if (claimable) {
@@ -347,6 +350,14 @@ const tenantWhere = (req, extra = {}) => ({
   tenantId: req.user.tenantId,
   ...extra,
 });
+
+const activePatientWhere = (extra = {}) => ({
+  ...extra,
+  deletedAt: null,
+});
+
+const deletedCustomerEmail = (userId, tenantId) =>
+  `deleted-customer-${tenantId}-${userId}-${Date.now()}@redacted.local`;
 
 // #527 / #533 (CRIT-02 + HI-04): PHI access gates.
 //
@@ -620,7 +631,7 @@ const { ensurePatientContact } = require("../lib/patientContactLink");
 // byte-similar copies that used to live in this file (booking, book-and-pay,
 // confirm-payment) — all three synced name + email and none synced phone, so a
 // self-booked patient could never have a number the clinic could call.
-const { resolveSelfBookingPatient } = require("../lib/selfBookingPatient");
+const { resolveSelfBookingPatient, loadSelfBookingUser } = require("../lib/selfBookingPatient");
 
 // Attach invoice status to already-fetched visit rows without relying on a
 // Prisma back-reference. Some wellness visit payloads need to know whether the
@@ -2782,13 +2793,12 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
 // #539 (PT-02): DELETE /patients/:id was missing  pen-test reported HTML 404
 // on a route the demo-monitor scrub script + GDPR DSAR flow both want. This
 // is admin-only because deleting clinical records has compliance + legal
-// weight. Hard-delete (no soft-delete column on Patient yet); if the patient
-// has any FK-bound children (visits/prescriptions/consents/treatment-plans/
-// loyalty/referrals), Prisma's Restrict policy throws P2003 and we surface
-// a 409 telling the caller they need to clear children first OR file a
-// GDPR /export  /retention request which handles the cascade properly.
-// Soft-delete semantics + child-detach are a future migration (#527 PHI
-// scoping arc).
+// weight. We now hard-delete the patient row when Prisma allows it, while
+// anonymizing any linked CUSTOMER login so the email can be reused on a fresh
+// registration. If FK-bound clinical children exist (visits/prescriptions/
+// consents/treatment-plans/loyalty/referrals), Prisma's Restrict policy
+// throws P2003 and we fall back to a soft-delete tombstone instead of losing
+// the existing history.
 router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -2799,10 +2809,23 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
     }
     const existing = await prisma.patient.findFirst({
       where: tenantWhere(req, { id }),
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        deletedAt: true,
+        userId: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+            userType: true,
+          },
+        },
+      },
     });
     if (!existing) return res.status(404).json({ error: "Patient not found" });
-    // #628  soft-delete: set deletedAt instead of cascade-orphaning
-    // visits/Rx/consents. Already-soft-deleted rows return 409.
+    // Already-deleted rows stay idempotent.
     if (existing.deletedAt) {
       return res.status(409).json({
         error: "Patient is already soft-deleted",
@@ -2810,25 +2833,73 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
       });
     }
 
-    const updated = await prisma.patient.update({
-      where: { id },
-      data: { deletedAt: new Date() },
-    });
+    const linkedCustomerUser =
+      existing.user && existing.user.userType === "CUSTOMER"
+        ? existing.user
+        : null;
+    const tombstoneEmail = linkedCustomerUser
+      ? deletedCustomerEmail(linkedCustomerUser.id, req.user.tenantId)
+      : null;
+    const anonymizeCustomerUser = async (tx) => {
+      if (!linkedCustomerUser) return;
+      await tx.user.update({
+        where: { id: linkedCustomerUser.id },
+        data: {
+          email: tombstoneEmail,
+          deactivatedAt: new Date(),
+          sessionVersion: { increment: 1 },
+        },
+      });
+    };
+
+    let hardDeleted = false;
+    let deletedAt = null;
+    try {
+      await prisma.$transaction(async (tx) => {
+        await anonymizeCustomerUser(tx);
+        await tx.patient.delete({ where: { id } });
+      });
+      hardDeleted = true;
+    } catch (e) {
+      if (e && e.code === "P2003") {
+        deletedAt = new Date();
+        await prisma.$transaction(async (tx) => {
+          await anonymizeCustomerUser(tx);
+          await tx.patient.update({
+            where: { id },
+            data: { deletedAt },
+          });
+        });
+      } else if (e && e.code === "P2025") {
+        return res.status(404).json({ error: "Patient not found" });
+      } else {
+        throw e;
+      }
+    }
 
     // #179 audit pattern  patient name only, no email/phone PII in the blob.
     await writeAudit(
       "Patient",
-      "SOFT_DELETE",
+      hardDeleted ? "DELETE" : "SOFT_DELETE",
       id,
       req.user.userId,
       req.user.tenantId,
       {
         patientName: existing.name,
-        deletedAt: updated.deletedAt,
+        hardDeleted,
+        deletedAt,
+        customerUserId: linkedCustomerUser ? linkedCustomerUser.id : null,
+        customerEmailAnonymized: !!linkedCustomerUser,
       },
     );
 
-    res.json({ success: true, id, deletedAt: updated.deletedAt });
+    res.json({
+      success: true,
+      id,
+      hardDeleted,
+      deletedAt,
+      customerEmailAnonymized: !!linkedCustomerUser,
+    });
   } catch (e) {
     if (e && e.code === "P2025") {
       return res.status(404).json({ error: "Patient not found" });
@@ -2839,9 +2910,9 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // #628  Restore a soft-deleted patient. Admin-only; clears deletedAt so
-// the row reappears in default lists. No-op (200 idempotent) if already
-// restored. Pairs with the soft-delete handler above; hard-purge runs
-// through the /privacy retention engine (#576) after the tombstone window.
+// the row reappears in default lists. If the linked customer login was
+// anonymized during DELETE, the original email is restored too when it is
+// still available. No-op (200 idempotent) if already restored.
 router.post(
   "/patients/:id/restore",
   verifyRole(["ADMIN"]),
@@ -2855,6 +2926,20 @@ router.post(
       }
       const existing = await prisma.patient.findFirst({
         where: tenantWhere(req, { id }),
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          deletedAt: true,
+          userId: true,
+          user: {
+            select: {
+              id: true,
+              email: true,
+              userType: true,
+            },
+          },
+        },
       });
       if (!existing)
         return res.status(404).json({ error: "Patient not found" });
@@ -2862,9 +2947,45 @@ router.post(
         return res.status(200).json({ success: true, id, idempotent: true });
       }
 
-      const updated = await prisma.patient.update({
-        where: { id },
-        data: { deletedAt: null },
+      const linkedCustomerUser =
+        existing.user && existing.user.userType === "CUSTOMER"
+          ? existing.user
+          : null;
+      if (linkedCustomerUser && existing.email) {
+        const conflict = await prisma.user.findFirst({
+          where: {
+            tenantId: req.user.tenantId,
+            email: existing.email,
+            id: { not: linkedCustomerUser.id },
+          },
+          select: { id: true },
+        });
+        if (conflict) {
+          return res.status(409).json({
+            error: "Patient email is already in use",
+            code: "EMAIL_ALREADY_EXISTS",
+          });
+        }
+      }
+
+      let customerEmailRestored = false;
+      const updated = await prisma.$transaction(async (tx) => {
+        if (linkedCustomerUser && existing.email) {
+          await tx.user.update({
+            where: { id: linkedCustomerUser.id },
+            data: {
+              email: existing.email,
+              deactivatedAt: null,
+              sessionVersion: { increment: 1 },
+            },
+          });
+          customerEmailRestored = true;
+        }
+
+        return await tx.patient.update({
+          where: { id },
+          data: { deletedAt: null },
+        });
       });
 
       await writeAudit(
@@ -2876,10 +2997,17 @@ router.post(
         {
           patientName: existing.name,
           restoredFrom: existing.deletedAt,
+          customerUserId: linkedCustomerUser ? linkedCustomerUser.id : null,
+          customerEmailRestored,
         },
       );
 
-      res.json({ success: true, id, patient: updated });
+      res.json({
+        success: true,
+        id,
+        patient: updated,
+        customerEmailRestored,
+      });
     } catch (e) {
       if (e && e.code === "P2025") {
         return res.status(404).json({ error: "Patient not found" });
@@ -5822,6 +5950,7 @@ router.get("/membership-plans", async (req, res) => {
         where: {
           tenant: { id: req.user.tenantId },
           user: { id: req.user.userId },
+          deletedAt: null,
         },
         select: { id: true },
       });
@@ -11518,7 +11647,10 @@ router.get(
   async (req, res) => {
     try {
       const patient = await prisma.patient.findFirst({
-        where: { userId: req.user.userId, tenantId: req.user.tenantId },
+        where: activePatientWhere({
+          userId: req.user.userId,
+          tenantId: req.user.tenantId,
+        }),
         select: { id: true, name: true },
       });
       if (!patient) {
@@ -11582,7 +11714,10 @@ router.get(
         return res.status(400).json({ error: "Invalid prescription id" });
       }
       const patient = await prisma.patient.findFirst({
-        where: { userId: req.user.userId, tenantId: req.user.tenantId },
+        where: activePatientWhere({
+          userId: req.user.userId,
+          tenantId: req.user.tenantId,
+        }),
         select: { id: true },
       });
       if (!patient) {
@@ -12634,7 +12769,7 @@ router.get("/my-transactions", verifyToken, async (req, res) => {
     // way. No linked Patient  empty history (a 200, not a 404) so the page
     // renders a clean empty state rather than an error toast.
     const patient = await prisma.patient.findFirst({
-      where: { userId: req.user.userId, tenantId },
+      where: activePatientWhere({ userId: req.user.userId, tenantId }),
       select: { id: true, tenantId: true, userId: true },
     });
     if (!patient) {
@@ -15001,15 +15136,12 @@ async function resolveSelfPatient(user) {
   const tenantId = user.tenantId;
   const userId = user.userId;
   let patient = await prisma.patient.findFirst({
-    where: { userId, tenantId },
+    where: activePatientWhere({ userId, tenantId }),
     select: { id: true, name: true },
   });
   if (patient) return patient;
 
-  const userRow = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { name: true, email: true },
-  });
+  const userRow = await loadSelfBookingUser(userId);
   if (!userRow) {
     const e = new Error("User not found");
     e.status = 401;
@@ -15020,7 +15152,7 @@ async function resolveSelfPatient(user) {
   // clinical record that staff may have created first.
   if (userRow.email) {
     const claimable = await prisma.patient.findFirst({
-      where: { tenantId, email: userRow.email, userId: null },
+      where: activePatientWhere({ tenantId, email: userRow.email, userId: null }),
       select: { id: true, name: true },
     });
     if (claimable) {
@@ -15447,7 +15579,11 @@ router.post(
       // clinic visit; staff can merge / annotate the row later.
       const { userId, tenantId } = req.user;
       let patient = await prisma.patient.findFirst({
-        where: { tenant: { id: tenantId }, user: { id: userId } },
+        where: {
+          tenant: { id: tenantId },
+          user: { id: userId },
+          deletedAt: null,
+        },
       });
       if (!patient) {
         const user = await prisma.user.findUnique({
@@ -16790,7 +16926,7 @@ async function resolveBookingPatient(req, tenantId) {
 
   if (requestedPatientId && role !== "CUSTOMER") {
     const patient = await prisma.patient.findFirst({
-      where: { id: requestedPatientId, tenantId },
+      where: activePatientWhere({ id: requestedPatientId, tenantId }),
     });
     if (!patient) {
       const error = new Error("Patient not found");
@@ -16931,7 +17067,7 @@ router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
     const requestedPatientId = patientId ? parseInt(patientId, 10) : null;
     if (requestedPatientId && role !== "CUSTOMER") {
       const patient = await prisma.patient.findFirst({
-        where: { id: requestedPatientId, tenantId },
+        where: activePatientWhere({ id: requestedPatientId, tenantId }),
       });
       if (!patient) {
         return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
@@ -17096,7 +17232,7 @@ router.post("/appointments/confirm-payment", verifyToken, async (req, res) => {
     let patient;
     if (existingMeta.patientId) {
       patient = await prisma.patient.findFirst({
-        where: { id: existingMeta.patientId, tenantId },
+        where: activePatientWhere({ id: existingMeta.patientId, tenantId }),
       });
       if (!patient) {
         return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
@@ -17218,6 +17354,7 @@ router.get("/appointments/my", verifyToken, async (req, res) => {
       where: {
         tenant: { id: tenantId },
         user: { id: userId },
+        deletedAt: null,
       },
     });
 
@@ -17265,7 +17402,11 @@ router.get("/appointments/my-memberships", verifyToken, async (req, res) => {
   try {
     const { userId, tenantId } = req.user;
     const patient = await prisma.patient.findFirst({
-      where: { tenant: { id: tenantId }, user: { id: userId } },
+      where: {
+        tenant: { id: tenantId },
+        user: { id: userId },
+        deletedAt: null,
+      },
     });
     if (!patient) return res.json([]);
 
@@ -17317,7 +17458,7 @@ router.post("/appointments/:id/cancel", verifyToken, async (req, res) => {
   try {
     const { userId, tenantId } = req.user;
     const patient = await prisma.patient.findFirst({
-      where: { tenantId, userId },
+      where: activePatientWhere({ tenantId, userId }),
       select: { id: true },
     });
     if (!patient) {

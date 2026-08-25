@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from "react";
+import { useState, useContext, useEffect } from "react";
 import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { Mail, Square } from "lucide-react";
 import { AuthContext } from "../App";

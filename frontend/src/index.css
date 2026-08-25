@@ -1205,20 +1205,20 @@ html[data-theme="dark"] .travel-flight-details-box {
   width: 100%;
   max-width: 100%;
   overflow: hidden;
-  background: var(--bg-color);
+  background: var(--surface-color);
 }
 
 .leads-table-frozen-pane {
   flex: 0 0 auto;
   position: relative;
   z-index: 3;
-  background: var(--bg-color);
+  background: var(--surface-color);
   box-shadow: 1px 0 0 var(--border-color);
 }
 
 .leads-table-frozen-spacer {
   height: 16px;
-  background: var(--bg-color);
+  background: var(--surface-color);
 }
 
 .leads-table-scroll-pane {
@@ -1244,7 +1244,7 @@ table.leads-table {
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
-  background-color: var(--bg-color);
+  background-color: var(--surface-color);
 }
 
 table.leads-table th,
@@ -1252,7 +1252,7 @@ table.leads-table td {
   box-sizing: border-box;
   border-right: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
-  background-color: var(--bg-color);
+  background-color: var(--surface-color);
   background-clip: padding-box;
 }
 

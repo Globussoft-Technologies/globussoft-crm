@@ -41,7 +41,11 @@ import FilterPanel from "../components/FilterPanel";
 import InlineCellEditor from "../components/InlineCellEditor";
 import ScrollableSelect from "../components/ScrollableSelect";
 import TopScrollSync from "../components/TopScrollSync";
-import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
+import {
+  SUB_BRAND_IDS,
+  accessibleSubBrands,
+  subBrandShortLabel,
+} from "../utils/travelSubBrand";
 import { useActiveSubBrand } from "../utils/subBrand";
 import CallifiedLeadCallDialog from "../components/CallifiedLeadCallDialog";
 import CallifiedCallDetailsDrawer from "../components/CallifiedCallDetailsDrawer";
@@ -976,8 +980,8 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
-  // Only ADMINs may assign / reassign leads. All other roles see the
-  // assignee name as plain text and have no checkbox / bulk-assign surface.
+  // ADMINs always get the full assignment UI. Travel non-admins can also
+  // reassign the leads they own, but only to non-admin staff targets.
   const isAdmin = auth?.user?.role === "ADMIN";
   const [leads, setLeads] = useState([]);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
@@ -1325,6 +1329,28 @@ const Leads = () => {
     } catch {
       setStaff([]);
     }
+  };
+
+  const staffBrandSuffix = (member) => {
+    if (!isTravel) return "";
+    const brands = accessibleSubBrands(member).map(subBrandShortLabel);
+    return brands.length ? ` (${brands.join(", ")})` : "";
+  };
+
+  const staffOptionLabel = (member) =>
+    `${member.name || member.email}${staffBrandSuffix(member)}`;
+
+  const assignableStaff = (lead) => {
+    let rows = staff;
+    if (isTravel && !isAdmin) {
+      rows = rows.filter((s) => s.role !== "ADMIN");
+    }
+    if (!isTravel || !lead?.subBrand) return rows;
+    return rows.filter(
+      (s) =>
+        accessibleSubBrands(s).includes(lead.subBrand) ||
+        String(s.id) === String(lead.assignedToId),
+    );
   };
 
   const loadAutoCampaignRules = useCallback(async () => {
@@ -4039,7 +4065,7 @@ const Leads = () => {
             style={getBodyCellStyle("assignedTo")}
             onClick={(e) => e.stopPropagation()}
           >
-            {isAdmin ? (
+            {isAdmin || isTravel ? (
               <select
                 className="input-field"
                 value={lead.assignedToId || ""}
@@ -4053,9 +4079,9 @@ const Leads = () => {
                 aria-label={`Assign ${lead.name || "lead"} to staff`}
               >
                 <option value="">Unassigned</option>
-                {staff.map((s) => (
+                {assignableStaff(lead).map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name || s.email}
+                    {staffOptionLabel(s)}
                   </option>
                 ))}
               </select>

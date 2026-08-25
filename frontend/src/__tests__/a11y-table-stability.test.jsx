@@ -250,6 +250,18 @@ describe("#633 — .stable-table CSS contract", () => {
   });
 });
 
+describe("Leads split-table surface contract", () => {
+  const css = readSrc("index.css");
+
+  it("uses the card surface token instead of the page background token", () => {
+    expect(css).toMatch(/\.leads-split-table\s*\{[^}]*background:\s*var\(--surface-color\)/s);
+    expect(css).toMatch(/\.leads-table-frozen-pane\s*\{[^}]*background:\s*var\(--surface-color\)/s);
+    expect(css).toMatch(/\.leads-table-frozen-spacer\s*\{[^}]*background:\s*var\(--surface-color\)/s);
+    expect(css).toMatch(/table\.leads-table\s*\{[^}]*background-color:\s*var\(--surface-color\)/s);
+    expect(css).toMatch(/table\.leads-table\s+th,\s*table\.leads-table\s+td\s*\{[^}]*background-color:\s*var\(--surface-color\)/s);
+  });
+});
+
 describe("#633 — canonical tables adopt .stable-table className", () => {
   // Pin the class onto a representative subset of canonical list pages so
   // a future "tableLayout: auto" regression on any of them is caught.

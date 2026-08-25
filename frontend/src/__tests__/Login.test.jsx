@@ -11,7 +11,8 @@
  *   (d) the QuickLoginSection rows grouped by tenant — Generic CRM /
  *       Enhanced Wellness / Travel Stall — each rendering one-click
  *       buttons that fire the login flow with the seeded password
- *       'password123' (per CLAUDE.md "Demo Credentials"),
+ *       'password123' for the shared demo accounts and
+ *       'yR9Q6&$vUFXKce-)W57' for the Travel Stall owner,
  *   (e) the 2FA challenge form that replaces (a)+(b)+(c)+(d) when
  *       /api/auth/login responds with { requires2FA: true, tempToken }.
  *
@@ -68,7 +69,6 @@
  *     in initial state — the test does NOT need to type into either to
  *     exercise the happy path.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -495,6 +495,33 @@ describe('<Login /> — page surface', () => {
     expect(JSON.parse(loginCall[1].body)).toEqual({
       email: 'admin@globussoft.com',
       password: 'password123',
+    });
+  });
+
+  it('clicking the Travel Stall owner quick-login button uses the branded password', async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === '/api/auth/login') {
+        return fetchResponse({
+          token: 'jwt-travel-owner',
+          user: { userId: 3, email: 'yasin@travelstall.in', role: 'ADMIN' },
+          tenant: { id: 3, name: 'Travel Stall', vertical: 'travel' },
+        });
+      }
+      return fetchResponse({}, 404);
+    });
+    renderLogin();
+
+    fireEvent.click(screen.getByTitle('Log in as yasin@travelstall.in'));
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith('/travel');
+    });
+
+    const loginCall = global.fetch.mock.calls.find(([u]) => u === '/api/auth/login');
+    expect(loginCall).toBeTruthy();
+    expect(JSON.parse(loginCall[1].body)).toEqual({
+      email: 'yasin@travelstall.in',
+      password: 'yR9Q6&$vUFXKce-)W57',
     });
   });
 

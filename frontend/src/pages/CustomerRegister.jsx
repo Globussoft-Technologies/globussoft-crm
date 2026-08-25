@@ -1,4 +1,4 @@
-import { useContext, useState, useEffect } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { CheckCircle2, XCircle } from "lucide-react";
 import { AuthContext } from "../App";
@@ -33,6 +33,24 @@ function passwordStrength(p) {
 const EXISTING_EMAIL_MESSAGE = "This email already exists. Sign in to your account.";
 const SELECT_ORG_MESSAGE = "Select your organization first to verify email availability.";
 const EMAIL_CHECK_FAILED_MESSAGE = "Unable to check email availability. Please try again.";
+const MIN_ORG_SUGGESTION_CHARS = 3;
+
+function normalizeOrganizationKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function scoreOrganizationMatch(tenant, queryKey) {
+  const nameKey = normalizeOrganizationKey(tenant?.name);
+  const slugKey = normalizeOrganizationKey(tenant?.slug);
+  if (!queryKey || (!nameKey && !slugKey)) return Number.POSITIVE_INFINITY;
+  if (nameKey === queryKey || slugKey === queryKey) return 0;
+  if (nameKey.startsWith(queryKey) || slugKey.startsWith(queryKey)) return 1;
+  if (nameKey.includes(queryKey) || slugKey.includes(queryKey)) return 2;
+  return Number.POSITIVE_INFINITY;
+}
 
 export default function CustomerRegister() {
   const navigate = useNavigate();
@@ -54,6 +72,7 @@ export default function CustomerRegister() {
 
   const [tenants, setTenants] = useState([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
+  const [organizationSuggestionsOpen, setOrganizationSuggestionsOpen] = useState(false);
   // Email verification gate - null until the customer verifies their email.
   const [verificationToken, setVerificationToken] = useState(null);
   const [form, setForm] = useState({
@@ -100,17 +119,38 @@ export default function CustomerRegister() {
     }
   }, [tenantSlugParam, tenants]);
 
-  const update = (field) => (e) =>
-    setForm({ ...form, [field]: e.target.value });
+  const organizationQueryKey = normalizeOrganizationKey(form.organization);
+  const organizationSuggestions = useMemo(() => {
+    if (
+      lockedToTenantSlug ||
+      organizationQueryKey.length < MIN_ORG_SUGGESTION_CHARS
+    ) return [];
+    return tenants
+      .filter((tenant) => scoreOrganizationMatch(tenant, organizationQueryKey) !== Number.POSITIVE_INFINITY)
+      .slice()
+      .sort((a, b) => {
+        const scoreA = scoreOrganizationMatch(a, organizationQueryKey);
+        const scoreB = scoreOrganizationMatch(b, organizationQueryKey);
+        if (scoreA !== scoreB) return scoreA - scoreB;
+        return String(a.name || "").localeCompare(String(b.name || ""));
+      })
+      .slice(0, 6);
+  }, [lockedToTenantSlug, organizationQueryKey, tenants]);
 
-  const clearEmailAvailabilityError = () => {
+  const update = (field) => (e) =>
+    setForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  const clearError = (field) => {
     setErrors((prev) => {
-      if (!prev.email) return prev;
+      if (!prev[field]) return prev;
       const next = { ...prev };
-      delete next.email;
+      delete next[field];
       return next;
     });
   };
+
+  const clearEmailAvailabilityError = () => clearError("email");
+  const clearOrganizationAvailabilityError = () => clearError("organization");
 
   const setEmailAvailabilityError = (message) => {
     setErrors((prev) => ({ ...prev, email: message }));
@@ -123,24 +163,75 @@ export default function CustomerRegister() {
     setSubmitError("");
   };
 
-  const normalizeOrg = (s) => s.trim().toLowerCase().replace(/\s+/g, "");
+  const resolveOrganizationMatch = (text) => {
+    const key = normalizeOrganizationKey(text);
+    if (!key) return null;
+    return (
+      tenants.find((tenant) => {
+        const nameKey = normalizeOrganizationKey(tenant.name);
+        const slugKey = normalizeOrganizationKey(tenant.slug);
+        return nameKey === key || slugKey === key;
+      }) || null
+    );
+  };
+
+  const selectOrganization = (tenant) => {
+    if (!tenant) return;
+    const nextTenantId = String(tenant.id);
+    const previousTenantId = form.tenantId;
+    setForm((prev) => ({
+      ...prev,
+      organization: tenant.name || prev.organization,
+      tenantId: nextTenantId,
+    }));
+    clearEmailAvailabilityError();
+    clearOrganizationAvailabilityError();
+    setSubmitError("");
+    setOrganizationSuggestionsOpen(false);
+    if (previousTenantId !== nextTenantId) {
+      setVerificationToken(null);
+    }
+  };
 
   const handleOrganizationChange = (e) => {
     const text = e.target.value;
-    const match = tenants.find(
-      (t) => normalizeOrg(t.name) === normalizeOrg(text)
-    );
+    const match = resolveOrganizationMatch(text);
     const nextTenantId = match ? String(match.id) : "";
     const previousTenantId = form.tenantId;
     setForm((prev) => ({
       ...prev,
-      organization: text,
+      organization: match ? match.name : text,
       tenantId: nextTenantId,
     }));
     clearEmailAvailabilityError();
+    clearOrganizationAvailabilityError();
     setSubmitError("");
+    setOrganizationSuggestionsOpen(
+      !lockedToTenantSlug &&
+      !match &&
+      normalizeOrganizationKey(text).length >= MIN_ORG_SUGGESTION_CHARS
+    );
     if (previousTenantId !== nextTenantId) {
       setVerificationToken(null);
+    }
+  };
+
+  const handleOrganizationBlur = () => {
+    setOrganizationSuggestionsOpen(false);
+  };
+
+  const handleOrganizationKeyDown = (e) => {
+    if (e.key === "Escape") {
+      setOrganizationSuggestionsOpen(false);
+    }
+    if (
+      e.key === "Enter" &&
+      organizationSuggestions.length > 0 &&
+      !form.tenantId &&
+      organizationQueryKey.length >= MIN_ORG_SUGGESTION_CHARS
+    ) {
+      e.preventDefault();
+      selectOrganization(organizationSuggestions[0]);
     }
   };
 
@@ -414,20 +505,142 @@ export default function CustomerRegister() {
             help={
               lockedToTenantSlug
                 ? "You started this booking from a specific clinic — registration is scoped to it."
-                : undefined
+                : `Type at least ${MIN_ORG_SUGGESTION_CHARS} characters to search organizations.`
             }
           >
-            <input
-              id="cr-organization"
-              type="text"
-              className="input-field"
-              autoComplete="organization"
-              placeholder={tenantsLoading ? "Loading…" : "Enter your organization name"}
-              value={form.organization}
-              onChange={handleOrganizationChange}
-              disabled={isLoading || lockedToTenantSlug}
-              required
-            />
+            <div style={{ position: "relative" }}>
+              <input
+                id="cr-organization"
+                type="text"
+                className="input-field"
+                autoComplete="off"
+                aria-autocomplete="list"
+                aria-expanded={organizationSuggestionsOpen && organizationSuggestions.length > 0}
+                aria-controls="cr-organization-suggestions"
+                placeholder={tenantsLoading ? "Loading…" : "Enter your organization name"}
+                value={form.organization}
+                onChange={handleOrganizationChange}
+                onFocus={() => {
+                  if (
+                    !lockedToTenantSlug &&
+                    organizationSuggestions.length > 0 &&
+                    organizationQueryKey.length >= MIN_ORG_SUGGESTION_CHARS
+                  ) {
+                    setOrganizationSuggestionsOpen(true);
+                  }
+                }}
+                onBlur={handleOrganizationBlur}
+                onKeyDown={handleOrganizationKeyDown}
+                disabled={isLoading || lockedToTenantSlug}
+                required
+              />
+              {organizationSuggestionsOpen && organizationSuggestions.length > 0 && (
+                <div
+                  id="cr-organization-suggestions"
+                  role="listbox"
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 6px)",
+                    left: 0,
+                    right: 0,
+                    zIndex: 20,
+                    background: "#fff",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 10,
+                    boxShadow: "0 14px 40px rgba(15, 23, 42, 0.12)",
+                    overflow: "hidden",
+                  }}
+                >
+                  {organizationSuggestions.map((tenant) => (
+                    <button
+                      key={tenant.id}
+                      type="button"
+                      role="option"
+                      aria-selected={String(form.tenantId) === String(tenant.id)}
+                      aria-label={tenant.name}
+                      onMouseDown={(ev) => {
+                        ev.preventDefault();
+                        selectOrganization(tenant);
+                      }}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.75rem",
+                        textAlign: "left",
+                        background: "transparent",
+                        border: "none",
+                        borderBottom: "1px solid rgba(15, 23, 42, 0.06)",
+                        padding: "0.7rem 0.85rem",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <span style={{ minWidth: 0, flex: 1 }}>
+                        <span
+                          style={{
+                            display: "block",
+                            fontSize: "0.92rem",
+                            fontWeight: 600,
+                            color: "var(--text-primary)",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {tenant.name}
+                        </span>
+                        <span
+                          style={{
+                            display: "block",
+                            marginTop: "0.1rem",
+                            fontSize: "0.72rem",
+                            color: "var(--text-secondary)",
+                          }}
+                        >
+                          {tenant.slug}
+                        </span>
+                      </span>
+                      <span
+                        style={{
+                          flexShrink: 0,
+                          padding: "0.18rem 0.55rem",
+                          borderRadius: 999,
+                          fontSize: "0.7rem",
+                          fontWeight: 600,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.04em",
+                          color: "var(--primary-color, var(--accent-color))",
+                          background: "rgba(99, 102, 241, 0.08)",
+                        }}
+                      >
+                        {tenant.vertical || "generic"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {organizationSuggestionsOpen && !tenantsLoading && organizationQueryKey.length >= MIN_ORG_SUGGESTION_CHARS && organizationSuggestions.length === 0 && (
+                <div
+                  role="status"
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 6px)",
+                    left: 0,
+                    right: 0,
+                    zIndex: 20,
+                    background: "#fff",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 10,
+                    boxShadow: "0 14px 40px rgba(15, 23, 42, 0.12)",
+                    padding: "0.7rem 0.85rem",
+                    color: "var(--text-secondary)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  No matching organizations found.
+                </div>
+              )}
+            </div>
           </Field>
 
           <Field

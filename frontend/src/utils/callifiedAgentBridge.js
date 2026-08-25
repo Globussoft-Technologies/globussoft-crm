@@ -13,33 +13,29 @@
  *   against the CRM relay instead, and the backend holds the credential. See
  *   backend/lib/callifiedAgentBridge.js.
  *
- * AUDIO FRAME FORMAT — READ THIS BEFORE CHANGING
- *   API_FLOW.md documents that `/ws/agent?call_sid=…` exists and what
- *   browser-call returns, but NOT the audio envelope that socket speaks. The
- *   surrounding evidence (Exotel call_sids, an `exotel_account_id` parameter)
- *   points at Exotel's Voice Streaming convention, so that is what we speak:
+ * WIRE PROTOCOL — CONFIRMED against Callified's source, not inferred.
+ *   `backend/internal/wshandler/bridge.go` (ServeAgent) documents it, and
+ *   `frontend/src/components/campaigns/BrowserCallModal.jsx` is their working
+ *   client. JSON text frames only — no binary, no Exotel `media` envelope:
  *
- *     out  {"event":"start","start":{"call_sid":…,"media_format":{…}}}   once
- *     out  {"event":"media","media":{"payload":"<base64 audio>"}}        ~50/s
- *     out  {"event":"stop","stop":{"call_sid":…}}                        once
- *     in   the same shapes, plus binary frames
+ *     Server → Agent: {"type":"status","status":"waiting"|"connected"}
+ *     Server → Agent: {"type":"audio","payload":"<base64 pcm16 8k>"}
+ *     Server → Agent: {"type":"hangup"}
+ *     Server → Agent: {"type":"error","msg":"…"}
+ *     Agent  → Server: {"type":"audio","payload":"<base64 pcm16 8k>"}
+ *     Agent  → Server: {"type":"hangup"}
  *
- *   The receive path is deliberately liberal: it accepts binary frames, the
- *   `media.payload` envelope, a bare `payload`/`audio` field, and adapts its
- *   codec + sample rate from whatever `media_format` the server announces in
- *   its `start`/`connected` frame. Both PCM16-LE and G.711 µ-law are handled.
- *   If Callified confirms a different envelope, `MEDIA_DEFAULTS` and
- *   `parseInboundFrame` are the only two places that need to change.
+ *   bridge.go:244 is the load-bearing line:
+ *       if msgType != "audio" || !customerAudioReady.Load() { continue }
+ *   Anything that is not exactly `type:"audio"` is DISCARDED SILENTLY, which
+ *   is why an earlier Exotel-style `{"event":"media","media":{…}}` envelope
+ *   produced a call where the customer could be heard but the agent could not
+ *   be. There is no handshake frame — connect and send.
+ *
+ *   Audio is 16-bit signed little-endian PCM, mono, 8 kHz, base64.
  */
 
-const DEFAULT_SAMPLE_RATE = 8000;
-const FRAME_SAMPLES = 160; // 20 ms at 8 kHz — the usual telephony frame size
-
-const MEDIA_DEFAULTS = {
-  encoding: 'audio/l16', // 16-bit signed little-endian PCM
-  sampleRate: DEFAULT_SAMPLE_RATE,
-  channels: 1,
-};
+const SAMPLE_RATE = 8000;
 
 /** States the UI renders. */
 export const BRIDGE_STATE = {
@@ -54,97 +50,54 @@ export const BRIDGE_STATE = {
 };
 
 // --------------------------------------------------------------------------
-// Codec helpers
+// Codec helpers — PCM16 LE @ 8 kHz, matching Callified's client exactly.
 // --------------------------------------------------------------------------
 
-function floatToPcm16(float32) {
-  const out = new Int16Array(float32.length);
-  for (let i = 0; i < float32.length; i += 1) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+/** Linear-resample a Float32 buffer down to 8 kHz. */
+export function resampleTo8k(input, srcRate) {
+  if (!srcRate || srcRate === SAMPLE_RATE) return input;
+  const ratio = srcRate / SAMPLE_RATE;
+  const outLen = Math.floor(input.length / ratio);
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i += 1) {
+    const src = i * ratio;
+    const lo = Math.floor(src);
+    const hi = Math.min(lo + 1, input.length - 1);
+    const frac = src - lo;
+    out[i] = input[lo] * (1 - frac) + input[hi] * frac;
   }
   return out;
 }
 
-function pcm16ToFloat(int16) {
-  const out = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i += 1) {
-    out[i] = int16[i] / (int16[i] < 0 ? 0x8000 : 0x7fff);
+function float32ToInt16(input) {
+  const out = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i += 1) {
+    out[i] = Math.max(-32768, Math.min(32767, input[i] * 32767));
   }
   return out;
 }
 
-// G.711 µ-law. Present because Exotel-family media streams frequently use it;
-// which one is active is decided by the server's announced media_format.
-function pcm16ToMulaw(input) {
-  const BIAS = 0x84;
-  const CLIP = 32635;
-  const sign = (input >> 8) & 0x80;
-  let sample = sign !== 0 ? -input : input;
-  if (sample > CLIP) sample = CLIP;
-  sample += BIAS;
-
-  let exponent = 7;
-  let mask = 0x4000;
-  while ((sample & mask) === 0 && exponent > 0) {
-    exponent -= 1;
-    mask >>= 1;
-  }
-  const mantissa = (sample >> (exponent + 3)) & 0x0f;
-  return ~(sign | (exponent << 4) | mantissa) & 0xff;
-}
-
-function mulawToPcm16(muByte) {
-  const BIAS = 0x84;
-  const value = ~muByte & 0xff;
-  const sign = value & 0x80;
-  const exponent = (value >> 4) & 0x07;
-  const mantissa = value & 0x0f;
-  let sample = ((mantissa << 3) + BIAS) << exponent;
-  sample -= BIAS;
-  return sign !== 0 ? -sample : sample;
-}
-
-function isMulaw(encoding) {
-  return /mulaw|ulaw|pcmu|g711u/i.test(String(encoding || ''));
-}
-
-function encodeAudio(float32, encoding) {
-  const pcm = floatToPcm16(float32);
-  if (!isMulaw(encoding)) return new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-  const out = new Uint8Array(pcm.length);
-  for (let i = 0; i < pcm.length; i += 1) out[i] = pcm16ToMulaw(pcm[i]);
-  return out;
-}
-
-function decodeAudio(bytes, encoding) {
-  if (isMulaw(encoding)) {
-    const pcm = new Int16Array(bytes.length);
-    for (let i = 0; i < bytes.length; i += 1) pcm[i] = mulawToPcm16(bytes[i]);
-    return pcm16ToFloat(pcm);
-  }
-  // 16-bit LE PCM. Copy into an aligned buffer — a WebSocket payload slice is
-  // not guaranteed to start on an even byte offset.
-  const usable = bytes.length - (bytes.length % 2);
-  const aligned = new Uint8Array(usable);
-  aligned.set(bytes.subarray(0, usable));
-  return pcm16ToFloat(new Int16Array(aligned.buffer));
-}
-
-function bytesToBase64(bytes) {
+function toBase64(typedArray) {
+  const bytes = new Uint8Array(typedArray.buffer || typedArray);
   let binary = '';
   const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
+  for (let i = 0; i < bytes.byteLength; i += chunk) {
     binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
   }
   return btoa(binary);
 }
 
-function base64ToBytes(b64) {
+/** Decode base64 PCM-16 bytes to Float32. */
+export function base64ToPcmFloat32(b64) {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+  // A WebSocket payload is not guaranteed to land on an even byte offset.
+  const usable = bytes.length - (bytes.length % 2);
+  const int16 = new Int16Array(bytes.buffer.slice(0, usable));
+  const f32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i += 1) f32[i] = int16[i] / 32768;
+  return f32;
 }
 
 /**
@@ -198,12 +151,16 @@ export class CallifiedAgentBridge {
     this.captureNode = null;
     this.silentGain = null;
 
-    this.media = { ...MEDIA_DEFAULTS };
     this.state = BRIDGE_STATE.IDLE;
     this.muted = false;
     this.stopped = false;
+    // Callified drops agent audio until the carrier leg is up
+    // (bridge.go:244 `!customerAudioReady`). Sending anyway does not just
+    // waste frames — it fills TCP buffers that flush the instant the relay
+    // starts, so the customer hears seconds of stale silence before the
+    // agent's real voice. Stay quiet until the server says "connected".
+    this.connected = false;
     this.playCursor = 0;
-    this.captureBuffer = [];
   }
 
   setState(state, detail) {
@@ -221,15 +178,16 @@ export class CallifiedAgentBridge {
 
   /**
    * Acquire the microphone, connect the relay, and start streaming.
-   * Resolves once the socket is open; the call goes LIVE when the relay
-   * reports its upstream is ready.
+   * Resolves once the socket is open; the call goes LIVE when Callified
+   * reports `status: connected`.
    */
   async start() {
     if (this.stopped) throw new Error('This call has already ended.');
 
     this.setState(BRIDGE_STATE.REQUESTING_MIC);
+    let micStream;
     try {
-      this.micStream = await navigator.mediaDevices.getUserMedia({
+      micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           echoCancellation: true,
@@ -247,8 +205,27 @@ export class CallifiedAgentBridge {
       );
     }
 
+    // The bridge can be torn down WHILE these awaits are parked — React
+    // StrictMode double-mounts every effect in dev (mount → cleanup →
+    // remount), and in production the dialog can be closed mid-connect.
+    //
+    // Without this check the abandoned bridge sails on and redeems the
+    // ticket, which is single-use — so the bridge that is actually on screen
+    // then gets a 401 and reports "Could not connect to the call bridge".
+    // Bail before the socket, and hand back the resources we just took.
+    if (this.stopped) {
+      micStream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.micStream = micStream;
+
     this.setState(BRIDGE_STATE.CONNECTING);
     await this.openAudioGraph();
+    if (this.stopped) {
+      this.releaseResources();
+      return;
+    }
+
     await this.openSocket();
   }
 
@@ -256,13 +233,9 @@ export class CallifiedAgentBridge {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) throw new Error('This browser does not support the Web Audio API.');
 
-    // Running the graph at the telephony rate lets the browser resample the
-    // mic for us, so the capture callback already yields 8 kHz frames.
-    try {
-      this.audioContext = new Ctx({ sampleRate: this.media.sampleRate });
-    } catch (_e) {
-      this.audioContext = new Ctx();
-    }
+    // Native rate + explicit resample, matching Callified's own client.
+    // Forcing an 8 kHz context is rejected outright by some browsers.
+    this.audioContext = new Ctx();
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume().catch(() => {});
     }
@@ -306,9 +279,9 @@ export class CallifiedAgentBridge {
     if (!this.audioContext.createScriptProcessor) {
       throw new Error('This browser cannot capture microphone audio for calls.');
     }
-    // 2048 frames ≈ 256 ms at 8 kHz — the smallest size that stays glitch-free
-    // on the main thread across browsers.
-    const node = this.audioContext.createScriptProcessor(2048, 1, 1);
+    // 512 frames, matching Callified's own client — low enough latency that
+    // the agent does not sound delayed.
+    const node = this.audioContext.createScriptProcessor(512, 1, 1);
     node.onaudioprocess = (event) => {
       this.onCapturedFrame(event.inputBuffer.getChannelData(0));
     };
@@ -317,38 +290,15 @@ export class CallifiedAgentBridge {
     this.captureNode = node;
   }
 
-  /** Buffer captured audio into fixed 20 ms frames and ship them. */
+  /** Resample a captured chunk to 8 kHz and ship it as one audio frame. */
   onCapturedFrame(float32) {
     if (this.stopped || !float32 || !float32.length) return;
-    if (this.muted) return;
+    if (this.muted || !this.connected) return;
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
 
-    this.captureBuffer.push(new Float32Array(float32));
-    let total = this.captureBuffer.reduce((n, chunk) => n + chunk.length, 0);
-
-    while (total >= FRAME_SAMPLES) {
-      const frame = new Float32Array(FRAME_SAMPLES);
-      let filled = 0;
-      while (filled < FRAME_SAMPLES) {
-        const head = this.captureBuffer[0];
-        const take = Math.min(head.length, FRAME_SAMPLES - filled);
-        frame.set(head.subarray(0, take), filled);
-        filled += take;
-        if (take === head.length) this.captureBuffer.shift();
-        else this.captureBuffer[0] = head.subarray(take);
-      }
-      total -= FRAME_SAMPLES;
-      this.sendMedia(frame);
-    }
-  }
-
-  sendMedia(float32) {
-    const bytes = encodeAudio(float32, this.media.encoding);
-    this.sendJson({
-      event: 'media',
-      stream_sid: this.callSid,
-      media: { payload: bytesToBase64(bytes) },
-    });
+    const pcm8k = resampleTo8k(float32, this.audioContext?.sampleRate);
+    const int16 = float32ToInt16(pcm8k);
+    this.sendJson({ type: 'audio', payload: toBase64(int16) });
   }
 
   sendJson(payload) {
@@ -371,24 +321,12 @@ export class CallifiedAgentBridge {
         reject(new Error(`Could not open the call connection: ${e?.message || e}`));
         return;
       }
-      socket.binaryType = 'arraybuffer';
       this.socket = socket;
 
       socket.onopen = () => {
         settled = true;
+        // No handshake frame: Callified's agent socket expects audio only.
         this.setState(BRIDGE_STATE.RINGING);
-        this.sendJson({
-          event: 'start',
-          start: {
-            call_sid: this.callSid,
-            stream_sid: this.callSid,
-            media_format: {
-              encoding: this.media.encoding,
-              sample_rate: this.media.sampleRate,
-              channels: this.media.channels,
-            },
-          },
-        });
         resolve();
       };
 
@@ -423,24 +361,22 @@ export class CallifiedAgentBridge {
   }
 
   handleMessage(data) {
-    if (data instanceof ArrayBuffer) {
-      this.playAudio(new Uint8Array(data));
-      return;
-    }
     if (typeof data !== 'string') return;
 
     let frame;
     try {
       frame = JSON.parse(data);
     } catch (_e) {
-      return; // non-JSON text frames are not part of any contract we honour
+      return; // the agent socket is JSON-only
     }
 
     // Relay control frames are namespaced so they cannot collide with
-    // Callified's own `event` frames.
+    // Callified's own `type` vocabulary.
     if (frame.type === 'bridge') {
       if (frame.event === 'ready') {
-        this.setState(BRIDGE_STATE.LIVE, { callSid: frame.callSid });
+        // Upstream is open — the customer's phone is ringing. LIVE waits for
+        // Callified's own `status: connected`.
+        this.setState(BRIDGE_STATE.RINGING, { callSid: frame.callSid });
       } else if (frame.event === 'error') {
         this.fail(frame.message || 'The call bridge reported an error.');
       } else if (frame.event === 'closed') {
@@ -453,34 +389,31 @@ export class CallifiedAgentBridge {
     this.onEvent(frame);
     const parsed = parseInboundFrame(frame);
 
-    if (parsed.mediaFormat) {
-      this.media = { ...this.media, ...parsed.mediaFormat };
-    }
-    if (parsed.audio) {
-      this.playAudio(parsed.audio);
+    if (parsed.audio) this.playAudio(parsed.audio);
+
+    if (parsed.errorMessage) {
+      this.fail(parsed.errorMessage);
+      return;
     }
     if (parsed.ended) {
-      this.setState(BRIDGE_STATE.ENDED, { reason: parsed.status || 'stopped' });
+      this.setState(BRIDGE_STATE.ENDED, { reason: parsed.status || 'hangup' });
       this.stop({ silent: true });
-    } else if (parsed.answered) {
+      return;
+    }
+    if (parsed.answered) {
+      // Ungate the microphone — see the `connected` note in the constructor.
+      this.connected = true;
       this.setState(BRIDGE_STATE.LIVE, { reason: parsed.status });
+    } else if (parsed.status === 'waiting') {
+      this.setState(BRIDGE_STATE.RINGING, { reason: parsed.status });
     }
   }
 
   /** Schedule inbound audio back-to-back so playback stays continuous. */
-  playAudio(bytes) {
-    if (!this.audioContext || this.stopped || !bytes || !bytes.length) return;
-    const samples = decodeAudio(bytes, this.media.encoding);
-    if (!samples.length) return;
+  playAudio(samples) {
+    if (!this.audioContext || this.stopped || !samples || !samples.length) return;
 
-    const rate = this.media.sampleRate || this.audioContext.sampleRate;
-    let buffer;
-    try {
-      buffer = this.audioContext.createBuffer(1, samples.length, rate);
-    } catch (_e) {
-      // Some browsers refuse buffers below 8 kHz; fall back to the graph rate.
-      buffer = this.audioContext.createBuffer(1, samples.length, this.audioContext.sampleRate);
-    }
+    const buffer = this.audioContext.createBuffer(1, samples.length, SAMPLE_RATE);
     buffer.getChannelData(0).set(samples);
 
     const source = this.audioContext.createBufferSource();
@@ -497,20 +430,18 @@ export class CallifiedAgentBridge {
 
   setMuted(muted) {
     this.muted = Boolean(muted);
-    if (this.muted) this.captureBuffer = [];
     return this.muted;
   }
 
-  /** Hang up and release every resource. Safe to call more than once. */
-  stop({ silent = false } = {}) {
-    if (this.stopped) return;
-    this.stopped = true;
-    if (!silent) this.setState(BRIDGE_STATE.ENDING);
-
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.sendJson({ event: 'stop', stop: { call_sid: this.callSid } });
-    }
-
+  /**
+   * Release the microphone, audio graph and socket without touching call
+   * state. Split out of stop() so the mid-connect bail-outs in start() can
+   * hand resources back too — those run when `stopped` is already true, so
+   * stop() itself would return early and leak a hot microphone.
+   *
+   * Safe to call repeatedly; every branch nulls what it releases.
+   */
+  releaseResources() {
     if (this.captureNode) {
       try {
         this.captureNode.disconnect();
@@ -542,7 +473,13 @@ export class CallifiedAgentBridge {
       this.micStream = null;
     }
     if (this.audioContext) {
-      this.audioContext.close().catch(() => {});
+      // Teardown must never throw — a failure here would abandon the socket
+      // below and leave the microphone live.
+      try {
+        this.audioContext.close()?.catch?.(() => {});
+      } catch (_e) {
+        /* context already closed */
+      }
       this.audioContext = null;
     }
     if (this.socket) {
@@ -560,8 +497,23 @@ export class CallifiedAgentBridge {
         /* already closed */
       }
     }
+  }
 
-    this.captureBuffer = [];
+  /** Hang up and release every resource. Safe to call more than once. */
+  stop({ silent = false } = {}) {
+    if (this.stopped) return;
+    this.stopped = true;
+    if (!silent) this.setState(BRIDGE_STATE.ENDING);
+
+    // Closing the socket alone only drops the browser leg — Callified needs
+    // an explicit hangup to release the customer's carrier line
+    // (bridge.go:239 → hangupBridgeCall).
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.sendJson({ type: 'hangup' });
+    }
+
+    this.releaseResources();
+
     if (!silent) this.setState(BRIDGE_STATE.ENDED);
   }
 }
@@ -569,49 +521,42 @@ export class CallifiedAgentBridge {
 /**
  * Normalize one inbound Callified frame.
  *
- * Exported for tests and because it is the single place that needs editing if
- * Callified's agent socket turns out to speak a different envelope.
+ * Vocabulary confirmed from bridge.go's ServeAgent header:
+ *   status / audio / hangup / error.
  *
  * @param {object} frame
- * @returns {{audio?:Uint8Array, mediaFormat?:object, answered?:boolean,
- *            ended?:boolean, status?:string}}
+ * @returns {{audio?:Float32Array, answered?:boolean, ended?:boolean,
+ *            status?:string, errorMessage?:string}}
  */
 export function parseInboundFrame(frame) {
   if (!frame || typeof frame !== 'object') return {};
   const result = {};
-  const event = String(frame.event || frame.type || '').toLowerCase();
+  const type = String(frame.type || '').toLowerCase();
 
-  const format = frame.media_format || frame.mediaFormat || frame.start?.media_format;
-  if (format) {
-    result.mediaFormat = {
-      encoding: format.encoding || format.codec || MEDIA_DEFAULTS.encoding,
-      sampleRate: Number(format.sample_rate || format.sampleRate) || MEDIA_DEFAULTS.sampleRate,
-      channels: Number(format.channels) || MEDIA_DEFAULTS.channels,
-    };
-  }
-
-  const payload =
-    frame.media?.payload ?? frame.media?.audio ?? frame.payload ?? frame.audio ?? null;
-  if (typeof payload === 'string' && payload.length) {
+  if (type === 'audio' && typeof frame.payload === 'string' && frame.payload) {
     try {
-      result.audio = base64ToBytes(payload);
+      result.audio = base64ToPcmFloat32(frame.payload);
     } catch (_e) {
-      /* malformed chunk — dropping one frame is better than killing the call */
+      /* malformed chunk — dropping one frame beats killing the call */
     }
+    return result;
   }
 
-  const status = String(frame.status || frame.call_status || frame.callStatus || '').toLowerCase();
-  if (status) result.status = status;
+  if (type === 'status') {
+    const status = String(frame.status || '').toLowerCase();
+    result.status = status;
+    if (status === 'connected') result.answered = true;
+    return result;
+  }
 
-  if (event === 'stop' || event === 'disconnected' || event === 'hangup') {
+  if (type === 'hangup') {
     result.ended = true;
-  } else if (['completed', 'ended', 'failed', 'busy', 'no-answer', 'canceled'].includes(status)) {
-    result.ended = true;
-  } else if (
-    event === 'answered' ||
-    ['answered', 'in-progress', 'connected', 'live'].includes(status)
-  ) {
-    result.answered = true;
+    return result;
+  }
+
+  if (type === 'error') {
+    result.errorMessage = frame.msg || frame.message || 'The call failed.';
+    return result;
   }
 
   return result;

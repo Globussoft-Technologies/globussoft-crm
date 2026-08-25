@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
-import { FileText, X, Loader, Phone, Clock, Smile, Calendar, AlertCircle, ExternalLink, RefreshCw, User } from "lucide-react";
-import { fetchApi } from "../utils/api";
+import { FileText, X, Loader, Phone, Clock, Smile, Calendar, AlertCircle, RefreshCw, User, Play } from "lucide-react";
+import { fetchApi, getAuthToken } from "../utils/api";
 
 /**
  * Drawer showing every Callified AI call attempt for a CRM lead.
@@ -12,6 +12,145 @@ import { fetchApi } from "../utils/api";
  *   - transcript messages
  *   - AI review (score, sentiment, appointment, summary, insights)
  */
+/**
+ * Rewrite a Callified `recording_url` to the CRM's streaming proxy.
+ *
+ * Callified returns a path on THEIR host (`/api/recordings/<org>/<…>.wav`),
+ * and that endpoint is behind their Bearer JWT — they explicitly removed the
+ * `?token=` fallback so the credential never lands in a URL. Rendered as-is,
+ * the browser resolved it against the CRM's own origin, hit our API, and got
+ * a 404 — which is why the player sat at 0:00 / 0:00.
+ *
+ * `/api/callified/recordings/*` streams the bytes with the tenant's Callified
+ * token attached server-side. Already-absolute URLs are left alone.
+ */
+function crmRecordingUrl(recordingUrl) {
+  const raw = String(recordingUrl || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const path = raw.replace(/^\/?api\/recordings\/?/, "");
+  if (!path) return "";
+  return `/api/callified/recordings/${path}`;
+}
+
+/**
+ * Recording player — blob-fetch, loaded on demand.
+ *
+ * An `<audio src>` cannot send an Authorization header, and both hops need
+ * one: Callified's `/api/recordings` is behind their Bearer JWT, and our proxy
+ * is behind the CRM's. The app does set an HttpOnly `auth_token` cookie the
+ * proxy would accept, but it expires after 15 minutes while the session JWT
+ * lasts days — so a cookie-only player would work right after login and then
+ * mysteriously stop. Fetching the bytes with the Bearer header and handing the
+ * element an object URL is the pattern Callified's own frontend uses.
+ *
+ * Loaded on click rather than on render: these are WAV files at ~16 KB/s and
+ * a long call runs to tens of megabytes, so opening the drawer must not pull
+ * every recording down uninvited.
+ */
+function RecordingPlayer({ url, durationSeconds }) {
+  const [objectUrl, setObjectUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  // Revoke on unmount — an un-revoked object URL pins the whole blob in memory
+  // for the life of the document.
+  useEffect(() => {
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [objectUrl]);
+
+  const load = async () => {
+    if (loading || objectUrl) return;
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(
+          body.error ||
+            (res.status === 404
+              ? "Recording not available yet."
+              : `Could not load the recording (${res.status}).`),
+        );
+      }
+      setObjectUrl(URL.createObjectURL(await res.blob()));
+    } catch (e) {
+      setError(e?.message || "Could not load the recording.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const shell = {
+    padding: "0.75rem",
+    borderRadius: "8px",
+    background: "var(--bg-color)",
+    border: "1px solid var(--border-color)",
+    display: "flex",
+    alignItems: "center",
+    gap: "0.75rem",
+  };
+
+  if (error) {
+    return (
+      <div style={{ ...shell, color: "var(--danger-color, #ef4444)", fontSize: "0.82rem" }}>
+        <AlertCircle size={16} /> {error}
+      </div>
+    );
+  }
+
+  if (objectUrl) {
+    return (
+      <div style={shell} data-testid="callified-recording-player">
+        <Phone size={16} color="var(--accent-color)" />
+        <audio controls autoPlay src={objectUrl} style={{ flex: 1, height: 32 }}>
+          Your browser does not support the audio element.
+        </audio>
+      </div>
+    );
+  }
+
+  return (
+    <div style={shell}>
+      <Phone size={16} color="var(--accent-color)" />
+      <button
+        type="button"
+        onClick={load}
+        disabled={loading}
+        className="btn-secondary"
+        data-testid="callified-recording-load"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "0.4rem",
+          padding: "0.35rem 0.75rem",
+          fontSize: "0.8rem",
+        }}
+      >
+        {loading ? (
+          <>
+            <Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Loading…
+          </>
+        ) : (
+          <>
+            <Play size={14} /> Play recording
+          </>
+        )}
+      </button>
+      {durationSeconds != null && (
+        <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+          {durationSeconds}s
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function CallifiedCallDetailsDrawer({ lead, onClose }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -276,7 +415,7 @@ export default function CallifiedCallDetailsDrawer({ lead, onClose }) {
             {calls.map(({ transcript, review }, idx) => {
               const messages = Array.isArray(transcript.transcript) ? transcript.transcript : [];
               const duration = transcript.call_duration_s != null ? Math.round(Number(transcript.call_duration_s)) : null;
-              const recordingUrl = transcript.recording_url;
+              const recordingUrl = crmRecordingUrl(transcript.recording_url);
               const language = transcript.language || "English";
 
               return (
@@ -325,21 +464,7 @@ export default function CallifiedCallDetailsDrawer({ lead, onClose }) {
                   </div>
 
                   {recordingUrl && (
-                    <div style={{ padding: "0.75rem", borderRadius: "8px", background: "var(--bg-color)", border: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                      <Phone size={16} color="var(--accent-color)" />
-                      <audio controls src={recordingUrl} style={{ flex: 1, height: 32 }}>
-                        Your browser does not support the audio element.
-                      </audio>
-                      <a
-                        href={recordingUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: "var(--accent-color)", display: "flex", alignItems: "center" }}
-                        title="Open recording"
-                      >
-                        <ExternalLink size={14} />
-                      </a>
-                    </div>
+                    <RecordingPlayer url={recordingUrl} durationSeconds={duration} />
                   )}
 
                   {messages.length > 0 && (

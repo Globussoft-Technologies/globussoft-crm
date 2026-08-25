@@ -436,6 +436,72 @@ router.post(
 );
 
 /**
+ * GET /api/callified/recordings/<callified recording path>
+ *
+ * Streams a call recording from Callified through the CRM.
+ *
+ * Transcripts return `recording_url` as a path on Callified's host, and that
+ * endpoint requires their Bearer JWT. An `<audio src>` cannot send an
+ * Authorization header, and the browser holds no Callified credential by
+ * design — so the bytes come through here, authenticated as the CRM user and
+ * fetched with the tenant's own Callified token.
+ *
+ * Range requests are forwarded so the player can seek instead of having to
+ * buffer the whole file before it reports a duration.
+ */
+router.get("/recordings/*", verifyToken, async (req, res) => {
+  try {
+    // Express puts the wildcard remainder in params[0], without the leading
+    // slash. Rebuild the path Callified gave us in `recording_url`.
+    const recordingPath = `/api/recordings/${req.params[0] || ""}`;
+
+    const upstream = await callifiedClient.fetchRecording(
+      req.user.tenantId,
+      recordingPath,
+      { range: req.headers.range },
+    );
+
+    if (!upstream.ok && upstream.status !== 206) {
+      return res.status(upstream.status === 404 ? 404 : 502).json({
+        error:
+          upstream.status === 404
+            ? "Recording not available yet. Callified may still be processing this call."
+            : `Callified returned ${upstream.status} for this recording`,
+        code: upstream.status === 404 ? "RECORDING_NOT_FOUND" : "RECORDING_FETCH_FAILED",
+      });
+    }
+
+    for (const header of [
+      "content-type",
+      "content-length",
+      "content-range",
+      "accept-ranges",
+    ]) {
+      const value = upstream.headers.get(header);
+      if (value) res.setHeader(header, value);
+    }
+    if (!upstream.headers.get("content-type")) {
+      res.setHeader("content-type", "audio/wav");
+    }
+    // Call audio is PHI-adjacent: let the browser cache it for the session but
+    // never a shared proxy.
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.status(upstream.status === 206 ? 206 : 200);
+
+    if (!upstream.body) return res.end();
+    const { Readable } = require("stream");
+    Readable.fromWeb(upstream.body).pipe(res);
+  } catch (e) {
+    sendCallifiedError(
+      res,
+      e,
+      "[callified] recordings",
+      "Failed to fetch the recording",
+    );
+  }
+});
+
+/**
  * GET /api/callified/calls/:callId/details
  *
  * Fetch Callified transcripts + AI reviews for a previously created Callified

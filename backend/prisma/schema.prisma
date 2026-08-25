@@ -256,7 +256,7 @@ model Tenant {
   // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles
   // (additive; consumes lib/agentCommissionCalculator.js from slice 1
   // commit cb284098). Each row is one named operator-facing pricing
-  // profile (flat_percent | tiered | per_pax_flat | hybrid).
+  // profile (flat_percent | flat_fee | tiered | per_pax_flat | hybrid).
   travelCommissionProfiles            TravelCommissionProfile[]
   // PRD_TRAVEL_MARKETING_FLYER #908 slice 3 — saved flyer templates
   // (additive; consumes lib/flyerTemplateValidator.js from slice 1
@@ -9000,7 +9000,7 @@ model TravelCommissionProfile {
   // on_booking         -> release when the deal is won / booked.
   // on_trip_completion -> release only after the trip completes.
   releaseMode String   @default("on_booking")
-  profileType String // flat_percent | tiered | per_pax_flat | hybrid
+  profileType String // flat_percent | flat_fee | tiered | per_pax_flat | hybrid
   profileJson String   @db.Text // JSON serialization of profile shape
   isActive    Boolean  @default(true)
   notes       String?  @db.Text

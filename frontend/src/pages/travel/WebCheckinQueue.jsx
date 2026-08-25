@@ -42,6 +42,7 @@ import { useNotify } from "../../utils/notify";
 import CountBadge from "../../components/CountBadge";
 import PatientPager from "../wellness/patients/PatientPager";
 import TopScrollSync from "../../components/TopScrollSync";
+import { useActiveSubBrand } from "../../utils/subBrand";
 
 // Rewrite /uploads/... → /api/uploads/... so production deployments (where the
 // frontend SPA catches /uploads/* before it reaches the backend static mount)
@@ -85,7 +86,7 @@ const STATUS_COLORS = {
   failed: { bg: "rgba(168,50,63,0.18)", color: "#A8323F" },
 };
 
-const TABLE_MIN_WIDTH = 1340;
+const TABLE_MIN_WIDTH = 1680;
 
 const empty = {
   padding: 32,
@@ -104,6 +105,8 @@ function fmtDateTime(d) {
 export default function WebCheckinQueue() {
   const notify = useNotify();
   const location = useLocation();
+  const { activeSubBrand } = useActiveSubBrand();
+  const isTmc = activeSubBrand === "tmc";
   const [searchParams, setSearchParams] = useSearchParams();
   const openedFromReports = useMemo(
     () => new URLSearchParams(location.search).get("source") === "reports",
@@ -211,9 +214,10 @@ export default function WebCheckinQueue() {
   }, []);
 
   useEffect(() => {
+    if (isTmc) return;
     load({ reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statuses, upcomingOnly]);
+  }, [statuses, upcomingOnly, isTmc]);
 
   useEffect(() => {
     setPage(1);
@@ -389,6 +393,28 @@ export default function WebCheckinQueue() {
     }
   };
   // ─── Render ──────────────────────────────────────────────────────
+  if (isTmc) {
+    return (
+      <div
+        style={{
+          padding: 24,
+          width: "100%",
+          maxWidth: 960,
+          margin: "0 auto",
+          boxSizing: "border-box",
+        }}
+      >
+        <h1 style={{ margin: 0, marginBottom: 8 }}>Web Check-ins</h1>
+        <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
+          Web Check-ins are disabled for the TMC sub-brand. This queue stays
+          available for the other sub-brands and All (4).
+        </p>
+        <Link to="/travel" style={backLinkStyle}>
+          <ArrowLeft size={15} aria-hidden /> Back to dashboard
+        </Link>
+      </div>
+    );
+  }
   return (
     <div
       style={{
@@ -524,6 +550,7 @@ export default function WebCheckinQueue() {
         </div>
       ) : (
         <div
+          className="webcheckins-table-scroll-shell"
           data-testid="webcheckins-table-scroll"
           style={{
             background: "var(--surface-color)",
@@ -546,7 +573,7 @@ export default function WebCheckinQueue() {
                 <col style={{ width: "116px" }} />
                 <col style={{ width: "88px" }} />
                 <col style={{ width: "90px" }} />
-                <col style={{ width: "78px" }} />
+                <col style={{ width: "110px" }} />
                 <col style={{ width: "178px" }} />
                 <col style={{ width: "170px" }} />
                 <col style={{ width: "150px" }} />
@@ -659,7 +686,7 @@ export default function WebCheckinQueue() {
                           </span>
                         )}
                       </td>
-                      <td style={td}>
+                      <td style={{ ...td, verticalAlign: "middle" }}>
                         <div
                           style={{
                             display: "flex",
@@ -703,7 +730,7 @@ export default function WebCheckinQueue() {
                           <button
                             type="button"
                             onClick={() => onDeliver(r)}
-                            style={actionBtn}
+                            style={deliverBtn}
                             disabled={deliveringId === r.id || !!r.deliveredAt}
                             aria-label={`Deliver boarding pass for ${r.pnr}`}
                             title={
@@ -727,11 +754,11 @@ export default function WebCheckinQueue() {
                                   : "Deliver"}
                             </span>
                           </button>
-                          <span
+                          <div
                             style={{
-                              display: "inline-flex",
+                              display: "flex",
                               alignItems: "center",
-                              gap: 4,
+                              gap: 6,
                               minWidth: 0,
                               flexShrink: 0,
                             }}
@@ -759,7 +786,7 @@ export default function WebCheckinQueue() {
                                 </option>
                               ))}
                             </select>
-                          </span>
+                          </div>
                         </div>
                       </td>
                     </tr>
@@ -914,4 +941,8 @@ const actionBtn = {
   minWidth: 75,
   whiteSpace: "nowrap",
   flexShrink: 0,
+};
+const deliverBtn = {
+  ...actionBtn,
+  width: 96,
 };

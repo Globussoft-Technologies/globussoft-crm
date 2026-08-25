@@ -4,6 +4,7 @@
 // nullable AgentCommissionProfile) and slice 3's route consumption from
 // invoice / sale flows. Coverage:
 //   - flat_percent: happy path, 0%, 0 sale
+//   - flat_fee: fixed payout regardless of sale amount
 //   - tiered: across multiple bands, exact-boundary sale, below first
 //     tier, above all tiers, slab-style semantics (each percent applies
 //     to its SLICE, not the cumulative figure)
@@ -57,6 +58,26 @@ describe("computeCommission — flat_percent", () => {
       profile: { type: "flat_percent", percent: 3.7 },
     });
     expect(r.commission).toBe(12.33);
+  });
+});
+
+describe("computeCommission — flat_fee", () => {
+  test("returns fixed commission regardless of sale amount", () => {
+    const r = computeCommission({
+      saleAmount: 100000,
+      profile: { type: "flat_fee", flatFeeAmount: 2500 },
+    });
+    expect(r.commission).toBe(2500);
+    expect(r.profileType).toBe("flat_fee");
+    expect(r.breakdown).toBe("flat fee 2500");
+  });
+
+  test("falls back to amount when flatFeeAmount is absent", () => {
+    const r = computeCommission({
+      saleAmount: 0,
+      profile: { type: "flat_fee", amount: 1750 },
+    });
+    expect(r.commission).toBe(1750);
   });
 });
 

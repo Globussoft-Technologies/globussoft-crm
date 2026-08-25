@@ -556,7 +556,7 @@ export default function SuppliersAdmin() {
           padding: "4px 8px",
           border: "none",
           borderRadius: 999,
-          background: active ? "var(--accent-bg)" : "transparent",
+          background: "transparent",
           color: active ? "var(--primary-color)" : "inherit",
           font: "inherit",
           textTransform: "inherit",

@@ -111,6 +111,7 @@ describe('<NotificationBell />', () => {
     const btn = screen.getByRole('button', { name: /notifications/i });
     expect(btn).toBeInTheDocument();
     expect(btn).toHaveAttribute('aria-label', 'Notifications');
+    expect(btn).toHaveAttribute('title', 'Open notifications');
     expect(btn).toHaveAttribute('aria-expanded', 'false');
   });
 

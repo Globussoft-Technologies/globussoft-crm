@@ -2174,7 +2174,10 @@ function renderTravelNav({
       {inBrand("tmc") && (
         <Link to="/travel/tmc/catalogue" icon={Package} label="TMC Catalogue" requiredPermission={{ module: "tmc_catalogue", action: "read" }} />
       )}
-      <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" requiredPermission={{ module: "web_checkins", action: "read" }} />
+      {/* TMC does not use Web Check-in. Keep it visible for other brands and All (4). */}
+      {activeSubBrand !== "tmc" && (
+        <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" requiredPermission={{ module: "web_checkins", action: "read" }} />
+      )}
       {/* Check-in Automation Health hidden per product call (manual web check-in only). */}
       {/* <Link to="/travel/automation-health" icon={Activity} label="Check-in Automation Health" requiredPermission={{ module: "web_checkins", action: "read" }} /> */}
       <Link to="/travel/passport-verification" icon={BadgeCheck} label="Passport" requiredPermission={{ module: "passport", action: "manage" }} />

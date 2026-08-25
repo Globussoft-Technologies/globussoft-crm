@@ -437,7 +437,9 @@ function SeasonsSection() {
         <h2 style={sectionTitle}>
           <CalendarRange size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Seasons
+          <span style={{ marginLeft: 12, display: "inline-flex", alignItems: "center" }}>
             <CountBadge count={total || seasons.length} title={`${(total || seasons.length).toLocaleString()} seasons`} />
+          </span>
         </h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
@@ -955,7 +957,9 @@ function MarkupRulesSection() {
         <h2 style={sectionTitle}>
           <Percent size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Markup Rules
+          <span style={{ marginLeft: 12, display: "inline-flex", alignItems: "center" }}>
             <CountBadge count={total || rules.length} title={`${(total || rules.length).toLocaleString()} markup rules`} />
+          </span>
         </h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>

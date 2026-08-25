@@ -5,7 +5,7 @@
  * Sibling to /api/travel/quotes + /api/travel/suppliers. Stores named
  * commission profiles consumed by lib/agentCommissionCalculator.js
  * (slice 1, commit cb284098). Each row is one operator-facing pricing
- * shape — flat_percent | tiered | per_pax_flat | hybrid — stored as a
+ * shape — flat_percent | flat_fee | tiered | per_pax_flat | hybrid — stored as a
  * JSON String column so future calculator extensions don't require
  * schema migrations.
  *
@@ -31,7 +31,7 @@
  *
  * Validation strictness (slice 2):
  *   - name required, non-empty trim                       → 400 MISSING_FIELDS
- *   - profileType must match 4-item whitelist             → 400 INVALID_PROFILE_TYPE
+ *   - profileType must match 5-item whitelist             → 400 INVALID_PROFILE_TYPE
  *   - profileJson must JSON.parse                         → 400 INVALID_PROFILE_JSON
  *   - subBrand (if provided) must match assertValidSubBrand → 400 INVALID_SUB_BRAND
  *   - DEEP-SHAPE validation of parsed profileJson against profileType is
@@ -68,7 +68,7 @@ const {
 const { writeAudit } = require("../lib/audit");
 const { computeCommission } = require("../lib/agentCommissionCalculator");
 
-const VALID_PROFILE_TYPES = ["flat_percent", "tiered", "per_pax_flat", "hybrid"];
+const VALID_PROFILE_TYPES = ["flat_percent", "flat_fee", "tiered", "per_pax_flat", "hybrid"];
 const VALID_RELEASE_MODES = ["on_booking", "on_trip_completion"];
 
 function assertValidProfileType(t) {

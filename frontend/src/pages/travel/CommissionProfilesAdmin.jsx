@@ -2,7 +2,7 @@
 //
 // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 3 — operator-facing CRUD UI for
 // TravelCommissionProfile rows. Profiles capture named agent-payout
-// shapes (flat_percent / tiered / per_pax_flat / hybrid) consumed by the
+// shapes (flat_percent / flat_fee / tiered / per_pax_flat / hybrid) consumed by the
 // agentCommissionCalculator lib (slice 1 commit cb284098).
 //
 // Consumes the CRUD backend shipped in slice 2 (commit b5042743):
@@ -21,7 +21,7 @@
 // Slice scope:
 //   - List table with sub-brand + isActive filters
 //   - Modal create / edit with type-conditional sub-form
-//   - flat_percent → percent input (0-100)
+//   - flat_percent / flat_fee → percent or flat-fee amount input
 //   - per_pax_flat → amountPerPax (number)
 //   - hybrid → baseAmount + thresholdAmount + overagePercent
 //   - tiered → dynamic list of {uptoCents, percent} rows + "Add tier"
@@ -101,6 +101,7 @@ const LAST_LIST_URL_KEY = "travel.commissionProfiles.lastListUrl";
 // If the backend grows another type, this list grows here too.
 const PROFILE_TYPES = [
   { value: "flat_percent", label: "Flat %" },
+  { value: "flat_fee", label: "Flat fee" },
   { value: "tiered", label: "Tiered" },
   { value: "per_pax_flat", label: "Per-pax flat" },
   { value: "hybrid", label: "Hybrid" },
@@ -114,6 +115,7 @@ const RELEASE_MODES = [
 // Style hint for the profile-type column badge.
 const PROFILE_TYPE_BADGE_BG = {
   flat_percent: "rgba(34, 197, 94, 0.18)",
+  flat_fee: "rgba(16, 185, 129, 0.18)",
   tiered: "rgba(59, 130, 246, 0.18)",
   per_pax_flat: "rgba(245, 158, 11, 0.18)",
   hybrid: "rgba(168, 85, 247, 0.18)",
@@ -156,6 +158,7 @@ const EMPTY_FORM = {
   // when building profileJson at submit time. Strings throughout for
   // controlled-input ergonomics; coerced at the build step.
   percent: "",
+  flatFeeAmount: "",
   amountPerPax: "",
   baseAmount: "",
   thresholdAmount: "",
@@ -176,6 +179,14 @@ function buildProfileJson(form, notifyErr) {
         return null;
       }
       return { percent: p };
+    }
+    case "flat_fee": {
+      const fee = Number(form.flatFeeAmount);
+      if (!Number.isFinite(fee) || fee < 0) {
+        notifyErr("Flat fee amount must be a non-negative number");
+        return null;
+      }
+      return { flatFeeAmount: fee };
     }
     case "per_pax_flat": {
       const a = Number(form.amountPerPax);
@@ -280,6 +291,7 @@ function parseProfileJsonForForm(profileType, raw) {
   }
   const out = {
     percent: "",
+    flatFeeAmount: "",
     amountPerPax: "",
     baseAmount: "",
     thresholdAmount: "",
@@ -288,6 +300,8 @@ function parseProfileJsonForForm(profileType, raw) {
   };
   if (profileType === "flat_percent" && parsed.percent != null) {
     out.percent = String(parsed.percent);
+  } else if (profileType === "flat_fee" && (parsed.flatFeeAmount != null || parsed.amount != null)) {
+    out.flatFeeAmount = String(parsed.flatFeeAmount != null ? parsed.flatFeeAmount : parsed.amount);
   } else if (profileType === "per_pax_flat" && parsed.amountPerPax != null) {
     out.amountPerPax = String(parsed.amountPerPax);
   } else if (profileType === "hybrid") {
@@ -1007,6 +1021,21 @@ export default function CommissionProfilesAdmin() {
                 onChange={(e) => setForm({ ...form, percent: e.target.value })}
                 style={inputStyle}
                 aria-label="Commission percent"
+              />
+            </label>
+          )}
+
+          {form.profileType === "flat_fee" && (
+            <label style={{ ...fieldLabel, gridColumn: "1 / -1" }}>
+              <span>Flat fee amount</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.flatFeeAmount}
+                onChange={(e) => setForm({ ...form, flatFeeAmount: e.target.value })}
+                style={inputStyle}
+                aria-label="Flat fee amount"
               />
             </label>
           )}

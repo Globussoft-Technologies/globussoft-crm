@@ -260,7 +260,7 @@ describe('WebCheckinQueue â€” operator queue (PRD Â§4.6)', () => {
     const table = document.querySelector('table.webcheckins-table');
     expect(table).toBeTruthy();
     expect(table.style.width).toBe('100%');
-    expect(table.style.minWidth).toBe('1340px');
+    expect(table.style.minWidth).toBe('1680px');
   });
   it('renders a visible horizontal scrollbar shell for macOS and zoomed layouts', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));

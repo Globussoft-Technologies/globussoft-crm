@@ -1,0 +1,13 @@
+-- CallLog.recordingUrl: varchar(191) -> TEXT.
+--
+-- Callified now returns absolute object-storage URLs instead of a short
+-- relative path:
+--   https://objectstorage.ap-mumbai-1.oraclecloud.com/n/<ns>/b/callified-live-media/o/recordings/<org>/<tenant>/<uuid>_<ts>.wav
+-- Observed at 193 characters — two over the varchar(191) limit. The whole
+-- fetch-call-details write then failed with "value too long for the column",
+-- surfacing as HTTP 500 on GET /api/callified/calls/:id/details, so a call's
+-- transcript AND recording were both unreachable because of two characters.
+--
+-- Widening varchar -> TEXT is non-destructive; existing rows are unchanged.
+-- Not indexed, so there is no key-length concern.
+ALTER TABLE `CallLog` MODIFY `recordingUrl` TEXT NULL;

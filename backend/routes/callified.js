@@ -20,6 +20,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { userHasPermission } = require("../middleware/requirePermission");
 const callifiedClient = require("../services/callifiedClient");
 const { writeAudit } = require("../lib/audit");
 const { resolveSubBrand } = require("../lib/subBrandResolve");
@@ -541,6 +542,207 @@ router.get(
     }
   },
 );
+
+/**
+ * Who may this caller see calls for?
+ *
+ * A call recording is a real patient discussing real treatment, so the default
+ * is "your own only". Seeing the whole clinic's call log is a deliberate
+ * grant:
+ *
+ *   - ADMIN / MANAGER            — always all (clinic-wide oversight, same as
+ *                                  every other tenant-wide surface here)
+ *   - `call_history.read_all`    — all, for a custom role such as a team lead
+ *   - everyone else              — their own calls only
+ *
+ * Returns the scope so the caller can both filter AND tell the UI whether a
+ * staff filter is meaningful.
+ *
+ * @returns {Promise<'all'|'own'>}
+ */
+async function resolveCallScope(req) {
+  const role = req.user?.role;
+  if (role === "ADMIN" || role === "MANAGER") return "all";
+  const canSeeAll = await userHasPermission(req.user, "call_history", "read_all").catch(
+    () => false,
+  );
+  return canSeeAll ? "all" : "own";
+}
+
+/**
+ * GET /api/callified/calls
+ *
+ * Tenant-wide, paginated call history — the data behind the Call History page.
+ *
+ * The per-lead `/calls/lead/:leadId/attempts` endpoint returns EVERY attempt
+ * for one contact with no paging, which is what made the drawer unreadable
+ * once a lead had 29 calls. This is the list view: filterable, paged, and
+ * joined to the contact so the table can show who was called without an N+1.
+ *
+ * Query: page, limit, from, to, status, mode (ai|browser), search
+ *
+ * `mode` lives inside the JSON `notes` blob rather than its own column, so it
+ * is filtered with a substring match on the serialised key. Cheap and exact —
+ * the writer is the only producer of that field.
+ */
+router.get("/calls", verifyToken, async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 25), 100);
+
+    const where = { tenantId: req.user.tenantId, provider: "callified" };
+
+    if (req.query.status) where.status = String(req.query.status).toUpperCase();
+
+    // Scope FIRST, then apply the requested filter — a staff filter must never
+    // be able to widen what someone is allowed to see.
+    const scope = await resolveCallScope(req);
+    if (scope === "own") {
+      where.userId = req.user.userId;
+    } else {
+      const userId = Number(req.query.userId);
+      if (Number.isInteger(userId) && userId > 0) where.userId = userId;
+    }
+
+    if (req.query.from || req.query.to) {
+      where.createdAt = {};
+      if (req.query.from) where.createdAt.gte = new Date(req.query.from);
+      if (req.query.to) where.createdAt.lte = new Date(req.query.to);
+    }
+
+    if (req.query.mode === "browser") {
+      where.notes = { contains: '"mode":"browser"' };
+    } else if (req.query.mode === "ai") {
+      // AI calls predate the `mode` field, so "not browser" is the correct
+      // test — an older row with no mode at all was an AI dial.
+      where.NOT = { notes: { contains: '"mode":"browser"' } };
+    }
+
+    const search = String(req.query.search || "").trim();
+    if (search) {
+      where.OR = [
+        { calleeNumber: { contains: search } },
+        { contact: { is: { name: { contains: search } } } },
+      ];
+    }
+
+    const [total, rows] = await Promise.all([
+      prisma.callLog.count({ where }),
+      prisma.callLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          createdAt: true,
+          status: true,
+          duration: true,
+          recordingUrl: true,
+          calleeNumber: true,
+          notes: true,
+          contactId: true,
+          contact: { select: { id: true, name: true } },
+          user: { select: { id: true, name: true, email: true } },
+        },
+      }),
+    ]);
+
+    const calls = rows.map((row) => {
+      let notes = {};
+      if (row.notes) {
+        try {
+          notes = JSON.parse(row.notes);
+        } catch (_e) {
+          notes = {};
+        }
+      }
+      return {
+        id: row.id,
+        createdAt: row.createdAt,
+        status: row.status,
+        duration: row.duration,
+        recordingUrl: row.recordingUrl,
+        calleeNumber: row.calleeNumber,
+        contactId: row.contactId,
+        contactName: row.contact?.name || null,
+        placedBy: row.user?.name || row.user?.email || null,
+        // A row written before the browser flow existed has no mode; it was
+        // an AI dial by definition.
+        mode: notes.mode === "browser" ? "browser" : "ai",
+        campaignId: notes.campaignId ?? null,
+        callifiedLeadId: notes.callifiedLeadId ?? null,
+        callSid: notes.callSid ?? null,
+      };
+    });
+
+    res.json({
+      calls,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      // 'own' means the list is already restricted to this user.
+      scope,
+    });
+  } catch (e) {
+    console.error("[callified] calls list error:", e.message);
+    res.status(500).json({ error: "Failed to load call history", code: "CALL_HISTORY_FAILED" });
+  }
+});
+
+/**
+ * GET /api/callified/calls/agents
+ *
+ * The staff members who have actually placed calls, for the Call History
+ * filter. Deliberately NOT the full staff roster: a clinic has many users and
+ * only a handful ever dial, so listing everyone would bury the useful names.
+ * Each entry carries its call count so the busiest agents sort to the top.
+ */
+router.get("/calls/agents", verifyToken, async (req, res) => {
+  try {
+    // Someone who can only see their own calls has nobody to filter by —
+    // returning the roster would leak who else works the phones.
+    const scope = await resolveCallScope(req);
+    if (scope === "own") return res.json({ agents: [], scope });
+
+    const grouped = await prisma.callLog.groupBy({
+      by: ["userId"],
+      where: {
+        tenantId: req.user.tenantId,
+        provider: "callified",
+        userId: { not: null },
+      },
+      _count: { userId: true },
+    });
+
+    if (grouped.length === 0) return res.json({ agents: [], scope });
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: grouped.map((g) => g.userId) }, tenantId: req.user.tenantId },
+      select: { id: true, name: true, email: true },
+    });
+    const byId = new Map(users.map((u) => [u.id, u]));
+
+    const agents = grouped
+      .map((g) => {
+        const user = byId.get(g.userId);
+        if (!user) return null; // deleted user — nothing to filter by
+        return {
+          id: user.id,
+          name: user.name || user.email,
+          callCount: g._count.userId,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.callCount - a.callCount);
+
+    res.json({ agents, scope });
+  } catch (e) {
+    console.error("[callified] calls/agents error:", e.message);
+    res.status(500).json({ error: "Failed to load agents", code: "CALL_AGENTS_FAILED" });
+  }
+});
 
 /**
  * GET /api/callified/calls/lead/:leadId/attempts

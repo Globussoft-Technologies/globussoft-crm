@@ -35,6 +35,8 @@
  *   Audio is 16-bit signed little-endian PCM, mono, 8 kHz, base64.
  */
 
+import { describeMediaError } from './callified';
+
 const SAMPLE_RATE = 8000;
 
 /** States the UI renders. */
@@ -184,6 +186,13 @@ export class CallifiedAgentBridge {
   async start() {
     if (this.stopped) throw new Error('This call has already ended.');
 
+    // Each bridge opens its OWN stream. Sharing one across bridges is unsafe:
+    // React StrictMode double-mounts the panel, and the discarded first bridge
+    // stops the tracks of whatever stream it holds — leaving the bridge that is
+    // actually on screen with dead tracks and a silent microphone. The caller
+    // still PROBES the microphone before placing the call (probeMicrophone), so
+    // a machine without one never rings the customer; permission is already
+    // granted by then, so this second call raises no prompt.
     this.setState(BRIDGE_STATE.REQUESTING_MIC);
     let micStream;
     try {
@@ -197,12 +206,7 @@ export class CallifiedAgentBridge {
         video: false,
       });
     } catch (e) {
-      const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
-      throw new Error(
-        denied
-          ? 'Microphone access was blocked. Allow the microphone for this site, then try again.'
-          : `Could not open the microphone: ${e?.message || e}`,
-      );
+      throw new Error(describeMediaError(e));
     }
 
     // The bridge can be torn down WHILE these awaits are parked — React

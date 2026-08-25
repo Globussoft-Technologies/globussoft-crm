@@ -564,6 +564,9 @@ const WellnessBookAppointment = lazy(
 const WellnessAppointments = lazy(
   () => import("./pages/wellness/Appointments"),
 );
+const WellnessCallHistory = lazy(
+  () => import("./pages/wellness/CallHistory"),
+);
 const WellnessMyAppointments = lazy(
   () => import("./pages/wellness/MyAppointments"),
 );
@@ -1859,6 +1862,14 @@ export default function App() {
                         element={
                           <WellnessOnly>
                             <WellnessAppointments />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/call-history"
+                        element={
+                          <WellnessOnly>
+                            <WellnessCallHistory />
                           </WellnessOnly>
                         }
                       />

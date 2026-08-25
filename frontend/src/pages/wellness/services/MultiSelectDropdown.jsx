@@ -2,7 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 
-export default function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onChange }) {
+export default function MultiSelectDropdown({
+  categories,
+  categoriesLoading,
+  selectedIds,
+  onChange,
+  // Defaulted so the existing category call sites read exactly as before —
+  // the package builder reuses this component for services.
+  placeholder = 'Select categories...',
+}) {
   const [isOpen, setIsOpen] = useState(false);
   // Portal-rendered menu uses fixed positioning anchored to the button's
   // viewport rect — sidesteps the .glass parent's backdrop-filter, which
@@ -87,7 +95,7 @@ export default function MultiSelectDropdown({ categories, categoriesLoading, sel
         }}
       >
         <span style={{ textAlign: 'left', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {categoriesLoading ? 'Loading...' : selectedNames || 'Select categories...'}
+          {categoriesLoading ? 'Loading...' : selectedNames || placeholder}
         </span>
         <ChevronDown size={16} style={{ marginLeft: '0.5rem', flexShrink: 0, transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
       </button>

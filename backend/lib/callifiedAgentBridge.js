@@ -280,20 +280,29 @@ function handleAgentConnection(client, grant) {
   let pending = [];
   let closed = false;
   let connectedAt = null;
+  // Set only when Callified reports the CUSTOMER answered — see teardown.
+  let answeredAt = null;
 
   const teardown = (reason, code) => {
     if (closed) return;
     closed = true;
     clearInterval(keepalive);
 
-    if (connectedAt) {
-      const duration = Math.max(0, Math.round((Date.now() - connectedAt) / 1000));
+    // `connectedAt` is when OUR socket to Callified opened; `answeredAt` is
+    // when the CUSTOMER picked up. Only the second one makes a call
+    // "completed" — using the first meant a call that never rang was logged
+    // as COMPLETED with a duration equal to however long the agent sat
+    // waiting, which then showed up in Call History as a real conversation.
+    if (answeredAt) {
       updateBridgeCallLog(callLogId, {
         status: 'COMPLETED',
-        duration,
+        duration: Math.max(0, Math.round((Date.now() - answeredAt) / 1000)),
       });
+    } else if (connectedAt) {
+      // Bridge was up, customer never answered.
+      updateBridgeCallLog(callLogId, { status: 'MISSED', duration: 0 });
     } else {
-      updateBridgeCallLog(callLogId, { status: 'FAILED' });
+      updateBridgeCallLog(callLogId, { status: 'FAILED', duration: 0 });
     }
 
     try {
@@ -379,6 +388,24 @@ function handleAgentConnection(client, grant) {
 
     // Callified → browser, verbatim.
     upstream.on('message', (data, isBinary) => {
+      // The relay forwards frames verbatim and does not interpret the audio
+      // protocol — but it does need ONE signal: whether the customer actually
+      // answered, so the CallLog records a real conversation rather than
+      // however long the agent sat listening to a phone that never rang.
+      if (!answeredAt && !isBinary) {
+        const text = String(data);
+        if (text.includes('"connected"')) {
+          try {
+            const frame = JSON.parse(text);
+            if (frame && frame.type === 'status' && frame.status === 'connected') {
+              answeredAt = Date.now();
+              updateBridgeCallLog(callLogId, { status: 'CONNECTED' });
+            }
+          } catch (_e) {
+            /* not JSON — nothing to learn from it */
+          }
+        }
+      }
       if (DEBUG_FRAMES && recvTrace < DEBUG_FRAMES) {
         recvTrace += 1;
         console.log(`${tag} callified→agent #${recvTrace} ${describeFrame(data, isBinary)}`);

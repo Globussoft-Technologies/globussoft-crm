@@ -1,47 +1,89 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Package, Copy, Check } from 'lucide-react';
+import { Package, Copy, Check, X, Save, Loader } from 'lucide-react';
+import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { formatMoney } from '../../../utils/money';
 import { inputStyle, labelStyle } from './shared';
+import MultiSelectDropdown from './MultiSelectDropdown';
 
-function Row({ label, children, negative }) {
+function Row({ label, children, negative, muted }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
-      <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
-      <span style={{ color: negative ? '#f59e0b' : 'var(--text-primary)' }}>{children}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', fontSize: muted ? '0.8rem' : '0.9rem' }}>
+      <span style={{ color: 'var(--text-secondary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {label}
+      </span>
+      <span style={{ color: negative ? '#f59e0b' : muted ? 'var(--text-secondary)' : 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+        {children}
+      </span>
     </div>
   );
 }
 
-export default function PackageBuilder({ services }) {
+/**
+ * Package builder — bundle one or more services into a discounted pitch.
+ *
+ * `sessions` is how many times the WHOLE bundle repeats, so the gross is
+ * (sum of the selected services' per-session prices) × sessions. A package of
+ * one service therefore prices exactly as it did before multi-select landed.
+ */
+export default function PackageBuilder({ services, onSaved }) {
   const notify = useNotify();
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
   // Prefer high-tier services for packages, fall back to all.
   const eligible = useMemo(() => {
     const hi = services.filter((s) => s.ticketTier === 'high');
     return hi.length ? hi : services;
   }, [services]);
 
-  const [serviceId, setServiceId] = useState('');
+  const [selectedIds, setSelectedIds] = useState([]);
   const [sessions, setSessions] = useState(6);
   const [discount, setDiscount] = useState(15);
   const [copied, setCopied] = useState(false);
   const copyResetTimerRef = useRef(null);
 
+  // Seed with the first service so the summary is never empty on open, the
+  // way the single-select version behaved.
   useEffect(() => {
-    if (!serviceId && eligible.length) setServiceId(String(eligible[0].id));
-  }, [eligible, serviceId]);
+    if (!selectedIds.length && eligible.length) setSelectedIds([eligible[0].id]);
+  }, [eligible, selectedIds.length]);
+
+  // Drop selections whose service disappeared (category filter, deletion)
+  // rather than silently pricing a service that is no longer on the list.
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const live = current.filter((id) => eligible.some((s) => s.id === id));
+      return live.length === current.length ? current : live;
+    });
+  }, [eligible]);
 
   useEffect(() => () => {
     if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
   }, []);
 
-  const service = eligible.find((s) => String(s.id) === String(serviceId));
-  const gross = service ? service.basePrice * sessions : 0;
+  const selected = useMemo(
+    () => eligible.filter((s) => selectedIds.includes(s.id)),
+    [eligible, selectedIds],
+  );
+
+  // Options carry the price in the label so the dropdown stays as informative
+  // as the single <select> it replaced.
+  const options = useMemo(
+    () =>
+      eligible.map((s) => ({
+        id: s.id,
+        name: `${s.name} — ₹${s.basePrice.toLocaleString('en-IN')} (${s.ticketTier})`,
+      })),
+    [eligible],
+  );
+
+  const perSession = selected.reduce((sum, s) => sum + s.basePrice, 0);
+  const gross = perSession * sessions;
   const savings = Math.round((gross * discount) / 100);
   const net = Math.round(gross - savings);
 
-  const pitch = service
-    ? `${service.name} × ${sessions} sessions = ${formatMoney(net, { maximumFractionDigits: 0 })} (${discount}% off)`
+  const pitch = selected.length
+    ? `${selected.map((s) => s.name).join(' + ')} × ${sessions} sessions = ${formatMoney(net, { maximumFractionDigits: 0 })} (${discount}% off)`
     : '';
 
   const copyPitch = async () => {
@@ -57,6 +99,39 @@ export default function PackageBuilder({ services }) {
     }
   };
 
+  const savePackage = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      notify.error('Give the package a name before saving');
+      return;
+    }
+    if (!selected.length) {
+      notify.error('Select at least one service');
+      return;
+    }
+    setSaving(true);
+    try {
+      // Saved as a draft: a package is priced here but published deliberately
+      // from Active Packages, so nothing reaches customers by accident.
+      const created = await fetchApi('/api/wellness/packages', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: trimmed,
+          serviceIds: selected.map((s) => s.id),
+          sessions,
+          discountPercent: discount,
+        }),
+      });
+      notify.success(`"${trimmed}" saved — publish it from Active Packages`);
+      setName('');
+      onSaved?.(created);
+    } catch (err) {
+      notify.error(err?.message || 'Could not save the package');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div id="package-builder-anchor" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}>
       <div className="glass" style={{ padding: '1.5rem' }}>
@@ -64,15 +139,76 @@ export default function PackageBuilder({ services }) {
           <Package size={16} /> Build a package
         </h2>
 
-        <label style={labelStyle}>Service</label>
-        <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
-          {eligible.length === 0 && <option value="">No services available</option>}
-          {eligible.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name} — ₹{s.basePrice.toLocaleString('en-IN')} ({s.ticketTier})
-            </option>
-          ))}
-        </select>
+        <label style={labelStyle} htmlFor="package-name">Package name</label>
+        <input
+          id="package-name"
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Glow Season Bundle"
+          style={inputStyle}
+          data-testid="package-name-input"
+        />
+
+        <label style={{ ...labelStyle, marginTop: '1rem' }}>
+          Services {selected.length > 0 && <strong>({selected.length} selected)</strong>}
+        </label>
+        {eligible.length === 0 ? (
+          <div style={{ ...inputStyle, color: 'var(--text-secondary)' }}>No services available</div>
+        ) : (
+          <div data-testid="package-service-select">
+            <MultiSelectDropdown
+              categories={options}
+              categoriesLoading={false}
+              selectedIds={selectedIds}
+              onChange={setSelectedIds}
+              placeholder="Select services…"
+            />
+          </div>
+        )}
+
+        {/* Removable chips: with several services bundled, the collapsed
+            dropdown label truncates, so the selection needs to stay visible
+            and individually removable. */}
+        {selected.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.6rem' }}>
+            {selected.map((s) => (
+              <span
+                key={s.id}
+                data-testid={`package-service-chip-${s.id}`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.3rem',
+                  padding: '0.2rem 0.5rem',
+                  borderRadius: 999,
+                  fontSize: '0.72rem',
+                  background: 'var(--subtle-bg-3)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-primary)',
+                  maxWidth: '100%',
+                }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${s.name}`}
+                  onClick={() => setSelectedIds((ids) => ids.filter((id) => id !== s.id))}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    padding: 0,
+                    display: 'flex',
+                    cursor: 'pointer',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
 
         <label style={{ ...labelStyle, marginTop: '1rem' }}>
           Sessions: <strong>{sessions}</strong>
@@ -112,11 +248,21 @@ export default function PackageBuilder({ services }) {
       <div className="glass" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         <h2 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem' }}>Package summary</h2>
 
-        {!service ? (
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Pick a service to see pricing.</div>
+        {selected.length === 0 ? (
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Pick one or more services to see pricing.</div>
         ) : (
           <>
-            <Row label="Per session">₹{service.basePrice.toLocaleString('en-IN')}</Row>
+            {/* Itemise only when bundling — a single service reads better as
+                the plain "Per session" row it always was. */}
+            {selected.length > 1 &&
+              selected.map((s) => (
+                <Row key={s.id} label={s.name} muted>
+                  ₹{s.basePrice.toLocaleString('en-IN')}
+                </Row>
+              ))}
+            <Row label={selected.length > 1 ? `Per session (${selected.length} services)` : 'Per session'}>
+              ₹{perSession.toLocaleString('en-IN')}
+            </Row>
             <Row label="Sessions">{sessions}</Row>
             <Row label="Gross total">₹{gross.toLocaleString('en-IN')}</Row>
             <Row label={`Discount (${discount}%)`} negative>
@@ -173,8 +319,34 @@ export default function PackageBuilder({ services }) {
               {copied ? <Check size={15} /> : <Copy size={15} />} {copied ? 'Copied!' : 'Copy pitch'}
             </button>
 
+            <button
+              onClick={savePackage}
+              disabled={saving}
+              data-testid="package-save"
+              className="btn-secondary"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.4rem',
+                padding: '0.6rem 1rem',
+                fontWeight: 600,
+              }}
+            >
+              {saving ? (
+                <>
+                  <Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> Saving…
+                </>
+              ) : (
+                <>
+                  <Save size={15} /> Save package
+                </>
+              )}
+            </button>
+
             <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-              Packages are computed on the fly — no DB record is created.
+              Saved packages start as drafts — publish them from Active Packages
+              to list them for customers.
             </div>
           </>
         )}

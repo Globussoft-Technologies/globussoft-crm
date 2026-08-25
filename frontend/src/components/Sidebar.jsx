@@ -1150,6 +1150,7 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/calendar": Calendar,
   "/wellness/appointments": Calendar,
   "/wellness/my-appointments": Calendar,
+  "/wellness/call-history": PhoneCall,
   "/wellness/patients": HeartPulse,
   "/wellness/waitlist": Clock,
   "/wellness/prescriptions": PenTool,

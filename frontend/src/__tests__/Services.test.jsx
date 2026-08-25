@@ -525,7 +525,7 @@ describe('<Services /> — Package builder tab', () => {
     fetchApi.mockImplementation(defaultFetchRouter);
   });
 
-  it('builder renders service select + sessions slider + discount slider', async () => {
+  it('builder renders service multi-select + sessions slider + discount slider', async () => {
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
@@ -533,7 +533,10 @@ describe('<Services /> — Package builder tab', () => {
     await user.click(screen.getByRole('button', { name: /^Packages$/i }));
 
     expect(screen.getByText(/Build a package/i)).toBeInTheDocument();
-    expect(screen.getByText(/^Service$/i)).toBeInTheDocument();
+    // Multi-select replaced the single <select>; the label now carries a
+    // selected count alongside it.
+    expect(screen.getByTestId('package-service-select')).toBeInTheDocument();
+    expect(screen.getByText(/^Services/i)).toBeInTheDocument();
     // "Sessions" + "Discount" labels
     expect(screen.getByText(/Sessions:/i)).toBeInTheDocument();
     expect(screen.getByText(/Discount:/i)).toBeInTheDocument();
@@ -841,10 +844,115 @@ describe('<Services /> — PackageBuilder dynamic recompute', () => {
     );
     await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
 
-    // The select has the "No services available" option AND the summary
-    // shows the "Pick a service" placeholder.
+    // The picker is replaced by a "No services available" notice AND the
+    // summary shows its empty-selection placeholder.
     expect(screen.getByText(/No services available/i)).toBeInTheDocument();
-    expect(screen.getByText(/Pick a service to see pricing/i)).toBeInTheDocument();
+    expect(screen.getByText(/Pick one or more services to see pricing/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Multi-service packages.
+ *
+ * `sessions` repeats the WHOLE bundle, so the gross is the summed per-session
+ * price × sessions. A one-service package must still price exactly as it did
+ * before multi-select landed — that back-compat is what the first test pins.
+ */
+describe('<Services /> — PackageBuilder multi-service selection', () => {
+  const TWO_HIGH_TIER = [
+    { id: 21, name: 'Alpha Peel', category: 'aesthetics', ticketTier: 'high', basePrice: 1000, durationMin: 30, targetRadiusKm: 10, isActive: true },
+    { id: 22, name: 'Beta Laser', category: 'aesthetics', ticketTier: 'high', basePrice: 2000, durationMin: 45, targetRadiusKm: 10, isActive: true },
+  ];
+
+  beforeEach(() => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/wellness/services') return Promise.resolve(TWO_HIGH_TIER);
+      if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
+      return Promise.resolve({});
+    });
+  });
+
+  const openPackages = async () => {
+    render(
+      <MemoryRouter initialEntries={['/wellness/services?tab=packages']}>
+        <Services />
+      </MemoryRouter>
+    );
+    // "Build a package" renders before the services fetch resolves, so waiting
+    // on it alone races the default selection. "Package price" only appears
+    // once a service is selected and priced.
+    await screen.findByText(/Build a package/i);
+    await screen.findByText(/Package price/i);
+  };
+
+  it('defaults to the first service and prices it exactly as the single-select did', async () => {
+    await openPackages();
+
+    // 1000 × 6 sessions = 6,000 gross; 15% = 900; net 5,100.
+    expect(screen.getByText(/Per session$/i)).toBeInTheDocument();
+    expect(screen.getByText(/6,000/)).toBeInTheDocument();
+    expect(screen.getByText(/900/)).toBeInTheDocument();
+    expect(screen.getAllByText(/5,100/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('sums the per-session price across every selected service', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+
+    // Open the multi-select and add the second service.
+    // Scope to the dropdown: the selection chip also renders a
+    // 'Remove Alpha Peel' button, so an unscoped name match is ambiguous.
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    expect(checkboxes.length).toBe(2);
+    await user.click(checkboxes[1]);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Per session \(2 services\)/i)).toBeInTheDocument(),
+    );
+    // (1000 + 2000) × 6 = 18,000 gross; 15% = 2,700; net 15,300.
+    expect(screen.getByText(/3,000/)).toBeInTheDocument();
+    expect(screen.getByText(/18,000/)).toBeInTheDocument();
+    expect(screen.getByText(/2,700/)).toBeInTheDocument();
+    expect(screen.getAllByText(/15,300/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('itemises each bundled service and names them all in the pitch', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+
+    // Scope to the dropdown: the selection chip also renders a
+    // 'Remove Alpha Peel' button, so an unscoped name match is ambiguous.
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    await user.click(checkboxes[1]);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Alpha Peel \+ Beta Laser × 6 sessions/i)).toBeInTheDocument(),
+    );
+  });
+
+  it('a bundled service can be removed from its chip', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+
+    // Scope to the dropdown: the selection chip also renders a
+    // 'Remove Alpha Peel' button, so an unscoped name match is ambiguous.
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    await user.click(checkboxes[1]);
+    await waitFor(() =>
+      expect(screen.getByText(/Per session \(2 services\)/i)).toBeInTheDocument(),
+    );
+
+    // Close the portal menu, then drop one service via its chip.
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: /Remove Beta Laser/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Per session \(2 services\)/i)).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Per session$/i)).toBeInTheDocument();
   });
 });
 

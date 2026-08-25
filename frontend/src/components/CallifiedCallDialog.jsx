@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { probeMicrophone } from '../utils/callified';
 import CallifiedManualCallPanel from './CallifiedManualCallPanel';
 
 /**
@@ -122,6 +123,17 @@ export default function CallifiedCallDialog({
       setProgress('Syncing customer with Callified…');
 
       try {
+        // Manual calls open the microphone BEFORE the call is placed.
+        // Callified dials the customer the instant the request succeeds, and
+        // the only way to hang that leg up is a hangup frame over the agent
+        // WebSocket — which cannot exist if the microphone never opened. Check
+        // first and a machine with no microphone never rings the customer at
+        // all, instead of leaving them on a live line hearing silence.
+        if (nextMode === 'manual') {
+          setProgress('Checking your microphone…');
+          await probeMicrophone();
+        }
+
         setProgress(
           nextMode === 'ai' ? 'Starting AI call…' : 'Connecting manual call…',
         );

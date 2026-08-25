@@ -16,7 +16,7 @@
  *   6. A successful manual call hands off to the live-call panel.
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 
 const fetchApiMock = vi.fn();
@@ -86,10 +86,21 @@ function renderDialog(props = {}) {
   );
 }
 
+// jsdom has no media devices. A manual call now opens the microphone BEFORE
+// placing the call, so every manual-mode test needs one.
+let getUserMediaMock;
+let micTrackStop;
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();
+  micTrackStop = vi.fn();
+  getUserMediaMock = vi.fn(() => Promise.resolve({ getTracks: () => [{ stop: micTrackStop }] }));
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: getUserMediaMock } });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('CallifiedCallDialog', () => {
@@ -250,5 +261,148 @@ describe('CallifiedCallDialog', () => {
 
     fireEvent.click(await screen.findByTestId('callified-call-dialog-history'));
     expect(onViewHistory).toHaveBeenCalledWith(11);
+  });
+});
+
+/**
+ * Microphone pre-flight for manual calls.
+ *
+ * Callified dials the customer the instant the manual-call request succeeds,
+ * and the ONLY way to hang that leg up again is a `{"type":"hangup"}` frame
+ * over the agent WebSocket — which cannot exist if the microphone never
+ * opened and the socket was therefore never created.
+ *
+ * Checking the microphone first is what stops a machine with no microphone
+ * ringing a real customer and leaving them on a live line hearing silence.
+ * The observed failure was "Could not open the microphone: Requested device
+ * not found" AFTER the phone was already ringing.
+ */
+describe('CallifiedCallDialog — microphone pre-flight', () => {
+  async function armDialog(onPost) {
+    installFetch({ onPost });
+    renderDialog();
+    fireEvent.change(await screen.findByTestId('callified-call-dialog-campaign'), {
+      target: { value: '42' },
+    });
+  }
+
+  test('opens the microphone BEFORE placing the call', async () => {
+    let micOpenedFirst = false;
+    const onPost = vi.fn(() => {
+      micOpenedFirst = getUserMediaMock.mock.calls.length > 0;
+      return Promise.resolve({ callifiedLeadId: 900, callSid: 'EXsid1', bridgeTicket: 't', bridgePath: '/ws/callified-agent' });
+    });
+    await armDialog(onPost);
+
+    fireEvent.click(screen.getByTestId('callified-call-mode-manual'));
+
+    await waitFor(() => expect(onPost).toHaveBeenCalledOnce());
+    expect(micOpenedFirst).toBe(true);
+  });
+
+  test('a missing microphone means the customer is NEVER called', async () => {
+    const onPost = vi.fn(() => Promise.resolve({ callifiedLeadId: 900 }));
+    getUserMediaMock.mockRejectedValue(
+      Object.assign(new Error('Requested device not found'), { name: 'NotFoundError' }),
+    );
+    await armDialog(onPost);
+
+    fireEvent.click(screen.getByTestId('callified-call-mode-manual'));
+
+    // The load-bearing assertion: no request reached the manual-call endpoint,
+    // so no phone rang.
+    await waitFor(() =>
+      expect(screen.getByTestId('callified-call-dialog-result')).toHaveTextContent(
+        /No microphone found/i,
+      ),
+    );
+    expect(onPost).not.toHaveBeenCalled();
+  });
+
+  test('a blocked microphone explains how to unblock it', async () => {
+    getUserMediaMock.mockRejectedValue(
+      Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' }),
+    );
+    await armDialog(vi.fn());
+
+    fireEvent.click(screen.getByTestId('callified-call-mode-manual'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('callified-call-dialog-result')).toHaveTextContent(
+        /Allow the microphone for this site/i,
+      ),
+    );
+  });
+
+  test('a microphone held by another app says which apps to close', async () => {
+    getUserMediaMock.mockRejectedValue(
+      Object.assign(new Error('Device in use'), { name: 'NotReadableError' }),
+    );
+    await armDialog(vi.fn());
+
+    fireEvent.click(screen.getByTestId('callified-call-mode-manual'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('callified-call-dialog-result')).toHaveTextContent(
+        /being used by another app/i,
+      ),
+    );
+  });
+
+  test('a failed pre-flight leaves the call retryable', async () => {
+    getUserMediaMock.mockRejectedValue(
+      Object.assign(new Error('nope'), { name: 'NotFoundError' }),
+    );
+    await armDialog(vi.fn());
+
+    fireEvent.click(screen.getByTestId('callified-call-mode-manual'));
+    await waitFor(() => expect(screen.getByTestId('callified-call-dialog-result')).toBeInTheDocument());
+
+    // Plugging a headset in and clicking again must work.
+    await waitFor(() => expect(screen.getByTestId('callified-call-mode-manual')).toBeEnabled());
+  });
+
+  test('AI calls need no microphone at all', async () => {
+    const onPost = vi.fn(() => Promise.resolve({ callifiedLeadId: 900 }));
+    getUserMediaMock.mockRejectedValue(
+      Object.assign(new Error('nope'), { name: 'NotFoundError' }),
+    );
+    await armDialog(onPost);
+
+    fireEvent.click(screen.getByTestId('callified-call-mode-ai'));
+
+    // Callified's own agent speaks — the staff member's mic is irrelevant.
+    await waitFor(() => expect(onPost).toHaveBeenCalledOnce());
+    expect(getUserMediaMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The pre-flight PROBES the microphone — it must not hold it open.
+ *
+ * Handing the opened stream on to the live-call panel looked tidier and was a
+ * real bug: React StrictMode double-mounts the panel, and the discarded first
+ * bridge stops the tracks of whatever stream it holds. A shared stream
+ * therefore left the bridge actually on screen with dead tracks — the agent
+ * could hear the customer, but was never heard back. The bridge opens its own
+ * stream instead (permission is already granted, so no second prompt).
+ */
+describe('CallifiedCallDialog — the mic probe releases its stream', () => {
+  test('the probed stream is stopped, not passed on', async () => {
+    const onPost = vi.fn(() =>
+      Promise.resolve({ callifiedLeadId: 900, callSid: 'EXsid1', bridgeTicket: 't', bridgePath: '/ws/callified-agent' }),
+    );
+    installFetch({ onPost });
+    renderDialog();
+    fireEvent.change(await screen.findByTestId('callified-call-dialog-campaign'), {
+      target: { value: '42' },
+    });
+
+    fireEvent.click(screen.getByTestId('callified-call-mode-manual'));
+    await waitFor(() => expect(onPost).toHaveBeenCalledOnce());
+
+    // Released immediately — a stream kept alive here is the one StrictMode
+    // kills out from under the live bridge.
+    await waitFor(() => expect(micTrackStop).toHaveBeenCalled());
   });
 });

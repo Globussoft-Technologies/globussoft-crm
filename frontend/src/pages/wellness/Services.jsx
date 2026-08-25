@@ -4,6 +4,7 @@ import {
   Sparkles,
   Plus,
   Package,
+  Layers,
   Activity,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
@@ -17,6 +18,7 @@ import TabBtn from './services/TabBtn';
 import CatalogTab from './services/CatalogTab';
 import PackageBuilder from './services/PackageBuilder';
 import ActiveTreatmentsTab from './services/ActiveTreatmentsTab';
+import ActivePackagesTab from './services/ActivePackagesTab';
 import ServiceDetailModal from './services/ServiceDetailModal';
 import TreatmentDetailModal from './services/TreatmentDetailModal';
 
@@ -36,9 +38,11 @@ export default function Services() {
   const [services, setServices] = useState([]);
   const [categories, setCategories] = useState([]);
   const [treatments, setTreatments] = useState([]);
+  const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [treatmentsLoading, setTreatmentsLoading] = useState(false);
+  const [packagesLoading, setPackagesLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTreatment, setSelectedTreatment] = useState(null);
   const [selectedService, setSelectedService] = useState(null);
@@ -73,15 +77,29 @@ export default function Services() {
     load();
     loadCategories();
   }, []);
+  // Customers only ever see published packages; the backend enforces that
+  // too, so a crafted request cannot pull drafts.
+  const loadPackages = () => {
+    setPackagesLoading(true);
+    fetchApi('/api/wellness/packages')
+      .then((res) => setPackages(Array.isArray(res?.packages) ? res.packages : []))
+      .catch(() => setPackages([]))
+      .finally(() => setPackagesLoading(false));
+  };
+
   useEffect(() => {
     if (tab === 'activetreatments') {
       loadTreatments();
     }
-  }, [tab]);
-  // A USER/CUSTOMER deep-linking to ?tab=packages|activetreatments has those
-  // tabs hidden — fall back to the catalog so they never see a blank page.
+    if (tab === 'activepackages' || (isUserOrCustomer && tab === 'packages')) {
+      loadPackages();
+    }
+  }, [tab, isUserOrCustomer]);
+  // A USER/CUSTOMER deep-linking to an internal tab has it hidden — fall back
+  // to the catalog so they never see a blank page. `packages` is NOT in this
+  // list any more: customers now get a read-only Packages tab of their own.
   useEffect(() => {
-    if (isUserOrCustomer && (tab === 'packages' || tab === 'activetreatments')) {
+    if (isUserOrCustomer && (tab === 'activetreatments' || tab === 'activepackages')) {
       setTab('catalog');
     }
   }, [isUserOrCustomer, tab]);
@@ -150,9 +168,15 @@ export default function Services() {
         }}
       >
         <TabBtn active={tab === 'catalog'} onClick={() => setTab('catalog')} icon={Sparkles} label="Catalog" />
-        {/* Packages + Active Treatments are internal/clinical surfaces — hidden for USER/CUSTOMER. */}
+        {/* Packages is now BOTH surfaces: the builder for staff, and a
+            read-only list of published packages for customers. */}
+        <TabBtn active={tab === 'packages'} onClick={() => setTab('packages')} icon={Package} label="Packages" />
+        {/* Active Packages (saved bundles) + Active Treatments (clinical PHI)
+            are internal surfaces — hidden for USER/CUSTOMER. They are
+            deliberately separate tabs: one is catalog config, the other is
+            per-patient clinical data. */}
         {!isUserOrCustomer && (
-          <TabBtn active={tab === 'packages'} onClick={() => setTab('packages')} icon={Package} label="Packages" />
+          <TabBtn active={tab === 'activepackages'} onClick={() => setTab('activepackages')} icon={Layers} label="Active Packages" />
         )}
         {!isUserOrCustomer && (
           <TabBtn active={tab === 'activetreatments'} onClick={() => setTab('activetreatments')} icon={Activity} label="Active Treatments" />
@@ -176,7 +200,20 @@ export default function Services() {
         />
       )}
 
-      {tab === 'packages' && !isUserOrCustomer && <PackageBuilder services={services} />}
+      {tab === 'packages' &&
+        (isUserOrCustomer ? (
+          <ActivePackagesTab packages={packages} loading={packagesLoading} readOnly />
+        ) : (
+          <PackageBuilder services={services} onSaved={loadPackages} />
+        ))}
+
+      {tab === 'activepackages' && !isUserOrCustomer && (
+        <ActivePackagesTab
+          packages={packages}
+          loading={packagesLoading}
+          onChanged={loadPackages}
+        />
+      )}
 
       {tab === 'activetreatments' && !isUserOrCustomer && (
         <ActiveTreatmentsTab

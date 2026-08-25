@@ -3581,7 +3581,7 @@ async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
 
   const itinFull = await prisma.itinerary.findUnique({
     where: { id: itineraryId },
-    select: { contactId: true, tenantId: true },
+    select: { contactId: true, tenantId: true, subBrand: true },
   });
   if (!itinFull || itinFull.tenantId !== tenantId) {
     // Defensive — should never trip since the caller already guarded.
@@ -3592,6 +3592,11 @@ async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
   // second findUnique on Contact. The first commit (9898e87) tried to
   // join via `select: { contact: { … } }` which Prisma rejected with
   // "Unknown field `contact`" — fix in 01bb911's follow-up.
+  // TMC does not use Web Check-in. Keep the fan-out code below intact for
+  // the other sub-brands; this guard comments out only TMC creation.
+  if (String(itinFull.subBrand || "").toLowerCase() === "tmc") {
+    return { created: 0, skipped: flightItems.length };
+  }
   const fallbackContact = await prisma.contact.findUnique({
     where: { id: itinFull.contactId },
     select: { name: true },

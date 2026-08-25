@@ -312,6 +312,15 @@ describe('<TravelDashboard /> — loading / fetch / error', () => {
     expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard/readiness');
   });
 
+  it('renders workload staff names as links to the Staff page', async () => {
+    installFetchMock();
+    renderPage();
+    await screen.findByText('Bob Agent');
+
+    const staffLink = screen.getByRole('link', { name: /Open staff page for Bob Agent/i });
+    expect(staffLink).toHaveAttribute('href', '/staff');
+  });
+
   it('renders the unavailable state and notifies on error', async () => {
     installFetchMock({ data: new Error('boom') });
     renderPage();
@@ -426,9 +435,9 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     const webCheckinAnchor = screen.getByText('Web check-ins').closest('a');
     expect(webCheckinAnchor).toHaveAttribute('href', '/travel/web-checkins');
 
-    // Tile-link count = 7 KPI links + 2 recent-trip links = 9 anchors total.
+    // Tile-link count = 7 KPI links + 2 recent-trip links + 1 workload staff link = 10 anchors total.
     const anchors = container.querySelectorAll('a');
-    expect(anchors.length).toBe(9);
+    expect(anchors.length).toBe(10);
   });
 });
 
@@ -507,16 +516,43 @@ describe('<TravelDashboard /> — sub-brand scoping', () => {
 });
 
 describe('<TravelDashboard /> — Refresh control', () => {
-  it('clicking Refresh re-fires the GETs (initial 2 + refresh 2 = 4 calls for managers)', async () => {
-    installFetchMock();
+  it('clicking Refresh clears the dashboard, shows loading, and re-fires the GETs', async () => {
+    let resolveRefreshDashboard;
+    let dashboardCalls = 0;
+
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/travel/dashboard' || url.startsWith('/api/travel/dashboard?')) {
+        dashboardCalls += 1;
+        if (dashboardCalls === 1) return Promise.resolve(DASHBOARD_DEFAULT);
+        return new Promise((resolve) => {
+          resolveRefreshDashboard = resolve;
+        });
+      }
+      if (url === '/api/travel/dashboard/workload' || url.startsWith('/api/travel/dashboard/workload?')) {
+        return Promise.resolve(WORKLOAD_DEFAULT);
+      }
+      if (url === '/api/travel/dashboard/readiness') {
+        return Promise.resolve(READINESS_DEFAULT);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+
     renderPage();
     await screen.findByText('47');
     // ADMIN mount = dashboard + workload + readiness.
     expect(fetchApiMock).toHaveBeenCalledTimes(3);
 
-    const refresh = screen.getByRole('button', { name: /Refresh/i });
+    const refresh = screen.getByRole('button', { name: /Refresh dashboard/i });
     fireEvent.click(refresh);
+    expect(screen.getByRole('button', { name: /Refreshing dashboard/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Refreshing dashboard/i })).toHaveTextContent(/Refreshing/i);
+    expect(screen.getByText(/Loading dashboard/i)).toBeInTheDocument();
+    expect(screen.queryByText('47')).not.toBeInTheDocument();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(6));
+
+    resolveRefreshDashboard(DASHBOARD_DEFAULT);
+    await waitFor(() => expect(screen.getByText(/Updated /i)).toBeInTheDocument());
+
     // All three endpoints re-fired with the same URLs.
     const urls = fetchApiMock.mock.calls.map((c) => c[0]);
     expect(urls.filter((u) => u === '/api/travel/dashboard')).toHaveLength(2);

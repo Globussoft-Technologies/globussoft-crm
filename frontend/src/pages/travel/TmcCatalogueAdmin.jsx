@@ -141,6 +141,7 @@ export default function TmcCatalogueAdmin() {
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const [reloadTick, setReloadTick] = useState(0);
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -260,11 +261,11 @@ export default function TmcCatalogueAdmin() {
 
   useEffect(() => {
     load({ reset: true });
-  }, [load]);
+  }, [load, reloadTick]);
 
   const reload = useCallback(() => {
-    load({ reset: true });
-  }, [load]);
+    setReloadTick((t) => t + 1);
+  }, []);
 
   const normalizedTitleSearch = titleSearch.trim().toLowerCase();
   const visibleRows = normalizedTitleSearch
@@ -887,7 +888,7 @@ export default function TmcCatalogueAdmin() {
         </button>
         <button
           type="button"
-          onClick={load}
+          onClick={reload}
           style={{ ...secondaryBtn, marginLeft: "auto" }}
           aria-label="Refresh list"
         >

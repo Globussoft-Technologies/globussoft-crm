@@ -104,11 +104,17 @@ const STAFF_ROWS = [
   { id: 4,  name: 'Inactive Aman',   email: 'aman@enhancedwellness.in',    role: 'USER',  wellnessRole: 'helper',     primaryRole: { id: 202, key: 'helper',       name: 'Helper' },       createdAt: '2026-01-04T00:00:00Z', deactivatedAt: '2026-04-01T00:00:00Z' },
 ];
 
-function renderStaff(viewerRole = 'ADMIN', overrides = {}, tenantVertical = 'wellness') {
+function renderStaff(
+  viewerRole = 'ADMIN',
+  overrides = {},
+  tenantVertical = 'wellness',
+  initialEntry = '/staff',
+  staffRows = STAFF_ROWS,
+) {
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (overrides[url] !== undefined) return Promise.resolve(overrides[url]);
-    if (url === '/api/staff') return Promise.resolve(STAFF_ROWS);
+    if (url === '/api/staff') return Promise.resolve(staffRows);
     if (url === '/api/staff/commission-profiles') return Promise.resolve([]);
     if (url.startsWith('/api/staff/revenue-goals')) return Promise.resolve([]);
     if (url === '/api/roles') return Promise.resolve(ROLES_CATALOG);
@@ -116,7 +122,7 @@ function renderStaff(viewerRole = 'ADMIN', overrides = {}, tenantVertical = 'wel
     return Promise.resolve({});
   });
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <AuthContext.Provider value={{
         user: { userId: 1, name: 'Rishu Agarwal', email: 'rishu@enhancedwellness.in', role: viewerRole },
         // vertical='wellness' is required so loadWellnessRoleTypes() fires
@@ -188,6 +194,36 @@ describe('<Staff /> — row action buttons (#618)', () => {
     expect(screen.queryByTestId('staff-edit-modal')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('staff-action-edit-2'));
     expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument();
+  });
+
+  it('expands the visible slice and scrolls a highlighted row into view even near the bottom', async () => {
+    const scrollSpy = vi.spyOn(window.Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+    const longStaffList = Array.from({ length: 20 }, (_, idx) => {
+      const id = idx + 1;
+      return {
+        id,
+        name: `Staff ${id}`,
+        email: `staff${id}@example.com`,
+        role: id === 1 ? 'ADMIN' : 'USER',
+        wellnessRole: null,
+        primaryRole: { id: id === 1 ? 100 : 102, key: id === 1 ? 'ADMIN' : 'USER', name: id === 1 ? 'Admin' : 'User' },
+        createdAt: `2026-01-${String((id % 28) + 1).padStart(2, '0')}T00:00:00Z`,
+        deactivatedAt: null,
+      };
+    });
+
+    try {
+      renderStaff('ADMIN', {}, 'travel', '/staff?highlight=20', longStaffList);
+
+      await waitFor(() => expect(screen.getByText('Staff 20')).toBeInTheDocument());
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+
+      const highlightedRow = screen.getByText('Staff 20').closest('tr');
+      expect(highlightedRow).toBeTruthy();
+      expect(highlightedRow.getAttribute('style')).toContain('inset 4px 0 0 var(--primary-color)');
+    } finally {
+      scrollSpy.mockRestore();
+    }
   });
 });
 

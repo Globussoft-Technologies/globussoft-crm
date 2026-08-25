@@ -1164,6 +1164,40 @@ html[data-theme="dark"] .travel-flight-details-box {
   border: 2px solid transparent;
   background-clip: padding-box;
 }
+
+/* Web Check-ins scrollbar matches the Trips page: visible, neutral gray,
+   and easy to grab without introducing a brand-blue accent. */
+.webcheckins-table-scroll-shell .top-scroll-sync__top,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom {
+  scrollbar-width: auto;
+  scrollbar-color: rgba(128, 128, 128, 0.72) rgba(128, 128, 128, 0.12);
+  scrollbar-gutter: stable both-edges;
+}
+
+.webcheckins-table-scroll-shell .top-scroll-sync__top::-webkit-scrollbar,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom::-webkit-scrollbar {
+  height: 18px;
+}
+
+.webcheckins-table-scroll-shell .top-scroll-sync__top::-webkit-scrollbar-track,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom::-webkit-scrollbar-track {
+  background: rgba(128, 128, 128, 0.12);
+  border-radius: 999px;
+}
+
+.webcheckins-table-scroll-shell .top-scroll-sync__top::-webkit-scrollbar-thumb,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  min-width: 64px;
+}
+
+.webcheckins-table-scroll-shell .top-scroll-sync__top::-webkit-scrollbar-thumb:hover,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+}
 /* Travel Leads fit mode: keep every column visible without a horizontal table scrollbar. */
 .leads-split-table {
   display: flex;

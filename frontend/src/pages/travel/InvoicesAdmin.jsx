@@ -1746,7 +1746,7 @@ const sortButtonStyle = {
   width: "100%", padding: "4px 8px", border: "none", borderRadius: 999,
   background: "transparent", color: "inherit", font: "inherit", cursor: "pointer", textAlign: "left",
 };
-const sortButtonActiveStyle = { color: "var(--primary-color)", background: "var(--accent-bg)" };
+const sortButtonActiveStyle = { color: "var(--primary-color)", background: "transparent" };
 const td = {
   padding: "10px 12px",
   fontSize: 14,

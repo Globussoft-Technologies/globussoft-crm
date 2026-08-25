@@ -218,6 +218,7 @@ const NotificationBell = () => {
         onClick={() => setOpen(!open)}
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
         aria-expanded={open}
+        title="Open notifications"
         style={{
           background: "none",
           border: "none",

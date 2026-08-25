@@ -19,7 +19,7 @@
 // panel backed by GET /api/travel/dashboard/workload (PRD §4.1 manager
 // view: open/overdue tasks per staff member with a per-brand split).
 
-import { useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle, BadgePercent, Calendar as CalendarIcon,
@@ -38,6 +38,9 @@ export default function TravelDashboard() {
   const { activeSubBrand } = useActiveSubBrand();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
+  const [reloadTick, setReloadTick] = useState(0);
   // Team workload (PRD §4.1 manager view, gap A9b) — MANAGER/ADMIN only;
   // the endpoint 403s for USER role so we don't even fetch for them.
   const isManager = user?.role === "ADMIN" || user?.role === "MANAGER";
@@ -46,6 +49,7 @@ export default function TravelDashboard() {
   // are wired up (Gmail, Calendar, WhatsApp, Drive, AI, Razorpay).
   const [readiness, setReadiness] = useState(null);
   const [showReadiness, setShowReadiness] = useState(false);
+  const hasDataRef = useRef(false);
 
   const loadReadiness = () => {
     fetchApi("/api/travel/dashboard/readiness")
@@ -53,19 +57,30 @@ export default function TravelDashboard() {
       .catch(() => setReadiness(null));
   };
 
-  const load = () => {
+  const load = useCallback(() => {
+    const hasExistingData = hasDataRef.current;
+    if (hasExistingData) {
+      setRefreshing(true);
+      setData(null);
+    }
     setLoading(true);
     // Mirror the sidebar sub-brand switcher: when a brand is active, scope
     // every tile to it via ?subBrand=. "All" (activeSubBrand=null) sends no
     // param so the endpoint falls back to the caller's full access set.
     const qs = activeSubBrand ? `?subBrand=${encodeURIComponent(activeSubBrand)}` : "";
     fetchApi(`/api/travel/dashboard${qs}`)
-      .then(setData)
+      .then((nextData) => {
+        setData(nextData);
+        setLastRefreshedAt(new Date());
+      })
       .catch((e) => {
         notify.error(e?.body?.error || "Failed to load dashboard");
         setData(null);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setRefreshing(false);
+        setLoading(false);
+      });
     // Workload is a secondary panel — failures degrade to "panel hidden"
     // rather than a page-level error toast.
     if (isManager) {
@@ -74,10 +89,18 @@ export default function TravelDashboard() {
         .catch(() => setWorkload(null));
     }
     loadReadiness();
-  };
+  }, [activeSubBrand, isManager, notify]);
+  const reload = useCallback(() => {
+    setReloadTick((t) => t + 1);
+  }, []);
   // Re-fetch on mount AND whenever the active sub-brand changes, so flipping
   // the switcher recomputes the KPI tiles instead of showing stale "All" data.
-  useEffect(load, [activeSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+  }, [activeSubBrand, load, reloadTick]);
+  useEffect(() => {
+    hasDataRef.current = data != null;
+  }, [data]);
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
@@ -90,9 +113,21 @@ export default function TravelDashboard() {
             {tenant?.name || "Travel Stall"} · {user?.name || user?.email}
           </p>
         </div>
-        <button type="button" onClick={load} style={refreshBtn} aria-label="Refresh dashboard">
-          <RefreshCw size={14} /> Refresh
-        </button>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+          <button
+            type="button"
+            onClick={reload}
+            style={refreshBtn}
+            aria-label={refreshing ? "Refreshing dashboard" : "Refresh dashboard"}
+            disabled={loading || refreshing}
+          >
+            <RefreshCw size={14} style={refreshing ? { animation: "spin 1s linear infinite" } : undefined} />
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+          <span style={{ fontSize: 12, color: "var(--text-secondary)", minHeight: 16 }}>
+            {lastRefreshedAt ? `Updated ${lastRefreshedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : " "}
+          </span>
+        </div>
       </div>
 
       {loading && !data ? (
@@ -148,20 +183,22 @@ export default function TravelDashboard() {
               footer={`${data.pricingRules.seasons} seasons · ${data.pricingRules.markupRules} markup rules`}
               link="/travel/pricing-rules"
             />
-            <Tile
-              icon={Ticket}
-              label="Web check-ins"
-              value={data.webCheckins?.total ?? 0}
-              accent={
-                (data.webCheckins?.missed ?? 0) > 0 ? (
-                  <span style={{ color: "var(--danger-color)", fontWeight: 600 }}>
-                    {data.webCheckins.missed} missed
-                  </span>
-                ) : null
-              }
-              footer={`${data.webCheckins?.done ?? 0} delivered · ${data.webCheckins?.pending ?? 0} pending · ${data.webCheckins?.missed ?? 0} missed`}
-              link="/travel/web-checkins"
-            />
+            {activeSubBrand !== "tmc" && (
+              <Tile
+                icon={Ticket}
+                label="Web check-ins"
+                value={data.webCheckins?.total ?? 0}
+                accent={
+                  (data.webCheckins?.missed ?? 0) > 0 ? (
+                    <span style={{ color: "var(--danger-color)", fontWeight: 600 }}>
+                      {data.webCheckins.missed} missed
+                    </span>
+                  ) : null
+                }
+                footer={`${data.webCheckins?.done ?? 0} delivered · ${data.webCheckins?.pending ?? 0} pending · ${data.webCheckins?.missed ?? 0} missed`}
+                link="/travel/web-checkins"
+              />
+            )}
             <Tile
               icon={ShieldCheck}
               label="System Readiness"
@@ -244,7 +281,20 @@ export default function TravelDashboard() {
                   <tbody>
                     {workload.perUser.map((r) => (
                       <tr key={r.userId} style={trStyle}>
-                        <td style={td}>{r.name || r.email || `User #${r.userId}`}</td>
+                        <td style={td}>
+                          <Link
+                            to={`/staff?highlight=${encodeURIComponent(String(r.userId))}`}
+                            style={{
+                              color: "var(--primary-color)",
+                              fontWeight: 600,
+                              textDecoration: "none",
+                            }}
+                            title="Open Staff page"
+                            aria-label={`Open staff page for ${r.name || r.email || `User #${r.userId}`}`}
+                          >
+                            {r.name || r.email || `User #${r.userId}`}
+                          </Link>
+                        </td>
                         <td style={td}>{r.role || "—"}</td>
                         <td style={td}>{r.openTasks}</td>
                         <td style={td}>

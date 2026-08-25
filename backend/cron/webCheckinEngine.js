@@ -80,8 +80,9 @@ async function runWebCheckinTick(now = new Date()) {
 
   for (const row of rows) {
     const itin = itinById[row.itineraryId];
-    // Gate: parent itinerary must be PAID + non-Visa-Sure.
-    if (!itin || !PAID_STATUSES.includes(itin.status) || itin.subBrand === "visasure") { summary.skipped += 1; continue; }
+    // Gate: parent itinerary must be PAID + non-Visa-Sure. TMC does not use
+    // Web Check-in; retain the row but comment out reminder delivery.
+    if (!itin || !PAID_STATUSES.includes(itin.status) || itin.subBrand === "visasure" || itin.subBrand === "tmc") { summary.skipped += 1; continue; }
 
     const hoursToGo = (new Date(row.departureAt).getTime() - now.getTime()) / 3600000;
     const milestone = dueMilestone(hoursToGo);

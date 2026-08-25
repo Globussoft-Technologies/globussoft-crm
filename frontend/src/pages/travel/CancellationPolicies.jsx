@@ -1043,7 +1043,7 @@ const sortButtonStyle = {
   background: "transparent", color: "inherit", font: "inherit", textTransform: "inherit",
   letterSpacing: "inherit", cursor: "pointer", textAlign: "left",
 };
-const sortButtonActiveStyle = { color: "var(--primary-color)", background: "var(--accent-bg)" };
+const sortButtonActiveStyle = { color: "var(--primary-color)", background: "transparent" };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const empty = {
   padding: 32,

@@ -46,6 +46,7 @@ async function runWebCheckinSchedulerForTenant(tenantId) {
       passengerName: true,
       departureAt: true,
       assignedAgentId: true,
+      itineraryId: true,
     },
     take: 500,
   });
@@ -56,7 +57,19 @@ async function runWebCheckinSchedulerForTenant(tenantId) {
 
   let notifiedUsers = 0;
 
+  const itineraryIds = [...new Set(rows.map((row) => row.itineraryId).filter(Boolean))];
+  const itineraries = itineraryIds.length
+    ? await prisma.itinerary.findMany({
+        where: { id: { in: itineraryIds } },
+        select: { id: true, subBrand: true },
+      })
+    : [];
+  const itineraryById = Object.fromEntries(itineraries.map((itinerary) => [itinerary.id, itinerary]));
+
   for (const row of rows) {
+    // TMC does not use Web Check-in. Existing rows remain untouched, but
+    // reminder notifications are commented out for this sub-brand.
+    if (itineraryById[row.itineraryId]?.subBrand === "tmc") continue;
     const userIds = await resolveNotifyUserIds(tenantId, row.assignedAgentId);
     if (userIds.length === 0) continue;
 

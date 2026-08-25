@@ -1612,7 +1612,7 @@ const sortButtonStyle = {
 
 const sortButtonActiveStyle = {
   color: 'var(--primary-color)',
-  background: 'var(--accent-bg)',
+  background: 'transparent',
 };
 
 const td = {

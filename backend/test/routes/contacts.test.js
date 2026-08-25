@@ -97,6 +97,17 @@ Module._cache[eventBusPath] = {
   },
 };
 
+const notifyMock = vi.fn().mockResolvedValue(undefined);
+const notificationServicePath = requireCJS.resolve('../../lib/notificationService.js');
+Module._cache[notificationServicePath] = {
+  id: notificationServicePath,
+  filename: notificationServicePath,
+  loaded: true,
+  exports: {
+    notify: notifyMock,
+  },
+};
+
 const notifyAdminsOfNewLeadMock = vi.fn().mockResolvedValue([]);
 const leadNotificationsPath = requireCJS.resolve('../../lib/leadNotifications.js');
 Module._cache[leadNotificationsPath] = {
@@ -199,6 +210,9 @@ prisma.contact.findUnique = vi.fn();
 prisma.contact.create = vi.fn();
 prisma.contact.update = vi.fn();
 prisma.contact.updateMany = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findFirst = vi.fn().mockResolvedValue(null);
+prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 prisma.wallet = prisma.wallet || {};
@@ -256,12 +270,12 @@ const SAMPLE_CONTACT = {
  * and omits the stamp middleware so the real verifyToken sees no Authorization
  * header).
  */
-function makeApp({ tenantId = TENANT_ID, userId = USER_ID, role = 'ADMIN', skipAuth = false } = {}) {
+function makeApp({ tenantId = TENANT_ID, userId = USER_ID, role = 'ADMIN', vertical = 'generic', name = 'Admin User', email = 'admin@example.com', skipAuth = false } = {}) {
   const app = express();
   app.use(express.json());
   if (!skipAuth) {
     app.use((req, _res, next) => {
-      req.user = { userId, tenantId, role };
+      req.user = { userId, tenantId, role, vertical, name, email };
       next();
     });
   }
@@ -276,6 +290,8 @@ beforeEach(() => {
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
   prisma.contact.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.user.findFirst.mockReset().mockResolvedValue(null);
+  prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
@@ -289,6 +305,7 @@ beforeEach(() => {
   writeAuditMock.mockReset().mockResolvedValue(undefined);
   diffFieldsMock.mockReset().mockReturnValue({});
   emitEventMock.mockReset();
+  notifyMock.mockReset().mockResolvedValue(undefined);
   notifyAdminsOfNewLeadMock.mockReset().mockResolvedValue([]);
   findDuplicateMock.mockReset().mockResolvedValue(null);
   autoDialEnqueueMock.mockReset();
@@ -330,6 +347,155 @@ describe('GET /api/contacts — list', () => {
     // USER role MUST win even when caller passes ?assignedToId=999.
     expect(args.where.assignedToId).toBe(42);
   });
+
+  test('travel MANAGER is scoped to their own assigned contacts — only travel ADMIN can view all', async () => {
+    const res = await request(makeApp({ role: 'MANAGER', userId: 42, vertical: 'travel' }))
+      .get('/api/contacts?assignedToId=999');
+
+    expect(res.status).toBe(200);
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args.where.assignedToId).toBe(42);
+  });
+
+  test('non-travel MANAGER keeps the existing full-tenant visibility', async () => {
+    const res = await request(makeApp({ role: 'MANAGER', userId: 42, vertical: 'generic' }))
+      .get('/api/contacts');
+
+    expect(res.status).toBe(200);
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args.where.assignedToId).toBeUndefined();
+  });
+});
+
+describe('PUT /api/contacts/:id/assign - travel agent reassignment', () => {
+  test('travel agent can reassign their own lead to a non-admin staff member and notifies only that staff member', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      assignedToId: 42,
+      subBrand: 'tmc',
+      name: 'Jiya Sharma',
+    });
+    prisma.user.findFirst.mockResolvedValueOnce({
+      id: 8,
+      role: 'USER',
+      userType: 'STAFF',
+    });
+    prisma.user.findUnique.mockResolvedValueOnce({
+      role: 'USER',
+      subBrandAccess: null,
+    });
+    prisma.contact.update.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      assignedToId: 8,
+      assignedTo: { id: 8, name: 'Sahil Agent', email: 'sahil@travel.test' },
+    });
+
+    const res = await request(makeApp({
+      role: 'MANAGER',
+      userId: 42,
+      vertical: 'travel',
+      name: 'TMC Operator',
+      email: 'operator@travel.test',
+    }))
+      .put('/api/contacts/9001/assign')
+      .send({ assignedToId: '8' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 9001 },
+      data: { assignedToId: 8 },
+      include: { assignedTo: { select: { id: true, name: true, email: true } } },
+    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 8,
+      tenantId: TENANT_ID,
+      title: 'New lead assigned',
+      type: 'info',
+      category: 'lead',
+      entityType: 'lead',
+      entityId: 9001,
+      link: '/contacts/9001',
+    }));
+  });
+
+  test('travel agent cannot assign a lead to an admin', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      assignedToId: 42,
+      subBrand: null,
+    });
+    prisma.user.findFirst.mockResolvedValueOnce({
+      id: 1,
+      role: 'ADMIN',
+      userType: 'STAFF',
+    });
+
+    const res = await request(makeApp({
+      role: 'MANAGER',
+      userId: 42,
+      vertical: 'travel',
+      name: 'TMC Operator',
+      email: 'operator@travel.test',
+    }))
+      .put('/api/contacts/9001/assign')
+      .send({ assignedToId: '1' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: "Travel agents can't assign leads to admins",
+      code: 'ASSIGNEE_ADMIN_FORBIDDEN',
+    });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  test('travel agent cannot reassign someone else\'s lead', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      assignedToId: 99,
+      subBrand: 'tmc',
+    });
+
+    const res = await request(makeApp({
+      role: 'MANAGER',
+      userId: 42,
+      vertical: 'travel',
+      name: 'TMC Operator',
+      email: 'operator@travel.test',
+    }))
+      .put('/api/contacts/9001/assign')
+      .send({ assignedToId: '8' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Contact not found' });
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  test('non-travel manager stays forbidden on assign', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      assignedToId: 42,
+    });
+
+    const res = await request(makeApp({
+      role: 'MANAGER',
+      userId: 42,
+      vertical: 'generic',
+    }))
+      .put('/api/contacts/9001/assign')
+      .send({ assignedToId: '8' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: "You don't have permission to perform this action. Contact your administrator.",
+      code: 'RBAC_DENIED',
+    });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -354,6 +520,15 @@ describe('GET /api/contacts/:id — read', () => {
     prisma.contact.findFirst.mockResolvedValueOnce(null);
 
     const res = await request(makeApp()).get('/api/contacts/424242');
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Contact not found' });
+  });
+
+  test('travel MANAGER gets 404 for an unassigned contact', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({ ...SAMPLE_CONTACT, assignedToId: 99 });
+
+    const res = await request(makeApp({ role: 'MANAGER', userId: 42, vertical: 'travel' })).get('/api/contacts/9001');
 
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: 'Contact not found' });

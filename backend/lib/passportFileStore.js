@@ -63,12 +63,14 @@ function diskSig(name, exp) {
 }
 
 // Build a short-lived, signed URL for a disk-backed passport scan. The
-// returned path is gated by the /uploads/passport-ocr middleware in server.js.
+// returned path is gated by the /api/uploads/passport-ocr middleware in
+// server.js so production demo traffic stays under the canonical /api/*
+// reverse-proxy path instead of falling through the SPA's /uploads 404.
 function signDiskUrl(name, ttlSec = DEFAULT_VIEW_TTL_SEC) {
   const safe = path.basename(name || "");
   if (!safe) return null;
   const exp = Math.floor(Date.now() / 1000) + Math.max(30, ttlSec);
-  return `/uploads/passport-ocr/${encodeURIComponent(safe)}?t=${exp}.${diskSig(safe, exp)}`;
+  return `/api/uploads/passport-ocr/${encodeURIComponent(safe)}?t=${exp}.${diskSig(safe, exp)}`;
 }
 
 // Validate a `?t=<exp>.<sig>` token for a disk-backed passport scan.

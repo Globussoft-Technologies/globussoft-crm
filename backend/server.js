@@ -1886,7 +1886,7 @@ const gatePassportScans = (req, res, next) => {
         "Forbidden — open this passport image from the passport screen.",
     });
 };
-app.use("/uploads/passport-ocr", gatePassportScans);
+app.use("/api/uploads/passport-ocr", gatePassportScans);
 app.use("/api/uploads", require("./routes/file-uploads"));
 // Web-form attachments: force download + nosniff so a forged HTML/JS file
 // cannot execute in the user's browser if the upload mimetype was spoofed.

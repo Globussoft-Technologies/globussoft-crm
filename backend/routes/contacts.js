@@ -1,5 +1,5 @@
 const express = require('express');
-const { verifyToken, verifyRole } = require('../middleware/auth');
+const { verifyToken, verifyRole, RBAC_DENIED_MESSAGE, RBAC_DENIED_CODE } = require('../middleware/auth');
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
@@ -257,7 +257,21 @@ function validateContactInput(body, { isUpdate = false } = {}) {
 }
 
 function canViewAllLeads(req) {
-  return !!(req && req.user && ['ADMIN', 'MANAGER'].includes(req.user.role));
+  if (!req || !req.user) return false;
+  const vertical = req.user.vertical || 'generic';
+  // Travel keeps the stricter rule: only ADMIN can see the full tenant.
+  // Other verticals preserve the pre-existing ADMIN/MANAGER behavior.
+  if (vertical === 'travel') {
+    return req.user.role === 'ADMIN';
+  }
+  return ['ADMIN', 'MANAGER'].includes(req.user.role);
+}
+
+function canReassignLead(req, contact) {
+  if (!req || !req.user || !contact) return false;
+  if (req.user.role === 'ADMIN') return true;
+  const vertical = req.user.vertical || 'generic';
+  return vertical === 'travel' && Number(contact.assignedToId) === Number(req.user.userId);
 }
 
 // Freshsales-style "Filter by" panel — field allowlist. Each entry maps a
@@ -984,11 +998,11 @@ router.get('/', async (req, res) => {
     }
     // #167: hide soft-deleted rows by default; admin views can opt in.
     applyDeletedAtFilter(where, req.query.includeDeleted === 'true');
-    // #588: USER role sees only contacts assigned to them; ADMIN/MANAGER see
-    // full tenant. Mirrors the deals-list scoping. An explicit ?assignedToId
-    // from a USER is overridden by their own userId — a sales rep cannot
-    // probe a colleague's book of business by URL. Total Contacts KPI on
-    // /dashboard now reflects own-book size for sales reps.
+    // #588: non-admin callers see only contacts assigned to them. Travel
+    // tightens this further so only ADMIN can view the full tenant; an
+    // explicit ?assignedToId from a restricted caller is overridden by their
+    // own userId — a rep cannot probe a colleague's book of business by URL.
+    // Total Contacts KPI on /dashboard now reflects own-book size for sales reps.
     if (!canViewAllLeads(req)) where.assignedToId = req.user.userId;
     // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
     if (req.query.count === '1') {
@@ -2112,23 +2126,52 @@ router.post('/import-csv', async (req, res) => {
   }
 });
 
-// Assign agent to a contact — restricted to ADMIN only.
-router.put('/:id/assign', verifyRole(['ADMIN']), async (req, res) => {
+// Assign agent to a contact.
+// - ADMIN: can reassign any lead in the tenant.
+// - travel non-admins: can reassign only the lead assigned to them.
+// The dropdowns on the travel pages are filtered to non-admin staff, and
+// this route keeps the validation in place so a forged request can't assign
+// a lead to an admin.
+router.put('/:id/assign', async (req, res) => {
   try {
     const { assignedToId } = req.body;
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    if (!canReassignLead(req, existing)) {
+      if ((req.user?.vertical || 'generic') !== 'travel' || req.user?.role === 'ADMIN') {
+        return res.status(403).json({ error: RBAC_DENIED_MESSAGE, code: RBAC_DENIED_CODE });
+      }
+      return res.status(404).json({ error: 'Contact not found' });
+    }
+    const nextAssignedToId = assignedToId ? parseInt(assignedToId, 10) : null;
+    if (assignedToId && !Number.isInteger(nextAssignedToId)) {
+      return res.status(400).json({ error: 'Invalid staff member', code: 'INVALID_ASSIGNEE' });
+    }
+    const targetUser = nextAssignedToId !== null
+      ? await prisma.user.findFirst({
+          where: { id: nextAssignedToId, tenantId: req.user.tenantId },
+          select: { id: true, role: true, userType: true },
+        })
+      : null;
+    if (nextAssignedToId !== null && !targetUser) {
+      return res.status(404).json({ error: 'Staff member not found', code: 'ASSIGNEE_NOT_FOUND' });
+    }
+    if ((req.user?.vertical || 'generic') === 'travel' && req.user?.role !== 'ADMIN' && targetUser?.role === 'ADMIN') {
+      return res.status(403).json({
+        error: "Travel agents can't assign leads to admins",
+        code: 'ASSIGNEE_ADMIN_FORBIDDEN',
+      });
+    }
     // Travel security guard — a brand-tagged lead can only be assigned to staff
     // who have access to that sub-brand. Contacts with no subBrand (generic /
     // wellness) skip this entirely, so their behaviour is unchanged.
-    if (existing.subBrand && assignedToId) {
+    if (existing.subBrand && nextAssignedToId) {
       const { getSubBrandAccessSet, canAccessSubBrand } = require('../middleware/travelGuards');
-      const allowed = await getSubBrandAccessSet(parseInt(assignedToId));
+      const allowed = await getSubBrandAccessSet(nextAssignedToId);
       if (!canAccessSubBrand(allowed, existing.subBrand)) {
         return res.status(403).json({ error: "That staff member doesn't have access to this lead's sub-brand", code: 'SUB_BRAND_ASSIGN_DENIED' });
       }
     }
-    const nextAssignedToId = assignedToId ? parseInt(assignedToId) : null;
     const contact = await prisma.contact.update({
       where: { id: existing.id },
       data: { assignedToId: nextAssignedToId },

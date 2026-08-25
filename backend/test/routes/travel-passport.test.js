@@ -804,7 +804,7 @@ describe('GET /api/travel/passport/.../view-url', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.url).toMatch(/^\/uploads\/passport-ocr\/abc\.jpg\?t=/);
+    expect(res.body.url).toMatch(/^\/api\/uploads\/passport-ocr\/abc\.jpg\?t=/);
     expect(res.body.expiresInSeconds).toBe(300);
   });
 

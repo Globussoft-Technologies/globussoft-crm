@@ -1,21 +1,17 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useContext } from "react";
 import {
   Mail,
-  Phone,
   ArrowRight,
   User,
   Send,
-  Clock,
-  Play,
   Calendar,
-  MessageSquare,
-  MessageCircle,
   X,
-  PhoneCall,
   Paperclip,
   Sparkles,
   Lightbulb,
 } from "lucide-react";
+import MultiSelectDropdown from "../components/MultiSelectDropdown";
+import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 
@@ -61,22 +57,156 @@ function extractPagination(payload, fallbackPage, fallbackLimit, rows) {
   };
 }
 
+const URL_REGEX = /(https?:\/\/[^\s<>"')\]]+)/gi;
+
+function renderTextWithLinks(text) {
+  const input = String(text ?? "");
+  if (!input) return input;
+
+  const linkRegex = new RegExp(URL_REGEX.source, URL_REGEX.flags);
+  const nodes = [];
+  let lastIndex = 0;
+
+  for (const match of input.matchAll(linkRegex)) {
+    const url = match[0];
+    const index = match.index ?? 0;
+
+    if (index > lastIndex) {
+      nodes.push(input.slice(lastIndex, index));
+    }
+
+    nodes.push(
+      <a
+        key={`${index}-${url}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          color: "var(--accent-color)",
+          textDecoration: "underline",
+          wordBreak: "break-word",
+        }}
+      >
+        {url}
+      </a>,
+    );
+
+    lastIndex = index + url.length;
+  }
+
+  if (nodes.length === 0) return input;
+  if (lastIndex < input.length) {
+    nodes.push(input.slice(lastIndex));
+  }
+
+  return nodes;
+}
+
+const COMPOSE_TONE_OPTIONS = [
+  { value: "professional", label: "Professional" },
+  { value: "friendly", label: "Friendly" },
+  { value: "formal", label: "Formal" },
+  { value: "casual", label: "Casual" },
+];
+
+function getRecipientQuery(rawValue) {
+  const text = String(rawValue ?? "");
+  const commaIndex = text.lastIndexOf(",");
+  return (commaIndex >= 0 ? text.slice(commaIndex + 1) : text).trim();
+}
+
+function replaceRecipientQuery(rawValue, selectedEmail) {
+  const text = String(rawValue ?? "");
+  const commaIndex = text.lastIndexOf(",");
+  if (commaIndex < 0) return selectedEmail;
+
+  const prefix = text.slice(0, commaIndex + 1).trimEnd();
+  return `${prefix} ${selectedEmail}`;
+}
+
+function buildFallbackSubject(toValue, bodyValue, tone) {
+  const body = String(bodyValue ?? "").trim();
+  if (body) {
+    const firstLine = body
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    if (firstLine) {
+      return firstLine.slice(0, 72);
+    }
+  }
+
+  const recipients = String(toValue ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (recipients.length > 0) {
+    return `Following up with ${recipients[0]}`;
+  }
+
+  if (tone === "formal") return "Formal follow up";
+  if (tone === "casual") return "Quick follow up";
+  if (tone === "friendly") return "Friendly follow up";
+  return "Following up";
+}
+
+function buildMeetingActivityDescription({ date, time, agenda, staffNames = [], recipientLabel }) {
+  const parts = [
+    `Scheduled Meeting for ${date} at ${time}.`,
+    recipientLabel ? `Contact: ${recipientLabel}.` : null,
+    staffNames.length > 0 ? `Assigned staff: ${staffNames.join(", ")}.` : null,
+    agenda ? `Agenda: ${agenda}` : null,
+  ].filter(Boolean);
+  return parts.join(" ");
+}
+
+function buildContactMeetingEmail({ recipientLabel, date, time, agenda, staffNames = [] }) {
+  return [
+    `Hello ${recipientLabel},`,
+    "",
+    `Your meeting has been scheduled for ${date} at ${time}.`,
+    staffNames.length > 0 ? `Assigned staff: ${staffNames.join(", ")}.` : null,
+    agenda ? `Agenda: ${agenda}` : null,
+    "",
+    "Thank you.",
+  ].filter(Boolean).join("\n");
+}
+
+function buildStaffMeetingEmail({ staffName, recipientLabel, date, time, agenda }) {
+  return [
+    `Hello ${staffName},`,
+    "",
+    `You have been assigned to a meeting with ${recipientLabel} on ${date} at ${time}.`,
+    agenda ? `Agenda: ${agenda}` : null,
+    "",
+    "Please review the details and join on time.",
+  ].filter(Boolean).join("\n");
+}
+
+function buildStaffMeetingNotification({ recipientLabel, date, time, agenda }) {
+  return [
+    `You have been assigned to a meeting with ${recipientLabel} on ${date} at ${time}.`,
+    agenda ? `Agenda: ${agenda}` : null,
+  ].filter(Boolean).join(" ");
+}
+
+function formatStaffOptionLabel(staff) {
+  const name = staff?.name?.trim() || staff?.email?.trim() || `Staff ${staff?.id}`;
+  return staff?.email ? `${name} — ${staff.email}` : name;
+}
+
 export default function Inbox() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const canAssignMeetingStaff = user?.role === "ADMIN";
   const [emails, setEmails] = useState([]);
-  const [calls, setCalls] = useState([]);
-  const [smsMessages, setSmsMessages] = useState([]);
-  const [waMessages, setWaMessages] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [patients, setPatients] = useState([]);
+  const [staffMembers, setStaffMembers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("emails");
+  const [staffLoading, setStaffLoading] = useState(false);
 
-  // Compose modal state
   const [showCompose, setShowCompose] = useState(false);
-  // #623 — cc / bcc default empty + collapsed; toggle reveals the inputs.
-  // Mirrors Gmail / Outlook behaviour where Cc/Bcc are an opt-in surface
-  // rather than always-visible chrome.
   const [composeData, setComposeData] = useState({
     to: "",
     cc: "",
@@ -84,50 +214,20 @@ export default function Inbox() {
     subject: "",
     body: "",
   });
+  const [composeTone, setComposeTone] = useState("professional");
   const [showCcBcc, setShowCcBcc] = useState(false);
-  // Custom themed autocomplete for the To: field. The native <datalist> dropdown
-  // can't be styled (renders browser-default white in dark mode) and escaped
-  // the modal's stacking context, hanging off the right edge of the viewport.
-  const [showToDropdown, setShowToDropdown] = useState(false);
-  // Compose attachments: File objects collected from the paperclip picker.
-  // Posted as multipart "attachments[]" when present; the backend caps at
-  // 5 files / 10 MB each (see communications.js composeAttachmentUpload).
+  const [showRecipientSuggestions, setShowRecipientSuggestions] = useState(false);
+  const [showSubjectSuggestions, setShowSubjectSuggestions] = useState(false);
+  const [composeSubjectSuggestions, setComposeSubjectSuggestions] = useState([]);
+  const [draftingEmail, setDraftingEmail] = useState(false);
+  const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [composeAttachments, setComposeAttachments] = useState([]);
   const composeFileInputRef = useRef(null);
   const MAX_ATTACHMENTS = 5;
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
-  // #624 — Sent folder UI: a sub-tab on the Emails tab toggles the
-  // backend folder filter (?folder=sent | ?folder=inbox | omitted=all).
-  const [emailFolder, setEmailFolder] = useState("all"); // 'all' | 'inbox' | 'sent'
+  const [emailFolder, setEmailFolder] = useState("all");
   const [emailPagination, setEmailPagination] = useState(() => ({
-    page: 0,
-    limit: getInboxPageSize(),
-    total: 0,
-    pages: 0,
-    hasMore: true,
-    loading: false,
-    loadingMore: false,
-  }));
-  const [callPagination, setCallPagination] = useState(() => ({
-    page: 0,
-    limit: getInboxPageSize(),
-    total: 0,
-    pages: 0,
-    hasMore: true,
-    loading: false,
-    loadingMore: false,
-  }));
-  const [smsPagination, setSmsPagination] = useState(() => ({
-    page: 0,
-    limit: getInboxPageSize(),
-    total: 0,
-    pages: 0,
-    hasMore: true,
-    loading: false,
-    loadingMore: false,
-  }));
-  const [waPagination, setWaPagination] = useState(() => ({
     page: 0,
     limit: getInboxPageSize(),
     total: 0,
@@ -138,353 +238,259 @@ export default function Inbox() {
   }));
   const inboxScrollRef = useRef(null);
   const loadMoreLockRef = useRef(false);
+  const emailPaginationRef = useRef(emailPagination);
 
-  // SMS Compose modal state
-  const [showComposeSms, setShowComposeSms] = useState(false);
-  const [composeSmsData, setComposeSmsData] = useState({ to: "", body: "" });
-
-  // #594 — WhatsApp Compose modal state. Mirrors the SMS composer (phone +
-  // body) but POSTs to /api/whatsapp/send. Pre-fix the WhatsApp tab could
-  // only render inbound threads — there was no affordance to start a new
-  // conversation.
-  const [showComposeWa, setShowComposeWa] = useState(false);
-  const [composeWaData, setComposeWaData] = useState({ to: "", body: "" });
-  const [waSending, setWaSending] = useState(false);
-
-  // Meeting modal state
   const [showMeet, setShowMeet] = useState(false);
   const [meetData, setMeetData] = useState({
     contactId: "",
     date: "",
     time: "",
     description: "",
+    staffIds: [],
   });
 
-  // #459: dialer modal — opened by the header "Call Dialer" button.
-  // Mirrors the click-to-call helper in components/Softphone.jsx but kept
-  // local here so the inbox stays self-contained and doesn't require the
-  // global softphone bar to be mounted.
-  const [showDialer, setShowDialer] = useState(false);
-  const [dialerData, setDialerData] = useState({
-    contactId: "",
-    toNumber: "",
-    notes: "",
-  });
-  const [dialing, setDialing] = useState(false);
+  const [detail, setDetail] = useState(null);
 
-  // #460: row-detail modal. Single slot keyed by ({ kind, item }) so the
-  // same component renders email / call / sms / whatsapp details with a
-  // shared close-on-backdrop / close-on-X behaviour.
-  const [detail, setDetail] = useState(null); // { kind: 'email'|'call'|'sms'|'wa', item }
-
-  // Call dialer modal state
-  const [showCallDial, setShowCallDial] = useState(false);
-  const [callDialData, setCallDialData] = useState({
-    contactId: "",
-    notes: "",
-  });
-
-  // Email detail view state (PR #511 — separate modal pattern; coexists with
-  // the shared `detail` modal for sms/wa/call. Blocker #7 in the review;
-  // intentional carry-over for v3.4.13 cleanup.)
-  // PR #511 #7: was a second modal pattern competing with `detail` for the
-  // email tab specifically. Consolidated into the unified `detail` modal
-  // above (the email branch now ports the avatar + bigger-subject layout
-  // from the old selectedEmail modal). Email rows now setDetail({kind:'email',
-  // item}) like every other channel.
-
-  // #253: track which call recording is currently expanded into a player.
-  // playerErrors keyed by call.id so a single broken URL doesn't poison
-  // all the other rows.
-  const [playingCallId, setPlayingCallId] = useState(null);
-  const [playerErrors, setPlayerErrors] = useState({});
-
-  // #624 — re-fetch emails when the folder sub-tab changes so the Sent
-  // folder query lands the OUTBOUND-only set, the Inbox the INBOUND-only
-  // set, and All keeps the original combined behaviour.
   const inboxPath =
     emailFolder === "all"
       ? "/api/communications/inbox"
       : `/api/communications/inbox?folder=${emailFolder}`;
+  const inboxPathRef = useRef(inboxPath);
 
   const didInitialLoadRef = useRef(false);
+  useEffect(() => {
+    emailPaginationRef.current = emailPagination;
+  }, [emailPagination]);
 
-  const loadEmailsPage = async ({ page = 1, reset = false } = {}) => {
-    if ((page > 1 && !emailPagination.hasMore) || emailPagination.loading || emailPagination.loadingMore) return;
+  useEffect(() => {
+    inboxPathRef.current = inboxPath;
+  }, [inboxPath]);
+
+  const loadEmailsPage = useCallback(async ({ page = 1, reset = false } = {}) => {
+    const currentPagination = emailPaginationRef.current;
+    const currentInboxPath = inboxPathRef.current;
+
+    if (
+      (page > 1 && !currentPagination.hasMore) ||
+      currentPagination.loading ||
+      currentPagination.loadingMore
+    ) {
+      return [];
+    }
+
     setEmailPagination((prev) => ({
       ...prev,
       loading: reset || page === 1,
       loadingMore: !reset && page > 1,
     }));
-    const pageSize = emailPagination.limit;
-    const pageUrl = page > 1
-      ? `${inboxPath}${inboxPath.includes("?") ? "&" : "?"}page=${page}&limit=${pageSize}`
-      : inboxPath;
-    const data = await fetchApi(pageUrl);
-    const rows = extractPagedRows(data, "emails");
-    const pagination = extractPagination(data, page, pageSize, rows);
-    setEmails((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
-    setEmailPagination((prev) => ({
-      ...prev,
-      ...pagination,
-      loading: false,
-      loadingMore: false,
-    }));
-    return rows;
-  };
 
-  const loadCallsPage = async ({ page = 1, reset = false } = {}) => {
-    if ((page > 1 && !callPagination.hasMore) || callPagination.loading || callPagination.loadingMore) return;
-    setCallPagination((prev) => ({
-      ...prev,
-      loading: reset || page === 1,
-      loadingMore: !reset && page > 1,
-    }));
-    const pageSize = callPagination.limit;
-    const pageUrl = page > 1
-      ? `/api/communications/calls?page=${page}&limit=${pageSize}`
-      : '/api/communications/calls';
-    const data = await fetchApi(pageUrl);
-    const rows = extractPagedRows(data, "calls");
-    const pagination = extractPagination(data, page, pageSize, rows);
-    setCalls((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
-    setCallPagination((prev) => ({
-      ...prev,
-      ...pagination,
-      loading: false,
-      loadingMore: false,
-    }));
-    return rows;
-  };
+    const pageSize = currentPagination.limit;
+    const pageUrl =
+      page > 1
+        ? `${currentInboxPath}${currentInboxPath.includes("?") ? "&" : "?"}page=${page}&limit=${pageSize}`
+        : currentInboxPath;
 
-  const loadSmsPage = async ({ page = 1, reset = false } = {}) => {
-    if ((page > 1 && !smsPagination.hasMore) || smsPagination.loading || smsPagination.loadingMore) return;
-    setSmsPagination((prev) => ({
-      ...prev,
-      loading: reset || page === 1,
-      loadingMore: !reset && page > 1,
-    }));
-    const pageSize = smsPagination.limit;
-    const pageUrl = page > 1
-      ? `/api/sms/messages?page=${page}&limit=${pageSize}`
-      : '/api/sms/messages';
-    const data = await fetchApi(pageUrl, { silent: true })
-      .catch(() => ({ messages: [], pagination: { page, limit: pageSize, total: 0, hasMore: false } }));
-    const rows = extractPagedRows(data, "messages");
-    const pagination = extractPagination(data, page, pageSize, rows);
-    setSmsMessages((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
-    setSmsPagination((prev) => ({
-      ...prev,
-      ...pagination,
-      loading: false,
-      loadingMore: false,
-    }));
-    return rows;
-  };
+    try {
+      const data = await fetchApi(pageUrl);
+      const rows = extractPagedRows(data, "emails");
+      const pagination = extractPagination(data, page, pageSize, rows);
 
-  const loadWaPage = async ({ page = 1, reset = false } = {}) => {
-    if ((page > 1 && !waPagination.hasMore) || waPagination.loading || waPagination.loadingMore) return;
-    setWaPagination((prev) => ({
-      ...prev,
-      loading: reset || page === 1,
-      loadingMore: !reset && page > 1,
-    }));
-    const pageSize = waPagination.limit;
-    const pageUrl = page > 1
-      ? `/api/whatsapp/messages?page=${page}&limit=${pageSize}`
-      : '/api/whatsapp/messages';
-    const data = await fetchApi(pageUrl, { silent: true })
-      .catch(() => ({ messages: [], pagination: { page, limit: pageSize, total: 0, hasMore: false } }));
-    const rows = extractPagedRows(data, "messages");
-    const pagination = extractPagination(data, page, pageSize, rows);
-    setWaMessages((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
-    setWaPagination((prev) => ({
-      ...prev,
-      ...pagination,
-      loading: false,
-      loadingMore: false,
-    }));
-    return rows;
-  };
+      setEmails((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
+      setEmailPagination((prev) => ({
+        ...prev,
+        ...pagination,
+      }));
+
+      return rows;
+    } catch (err) {
+      console.error(err);
+      return [];
+    } finally {
+      setEmailPagination((prev) => ({
+        ...prev,
+        loading: false,
+        loadingMore: false,
+      }));
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     loadMoreLockRef.current = false;
+
     const bootstrap = async () => {
       try {
         setLoading(true);
-        const [emailRows, callRows, smsRows, waRows, contactData, patientData] = await Promise.all([
+        if (canAssignMeetingStaff) setStaffLoading(true);
+        const [emailRows, contactData, patientData, staffData] = await Promise.all([
           loadEmailsPage({ page: 1, reset: true }),
-          loadCallsPage({ page: 1, reset: true }),
-          loadSmsPage({ page: 1, reset: true }),
-          loadWaPage({ page: 1, reset: true }),
           fetchApi("/api/contacts"),
           fetchApi("/api/wellness/patients", { silent: true }).catch(() => ({ patients: [] })),
+          canAssignMeetingStaff
+            ? fetchApi("/api/staff?fields=summary", { silent: true }).catch(() => [])
+            : Promise.resolve([]),
         ]);
+
         if (cancelled) return;
         setEmails(Array.isArray(emailRows) ? emailRows : []);
-        setCalls(Array.isArray(callRows) ? callRows : []);
-        setSmsMessages(Array.isArray(smsRows) ? smsRows : []);
-        setWaMessages(Array.isArray(waRows) ? waRows : []);
         setContacts(Array.isArray(contactData) ? contactData : []);
         const patientList = patientData?.patients || patientData;
         setPatients(Array.isArray(patientList) ? patientList : []);
+        setStaffMembers(Array.isArray(staffData) ? staffData : []);
       } catch (err) {
         if (!cancelled) console.error(err);
       } finally {
         if (!cancelled) {
           setLoading(false);
+          setStaffLoading(false);
           didInitialLoadRef.current = true;
         }
       }
     };
+
     bootstrap();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadEmailsPage, canAssignMeetingStaff]);
 
   useEffect(() => {
     if (!didInitialLoadRef.current) return;
     loadEmailsPage({ page: 1, reset: true }).catch((err) => console.error(err));
-  }, [inboxPath]);
+  }, [inboxPath, loadEmailsPage]);
 
   const handleInboxScroll = async (event) => {
     const el = event.currentTarget;
     if (el.scrollTop + el.clientHeight < el.scrollHeight - 140) return;
-    if (loadMoreLockRef.current) return;
+    if (loadMoreLockRef.current || !emailPagination.hasMore) return;
 
-    let nextLoad = null;
-    if (activeTab === "emails" && emailPagination.hasMore) {
-      nextLoad = () => loadEmailsPage({ page: emailPagination.page + 1 });
-    } else if (activeTab === "calls" && callPagination.hasMore) {
-      nextLoad = () => loadCallsPage({ page: callPagination.page + 1 });
-    } else if (activeTab === "sms" && smsPagination.hasMore) {
-      nextLoad = () => loadSmsPage({ page: smsPagination.page + 1 });
-    } else if (activeTab === "whatsapp" && waPagination.hasMore) {
-      nextLoad = () => loadWaPage({ page: waPagination.page + 1 });
-    }
-
-    if (!nextLoad) return;
     loadMoreLockRef.current = true;
     try {
-      await nextLoad();
+      await loadEmailsPage({ page: emailPagination.page + 1 });
     } finally {
       loadMoreLockRef.current = false;
     }
   };
 
-  const handleSendEmail = async (e) => {
-    e.preventDefault();
-
-    // Switch to multipart when attachments are present so the file buffers
-    // round-trip cleanly. fetchApi detects FormData and drops the JSON
-    // Content-Type so the browser can set the multipart boundary itself.
-    let requestBody;
-    if (composeAttachments.length > 0) {
-      const fd = new FormData();
-      fd.append("to", composeData.to);
-      if (composeData.cc) fd.append("cc", composeData.cc);
-      if (composeData.bcc) fd.append("bcc", composeData.bcc);
-      fd.append("subject", composeData.subject);
-      fd.append("body", composeData.body);
-      for (const file of composeAttachments)
-        fd.append("attachments", file, file.name);
-      requestBody = fd;
-    } else {
-      requestBody = JSON.stringify(composeData);
-    }
-    await fetchApi("/api/communications/send-email", {
-      method: "POST",
-      body: requestBody,
-    });
-
-    notify.success(
-      `Email Sent Successfully!\n\n[Epic #104] Tracking Pixel Active: You will be notified the instant ${composeData.to} opens or clicks links in this message.`,
-    );
-
-    closeCompose();
-    // Refresh
-    await loadEmailsPage({ page: 1, reset: true });
-  };
-
-  const handlePickAttachments = (e) => {
-    const incoming = Array.from(e.target.files || []);
-    if (incoming.length === 0) return;
-
-    const accepted = [];
-    const rejected = [];
-    let nextCount = composeAttachments.length;
-    for (const f of incoming) {
-      if (nextCount >= MAX_ATTACHMENTS) {
-        rejected.push(`${f.name} (max ${MAX_ATTACHMENTS} files)`);
-        continue;
-      }
-      if (f.size > MAX_ATTACHMENT_BYTES) {
-        rejected.push(`${f.name} (over 10 MB)`);
-        continue;
-      }
-      accepted.push(f);
-      nextCount += 1;
-    }
-    if (accepted.length > 0)
-      setComposeAttachments((prev) => [...prev, ...accepted]);
-    if (rejected.length > 0)
-      notify.error(`Some files were skipped:\n${rejected.join("\n")}`);
-    // Reset the input value so picking the same file again still fires onChange.
-    e.target.value = "";
-  };
-
-  const handleRemoveAttachment = (idx) => {
-    setComposeAttachments((prev) => prev.filter((_, i) => i !== idx));
-  };
-
-  // To: field is comma-separated for multi-recipient. The dropdown filters on
-  // (and replaces) only the LAST comma-separated token so the user can pick
-  // recipients one at a time without nuking what they've already typed.
-  const composeToTokens = composeData.to.split(",");
-  const composeToFilter = (composeToTokens[composeToTokens.length - 1] || "")
-    .trim()
-    .toLowerCase();
-  const filteredToContacts = contacts
-    .filter((c) => c.email)
-    .filter((c) => {
-      if (!composeToFilter) return true;
-      const email = (c.email || "").toLowerCase();
-      const name = (c.name || "").toLowerCase();
-      return email.includes(composeToFilter) || name.includes(composeToFilter);
-    })
-    .slice(0, 50);
-
-  const handleSelectToContact = (email) => {
-    setComposeData((prev) => {
-      const parts = prev.to
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      // Replace the last (in-progress) token with the picked email if the user
-      // was mid-typing; otherwise append.
-      if (parts.length === 0 || !prev.to.endsWith(",")) {
-        if (parts.length > 0) parts[parts.length - 1] = email;
-        else parts.push(email);
-      } else {
-        parts.push(email);
-      }
-      return { ...prev, to: parts.join(", ") };
-    });
-    setShowToDropdown(false);
-  };
-
-  // Single close path for the composer — header X, backdrop click, post-send.
-  // Keeps the state-reset list in one place so we can't drift between callers.
   const closeCompose = () => {
     setShowCompose(false);
     setShowCcBcc(false);
+    setShowRecipientSuggestions(false);
+    setShowSubjectSuggestions(false);
+    setComposeSubjectSuggestions([]);
+    setComposeTone("professional");
+    setDraftingEmail(false);
+    setLoadingSubjects(false);
     setComposeData({ to: "", cc: "", bcc: "", subject: "", body: "" });
     setComposeAttachments([]);
-    setAiSubjects([]);
-    setShowToDropdown(false);
+    composeFileInputRef.current = null;
   };
+
+  const meetingStaffOptions = staffMembers
+    .filter((staff) => staff && staff.email && !staff.deactivatedAt)
+    .map((staff) => ({
+      value: String(staff.id),
+      label: formatStaffOptionLabel(staff),
+    }));
+
+  const composeRecipientOptions = [
+    ...contacts.map((contact) => ({
+      key: `contact-${contact.id}`,
+      email: contact.email || "",
+      name: contact.name || "",
+    })),
+    ...patients.map((patient) => ({
+      key: `patient-${patient.id}`,
+      email: patient.email || "",
+      name: patient.name || "",
+    })),
+  ].filter((entry) => entry.email || entry.name);
+
+  const recipientQuery = getRecipientQuery(composeData.to);
+  const filteredRecipientSuggestions = recipientQuery
+    ? composeRecipientOptions.filter((entry) => {
+        const haystack = `${entry.email} ${entry.name}`.toLowerCase();
+        return haystack.includes(recipientQuery.toLowerCase());
+      })
+    : composeRecipientOptions;
+  const visibleRecipientSuggestions = filteredRecipientSuggestions.slice(0, 6);
+
+  const handleRecipientSelect = (email) => {
+    setComposeData((prev) => ({
+      ...prev,
+      to: replaceRecipientQuery(prev.to, email),
+    }));
+    setShowRecipientSuggestions(false);
+  };
+
+  const handleMeetingStaffChange = (selectedIds) => {
+    setMeetData((prev) => ({
+      ...prev,
+      staffIds: selectedIds,
+    }));
+  };
+
+  const handleLoadSubjects = useCallback(async () => {
+    const context = composeData.body.trim() || composeData.to.trim() || "follow up";
+    setLoadingSubjects(true);
+    try {
+      const data = await fetchApi("/api/ai/subject-lines", {
+        method: "POST",
+        body: JSON.stringify({ context, count: 5 }),
+      });
+      const subjects = Array.isArray(data?.subjects) ? data.subjects.filter(Boolean) : [];
+      setComposeSubjectSuggestions(subjects);
+      setShowSubjectSuggestions(true);
+      if (subjects.length > 0) {
+        setComposeData((prev) => ({
+          ...prev,
+          subject: prev.subject?.trim() ? prev.subject : subjects[0],
+        }));
+      }
+    } catch (err) {
+      console.error(err);
+      notify.error("Failed to load subject ideas.");
+    } finally {
+      setLoadingSubjects(false);
+    }
+  }, [composeData.body, composeData.to, notify]);
+
+  const handleComposeDraft = useCallback(async () => {
+    const context = composeData.body.trim() || composeData.to.trim() || "follow up";
+    setDraftingEmail(true);
+    try {
+      const [subjectData, draftData] = await Promise.all([
+        fetchApi("/api/ai/subject-lines", {
+          method: "POST",
+          body: JSON.stringify({ context, count: 5 }),
+        }),
+        fetchApi("/api/ai/draft", {
+          method: "POST",
+          body: JSON.stringify({
+            context,
+            tone: composeTone,
+            recipientEmail: composeData.to.split(",")[0]?.trim() || "",
+          }),
+        }),
+      ]);
+
+      const subjects = Array.isArray(subjectData?.subjects) ? subjectData.subjects.filter(Boolean) : [];
+      const draft = typeof draftData?.draft === "string" ? draftData.draft : "";
+
+      setComposeSubjectSuggestions(subjects);
+      setShowSubjectSuggestions(subjects.length > 0);
+      setComposeData((prev) => ({
+        ...prev,
+        subject: prev.subject?.trim() || subjects[0] || buildFallbackSubject(prev.to, draft, composeTone),
+        body: draft || prev.body,
+      }));
+    } catch (err) {
+      console.error(err);
+      notify.error("AI draft could not be generated right now.");
+    } finally {
+      setDraftingEmail(false);
+    }
+  }, [composeData.body, composeData.to, composeTone, notify]);
 
   const formatAttachmentSize = (bytes) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -492,69 +498,84 @@ export default function Inbox() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  const handleSendSms = async (e) => {
-    e.preventDefault();
-    try {
-      await fetchApi("/api/sms/send", {
-        method: "POST",
-        body: JSON.stringify(composeSmsData),
-      });
+  const handlePickAttachments = (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
 
-      notify.success(
-        `SMS Sent Successfully!\n\nYour message has been queued and will be delivered to ${composeSmsData.to}.`,
-      );
-
-      setShowComposeSms(false);
-      setComposeSmsData({ to: "", body: "" });
-      // Refresh SMS messages
-      const data = await fetchApi("/api/sms/messages").catch(() => ({}));
-      setSmsMessages(
-        Array.isArray(data?.messages || data) ? data?.messages || data : [],
-      );
-    } catch (err) {
-      notify.error(
-        "Failed to send SMS. Please check the phone number and try again.",
-      );
-      console.error(err);
-    }
-  };
-
-  // #594 — Send a new WhatsApp message via /api/whatsapp/send. The route
-  // requires { to, body } at minimum (templateName is optional for richer
-  // template flows; for the in-thread quick-compose we use plain text).
-  const handleSendWa = async (e) => {
-    e.preventDefault();
-    const to = composeWaData.to.trim();
-    const body = composeWaData.body.trim();
-    if (!to || !body) {
-      notify.error("Phone number and message body are required");
+    const slotsLeft = MAX_ATTACHMENTS - composeAttachments.length;
+    if (slotsLeft <= 0) {
+      notify.error(`You can attach up to ${MAX_ATTACHMENTS} files.`);
+      event.target.value = "";
       return;
     }
-    setWaSending(true);
-    try {
-      await fetchApi("/api/whatsapp/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, body }),
-      });
-      notify.success(`WhatsApp message queued for ${to}.`);
-      setShowComposeWa(false);
-      setComposeWaData({ to: "", body: "" });
-      const data = await fetchApi("/api/whatsapp/messages").catch(() => ({}));
-      setWaMessages(
-        Array.isArray(data?.messages || data) ? data?.messages || data : [],
-      );
-    } catch (err) {
-      const msg = err?.message || "Unable to send WhatsApp message";
-      if (/no active whatsapp/i.test(msg)) {
-        notify.error(
-          "No active WhatsApp provider configured. Open Settings > Channels to add credentials.",
-        );
-      } else {
-        notify.error(`WhatsApp send failed: ${msg}`);
+
+    const accepted = [];
+    let skippedLarge = 0;
+
+    for (const file of files) {
+      if (accepted.length >= slotsLeft) break;
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        skippedLarge += 1;
+        continue;
       }
-    } finally {
-      setWaSending(false);
+      accepted.push(file);
+    }
+
+    if (skippedLarge > 0) {
+      notify.error(
+        `Some files were skipped because they exceed ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)}.`,
+      );
+    }
+
+    if (accepted.length > 0) {
+      setComposeAttachments((prev) => [...prev, ...accepted].slice(0, MAX_ATTACHMENTS));
+    }
+
+    event.target.value = "";
+  };
+
+  const handleRemoveAttachment = (index) => {
+    setComposeAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSendEmail = async (e) => {
+    e.preventDefault();
+
+    try {
+      const subject =
+        composeData.subject.trim() ||
+        composeSubjectSuggestions[0] ||
+        buildFallbackSubject(composeData.to, composeData.body, composeTone);
+      let requestBody;
+      if (composeAttachments.length > 0) {
+        const fd = new FormData();
+        fd.append("to", composeData.to);
+        if (composeData.cc) fd.append("cc", composeData.cc);
+        if (composeData.bcc) fd.append("bcc", composeData.bcc);
+        fd.append("subject", subject);
+        fd.append("body", composeData.body);
+        for (const file of composeAttachments) {
+          fd.append("attachments", file, file.name);
+        }
+        requestBody = fd;
+      } else {
+        requestBody = JSON.stringify({
+          ...composeData,
+          subject,
+        });
+      }
+
+      await fetchApi("/api/communications/send-email", {
+        method: "POST",
+        body: requestBody,
+      });
+
+      notify.success("Email sent successfully.");
+      closeCompose();
+      await loadEmailsPage({ page: 1, reset: true });
+    } catch (err) {
+      console.error(err);
+      notify.error("Failed to send email. Please try again.");
     }
   };
 
@@ -564,37 +585,49 @@ export default function Inbox() {
       notify.error("Please select a contact from the dropdown.");
       return;
     }
+
     try {
-      // Patient selections are prefixed `patient:<id>` and log against the
-      // wellness patient activity endpoint; plain ids are CRM Contacts.
       const isPatient = String(meetData.contactId).startsWith("patient:");
-      const rawId = isPatient
-        ? meetData.contactId.slice("patient:".length)
-        : meetData.contactId;
+      const rawId = isPatient ? meetData.contactId.slice("patient:".length) : meetData.contactId;
       const endpoint = isPatient
         ? `/api/wellness/patients/${rawId}/activities`
         : `/api/contacts/${rawId}/activities`;
-      // Resolve the selected recipient's email so we can actually email the
-      // invite (not just log it). The dropdown already filters to entries with
-      // an email, so this is normally present.
+
       const selected = isPatient
         ? patients.find((p) => String(p.id) === String(rawId))
         : contacts.find((c) => String(c.id) === String(rawId));
-      const recipientEmail = selected?.email;
+      const recipientEmail = selected?.email || "";
+      const recipientLabel = selected?.name || recipientEmail || "the selected contact";
+      const selectedStaff = canAssignMeetingStaff
+        ? staffMembers.filter(
+            (staff) =>
+              meetData.staffIds.includes(String(staff.id)) &&
+              staff.email &&
+              !staff.deactivatedAt,
+          )
+        : [];
+      const selectedStaffEmails = [...new Set(selectedStaff.map((staff) => staff.email).filter(Boolean))];
+      const selectedStaffNames = selectedStaff.map((staff) => staff.name || staff.email);
 
-      // 1. Log the meeting on the contact/patient activity timeline.
       await fetchApi(endpoint, {
         method: "POST",
         body: JSON.stringify({
           type: "Meeting",
-          description: `Scheduled Calendar Meeting for ${meetData.date} at ${meetData.time}. Topic: ${meetData.description}`,
+          description: buildMeetingActivityDescription({
+            date: meetData.date,
+            time: meetData.time,
+            agenda: meetData.description,
+            staffNames: selectedStaffNames,
+            recipientLabel,
+          }),
         }),
       });
 
-      // 2. Actually send the invite email (SendGrid-backed, same endpoint the
-      //    Compose Email flow uses). Best-effort: a mail failure must not fail
-      //    the schedule — the activity is already logged.
-      let emailed = false;
+      let contactEmailDelivered = false;
+      let staffEmailDelivered = false;
+      let staffNotificationsDelivered = 0;
+      let staffNotificationsFailed = 0;
+
       if (recipientEmail) {
         try {
           await fetchApi("/api/communications/send-email", {
@@ -602,207 +635,134 @@ export default function Inbox() {
             body: JSON.stringify({
               to: recipientEmail,
               subject: `Meeting invitation — ${meetData.date} at ${meetData.time}`,
-              body: `Hello,\n\nYou have a meeting scheduled for ${meetData.date} at ${meetData.time}.\n\n${meetData.description}\n\nThank you.`,
+              contactId: isPatient ? undefined : rawId,
+              body: buildContactMeetingEmail({
+                recipientLabel,
+                date: meetData.date,
+                time: meetData.time,
+                agenda: meetData.description,
+                staffNames: selectedStaffNames,
+              }),
             }),
           });
-          emailed = true;
+          contactEmailDelivered = true;
         } catch (mailErr) {
           console.error("Meeting invite email failed:", mailErr);
         }
       }
 
-      notify.success(
-        emailed
-          ? `Meeting scheduled — invite emailed to ${recipientEmail}.`
-          : recipientEmail
-            ? `Meeting scheduled, but the invite email could not be sent to ${recipientEmail}.`
-            : "Meeting scheduled. No email on file for this contact, so no invite was sent.",
-      );
+      if (selectedStaffEmails.length > 0) {
+        try {
+          await fetchApi("/api/communications/send-email", {
+            method: "POST",
+            body: JSON.stringify({
+              to: selectedStaffEmails.join(", "),
+              subject: `Meeting assigned — ${meetData.date} at ${meetData.time}`,
+              body: buildStaffMeetingEmail({
+                staffName: "Team",
+                recipientLabel,
+                date: meetData.date,
+                time: meetData.time,
+                agenda: meetData.description,
+              }),
+            }),
+          });
+          staffEmailDelivered = true;
+        } catch (mailErr) {
+          console.error("Meeting staff email failed:", mailErr);
+        }
+
+        const notificationResults = await Promise.allSettled(
+          selectedStaff.map((staff) =>
+            fetchApi("/api/notifications", {
+              method: "POST",
+              body: JSON.stringify({
+                targetUserId: staff.id,
+                title: `Meeting assigned — ${meetData.date} at ${meetData.time}`,
+                message: buildStaffMeetingNotification({
+                  recipientLabel,
+                  date: meetData.date,
+                  time: meetData.time,
+                  agenda: meetData.description,
+                }),
+                type: "info",
+                link: "/calendar-sync",
+                channels: ["db", "socket"],
+              }),
+            }),
+          ),
+        );
+        for (const result of notificationResults) {
+          if (result.status === "fulfilled") staffNotificationsDelivered += 1;
+          else staffNotificationsFailed += 1;
+        }
+      }
+
+      const hasDeliveryIssue =
+        (recipientEmail && !contactEmailDelivered) ||
+        (selectedStaffEmails.length > 0 && (!staffEmailDelivered || staffNotificationsFailed > 0));
+      const parts = ["Meeting scheduled."];
+      if (recipientEmail) {
+        parts.push(
+          contactEmailDelivered
+            ? `Invite emailed to ${recipientEmail}.`
+            : `The contact invite could not be emailed to ${recipientEmail}.`,
+        );
+      } else {
+        parts.push("No email on file for the contact, so no contact invite was sent.");
+      }
+      if (selectedStaffEmails.length > 0) {
+        parts.push(
+          staffEmailDelivered
+            ? `${selectedStaffEmails.length} staff member${selectedStaffEmails.length === 1 ? "" : "s"} emailed.`
+            : "The staff invite email could not be sent.",
+        );
+        parts.push(
+          staffNotificationsFailed > 0
+            ? `${staffNotificationsDelivered} of ${selectedStaffEmails.length} staff notifications delivered.`
+            : `${staffNotificationsDelivered} staff notification${staffNotificationsDelivered === 1 ? "" : "s"} delivered.`,
+        );
+      }
+
+      notify[hasDeliveryIssue ? "info" : "success"](parts.join(" "));
       setShowMeet(false);
-      setMeetData({ contactId: "", date: "", time: "", description: "" });
+      setMeetData({ contactId: "", date: "", time: "", description: "", staffIds: [] });
     } catch (err) {
       console.error(err);
       notify.error("Failed to schedule meeting.");
     }
   };
 
-  const handleInitiateCall = async (e) => {
-    e.preventDefault();
-    if (!callDialData.contactId) {
-      notify.error("Please select a contact from the dropdown.");
-      return;
-    }
-    try {
-      const contact = contacts.find((c) => c.id === callDialData.contactId);
-      await fetchApi("/api/communications/calls", {
-        method: "POST",
-        body: JSON.stringify({
-          contactId: callDialData.contactId,
-          direction: "OUTBOUND",
-          notes: callDialData.notes,
-        }),
-      });
-      notify.success(
-        `Call initiated with ${contact?.name || "contact"}. Connecting...`,
-      );
-      setShowCallDial(false);
-      setCallDialData({ contactId: "", notes: "" });
-    } catch (err) {
-      console.error(err);
-      notify.error("Failed to initiate call.");
-    }
-  };
-
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiTone, setAiTone] = useState("professional");
-  const [aiSubjects, setAiSubjects] = useState([]);
-
-  const handleAIGenerate = async () => {
-    if (!composeData.subject) {
-      notify.error(
-        "Please enter a subject so the AI knows what to write about.",
-      );
-      return;
-    }
-    setAiLoading(true);
-    try {
-      // Find contact ID from the recipient email for CRM-aware drafting
-      const matchedContact = contacts.find((c) => c.email === composeData.to);
-      const res = await fetchApi("/api/ai/draft", {
-        method: "POST",
-        body: JSON.stringify({
-          context: composeData.subject,
-          recipientEmail: composeData.to,
-          contactId: matchedContact?.id || null,
-          tone: aiTone,
-        }),
-      });
-      setComposeData((prev) => ({ ...prev, body: res.draft }));
-    } catch (err) {
-      console.error(err);
-    }
-    setAiLoading(false);
-  };
-
-  const handleAISubjects = async () => {
-    if (!composeData.subject && !composeData.to) return;
-    try {
-      const res = await fetchApi("/api/ai/subject-lines", {
-        method: "POST",
-        body: JSON.stringify({
-          context: composeData.subject || composeData.to,
-          count: 4,
-        }),
-      });
-      setAiSubjects(res.subjects || []);
-    } catch {
-      setAiSubjects([]);
-    }
-  };
-
-  // #459: Dial via the existing /api/telephony/click-to-call endpoint
-  // (used by the Softphone bar). When `contactId` is selected we pre-fill
-  // its phone, but allow the user to type a one-off number too. On 400
-  // (no telephony provider configured) surface the actionable error
-  // toast pointing at Settings > Channels rather than a generic "failed".
-  const handleDial = async (e) => {
-    e.preventDefault();
-    if (!dialerData.toNumber.trim()) {
-      notify.error("Enter a phone number to dial.");
-      return;
-    }
-    setDialing(true);
-    try {
-      const res = await fetchApi("/api/telephony/click-to-call", {
-        method: "POST",
-        body: JSON.stringify({
-          to: dialerData.toNumber.trim(),
-          contactId: dialerData.contactId || undefined,
-        }),
-      });
-      // Optionally log a follow-up activity if the user typed notes + picked a contact.
-      if (dialerData.contactId && dialerData.notes.trim()) {
-        try {
-          await fetchApi(`/api/contacts/${dialerData.contactId}/activities`, {
-            method: "POST",
-            body: JSON.stringify({
-              type: "Call",
-              description: dialerData.notes.trim(),
-            }),
-          });
-        } catch {
-          /* non-fatal — call already placed */
-        }
-      }
-      notify.success(
-        `Dialing ${dialerData.toNumber}... (call id: ${res.callId || res.callLogId || "queued"})`,
-      );
-      setShowDialer(false);
-      setDialerData({ contactId: "", toNumber: "", notes: "" });
-      // Refresh the call-log tab so the new INITIATED entry appears
-      try {
-        await loadCallsPage({ page: 1, reset: true });
-      } catch {
-        /* ignore */
-      }
-    } catch (err) {
-      const msg = err?.message || "Unable to start call";
-      // Most common gotcha: no telephony provider configured. Make the toast actionable.
-      if (/telephony provider/i.test(msg)) {
-        notify.error(
-          "No telephony provider configured. Open Settings > Channels to add MyOperator or Knowlarity credentials.",
-        );
-      } else {
-        notify.error(`Dial failed: ${msg}`);
-      }
-    } finally {
-      setDialing(false);
-    }
-  };
-
-  // #459: when a contact is selected from the dropdown, pre-fill their
-  // phone if known so the user doesn't have to retype it.
-  const onPickDialerContact = (contactId) => {
-    const c = contacts.find((x) => String(x.id) === String(contactId));
-    setDialerData((prev) => ({
-      ...prev,
-      contactId,
-      toNumber: c?.phone || prev.toNumber,
-    }));
-  };
-
   return (
     <div
+      data-testid="inbox-page-shell"
       style={{
+        width: "100%",
+        maxWidth: 1480,
+        margin: "0 auto",
         padding: "2rem",
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
+        boxSizing: "border-box",
         overflowX: "hidden",
         animation: "fadeIn 0.5s ease-out",
       }}
     >
-      {/* #485: flex-wrap + gap so the action group cleanly wraps below the title at
-          narrow viewports instead of overlapping it. Inner action group also wraps
-          so individual buttons stack on very tight widths rather than overflowing. */}
       <header
         style={{
-          marginBottom: "2.5rem",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
           flexWrap: "wrap",
           gap: "1rem",
+          marginBottom: "2.25rem",
         }}
       >
         <div style={{ minWidth: 0, flex: "1 1 240px" }}>
-          <h1 style={{ fontSize: "2rem", fontWeight: "bold" }}>
-            Unified Inbox
-          </h1>
+          <h1 style={{ fontSize: "2rem", fontWeight: "bold" }}>Unified Inbox</h1>
           <p style={{ color: "var(--text-secondary)", marginTop: "0.25rem" }}>
-            Manage all client emails, calls, and SMS from one hub.
+            Manage all client emails from one hub.
           </p>
         </div>
+
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
           <button
             onClick={() => setShowMeet(true)}
@@ -810,34 +770,6 @@ export default function Inbox() {
             style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
           >
             <Calendar size={18} /> Schedule Meeting
-          </button>
-          <button
-            onClick={() => setShowCallDial(true)}
-            className="btn-primary"
-            style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
-          >
-            <Phone size={18} /> Call Dialer
-          </button>
-          <button
-            onClick={() => setShowComposeSms(true)}
-            className="btn-primary"
-            style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
-          >
-            <MessageSquare size={18} /> Compose SMS
-          </button>
-          {/* #594 — Compose WhatsApp affordance. Pre-fix the WhatsApp tab
-              had no way to start a new outbound thread.
-              #726 — was visually inconsistent with the other compose
-              buttons (outlined green pill among 4 solid teal pills).
-              WhatsApp-brand-green belongs to the WhatsApp Cloud API
-              itself, not the CRM CTAs. Use btn-primary + no inline
-              overrides so it renders canonical teal var(--brand). */}
-          <button
-            onClick={() => setShowComposeWa(true)}
-            className="btn-primary"
-            style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
-          >
-            <MessageCircle size={18} /> Compose WhatsApp
           </button>
           <button
             onClick={() => setShowCompose(true)}
@@ -850,113 +782,17 @@ export default function Inbox() {
       </header>
 
       <div
-        style={{
-          display: "flex",
-          gap: "1rem",
-          borderBottom: "1px solid var(--border-color)",
-          marginBottom: "1.5rem",
-        }}
-      >
-        <button
-          onClick={() => setActiveTab("emails")}
-          style={{
-            background: "none",
-            border: "none",
-            padding: "1rem 2rem",
-            color:
-              activeTab === "emails"
-                ? "var(--accent-color)"
-                : "var(--text-secondary)",
-            borderBottom:
-              activeTab === "emails"
-                ? "2px solid var(--accent-color)"
-                : "2px solid transparent",
-            fontWeight: "bold",
-            cursor: "pointer",
-            transition: "var(--transition)",
-          }}
-        >
-          Emails ({emailPagination.total || emails.length})
-        </button>
-        <button
-          onClick={() => setActiveTab("calls")}
-          style={{
-            background: "none",
-            border: "none",
-            padding: "1rem 2rem",
-            color:
-              activeTab === "calls"
-                ? "var(--warning-color)"
-                : "var(--text-secondary)",
-            borderBottom:
-              activeTab === "calls"
-                ? "2px solid var(--warning-color)"
-                : "2px solid transparent",
-            fontWeight: "bold",
-            cursor: "pointer",
-            transition: "var(--transition)",
-          }}
-        >
-          Call Logs ({callPagination.total || calls.length})
-        </button>
-        <button
-          onClick={() => setActiveTab("sms")}
-          style={{
-            background: "none",
-            border: "none",
-            padding: "1rem 2rem",
-            color: activeTab === "sms" ? "#10b981" : "var(--text-secondary)",
-            borderBottom:
-              activeTab === "sms"
-                ? "2px solid #10b981"
-                : "2px solid transparent",
-            fontWeight: "bold",
-            cursor: "pointer",
-            transition: "var(--transition)",
-          }}
-        >
-          <MessageSquare
-            size={16}
-            style={{ verticalAlign: "middle", marginRight: "0.25rem" }}
-          />{" "}
-          SMS ({smsPagination.total || smsMessages.length})
-        </button>
-        <button
-          onClick={() => setActiveTab("whatsapp")}
-          style={{
-            background: "none",
-            border: "none",
-            padding: "1rem 2rem",
-            color:
-              activeTab === "whatsapp" ? "#25D366" : "var(--text-secondary)",
-            borderBottom:
-              activeTab === "whatsapp"
-                ? "2px solid #25D366"
-                : "2px solid transparent",
-            fontWeight: "bold",
-            cursor: "pointer",
-            transition: "var(--transition)",
-          }}
-        >
-          <MessageCircle
-            size={16}
-            style={{ verticalAlign: "middle", marginRight: "0.25rem" }}
-          />{" "}
-          WhatsApp ({waPagination.total || waMessages.length})
-        </button>
-      </div>
-
-      <div
         className="card"
+        data-testid="inbox-list-card"
         ref={inboxScrollRef}
         onScroll={handleInboxScroll}
         style={{
-          flex: 1,
-          minHeight: 0,
-          height: "calc(100vh - 320px)",
+          width: "100%",
+          flex: "0 0 auto",
+          maxHeight: "calc(100vh - 320px)",
           overflowY: "auto",
           overflowX: "hidden",
-          padding: "1rem",
+          padding: "1.25rem",
         }}
       >
         {loading ? (
@@ -969,234 +805,18 @@ export default function Inbox() {
           >
             Syncing communications...
           </p>
-        ) : activeTab === "sms" ? (
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
-          >
-            {smsMessages.length === 0 && (
-              <p
-                style={{
-                  color: "var(--text-secondary)",
-                  textAlign: "center",
-                  padding: "2rem",
-                }}
-              >
-                No SMS messages yet. Configure SMS in Settings &gt; Channels.
-              </p>
-            )}
-            {smsMessages.map((msg) => (
-              <div
-                key={msg.id}
-                onClick={() => setDetail({ kind: "sms", item: msg })}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setDetail({ kind: "sms", item: msg });
-                  }
-                }}
-                className={`table-row-hover inbox-bubble inbox-bubble--sms ${msg.direction === "INBOUND" ? "inbox-bubble--inbound" : ""}`}
-                style={{
-                  padding: "1.25rem",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "12px",
-                  display: "flex",
-                  gap: "1rem",
-                  alignItems: "flex-start",
-                  minWidth: 0,
-                  cursor: "pointer",
-                }}
-              >
-                <div
-                  className="inbox-avatar inbox-avatar--sms"
-                  style={{
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "50%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                  }}
-                >
-                  <MessageSquare size={18} />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      marginBottom: "0.375rem",
-                    }}
-                  >
-                    <span style={{ fontWeight: "600", overflowWrap: "anywhere" }}>
-                      {msg.direction === "INBOUND"
-                        ? msg.from || msg.to
-                        : msg.to}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "0.75rem",
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      {new Date(msg.createdAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <p
-                    style={{
-                      color: "var(--text-secondary)",
-                      fontSize: "0.9rem",
-                      overflowWrap: "anywhere",
-                    }}
-                  >
-                    {msg.body}
-                  </p>
-                  <span
-                    className={`inbox-status-pill inbox-status-pill--${msg.status === "DELIVERED" ? "delivered" : msg.status === "FAILED" ? "failed" : "pending"}`}
-                    style={{ marginTop: "0.375rem" }}
-                  >
-                    {msg.status}
-                  </span>
-                </div>
-              </div>
-            ))}
-            {smsPagination.loadingMore && (
-              <p style={{ textAlign: "center", color: "var(--text-secondary)", padding: "0.75rem 0" }}>
-                Loading more SMS...
-              </p>
-            )}
-          </div>
-        ) : activeTab === "whatsapp" ? (
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
-          >
-            {waMessages.length === 0 && (
-              <p
-                style={{
-                  color: "var(--text-secondary)",
-                  textAlign: "center",
-                  padding: "2rem",
-                }}
-              >
-                No WhatsApp messages yet. Configure WhatsApp in Settings &gt;
-                Channels.
-              </p>
-            )}
-            {waMessages.map((msg) => (
-              <div
-                key={msg.id}
-                onClick={() => setDetail({ kind: "wa", item: msg })}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setDetail({ kind: "wa", item: msg });
-                  }
-                }}
-                className={`table-row-hover inbox-bubble inbox-bubble--wa ${msg.direction === "INBOUND" ? "inbox-bubble--inbound" : ""}`}
-                style={{
-                  padding: "1.25rem",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "12px",
-                  display: "flex",
-                  gap: "1rem",
-                  alignItems: "flex-start",
-                  minWidth: 0,
-                  cursor: "pointer",
-                }}
-              >
-                <div
-                  className="inbox-avatar inbox-avatar--wa"
-                  style={{
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "50%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                  }}
-                >
-                  <MessageCircle size={18} />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      marginBottom: "0.375rem",
-                    }}
-                  >
-                    <span style={{ fontWeight: "600", overflowWrap: "anywhere" }}>
-                      {msg.direction === "INBOUND"
-                        ? msg.from || msg.to
-                        : msg.to}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "0.75rem",
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      {new Date(msg.createdAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <p
-                    style={{
-                      color: "var(--text-secondary)",
-                      fontSize: "0.9rem",
-                      overflowWrap: "anywhere",
-                    }}
-                  >
-                    {msg.body || `Template: ${msg.templateName}`}
-                  </p>
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: "0.5rem",
-                      marginTop: "0.375rem",
-                      alignItems: "center",
-                    }}
-                  >
-                    <span
-                      className={`inbox-status-pill inbox-status-pill--${msg.status === "READ" ? "read" : msg.status === "DELIVERED" ? "delivered" : msg.status === "FAILED" ? "failed" : "pending"}`}
-                    >
-                      {msg.status}
-                    </span>
-                    {msg.status === "READ" && (
-                      <span className="inbox-read-receipt">✓✓</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-            {waPagination.loadingMore && (
-              <p style={{ textAlign: "center", color: "var(--text-secondary)", padding: "0.75rem 0" }}>
-                Loading more WhatsApp...
-              </p>
-            )}
-          </div>
-        ) : activeTab === "emails" ? (
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
-          >
-            {/* #624 — folder sub-tabs (All / Inbox / Sent). Backend filter
-                is applied via /api/communications/inbox?folder=<v>. The
-                Sent folder was the bug surface in #624: pre-fix there was
-                no UI to view OUTBOUND-only mail; the backend has always
-                stored direction='OUTBOUND' on every send-email call. */}
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
             <div
               role="tablist"
               aria-label="Email folder"
               style={{
                 display: "flex",
                 gap: "0.25rem",
-                padding: "0.25rem",
-                background: "rgba(0,0,0,0.15)",
-                borderRadius: "8px",
+                padding: "0.3rem",
+                background: "var(--subtle-bg-2)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "12px",
                 alignSelf: "flex-start",
               }}
             >
@@ -1204,35 +824,29 @@ export default function Inbox() {
                 { id: "all", label: "All" },
                 { id: "inbox", label: "Inbox" },
                 { id: "sent", label: "Sent" },
-              ].map((f) => (
+              ].map((folder) => (
                 <button
-                  key={f.id}
+                  key={folder.id}
                   role="tab"
-                  aria-selected={emailFolder === f.id}
-                  onClick={() => setEmailFolder(f.id)}
+                  aria-selected={emailFolder === folder.id}
+                  onClick={() => setEmailFolder(folder.id)}
                   style={{
                     padding: "0.4rem 1rem",
                     border: "none",
-                    background:
-                      emailFolder === f.id
-                        ? "var(--accent-color)"
-                        : "transparent",
-                    color:
-                      emailFolder === f.id ? "#fff" : "var(--text-secondary)",
-                    fontWeight: emailFolder === f.id ? 600 : 500,
+                    background: emailFolder === folder.id ? "var(--accent-color)" : "transparent",
+                    color: emailFolder === folder.id ? "#fff" : "var(--text-secondary)",
+                    fontWeight: emailFolder === folder.id ? 600 : 500,
                     borderRadius: "6px",
                     cursor: "pointer",
                     fontSize: "0.85rem",
                   }}
                 >
-                  {f.label}
+                  {folder.label}
                 </button>
               ))}
             </div>
-            {/* #252: scope empty state to the active tab. Calls/SMS/WhatsApp
-                may still have data; the previous global "Inbox is empty"
-                message read like the whole CRM had no activity. */}
-            {emails.length === 0 && (
+
+            {emails.length === 0 ? (
               <p
                 style={{
                   color: "var(--text-secondary)",
@@ -1241,270 +855,113 @@ export default function Inbox() {
                 }}
               >
                 No emails yet.
-                {calls.length + smsMessages.length + waMessages.length > 0 && (
-                  <span
-                    style={{
-                      display: "block",
-                      marginTop: "0.5rem",
-                      fontSize: "0.85rem",
-                      opacity: 0.8,
-                    }}
-                  >
-                    {calls.length} call{calls.length !== 1 ? "s" : ""},{" "}
-                    {smsMessages.length} SMS, {waMessages.length} WhatsApp
-                    message{waMessages.length !== 1 ? "s" : ""} in other tabs.
-                  </span>
-                )}
               </p>
-            )}
-            {emails.map((email) => (
-              <div
-                key={email.id}
-                className="table-row-hover"
-                onClick={() => setDetail({ kind: "email", item: email })}
-                style={{
-                  padding: "1.5rem",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "12px",
-                  background: email.read
-                    ? "rgba(0,0,0,0.2)"
-                    : "rgba(59, 130, 246, 0.05)",
-                  display: "flex",
-                  gap: "1.5rem",
-                  minWidth: 0,
-                  flexWrap: "wrap",
-                  cursor: "pointer",
-                }}
-              >
+            ) : (
+              emails.map((email) => (
                 <div
+                  key={email.id}
+                  className="table-row-hover"
+                  onClick={() => setDetail(email)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setDetail(email);
+                    }
+                  }}
                   style={{
-                    width: "40px",
-                    height: "40px",
-                    borderRadius: "50%",
-                    background: "var(--accent-color)",
+                    padding: "1.5rem",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "12px",
+                    background: email.read ? "var(--subtle-bg-4)" : "var(--subtle-bg-3)",
                     display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
+                    gap: "1.5rem",
+                    minWidth: 0,
+                    flexWrap: "wrap",
+                    cursor: "pointer",
+                    transition: "background 0.18s ease, border-color 0.18s ease",
                   }}
                 >
-                  <User size={20} color="#fff" />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      marginBottom: "0.5rem",
-                    }}
-                  >
-                    <p style={{ fontWeight: "bold", fontSize: "1.1rem", overflowWrap: "anywhere" }}>
-                      {email.from}{" "}
-                      <ArrowRight size={14} style={{ margin: "0 0.5rem" }} />{" "}
-                      {email.to}
-                    </p>
-                    <span
-                      style={{
-                        fontSize: "0.8rem",
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      {new Date(email.createdAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <h4
-                    style={{
-                      fontWeight: "600",
-                      marginBottom: "0.5rem",
-                      color: "var(--text-primary)",
-                      overflowWrap: "anywhere",
-                    }}
-                  >
-                    {email.subject}
-                  </h4>
-                  <p
-                    style={{
-                      color: "var(--text-secondary)",
-                      fontSize: "0.9rem",
-                      lineHeight: "1.5",
-                      overflowWrap: "anywhere",
-                    }}
-                  >
-                    {email.body}
-                  </p>
-                </div>
-                {!email.read && (
-                  <div
-                    style={{
-                      width: "10px",
-                      height: "10px",
+                      width: "40px",
+                      height: "40px",
                       borderRadius: "50%",
                       background: "var(--accent-color)",
-                      alignSelf: "center",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
                     }}
-                  ></div>
-                )}
-              </div>
-            ))}
+                  >
+                    <User size={20} color="#fff" />
+                  </div>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: "1rem",
+                        marginBottom: "0.5rem",
+                      }}
+                    >
+                      <p style={{ fontWeight: "bold", fontSize: "1.05rem", overflowWrap: "anywhere" }}>
+                        {email.from} <ArrowRight size={14} style={{ margin: "0 0.5rem" }} /> {email.to}
+                      </p>
+                      <span
+                        style={{
+                          fontSize: "0.8rem",
+                          color: "var(--text-secondary)",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {new Date(email.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+
+                    <h4
+                      style={{
+                        fontWeight: "600",
+                        marginBottom: "0.5rem",
+                        color: "var(--text-primary)",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {email.subject}
+                    </h4>
+
+                    <p
+                      style={{
+                        color: "var(--text-secondary)",
+                        fontSize: "0.9rem",
+                        lineHeight: "1.5",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {email.body}
+                    </p>
+                  </div>
+
+                  {!email.read && (
+                    <div
+                      style={{
+                        width: "10px",
+                        height: "10px",
+                        borderRadius: "50%",
+                        background: "var(--accent-color)",
+                        alignSelf: "center",
+                      }}
+                    />
+                  )}
+                </div>
+              ))
+            )}
+
             {emailPagination.loadingMore && (
               <p style={{ textAlign: "center", color: "var(--text-secondary)", padding: "0.75rem 0" }}>
                 Loading more emails...
-              </p>
-            )}
-          </div>
-        ) : (
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
-          >
-            {calls.length === 0 && (
-              <p
-                style={{
-                  color: "var(--text-secondary)",
-                  textAlign: "center",
-                  padding: "2rem",
-                }}
-              >
-                No recent calls.
-              </p>
-            )}
-            {calls.map((call) => (
-              <div
-                key={call.id}
-                onClick={() => setDetail({ kind: "call", item: call })}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setDetail({ kind: "call", item: call });
-                  }
-                }}
-                className="table-row-hover"
-                style={{
-                  padding: "1.5rem",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "12px",
-                  background: "var(--table-header-bg)",
-                  display: "flex",
-                  gap: "1.5rem",
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                  minWidth: 0,
-                  cursor: "pointer",
-                }}
-              >
-                <div
-                  style={{
-                    width: "40px",
-                    height: "40px",
-                    borderRadius: "50%",
-                    background: "rgba(245, 158, 11, 0.1)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "var(--warning-color)",
-                    flexShrink: 0,
-                  }}
-                >
-                  <Phone size={20} />
-                </div>
-                <div style={{ flex: 1, minWidth: "200px" }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "1rem",
-                      marginBottom: "0.5rem",
-                    }}
-                  >
-                    <p style={{ fontWeight: "bold", overflowWrap: "anywhere" }}>{call.direction} CALL</p>
-                    <span
-                      style={{
-                        fontSize: "0.8rem",
-                        color: "var(--text-secondary)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.25rem",
-                      }}
-                    >
-                      <Clock size={12} /> {call.duration} seconds
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "0.8rem",
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      {new Date(call.createdAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <p style={{ color: "var(--text-secondary)", overflowWrap: "anywhere" }}>
-                    {call.notes || "No notes logged for this call."}
-                  </p>
-                </div>
-                {call.recordingUrl ? (
-                  playingCallId === call.id ? (
-                    playerErrors[call.id] ? (
-                      <span
-                        style={{
-                          fontSize: "0.85rem",
-                          color: "var(--text-secondary)",
-                          fontStyle: "italic",
-                        }}
-                      >
-                        Recording not available (URL stored but file
-                        unreachable)
-                      </span>
-                    ) : (
-                      <audio
-                        controls
-                        autoPlay
-                        src={call.recordingUrl}
-                        onError={() =>
-                          setPlayerErrors((prev) => ({
-                            ...prev,
-                            [call.id]: true,
-                          }))
-                        }
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ height: 36 }}
-                      />
-                    )
-                  ) : (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setPlayingCallId(call.id);
-                      }}
-                      className="btn-secondary"
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.5rem",
-                        padding: "0.5rem 1rem",
-                        cursor: "pointer",
-                      }}
-                      title={call.recordingUrl}
-                    >
-                      <Play size={16} /> Play Recording
-                    </button>
-                  )
-                ) : (
-                  <span
-                    style={{
-                      fontSize: "0.85rem",
-                      color: "var(--text-secondary)",
-                      fontStyle: "italic",
-                    }}
-                  >
-                    No recording
-                  </span>
-                )}
-              </div>
-            ))}
-            {callPagination.loadingMore && (
-              <p style={{ textAlign: "center", color: "var(--text-secondary)", padding: "0.75rem 0" }}>
-                Loading more calls...
               </p>
             )}
           </div>
@@ -1513,80 +970,79 @@ export default function Inbox() {
 
       {showCompose && (
         <div
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeCompose();
-          }}
           style={{
             position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "var(--catalogue-modal-backdrop)",
+            inset: 0,
+            background: "var(--overlay-bg)",
             backdropFilter: "blur(8px)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             zIndex: 100,
+            padding: "1rem",
             animation: "fadeIn 0.2s ease-out",
+          }}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closeCompose();
           }}
         >
           <div
-            className="card"
+            className="card modal"
             style={{
-              padding: "2rem 2.25rem",
-              width: "600px",
+              padding: "1.5rem",
+              width: "min(760px, calc(100vw - 2rem))",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              background: "var(--modal-bg)",
+              color: "var(--text-primary)",
               border: "1px solid var(--border-color)",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
-              position: "relative",
+              boxShadow: "var(--glass-shadow)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
             }}
           >
-            <button
-              type="button"
-              onClick={closeCompose}
-              aria-label="Close"
+            <div
               style={{
-                position: "absolute",
-                top: "1rem",
-                right: "1rem",
-                width: 32,
-                height: 32,
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: "transparent",
-                border: "none",
-                borderRadius: 6,
-                color: "var(--text-secondary)",
-                cursor: "pointer",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "var(--surface-color)";
-                e.currentTarget.style.color = "var(--text-primary)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.color = "var(--text-secondary)";
-              }}
-            >
-              <X size={18} />
-            </button>
-            <h3
-              style={{
-                marginBottom: "1.5rem",
-                fontSize: "1.25rem",
-                fontWeight: 600,
                 display: "flex",
+                justifyContent: "space-between",
                 alignItems: "center",
-                gap: "0.55rem",
-                paddingRight: "2rem",
+                gap: "1rem",
               }}
             >
-              <Mail size={20} color="var(--accent-color)" /> New Message
-            </h3>
+              <h3
+                style={{
+                  margin: 0,
+                  fontSize: "1.5rem",
+                  fontWeight: 700,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.6rem",
+                }}
+              >
+                <Mail size={22} color="var(--accent-color)" /> New Message
+              </h3>
+              <button
+                type="button"
+                onClick={closeCompose}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--text-secondary)",
+                  padding: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                }}
+                aria-label="Close compose"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
             <form
               onSubmit={handleSendEmail}
-              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+              style={{ display: "flex", flexDirection: "column", gap: "1rem", minHeight: 0 }}
             >
               <div>
                 <div
@@ -1594,154 +1050,120 @@ export default function Inbox() {
                     display: "flex",
                     justifyContent: "space-between",
                     alignItems: "center",
-                    marginBottom: "0.5rem",
+                    gap: "0.75rem",
+                    marginBottom: "0.4rem",
                   }}
                 >
                   <label
+                    htmlFor="compose-to"
                     style={{
-                      fontSize: "0.875rem",
+                      display: "block",
+                      fontSize: "0.9rem",
                       color: "var(--text-secondary)",
                     }}
                   >
                     To:
                   </label>
-                  {/* #623 — Cc/Bcc toggle. Hidden by default to keep the
-                      composer minimal; clicking expands the two fields below. */}
-                  {!showCcBcc && (
-                    <button
-                      type="button"
-                      onClick={() => setShowCcBcc(true)}
-                      aria-label="Show Cc and Bcc"
-                      style={{
-                        background: "transparent",
-                        border: "none",
-                        color: "var(--accent-color)",
-                        fontSize: "0.8rem",
-                        cursor: "pointer",
-                        padding: 0,
-                      }}
-                    >
-                      Cc / Bcc
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowCcBcc((value) => !value)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "var(--accent-color)",
+                      cursor: "pointer",
+                      padding: 0,
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    Cc / Bcc
+                  </button>
                 </div>
+
                 <div style={{ position: "relative" }}>
                   <input
+                    id="compose-to"
                     type="text"
                     required
+                    autoComplete="off"
                     className="input-field"
                     value={composeData.to}
+                    onFocus={() => setShowRecipientSuggestions(true)}
+                    onBlur={() => {
+                      window.setTimeout(() => setShowRecipientSuggestions(false), 120);
+                    }}
                     onChange={(e) => {
                       setComposeData({ ...composeData, to: e.target.value });
-                      setShowToDropdown(true);
-                    }}
-                    onFocus={() => setShowToDropdown(true)}
-                    onBlur={() =>
-                      setTimeout(() => setShowToDropdown(false), 120)
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") setShowToDropdown(false);
+                      setShowRecipientSuggestions(true);
                     }}
                     placeholder="client@company.com (comma-separated for multiple)"
-                    autoComplete="off"
-                    aria-autocomplete="list"
-                    aria-expanded={
-                      showToDropdown && filteredToContacts.length > 0
-                    }
                   />
-                  {showToDropdown && filteredToContacts.length > 0 && (
-                    <ul
+
+                  {showRecipientSuggestions && visibleRecipientSuggestions.length > 0 && (
+                    <div
                       role="listbox"
+                      aria-label="Recipient suggestions"
                       style={{
                         position: "absolute",
-                        top: "calc(100% + 4px)",
+                        top: "calc(100% + 0.35rem)",
                         left: 0,
                         right: 0,
-                        margin: 0,
-                        padding: "0.25rem 0",
-                        listStyle: "none",
-                        // --tooltip-bg is the canonical near-solid popover
-                        // surface in this app (dark navy in dark mode, near-white
-                        // in light mode) so the dropdown stays legible against
-                        // the semi-transparent modal underneath.
-                        background: "var(--tooltip-bg)",
-                        backdropFilter: "blur(8px)",
-                        WebkitBackdropFilter: "blur(8px)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: 6,
-                        boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
-                        maxHeight: 260,
-                        overflowY: "auto",
                         zIndex: 10,
+                        background: "var(--modal-bg)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "14px",
+                        boxShadow: "var(--glass-shadow)",
+                        maxHeight: "230px",
+                        overflowY: "auto",
                       }}
                     >
-                      {filteredToContacts.map((c) => (
-                        <li
-                          key={c.id}
+                      {visibleRecipientSuggestions.map((entry, index) => (
+                        <button
+                          type="button"
+                          key={entry.key || `${entry.email}-${index}`}
                           role="option"
-                          // onMouseDown + preventDefault stops the input from
-                          // blurring before the click registers — without this
-                          // the dropdown closes before onClick fires.
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            handleSelectToContact(c.email);
+                          aria-label={entry.email}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            handleRecipientSelect(entry.email);
                           }}
                           style={{
-                            padding: "0.5rem 0.75rem",
+                            width: "100%",
+                            textAlign: "left",
+                            background: "transparent",
+                            border: "none",
+                            borderBottom:
+                              index === visibleRecipientSuggestions.length - 1
+                                ? "none"
+                                : "1px solid var(--border-color)",
+                            padding: "0.85rem 1rem",
                             cursor: "pointer",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 2,
-                            borderRadius: 4,
-                            margin: "0 0.25rem",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background =
-                              "var(--surface-color)";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = "transparent";
+                            color: "var(--text-primary)",
                           }}
                         >
-                          <span
-                            style={{
-                              color: "var(--text-primary)",
-                              fontSize: "0.875rem",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {c.email}
-                          </span>
-                          {c.name && (
-                            <span
-                              style={{
-                                color: "var(--text-secondary)",
-                                fontSize: "0.75rem",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {c.name}
-                            </span>
+                          <div style={{ fontWeight: 600, marginBottom: "0.15rem" }}>{entry.email}</div>
+                          {entry.name && (
+                            <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                              {entry.name}
+                            </div>
                           )}
-                        </li>
+                        </button>
                       ))}
-                    </ul>
+                    </div>
                   )}
                 </div>
               </div>
+
               {showCcBcc && (
-                <>
+                <div style={{ display: "grid", gap: "0.9rem" }}>
                   <div>
                     <label
                       htmlFor="compose-cc"
                       style={{
                         display: "block",
-                        marginBottom: "0.5rem",
-                        fontSize: "0.875rem",
+                        marginBottom: "0.4rem",
+                        fontSize: "0.9rem",
                         color: "var(--text-secondary)",
                       }}
                     >
@@ -1752,10 +1174,8 @@ export default function Inbox() {
                       type="text"
                       className="input-field"
                       value={composeData.cc}
-                      onChange={(e) =>
-                        setComposeData({ ...composeData, cc: e.target.value })
-                      }
-                      placeholder="cc@company.com (comma-separated)"
+                      onChange={(e) => setComposeData({ ...composeData, cc: e.target.value })}
+                      placeholder="cc@company.com"
                     />
                   </div>
                   <div>
@@ -1763,8 +1183,8 @@ export default function Inbox() {
                       htmlFor="compose-bcc"
                       style={{
                         display: "block",
-                        marginBottom: "0.5rem",
-                        fontSize: "0.875rem",
+                        marginBottom: "0.4rem",
+                        fontSize: "0.9rem",
                         color: "var(--text-secondary)",
                       }}
                     >
@@ -1775,16 +1195,16 @@ export default function Inbox() {
                       type="text"
                       className="input-field"
                       value={composeData.bcc}
-                      onChange={(e) =>
-                        setComposeData({ ...composeData, bcc: e.target.value })
-                      }
-                      placeholder="bcc@company.com (comma-separated)"
+                      onChange={(e) => setComposeData({ ...composeData, bcc: e.target.value })}
+                      placeholder="bcc@company.com"
                     />
                   </div>
-                </>
+                </div>
               )}
+
               <div>
                 <label
+                  htmlFor="compose-subject"
                   style={{
                     display: "block",
                     marginBottom: "0.5rem",
@@ -1795,18 +1215,18 @@ export default function Inbox() {
                   Subject:
                 </label>
                 <input
+                  id="compose-subject"
                   type="text"
-                  required
                   className="input-field"
                   value={composeData.subject}
-                  onChange={(e) =>
-                    setComposeData({ ...composeData, subject: e.target.value })
-                  }
+                  onChange={(e) => setComposeData({ ...composeData, subject: e.target.value })}
                   placeholder="Following up"
                 />
               </div>
+
               <div>
                 <label
+                  htmlFor="compose-body"
                   style={{
                     display: "block",
                     marginBottom: "0.5rem",
@@ -1817,27 +1237,22 @@ export default function Inbox() {
                   Message:
                 </label>
                 <textarea
+                  id="compose-body"
                   required
                   className="input-field"
                   value={composeData.body}
-                  onChange={(e) =>
-                    setComposeData({ ...composeData, body: e.target.value })
-                  }
+                  onChange={(e) => setComposeData({ ...composeData, body: e.target.value })}
                   placeholder="Write your email here..."
                   rows={6}
                   style={{ resize: "vertical" }}
                 />
               </div>
 
-              {/* Attachments — paperclip opens the native file picker; selected
-                  files render as removable chips. Sent as multipart
-                  `attachments[]` in handleSendEmail; max 5 files / 10 MB each. */}
               <div>
                 <input
                   ref={composeFileInputRef}
                   type="file"
                   multiple
-                  accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain,application/zip,.jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"
                   onChange={handlePickAttachments}
                   style={{ display: "none" }}
                 />
@@ -1856,22 +1271,18 @@ export default function Inbox() {
                     color: "var(--text-secondary)",
                     fontSize: "0.8rem",
                     cursor:
-                      composeAttachments.length >= MAX_ATTACHMENTS
-                        ? "not-allowed"
-                        : "pointer",
-                    opacity:
-                      composeAttachments.length >= MAX_ATTACHMENTS ? 0.6 : 1,
+                      composeAttachments.length >= MAX_ATTACHMENTS ? "not-allowed" : "pointer",
+                    opacity: composeAttachments.length >= MAX_ATTACHMENTS ? 0.6 : 1,
                   }}
                 >
                   <Paperclip size={14} /> Attach files
                   {composeAttachments.length > 0 && (
-                    <span
-                      style={{ color: "var(--accent-color)", fontWeight: 600 }}
-                    >
+                    <span style={{ color: "var(--accent-color)", fontWeight: 600 }}>
                       ({composeAttachments.length}/{MAX_ATTACHMENTS})
                     </span>
                   )}
                 </button>
+
                 {composeAttachments.length > 0 && (
                   <div
                     style={{
@@ -1881,16 +1292,16 @@ export default function Inbox() {
                       marginTop: "0.6rem",
                     }}
                   >
-                    {composeAttachments.map((f, i) => (
+                    {composeAttachments.map((file, index) => (
                       <div
-                        key={`${f.name}-${i}`}
+                        key={`${file.name}-${index}`}
                         style={{
                           display: "inline-flex",
                           alignItems: "center",
                           gap: "0.4rem",
                           padding: "0.3rem 0.6rem",
-                          background: "rgba(59, 130, 246, 0.08)",
-                          border: "1px solid rgba(59, 130, 246, 0.3)",
+                          background: "var(--subtle-bg-2)",
+                          border: "1px solid var(--border-color)",
                           borderRadius: "14px",
                           fontSize: "0.75rem",
                           color: "var(--text-primary)",
@@ -1906,20 +1317,15 @@ export default function Inbox() {
                             maxWidth: "180px",
                           }}
                         >
-                          {f.name}
+                          {file.name}
                         </span>
-                        <span
-                          style={{
-                            color: "var(--text-secondary)",
-                            fontSize: "0.7rem",
-                          }}
-                        >
-                          {formatAttachmentSize(f.size)}
+                        <span style={{ color: "var(--text-secondary)", fontSize: "0.7rem" }}>
+                          {formatAttachmentSize(file.size)}
                         </span>
                         <button
                           type="button"
-                          onClick={() => handleRemoveAttachment(i)}
-                          aria-label={`Remove ${f.name}`}
+                          onClick={() => handleRemoveAttachment(index)}
+                          aria-label={`Remove ${file.name}`}
                           style={{
                             background: "transparent",
                             border: "none",
@@ -1938,123 +1344,134 @@ export default function Inbox() {
                 )}
               </div>
 
-              {/* AI Subject Suggestions */}
-              {aiSubjects.length > 0 && (
+              {showSubjectSuggestions && (
                 <div
-                  style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem" }}
+                  style={{
+                    borderTop: "1px solid var(--border-color)",
+                    paddingTop: "0.9rem",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.75rem",
+                  }}
                 >
-                  {aiSubjects.map((s, i) => (
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
+                    <div>
+                      <p style={{ margin: 0, fontWeight: 700 }}>Subject ideas</p>
+                      <p style={{ margin: "0.2rem 0 0", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                        Pick one or keep the currently selected subject.
+                      </p>
+                    </div>
                     <button
-                      key={i}
                       type="button"
-                      onClick={() => {
-                        setComposeData((prev) => ({ ...prev, subject: s }));
-                        setAiSubjects([]);
-                      }}
+                      onClick={() => setShowSubjectSuggestions(false)}
                       style={{
-                        padding: "0.25rem 0.6rem",
-                        borderRadius: "12px",
-                        border: "1px solid rgba(59,130,246,0.3)",
-                        background: "rgba(59,130,246,0.08)",
-                        color: "var(--accent-color)",
-                        fontSize: "0.75rem",
+                        background: "transparent",
+                        border: "none",
+                        color: "var(--text-secondary)",
                         cursor: "pointer",
+                        fontWeight: 600,
                       }}
                     >
-                      {s}
+                      Hide
                     </button>
-                  ))}
+                  </div>
+
+                  {loadingSubjects ? (
+                    <p style={{ color: "var(--text-secondary)", margin: 0 }}>Loading subjects...</p>
+                  ) : composeSubjectSuggestions.length > 0 ? (
+                    <div style={{ display: "grid", gap: "0.5rem" }}>
+                      {composeSubjectSuggestions.map((subject, index) => (
+                        <button
+                          key={`${subject}-${index}`}
+                          type="button"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            setComposeData((prev) => ({ ...prev, subject }));
+                            setShowSubjectSuggestions(false);
+                          }}
+                          style={{
+                            textAlign: "left",
+                            background: "var(--subtle-bg-2)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "10px",
+                            padding: "0.75rem 0.9rem",
+                            color: "var(--text-primary)",
+                            cursor: "pointer",
+                            fontWeight: 500,
+                          }}
+                        >
+                          {subject}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ color: "var(--text-secondary)", margin: 0 }}>No subject ideas yet.</p>
+                  )}
                 </div>
               )}
 
-              {/* Action row — refined for a professional feel: muted ghost
-                  buttons for the secondary tools, single accent-filled primary
-                  on the right. Discard removed; the header X owns dismissal. */}
               <div
                 style={{
                   display: "flex",
                   justifyContent: "space-between",
-                  marginTop: "0.75rem",
+                  alignItems: "center",
+                  gap: "1rem",
                   paddingTop: "1rem",
                   borderTop: "1px solid var(--border-color)",
-                  alignItems: "center",
-                  gap: "0.5rem",
                   flexWrap: "wrap",
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    gap: "0.5rem",
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                  }}
-                >
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
                   <select
-                    value={aiTone}
-                    onChange={(e) => setAiTone(e.target.value)}
-                    aria-label="AI tone"
+                    value={composeTone}
+                    onChange={(e) => setComposeTone(e.target.value)}
+                    className="input-field"
                     style={{
-                      padding: "0.45rem 0.6rem",
-                      fontSize: "0.8rem",
-                      width: "auto",
-                      background: "var(--input-bg)",
-                      color: "var(--text-primary)",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: 6,
-                      cursor: "pointer",
+                      width: "150px",
+                      padding: "0.55rem 0.75rem",
+                      fontSize: "0.9rem",
                     }}
                   >
-                    <option value="professional">Professional</option>
-                    <option value="friendly">Friendly</option>
-                    <option value="formal">Formal</option>
-                    <option value="casual">Casual</option>
-                    <option value="persuasive">Persuasive</option>
-                    <option value="concise">Concise</option>
+                    {COMPOSE_TONE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
                   <button
                     type="button"
-                    onClick={handleAIGenerate}
-                    disabled={aiLoading}
+                    onClick={handleComposeDraft}
+                    disabled={draftingEmail || loadingSubjects}
+                    className="btn-secondary"
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
-                      gap: "0.4rem",
-                      padding: "0.45rem 0.85rem",
-                      fontSize: "0.8rem",
-                      fontWeight: 500,
-                      background: "transparent",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: 6,
-                      color: "var(--text-primary)",
-                      cursor: aiLoading ? "wait" : "pointer",
-                      opacity: aiLoading ? 0.7 : 1,
+                      gap: "0.45rem",
                     }}
                   >
-                    <Sparkles size={14} color="var(--accent-color)" />
-                    {aiLoading ? "Generating…" : "AI Draft"}
+                    <Sparkles size={14} /> {draftingEmail ? "Drafting..." : "AI Draft"}
                   </button>
                   <button
                     type="button"
-                    onClick={handleAISubjects}
+                    onClick={() => {
+                      if (showSubjectSuggestions) {
+                        setShowSubjectSuggestions(false);
+                      } else {
+                        handleLoadSubjects();
+                      }
+                    }}
+                    disabled={loadingSubjects || draftingEmail}
+                    className="btn-secondary"
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
-                      gap: "0.4rem",
-                      padding: "0.45rem 0.85rem",
-                      fontSize: "0.8rem",
-                      fontWeight: 500,
-                      background: "transparent",
-                      border: "1px solid var(--border-color)",
-                      borderRadius: 6,
-                      color: "var(--text-primary)",
-                      cursor: "pointer",
+                      gap: "0.45rem",
                     }}
                   >
-                    <Lightbulb size={14} color="var(--text-secondary)" />
-                    Subjects
+                    <Lightbulb size={14} /> {loadingSubjects ? "Loading..." : "Subjects"}
                   </button>
                 </div>
+
                 <button
                   type="submit"
                   className="btn-primary"
@@ -2062,8 +1479,8 @@ export default function Inbox() {
                     display: "inline-flex",
                     alignItems: "center",
                     gap: "0.5rem",
-                    padding: "0.55rem 1.1rem",
-                    fontWeight: 500,
+                    padding: "0.6rem 1.15rem",
+                    fontWeight: 600,
                   }}
                 >
                   <Send size={16} /> Send Email
@@ -2092,12 +1509,16 @@ export default function Inbox() {
           }}
         >
           <div
-            className="card"
+            className="card modal"
             style={{
               padding: "2.5rem",
-              width: "500px",
-              border: "1px solid rgba(168, 85, 247, 0.3)",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
+              width: "min(560px, calc(100vw - 2rem))",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              background: "var(--modal-bg)",
+              color: "var(--text-primary)",
+              border: "1px solid var(--border-color)",
+              boxShadow: "var(--glass-shadow)",
             }}
           >
             <h3
@@ -2110,12 +1531,10 @@ export default function Inbox() {
                 gap: "0.5rem",
               }}
             >
-              <Calendar size={24} color="var(--accent-color)" /> Calendar Sync
+              <Calendar size={24} color="var(--accent-color)" /> Schedule Meeting
             </h3>
-            <form
-              onSubmit={handleScheduleMeeting}
-              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
-            >
+
+            <form onSubmit={handleScheduleMeeting} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
               <div>
                 <label
                   style={{
@@ -2125,23 +1544,15 @@ export default function Inbox() {
                     color: "var(--text-secondary)",
                   }}
                 >
-                  Associate with Contact:
+                  Select Contact:
                 </label>
                 <select
                   required
                   className="input-field"
                   value={meetData.contactId}
-                  onChange={(e) =>
-                    setMeetData({ ...meetData, contactId: e.target.value })
-                  }
+                  onChange={(e) => setMeetData({ ...meetData, contactId: e.target.value })}
                 >
-                  <option value="">-- Select Contact --</option>
-                  {/* A meeting invite is dispatched to the contact's inbox, so only
-                      list contacts/patients that actually have an email, and show it.
-                      Patients aren't CRM Contacts (they live in the wellness Patient
-                      table), so they're grouped separately and their option value is
-                      prefixed `patient:` so handleScheduleMeeting routes them to the
-                      patient activity endpoint instead of /api/contacts/:id. */}
+                  <option value="">-- Choose Contact --</option>
                   {contacts.filter((c) => c.email).length > 0 && (
                     <optgroup label="Contacts">
                       {contacts
@@ -2166,50 +1577,48 @@ export default function Inbox() {
                   )}
                 </select>
               </div>
+
               <div style={{ display: "flex", gap: "1rem" }}>
                 <div style={{ flex: 1 }}>
                   <label
-                    style={{
-                      display: "block",
-                      marginBottom: "0.5rem",
-                      fontSize: "0.875rem",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    Date:
+                  style={{
+                    display: "block",
+                    marginBottom: "0.5rem",
+                    fontSize: "0.875rem",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                    Meeting Date:
                   </label>
                   <input
                     type="date"
                     required
                     className="input-field"
                     value={meetData.date}
-                    onChange={(e) =>
-                      setMeetData({ ...meetData, date: e.target.value })
-                    }
+                    onChange={(e) => setMeetData({ ...meetData, date: e.target.value })}
                   />
                 </div>
                 <div style={{ flex: 1 }}>
                   <label
-                    style={{
-                      display: "block",
-                      marginBottom: "0.5rem",
-                      fontSize: "0.875rem",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    Time:
+                  style={{
+                    display: "block",
+                    marginBottom: "0.5rem",
+                    fontSize: "0.875rem",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                    Meeting Time:
                   </label>
                   <input
                     type="time"
                     required
                     className="input-field"
                     value={meetData.time}
-                    onChange={(e) =>
-                      setMeetData({ ...meetData, time: e.target.value })
-                    }
+                    onChange={(e) => setMeetData({ ...meetData, time: e.target.value })}
                   />
                 </div>
               </div>
+
               <div>
                 <label
                   style={{
@@ -2219,20 +1628,74 @@ export default function Inbox() {
                     color: "var(--text-secondary)",
                   }}
                 >
-                  Meeting Topic & Conferencing Links:
+                  Meeting Agenda & Conferencing Links:
                 </label>
                 <textarea
                   required
                   className="input-field"
                   value={meetData.description}
-                  onChange={(e) =>
-                    setMeetData({ ...meetData, description: e.target.value })
-                  }
+                  onChange={(e) => setMeetData({ ...meetData, description: e.target.value })}
                   placeholder="Zoom/Google Meet links and agenda..."
                   rows={3}
                   style={{ resize: "vertical" }}
                 />
               </div>
+
+              {canAssignMeetingStaff && (
+                <div
+                  style={{
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "0.875rem",
+                    padding: "1rem",
+                    background: "var(--subtle-bg-2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.75rem",
+                  }}
+                >
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        marginBottom: "0.35rem",
+                        fontSize: "0.875rem",
+                        color: "var(--text-secondary)",
+                        fontWeight: "600",
+                      }}
+                    >
+                      Assign Staff Members:
+                    </label>
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: "0.8rem",
+                        color: "var(--text-tertiary, var(--text-secondary))",
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      Selected staff will receive the invite by email and a private notification in their bell icon.
+                    </p>
+                  </div>
+
+                  {staffLoading ? (
+                    <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.9rem" }}>
+                      Loading staff members...
+                    </p>
+                  ) : meetingStaffOptions.length > 0 ? (
+                    <MultiSelectDropdown
+                      options={meetingStaffOptions}
+                      selected={meetData.staffIds}
+                      onChange={handleMeetingStaffChange}
+                      placeholder="No staff selected"
+                      searchable
+                    />
+                  ) : (
+                    <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.9rem" }}>
+                      No active staff members with email addresses are available to assign.
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div
                 style={{
@@ -2272,143 +1735,6 @@ export default function Inbox() {
         </div>
       )}
 
-      {showCallDial && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "var(--overlay-bg)",
-            backdropFilter: "blur(8px)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 100,
-            animation: "fadeIn 0.2s ease-out",
-          }}
-        >
-          <div
-            className="card"
-            style={{
-              padding: "2.5rem",
-              width: "500px",
-              border: "1px solid rgba(38, 88, 85, 0.3)",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
-            }}
-          >
-            <h3
-              style={{
-                marginBottom: "1.5rem",
-                fontSize: "1.5rem",
-                fontWeight: "bold",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-              }}
-            >
-              <Phone size={24} color="var(--accent-color)" /> Initiate Call
-            </h3>
-            <form
-              onSubmit={handleInitiateCall}
-              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
-            >
-              <div>
-                <label
-                  style={{
-                    display: "block",
-                    marginBottom: "0.5rem",
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  Select Contact:
-                </label>
-                <select
-                  required
-                  className="input-field"
-                  value={callDialData.contactId}
-                  onChange={(e) =>
-                    setCallDialData({
-                      ...callDialData,
-                      contactId: e.target.value,
-                    })
-                  }
-                >
-                  <option value="">-- Select Contact --</option>
-                  {contacts.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.email || c.phone})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label
-                  style={{
-                    display: "block",
-                    marginBottom: "0.5rem",
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  Notes (optional):
-                </label>
-                <textarea
-                  className="input-field"
-                  value={callDialData.notes}
-                  onChange={(e) =>
-                    setCallDialData({ ...callDialData, notes: e.target.value })
-                  }
-                  placeholder="Add call notes..."
-                  rows={3}
-                  style={{ resize: "vertical" }}
-                />
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  marginTop: "1rem",
-                  gap: "1rem",
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setShowCallDial(false)}
-                  style={{
-                    background: "transparent",
-                    color: "var(--text-secondary)",
-                    border: "none",
-                    cursor: "pointer",
-                    fontWeight: "500",
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.5rem",
-                  }}
-                >
-                  <Phone size={16} /> Start Call
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* #460: Row-detail modal — shared across email/call/sms/whatsapp tabs.
-          Renders the full body, headers, status, and (for calls) the recording.
-          NOTE: PR #512 (squash-merge 8b59fcb) accidentally dropped this block
-          while keeping setDetail() callsites. PR #511's rebase restores it. */}
       {detail && (
         <div
           onClick={() => setDetail(null)}
@@ -2429,13 +1755,16 @@ export default function Inbox() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="card"
+            className="card modal"
             style={{
               padding: "2.5rem",
-              width: "640px",
+              width: "min(640px, calc(100vw - 2rem))",
               maxHeight: "80vh",
               overflowY: "auto",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
+              background: "var(--modal-bg)",
+              color: "var(--text-primary)",
+              border: "1px solid var(--border-color)",
+              boxShadow: "var(--glass-shadow)",
             }}
           >
             <div
@@ -2456,26 +1785,7 @@ export default function Inbox() {
                   gap: "0.5rem",
                 }}
               >
-                {detail.kind === "email" && (
-                  <>
-                    <Mail size={20} color="var(--accent-color)" /> Email
-                  </>
-                )}
-                {detail.kind === "call" && (
-                  <>
-                    <Phone size={20} color="var(--warning-color)" /> Call Log
-                  </>
-                )}
-                {detail.kind === "sms" && (
-                  <>
-                    <MessageSquare size={20} color="#10b981" /> SMS Message
-                  </>
-                )}
-                {detail.kind === "wa" && (
-                  <>
-                    <MessageCircle size={20} color="#25D366" /> WhatsApp Message
-                  </>
-                )}
+                <Mail size={20} color="var(--accent-color)" /> Email
               </h3>
               <button
                 onClick={() => setDetail(null)}
@@ -2490,271 +1800,100 @@ export default function Inbox() {
                 <X size={20} />
               </button>
             </div>
-            {detail.kind === "email" && (
-              <div>
-                {/* Avatar + from/to row — ported from the previous selectedEmail
-                    modal (PR #511 #7 consolidation). Same visual hierarchy
-                    sms/wa/call branches use, just with the email-specific
-                    sender card on top. */}
+
+            <div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "1rem",
+                  marginBottom: "1.25rem",
+                }}
+              >
                 <div
                   style={{
+                    width: "50px",
+                    height: "50px",
+                    borderRadius: "50%",
+                    background: "var(--primary-color, var(--accent-color))",
                     display: "flex",
                     alignItems: "center",
-                    gap: "1rem",
-                    marginBottom: "1.25rem",
+                    justifyContent: "center",
+                    flexShrink: 0,
                   }}
                 >
-                  <div
+                  <User size={24} color="#fff" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p
                     style={{
-                      width: "50px",
-                      height: "50px",
-                      borderRadius: "50%",
-                      background: "var(--primary-color, var(--accent-color))",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
+                      fontSize: "1.05rem",
+                      fontWeight: "bold",
+                      margin: 0,
+                      marginBottom: "0.15rem",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
                     }}
+                    title={detail.from}
                   >
-                    <User size={24} color="#fff" />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p
-                      style={{
-                        fontSize: "1.05rem",
-                        fontWeight: "bold",
-                        margin: 0,
-                        marginBottom: "0.15rem",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                      title={detail.item.from}
-                    >
-                      {detail.item.from}
-                    </p>
-                    <p
-                      style={{
-                        fontSize: "0.85rem",
-                        color: "var(--text-secondary)",
-                        margin: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                      title={detail.item.to}
-                    >
-                      to {detail.item.to}
-                    </p>
-                  </div>
-                </div>
-                <h2
-                  style={{
-                    fontSize: "1.4rem",
-                    fontWeight: "bold",
-                    margin: 0,
-                    marginBottom: "0.4rem",
-                  }}
-                >
-                  {detail.item.subject}
-                </h2>
-                <p
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                    margin: 0,
-                    marginBottom: "1.25rem",
-                  }}
-                >
-                  {new Date(detail.item.createdAt).toLocaleString()}
-                </p>
-                <div
-                  style={{
-                    borderTop: "1px solid var(--border-color)",
-                    paddingTop: "1.25rem",
-                    whiteSpace: "pre-wrap",
-                    wordWrap: "break-word",
-                    lineHeight: 1.65,
-                    color: "var(--text-primary)",
-                  }}
-                >
-                  {detail.item.body || (
-                    <em style={{ color: "var(--text-secondary)" }}>
-                      (empty body)
-                    </em>
-                  )}
-                </div>
-              </div>
-            )}
-            {detail.kind === "call" && (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.75rem",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>Direction:</strong> {detail.item.direction}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>Duration:</strong> {detail.item.duration ?? 0} seconds
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>From:</strong> {detail.item.callerNumber || "—"}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>To:</strong> {detail.item.calleeNumber || "—"}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>Status:</strong> {detail.item.status || "—"}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>When:</strong>{" "}
-                  {new Date(detail.item.createdAt).toLocaleString()}
-                </div>
-                {detail.item.notes && (
-                  <div
-                    style={{
-                      marginTop: "0.5rem",
-                      whiteSpace: "pre-wrap",
-                      lineHeight: 1.55,
-                    }}
-                  >
-                    <strong
-                      style={{ display: "block", marginBottom: "0.25rem" }}
-                    >
-                      Notes
-                    </strong>
-                    {detail.item.notes}
-                  </div>
-                )}
-                {detail.item.recordingUrl && (
-                  <div style={{ marginTop: "0.5rem" }}>
-                    <strong
-                      style={{ display: "block", marginBottom: "0.25rem" }}
-                    >
-                      Recording
-                    </strong>
-                    <audio
-                      controls
-                      src={detail.item.recordingUrl}
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-            {(detail.kind === "sms" || detail.kind === "wa") && (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.75rem",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>Direction:</strong> {detail.item.direction}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>From:</strong> {detail.item.from || "—"}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>To:</strong> {detail.item.to || "—"}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>Status:</strong> {detail.item.status || "—"}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.85rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <strong>When:</strong>{" "}
-                  {new Date(detail.item.createdAt).toLocaleString()}
-                </div>
-                {detail.kind === "wa" && detail.item.templateName && (
-                  <div
+                    {detail.from}
+                  </p>
+                  <p
                     style={{
                       fontSize: "0.85rem",
                       color: "var(--text-secondary)",
+                      margin: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
                     }}
+                    title={detail.to}
                   >
-                    <strong>Template:</strong> {detail.item.templateName}
-                  </div>
-                )}
-                <div
-                  style={{
-                    marginTop: "0.5rem",
-                    whiteSpace: "pre-wrap",
-                    lineHeight: 1.55,
-                    padding: "0.75rem 1rem",
-                    borderRadius: "8px",
-                    background:
-                      detail.kind === "wa"
-                        ? "rgba(37, 211, 102, 0.06)"
-                        : "rgba(16, 185, 129, 0.06)",
-                  }}
-                >
-                  {detail.item.body || (
-                    <em style={{ color: "var(--text-secondary)" }}>
-                      (no body — template only)
-                    </em>
-                  )}
+                    to {detail.to}
+                  </p>
                 </div>
               </div>
-            )}
+
+              <h2
+                style={{
+                  fontSize: "1.4rem",
+                  fontWeight: "bold",
+                  margin: 0,
+                  marginBottom: "0.4rem",
+                }}
+              >
+                {detail.subject}
+              </h2>
+              <p
+                style={{
+                  fontSize: "0.85rem",
+                  color: "var(--text-secondary)",
+                  margin: 0,
+                  marginBottom: "1.25rem",
+                }}
+              >
+                {new Date(detail.createdAt).toLocaleString()}
+              </p>
+
+              <div
+                style={{
+                  borderTop: "1px solid var(--border-color)",
+                  paddingTop: "1.25rem",
+                  whiteSpace: "pre-wrap",
+                  wordWrap: "break-word",
+                  lineHeight: 1.65,
+                  color: "var(--text-primary)",
+                }}
+              >
+                {detail.body ? (
+                  renderTextWithLinks(detail.body)
+                ) : (
+                  <em style={{ color: "var(--text-secondary)" }}>(empty body)</em>
+                )}
+              </div>
+            </div>
+
             <div
               style={{
                 display: "flex",
@@ -2769,296 +1908,6 @@ export default function Inbox() {
           </div>
         </div>
       )}
-
-      {showComposeSms && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "var(--overlay-bg)",
-            backdropFilter: "blur(8px)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 100,
-            animation: "fadeIn 0.2s ease-out",
-          }}
-        >
-          <div
-            className="card"
-            style={{
-              padding: "2.5rem",
-              width: "600px",
-              border: "1px solid rgba(16, 185, 129, 0.3)",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
-            }}
-          >
-            <h3
-              style={{
-                marginBottom: "1.5rem",
-                fontSize: "1.5rem",
-                fontWeight: "bold",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-              }}
-            >
-              <MessageSquare size={24} color="#10b981" /> New SMS Message
-            </h3>
-            <form
-              onSubmit={handleSendSms}
-              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
-            >
-              <div>
-                <label
-                  style={{
-                    display: "block",
-                    marginBottom: "0.5rem",
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  Phone Number:
-                </label>
-                <input
-                  type="tel"
-                  required
-                  className="input-field"
-                  value={composeSmsData.to}
-                  onChange={(e) =>
-                    setComposeSmsData({ ...composeSmsData, to: e.target.value })
-                  }
-                  placeholder="+91 XXXXXXXXXX"
-                />
-              </div>
-              <div>
-                <label
-                  style={{
-                    display: "block",
-                    marginBottom: "0.5rem",
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  Message:
-                </label>
-                <textarea
-                  required
-                  className="input-field"
-                  value={composeSmsData.body}
-                  onChange={(e) =>
-                    setComposeSmsData({
-                      ...composeSmsData,
-                      body: e.target.value,
-                    })
-                  }
-                  placeholder="Type your SMS message here..."
-                  rows={4}
-                  style={{ resize: "vertical" }}
-                />
-                <span
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "var(--text-secondary)",
-                    marginTop: "0.25rem",
-                    display: "block",
-                  }}
-                >
-                  Character count: {composeSmsData.body.length}/160
-                </span>
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  marginTop: "1rem",
-                  gap: "1rem",
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setShowComposeSms(false)}
-                  style={{
-                    background: "transparent",
-                    color: "var(--text-secondary)",
-                    border: "none",
-                    cursor: "pointer",
-                    fontWeight: "500",
-                  }}
-                >
-                  Discard
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.5rem",
-                  }}
-                >
-                  <Send size={16} /> Send SMS
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* #594 — Compose WhatsApp modal. Channel-specific entry: To field is
-          a phone number (E.164 expected by Meta Cloud API), body is plain
-          text, POST to /api/whatsapp/send. Email-specific fields (subject,
-          cc/bcc) are intentionally absent. */}
-      {showComposeWa && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "var(--overlay-bg)",
-            backdropFilter: "blur(8px)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 100,
-            animation: "fadeIn 0.2s ease-out",
-          }}
-        >
-          <div
-            className="card"
-            style={{
-              padding: "2.5rem",
-              width: "600px",
-              border: "1px solid rgba(37, 211, 102, 0.3)",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
-            }}
-          >
-            <h3
-              style={{
-                marginBottom: "1.5rem",
-                fontSize: "1.5rem",
-                fontWeight: "bold",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-              }}
-            >
-              <MessageCircle size={24} color="#25D366" /> New WhatsApp Message
-            </h3>
-            <form
-              onSubmit={handleSendWa}
-              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
-            >
-              <div>
-                <label
-                  htmlFor="compose-wa-to"
-                  style={{
-                    display: "block",
-                    marginBottom: "0.5rem",
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  Phone Number (E.164):
-                </label>
-                <input
-                  id="compose-wa-to"
-                  type="tel"
-                  required
-                  list="contacts-phone-list"
-                  className="input-field"
-                  value={composeWaData.to}
-                  onChange={(e) =>
-                    setComposeWaData({ ...composeWaData, to: e.target.value })
-                  }
-                  placeholder="+919876543210"
-                />
-                <datalist id="contacts-phone-list">
-                  {contacts
-                    .filter((c) => c.phone)
-                    .map((c) => (
-                      <option key={c.id} value={c.phone}>
-                        {c.name}
-                      </option>
-                    ))}
-                </datalist>
-              </div>
-              <div>
-                <label
-                  htmlFor="compose-wa-body"
-                  style={{
-                    display: "block",
-                    marginBottom: "0.5rem",
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  Message:
-                </label>
-                <textarea
-                  id="compose-wa-body"
-                  required
-                  className="input-field"
-                  value={composeWaData.body}
-                  onChange={(e) =>
-                    setComposeWaData({ ...composeWaData, body: e.target.value })
-                  }
-                  placeholder="Type your WhatsApp message here..."
-                  rows={5}
-                  style={{ resize: "vertical" }}
-                />
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  marginTop: "1rem",
-                  gap: "1rem",
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowComposeWa(false);
-                    setComposeWaData({ to: "", body: "" });
-                  }}
-                  style={{
-                    background: "transparent",
-                    color: "var(--text-secondary)",
-                    border: "none",
-                    cursor: "pointer",
-                    fontWeight: "500",
-                  }}
-                >
-                  Discard
-                </button>
-                {/* #726 — was solid #25D366 (WhatsApp brand green) among
-                    teal Send Email / Send SMS submits. Drop the inline
-                    overrides so btn-primary renders the canonical teal. */}
-                <button
-                  type="submit"
-                  disabled={waSending}
-                  className="btn-primary"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.5rem",
-                  }}
-                >
-                  <Send size={16} /> {waSending ? "Sending…" : "Send WhatsApp"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
-

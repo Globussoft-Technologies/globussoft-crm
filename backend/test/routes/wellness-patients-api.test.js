@@ -66,8 +66,14 @@ prisma.patient = {
   findMany: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  delete: vi.fn(),
   count: vi.fn(),
 };
+prisma.$transaction = vi.fn(async (fn) => fn(prisma));
+prisma.user = prisma.user || {};
+prisma.user.findFirst = vi.fn();
+prisma.user.findUnique = vi.fn();
+prisma.user.update = vi.fn();
 prisma.visit = prisma.visit || {};
 prisma.visit.findMany = vi.fn();
 prisma.invoice = prisma.invoice || {};
@@ -124,7 +130,12 @@ beforeEach(() => {
   prisma.patient.findMany.mockReset();
   prisma.patient.create.mockReset();
   prisma.patient.update.mockReset();
+  prisma.patient.delete.mockReset();
   prisma.patient.count.mockReset();
+  prisma.user.findFirst.mockReset();
+  prisma.user.findUnique.mockReset();
+  prisma.user.update.mockReset();
+  prisma.$transaction.mockReset();
   prisma.visit.findMany.mockReset();
   prisma.invoice.findMany.mockReset();
   prisma.auditLog.create.mockReset();
@@ -138,6 +149,7 @@ beforeEach(() => {
     Promise.resolve({ id: where.id, tenantId: 1, ...data }),
   );
   prisma.patient.count.mockResolvedValue(0);
+  prisma.$transaction.mockImplementation(async (fn) => fn(prisma));
 });
 
 // ─── POST /patients — S100 firstName + lastName whitelist ─────────────
@@ -242,6 +254,185 @@ describe('POST /api/wellness/patients — S100 firstName + lastName whitelist', 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_NAME_FIELD');
     expect(prisma.patient.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/wellness/patients/:id - hard delete + customer tombstone', () => {
+  test('hard-deletes an active patient and anonymizes the linked CUSTOMER login', async () => {
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 22,
+      tenantId: 1,
+      name: 'Riya Sharma',
+      email: 'riya@example.com',
+      deletedAt: null,
+      userId: 7,
+      user: {
+        id: 7,
+        email: 'riya@example.com',
+        userType: 'CUSTOMER',
+      },
+    });
+    prisma.patient.delete.mockResolvedValue({ id: 22 });
+    prisma.user.update.mockResolvedValue({ id: 7 });
+
+    const res = await request(makeApp())
+      .delete('/api/wellness/patients/22')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      id: 22,
+      hardDeleted: true,
+      deletedAt: null,
+      customerEmailAnonymized: true,
+    });
+    expect(prisma.patient.delete).toHaveBeenCalledWith({ where: { id: 22 } });
+    expect(prisma.patient.update).not.toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 7 },
+        data: expect.objectContaining({
+          email: expect.stringMatching(/^deleted-customer-1-7-\d+@redacted\.local$/),
+          deactivatedAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'DELETE',
+          entity: 'Patient',
+        }),
+      }),
+    );
+  });
+
+  test('falls back to soft delete when Prisma blocks the hard delete', async () => {
+    const softDeletedAt = new Date('2026-08-25T10:00:00Z');
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 22,
+      tenantId: 1,
+      name: 'Riya Sharma',
+      email: 'riya@example.com',
+      deletedAt: null,
+      userId: 7,
+      user: {
+        id: 7,
+        email: 'riya@example.com',
+        userType: 'CUSTOMER',
+      },
+    });
+    prisma.patient.delete.mockRejectedValueOnce(Object.assign(new Error('FK blocked'), { code: 'P2003' }));
+    prisma.patient.update.mockResolvedValue({ id: 22, deletedAt: softDeletedAt });
+    prisma.user.update.mockResolvedValue({ id: 7 });
+
+    const res = await request(makeApp())
+      .delete('/api/wellness/patients/22')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      id: 22,
+      hardDeleted: false,
+      customerEmailAnonymized: true,
+    });
+    expect(typeof res.body.deletedAt).toBe('string');
+    expect(Number.isNaN(Date.parse(res.body.deletedAt))).toBe(false);
+    expect(prisma.patient.delete).toHaveBeenCalledTimes(1);
+    expect(prisma.patient.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 22 },
+        data: expect.objectContaining({ deletedAt: expect.any(Date) }),
+      }),
+    );
+  });
+});
+
+describe('POST /api/wellness/patients/:id/restore - rebind linked CUSTOMER email', () => {
+  test('restores a soft-deleted patient and the original customer email when free', async () => {
+    const deletedAt = new Date('2026-08-20T10:00:00Z');
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 22,
+      tenantId: 1,
+      name: 'Riya Sharma',
+      email: 'riya@example.com',
+      deletedAt,
+      userId: 7,
+      user: {
+        id: 7,
+        email: 'deleted-customer-1-7-1720000000000@redacted.local',
+        userType: 'CUSTOMER',
+      },
+    });
+    prisma.user.findFirst.mockResolvedValue(null);
+    prisma.user.update.mockResolvedValue({ id: 7, email: 'riya@example.com' });
+    prisma.patient.update.mockResolvedValue({ id: 22, deletedAt: null });
+
+    const res = await request(makeApp())
+      .post('/api/wellness/patients/22/restore')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      id: 22,
+      customerEmailRestored: true,
+    });
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 7 },
+        data: expect.objectContaining({
+          email: 'riya@example.com',
+          deactivatedAt: null,
+        }),
+      }),
+    );
+    expect(prisma.patient.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 22 },
+        data: { deletedAt: null },
+      }),
+    );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'RESTORE',
+          entity: 'Patient',
+        }),
+      }),
+    );
+  });
+
+  test('blocks restore when any other user row still holds the original email', async () => {
+    const deletedAt = new Date('2026-08-20T10:00:00Z');
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 22,
+      tenantId: 1,
+      name: 'Riya Sharma',
+      email: 'riya@example.com',
+      deletedAt,
+      userId: 7,
+      user: {
+        id: 7,
+        email: 'deleted-customer-1-7-1720000000000@redacted.local',
+        userType: 'CUSTOMER',
+      },
+    });
+    prisma.user.findFirst.mockResolvedValue({
+      id: 11,
+      deactivatedAt: new Date('2026-08-21T10:00:00Z'),
+    });
+
+    const res = await request(makeApp())
+      .post('/api/wellness/patients/22/restore')
+      .send({});
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('EMAIL_ALREADY_EXISTS');
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.patient.update).not.toHaveBeenCalled();
   });
 });
 

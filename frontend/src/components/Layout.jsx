@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // #475: removed ChevronDown import — the chevron next to the user name
 // implied a dropdown affordance that didn't exist; clicking it just navigated
@@ -143,7 +143,7 @@ function TenantChip({ tenant }) {
 const MOBILE_BREAKPOINT_PX = 900;
 
 const Layout = () => {
-  const { user, setUser, setToken, token, tenant, setTenant } =
+  const { user, setUser, setToken, token, tenant } =
     useContext(AuthContext);
   // #862 — top-bar theme toggle. Cycles light → dark → system (matches the
   // /settings Appearance card's 3-option group). Discoverable from anywhere
@@ -156,13 +156,15 @@ const Layout = () => {
   const location = useLocation();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
-  // The softphone FAB is fixed at bottom-right (2rem/2rem) — on WhatsApp chat
-  // pages and the Gmail compose page it overlaps the docked composer.
+  const isTravel = tenant?.vertical === "travel";
+  // The softphone FAB is fixed at bottom-right (2rem/2rem) — on WhatsApp chat,
+  // the inbox page, and the Gmail compose page it overlaps the docked composer.
   // Hide it only on those routes; every other page keeps it unchanged.
   const isWhatsAppChat =
     location.pathname === "/whatsapp" ||
     location.pathname === "/travel/whatsapp" ||
-    location.pathname === "/gmail";
+    location.pathname === "/gmail" ||
+    location.pathname === "/inbox";
   const isTravelShortcutPath =
     location.pathname === "/travel" ||
     location.pathname.startsWith("/travel/") ||
@@ -293,7 +295,7 @@ const Layout = () => {
         if (data) {
           setDaysRemaining(data.daysRemaining);
         }
-      } catch (err) {
+      } catch {
         // silently fail
       }
     };
@@ -623,7 +625,7 @@ const Layout = () => {
           </small>
         </footer>
       </div>
-      {!isWellness && !isWhatsAppChat && <Softphone />}
+      {!isWellness && !isTravel && !isWhatsAppChat && <Softphone />}
       {/* Wellness Admin Support Chatbot — the component itself also guards
           on tenant.vertical === 'wellness' + authenticated user; the layout
           check avoids mounting it at all for other verticals. */}

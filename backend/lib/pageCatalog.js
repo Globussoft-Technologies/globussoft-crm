@@ -108,6 +108,20 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'appointments', action: 'read' }],
   },
   {
+    path: '/wellness/call-history',
+    label: 'Call History',
+    description:
+      'Every AI and manual Callified call, with filters, paging and per-call transcript / recording / AI review',
+    category: 'Clinical',
+    // `call_history.read` opens the page and shows YOUR OWN calls.
+    // `call_history.read_all` (or ADMIN / MANAGER) widens it to the whole
+    // clinic — see resolveCallScope in routes/callified.js. Split that way
+    // because a recording is a real patient discussing real treatment, so
+    // clinic-wide access is a deliberate grant rather than a side effect of
+    // being able to place a call.
+    requiredPermissions: [{ module: 'call_history', action: 'read' }],
+  },
+  {
     path: '/wellness/my-appointments',
     label: 'My appointments',
     description: 'Appointments where you are the assigned practitioner',

@@ -123,6 +123,17 @@ const WELLNESS_MODULES = {
   // granted the tenant-wide list without polluting their nav with a
   // "My Appointments" page they'd never use (admins aren't assigned slots).
   my_appointments: ['read'],
+  // `call_history` gates /wellness/call-history (wellness vertical only).
+  //
+  //   read      — open the page at all. Everyone with it sees THEIR OWN calls.
+  //   read_all  — see every staff member's calls, not just your own.
+  //
+  // Split the same way appointments / my_appointments is, and for the same
+  // reason: a telecaller should be able to review their own conversations
+  // without being handed the whole clinic's call log, which is a recording of
+  // real patients discussing real treatment. ADMIN and MANAGER get read_all
+  // implicitly — they already have clinic-wide oversight everywhere else.
+  call_history: ['read', 'read_all'],
   // `book_appointment` gates /wellness/book-appointment — the staff/
   // patient booking form. Telecallers / receptionists need this to
   // create new appointments on behalf of patients; doctors don't (slots

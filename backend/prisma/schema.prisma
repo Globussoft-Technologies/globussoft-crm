@@ -459,6 +459,8 @@ model Tenant {
   //   ServiceCategory — hierarchical taxonomy for Service.
   //   Drug            — drug catalogue used by prescription writing.
   serviceCategories ServiceCategory[]
+  //   ServicePackage — saleable bundles of services sold as N sessions.
+  servicePackages   ServicePackage[]
   drugs             Drug[]
 
   // PRD Gap §1.5 / §1.6 — staff commission profiles + per-staff revenue
@@ -1390,7 +1392,13 @@ model CallLog {
   duration       Int // seconds
   notes          String?  @db.Text
   direction      String   @default("OUTBOUND")
-  recordingUrl   String?
+  // TEXT, not the default varchar(191): Callified now returns absolute object
+  // -storage URLs rather than a short relative path, e.g.
+  // https://objectstorage.ap-mumbai-1.oraclecloud.com/n/<ns>/b/callified-live-media/o/recordings/<org>/<tenant>/<uuid>_<ts>.wav
+  // — observed at 193 chars, two over the limit, which made the whole
+  // fetch-call-details write fail with "value too long for the column" and
+  // surfaced as a 500 on GET /api/callified/calls/:id/details.
+  recordingUrl   String?  @db.Text
   provider       String? // "myoperator", "knowlarity", "twilio", "webrtc"
   providerCallId String?
   status         String   @default("COMPLETED") // INITIATED, RINGING, CONNECTED, COMPLETED, MISSED, FAILED
@@ -9912,4 +9920,52 @@ model TravelDiagnosticRagResult {
 
   @@index([tenantId, subBrand])
   @@index([tenantId, diagnosticId])
+}
+
+/// A saleable bundle of wellness services sold as N discounted sessions.
+///
+/// Before this model the "package builder" was a pricing calculator only — it
+/// produced a copy-paste sales pitch and explicitly created no record. Nothing
+/// could be listed to a customer, priced consistently twice, or bought.
+///
+/// `serviceIds` is a JSON-stringified array of Service ids (the canonical
+/// JSON-string-column convention used across this schema — see
+/// SequenceStep.conditionJson, Campaign.scheduleFilters, Patient.tags). A
+/// package intentionally does NOT use a relation table: the bundle is a
+/// priced snapshot, and a service later being renamed, repriced or retired
+/// must not silently mutate a package already quoted to a customer. `price`
+/// is likewise stored, not derived, for the same reason.
+model ServicePackage {
+  id          Int     @id @default(autoincrement())
+  name        String
+  description String? @db.Text
+
+  /// JSON array of Service ids, e.g. "[10,11]". Snapshot, not a relation.
+  serviceIds String @db.Text
+  /// How many times the WHOLE bundle repeats.
+  sessions        Int   @default(6)
+  discountPercent Int   @default(0)
+  /// Gross (sum of the bundled services' base prices) before discount.
+  grossPrice Float @default(0)
+  /// What the customer pays — stored so a later price change to a service
+  /// cannot retroactively alter a package already sold or quoted.
+  price    Float  @default(0)
+  currency String @default("INR")
+
+  /// Off = retired; the package stops being offered but existing sales keep
+  /// resolving against it.
+  isActive Boolean @default(true)
+  /// On = listed on the customer-facing catalog. Off = internal/quote-only,
+  /// which is how a bespoke package negotiated for one client stays private.
+  isPublic Boolean @default(false)
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  createdBy Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, isPublic, isActive])
 }

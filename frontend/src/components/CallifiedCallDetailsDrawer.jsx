@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { FileText, X, Loader, Phone, Clock, Smile, Calendar, AlertCircle, RefreshCw, User, Play } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
+import { crmRecordingUrl } from "../utils/callified";
 
 /**
  * Drawer showing every Callified AI call attempt for a CRM lead.
@@ -12,27 +13,6 @@ import { fetchApi, getAuthToken } from "../utils/api";
  *   - transcript messages
  *   - AI review (score, sentiment, appointment, summary, insights)
  */
-/**
- * Rewrite a Callified `recording_url` to the CRM's streaming proxy.
- *
- * Callified returns a path on THEIR host (`/api/recordings/<org>/<…>.wav`),
- * and that endpoint is behind their Bearer JWT — they explicitly removed the
- * `?token=` fallback so the credential never lands in a URL. Rendered as-is,
- * the browser resolved it against the CRM's own origin, hit our API, and got
- * a 404 — which is why the player sat at 0:00 / 0:00.
- *
- * `/api/callified/recordings/*` streams the bytes with the tenant's Callified
- * token attached server-side. Already-absolute URLs are left alone.
- */
-function crmRecordingUrl(recordingUrl) {
-  const raw = String(recordingUrl || "").trim();
-  if (!raw) return "";
-  if (/^https?:\/\//i.test(raw)) return raw;
-  const path = raw.replace(/^\/?api\/recordings\/?/, "");
-  if (!path) return "";
-  return `/api/callified/recordings/${path}`;
-}
-
 /**
  * Recording player — blob-fetch, loaded on demand.
  *
@@ -206,10 +186,14 @@ export default function CallifiedCallDetailsDrawer({ lead, onClose }) {
     // Sort newest first so Call #1 is the most recent attempt.
     return transcripts
       .map((t) => {
+        // ONLY the review belonging to this transcript. There used to be a
+        // `|| reviews.find(r => !r.error)` fallback here, which handed a call
+        // with no review of its own the FIRST review in the list — another
+        // call's score, sentiment and summary, rendered as if it were this
+        // one's. A missing review must read as missing, not as someone
+        // else's.
         const review =
-          reviews.find((r) => r && !r.error && r.transcript_id === t.id) ||
-          reviews.find((r) => r && !r.error) ||
-          null;
+          reviews.find((r) => r && !r.error && r.transcript_id === t.id) || null;
         return { transcript: t, review };
       })
       .sort((a, b) => new Date(b.transcript.created_at || 0).getTime() - new Date(a.transcript.created_at || 0).getTime());

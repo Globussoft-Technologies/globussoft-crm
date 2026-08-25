@@ -872,6 +872,10 @@ const wellnessAiConfigRoutes = require("./routes/wellness_ai_config");
 // services/callifiedClient.js the generic CRM Leads page uses; declares only
 // /callified/* paths that wellness.js does NOT own.
 const wellnessCallifiedRoutes = require("./routes/wellness_callified");
+// Wellness service packages — saleable bundles of services sold as N
+// discounted sessions. Declares only /packages* paths that wellness.js does
+// NOT own.
+const wellnessPackagesRoutes = require("./routes/wellness_packages");
 // Wave 2 Agent II — POS / cash register / shift / sale backbone.
 const posRoutes = require("./routes/pos");
 // D16 Wallet Top-up Arc 1 slice 2-partial — read-only wallet endpoints
@@ -1523,6 +1527,8 @@ app.use("/api/support-chat", supportChatRoutes);
 app.use("/api/wellness", wellnessAiConfigRoutes);
 // Callified calling for the wellness Appointments page (/callified/* paths).
 app.use("/api/wellness", wellnessCallifiedRoutes);
+// Wellness service packages (/packages* paths).
+app.use("/api/wellness", wellnessPackagesRoutes);
 // Standalone geofence zones + bulk staff assignment (/geofence-zones,
 // /geofence-zone-assignments/* paths). Decoupled from clinic Location — see
 // routes/wellness_geofence_zones.js for the global-fallback design.

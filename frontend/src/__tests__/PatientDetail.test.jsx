@@ -79,7 +79,7 @@ describe('<PatientDetail />', () => {
   it('renders all 7 tab buttons', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByRole('button', { name: /Case history/i })).toBeInTheDocument());
-    for (const label of ['Case history', 'New prescription', 'Consent form', 'Treatment plans', 'Log visit', 'Photos', 'Inventory used']) {
+    for (const label of ['Case history', 'New prescription', 'Consent form', 'Packages', 'Log visit', 'Photos', 'Inventory used']) {
       expect(screen.getByRole('button', { name: new RegExp(label, 'i') })).toBeInTheDocument();
     }
   });
@@ -636,7 +636,7 @@ describe('<PatientDetail />', () => {
   // ──────────────────────────────────────────────────────────────────
   // Extension wave — 2026-05-26
   // Covers tabs / surfaces the original spec didn't exercise:
-  //   - Treatment plans tab (list + create form + validation guard)
+  //   - Packages tab (list + create form + validation guard)
   //   - Log visit tab (form fields + validation gating)
   //   - Inventory tab (consumption rows + add-row validation)
   //   - Telehealth tab (visit selector + start-or-join + empty state)
@@ -647,22 +647,22 @@ describe('<PatientDetail />', () => {
   // Uses the stable notifyObj mock pattern + adapts to actual SUT.
   // ──────────────────────────────────────────────────────────────────
 
-  describe('Treatment plans tab', () => {
+  describe('Packages tab', () => {
     // Validate just the surface that the SUT actually exposes.
     it('shows empty-state and form fields when patient has no plans', async () => {
       const user = userEvent.setup();
       renderPage();
-      await waitFor(() => expect(screen.getByRole('button', { name: /Treatment plans/i })).toBeInTheDocument());
-      await user.click(screen.getByRole('button', { name: /Treatment plans/i }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Packages$/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /^Packages$/i }));
 
-      expect(screen.getByText(/No treatment plans yet/i)).toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/Plan name/i)).toBeInTheDocument();
+      expect(screen.getByText(/No packages yet/i)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/Package name/i)).toBeInTheDocument();
       expect(screen.getByPlaceholderText(/Sessions/i)).toBeInTheDocument();
       expect(screen.getByPlaceholderText(/Total price/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Add$/i })).toBeInTheDocument();
     });
 
-    it('renders existing treatment plans with progress bar + service name', async () => {
+    it('renders existing packages with progress bar + service name', async () => {
       const patientWithPlans = {
         ...patient,
         treatmentPlans: [
@@ -686,8 +686,8 @@ describe('<PatientDetail />', () => {
 
       const user = userEvent.setup();
       renderPage();
-      await waitFor(() => expect(screen.getByRole('button', { name: /Treatment plans/i })).toBeInTheDocument());
-      await user.click(screen.getByRole('button', { name: /Treatment plans/i }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Packages$/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /^Packages$/i }));
 
       expect(screen.getByText(/PRP 6-session package/i)).toBeInTheDocument();
       expect(screen.getByText(/Session 2\/6/)).toBeInTheDocument();
@@ -707,10 +707,10 @@ describe('<PatientDetail />', () => {
       });
 
       renderPage();
-      await waitFor(() => expect(screen.getByRole('button', { name: /Treatment plans/i })).toBeInTheDocument());
-      await user.click(screen.getByRole('button', { name: /Treatment plans/i }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Packages$/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /^Packages$/i }));
 
-      await user.type(screen.getByPlaceholderText(/Plan name/i), 'PRP starter');
+      await user.type(screen.getByPlaceholderText(/Package name/i), 'PRP starter');
       // submit via the Add button (form-submit path)
       await user.click(screen.getByRole('button', { name: /^Add$/i }));
 
@@ -1308,12 +1308,12 @@ describe('<PatientDetail />', () => {
       // Source label + value
       expect(screen.getByText(/Source:/i)).toBeInTheDocument();
       expect(screen.getByText(/walk-in/)).toBeInTheDocument();
-      // counts: 1 visits • 0 Rx • 0 treatment plans (default fixture)
+      // counts: 1 visits • 0 Rx • 0 packages (default fixture)
       expect(screen.getByText(/1 visits/)).toBeInTheDocument();
-      // The "0 Rx" + "0 treatment plans" text co-occur in the same span; assert
+      // The "0 Rx" + "0 packages" text co-occur in the same span; assert
       // the full pattern so we don't bind to en-dash vs hyphen.
       expect(screen.getByText(/0 Rx/)).toBeInTheDocument();
-      expect(screen.getByText(/0 treatment plans/)).toBeInTheDocument();
+      expect(screen.getByText(/0 packages/)).toBeInTheDocument();
     });
 
     // SKIP: drift — anniversary + GST tokens not yet shipped on subline.
@@ -1643,7 +1643,7 @@ describe('<PatientDetail />', () => {
       { name: /Case history/i,    anchor: () => screen.getByText(/First visit/) },
       { name: /New prescription/i, anchor: () => screen.getByRole('heading', { name: /New prescription/i }) },
       { name: /Consent form/i,    anchor: () => screen.getByRole('heading', { name: /Capture consent/i }) },
-      { name: /Treatment plans/i, anchor: () => screen.getByText(/No treatment plans yet/i) },
+      { name: /^Packages$/i, anchor: () => screen.getByText(/No packages yet/i) },
       { name: /Log visit/i,       anchor: () => screen.getByRole('heading', { name: /Log a visit/i }) },
       { name: /Photos/i,          anchor: () => screen.getByRole('heading', { name: /Visit photos/i }) },
       { name: /Inventory used/i,  anchor: () => screen.getByRole('heading', { name: /Inventory used/i }) },
@@ -1800,7 +1800,7 @@ describe('<PatientDetail />', () => {
     });
   });
 
-  describe('Treatment plans — submit debounce guard (#225)', () => {
+  describe('Packages — submit debounce guard (#225)', () => {
     it('Add button shows "Adding…" and is disabled while POST is in flight', async () => {
       // Hold the POST promise open so the in-flight state is observable.
       let resolvePost;
@@ -1816,10 +1816,10 @@ describe('<PatientDetail />', () => {
 
       const user = userEvent.setup();
       renderPage();
-      await waitFor(() => expect(screen.getByRole('button', { name: /Treatment plans/i })).toBeInTheDocument());
-      await user.click(screen.getByRole('button', { name: /Treatment plans/i }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Packages$/i })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /^Packages$/i }));
 
-      await user.type(screen.getByPlaceholderText(/Plan name/i), 'PRP 4-session');
+      await user.type(screen.getByPlaceholderText(/Package name/i), 'PRP 4-session');
       const addBtn = screen.getByRole('button', { name: /^Add$/i });
       await user.click(addBtn);
 

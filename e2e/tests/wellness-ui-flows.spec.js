@@ -301,7 +301,7 @@ test('8. Patient detail: every one of the 7 tabs renders without error', async (
     { label: 'Case history',     marker: /No case history|First|Visit|Prescription|Consent/i },
     { label: 'New prescription', marker: /^New prescription$/i },
     { label: 'Consent form',     marker: /Capture consent/i },
-    { label: 'Treatment plans',  marker: /New treatment plan|No treatment plans/i },
+    { label: 'Packages',         marker: /New package|No packages yet/i },
     { label: 'Log visit',        marker: /Log a visit/i },
     { label: 'Photos',           marker: /Visit photos/i },
     { label: 'Inventory used',   marker: /Inventory used/i },

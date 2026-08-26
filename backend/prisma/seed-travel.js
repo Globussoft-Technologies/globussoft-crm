@@ -73,9 +73,7 @@ async function main() {
   );
 
   // 2. Users — Day 1 minimum to demo per-role landing.
-  // Yasin keeps the branded owner password; the other travel demo accounts
-  // stay on the shared "password123" convention.
-  const ownerPw = await bcrypt.hash("yR9Q6&$vUFXKce-)W57", 10);
+  // Passwords all "password123" to match the existing demo convention.
   const pw = await bcrypt.hash("password123", 10);
   const trialStartDate = new Date();
   const trialEndsAt = new Date(Date.now() + 15 * 86400000);
@@ -133,7 +131,7 @@ async function main() {
       },
       create: {
         email: u.email,
-        password: u.email === "yasin@travelstall.in" ? ownerPw : pw,
+        password: pw,
         role: u.role,
         name: u.name,
         tenantId: tenant.id,
@@ -879,7 +877,7 @@ async function main() {
   await seedTravelServiceCategorySacCodes(tenant.id);
 
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
-  console.log("[seed-travel] Login: yasin@travelstall.in / yR9Q6&$vUFXKce-)W57");
+  console.log("[seed-travel] Login: yasin@travelstall.in / password123");
 }
 
 /**

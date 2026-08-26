@@ -257,8 +257,8 @@ describe('POST /api/wellness/patients — S100 firstName + lastName whitelist', 
   });
 });
 
-describe('DELETE /api/wellness/patients/:id - hard delete + customer tombstone', () => {
-  test('hard-deletes an active patient and anonymizes the linked CUSTOMER login', async () => {
+describe('DELETE /api/wellness/patients/:id - soft delete + customer tombstone', () => {
+  test('soft-deletes an active patient and anonymizes the linked CUSTOMER login', async () => {
     prisma.patient.findFirst.mockResolvedValue({
       id: 22,
       tenantId: 1,
@@ -272,59 +272,6 @@ describe('DELETE /api/wellness/patients/:id - hard delete + customer tombstone',
         userType: 'CUSTOMER',
       },
     });
-    prisma.patient.delete.mockResolvedValue({ id: 22 });
-    prisma.user.update.mockResolvedValue({ id: 7 });
-
-    const res = await request(makeApp())
-      .delete('/api/wellness/patients/22')
-      .send({});
-
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      success: true,
-      id: 22,
-      hardDeleted: true,
-      deletedAt: null,
-      customerEmailAnonymized: true,
-    });
-    expect(prisma.patient.delete).toHaveBeenCalledWith({ where: { id: 22 } });
-    expect(prisma.patient.update).not.toHaveBeenCalled();
-    expect(prisma.user.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 7 },
-        data: expect.objectContaining({
-          email: expect.stringMatching(/^deleted-customer-1-7-\d+@redacted\.local$/),
-          deactivatedAt: expect.any(Date),
-        }),
-      }),
-    );
-    expect(prisma.auditLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          action: 'DELETE',
-          entity: 'Patient',
-        }),
-      }),
-    );
-  });
-
-  test('falls back to soft delete when Prisma blocks the hard delete', async () => {
-    const softDeletedAt = new Date('2026-08-25T10:00:00Z');
-    prisma.patient.findFirst.mockResolvedValue({
-      id: 22,
-      tenantId: 1,
-      name: 'Riya Sharma',
-      email: 'riya@example.com',
-      deletedAt: null,
-      userId: 7,
-      user: {
-        id: 7,
-        email: 'riya@example.com',
-        userType: 'CUSTOMER',
-      },
-    });
-    prisma.patient.delete.mockRejectedValueOnce(Object.assign(new Error('FK blocked'), { code: 'P2003' }));
-    prisma.patient.update.mockResolvedValue({ id: 22, deletedAt: softDeletedAt });
     prisma.user.update.mockResolvedValue({ id: 7 });
 
     const res = await request(makeApp())
@@ -338,9 +285,63 @@ describe('DELETE /api/wellness/patients/:id - hard delete + customer tombstone',
       hardDeleted: false,
       customerEmailAnonymized: true,
     });
-    expect(typeof res.body.deletedAt).toBe('string');
-    expect(Number.isNaN(Date.parse(res.body.deletedAt))).toBe(false);
-    expect(prisma.patient.delete).toHaveBeenCalledTimes(1);
+    expect(res.body.deletedAt).toBeTruthy();
+    expect(prisma.patient.delete).not.toHaveBeenCalled();
+    expect(prisma.patient.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 22 },
+        data: expect.objectContaining({ deletedAt: expect.any(Date) }),
+      }),
+    );
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 7 },
+        data: expect.objectContaining({
+          email: expect.stringMatching(/^deleted-customer-1-7-\d+@redacted\.local$/),
+          deactivatedAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'SOFT_DELETE',
+          entity: 'Patient',
+        }),
+      }),
+    );
+  });
+
+  test('soft-deletes a patient without attempting a hard delete first', async () => {
+    prisma.patient.findFirst.mockResolvedValue({
+      id: 22,
+      tenantId: 1,
+      name: 'Riya Sharma',
+      email: 'riya@example.com',
+      deletedAt: null,
+      userId: 7,
+      user: {
+        id: 7,
+        email: 'riya@example.com',
+        userType: 'CUSTOMER',
+      },
+    });
+    prisma.user.update.mockResolvedValue({ id: 7 });
+
+    const res = await request(makeApp())
+      .delete('/api/wellness/patients/22')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      id: 22,
+      hardDeleted: false,
+      customerEmailAnonymized: true,
+    });
+    expect(res.body.deletedAt).toBeTruthy();
+    expect(prisma.patient.delete).not.toHaveBeenCalled();
+    expect(prisma.patient.update).toHaveBeenCalledTimes(1);
     expect(prisma.patient.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 22 },

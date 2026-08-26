@@ -2793,12 +2793,10 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
 // #539 (PT-02): DELETE /patients/:id was missing  pen-test reported HTML 404
 // on a route the demo-monitor scrub script + GDPR DSAR flow both want. This
 // is admin-only because deleting clinical records has compliance + legal
-// weight. We now hard-delete the patient row when Prisma allows it, while
-// anonymizing any linked CUSTOMER login so the email can be reused on a fresh
-// registration. If FK-bound clinical children exist (visits/prescriptions/
-// consents/treatment-plans/loyalty/referrals), Prisma's Restrict policy
-// throws P2003 and we fall back to a soft-delete tombstone instead of losing
-// the existing history.
+// weight. The patient row is soft-deleted (deletedAt tombstone) so FK-bound
+// clinical children (visits/prescriptions/consents/treatment-plans/loyalty/
+// referrals) are preserved, while any linked CUSTOMER login is anonymized so
+// the email can be reused on a fresh registration.
 router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -2852,41 +2850,25 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
       });
     };
 
-    let hardDeleted = false;
-    let deletedAt = null;
-    try {
-      await prisma.$transaction(async (tx) => {
-        await anonymizeCustomerUser(tx);
-        await tx.patient.delete({ where: { id } });
+    const deletedAt = new Date();
+    await prisma.$transaction(async (tx) => {
+      await anonymizeCustomerUser(tx);
+      await tx.patient.update({
+        where: { id },
+        data: { deletedAt },
       });
-      hardDeleted = true;
-    } catch (e) {
-      if (e && e.code === "P2003") {
-        deletedAt = new Date();
-        await prisma.$transaction(async (tx) => {
-          await anonymizeCustomerUser(tx);
-          await tx.patient.update({
-            where: { id },
-            data: { deletedAt },
-          });
-        });
-      } else if (e && e.code === "P2025") {
-        return res.status(404).json({ error: "Patient not found" });
-      } else {
-        throw e;
-      }
-    }
+    });
 
     // #179 audit pattern  patient name only, no email/phone PII in the blob.
     await writeAudit(
       "Patient",
-      hardDeleted ? "DELETE" : "SOFT_DELETE",
+      "SOFT_DELETE",
       id,
       req.user.userId,
       req.user.tenantId,
       {
         patientName: existing.name,
-        hardDeleted,
+        hardDeleted: false,
         deletedAt,
         customerUserId: linkedCustomerUser ? linkedCustomerUser.id : null,
         customerEmailAnonymized: !!linkedCustomerUser,
@@ -2896,7 +2878,7 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
     res.json({
       success: true,
       id,
-      hardDeleted,
+      hardDeleted: false,
       deletedAt,
       customerEmailAnonymized: !!linkedCustomerUser,
     });

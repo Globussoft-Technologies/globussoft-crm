@@ -987,13 +987,12 @@ async function main() {
   // Travel-login quick cards on the shared login page. These are the exact
   // demo accounts the UI advertises, so the seed keeps them aligned with the
   // travel-specific login surface instead of leaving dead cards behind.
-  const travelOwnerPassword = await bcrypt.hash('yR9Q6&$vUFXKce-)W57', 10);
   const travelDemoPassword = await bcrypt.hash('password123', 10);
   const travelLoginUsers = await Promise.all([
     prisma.user.create({
       data: {
         email: 'yasin@travelstall.in',
-        password: travelOwnerPassword,
+        password: travelDemoPassword,
         name: 'Yasin Malik',
         userType: 'OWNER',
         role: 'ADMIN',

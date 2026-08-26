@@ -509,6 +509,10 @@ router.get("/:entity", (req, res) => {
     res.json({
       entity: req.params.entity,
       headers: def.headers,
+      // Columns the import tolerates being absent from the file. The client
+      // preview subtracts these before warning about missing columns, so an
+      // entity with optional columns doesn't flag a perfectly valid upload.
+      optionalHeaders: def.optionalHeaders || [],
       sample: def.sample,
       thresholds: {
         rows: ASYNC_THRESHOLD_ROWS,

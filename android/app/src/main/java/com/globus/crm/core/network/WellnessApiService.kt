@@ -21,7 +21,9 @@ import com.globus.crm.feature.booking.data.remote.dto.RescheduleAppointmentRespo
 import com.globus.crm.feature.booking.data.remote.dto.VisitDto
 import com.globus.crm.feature.booking.data.remote.dto.WaitlistEntryDto
 import com.globus.crm.feature.health.data.remote.dto.ConsentFormDto
+import com.globus.crm.feature.health.data.remote.dto.CreatePrescriptionRequestDto
 import com.globus.crm.feature.health.data.remote.dto.PrescriptionDto
+import com.globus.crm.feature.health.data.remote.dto.PrescriptionRequestDto
 import com.globus.crm.feature.health.data.remote.dto.TreatmentPlanDto
 import com.globus.crm.feature.loyalty.data.remote.dto.LoyaltyResponseDto
 import com.globus.crm.feature.membership.data.remote.dto.MembershipDto
@@ -188,6 +190,28 @@ interface WellnessApiService {
     suspend fun getPrescriptionPdf(
         @Path("id") prescriptionId: Int,
     ): Response<ResponseBody>
+
+    // ── Prescription renewal / medicine requests (data layer ready) ──────────
+    // POST raises a renewal against one of the patient's own prescriptions.
+    // Omit `medicines` to renew the COMPLETE prescription; supply names that
+    // appear on that prescription to renew only those.
+    //
+    // Errors worth branding in the UI (all { error, code }):
+    //   404 PRESCRIPTION_NOT_FOUND         — not this patient's Rx
+    //   409 REQUEST_ALREADY_OPEN           — a request is already in flight
+    //   409 PRESCRIPTION_CANCELLED         — needs a fresh consultation
+    //   400 MEDICINE_NOT_ON_PRESCRIPTION   — `error` names the offenders
+    @POST("portal/prescription-requests")
+    suspend fun createPrescriptionRequest(
+        @Body body: CreatePrescriptionRequestDto,
+    ): Response<PrescriptionRequestDto>
+
+    // The patient's own request history — use it to show "renewal pending"
+    // on a prescription instead of letting them tap Renew into the 409.
+    @GET("portal/prescription-requests")
+    suspend fun getPrescriptionRequests(
+        @Query("status") status: String? = null,
+    ): Response<List<PrescriptionRequestDto>>
 
     // ── Treatment Plans (Phase 2 UI, data layer ready) ───────────────────────
     // Uses patient-row ID from EncryptedPrefsManager.getPatientId().

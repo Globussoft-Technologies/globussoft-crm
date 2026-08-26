@@ -298,7 +298,7 @@ describe('<CallHistory /> — detail', () => {
   it('says a call that never connected has nothing to show', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (typeof url === 'string' && url.startsWith('/api/callified/calls?')) {
-        return Promise.resolve(listResponse([makeCall({ duration: 0, status: 'INITIATED' })]));
+        return Promise.resolve(listResponse([makeCall({ duration: 0, status: 'FAILED' })]));
       }
       if (typeof url === 'string' && url.includes('/details')) {
         return Promise.resolve({ transcripts: [], reviews: [] });
@@ -311,6 +311,30 @@ describe('<CallHistory /> — detail', () => {
 
     expect(await screen.findByText(/never connected/i)).toBeInTheDocument();
   });
+
+  // An AI call sits in INITIATED until Callified reports back, which can take
+  // minutes. Calling that "never connected" tells the operator the call FAILED
+  // when it may still be ringing — the exact thing seen on a live 12:54 call.
+  it.each(['INITIATED', 'CONNECTED'])(
+    'a %s call reads as pending, never as failed',
+    async (status) => {
+      fetchApiMock.mockImplementation((url) => {
+        if (typeof url === 'string' && url.startsWith('/api/callified/calls?')) {
+          return Promise.resolve(listResponse([makeCall({ duration: 0, status })]));
+        }
+        if (typeof url === 'string' && url.includes('/details')) {
+          return Promise.resolve({ transcripts: [], reviews: [] });
+        }
+        return Promise.resolve({});
+      });
+      const user = userEvent.setup();
+      render(<CallHistory />);
+      await user.click(await screen.findByTestId('call-details-1'));
+
+      expect(await screen.findByText(/Call initiated/i)).toBeInTheDocument();
+      expect(screen.queryByText(/never connected/i)).not.toBeInTheDocument();
+    },
+  );
 
   it('closes without leaving the drawer mounted', async () => {
     const user = userEvent.setup();

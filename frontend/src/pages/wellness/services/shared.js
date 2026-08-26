@@ -93,3 +93,73 @@ export const srOnly = {
   whiteSpace: 'nowrap',
   border: 0,
 };
+
+// ── Portal dropdown anchoring ─────────────────────────────────────
+//
+// Both dropdowns render their menu in a portal with `position: fixed` (to
+// escape the .glass parent's backdrop-filter stacking context) and re-anchor
+// it to the trigger on every scroll. That combination has a trap: a menu
+// opened from a trigger near the bottom of the viewport hangs off the bottom
+// edge, and scrolling the page cannot rescue it — the menu just follows its
+// trigger. The options below the fold become unreachable.
+//
+// So the menu is measured against the room actually available. Two details
+// matter for it to land where the eye expects:
+//
+//   - The flip decision is judged against how tall THIS menu wants to be, not
+//     the 340px ceiling. A three-item list has no business jumping above the
+//     trigger when 300px sit free below it.
+//   - A menu that does flip up is anchored by its BOTTOM edge, so it sits
+//     directly on top of the trigger. Anchoring by `top` at the ceiling height
+//     left a short list floating a full menu-height above the trigger, which
+//     reads as the menu opening "somewhere at the top of the page".
+//
+// components/MultiSelectDropdown.jsx (the one Inbox / ColumnPicker / the
+// patient filters use) solves the same problem inline with its own thresholds.
+// Left alone deliberately — folding the two together would change the popover
+// geometry on those pages for no gain here.
+export const DROPDOWN_MAX_HEIGHT = 340;
+
+// One option row: 0.65rem padding top and bottom, ~20px of text, 1px divider.
+const DROPDOWN_ROW_HEIGHT = 42;
+
+/** Roughly how tall a menu of `rowCount` options wants to be, capped. */
+export function estimateDropdownHeight(rowCount, extra = 0) {
+  const rows = Math.max(1, rowCount || 1);
+  return Math.min(DROPDOWN_MAX_HEIGHT, rows * DROPDOWN_ROW_HEIGHT + extra);
+}
+
+export function anchorDropdown(triggerEl, options = {}) {
+  const {
+    gap = 8,
+    margin = 12,
+    maxHeight = DROPDOWN_MAX_HEIGHT,
+    minHeight = 140,
+    desiredHeight = DROPDOWN_MAX_HEIGHT,
+  } = options;
+  const r = triggerEl.getBoundingClientRect();
+  const viewportH = window.innerHeight || 0;
+  const spaceBelow = Math.round(viewportH - r.bottom - gap - margin);
+  const spaceAbove = Math.round(r.top - gap - margin);
+  const wanted = Math.min(maxHeight, Math.max(1, Math.round(desiredHeight)));
+
+  // Flip up only when the menu genuinely does not fit below AND there is more
+  // room above.
+  const openUp = spaceBelow < Math.min(wanted, spaceAbove) && spaceAbove > spaceBelow;
+
+  if (openUp) {
+    return {
+      openUp: true,
+      bottom: viewportH - r.top + gap,
+      left: r.left,
+      width: r.width,
+      maxHeight: Math.min(wanted, Math.max(0, spaceAbove)),
+    };
+  }
+
+  // The min-height floor keeps a squeezed menu usable; the clamp then keeps it
+  // on screen even when that floor is more than the space below allows.
+  const height = Math.min(wanted, Math.max(minHeight, spaceBelow));
+  const top = Math.max(margin, Math.min(r.bottom + gap, viewportH - margin - height));
+  return { openUp: false, top, left: r.left, width: r.width, maxHeight: height };
+}

@@ -96,4 +96,60 @@ function normalizePrescriptionList(prescriptions) {
   return prescriptions.map(normalizePrescriptionDrugs);
 }
 
-module.exports = { normalizePrescriptionDrugs, normalizePrescriptionList };
+/**
+ * Prescription validity — how long the prescribed course is meant to last.
+ *
+ * Lives here rather than inline in the route so the create and the amend path
+ * cannot disagree about the bounds, and so the renewal engine can reuse the
+ * same derivation when it starts reminding patients.
+ */
+
+// A course longer than a year is not a prescription, it is a repeat
+// arrangement — and an unbounded value would put `validUntil` somewhere the
+// reminder sweep will never reach. Matches the cap on renewal-request
+// durations in lib/prescriptionRenewalService.js.
+const MAX_VALIDITY_DAYS = 365;
+
+/**
+ * Normalise the clinician-entered validity.
+ *
+ * @returns {number|null} whole days, or null when the field was left blank
+ *   (null means "no stated validity" — NOT expired, and nothing downstream
+ *   may treat it as such).
+ * @throws {Error} with `.code = 'INVALID_VALIDITY_DAYS'` on a value that is
+ *   present but unusable, so the route can map it to a 400 rather than
+ *   silently dropping what the doctor typed.
+ */
+function parseValidityDays(raw) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0 || n > MAX_VALIDITY_DAYS) {
+    const err = new Error(
+      `validityDays must be a whole number of days between 1 and ${MAX_VALIDITY_DAYS}`,
+    );
+    err.code = "INVALID_VALIDITY_DAYS";
+    throw err;
+  }
+  return n;
+}
+
+/**
+ * Derive the lapse date from the day the prescription was ISSUED — not from
+ * "now". On an amendment that matters: a 30-day course written last week has
+ * three weeks left, not thirty days. Passing the original `createdAt` keeps
+ * the window anchored to when the patient actually started the medication.
+ */
+function computeValidUntil(issuedAt, validityDays) {
+  if (!validityDays) return null;
+  const start = issuedAt ? new Date(issuedAt) : new Date();
+  if (Number.isNaN(start.getTime())) return null;
+  return new Date(start.getTime() + validityDays * 24 * 60 * 60 * 1000);
+}
+
+module.exports = {
+  normalizePrescriptionDrugs,
+  normalizePrescriptionList,
+  parseValidityDays,
+  computeValidUntil,
+  MAX_VALIDITY_DAYS,
+};

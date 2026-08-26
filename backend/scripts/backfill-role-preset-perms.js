@@ -92,6 +92,9 @@ const MANAGER_PERMISSIONS = [
   'products.read', 'products.write', 'products.update',
   'attendance.read', 'attendance.write', 'attendance.manage',
   'leave.read', 'leave.write', 'leave.manage',
+  'call_history.read', 'call_history.read_all',
+  // Prescription renewal queue — manager triages and dispositions it.
+  'prescription_requests.read', 'prescription_requests.update',
 ];
 
 const CUSTOMER_PERMISSIONS = [
@@ -106,6 +109,9 @@ const CUSTOMER_PERMISSIONS = [
   'my_prescriptions.read',
   // Patient appointment management — /wellness/my-bookings.
   'my_bookings.read',
+  // Android-app prescription renewal — raise + list your OWN requests.
+  // Patient-scoped counterpart to staff-wide `prescription_requests.*`.
+  'my_prescription_requests.read', 'my_prescription_requests.write',
   'consents.read', 'consents.write',
   'visits.read',
 ];
@@ -132,6 +138,7 @@ const USER_PERMISSIONS = [
   'appointments.read', 'appointments.write',
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  'call_history.read',
 ];
 
 const DOCTOR_PERMISSIONS = [
@@ -142,6 +149,9 @@ const DOCTOR_PERMISSIONS = [
   'calendar.read', 'calendar.write',
   'visits.read', 'visits.write', 'visits.update', 'visits.delete',
   'prescriptions.read', 'prescriptions.write', 'prescriptions.update', 'prescriptions.delete',
+  // Notified on every renewal request against an Rx they wrote — so they
+  // must be able to open and action it.
+  'prescription_requests.read', 'prescription_requests.update',
   'consents.read', 'consents.write',
   'services.read',
   'products.read',
@@ -152,6 +162,7 @@ const DOCTOR_PERMISSIONS = [
   'contacts.read',
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  'call_history.read',
 ];
 
 const NURSE_PERMISSIONS = [
@@ -165,8 +176,11 @@ const NURSE_PERMISSIONS = [
   'services.read',
   'consents.read', 'consents.write',
   'prescriptions.read',
+  // Sees the renewal queue (nurse preps medication); does not disposition it.
+  'prescription_requests.read',
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  'call_history.read',
 ];
 
 const RECEPTIONIST_PERMISSIONS = [
@@ -186,6 +200,9 @@ const RECEPTIONIST_PERMISSIONS = [
   'patient_wallets.read',
   'payments.read',
   'pos.read', 'pos.write', 'pos.manage',
+  // Front desk fields renewal requests and calls the patient back; the
+  // accept / reject decision needs `.update`, which receptionist lacks.
+  'prescription_requests.read',
   'contacts.read', 'contacts.write',
   'leads.read', 'leads.write',
   'communications.read', 'communications.write',
@@ -194,6 +211,7 @@ const RECEPTIONIST_PERMISSIONS = [
   'whatsapp.read', 'whatsapp.write',
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  'call_history.read',
 ];
 
 const TELECALLER_PERMISSIONS = [
@@ -212,6 +230,7 @@ const TELECALLER_PERMISSIONS = [
   'tasks.read', 'tasks.write',
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  'call_history.read',
 ];
 
 // ADMIN gets every permission in the catalogue — mirrors
@@ -227,6 +246,22 @@ function buildAdminPermissions() {
   }
   return out;
 }
+
+// Wellness-ONLY grants. Unlike ensureRbacOnBoot.js, this script applies
+// ROLE_GRANTS with no vertical filtering — it predates the vertical split and
+// the legacy cross-vertical entries (patients.read, appointments.read, ...)
+// are left exactly as they are, because narrowing them now would revoke rows
+// live tenants already depend on.
+//
+// Anything added to the presets AFTER that split must not inherit the same
+// leak, so wellness-only permissions are listed here and skipped on every
+// non-wellness tenant. `call_history` is registered for wellness only in
+// permissionCatalog.js, so granting it elsewhere would write a row that is
+// not even a valid permission for that tenant.
+const WELLNESS_ONLY_GRANTS = new Set([
+  'call_history.read',
+  'call_history.read_all',
+]);
 
 const ROLE_GRANTS = {
   ADMIN: buildAdminPermissions(),
@@ -317,8 +352,15 @@ async function main() {
 
     for (const role of roles) {
       totalRolesScanned++;
-      const wanted = ROLE_GRANTS[role.key];
-      if (!wanted) continue;
+      const allGrants = ROLE_GRANTS[role.key];
+      if (!allGrants) continue;
+      // Strip wellness-only grants on every other vertical. Matched by role
+      // KEY above, so a generic tenant with a hand-made DOCTOR role is caught
+      // here too, not just the canonical MANAGER / USER pair.
+      const wanted =
+        tenant.vertical === 'wellness'
+          ? allGrants
+          : allGrants.filter((perm) => !WELLNESS_ONLY_GRANTS.has(perm));
 
       const existing = await prisma.rolePermission.findMany({
         where: { roleId: role.id },

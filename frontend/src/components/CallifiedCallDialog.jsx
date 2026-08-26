@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import {
   Phone,
   X,
@@ -7,7 +9,8 @@ import {
   Bot,
   User,
   CheckCircle2,
-  FileText,
+  ArrowRight,
+  Info,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -38,14 +41,12 @@ import CallifiedManualCallPanel from './CallifiedManualCallPanel';
  *   endpoints  { context, campaigns, aiCall, manualCall }
  *   onClose    close the dialog
  *   onCalled   (result) => void — fired after a call is successfully placed
- *   onViewHistory (contactId) => void — optional "view call history" action
  */
 export default function CallifiedCallDialog({
   customer,
   endpoints,
   onClose,
   onCalled,
-  onViewHistory,
 }) {
   const notify = useNotify();
   const placingRef = useRef(false);
@@ -54,6 +55,10 @@ export default function CallifiedCallDialog({
   const [loadError, setLoadError] = useState('');
   const [context, setContext] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
+  // True while the selection below is OUR pick rather than the caller's, and
+  // there was more than one to pick from — that is the only case where the
+  // choice needs pointing out.
+  const [autoPicked, setAutoPicked] = useState(false);
   const [selectedCampaignId, setSelectedCampaignId] = useState('');
 
   const [mode, setMode] = useState(null); // 'ai' | 'manual'
@@ -78,11 +83,16 @@ export default function CallifiedCallDialog({
         setContext(ctx || null);
         const list = Array.isArray(campaignRes?.campaigns) ? campaignRes.campaigns : [];
         setCampaigns(list);
-        // Prefer an active campaign; with exactly one option there is nothing
-        // to choose, so preselect it and save the user a click.
+        // Preselect the first active campaign so the dialog opens ready to
+        // call. The campaign carries the voice and the script, so picking the
+        // wrong one is a real mistake — hence the notice below the field
+        // whenever this default was chosen for someone rather than by them.
         const active = list.filter((c) => !c.status || c.status === 'active');
-        const preferred = active.length === 1 ? active[0] : list.length === 1 ? list[0] : null;
-        if (preferred) setSelectedCampaignId(String(preferred.id));
+        const preferred = active[0] || list[0] || null;
+        if (preferred) {
+          setSelectedCampaignId(String(preferred.id));
+          setAutoPicked(list.length > 1);
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -179,6 +189,11 @@ export default function CallifiedCallDialog({
     ],
   );
 
+  const selectedCampaignName = useMemo(() => {
+    const found = campaigns.find((c) => String(c.id) === String(selectedCampaignId));
+    return found ? (found.name || `Campaign ${found.id}`) : '';
+  }, [campaigns, selectedCampaignId]);
+
   const campaignOptions = useMemo(
     () =>
       campaigns.map((c) => ({
@@ -188,9 +203,16 @@ export default function CallifiedCallDialog({
     [campaigns],
   );
 
-  const historyContactId = result?.contactId || context?.contactId || null;
 
-  return (
+  // Portalled to document.body on purpose. The app shell's <main> carries
+  // `animation: fadeIn ... forwards` whose final frame is
+  // `transform: translateY(0)`, and a non-none transform makes an element the
+  // containing block for `position: fixed` descendants — so rendered in place,
+  // this overlay anchors to the top of main's SCROLLED CONTENT instead of the
+  // viewport. Click Call on a row near the bottom of a long list and the
+  // dialog lands far above the fold. Same reason components/wellness/
+  // ModalShell.jsx portals.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -316,7 +338,7 @@ export default function CallifiedCallDialog({
               <select
                 className="input-field"
                 value={selectedCampaignId}
-                onChange={(e) => setSelectedCampaignId(e.target.value)}
+                onChange={(e) => { setSelectedCampaignId(e.target.value); setAutoPicked(false); }}
                 disabled={placing || callPlaced}
                 data-testid="callified-call-dialog-campaign"
                 style={{ width: '100%' }}
@@ -355,6 +377,31 @@ export default function CallifiedCallDialog({
               />
             </div>
 
+            {autoPicked && selectedCampaignId && (
+              <div
+                data-testid="callified-campaign-default-notice"
+                style={{
+                  display: 'flex',
+                  gap: '0.45rem',
+                  alignItems: 'flex-start',
+                  fontSize: '0.78rem',
+                  lineHeight: 1.5,
+                  color: 'var(--text-secondary)',
+                  background: 'rgba(245,158,11,0.10)',
+                  border: '1px solid rgba(245,158,11,0.32)',
+                  borderRadius: 8,
+                  padding: '0.55rem 0.7rem',
+                }}
+              >
+                <Info size={14} style={{ color: '#f59e0b', flexShrink: 0, marginTop: '0.12rem' }} />
+                <span>
+                  We picked <strong style={{ color: 'var(--text-primary)' }}>{selectedCampaignName}</strong> for
+                  you. The campaign sets the voice and script the customer hears — check if it is the right one
+                  before you call.
+                </span>
+              </div>
+            )}
+
             {!selectedCampaignId && (
               <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                 Pick a campaign to enable calling.
@@ -389,33 +436,36 @@ export default function CallifiedCallDialog({
           </>
         )}
 
+        {/* Call History is its own page now, so this dialog stays a single-
+            purpose "place a call" surface and only POINTS at the history.
+            Hidden mid-manual-call: navigating away unmounts the live panel,
+            whose cleanup hangs up — a one-click accidental hang-up. */}
         <div
           style={{
             display: 'flex',
-            justifyContent: 'space-between',
+            justifyContent: manualCall ? 'flex-end' : 'space-between',
             alignItems: 'center',
             gap: '0.75rem',
             marginTop: '1.1rem',
             flexWrap: 'wrap',
           }}
         >
-          {onViewHistory && historyContactId ? (
-            <button
-              type="button"
-              onClick={() => onViewHistory(historyContactId)}
-              className="btn-secondary"
-              data-testid="callified-call-dialog-history"
+          {!manualCall && (
+            <Link
+              to="/wellness/call-history"
+              onClick={onClose}
+              data-testid="callified-call-dialog-history-link"
               style={{
+                fontSize: '0.8rem',
+                color: 'var(--accent-color)',
+                textDecoration: 'none',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '0.4rem',
-                padding: '0.55rem 0.9rem',
+                gap: '0.3rem',
               }}
             >
-              <FileText size={15} /> Call history
-            </button>
-          ) : (
-            <span />
+              See past calls in Call History <ArrowRight size={13} />
+            </Link>
           )}
           <button
             type="button"
@@ -430,7 +480,8 @@ export default function CallifiedCallDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

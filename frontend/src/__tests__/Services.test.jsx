@@ -5,7 +5,7 @@
  * PUT on save, confirm-on-deactivate) with substantial coverage of the
  * 903-LOC SUT at `pages/wellness/Services.jsx`:
  *
- *   - Tab switching (Catalog vs Packages vs Active Treatments)
+ *   - Tab switching (Catalog vs Packages vs Active Packages)
  *   - Create-service modal: open / form fields visible / POST to
  *     /api/wellness/services
  *   - Validation: blank name + zero price guards the submit button
@@ -208,14 +208,14 @@ describe('<Services /> — header + tab navigation', () => {
     expect(screen.getByText(/Each service has a price, duration, and target marketing radius/i)).toBeInTheDocument();
   });
 
-  it('exposes 3 tabs: Catalog, Packages, Active Treatments', async () => {
+  it('exposes 3 tabs: Catalog, Packages, Active Packages', async () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
     // Catalog label appears in both the page subtitle and the tab — use getAllByText.
     expect(screen.getAllByText(/Catalog/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/^Packages$/i)).toBeInTheDocument();
-    expect(screen.getByText(/Active Treatments/i)).toBeInTheDocument();
+    expect(screen.getByText(/Active Packages/i)).toBeInTheDocument();
   });
 
   it('switching to the Packages tab hides the Catalog CTA and renders the package builder', async () => {
@@ -238,12 +238,12 @@ describe('<Services /> — header + tab navigation', () => {
     );
   });
 
-  it('switching to Active Treatments fetches /api/wellness/activetreatment', async () => {
+  it('switching to Active Packages fetches /api/wellness/activetreatment', async () => {
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     await waitFor(() => {
       const treatmentsCall = fetchApi.mock.calls.find(
@@ -253,15 +253,15 @@ describe('<Services /> — header + tab navigation', () => {
     });
   });
 
-  it('Active Treatments tab renders the empty-state copy when no rows', async () => {
+  it('Active Packages tab renders the empty-state copy when no rows', async () => {
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     await waitFor(() =>
-      expect(screen.getByText(/No active treatment plans yet\./i)).toBeInTheDocument()
+      expect(screen.getByText(/No active packages yet\./i)).toBeInTheDocument()
     );
   });
 });
@@ -289,7 +289,25 @@ describe('<Services /> — initial tab from URL search params', () => {
     expect(screen.queryByRole('button', { name: /New service/i })).not.toBeInTheDocument();
   });
 
-  it('?tab=activetreatments lands on the Active Treatments tab', async () => {
+  it('?tab=activepackages falls back to the renamed tab, not a blank page', async () => {
+    // The saved-bundles tab that used to own this key was removed. A stale
+    // bookmark has to land somewhere real.
+    render(
+      <MemoryRouter initialEntries={['/wellness/services?tab=activepackages']}>
+        <Services />
+      </MemoryRouter>
+    );
+    await waitFor(() => {
+      const treatmentsCall = fetchApi.mock.calls.find(
+        ([url]) => url === '/api/wellness/activetreatment'
+      );
+      expect(treatmentsCall).toBeTruthy();
+    });
+
+    expect(screen.getByText(/No active packages yet\./i)).toBeInTheDocument();
+  });
+
+  it('?tab=activetreatments lands on the Active Packages tab', async () => {
     render(
       <MemoryRouter initialEntries={['/wellness/services?tab=activetreatments']}>
         <Services />
@@ -303,7 +321,7 @@ describe('<Services /> — initial tab from URL search params', () => {
       expect(treatmentsCall).toBeTruthy();
     });
 
-    expect(screen.getByText(/No active treatment plans yet\./i)).toBeInTheDocument();
+    expect(screen.getByText(/No active packages yet\./i)).toBeInTheDocument();
   });
 });
 
@@ -956,7 +974,92 @@ describe('<Services /> — PackageBuilder multi-service selection', () => {
   });
 });
 
-describe('<Services /> — Active Treatments populated state', () => {
+describe('<Services /> — PackageBuilder tax, validity and sell-by', () => {
+  beforeEach(() => {
+    fetchApi.mockReset();
+    fetchApi.mockImplementation(defaultFetchRouter);
+  });
+
+  const openBuilder = async (user) => {
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /^Packages$/i }));
+    await waitFor(() => expect(screen.getByText(/51,000/)).toBeInTheDocument());
+  };
+
+  const pickFrom = async (user, testId, optionLabel) => {
+    const trigger = within(screen.getByTestId(testId)).getByRole('button');
+    await user.click(trigger);
+    await user.click(await screen.findByRole('option', { name: optionLabel }));
+  };
+
+  it('adds the selected tax on top of the package price rather than inside it', async () => {
+    const user = userEvent.setup();
+    await openBuilder(user);
+
+    // Default bundle: 8500 × 6 = 51,000 gross, 15% off → 43,350 net.
+    expect(screen.getByText(/Package price$/i)).toBeInTheDocument();
+    await pickFrom(user, 'package-tax-select', 'GST 18%');
+
+    // The stored price stays pre-tax; the customer-facing total is derived.
+    await waitFor(() => expect(screen.getByText(/Package price \(pre-tax\)/i)).toBeInTheDocument());
+    expect(screen.getByText(/Tax \(18%\)/)).toBeInTheDocument();
+    expect(screen.getByText(/7,803/)).toBeInTheDocument(); // 43,350 × 18%
+    // 43,350 + 7,803 shows twice: the "Customer pays" row and the sales pitch,
+    // which has to quote the tax-inclusive figure a customer would hear.
+    expect(screen.getAllByText(/51,153/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/incl\. tax/i)).toBeInTheDocument();
+  });
+
+  it('sends tax, validity and sell-by with the saved package', async () => {
+    const user = userEvent.setup();
+    await openBuilder(user);
+
+    await user.type(screen.getByTestId('package-name-input'), 'Glow Season Bundle');
+    await pickFrom(user, 'package-tax-select', 'GST 18%');
+    await pickFrom(user, 'package-validity-select', '6 Months');
+    fireEvent.change(screen.getByTestId('package-sell-by-input'), { target: { value: '2026-12-31' } });
+
+    await user.click(screen.getByTestId('package-save'));
+
+    await waitFor(() => {
+      const post = fetchApi.mock.calls.find(
+        ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body).toMatchObject({
+        name: 'Glow Season Bundle',
+        taxPercent: 18,
+        validityDays: 180,      // "6 Months" is stored as a day count
+        sellByDate: '2026-12-31',
+      });
+    });
+  });
+
+  it('omits validity and sell-by when they are left alone', async () => {
+    // No expiry and no sell-by is the default, and has to reach the API as an
+    // explicit null rather than an empty string the validator would reject.
+    const user = userEvent.setup();
+    await openBuilder(user);
+
+    await user.type(screen.getByTestId('package-name-input'), 'Plain Bundle');
+    await user.click(screen.getByTestId('package-save'));
+
+    await waitFor(() => {
+      const post = fetchApi.mock.calls.find(
+        ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.taxPercent).toBe(0);
+      expect(body.validityDays).toBeNull();
+      expect(body.sellByDate).toBeNull();
+    });
+  });
+});
+
+describe('<Services /> — Active Packages populated state', () => {
   beforeEach(() => {
     fetchApi.mockReset();
   });
@@ -988,14 +1091,102 @@ describe('<Services /> — Active Treatments populated state', () => {
 
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     // Treatment heading + patient label + sessions counter
     await waitFor(() => expect(screen.getByText('GFC 6-session course')).toBeInTheDocument());
     expect(screen.getByText(/Asha Iyer/)).toBeInTheDocument();
     expect(screen.getByText(/2\/6 sessions/)).toBeInTheDocument();
     // Active treatments empty-state copy MUST NOT render when rows exist
-    expect(screen.queryByText(/No active treatment plans yet\./i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No active packages yet\./i)).not.toBeInTheDocument();
+  });
+
+  it('a bundle saved on the Packages tab shows up here, above the patient plans', async () => {
+    // The clinic calls both things "packages": a bundle they offer, and a
+    // plan a patient has bought. Building one has to land somewhere visible.
+    const user = userEvent.setup();
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/packages') {
+        return Promise.resolve({
+          packages: [
+            {
+              id: 90,
+              name: 'Glow Bundle',
+              serviceIds: [10],
+              services: [{ id: 10, name: 'GFC Hair', basePrice: 8500 }],
+              missingServiceIds: [],
+              sessions: 6,
+              discountPercent: 10,
+              grossPrice: 51000,
+              price: 45900,
+              isActive: true,
+              isPublic: false,
+            },
+          ],
+        });
+      }
+      if (url === '/api/wellness/activetreatment') {
+        return Promise.resolve({
+          data: [{
+            id: 501,
+            name: 'GFC 6-session course',
+            status: 'active',
+            totalSessions: 6,
+            completedSessions: 2,
+            totalPrice: 51000,
+            startedAt: '2026-04-01T00:00:00Z',
+            patient: { name: 'Asha Iyer' },
+            service: { name: 'GFC Hair' },
+          }],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
+
+    // Both halves render, each under its own heading.
+    await waitFor(() => expect(screen.getByText('Glow Bundle')).toBeInTheDocument());
+    expect(screen.getByText(/Packages you offer/i)).toBeInTheDocument();
+    expect(screen.getByText(/Patient packages in progress/i)).toBeInTheDocument();
+    expect(screen.getByText('GFC 6-session course')).toBeInTheDocument();
+  });
+
+  it('omits the bundle section entirely when no bundle has been built', async () => {
+    // A clinic that only tracks what patients bought sees the tab unchanged —
+    // no empty section, no extra headings.
+    const user = userEvent.setup();
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/packages') return Promise.resolve({ packages: [] });
+      if (url === '/api/wellness/activetreatment') {
+        return Promise.resolve({
+          data: [{
+            id: 502,
+            name: 'Solo plan',
+            status: 'active',
+            totalSessions: 4,
+            completedSessions: 0,
+            totalPrice: 12000,
+            startedAt: '2026-04-01T00:00:00Z',
+            patient: { name: 'Ravi Menon' },
+            service: { name: 'GFC Hair' },
+          }],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
+
+    await waitFor(() => expect(screen.getByText('Solo plan')).toBeInTheDocument());
+    expect(screen.queryByText(/Packages you offer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Patient packages in progress/i)).not.toBeInTheDocument();
   });
 
   it('loads additional treatment cards when the scroll container reaches the bottom', async () => {
@@ -1021,7 +1212,7 @@ describe('<Services /> — Active Treatments populated state', () => {
 
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     await waitFor(() => {
       expect(screen.getByText('Scrollable treatment 1')).toBeInTheDocument();
@@ -1066,7 +1257,7 @@ describe('<Services /> — Active Treatments populated state', () => {
 
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     const card = await screen.findByTestId('treatment-card-502');
     const badge = within(card).getByTestId('treatment-status-502');

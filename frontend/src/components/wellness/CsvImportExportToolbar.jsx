@@ -15,6 +15,9 @@
 //                (defaults to titlecased entity name).
 //   onImported - optional () => void callback fired AFTER a successful sync
 //                import completes, so the parent can refresh its list.
+//   allowImport - default true. Pass false when the caller can read/export but
+//                not write, so the toolbar renders export-only instead of an
+//                Import button that would 403 on submit.
 
 // Auth: piggy-backs on fetchApi's Bearer-token plumbing. Export uses a manual
 // fetch to honor the Authorization header on the blob download; the
@@ -59,6 +62,11 @@ export default function CsvImportExportToolbar({
   // the source/gender/tags/dates filters; other entities stay on the
   // generic /api/wellness/csv/:entity/{export,template} pipeline.
   endpoints = null,
+  // Set false to render an export-only toolbar. Attendance uses this: the
+  // dashboard is visible to MANAGERs, but the import endpoint is ADMIN-only
+  // (it can overwrite existing rows), so managers must not see a button that
+  // can only ever 403.
+  allowImport = true,
 }) {
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
@@ -194,14 +202,16 @@ export default function CsvImportExportToolbar({
             <Upload size={14} /> {exporting ? "Exporting..." : "Export CSV"}
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => setShowImport(true)}
-          aria-label={`Import ${displayLabel}`}
-          style={toolbarButtonStyle}
-        >
-          <Download size={14} /> {multiFormat ? "Import" : "Import CSV"}
-        </button>
+        {allowImport && (
+          <button
+            type="button"
+            onClick={() => setShowImport(true)}
+            aria-label={`Import ${displayLabel}`}
+            style={toolbarButtonStyle}
+          >
+            <Download size={14} /> {multiFormat ? "Import" : "Import CSV"}
+          </button>
+        )}
       </div>
 
       {showImport && (
@@ -249,6 +259,9 @@ function ImportModal({
   const [previewError, setPreviewError] = useState(null);
   const [thresholds, setThresholds] = useState({ rows: 5000, bytes: 5 * 1024 * 1024 });
   const [expectedHeaders, setExpectedHeaders] = useState([]);
+  // Columns the server accepts but doesn't require. Kept separate so the
+  // preview only warns about genuinely missing columns.
+  const [optionalHeaders, setOptionalHeaders] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
   const [jobId, setJobId] = useState(null);
@@ -259,6 +272,7 @@ function ImportModal({
     fetchApi(metaUrl || `/api/wellness/csv/${entity}`, { silent: true })
       .then((meta) => {
         setExpectedHeaders(meta.headers || []);
+        setOptionalHeaders(meta.optionalHeaders || []);
         if (meta.thresholds) setThresholds(meta.thresholds);
       })
       .catch(() => { /* gate denied - submit will show the real error */ });
@@ -313,7 +327,8 @@ function ImportModal({
       const { headers, rows } = parseCsvClient(text);
       setPreviewHeaders(headers);
       setPreviewRows(rows.slice(0, 10));
-      const missing = expectedHeaders.filter((h) => !headers.includes(h));
+      const optional = new Set(optionalHeaders);
+      const missing = expectedHeaders.filter((h) => !headers.includes(h) && !optional.has(h));
       if (missing.length) {
         setPreviewError(`Missing required column(s): ${missing.join(", ")}`);
       }

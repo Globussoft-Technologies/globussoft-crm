@@ -7,13 +7,15 @@
 //   3. Attendance List table — Employee Name, Date, Check-In, Check-Out,
 //      Check-In Type, Check-Out Type, Check-In Recorded Via, Check-Out
 //      Recorded Via, Absent, Notes, Actions (Edit/Delete — ADMIN only)
-//   4. Calendar View link → /wellness/attendance/calendar (existing page)
+//   4. Export / Import toolbar + Calendar View link →
+//      /wellness/attendance/calendar (existing page)
 //
 // RBAC:
 //   - ADMIN + MANAGER can view the KPIs + all-staff list (backend
-//     /api/attendance/summary + /list are role-gated)
-//   - ADMIN-only sees Edit/Delete buttons (backend /api/attendance/:id
-//     PUT + DELETE are ADMIN-only)
+//     /api/attendance/summary + /list are role-gated), and can Export
+//   - ADMIN-only sees Edit/Delete buttons and the Import button (backend
+//     /api/attendance/:id PUT + DELETE and /api/attendance/import are
+//     ADMIN-only)
 //
 // Mounted at /wellness/attendance-dashboard and /travel/attendance via App.jsx.
 
@@ -37,6 +39,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 import TopScrollSync from '../components/TopScrollSync';
+import CsvImportExportToolbar from '../components/wellness/CsvImportExportToolbar';
 
 // ──────────────────────────────────────────────────────────────────
 // Date-range presets
@@ -413,17 +416,37 @@ export default function AttendanceDashboard() {
           <h2 style={{ margin: 0, fontSize: 18, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)' }}>
             <ClipboardList size={18} aria-hidden /> Attendance List
           </h2>
-          <Link
-            to={calendarPath}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '0.4rem 0.9rem', borderRadius: 999,
-              border: '1px solid var(--border-color)',
-              color: 'var(--text-primary)', textDecoration: 'none', fontSize: 13,
-            }}
-          >
-            <CalendarIcon size={14} aria-hidden /> Calendar View
-          </Link>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {/* Export honours the Period filter above — the file matches what
+                the table below is showing. Import is ADMIN-only, matching the
+                Edit / Delete gate on the rows themselves. */}
+            <CsvImportExportToolbar
+              entity="attendance"
+              label="Attendance"
+              formats={['csv', 'xlsx']}
+              forceSync
+              allowImport={isAdmin}
+              filters={{ from, to }}
+              endpoints={{
+                export: '/api/attendance/export',
+                template: '/api/attendance/import-template',
+                meta: '/api/attendance/import-meta',
+                import: '/api/attendance/import',
+              }}
+              onImported={load}
+            />
+            <Link
+              to={calendarPath}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '0.4rem 0.9rem', borderRadius: 999,
+                border: '1px solid var(--border-color)',
+                color: 'var(--text-primary)', textDecoration: 'none', fontSize: 13,
+              }}
+            >
+              <CalendarIcon size={14} aria-hidden /> Calendar View
+            </Link>
+          </div>
         </div>
 
         {loading ? (

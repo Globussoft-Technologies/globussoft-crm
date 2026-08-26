@@ -125,6 +125,15 @@ describe("CsvImportExportToolbar", () => {
     });
   });
 
+  it("renders export-only when allowImport is false", () => {
+    render(
+      <CsvImportExportToolbar entity="attendance" label="Attendance" allowImport={false} />,
+    );
+
+    expect(screen.getByRole("button", { name: /Export Attendance as CSV/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Import Attendance$/i })).toBeNull();
+  });
+
   it("renders a theme-safe file picker in the import modal", async () => {
     render(
       <CsvImportExportToolbar

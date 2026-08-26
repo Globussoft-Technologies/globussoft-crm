@@ -2,7 +2,11 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
-// ── Modal shell (reused by both create + bulk-tag modals) ──────────
+// ── Shared modal shell ─────────────────────────────────────────────
+// Moved here from pages/wellness/patients/ once a second feature area
+// (prescription renewals) needed it — a component under pages/ being
+// imported by components/ is the wrong direction. Behaviour is unchanged;
+// only the file location and the three import paths moved.
 // Theme-adaptive: we let the `.glass` class supply the background
 // (translucent white in light mode, translucent dark teal in dark
 // mode — both already defined in [theme/wellness.css](src/theme/wellness.css))

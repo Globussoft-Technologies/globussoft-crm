@@ -15,7 +15,13 @@ import { describe, test, expect } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
-const { parseServiceIds, normalizePackageBody } = requireCJS('../../routes/wellness_packages');
+const {
+  parseServiceIds,
+  normalizePackageBody,
+  saleBlockReason,
+  priceBreakdown,
+  planRequestBlockReason,
+} = requireCJS('../../routes/wellness_packages');
 
 describe('parseServiceIds', () => {
   test('reads the stored JSON id array', () => {
@@ -100,6 +106,75 @@ describe('normalizePackageBody — create', () => {
   });
 });
 
+describe('normalizePackageBody — tax, validity and sell-by', () => {
+  const valid = { name: 'Glow Bundle', serviceIds: [10, 11], sessions: 6, discountPercent: 15 };
+
+  test('all three are optional — a package without them is still valid', () => {
+    const { error, data } = normalizePackageBody(valid);
+    expect(error).toBeUndefined();
+    expect(data.taxPercent).toBeUndefined();   // route defaults to 0
+    expect(data.validityDays).toBeUndefined(); // route defaults to null
+    expect(data.sellByDate).toBeUndefined();
+  });
+
+  test('accepts the slabs the builder offers', () => {
+    for (const tax of [0, 5, 18]) {
+      const { error, data } = normalizePackageBody({ ...valid, taxPercent: tax });
+      expect(error).toBeUndefined();
+      expect(data.taxPercent).toBe(tax);
+    }
+  });
+
+  test('bounds the tax rate — a negative rate would refund the government', () => {
+    expect(normalizePackageBody({ ...valid, taxPercent: -1 }).error?.body.code).toBe('INVALID_TAX');
+    expect(normalizePackageBody({ ...valid, taxPercent: 101 }).error?.body.code).toBe('INVALID_TAX');
+    expect(normalizePackageBody({ ...valid, taxPercent: 'GST' }).error?.body.code).toBe('INVALID_TAX');
+  });
+
+  test('an explicitly cleared tax reads as no tax, not as "unchanged"', () => {
+    expect(normalizePackageBody({ ...valid, taxPercent: '' }).data.taxPercent).toBe(0);
+    expect(normalizePackageBody({ ...valid, taxPercent: null }).data.taxPercent).toBe(0);
+  });
+
+  test('validity accepts the preset day counts and clears to null', () => {
+    for (const days of [1, 7, 14, 30, 180, 365]) {
+      expect(normalizePackageBody({ ...valid, validityDays: days }).data.validityDays).toBe(days);
+    }
+    expect(normalizePackageBody({ ...valid, validityDays: '' }).data.validityDays).toBeNull();
+    expect(normalizePackageBody({ ...valid, validityDays: null }).data.validityDays).toBeNull();
+  });
+
+  test('rejects a validity that is zero, fractional or absurd', () => {
+    expect(normalizePackageBody({ ...valid, validityDays: 0 }).error?.body.code).toBe('INVALID_VALIDITY');
+    expect(normalizePackageBody({ ...valid, validityDays: 1.5 }).error?.body.code).toBe('INVALID_VALIDITY');
+    expect(normalizePackageBody({ ...valid, validityDays: 3651 }).error?.body.code).toBe('INVALID_VALIDITY');
+    expect(normalizePackageBody({ ...valid, validityDays: 'forever' }).error?.body.code).toBe('INVALID_VALIDITY');
+  });
+
+  test('sell-by parses a date input and clears to null', () => {
+    const { error, data } = normalizePackageBody({ ...valid, sellByDate: '2026-12-31' });
+    expect(error).toBeUndefined();
+    expect(data.sellByDate).toBeInstanceOf(Date);
+    expect(data.sellByDate.toISOString().slice(0, 10)).toBe('2026-12-31');
+    expect(normalizePackageBody({ ...valid, sellByDate: '' }).data.sellByDate).toBeNull();
+  });
+
+  test('rejects an unparseable sell-by date', () => {
+    expect(normalizePackageBody({ ...valid, sellByDate: 'next winter' }).error?.body.code).toBe('INVALID_SELL_BY');
+  });
+
+  test('a past sell-by date is allowed — a closed season is a real thing to record', () => {
+    expect(normalizePackageBody({ ...valid, sellByDate: '2020-01-01' }).error).toBeUndefined();
+  });
+
+  test('they patch independently of pricing', () => {
+    // Same property as the visibility-only patch: changing the GST slab must
+    // not drag the bundle through a reprice at today's service prices.
+    const { data } = normalizePackageBody({ taxPercent: 18 }, { partial: true });
+    expect(data).toEqual({ taxPercent: 18 });
+  });
+});
+
 describe('normalizePackageBody — partial update', () => {
   test('a visibility-only patch carries no pricing fields', () => {
     // This is what stops "Publish" silently re-pricing a package at today's
@@ -125,5 +200,108 @@ describe('normalizePackageBody — partial update', () => {
 
   test('description can be cleared', () => {
     expect(normalizePackageBody({ description: '' }, { partial: true }).data.description).toBeNull();
+  });
+});
+
+// ── Buying a package ────────────────────────────────────────────────
+
+describe('saleBlockReason', () => {
+  const onSale = { isActive: true, isPublic: true, sellByDate: null };
+
+  test('a live package with no sell-by date is buyable', () => {
+    expect(saleBlockReason(onSale)).toBeNull();
+  });
+
+  test('a retired package cannot be bought', () => {
+    expect(saleBlockReason({ ...onSale, isActive: false }).code).toBe('PACKAGE_RETIRED');
+  });
+
+  test('an unpublished draft cannot be bought even with its id in hand', () => {
+    expect(saleBlockReason({ ...onSale, isPublic: false }).code).toBe('PACKAGE_NOT_PUBLIC');
+  });
+
+  test('a lapsed sell-by date closes the sale', () => {
+    expect(saleBlockReason({ ...onSale, sellByDate: '2020-01-01T00:00:00.000Z' }).code)
+      .toBe('PACKAGE_PAST_SELL_BY');
+  });
+
+  test('a future sell-by date does not', () => {
+    expect(saleBlockReason({ ...onSale, sellByDate: '2099-12-31T00:00:00.000Z' })).toBeNull();
+  });
+});
+
+describe('priceBreakdown', () => {
+  test('adds the GST slab on top of the stored price', () => {
+    expect(priceBreakdown({ price: 50993, taxPercent: 5 })).toEqual({
+      baseAmount: 50993,
+      taxPercent: 5,
+      tax: 2550,
+      total: 53543,
+    });
+  });
+
+  test('rounds tax the way the builder quoted it', () => {
+    // 50993 x 5% is 2549.65. The builder showed the customer 2,550, so that is
+    // what gets charged — being billed 35 paise off the quote is a support
+    // ticket waiting to happen.
+    expect(priceBreakdown({ price: 50993, taxPercent: 5 }).tax).toBe(2550);
+  });
+
+  test('no tax means the total is the price', () => {
+    expect(priceBreakdown({ price: 1200, taxPercent: 0 })).toMatchObject({ tax: 0, total: 1200 });
+    expect(priceBreakdown({ price: 1200 })).toMatchObject({ tax: 0, total: 1200 });
+  });
+
+  test('a priceless package totals zero rather than NaN', () => {
+    // The route rejects this with PACKAGE_NOT_PAYABLE; it must not reach the
+    // gateway as a NaN amount.
+    expect(priceBreakdown({}).total).toBe(0);
+    expect(priceBreakdown({ price: null, taxPercent: null }).total).toBe(0);
+  });
+
+  test('GST 18% on a round price', () => {
+    expect(priceBreakdown({ price: 10000, taxPercent: 18 })).toMatchObject({ tax: 1800, total: 11800 });
+  });
+});
+
+// ── Asking for a session out of a bought package ────────────────────
+
+describe('planRequestBlockReason', () => {
+  const usable = { status: 'active', totalSessions: 4, completedSessions: 1, nextDueAt: null };
+
+  test('an active package with sessions left and no expiry is bookable', () => {
+    expect(planRequestBlockReason(usable)).toBeNull();
+  });
+
+  test('a future use-by date does not block it', () => {
+    expect(planRequestBlockReason({ ...usable, nextDueAt: '2099-01-01T00:00:00.000Z' })).toBeNull();
+  });
+
+  test('a package with every session used cannot take another request', () => {
+    expect(planRequestBlockReason({ ...usable, completedSessions: 4 }).body.code).toBe('PLAN_EXHAUSTED');
+    // Over-run defensively too: a courtesy sitting must not reopen the package.
+    expect(planRequestBlockReason({ ...usable, completedSessions: 5 }).body.code).toBe('PLAN_EXHAUSTED');
+  });
+
+  test('a finished or cancelled package is closed to requests', () => {
+    expect(planRequestBlockReason({ ...usable, status: 'completed' }).body.code).toBe('PLAN_NOT_ACTIVE');
+    expect(planRequestBlockReason({ ...usable, status: 'cancelled' }).body.code).toBe('PLAN_NOT_ACTIVE');
+    expect(planRequestBlockReason({ ...usable, status: 'paused' }).body.code).toBe('PLAN_NOT_ACTIVE');
+  });
+
+  test('a lapsed use-by date sends the customer to the clinic rather than silently failing', () => {
+    const blocked = planRequestBlockReason({ ...usable, nextDueAt: '2020-01-01T00:00:00.000Z' });
+    expect(blocked.body.code).toBe('PLAN_LAPSED');
+    expect(blocked.body.error).toMatch(/contact the clinic/i);
+  });
+
+  test('every refusal is a 409, not a 500 — these are states, not faults', () => {
+    for (const plan of [
+      { ...usable, status: 'completed' },
+      { ...usable, completedSessions: 4 },
+      { ...usable, nextDueAt: '2020-01-01T00:00:00.000Z' },
+    ]) {
+      expect(planRequestBlockReason(plan).status).toBe(409);
+    }
   });
 });

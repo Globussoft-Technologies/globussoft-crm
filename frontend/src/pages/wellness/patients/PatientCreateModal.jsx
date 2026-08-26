@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../../../utils/api";
 import { useNotify } from "../../../utils/notify";
-import ModalShell from "./ModalShell";
+import ModalShell from "../../../components/wellness/ModalShell";
 import { iconBtnSmall, primaryTealBtn, modalInputStyle } from "./styles";
 
 // ── Create-customer modal ──────────────────────────────────────────

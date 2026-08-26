@@ -5,6 +5,27 @@ import { useNotify } from '../../../utils/notify';
 import { formatMoney } from '../../../utils/money';
 import { inputStyle, labelStyle } from './shared';
 import MultiSelectDropdown from './MultiSelectDropdown';
+import SingleSelectDropdown from './SingleSelectDropdown';
+
+// GST slabs a clinic actually charges. The column takes any 0-100 rate, so a
+// slab change here does not need a migration.
+const TAX_OPTIONS = [
+  { value: 0, label: 'No Tax' },
+  { value: 5, label: 'GST 5%' },
+  { value: 18, label: 'GST 18%' },
+];
+
+// How long the buyer has to use the package once bought. Stored as a day
+// count so "6 Months" is unambiguous across month lengths.
+const VALIDITY_OPTIONS = [
+  { value: '', label: 'No expiry', days: null },
+  { value: '1', label: 'Today', days: 1 },
+  { value: '7', label: '1 Week', days: 7 },
+  { value: '14', label: '2 Weeks', days: 14 },
+  { value: '30', label: '1 Month', days: 30 },
+  { value: '180', label: '6 Months', days: 180 },
+  { value: '365', label: '1 Year', days: 365 },
+];
 
 function Row({ label, children, negative, muted }) {
   return (
@@ -39,6 +60,11 @@ export default function PackageBuilder({ services, onSaved }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [sessions, setSessions] = useState(6);
   const [discount, setDiscount] = useState(15);
+  const [taxPercent, setTaxPercent] = useState(0);
+  // '' = no expiry. Kept as a string so it round-trips through the dropdown's
+  // strict === comparison without a number/string mismatch.
+  const [validity, setValidity] = useState('');
+  const [sellByDate, setSellByDate] = useState('');
   const [copied, setCopied] = useState(false);
   const copyResetTimerRef = useRef(null);
 
@@ -81,9 +107,15 @@ export default function PackageBuilder({ services, onSaved }) {
   const gross = perSession * sessions;
   const savings = Math.round((gross * discount) / 100);
   const net = Math.round(gross - savings);
+  // GST sits ON TOP of the package price — the same convention the appointment
+  // checkout uses — so the stored price stays pre-tax and a slab change never
+  // rewrites what a customer was already quoted.
+  const taxAmount = Math.round((net * taxPercent) / 100);
+  const payable = net + taxAmount;
+  const validityLabel = VALIDITY_OPTIONS.find((o) => o.value === validity)?.label || 'No expiry';
 
   const pitch = selected.length
-    ? `${selected.map((s) => s.name).join(' + ')} × ${sessions} sessions = ${formatMoney(net, { maximumFractionDigits: 0 })} (${discount}% off)`
+    ? `${selected.map((s) => s.name).join(' + ')} × ${sessions} sessions = ${formatMoney(payable, { maximumFractionDigits: 0 })}${taxPercent ? ' incl. tax' : ''} (${discount}% off)${validity ? `, valid ${validityLabel.toLowerCase()}` : ''}`
     : '';
 
   const copyPitch = async () => {
@@ -111,8 +143,9 @@ export default function PackageBuilder({ services, onSaved }) {
     }
     setSaving(true);
     try {
-      // Saved as a draft: a package is priced here but published deliberately
-      // from Active Packages, so nothing reaches customers by accident.
+      // Saved as a draft: isPublic defaults to false server-side, so a bundle
+      // is published deliberately from the Active Packages tab and nothing
+      // reaches customers by accident.
       const created = await fetchApi('/api/wellness/packages', {
         method: 'POST',
         body: JSON.stringify({
@@ -120,6 +153,9 @@ export default function PackageBuilder({ services, onSaved }) {
           serviceIds: selected.map((s) => s.id),
           sessions,
           discountPercent: discount,
+          taxPercent,
+          validityDays: validity === '' ? null : Number(validity),
+          sellByDate: sellByDate || null,
         }),
       });
       notify.success(`"${trimmed}" saved — publish it from Active Packages`);
@@ -243,6 +279,45 @@ export default function PackageBuilder({ services, onSaved }) {
           <span>0%</span>
           <span>50%</span>
         </div>
+
+        <label style={{ ...labelStyle, marginTop: '1rem' }}>Select tax</label>
+        <div data-testid="package-tax-select">
+          <SingleSelectDropdown
+            value={taxPercent}
+            onChange={setTaxPercent}
+            options={TAX_OPTIONS}
+          />
+        </div>
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
+          Added on top at checkout; the saved price stays pre-tax.
+        </div>
+
+        <label style={{ ...labelStyle, marginTop: '1rem' }}>Package validity</label>
+        <div data-testid="package-validity-select">
+          <SingleSelectDropdown
+            value={validity}
+            onChange={setValidity}
+            options={VALIDITY_OPTIONS}
+          />
+        </div>
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
+          How long the customer has to use the sessions after buying.
+        </div>
+
+        <label style={{ ...labelStyle, marginTop: '1rem' }} htmlFor="package-sell-by">
+          Package sell-by date
+        </label>
+        <input
+          id="package-sell-by"
+          type="date"
+          value={sellByDate}
+          onChange={(e) => setSellByDate(e.target.value)}
+          style={inputStyle}
+          data-testid="package-sell-by-input"
+        />
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
+          Last day it can be sold. After this the customer catalog stops listing it.
+        </div>
       </div>
 
       <div className="glass" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -278,11 +353,29 @@ export default function PackageBuilder({ services, onSaved }) {
                 alignItems: 'baseline',
               }}
             >
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Package price</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                {taxPercent ? 'Package price (pre-tax)' : 'Package price'}
+              </div>
               <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--accent-color)' }}>
                 ₹{net.toLocaleString('en-IN')}
               </div>
             </div>
+
+            {taxPercent > 0 && (
+              <>
+                <Row label={`Tax (${taxPercent}%)`}>+ ₹{taxAmount.toLocaleString('en-IN')}</Row>
+                <Row label="Customer pays">
+                  <strong>₹{payable.toLocaleString('en-IN')}</strong>
+                </Row>
+              </>
+            )}
+
+            {(validity || sellByDate) && (
+              <div style={{ display: 'grid', gap: '0.35rem', paddingTop: '0.5rem' }}>
+                {validity && <Row label="Valid for" muted>{validityLabel}</Row>}
+                {sellByDate && <Row label="Sell by" muted>{sellByDate}</Row>}
+              </div>
+            )}
 
             <div
               style={{

@@ -876,6 +876,11 @@ const wellnessCallifiedRoutes = require("./routes/wellness_callified");
 // discounted sessions. Declares only /packages* paths that wellness.js does
 // NOT own.
 const wellnessPackagesRoutes = require("./routes/wellness_packages");
+// Prescription renewal / medicine requests — the staff half of the workflow a
+// patient starts from the Android app. Declares only /prescription-requests*
+// paths that wellness.js does NOT own; the patient half lives on
+// /portal/prescription-requests inside wellness.js (next to verifyPatientToken).
+const wellnessPrescriptionRequestRoutes = require("./routes/wellness_prescription_requests");
 // Wave 2 Agent II — POS / cash register / shift / sale backbone.
 const posRoutes = require("./routes/pos");
 // D16 Wallet Top-up Arc 1 slice 2-partial — read-only wallet endpoints
@@ -1529,6 +1534,8 @@ app.use("/api/wellness", wellnessAiConfigRoutes);
 app.use("/api/wellness", wellnessCallifiedRoutes);
 // Wellness service packages (/packages* paths).
 app.use("/api/wellness", wellnessPackagesRoutes);
+// Prescription renewal / medicine requests (/prescription-requests* paths).
+app.use("/api/wellness", wellnessPrescriptionRequestRoutes);
 // Standalone geofence zones + bulk staff assignment (/geofence-zones,
 // /geofence-zone-assignments/* paths). Decoupled from clinic Location — see
 // routes/wellness_geofence_zones.js for the global-fallback design.

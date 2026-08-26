@@ -1585,3 +1585,117 @@ describe('<PatientCreateModal /> — S97 structured intake (firstName + lastName
     });
   });
 });
+
+/**
+ * Callified calling on the Patients row.
+ *
+ * Same feature as the Appointments row, pointed at the patient endpoints —
+ * there is no appointment when you call someone from their patient record.
+ * What matters here is that the action is GATED (an unconfigured tenant must
+ * not see a button that always fails) and that it targets the PATIENT
+ * endpoints, since hitting the visit ones with a patient id would call the
+ * wrong person or 404.
+ */
+describe('<Patients /> — Callified calling', () => {
+  const ROW = {
+    id: 555,
+    name: 'Smoke Patient',
+    phone: '+919800000555',
+    email: 's@t.in',
+    gender: 'F',
+    source: 'walk-in',
+    createdAt: '2026-05-20T10:00:00Z',
+  };
+
+  function mockPage({ callified = true, patient = ROW } = {}) {
+    fetchApi.mockImplementation((url) => {
+      if (typeof url !== 'string') return Promise.resolve({});
+      if (url.startsWith('/api/wellness/patients?')) {
+        return Promise.resolve({ patients: [patient], total: 1 });
+      }
+      if (url === '/api/wellness/callified/status') {
+        return Promise.resolve({ configured: callified, enabled: callified });
+      }
+      if (url.includes('/callified/patients/') && url.endsWith('/context')) {
+        return Promise.resolve({
+          patientId: patient.id,
+          patientName: patient.name,
+          contactId: null,
+          phone: patient.phone,
+          normalizedPhone: patient.phone,
+          phoneValid: true,
+          recentCallAt: null,
+        });
+      }
+      if (url === '/api/wellness/callified/campaigns') {
+        return Promise.resolve({ campaigns: [{ id: 1, name: 'Recall' }] });
+      }
+      if (url === '/api/wellness/locations') return Promise.resolve([]);
+      if (url === '/api/wellness/patients/tags') return Promise.resolve({ tags: [] });
+      return Promise.resolve({});
+    });
+  }
+
+  beforeEach(() => {
+    fetchApi.mockReset();
+    notifyObj.success.mockReset();
+    notifyObj.error.mockReset();
+  });
+
+  it('offers a call action once Callified is configured', async () => {
+    mockPage();
+    renderPage();
+    expect(await screen.findByTestId('patient-call-555')).toBeEnabled();
+  });
+
+  it('hides the call action when the tenant has no Callified set up', async () => {
+    mockPage({ callified: false });
+    renderPage();
+
+    // Wait for the row itself so we are asserting on a rendered table, not on
+    // a page that simply has not loaded yet.
+    await screen.findByText('Smoke Patient');
+    expect(screen.queryByTestId('patient-call-555')).not.toBeInTheDocument();
+  });
+
+  it('disables the action for a patient with no dialable number', async () => {
+    mockPage({ patient: { ...ROW, phone: '' } });
+    renderPage();
+
+    const btn = await screen.findByTestId('patient-call-555');
+    // Disabled rather than hidden: the operator needs to know WHY they cannot
+    // call, so they can go and fix the phone number.
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('title', 'No valid phone number on file');
+  });
+
+  it('opens the call dialog against the PATIENT endpoints, not the visit ones', async () => {
+    mockPage();
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByTestId('patient-call-555'));
+
+    await waitFor(() =>
+      expect(fetchApi).toHaveBeenCalledWith(
+        '/api/wellness/callified/patients/555/context',
+        expect.anything(),
+      ),
+    );
+    // Calling a patient record has no appointment behind it — a visit-scoped
+    // request here would resolve a different patient or 404.
+    const urls = fetchApi.mock.calls.map((c) => c[0]);
+    expect(urls.some((u) => typeof u === 'string' && u.includes('/callified/visits/'))).toBe(false);
+  });
+
+  it('shows both call modes so nothing dials on a single click', async () => {
+    mockPage();
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByTestId('patient-call-555'));
+
+    expect(await screen.findByTestId('callified-call-mode-ai')).toBeInTheDocument();
+    expect(screen.getByTestId('callified-call-mode-manual')).toBeInTheDocument();
+  });
+});

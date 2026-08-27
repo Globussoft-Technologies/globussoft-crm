@@ -157,6 +157,45 @@ describe('POST /api/wellness/public/enquiry', () => {
     }));
   });
 
+  test('does not merge by phone alone for website enquiries', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({
+      id: 1,
+      slug: 'enhanced-wellness',
+      vertical: 'wellness',
+      name: 'Enhanced Wellness',
+    });
+    findDuplicateContactFullMock.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 84 });
+
+    const res = await request(makeApp())
+      .post('/api/wellness/public/enquiry')
+      .send({
+        tenantSlug: 'enhanced-wellness',
+        firstName: 'Mira',
+        lastName: 'Sharma',
+        email: 'mira.new@example.com',
+        phone: '+919876543210',
+        service: 'Body Wellness',
+        message: 'Need details',
+      });
+
+    expect(res.status).toBe(201);
+    expect(findDuplicateContactFullMock).toHaveBeenCalledWith({
+      email: 'mira.new@example.com',
+      tenantId: 1,
+    });
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        tenantId: 1,
+        name: 'Mira Sharma',
+        email: 'mira.new@example.com',
+        phone: '+919876543210',
+        status: 'Lead',
+        source: 'website',
+      }),
+    }));
+  });
+
   test('dedupes by email and updates the existing contact', async () => {
     prisma.tenant.findUnique.mockResolvedValue({
       id: 1,

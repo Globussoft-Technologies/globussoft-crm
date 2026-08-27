@@ -89,6 +89,7 @@ prisma.userRole = {
   count: vi.fn(),
   create: vi.fn(),
   delete: vi.fn(),
+  findFirst: vi.fn(),
   findUnique: vi.fn(),
   deleteMany: vi.fn(),
 };
@@ -96,7 +97,19 @@ prisma.userRole = {
 // the lockout guard pulls active users from this model.
 prisma.user = {
   findMany: vi.fn(),
+  findFirst: vi.fn(),
   findUnique: vi.fn(),
+  delete: vi.fn(),
+};
+prisma.contact = {
+  findMany: vi.fn(),
+  delete: vi.fn(),
+  update: vi.fn(),
+};
+prisma.patient = {
+  findMany: vi.fn(),
+  delete: vi.fn(),
+  update: vi.fn(),
 };
 prisma.$transaction = vi.fn(async (fn) => fn(prisma));
 
@@ -124,7 +137,7 @@ function makeApp({
 }
 
 beforeEach(() => {
-  for (const m of [prisma.role, prisma.rolePermission, prisma.tenant, prisma.userRole]) {
+  for (const m of [prisma.role, prisma.rolePermission, prisma.tenant, prisma.userRole, prisma.user, prisma.contact, prisma.patient]) {
     for (const fn of Object.values(m)) {
       if (typeof fn === 'function' && typeof fn.mockReset === 'function') {
         fn.mockReset();
@@ -141,6 +154,7 @@ beforeEach(() => {
   });
   // Default: $transaction is a passthrough.
   prisma.$transaction.mockImplementation(async (fn) => fn(prisma));
+  prisma.userRole.count.mockResolvedValue(2);
   delete process.env.RBAC_STRICT_VERTICAL_VALIDATION;
 });
 
@@ -184,6 +198,126 @@ describe('Bug 2 — DELETE /api/roles/:id on a system role', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(prisma.role.delete).toHaveBeenCalledWith({ where: { id: 9 } });
+  });
+});
+
+describe('Member delete — DELETE /api/roles/:id/members/:userId', () => {
+  test('hard-deletes the user account and cleans linked contact/patient rows', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 5,
+      key: 'USER',
+      name: 'User',
+      tenantId: 11,
+      isSystem: false,
+    });
+    prisma.user.findFirst.mockResolvedValue({
+      id: 7,
+      email: 'member@acme.test',
+      name: 'Member',
+      tenantId: 11,
+      userType: 'STAFF',
+    });
+    prisma.userRole.findUnique.mockResolvedValue({
+      userId_roleId: { userId: 7, roleId: 5 },
+    });
+    prisma.userRole.findFirst.mockResolvedValue(null);
+    prisma.contact.findMany.mockResolvedValue([{ id: 31 }]);
+    prisma.contact.delete.mockResolvedValue({ id: 31 });
+    prisma.patient.findMany.mockResolvedValue([{ id: 41 }]);
+    prisma.patient.delete.mockResolvedValue({ id: 41 });
+    prisma.user.delete.mockResolvedValue({ id: 7 });
+
+    const res = await request(makeApp({ userId: 1 })).delete('/api/roles/5/members/7');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 11, email: 'member@acme.test' },
+      select: { id: true },
+    });
+    expect(prisma.patient.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 11,
+        OR: [{ userId: 7 }, { email: 'member@acme.test' }],
+      },
+      select: { id: true },
+    });
+    expect(prisma.contact.delete).toHaveBeenCalledWith({ where: { id: 31 } });
+    expect(prisma.patient.delete).toHaveBeenCalledWith({ where: { id: 41 } });
+    expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 7 } });
+  });
+
+  test('returns 409 LAST_ADMIN_PROTECTION when deleting the only ADMIN', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 5,
+      key: 'ADMIN',
+      name: 'Administrator',
+      tenantId: 11,
+      isSystem: true,
+    });
+    prisma.user.findFirst.mockResolvedValue({
+      id: 7,
+      email: 'admin@acme.test',
+      name: 'Admin',
+      tenantId: 11,
+      userType: 'STAFF',
+    });
+    prisma.userRole.findUnique.mockResolvedValue({
+      userId_roleId: { userId: 7, roleId: 5 },
+    });
+    prisma.userRole.findFirst.mockResolvedValue({ id: 88 });
+    prisma.userRole.count.mockResolvedValue(1);
+
+    const res = await request(makeApp({ userId: 1 })).delete('/api/roles/5/members/7');
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('LAST_ADMIN_PROTECTION');
+    expect(prisma.user.delete).not.toHaveBeenCalled();
+    expect(prisma.contact.delete).not.toHaveBeenCalled();
+    expect(prisma.patient.delete).not.toHaveBeenCalled();
+  });
+
+  test('tombstones a contact when hard delete is blocked by FK children', async () => {
+    const contactDeleteErr = new Error('FK blocked');
+    contactDeleteErr.code = 'P2003';
+
+    prisma.role.findUnique.mockResolvedValue({
+      id: 5,
+      key: 'USER',
+      name: 'User',
+      tenantId: 11,
+      isSystem: false,
+    });
+    prisma.user.findFirst.mockResolvedValue({
+      id: 7,
+      email: 'portal@acme.test',
+      name: 'Portal User',
+      tenantId: 11,
+      userType: 'CUSTOMER',
+    });
+    prisma.userRole.findUnique.mockResolvedValue({
+      userId_roleId: { userId: 7, roleId: 5 },
+    });
+    prisma.userRole.findFirst.mockResolvedValue(null);
+    prisma.contact.findMany.mockResolvedValue([{ id: 31 }]);
+    prisma.contact.delete.mockRejectedValue(contactDeleteErr);
+    prisma.contact.update.mockResolvedValue({ id: 31 });
+    prisma.patient.findMany.mockResolvedValue([]);
+    prisma.user.delete.mockResolvedValue({ id: 7 });
+
+    const res = await request(makeApp({ userId: 1 })).delete('/api/roles/5/members/7');
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 31 },
+        data: expect.objectContaining({
+          email: expect.stringMatching(/^deleted-contact-11-7-/),
+          deletedAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 7 } });
   });
 });
 

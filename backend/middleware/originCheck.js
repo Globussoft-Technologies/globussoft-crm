@@ -87,6 +87,8 @@ function buildAllowlist() {
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "https://globuscrm.globussoft.com",
+    "https://drenhance.com",
+    "https://www.drenhance.com",
     "https://empcloud.com",
     "https://www.empcloud.com",
     "https://app.empcloud.com",

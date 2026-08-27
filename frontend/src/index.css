@@ -1165,6 +1165,16 @@ html[data-theme="dark"] .travel-flight-details-box {
   background-clip: padding-box;
 }
 
+.top-scroll-sync__bottom--hidden-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.top-scroll-sync__bottom--hidden-scrollbar::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
+
 /* Web Check-ins scrollbar matches the Trips page: visible, neutral gray,
    and easy to grab without introducing a brand-blue accent. */
 .webcheckins-table-scroll-shell .top-scroll-sync__top,
@@ -1204,12 +1214,15 @@ html[data-theme="dark"] .travel-flight-details-box {
   align-items: flex-start;
   width: 100%;
   max-width: 100%;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: calc(100vh - 24rem);
   background: var(--surface-color);
 }
 
 .leads-table-frozen-pane {
   flex: 0 0 auto;
+  align-self: flex-start;
   position: relative;
   z-index: 3;
   background: var(--surface-color);
@@ -1224,7 +1237,8 @@ html[data-theme="dark"] .travel-flight-details-box {
 .leads-table-scroll-pane {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
+  min-height: 0;
+  overflow: visible;
 }
 
 .leads-split-table table.leads-table thead tr {
@@ -1558,7 +1572,11 @@ table.leads-table--scrollable td:first-child {
 }
 
 table.leads-table thead th {
-  background-color: var(--table-header-bg);
+  position: sticky;
+  top: 16px;
+  z-index: 6;
+  background-color: var(--modal-bg);
+  box-shadow: inset 0 -1px 0 var(--border-color);
 }
 
 table.leads-table thead tr:first-child th {
@@ -1570,6 +1588,100 @@ table.leads-table tbody td {
 }
 
 table.leads-table tbody tr:hover td {
+  background-color: var(--surface-hover);
+}
+
+/* Contacts split-table shell: freeze the name pane and keep the rest of the
+   grid inside a single scrollable viewport, while preserving the existing
+   card chrome and sticky top scrollbar. */
+.contacts-split-table {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: calc(100vh - 24rem);
+  background: var(--surface-color);
+}
+
+.contacts-table-frozen-pane {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  position: relative;
+  z-index: 3;
+  background: var(--surface-color);
+  box-shadow: 1px 0 0 var(--border-color);
+}
+
+.contacts-table-frozen-spacer {
+  height: 16px;
+  background: var(--surface-color);
+}
+
+.contacts-table-scroll-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+.contacts-split-table table.contacts-table thead tr {
+  height: 50px;
+}
+
+.contacts-split-table table.contacts-table tbody tr {
+  height: 52px;
+}
+
+.contacts-split-table table.contacts-table th,
+.contacts-split-table table.contacts-table td {
+  height: inherit;
+}
+
+table.contacts-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  background-color: var(--surface-color);
+}
+
+table.contacts-table th,
+table.contacts-table td {
+  box-sizing: border-box;
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--surface-color);
+  background-clip: padding-box;
+}
+
+table.contacts-table th:first-child,
+table.contacts-table td:first-child {
+  border-left: 1px solid var(--border-color);
+}
+
+table.contacts-table--scrollable th:first-child,
+table.contacts-table--scrollable td:first-child {
+  border-left: 0;
+}
+
+table.contacts-table thead th {
+  position: sticky;
+  top: 16px;
+  z-index: 6;
+  background-color: var(--modal-bg);
+  box-shadow: inset 0 -1px 0 var(--border-color);
+}
+
+table.contacts-table thead tr:first-child th {
+  border-top: 1px solid var(--border-color);
+}
+
+table.contacts-table tbody td {
+  transition: background-color 0.15s ease;
+}
+
+table.contacts-table tbody tr:hover td {
   background-color: var(--surface-hover);
 }
 

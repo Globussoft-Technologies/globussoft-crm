@@ -617,6 +617,9 @@ describe('Leads Freshsales-style list UI affordances', () => {
 
     const phoneHeader = screen.getByText('Phone').closest('th');
     expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
+
+    const bottomScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__bottom');
+    expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
   });
 
   it('persists dragged column widths for the Leads table layout', async () => {

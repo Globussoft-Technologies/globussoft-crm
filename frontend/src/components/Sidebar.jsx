@@ -2257,10 +2257,10 @@ function renderTravelNav({
       {/* Gmail  personal per-user mailbox connection (each staff member links
           their OWN Google account). Intentionally NO requiredPermission: it's a
           personal integration, not a permission-gated module, so every travel
-          staff user sees it regardless of role. Placed OUTSIDE the Customer
-          comms <Section> so the section can still collapse when the user has
-          no comms grants. */}
-      <Link to="/gmail" icon={Mail} label="Gmail" />
+          staff user sees it regardless of role  except TMC, which hides the
+          page entirely. Placed OUTSIDE the Customer comms <Section> so the
+          section can still collapse when the user has no comms grants. */}
+      {activeSubBrand !== "tmc" && <Link to="/gmail" icon={Mail} label="Gmail" />}
 
       <Section label="Financial">
         <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />

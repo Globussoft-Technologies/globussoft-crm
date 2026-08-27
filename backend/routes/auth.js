@@ -1070,6 +1070,7 @@ router.post("/login", async (req, res) => {
         // customer portal instead of the staff dashboard.
         userType: user.userType || 'STAFF',
         wellnessRole: user.wellnessRole || null,
+        themePreference: user.themePreference || 'system',
         // Sub-brand access scope (travel vertical). Lets the sidebar switcher
         // render only the brands this user may activate; the authoritative gate
         // stays server-side (travelGuards.getSubBrandAccessSet). Null = full

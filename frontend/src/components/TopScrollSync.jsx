@@ -8,6 +8,10 @@ import { useEffect, useRef, useState } from "react";
 // it before they can scroll right. This mirrors scroll position both ways
 // so either bar can be dragged from wherever the user's mouse already is.
 //
+// `hideBottomScrollbar` keeps the sync behavior but visually hides the
+// native bottom scrollbar, which is useful on dense split tables where the
+// top bar is the only one we want the user to see.
+//
 // `scrollWidth` is OPTIONAL - when omitted, the actual rendered width of the
 // wrapped content is measured automatically (via ResizeObserver, so it stays
 // correct when columns are toggled on/off or data changes row count). Pass
@@ -21,6 +25,7 @@ const TopScrollSync = ({
   forceScrollbar = false,
   stickyTop = false,
   stickyTopOffset = 0,
+  hideBottomScrollbar = false,
 }) => {
   const topRef = useRef(null);
   const bottomRef = useRef(null);
@@ -68,12 +73,15 @@ const TopScrollSync = ({
     // Taking the max of both catches that case without affecting the
     // normal case (where they're already equal).
     const measure = () =>
-      setMeasuredWidth(
-        Math.max(
-          bottom.scrollWidth,
-          bottom.firstElementChild ? bottom.firstElementChild.scrollWidth : 0,
-        ),
-      );
+      {
+        setMeasuredWidth(
+          Math.max(
+            bottom.scrollWidth,
+            bottom.firstElementChild ? bottom.firstElementChild.scrollWidth : 0,
+          ),
+        );
+        setClientWidth(bottom.clientWidth);
+      };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(bottom);
@@ -124,11 +132,13 @@ const TopScrollSync = ({
       ) : null}
       <div
         ref={bottomRef}
-        className="top-scroll-sync__bottom"
+        className={`top-scroll-sync__bottom${hideBottomScrollbar ? " top-scroll-sync__bottom--hidden-scrollbar" : ""}`}
         style={{
           overflowX: forceScrollbar ? "scroll" : "auto",
           minWidth: 0,
           maxWidth: "100%",
+          scrollbarWidth: hideBottomScrollbar ? "none" : "auto",
+          msOverflowStyle: hideBottomScrollbar ? "none" : "auto",
         }}
       >
         {children}

@@ -327,6 +327,16 @@ describe('<TravelDashboard /> — loading / fetch / error', () => {
     await screen.findByText(/Dashboard data is unavailable\. Try refreshing\./i);
     await waitFor(() => expect(notifyError).toHaveBeenCalled());
   });
+
+  it('opens the system readiness modal with an opaque panel surface', async () => {
+    installFetchMock();
+    renderPage();
+    const readinessTile = await screen.findByRole('button', { name: /System Readiness/i });
+    fireEvent.click(readinessTile);
+
+    const modal = await screen.findByRole('dialog', { name: /System Readiness/i });
+    expect(modal.firstElementChild).toHaveStyle({ backgroundColor: 'var(--modal-bg)' });
+  });
 });
 
 describe('<TravelDashboard /> — KPI tiles', () => {

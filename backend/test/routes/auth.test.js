@@ -227,6 +227,7 @@ describe('POST /api/auth/login', () => {
       password: hashed,
       role: 'ADMIN',
       wellnessRole: null,
+      themePreference: 'dark',
       twoFactorEnabled: false,
       tenantId: 1,
       tenant: { id: 1, name: 'Globussoft', slug: 'globussoft', plan: 'PRO', vertical: 'generic', country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null, themeColor: '#C9A063' },
@@ -239,6 +240,7 @@ describe('POST /api/auth/login', () => {
     expect(res.status).toBe(200);
     expect(res.body.token).toMatch(/^eyJ/);
     expect(res.body.user).toMatchObject({ id: 7, email: 'admin@globussoft.com', role: 'ADMIN' });
+    expect(res.body.user.themePreference).toBe('dark');
     expect(res.body.tenant).toMatchObject({ id: 1, slug: 'globussoft', plan: 'PRO' });
     expect(res.body.tenant.themeColor).toBe('#C9A063');
 
@@ -605,6 +607,7 @@ describe('GET /api/auth/me', () => {
     prisma.user.findUnique.mockResolvedValue({
       id: 7, name: 'Admin', email: 'admin@globussoft.com', role: 'ADMIN',
       wellnessRole: null, createdAt: new Date('2026-01-01T00:00:00Z'),
+      themePreference: 'dark',
       tenant: { id: 1, name: 'Globussoft', slug: 'globussoft', plan: 'PRO', vertical: 'generic', country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null },
     });
     prisma.tenant.findUnique.mockResolvedValue({ themeColor: '#C9A063' });
@@ -616,6 +619,7 @@ describe('GET /api/auth/me', () => {
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(7);
     expect(res.body.email).toBe('admin@globussoft.com');
+    expect(res.body.themePreference).toBe('dark');
     expect(res.body.tenant.slug).toBe('globussoft');
     expect(res.body.tenant.themeColor).toBe('#C9A063');
     // T1.2 feature flag — features.smsConfigured surfaced for the FE to gate

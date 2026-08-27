@@ -241,7 +241,15 @@ router.post("/verify", async (req, res) => {
       token,
       // #1123 — include profilePicture so the header avatar matches the
       // /me payload after re-login (the plain /login path mirrors this).
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null, profilePicture: user.profilePicture || null },
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        wellnessRole: user.wellnessRole || null,
+        themePreference: user.themePreference || 'system',
+        profilePicture: user.profilePicture || null,
+      },
       tenant: user.tenant
         ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor }
         : { id: tenantId, vertical: "generic", country: "US", defaultCurrency: "USD", locale: "en-US", logoUrl: null, brandColor: null },

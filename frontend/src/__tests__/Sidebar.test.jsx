@@ -39,12 +39,14 @@ import { render, screen, within, fireEvent, waitFor } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import { AuthContext } from '../App';
+import { ActiveSubBrandProvider } from '../utils/subBrand';
 
 // Stable mock object references (2026-05-23 RTL rule: hook-returned objects
 // used in useCallback deps must be referentially stable across renders or
 // the consumer infinite-renders).
 const notifyObj = { error: vi.fn(), success: vi.fn(), info: vi.fn(), confirm: vi.fn() };
 const socketObj = { on: vi.fn(), disconnect: vi.fn() };
+const ACTIVE_SUB_BRAND_STORAGE_KEY = 'travel.activeSubBrand';
 
 vi.mock('../utils/adsgpt', () => ({
   launchAdsGptAs: vi.fn(),
@@ -189,6 +191,7 @@ function renderSidebar({
   logoUrl = null,
   brandColor = null,
   subBrandAccess = null,
+  activeSubBrand = null,
   accessiblePages = null, // null → empty catalog (back-compat default)
   permissions = null,     // null → default per-role set; pass array of "module.action" strings to override
 } = {}) {
@@ -201,6 +204,8 @@ function renderSidebar({
   // usePermissions().hasPermission. Capture the per-render permission
   // set so the closure-backed mock returns role-appropriate grants.
   currentPermissionSet = permissions ? new Set(permissions) : permsForRole(role);
+  if (activeSubBrand == null) window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
+  else window.sessionStorage.setItem(ACTIVE_SUB_BRAND_STORAGE_KEY, activeSubBrand);
 
   const user = {
     name: 'Maya Iyer',
@@ -222,7 +227,9 @@ function renderSidebar({
           setTenant: vi.fn(),
         }}
       >
-        <Sidebar />
+        <ActiveSubBrandProvider>
+          <Sidebar />
+        </ActiveSubBrandProvider>
       </AuthContext.Provider>
     </MemoryRouter>,
   );
@@ -255,6 +262,7 @@ beforeEach(() => {
   currentAccessiblePages = [];
   window.sessionStorage.removeItem('travel.itineraries.lastListUrl');
   window.sessionStorage.removeItem('travel.diagnostics.lastListUrl');
+  window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (url === '/api/pages/me') {
@@ -267,6 +275,7 @@ beforeEach(() => {
 afterEach(() => {
   window.sessionStorage.removeItem('travel.itineraries.lastListUrl');
   window.sessionStorage.removeItem('travel.diagnostics.lastListUrl');
+  window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
   consoleErrorSpy?.mockRestore();
 });
 
@@ -454,6 +463,17 @@ describe('Sidebar — load-bearing render surface', () => {
       // Phase 3 Visa Sure section is admin-only. "Visa Sure" appears both as
       // a section label AND as a switcher option — accept ≥1 match.
       expect(screen.getAllByText('Visa Sure').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('hides Gmail when TMC is the active sub-brand', () => {
+      renderSidebar({
+        vertical: 'travel',
+        role: 'MANAGER',
+        subBrandAccess: ['tmc', 'rfu'],
+        activeSubBrand: 'tmc',
+      });
+      expect(screen.queryByText('Gmail')).toBeNull();
+      expect(document.querySelector('a[href="/gmail"]')).toBeNull();
     });
 
     it('renders Landing Pages only for travel tenants', () => {

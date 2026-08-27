@@ -96,6 +96,8 @@ describe('<CustomerRegister /> organization autocomplete', () => {
     const orgInput = await screen.findByLabelText(/Organization/i);
     fireEvent.change(orgInput, { target: { value: 'Dr Enh' } });
 
+    const listbox = await screen.findByRole('listbox');
+    expect(listbox).toHaveStyle({ background: 'var(--modal-bg)' });
     expect(await screen.findByRole('option', { name: 'Dr. Enhanced Wellness' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Dr. Enhanced Wellness South' })).toBeInTheDocument();
 
@@ -131,6 +133,17 @@ describe('<CustomerRegister /> organization autocomplete', () => {
       name: 'Jane Doe',
       registrationTenantId: 11,
     });
+  });
+
+  it('renders the empty suggestion state on the same opaque theme-aware surface', async () => {
+    renderPage();
+
+    const orgInput = await screen.findByLabelText(/Organization/i);
+    fireEvent.change(orgInput, { target: { value: 'zzzz' } });
+
+    const status = await screen.findByRole('status');
+    expect(status).toHaveStyle({ background: 'var(--modal-bg)' });
+    expect(status).toHaveTextContent(/No matching organizations found/i);
   });
 
   it('keeps organization suggestions hidden until at least three characters are typed', async () => {

@@ -5389,7 +5389,7 @@ const Leads = () => {
 
       <div
         className="card"
-        style={{ overflow: "hidden", maxHeight: "unset", minHeight: "auto" }}
+        style={{ overflow: "hidden" }}
       >
         <div
         style={{
@@ -6279,6 +6279,9 @@ const Leads = () => {
             <TopScrollSync
               forceScrollbar
               scrollWidth={leadsScrollableTableMinWidth}
+              stickyTop
+              stickyTopOffset={0}
+              hideBottomScrollbar
             >
               <table
                 ref={leadsScrollableTableRef}

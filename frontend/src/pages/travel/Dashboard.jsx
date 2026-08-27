@@ -794,7 +794,7 @@ const modalOverlayStyle = {
   padding: 16,
 };
 const modalContentStyle = {
-  background: "var(--surface-color)",
+  backgroundColor: "var(--modal-bg)",
   border: "1px solid var(--border-color)",
   borderRadius: 14,
   padding: 22,

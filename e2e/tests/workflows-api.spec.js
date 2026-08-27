@@ -302,11 +302,185 @@ test.describe('Workflows API — GET /history', () => {
     expect(fire.status()).toBe(200);
     const after = await get(request, genTok, '/api/workflows/history?limit=200');
     const afterBody = await after.json();
-    const leakedRow = (afterBody.logs || []).find((row) => row.entityId === wellnessRule.id);
+    // History rows come from WorkflowExecution now and expose `workflowId`.
+    // This probe used to read `row.entityId` (the AuditLog column name); after
+    // the rename that predicate matched nothing, so the test would have passed
+    // for the wrong reason and stopped detecting a real cross-tenant leak.
+    const leakedRow = (afterBody.logs || []).find((row) => row.workflowId === wellnessRule.id);
     expect(
       leakedRow,
       `wellness rule id ${wellnessRule.id} should NOT appear in generic history (would prove cross-tenant leak)`
     ).toBeFalsy();
+  });
+});
+
+// ── GET /history — server-side filtering (parity wave) ─────────────
+//
+// The old endpoint returned the last N rows for the WHOLE tenant and left the
+// client to filter by workflow id, so on a busy tenant a real workflow's
+// history rendered "No actions found". These pin that the filtering is now
+// genuinely server-side.
+
+test.describe('Workflows API — GET /history filters', () => {
+  test('?workflowId scopes the feed to one workflow', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    const rule = await createRule(request, 'generic', { name: `${RUN_TAG} hist-filter-${Date.now()}` });
+    const fire = await post(request, token, `/api/workflows/${rule.id}/test`, {});
+    expect(fire.status()).toBe(200);
+
+    const res = await get(request, token, `/api/workflows/history?workflowId=${rule.id}&limit=50`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.logs)).toBe(true);
+    for (const row of body.logs) {
+      expect(row.workflowId, 'every row must belong to the requested workflow').toBe(rule.id);
+    }
+  });
+
+  test('rows carry a real status column, not a substring guess', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    const rule = await createRule(request, 'generic', { name: `${RUN_TAG} hist-status-${Date.now()}` });
+    await post(request, token, `/api/workflows/${rule.id}/test`, {});
+
+    const res = await get(request, token, `/api/workflows/history?workflowId=${rule.id}`);
+    const body = await res.json();
+    for (const row of body.logs) {
+      expect(['SUCCESS', 'FAILED', 'SKIPPED']).toContain(row.status);
+      expect(typeof row.actionType).toBe('string');
+    }
+  });
+
+  test('?status=failed returns only failures', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    const res = await get(request, token, '/api/workflows/history?status=failed&limit=50');
+    expect(res.status()).toBe(200);
+    for (const row of (await res.json()).logs) {
+      expect(row.status).toBe('FAILED');
+    }
+  });
+});
+
+// ── Builder catalogue + picker endpoints (parity wave) ─────────────
+
+test.describe('Workflows API — builder catalogue', () => {
+  test('GET /schema returns everything the builder needs in one call', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    const res = await get(request, token, '/api/workflows/schema');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    for (const key of ['modules', 'triggers', 'actions', 'operators', 'fields', 'scheduleTriggers', 'scheduleEntities']) {
+      expect(body[key], `schema should expose ${key}`).toBeTruthy();
+    }
+    // Operators that shipped in the engine but were unreachable from the UI.
+    const ops = body.operators.map((o) => o.value);
+    for (const expected of ['exists', 'not_exists', 'nin', 'changed_to', 'date_within_next']) {
+      expect(ops, `operators should include ${expected}`).toContain(expected);
+    }
+  });
+
+  test('the trigger catalogue advertises the time-based triggers', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    const values = (await (await get(request, token, '/api/workflows/triggers')).json()).map((t) => t.value);
+    expect(values).toContain('schedule.date_field');
+    expect(values).toContain('schedule.recurring');
+  });
+
+  test('picker endpoints return arrays', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    for (const path of ['/api/workflows/email-templates', '/api/workflows/sequences', '/api/workflows/assignees']) {
+      const res = await get(request, token, path);
+      expect(res.status(), `${path} should be 200`).toBe(200);
+      expect(Array.isArray(await res.json()), `${path} should return an array`).toBe(true);
+    }
+  });
+});
+
+// ── Scheduled workflows (parity wave) ──────────────────────────────
+
+test.describe('Workflows API — scheduled workflows', () => {
+  test('creates a schedule.date_field rule and persists its schedule', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    const res = await post(request, token, '/api/workflows', {
+      name: `${RUN_TAG} sched-${Date.now()}`,
+      triggerType: 'schedule.date_field',
+      actionType: 'create_task',
+      targetState: { module: 'deal', actions: [{ type: 'create_task', config: { title: 'Renewal' } }] },
+      scheduleConfig: { entity: 'deal', field: 'expectedClose', offsetDays: -3, timeOfDay: '09:00' },
+      isActive: false,
+    });
+    expect(res.status()).toBe(201);
+    const rule = await res.json();
+    expect(rule.scheduleConfig, 'scheduleConfig should persist').toBeTruthy();
+    expect(JSON.parse(rule.scheduleConfig)).toMatchObject({ mode: 'date_field', entity: 'deal' });
+  });
+
+  test('400 when a scheduled trigger arrives with no schedule', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    const res = await post(request, token, '/api/workflows', {
+      name: `${RUN_TAG} sched-bad-${Date.now()}`,
+      triggerType: 'schedule.recurring',
+      actionType: 'send_notification',
+      targetState: {},
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('INVALID_SCHEDULE');
+  });
+
+  test('400 when a schedule is attached to an EVENT-driven trigger', async ({ request }) => {
+    // Otherwise a half-converted rule looks scheduled in the builder and never
+    // runs, because no cron is looking at it.
+    const { token } = await getGeneric(request);
+    const res = await post(request, token, '/api/workflows', {
+      name: `${RUN_TAG} sched-mismatch-${Date.now()}`,
+      triggerType: 'contact.created',
+      actionType: 'send_notification',
+      targetState: {},
+      scheduleConfig: { entity: 'deal', frequency: 'daily' },
+    });
+    expect(res.status()).toBe(400);
+  });
+});
+
+// ── Run-now / health (parity wave) ─────────────────────────────────
+
+test.describe('Workflows API — run-now + health', () => {
+  test('run-now DEFAULTS to a dry run and reports the blast radius', async ({ request }) => {
+    // Applying a workflow to every existing record without a preview is how
+    // someone accidentally emails their whole database.
+    const { token } = await getGeneric(request);
+    const rule = await createRule(request, 'generic', { name: `${RUN_TAG} runnow-${Date.now()}` });
+    const res = await post(request, token, `/api/workflows/${rule.id}/run-now`, {});
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.dryRun).toBe(true);
+    expect(body.fired, 'a dry run must not fire anything').toBe(0);
+    expect(typeof body.matched).toBe('number');
+  });
+
+  test('404 for a workflow in another tenant', async ({ request }) => {
+    const { token: genTok } = await getGeneric(request);
+    const wellnessRule = await createRule(request, 'wellness', {
+      name: `${RUN_TAG} runnow-iso-${Date.now()}`,
+      actionType: 'send_sms',
+    });
+    const res = await post(request, genTok, `/api/workflows/${wellnessRule.id}/run-now`, {});
+    expect(res.status()).toBe(404);
+  });
+
+  test('GET /:id/health reports execution counters', async ({ request }) => {
+    const { token } = await getGeneric(request);
+    const rule = await createRule(request, 'generic', { name: `${RUN_TAG} health-${Date.now()}` });
+    const res = await get(request, token, `/api/workflows/${rule.id}/health`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.id).toBe(rule.id);
+    expect(typeof body.runCount).toBe('number');
+    expect(typeof body.consecutiveFailures).toBe('number');
+    expect(body.autoDisabled).toBe(false);
+    // Real timestamps — the model had none before, so the UI's "last updated"
+    // cell permanently read "Not run yet".
+    expect(body.createdAt).toBeTruthy();
+    expect(body.updatedAt).toBeTruthy();
   });
 });
 

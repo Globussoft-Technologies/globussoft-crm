@@ -507,16 +507,42 @@ router.put("/:id", async (req, res) => {
     // and /lost which have their own dedicated emissions).
     try {
       const { emitEvent } = require("../lib/eventBus");
-      await emitEvent("deal.updated", {
+      // `previous` powers the changed / changed_to / changed_from condition
+      // operators. Without it a rule can only see the post-update state, so
+      // "amount was raised" or "stage changed away from Proposal" are
+      // inexpressible.
+      const previous = {
+        stage: existing.stage, amount: existing.amount, title: existing.title,
+        ownerId: existing.ownerId, probability: existing.probability,
+      };
+      const basePayload = {
         dealId: deal.id, title: deal.title, amount: deal.amount, stage: deal.stage,
-        contactId: deal.contactId, userId: req.user.userId,
-      }, req.user.tenantId, req.io);
+        currency: deal.currency, probability: deal.probability,
+        contactId: deal.contactId, ownerId: deal.ownerId, userId: req.user.userId,
+        changedFields: Object.keys(data), previous,
+      };
+      await emitEvent("deal.updated", basePayload, req.user.tenantId, req.io);
       if (stageChanged) {
         await emitEvent("deal.stage_changed", {
-          dealId: deal.id, title: deal.title, amount: deal.amount,
+          ...basePayload,
           fromStage: existing.stage, toStage: deal.stage,
-          contactId: deal.contactId, userId: req.user.userId,
         }, req.user.tenantId, req.io);
+
+        // deal.won / deal.lost previously fired ONLY from the dedicated
+        // /won and /lost endpoints. The pipeline board moves a deal by
+        // PUT /api/deals/:id (see frontend Pipeline.jsx updateStage), so
+        // dragging a card into the Won column emitted deal.updated +
+        // deal.stage_changed and never deal.won — every "when a deal is
+        // won" workflow, including the shipped template, was dead on the
+        // main UI path. Emitting here makes the trigger mean what it says:
+        // the deal reached that stage, however it got there.
+        if (deal.stage === "won" || deal.stage === "lost") {
+          await emitEvent(`deal.${deal.stage}`, {
+            ...basePayload,
+            fromStage: existing.stage, toStage: deal.stage,
+            lostReason: deal.lostReason || null,
+          }, req.user.tenantId, req.io);
+        }
       }
     } catch (_) { /* event bus failures must not break the update */ }
 
@@ -569,6 +595,34 @@ router.put("/:id/stage", async (req, res) => {
     }
 
     await audit("UPDATE", deal.id, req.user.userId, req.user.tenantId, { action: "stage_change", from: existing.stage, to: stage });
+
+    // This endpoint emitted NOTHING — not deal.updated, not deal.stage_changed,
+    // not deal.won/lost. Any caller that moved a deal through here (the mobile
+    // apps and any direct API consumer) silently bypassed every deal workflow
+    // in the tenant. Mirrors the PUT /:id emissions above so both paths behave
+    // identically.
+    if (existing.stage !== deal.stage) {
+      try {
+        const { emitEvent } = require("../lib/eventBus");
+        const payload = {
+          dealId: deal.id, title: deal.title, amount: deal.amount, stage: deal.stage,
+          currency: deal.currency, probability: deal.probability,
+          contactId: deal.contactId, ownerId: deal.ownerId, userId: req.user.userId,
+          fromStage: existing.stage, toStage: deal.stage,
+          lostReason: deal.lostReason || null,
+          changedFields: Object.keys(data),
+          previous: { stage: existing.stage, amount: existing.amount, probability: existing.probability },
+        };
+        await emitEvent("deal.updated", payload, req.user.tenantId, req.io);
+        await emitEvent("deal.stage_changed", payload, req.user.tenantId, req.io);
+        if (deal.stage === "won" || deal.stage === "lost") {
+          await emitEvent(`deal.${deal.stage}`, payload, req.user.tenantId, req.io);
+        }
+      } catch (e) {
+        // Workflow fan-out must never fail the stage transition itself.
+        console.error("[deals] stage-change workflow emit failed:", e.message);
+      }
+    }
 
     if (req.io) req.io.emit("deal_updated", deal);
     res.json(deal);

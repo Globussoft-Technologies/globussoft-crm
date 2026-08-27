@@ -13,8 +13,8 @@
  */
 
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const fetchApiMock = vi.fn();
@@ -50,9 +50,16 @@ const LIVE = { ...DRAFT, id: 2, name: 'Published Bundle', isPublic: true };
 const RETIRED = { ...DRAFT, id: 3, name: 'Old Bundle', isActive: false, isPublic: false };
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-08-27T12:00:00'));
   fetchApiMock.mockReset().mockResolvedValue({});
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
+  notifyObj.confirm.mockReset();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('<ActivePackagesTab />', () => {
@@ -133,6 +140,27 @@ describe('<ActivePackagesTab />', () => {
     expect(JSON.parse(opts.body)).toEqual({ sellByDate: '2027-01-31' });
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(user).toBeTruthy();
+  });
+
+  it('blocks moving sell-by to a past date', async () => {
+    render(
+      <ActivePackagesTab
+        packages={[{ ...LIVE, sellByDate: '2027-01-31T00:00:00.000Z' }]}
+        loading={false}
+        onChanged={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('package-sellby-2'), { target: { value: '2026-08-26' } });
+
+    await waitFor(() => expect(notifyObj.error).toHaveBeenCalledWith('Sell-by date cannot be in the past'));
+    expect(fetchApiMock).not.toHaveBeenCalled();
+  });
+
+  it('does not offer past dates in the sell-by editor', () => {
+    render(<ActivePackagesTab packages={[LIVE]} loading={false} onChanged={vi.fn()} />);
+
+    expect(screen.getByTestId('package-sellby-2')).toHaveAttribute('min', '2026-08-27');
   });
 
   it('clearing the date sends an explicit null, not an empty string', async () => {
@@ -225,8 +253,10 @@ describe('<ActivePackagesTab />', () => {
     expect(screen.getByText(/You bought this/i)).toBeInTheDocument();
     expect(screen.getByText(/3 of 4 sessions left/i)).toBeInTheDocument();
     expect(screen.getByText(/Book your sessions by/i)).toBeInTheDocument();
-    // Buying a second course stays possible, but reads as a repeat.
-    expect(screen.getByTestId('package-buy-2')).toHaveTextContent(/Buy again/i);
+    expect(screen.getByTestId('package-valid-till-2')).toHaveTextContent(/Package valid till/i);
+    // Sessions still in hand, so the package is not for sale to them again —
+    // that only returns once the plan is spent or its window closes.
+    expect(screen.queryByTestId('package-buy-2')).not.toBeInTheDocument();
   });
 
   it('warns when the window to use a bought package has run out', () => {
@@ -269,6 +299,62 @@ describe('<ActivePackagesTab />', () => {
     expect(screen.getByText(/No expiry — book whenever suits you/i)).toBeInTheDocument();
   });
 
+  it('does not offer to sell a package the viewer already holds unused', () => {
+    // The server refuses this purchase (PACKAGE_ALREADY_HELD); a button that
+    // cannot work is worse than no button.
+    render(
+      <ActivePackagesTab
+        packages={[{
+          ...LIVE,
+          ownedPlan: { id: 77, status: 'active', totalSessions: 4, completedSessions: 0, startedAt: '2026-08-27T00:00:00.000Z', nextDueAt: '2099-08-27T00:00:00.000Z' },
+        }]}
+        loading={false}
+        readOnly
+        onBuy={vi.fn()}
+        onRequestSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('package-owned-2')).toBeInTheDocument();
+    expect(screen.getByTestId('package-request-session-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('package-buy-2')).not.toBeInTheDocument();
+  });
+
+  it('offers it again once every session has been used', async () => {
+    render(
+      <ActivePackagesTab
+        packages={[{
+          ...LIVE,
+          ownedPlan: { id: 78, status: 'active', totalSessions: 4, completedSessions: 4, startedAt: '2026-08-27T00:00:00.000Z', nextDueAt: '2099-08-27T00:00:00.000Z' },
+        }]}
+        loading={false}
+        readOnly
+        onBuy={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('package-buy-2')).toHaveTextContent(/Buy again/i);
+    // Nothing left to book, so no request button either.
+    expect(screen.queryByTestId('package-request-session-2')).not.toBeInTheDocument();
+  });
+
+  it('offers it again once the window to use it has closed', () => {
+    render(
+      <ActivePackagesTab
+        packages={[{
+          ...LIVE,
+          ownedPlan: { id: 79, status: 'active', totalSessions: 4, completedSessions: 1, startedAt: '2020-01-01T00:00:00.000Z', nextDueAt: '2020-02-01T00:00:00.000Z' },
+        }]}
+        loading={false}
+        readOnly
+        onBuy={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/Ran out on/i)).toBeInTheDocument();
+    expect(screen.getByTestId('package-buy-2')).toBeInTheDocument();
+  });
+
   it('shows no ownership panel on a package the viewer has not bought', () => {
     render(<ActivePackagesTab packages={[LIVE]} loading={false} readOnly onBuy={vi.fn()} />);
 
@@ -289,6 +375,92 @@ describe('<ActivePackagesTab />', () => {
     expect(screen.queryByTestId('package-owned-2')).not.toBeInTheDocument();
   });
 
+  it('saves a new session count on blur, not on every keystroke', async () => {
+    // A PUT per keystroke would re-price the package on the way to a number
+    // the user has not finished typing.
+    const user = userEvent.setup();
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+
+    const field = screen.getByTestId('package-sessions-1');
+    await user.clear(field);
+    await user.type(field, '10');
+    expect(fetchApiMock).not.toHaveBeenCalled();
+
+    await user.tab();
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledOnce());
+    const [url, opts] = fetchApiMock.mock.calls[0];
+    expect(url).toBe('/api/wellness/packages/1');
+    expect(JSON.parse(opts.body)).toEqual({ sessions: 10 });
+  });
+
+  it('saves a new discount the same way', async () => {
+    const user = userEvent.setup();
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+
+    const field = screen.getByTestId('package-discount-1');
+    await user.clear(field);
+    await user.type(field, '25');
+    await user.tab();
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(fetchApiMock.mock.calls[0][1].body)).toEqual({ discountPercent: 25 });
+  });
+
+  it('refuses an out-of-range value and puts the old one back', async () => {
+    // The server caps sessions at 60; a field that lets you commit 99 just
+    // trades a clear message for a failed request.
+    const user = userEvent.setup();
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+
+    const field = screen.getByTestId('package-sessions-1');
+    await user.clear(field);
+    await user.type(field, '99');
+    await user.tab();
+
+    await waitFor(() => expect(notifyObj.error).toHaveBeenCalledWith(expect.stringMatching(/between 1 and 60/i)));
+    expect(fetchApiMock).not.toHaveBeenCalled();
+    expect(field).toHaveValue(6); // DRAFT.sessions restored
+  });
+
+  it('saves nothing when the number is left as it was', async () => {
+    const user = userEvent.setup();
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+
+    await user.click(screen.getByTestId('package-discount-1'));
+    await user.tab();
+
+    expect(fetchApiMock).not.toHaveBeenCalled();
+  });
+
+  it('changes the tax slab as soon as it is picked', async () => {
+    const user = userEvent.setup();
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+
+    await user.click(within(screen.getByTestId('package-tax-1')).getByRole('button'));
+    await user.click(await screen.findByRole('option', { name: 'GST 18%' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledOnce());
+    // Tax alone: no bundle field rides along, so the package cannot be
+    // re-priced on the way through.
+    expect(JSON.parse(fetchApiMock.mock.calls[0][1].body)).toEqual({ taxPercent: 18 });
+  });
+
+  it('warns that a session or discount edit re-prices the package', async () => {
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+
+    expect(screen.getByText(/re-prices this package at today/i)).toBeInTheDocument();
+    expect(screen.getByText(/already bought keep the price they were sold at/i)).toBeInTheDocument();
+  });
+
+  it('gives customers no terms editor at all', () => {
+    render(<ActivePackagesTab packages={[LIVE]} loading={false} readOnly onBuy={vi.fn()} />);
+
+    expect(screen.queryByTestId('package-terms-2')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('package-sessions-2')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('package-tax-2')).not.toBeInTheDocument();
+  });
+
   it('offers no sell-by editor to customers', () => {
     render(<ActivePackagesTab packages={[{ ...LIVE, sellByDate: '2027-01-31T00:00:00.000Z' }]} loading={false} readOnly />);
 
@@ -298,7 +470,10 @@ describe('<ActivePackagesTab />', () => {
   it('says nothing about terms a package does not carry', () => {
     render(<ActivePackagesTab packages={[DRAFT]} loading={false} />);
 
-    expect(screen.queryByText(/tax/i)).not.toBeInTheDocument();
+    // The "+N% tax" chip, not the word — the terms editor below always has a
+    // Tax field, which is the control for setting one rather than a claim
+    // that this package carries one.
+    expect(screen.queryByText(/\+\d+% tax/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Valid /i)).not.toBeInTheDocument();
     // No "Sell by <date>" line. The editor's own "Sell by" label still shows —
     // that is the control for setting one, not a claim that one exists.
@@ -332,6 +507,58 @@ describe('<ActivePackagesTab />', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
+  it('flips the badge on click, before the request comes back', async () => {
+    // Publishing is a PUT plus the parent's refetch. Waiting for both to
+    // repaint the badge reads as a dead click.
+    const user = userEvent.setup();
+    let resolvePut;
+    fetchApiMock.mockImplementationOnce(() => new Promise((res) => { resolvePut = res; }));
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+
+    expect(screen.getByText('Draft')).toBeInTheDocument();
+    await user.click(screen.getByTestId('package-publish-1'));
+
+    // Still in flight — the card already reads Live.
+    await waitFor(() => expect(screen.getByText('Live')).toBeInTheDocument());
+    expect(screen.queryByText('Draft')).not.toBeInTheDocument();
+    expect(screen.getByTestId('package-publish-1')).toHaveTextContent(/Unpublish/i);
+
+    resolvePut({});
+  });
+
+  it('puts the badge back when the request fails', async () => {
+    // The card must not keep showing something that did not happen.
+    const user = userEvent.setup();
+    fetchApiMock.mockRejectedValueOnce(new Error('Network down'));
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+
+    await user.click(screen.getByTestId('package-publish-1'));
+
+    await waitFor(() => expect(notifyObj.error).toHaveBeenCalled());
+    expect(screen.getByText('Draft')).toBeInTheDocument();
+    expect(screen.queryByText('Live')).not.toBeInTheDocument();
+  });
+
+  it('holds the optimistic badge until the reloaded list carries it', async () => {
+    // Clearing on the PUT resolving instead would flash the old badge for the
+    // frame between that and the parent's refetch landing.
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />
+    );
+
+    await user.click(screen.getByTestId('package-publish-1'));
+    await waitFor(() => expect(screen.getByText('Live')).toBeInTheDocument());
+
+    // Parent re-renders with the pre-toggle data still in hand.
+    rerender(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+    expect(screen.getByText('Live')).toBeInTheDocument();
+
+    // …and now the refetch lands.
+    rerender(<ActivePackagesTab packages={[{ ...DRAFT, isPublic: true }]} loading={false} onChanged={vi.fn()} />);
+    expect(screen.getByText('Live')).toBeInTheDocument();
+  });
+
   it('unpublishes a live package', async () => {
     const user = userEvent.setup();
     render(<ActivePackagesTab packages={[LIVE]} loading={false} onChanged={vi.fn()} />);
@@ -344,19 +571,33 @@ describe('<ActivePackagesTab />', () => {
 
   it('retires rather than deletes, and asks first', async () => {
     const user = userEvent.setup();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    notifyObj.confirm.mockResolvedValueOnce(true);
     render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
 
     await user.click(screen.getByTestId('package-retire-1'));
 
-    expect(confirmSpy).toHaveBeenCalled();
+    // The app's own dialog, not the browser's — a native confirm is chrome
+    // outside the app and blocks the QA tooling that drives these flows.
+    expect(notifyObj.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ destructive: true, confirmText: expect.stringMatching(/retire/i) }),
+    );
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledOnce());
     const [url, opts] = fetchApiMock.mock.calls[0];
     expect(url).toBe('/api/wellness/packages/1');
     expect(opts.method).toBe('DELETE');
     // No ?hard=true — a quoted package must keep resolving.
     expect(url).not.toContain('hard');
-    confirmSpy.mockRestore();
+  });
+
+  it('leaves the package alone when the retire dialog is dismissed', async () => {
+    const user = userEvent.setup();
+    notifyObj.confirm.mockResolvedValueOnce(false);
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} onChanged={vi.fn()} />);
+
+    await user.click(screen.getByTestId('package-retire-1'));
+
+    await waitFor(() => expect(notifyObj.confirm).toHaveBeenCalled());
+    expect(fetchApiMock).not.toHaveBeenCalled();
   });
 
   it('cancelling the retire confirm changes nothing', async () => {

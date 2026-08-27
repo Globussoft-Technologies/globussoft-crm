@@ -40,7 +40,12 @@ export default function Services() {
   const canManageServices = permsReady && hasPermission('services', 'write');
   // USER / CUSTOMER get a customer-facing catalog: Active Packages
   // (per-patient clinical data) is hidden. Admin / Manager are untouched.
-  const isUserOrCustomer = userType === 'CUSTOMER' || user?.role === 'USER';
+  // A real customer is stamped `userType: 'CUSTOMER'` — the same test
+  // GET /api/wellness/packages uses to decide what it hands back. Reading
+  // `role === 'USER'` as "customer" swept in every doctor, nurse, telecaller
+  // and receptionist, because staff are role USER / userType STAFF: they were
+  // shown the customer catalog, complete with a Buy button.
+  const isCustomer = userType === 'CUSTOMER' || user?.role === 'CUSTOMER';
   const [searchParams] = useSearchParams();
   // The saved-bundles tab was folded away and treatment plans took its name,
   // so a bookmark still pointing at ?tab=activepackages lands on the renamed
@@ -70,7 +75,7 @@ export default function Services() {
   // Customer checkout. A purchase becomes a treatment plan on the patient's
   // record, so the list is reloaded to reflect anything that changed.
   const { buy, buyingId } = usePackageCheckout({
-    onPurchased: () => loadPackages(),
+    onPurchased: () => loadPackages({ quiet: true }),
     clinicName: tenant?.name || 'Wellness',
   });
   // Which owned package the customer is asking for a session from.
@@ -91,8 +96,10 @@ export default function Services() {
       .finally(() => setCategoriesLoading(false));
   };
 
-  const loadTreatments = () => {
-    setTreatmentsLoading(true);
+  const loadTreatments = ({ quiet = false } = {}) => {
+    // Same rule as loadPackages: pausing or cancelling a patient's package
+    // should replace the card in place, not blank the whole list first.
+    if (!quiet) setTreatmentsLoading(true);
     fetchApi('/api/wellness/activetreatment').then(res => setTreatments(res.data || [])).catch(() => setTreatments([])).finally(() => setTreatmentsLoading(false));
   };
 
@@ -102,8 +109,12 @@ export default function Services() {
   }, []);
   // Customers only ever see published packages; the backend enforces that
   // too, so a crafted request cannot pull drafts.
-  const loadPackages = () => {
-    setPackagesLoading(true);
+  const loadPackages = ({ quiet = false } = {}) => {
+    // A refresh that follows a publish / retire / edit keeps the cards on
+    // screen: `quiet` skips the loading flag, so the list is replaced in place
+    // when the new data lands. Swapping the whole grid for "Loading packages…"
+    // on every toggle is what made publishing feel like a page reload.
+    if (!quiet) setPackagesLoading(true);
     fetchApi('/api/wellness/packages')
       .then((res) => setPackages(Array.isArray(res?.packages) ? res.packages : []))
       .catch(() => setPackages([]))
@@ -111,7 +122,7 @@ export default function Services() {
   };
 
   useEffect(() => {
-    if (isUserOrCustomer || tab !== 'activetreatments') return undefined;
+    if (isCustomer || tab !== 'activetreatments') return undefined;
     let cancelled = false;
     fetchApi('/api/staff', { silent: true })
       .then((res) => {
@@ -121,33 +132,35 @@ export default function Services() {
       })
       .catch(() => setDoctors([]));
     return () => { cancelled = true; };
-  }, [tab, isUserOrCustomer]);
+  }, [tab, isCustomer]);
 
   useEffect(() => {
     if (tab === 'activetreatments') {
       loadTreatments();
       // Bundles saved on the Packages tab surface here too, so staff have
       // somewhere to publish or retire what they just built.
-      if (!isUserOrCustomer) loadPackages();
+      if (!isCustomer) loadPackages();
     }
-    if (isUserOrCustomer && tab === 'packages') {
+    // Loaded for anyone who sees the list rather than the builder: customers,
+    // and staff without services.write.
+    if (tab === 'packages' && (isCustomer || !canManageServices)) {
       loadPackages();
     }
-  }, [tab, isUserOrCustomer]);
-  // A USER/CUSTOMER deep-linking to an internal tab has it hidden — fall back
+  }, [tab, isCustomer, canManageServices]);
+  // A customer deep-linking to an internal tab has it hidden — fall back
   // to the catalog so they never see a blank page. `packages` is NOT in this
   // list any more: customers now get a read-only Packages tab of their own.
   useEffect(() => {
-    if (isUserOrCustomer && tab === 'activetreatments') {
+    if (isCustomer && tab === 'activetreatments') {
       setTab('catalog');
     }
-  }, [isUserOrCustomer, tab]);
+  }, [isCustomer, tab]);
 
   // A bundle built on the Packages tab is a catalog offering; a treatment
   // plan is one a patient has bought and is working through. Both are
   // "packages" to this clinic, so they share a tab — but only when there is a
   // bundle to show, otherwise the extra headings are noise.
-  const hasBundles = !isUserOrCustomer && packages.length > 0;
+  const hasBundles = !isCustomer && packages.length > 0;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -221,7 +234,7 @@ export default function Services() {
             rows, which are per-patient clinical data, so it stays hidden for
             USER/CUSTOMER. The internal tab key is still `activetreatments`;
             only the label changed. */}
-        {!isUserOrCustomer && (
+        {!isCustomer && (
           <TabBtn active={tab === 'activetreatments'} onClick={() => setTab('activetreatments')} icon={Layers} label="Active Packages" />
         )}
       </div>
@@ -243,8 +256,12 @@ export default function Services() {
         />
       )}
 
-      {tab === 'packages' &&
-        (isUserOrCustomer ? (
+      {/* Three audiences, not two. A patient buys; someone who can manage the
+          catalog builds; everyone else on staff — a doctor, say — may look at
+          what the clinic sells without being offered a purchase they should
+          not be making from a staff account. */}
+      {tab === 'packages' && (
+        isCustomer ? (
           <ActivePackagesTab
             packages={packages}
             loading={packagesLoading}
@@ -253,17 +270,20 @@ export default function Services() {
             buyingId={buyingId}
             onRequestSession={setSessionRequestPkg}
           />
+        ) : canManageServices ? (
+          <PackageBuilder services={services} onSaved={() => loadPackages()} />
         ) : (
-          <PackageBuilder services={services} onSaved={loadPackages} />
-        ))}
+          <ActivePackagesTab packages={packages} loading={packagesLoading} readOnly />
+        )
+      )}
 
-      {tab === 'activetreatments' && !isUserOrCustomer && (
+      {tab === 'activetreatments' && !isCustomer && (
         <>
           {/* Answering these is time-sensitive — a patient is waiting on a
               reply — so the queue sits above the catalog admin below it. */}
           <SessionRequestsPanel
             doctors={doctors}
-            onHandled={() => { loadTreatments(); loadPackages(); }}
+            onHandled={() => { loadTreatments({ quiet: true }); loadPackages({ quiet: true }); }}
           />
           {hasBundles && (
             <section style={{ marginBottom: '1.75rem' }}>
@@ -271,7 +291,8 @@ export default function Services() {
               <ActivePackagesTab
                 packages={packages}
                 loading={packagesLoading}
-                onChanged={loadPackages}
+                onChanged={() => loadPackages({ quiet: true })}
+                readOnly={!canManageServices}
               />
             </section>
           )}
@@ -279,7 +300,7 @@ export default function Services() {
           <ActiveTreatmentsTab
             treatments={treatments}
             loading={treatmentsLoading}
-            onChanged={loadTreatments}
+            onChanged={() => loadTreatments({ quiet: true })}
             onSelectTreatment={setSelectedTreatment}
           />
         </>
@@ -289,7 +310,7 @@ export default function Services() {
         <TreatmentDetailModal
           treatment={selectedTreatment}
           onClose={() => setSelectedTreatment(null)}
-          onChanged={() => { loadTreatments(); setSelectedTreatment(null); }}
+          onChanged={() => { loadTreatments({ quiet: true }); setSelectedTreatment(null); }}
         />
       )}
 

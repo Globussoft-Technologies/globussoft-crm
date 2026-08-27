@@ -1,7 +1,6 @@
 import React, {
   useState,
   useContext,
-  createContext,
   useEffect,
   useMemo,
   useCallback,
@@ -701,8 +700,11 @@ const KbArticleView = lazy(() => import("./pages/KbArticleView"));
 // because the SPA layout served but nothing inside it matched.
 const NotFound = lazy(() => import("./pages/NotFound"));
 
-export const AuthContext = createContext();
-export const ThemeContext = createContext();
+// The contexts live in ./appContexts so that editing this file cannot hand
+// mounted children a fresh context object — see the note there. Re-exported
+// here because ~230 modules import them from '../App'.
+export { AuthContext, ThemeContext } from "./appContexts";
+import { AuthContext, ThemeContext } from "./appContexts";
 
 // Issue #207/#214/#216: wellness staff carry RBAC role=USER + an orthogonal
 // `wellnessRole` (doctor/professional/telecaller/helper/stylist). The Owner

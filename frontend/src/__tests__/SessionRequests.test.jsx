@@ -13,7 +13,7 @@
  */
 
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -57,6 +57,10 @@ beforeEach(() => {
   notifyObj.success.mockReset();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('<RequestSessionModal />', () => {
   it('sends the preferred date and note, and never a practitioner', async () => {
     // Who takes the session is the clinic's call — a doctor sent from the
@@ -91,6 +95,17 @@ describe('<RequestSessionModal />', () => {
     expect(screen.getByText(/3 of 4 sessions left/i)).toBeInTheDocument();
   });
 
+  it('limits the picker to today through the package validity date', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00+05:30'));
+    render(<RequestSessionModal pkg={OWNED_PACKAGE} onClose={vi.fn()} onRequested={vi.fn()} />);
+
+    expect(screen.getByTestId('session-preferred-date')).toHaveAttribute('min', '2026-08-27');
+    expect(screen.getByTestId('session-preferred-date')).toHaveAttribute('max', '2099-09-02');
+    expect(screen.getByText(/Package valid till/i)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
   it('sends the request with no date at all when none is picked', async () => {
     const user = userEvent.setup();
     render(<RequestSessionModal pkg={OWNED_PACKAGE} onClose={vi.fn()} onRequested={vi.fn()} />);
@@ -112,6 +127,34 @@ describe('<RequestSessionModal />', () => {
 
     await waitFor(() => expect(notifyObj.error).toHaveBeenCalledWith(expect.stringMatching(/window to use this package/i)));
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('refuses a preferred date in the past', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00+05:30'));
+    render(<RequestSessionModal pkg={OWNED_PACKAGE} onClose={vi.fn()} onRequested={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId('session-preferred-date'), { target: { value: '2026-08-26' } });
+    fireEvent.click(screen.getByTestId('session-request-submit'));
+
+    expect(notifyObj.error).toHaveBeenCalledWith(expect.stringMatching(/cannot be in the past/i));
+    expect(fetchApiMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a preferred date after the package validity window', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00+05:30'));
+    const pkg = {
+      ...OWNED_PACKAGE,
+      ownedPlan: { ...OWNED_PACKAGE.ownedPlan, nextDueAt: '2026-09-03T13:00:00.000Z' },
+    };
+    render(<RequestSessionModal pkg={pkg} onClose={vi.fn()} onRequested={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId('session-preferred-date'), { target: { value: '2026-09-04' } });
+    fireEvent.click(screen.getByTestId('session-request-submit'));
+
+    expect(notifyObj.error).toHaveBeenCalledWith(expect.stringMatching(/must be on or before 2026-09-03/i));
+    expect(fetchApiMock).not.toHaveBeenCalled();
   });
 });
 
@@ -199,6 +242,48 @@ describe('<SessionRequestsPanel />', () => {
       expect(call).toBeTruthy();
       expect(JSON.parse(call[1].body)).toEqual({ doctorId: '12', visitDate: '2026-09-01T10:30' });
     });
+  });
+
+  it('refuses to confirm a slot that has already passed', async () => {
+    // The field is pre-filled with the date the patient asked for. Requests
+    // sit in this queue, so by the time someone answers, that date may be
+    // behind us — accepting it as-is books a session nobody can attend.
+    const user = userEvent.setup();
+    renderWithQueue([{ ...PENDING_REQUEST, visitDate: '2020-01-01T10:00:00.000Z' }]);
+    await waitFor(() => expect(screen.getByTestId('session-request-900')).toBeInTheDocument());
+
+    await user.click(within(screen.getByTestId('session-request-doctor-900')).getByRole('button'));
+    await user.click(await screen.findByRole('option', { name: 'Dr Harsh' }));
+    await user.click(screen.getByTestId('session-request-accept-900'));
+
+    expect(notifyObj.error).toHaveBeenCalledWith(expect.stringMatching(/already passed/i));
+    expect(fetchApiMock.mock.calls.some(([url]) => url.endsWith('/accept'))).toBe(false);
+  });
+
+  it('accepts once a future slot is chosen instead', async () => {
+    const user = userEvent.setup();
+    renderWithQueue([{ ...PENDING_REQUEST, visitDate: '2020-01-01T10:00:00.000Z' }]);
+    await waitFor(() => expect(screen.getByTestId('session-request-900')).toBeInTheDocument());
+
+    await user.click(within(screen.getByTestId('session-request-doctor-900')).getByRole('button'));
+    await user.click(await screen.findByRole('option', { name: 'Dr Harsh' }));
+    fireEvent.change(screen.getByTestId('session-request-date-900'), { target: { value: '2099-01-01T10:30' } });
+    await user.click(screen.getByTestId('session-request-accept-900'));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([url]) => url.endsWith('/accept'));
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body).visitDate).toBe('2099-01-01T10:30');
+    });
+  });
+
+  it('stops the picker offering past times at all', async () => {
+    renderWithQueue();
+    await waitFor(() => expect(screen.getByTestId('session-request-900')).toBeInTheDocument());
+
+    const min = screen.getByTestId('session-request-date-900').getAttribute('min');
+    expect(min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    expect(new Date(min).getTime()).toBeLessThanOrEqual(Date.now());
   });
 
   it('declining keeps the session on the patient package', async () => {

@@ -2556,6 +2556,11 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initSlaBreachCron } = require("./cron/slaBreachEngine");
   initSlaBreachCron();
 
+  // Time-based workflow triggers (schedule.date_field / schedule.recurring),
+  // the `wait` action's resume queue, and the invoice.overdue emitter.
+  const { initWorkflowScheduler } = require("./cron/workflowScheduler");
+  initWorkflowScheduler();
+
   // WhatsApp SaaS P3 — async outbound delivery (every 30s) + media download
   // pipeline (every 60s). Both engines no-op gracefully when the underlying
   // WhatsAppConfig is missing or token is unset, so they're safe to enable

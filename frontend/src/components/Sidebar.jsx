@@ -194,12 +194,16 @@ const Sidebar = ({
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
-  // Customer-tier = the low-privilege end-customer roles. Drives the
-  // `customerOnly` page-catalog flag (e.g. Buy Gift Cards) so admin /
-  // manager / staff roles don't see customer-facing storefront entries
-  // in their nav. CUSTOMER is the self-service-registered role; USER is
-  // the default low-privilege end-user role.
-  const isCustomerTier = role === "USER" || role === "CUSTOMER";
+  // Customer-tier = actual end customers. Drives the `customerOnly`
+  // page-catalog flag (Buy Gift Cards, My Transactions) so staff don't see
+  // customer-facing storefront entries in their nav.
+  //
+  // Read from userType, not role: staff are role USER / userType STAFF, so
+  // testing `role === "USER"` classed every doctor, nurse and telecaller as a
+  // customer. Role is still consulted for CUSTOMER because one legacy
+  // customer carries role USER with the customer userType.
+  const isCustomerTier =
+    String(user?.userType || "").toUpperCase() === "CUSTOMER" || role === "CUSTOMER";
   const wellnessRole = user?.wellnessRole || null;
   const subBrandAccess = (() => {
     if (isAdmin) return null;

@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { X, CalendarClock, Send, Loader } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
-import { inputStyle, labelStyle } from './shared';
+import { formatDate } from '../../../utils/date';
+import { dateInputValue, inputStyle, isPastDateInput, labelStyle, todayDateInput } from './shared';
 
 /**
  * Ask the clinic for one of the sessions you have already paid for.
@@ -21,14 +22,27 @@ export default function RequestSessionModal({ pkg, onClose, onRequested }) {
 
   const plan = pkg.ownedPlan;
   const sessionsLeft = Math.max(0, (plan?.totalSessions || 0) - (plan?.completedSessions || 0));
+  const minPreferredDate = todayDateInput();
+  const maxPreferredDate = dateInputValue(plan?.nextDueAt);
+  const preferredDatePast = isPastDateInput(preferredDate, minPreferredDate);
+  const preferredDateAfterWindow = Boolean(preferredDate && maxPreferredDate && preferredDate > maxPreferredDate);
 
   const submit = async (e) => {
     e.preventDefault();
     if (sending || !plan) return;
+    if (preferredDatePast) {
+      notify.error('Preferred date cannot be in the past');
+      return;
+    }
+    if (preferredDateAfterWindow) {
+      notify.error(`Preferred date must be on or before ${maxPreferredDate}`);
+      return;
+    }
     setSending(true);
     try {
       await fetchApi(`/api/wellness/packages/plans/${plan.id}/request-session`, {
         method: 'POST',
+        silent: true,
         body: JSON.stringify({
           preferredDate: preferredDate || null,
           note: note.trim() || null,
@@ -62,6 +76,7 @@ export default function RequestSessionModal({ pkg, onClose, onRequested }) {
     >
       <form
         onSubmit={submit}
+        noValidate
         onClick={(e) => e.stopPropagation()}
         data-testid="request-session-modal"
         style={{
@@ -100,9 +115,16 @@ export default function RequestSessionModal({ pkg, onClose, onRequested }) {
             type="date"
             value={preferredDate}
             onChange={(e) => setPreferredDate(e.target.value)}
+            min={minPreferredDate}
+            max={maxPreferredDate || undefined}
             style={inputStyle}
             data-testid="session-preferred-date"
           />
+          {plan?.nextDueAt && (
+            <p style={{ margin: '0.45rem 0 0', fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+              Package valid till {formatDate(plan.nextDueAt)}. Pick a date from today up to that day.
+            </p>
+          )}
         </div>
 
         <div>

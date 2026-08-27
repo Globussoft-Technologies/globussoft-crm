@@ -21,6 +21,7 @@ const {
   computeValidUntil,
 } = require("../lib/prescriptionHelpers");
 const prescriptionRenewals = require("../lib/prescriptionRenewalService");
+const { applyPrescriptionStock } = require("../lib/drugStock");
 const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
 const {
   getAllTreatmentPlans,
@@ -84,6 +85,12 @@ const {
 const { parseDateTimeLocalInTZ, formatInTenantTZ } = require("../lib/datetime");
 // Wave 11 Agent GG: 4-class booking-conflict gate.
 const { assertVisitSlotAvailable } = require("../lib/bookingAvailability");
+const {
+  findConflictsForDoctors,
+  markSlotAvailability,
+  OCCUPYING_STATUSES,
+  DEFAULT_DURATION_MIN,
+} = require("../lib/doctorAvailability");
 // Centralized appointment service  book / cancel / reschedule business
 // rules. Both the legacy /appointments/* routes (CUSTOMER session) and
 // the new /portal/appointments/* routes (verifyPatientToken accepts both
@@ -3038,19 +3045,48 @@ router.get("/visits", phiReadGate, async (req, res) => {
       patientId,
       doctorId,
       status,
+      displayStatus,
+      fromPackage,
+      q,
       from,
       to,
       limit = 100,
       offset = 0,
+      page,
+      paginate,
     } = req.query;
     const where = tenantWhere(req);
     if (patientId) where.patientId = parseInt(patientId);
     if (doctorId) where.doctorId = parseInt(doctorId);
     if (status) where.status = status;
+    if (displayStatus === "pending") {
+      where.status = "booked";
+      where.doctorId = null;
+    } else if (displayStatus === "booked") {
+      where.status = "booked";
+      where.doctorId = { not: null };
+    }
+    if (fromPackage === "true" || fromPackage === "1") {
+      where.treatmentPlanId = { not: null };
+    }
     if (from || to) {
       where.visitDate = {};
       if (from) where.visitDate.gte = new Date(from);
       if (to) where.visitDate.lte = new Date(to);
+    }
+    const term = String(q || "").trim();
+    if (term) {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : []),
+        {
+          OR: [
+            { patient: { is: { name: { contains: term } } } },
+            { service: { is: { name: { contains: term } } } },
+            { doctor: { is: { name: { contains: term } } } },
+            { treatmentPlan: { is: { name: { contains: term } } } },
+          ],
+        },
+      ];
     }
 
     // #280: professional/helper PHI scope. Bypass for ADMIN/MANAGER (org oversight).
@@ -3094,10 +3130,17 @@ router.get("/visits", phiReadGate, async (req, res) => {
     // patient.phone, doctor.name). Slim shape ships only FKs the picker
     // can hop on (patientId, doctorId, serviceId, locationId).
     const wantFullShape = isFullShape(req.query);
+    const wantPaginatedEnvelope = paginate === "true" || paginate === "1";
+    const take = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 500);
+    const rawOffset = Math.max(parseInt(offset, 10) || 0, 0);
+    const pageNumber = Math.max(parseInt(page, 10) || Math.floor(rawOffset / take) + 1, 1);
+    const skip = page
+      ? (pageNumber - 1) * take
+      : rawOffset;
     const visitFindArgs = {
       where,
-      take: Math.min(parseInt(limit, 10) || 100, 500),
-      skip: parseInt(offset, 10) || 0,
+      take,
+      skip,
       orderBy: { visitDate: "desc" },
     };
     if (wantFullShape) {
@@ -3122,7 +3165,10 @@ router.get("/visits", phiReadGate, async (req, res) => {
     } else {
       visitFindArgs.select = listProjection("Visit", false);
     }
-    const visits = await prisma.visit.findMany(visitFindArgs);
+    const [visits, total] = await Promise.all([
+      prisma.visit.findMany(visitFindArgs),
+      wantPaginatedEnvelope ? prisma.visit.count({ where }) : Promise.resolve(null),
+    ]);
     if (wantFullShape) {
       attachCouponBreakdownToVisits(visits);
     }
@@ -3146,6 +3192,9 @@ router.get("/visits", phiReadGate, async (req, res) => {
           patientId: patientId ? parseInt(patientId) : null,
           doctorId: doctorId ? parseInt(doctorId) : null,
           status: status || null,
+          displayStatus: displayStatus || null,
+          fromPackage: fromPackage === "true" || fromPackage === "1",
+          q: term || null,
           from: from || null,
           to: to || null,
         },
@@ -3154,6 +3203,21 @@ router.get("/visits", phiReadGate, async (req, res) => {
     ).catch((auditErr) => {
       console.warn("[wellness] audit /visits list failed:", auditErr.message);
     });
+    if (wantPaginatedEnvelope) {
+      const pages = Math.max(1, Math.ceil((total || 0) / take));
+      return res.json({
+        visits,
+        pagination: {
+          total: total || 0,
+          page: pageNumber,
+          limit: take,
+          offset: skip,
+          pages,
+          hasPrev: pageNumber > 1,
+          hasNext: pageNumber < pages,
+        },
+      });
+    }
     res.json(visits);
   } catch (e) {
     console.error("[wellness] list visits error:", e.message);
@@ -3305,6 +3369,8 @@ router.post("/visits", phiWriteGate, async (req, res) => {
       doctorId: doctorId ? parseInt(doctorId) : null,
       resourceId: resourceId ? parseInt(resourceId) : null,
       locationId: locationId ? parseInt(locationId) : null,
+      // The service decides how long the doctor is occupied.
+      serviceId: serviceId ? parseInt(serviceId) : null,
     });
     if (!slotCheck.ok) {
       return res.status(409).json({
@@ -3579,6 +3645,7 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
       const slotCheck = await assertVisitSlotAvailable({
         id,
         tenantId: req.user.tenantId,
+        serviceId: existing.serviceId,
         visitDate: data.visitDate ?? existing.visitDate,
         doctorId:
           data.doctorId !== undefined ? data.doctorId : existing.doctorId,
@@ -4511,7 +4578,28 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
         validUntil: rx.validUntil,
       },
     );
-    res.status(201).json(normalizePrescriptionDrugs(rx));
+    // Dispense from the shelf. Runs AFTER the prescription is committed and
+    // never inside its transaction: an inventory count must not be the reason
+    // a medico-legal record fails to save. Stock can be corrected in the
+    // catalogue; a lost prescription cannot.
+    //
+    // The response carries the result so the writer can tell the doctor what
+    // moved and which lines were free text the catalogue has never seen.
+    let stock = null;
+    try {
+      stock = await applyPrescriptionStock({
+        tenantId: req.user.tenantId,
+        drugs: namedDrugs,
+        io: req.io,
+      });
+    } catch (stockErr) {
+      console.warn(
+        "[wellness] prescription stock decrement failed:",
+        stockErr.message,
+      );
+    }
+
+    res.status(201).json({ ...normalizePrescriptionDrugs(rx), stock });
   } catch (e) {
     console.error("[wellness] create prescription error:", e.message);
     res.status(500).json({ error: "Failed to create prescription" });
@@ -17734,14 +17822,64 @@ router.get("/doctors/availability", verifyToken, async (req, res) => {
     const onLeaveIds = new Set(approvedLeaves.map((l) => l.userId));
     const hasBlockTimeIds = new Set(blockTimes.map((b) => b.userId));
 
+    // Existing appointments at the requested TIME.
+    //
+    // Previously this endpoint only knew about whole-day absences (leave and
+    // block-times), so the Assign Doctor dropdown happily offered a doctor who
+    // already had an appointment in that exact slot. Pass `?time=HH:mm` (and
+    // optionally `?serviceId=` / `?durationMin=` / `?excludeVisitId=`) and each
+    // doctor is also checked for an overlapping visit.
+    //
+    // Without `time` the response keeps its old day-level meaning, so existing
+    // callers are unaffected.
+    const timeParam = String(req.query.time || "").trim();
+    let busyByDoctor = new Map();
+    if (/^\d{1,2}:\d{2}$/.test(timeParam) && doctors.length > 0) {
+      const startsAt = new Date(`${dateParam}T${timeParam.padStart(5, "0")}:00+05:30`);
+      if (!Number.isNaN(startsAt.getTime())) {
+        let durationMin = parseInt(req.query.durationMin, 10);
+        if (!Number.isFinite(durationMin) || durationMin <= 0) {
+          const svcId = parseInt(req.query.serviceId, 10);
+          if (Number.isFinite(svcId)) {
+            const svc = await prisma.service
+              .findFirst({ where: { id: svcId, tenantId }, select: { durationMin: true } })
+              .catch(() => null);
+            durationMin = svc?.durationMin;
+          }
+        }
+        busyByDoctor = await findConflictsForDoctors({
+          tenantId,
+          doctorIds: doctors.map((d) => d.id),
+          startsAt,
+          durationMin: durationMin || DEFAULT_DURATION_MIN,
+          excludeVisitId: parseInt(req.query.excludeVisitId, 10) || null,
+        });
+      }
+    }
+
     // Return only necessary fields: id, name, specialty, role, availability
-    const doctorsList = doctors.map((doctor) => ({
-      id: doctor.id,
-      name: doctor.name,
-      specialty: doctor.specialty || null,
-      wellnessRole: doctor.wellnessRole || null,
-      available: !onLeaveIds.has(doctor.id) && !hasBlockTimeIds.has(doctor.id),
-    }));
+    const doctorsList = doctors.map((doctor) => {
+      const clash = busyByDoctor.get(doctor.id) || null;
+      const onLeave = onLeaveIds.has(doctor.id);
+      const blocked = hasBlockTimeIds.has(doctor.id);
+      return {
+        id: doctor.id,
+        name: doctor.name,
+        specialty: doctor.specialty || null,
+        wellnessRole: doctor.wellnessRole || null,
+        available: !onLeave && !blocked && !clash,
+        // Why they're unavailable, so the dropdown can say so rather than
+        // silently hiding a practitioner the operator expected to see.
+        unavailableReason: onLeave
+          ? "On leave"
+          : blocked
+            ? "Blocked time"
+            : clash
+              ? "Already booked at this time"
+              : null,
+        conflictVisitId: clash ? clash.id : null,
+      };
+    });
 
     res.json(doctorsList);
   } catch (err) {
@@ -17832,7 +17970,12 @@ router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
       });
     }
 
-    // Get all booked visits for this doctor on this date
+    // Everything this doctor already holds that day.
+    //
+    // `status: { not: "cancelled" }` used to leave COMPLETED visits occupying
+    // the grid; OCCUPYING_STATUSES is the same set the booking guard uses, so
+    // the slots a patient is offered and the slots the server will accept can
+    // no longer disagree.
     const bookedVisits = await prisma.visit.findMany({
       where: {
         tenantId,
@@ -17841,36 +17984,57 @@ router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
           gte: new Date(dateParam + "T00:00:00+05:30"),
           lte: new Date(dateParam + "T23:59:59+05:30"),
         },
-        status: { not: "cancelled" },
+        status: { in: OCCUPYING_STATUSES },
       },
-      select: { visitDate: true },
+      // The existing visit's own service decides how far it reaches.
+      select: { id: true, visitDate: true, service: { select: { durationMin: true } } },
     });
 
-    // Generate 30-min slots from 9 AM to 6 PM
-    const slots = [];
+    // How long the slot being offered will run. Callers booking a specific
+    // service should pass it so a 50-minute treatment doesn't get offered in a
+    // 30-minute gap.
+    let slotDuration = parseInt(req.query.durationMin, 10);
+    if (!Number.isFinite(slotDuration) || slotDuration <= 0) {
+      const svcId = parseInt(req.query.serviceId, 10);
+      if (Number.isFinite(svcId)) {
+        const svc = await prisma.service
+          .findFirst({ where: { id: svcId, tenantId }, select: { durationMin: true } })
+          .catch(() => null);
+        slotDuration = svc?.durationMin;
+      }
+    }
+    if (!Number.isFinite(slotDuration) || slotDuration <= 0) slotDuration = DEFAULT_DURATION_MIN;
+
+    // Build the 09:00–18:00 IST grid as real instants.
+    //
+    // The previous version compared `visit.visitDate.getHours()` — the SERVER's
+    // local hour. On a UTC server serving IST clinics those never lined up with
+    // the grid, and it only matched an exact start minute, so a 50-minute visit
+    // at 14:00 left 14:30 looking free. Both are fixed by comparing instants
+    // and testing for OVERLAP.
+    const candidates = [];
     for (let hour = 9; hour < 18; hour++) {
       for (let min = 0; min < 60; min += 30) {
         const timeStr = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-
-        // Check if this slot is booked
-        const isBooked = bookedVisits.some((visit) => {
-          const visitHour = visit.visitDate.getHours();
-          const visitMin = visit.visitDate.getMinutes();
-          return visitHour === hour && visitMin === min;
-        });
-
-        slots.push({
+        candidates.push({
           time: timeStr,
-          available: !isBooked,
+          startsAt: new Date(`${dateParam}T${timeStr}:00+05:30`),
         });
       }
     }
+
+    const marked = markSlotAvailability(candidates, bookedVisits, slotDuration);
 
     res.json({
       available: true,
       date: dateParam,
       doctorId: parseInt(doctorId),
-      slots: slots.filter((s) => s.available).map((s) => s.time),
+      durationMin: slotDuration,
+      slots: marked.filter((s) => s.available).map((s) => s.time),
+      // Full grid so a UI can grey taken slots out rather than making them
+      // vanish — a disappearing slot reads as a bug, a greyed one reads as
+      // "someone else has it".
+      allSlots: marked.map((s) => ({ time: s.time, available: s.available })),
     });
   } catch (err) {
     console.error("[wellness] get time slots error:", err.message);

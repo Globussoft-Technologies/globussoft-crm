@@ -84,6 +84,70 @@ function parseWallClock(input) {
   return new Date(raw);
 }
 
+function dayKeyInTZ(value, timeZone = WELLNESS_TZ) {
+  const when = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(when.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(when);
+  const byType = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}`;
+}
+
+/**
+ * A confirmed slot that has already passed, or null.
+ *
+ * The queue pre-fills the slot with the date the patient asked for, which may
+ * have gone by while the request waited — confirming it as-is would book a
+ * session nobody can attend and put a visit in the diary behind today.
+ *
+ * Compared at MINUTE granularity because that is what the input carries:
+ * choosing the current minute must not be refused because seconds elapsed
+ * between picking it and pressing Accept.
+ */
+function validateAcceptSlot(when, now = new Date()) {
+  if (!when) return null;
+  const MINUTE = 60 * 1000;
+  const currentMinute = Math.floor(now.getTime() / MINUTE) * MINUTE;
+  if (when.getTime() < currentMinute) {
+    return {
+      status: 400,
+      body: {
+        error: "That slot has already passed — pick a time from now on.",
+        code: "PAST_VISIT_DATE",
+      },
+    };
+  }
+  return null;
+}
+
+function validatePreferredRequestDate(preferred, plan, now = new Date()) {
+  if (!preferred) return null;
+  const preferredDay = dayKeyInTZ(preferred);
+  const today = dayKeyInTZ(now);
+  if (preferredDay < today) {
+    return {
+      status: 400,
+      body: { error: "preferredDate cannot be in the past", code: "PAST_PREFERRED_DATE" },
+    };
+  }
+  const lastAllowedDay = dayKeyInTZ(plan?.nextDueAt);
+  if (lastAllowedDay && preferredDay > lastAllowedDay) {
+    return {
+      status: 400,
+      body: {
+        error: "preferredDate must be within the package validity window",
+        code: "PREFERRED_DATE_AFTER_VALIDITY",
+        latestDate: lastAllowedDay,
+      },
+    };
+  }
+  return null;
+}
+
 /**
  * Parse an optional whole-number field. Returns:
  *   undefined - the caller did not send the field (leave it alone)
@@ -282,6 +346,30 @@ function saleBlockReason(pkg) {
     return { error: "This package is past its sell-by date", code: "PACKAGE_PAST_SELL_BY" };
   }
   return null;
+}
+
+/**
+ * Why this customer must not buy this package again right now, or null.
+ *
+ * Holding it with sessions left means a second purchase charges for something
+ * unused and leaves two plans where the catalog shows one — the purchase they
+ * just paid for would be invisible to them. Once the sessions are spent, or the
+ * window to use them has closed, buying again is exactly right.
+ */
+function alreadyHeldBlockReason(plan) {
+  if (!plan) return null;
+  if (plan.completedSessions >= plan.totalSessions) return null;
+  if (plan.nextDueAt && new Date(plan.nextDueAt).getTime() < Date.now()) return null;
+  const left = plan.totalSessions - plan.completedSessions;
+  return {
+    status: 409,
+    body: {
+      error: `You already have this package with ${left} of ${plan.totalSessions} sessions left — use those before buying it again.`,
+      code: "PACKAGE_ALREADY_HELD",
+      treatmentPlanId: plan.id,
+      sessionsLeft: left,
+    },
+  };
 }
 
 /**
@@ -570,12 +658,26 @@ router.post("/packages/:id/buy", verifyToken, async (req, res) => {
   try {
     const {
       getTenantRazorpayClient,
+      parseRazorpayError,
       NOT_CONFIGURED_MESSAGE,
     } = require("../lib/tenantPaymentGateway");
     const { resolveSelfBookingPatient } = require("../lib/selfBookingPatient");
     const { ensurePatientContact } = require("../lib/patientContactLink");
 
     const { userId, tenantId } = req.user;
+
+    // Buying is a patient's action. Staff are role USER / userType STAFF, and
+    // letting one through would charge the clinic's own doctor and mint a
+    // Patient record named after them — resolveSelfBookingPatient creates one
+    // for whoever is calling. Selling at the desk is a POS flow, not this.
+    const isCustomer = req.user.userType === "CUSTOMER" || req.user.role === "CUSTOMER";
+    if (!isCustomer) {
+      return res.status(403).json({
+        error: "Packages are bought by patients from their own account. Sell this one at the desk instead.",
+        code: "STAFF_CANNOT_BUY",
+      });
+    }
+
     const id = Number(req.params.id);
     const pkg = await prisma.servicePackage.findFirst({ where: tenantWhere(req, { id }) });
     if (!pkg) {
@@ -598,6 +700,25 @@ router.post("/packages/:id/buy", verifyToken, async (req, res) => {
     const patient = await resolveSelfBookingPatient({ userId, tenantId });
     const contact = await ensurePatientContact(patient, tenantId);
 
+    // Already holding this package with sessions left? Then buying it again
+    // takes money for something the customer has not used, and leaves them
+    // with two plans where the catalog can only show one — so the second
+    // purchase is invisible to the person who paid for it. Refuse it and say
+    // what they already have. Once the sessions are spent (or the window has
+    // closed) the plan stops being active and a repeat purchase is allowed.
+    const held = await prisma.treatmentPlan.findFirst({
+      where: {
+        tenantId,
+        patientId: patient.id,
+        servicePackageId: pkg.id,
+        status: { in: ["active", "paused"] },
+      },
+      orderBy: { startedAt: "desc" },
+      select: { id: true, totalSessions: true, completedSessions: true, nextDueAt: true },
+    });
+    const alreadyHeld = alreadyHeldBlockReason(held);
+    if (alreadyHeld) return res.status(alreadyHeld.status).json(alreadyHeld.body);
+
     const rp = await getTenantRazorpayClient(tenantId);
     if (!rp) {
       return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
@@ -617,8 +738,22 @@ router.post("/packages/:id/buy", verifyToken, async (req, res) => {
         },
       });
     } catch (gatewayErr) {
-      console.error("[wellness-packages] buy order failed:", gatewayErr && gatewayErr.message);
-      return res.status(502).json({ error: "Failed to create payment order", code: "GATEWAY_ERROR" });
+      // Razorpay refuses an order for reasons the customer can act on — an
+      // amount over the account's per-transaction ceiling being the usual one.
+      // A blanket 502 hid all of that behind "Failed to create payment order",
+      // so nobody could tell a gateway outage from a package priced too high
+      // to charge. parseRazorpayError keeps the gateway's own words (scrubbed
+      // of keys) and maps a 4xx to a 4xx.
+      const parsed = parseRazorpayError(gatewayErr);
+      console.error(
+        "[wellness-packages] buy order failed:",
+        `package=${pkg.id} amount=${breakdown.total} ${parsed.code}: ${parsed.message}`,
+      );
+      return res.status(parsed.status).json({
+        error: parsed.message,
+        code: parsed.code,
+        amount: breakdown.total,
+      });
     }
 
     const payment = await prisma.payment.create({
@@ -661,6 +796,42 @@ router.post("/packages/:id/buy", verifyToken, async (req, res) => {
     res.status(500).json({ error: "Failed to start payment", code: "PACKAGE_BUY_FAILED" });
   }
 });
+
+/**
+ * Raise the sales record for a package that has just been paid for.
+ *
+ * Wellness already mints invoices, but only on one path: a visit completed
+ * with a charge gets `WLV-<visitId>-…` from generateVisitPaymentLink. Both
+ * online-checkout paths — this one and appointment book-and-pay — recorded a
+ * Payment and nothing else, so a package sale never reached the invoices
+ * ledger, the accounting export, or anything keyed on Invoice.paidAt. Money
+ * with GST collected against it and no invoice behind it is a bookkeeping
+ * problem, not a cosmetic one.
+ *
+ * Raised as already PAID: the card was captured before we got here, so an
+ * UNPAID invoice would immediately be wrong (and would show up as owed).
+ *
+ * Best-effort. The customer has paid and the plan exists; failing the request
+ * over the paperwork would tell them the purchase failed when it did not. A
+ * failure is recorded on the payment for someone to pick up.
+ */
+async function raisePackageInvoice({ tenantId, payment, meta, plan }) {
+  const paidAt = new Date();
+  return prisma.invoice.create({
+    data: {
+      // Mirrors the WLV-<visitId>-<ts> shape the visit path uses, so the
+      // ledger reads at a glance: WPK = wellness package.
+      invoiceNum: `WPK-${meta.packageId ?? plan.id}-${Date.now()}`,
+      amount: Number(payment.amount) || 0,
+      status: "PAID",
+      paidAt,
+      // Paid on issue; a due date is required by the model.
+      dueDate: paidAt,
+      contactId: payment.contactId,
+      tenantId,
+    },
+  });
+}
 
 /**
  * POST /api/wellness/packages/confirm-payment
@@ -772,13 +943,32 @@ router.post("/packages/confirm-payment", verifyToken, async (req, res) => {
       });
     }
 
+    // The sales record. `invoiceId` on the payment is what ties the money to
+    // it, which is how the rest of the app reconciles the two.
+    let invoice = null;
+    let invoiceError = null;
+    try {
+      invoice = await raisePackageInvoice({ tenantId, payment, meta, plan });
+    } catch (invoiceErr) {
+      invoiceError = invoiceErr.message || String(invoiceErr);
+      console.error("[wellness-packages] invoice creation failed:", invoiceError);
+    }
+
     await prisma.payment.update({
       where: { id: payment.id },
       data: {
         status: "SUCCESS",
         paidAt: new Date(),
         gatewayId: razorpay_payment_id,
-        metadata: JSON.stringify({ ...meta, razorpay_order_id, razorpay_payment_id, treatmentPlanId: plan.id }),
+        invoiceId: invoice ? invoice.id : null,
+        metadata: JSON.stringify({
+          ...meta,
+          razorpay_order_id,
+          razorpay_payment_id,
+          treatmentPlanId: plan.id,
+          invoiceId: invoice ? invoice.id : null,
+          ...(invoiceError ? { invoiceError, needsManualInvoice: true } : {}),
+        }),
       },
     });
 
@@ -786,10 +976,16 @@ router.post("/packages/confirm-payment", verifyToken, async (req, res) => {
       packageName: meta.packageName,
       treatmentPlanId: plan.id,
       paymentId: payment.id,
+      invoiceId: invoice ? invoice.id : null,
       amount: Number(payment.amount) || 0,
     });
 
-    res.json({ success: true, treatmentPlanId: plan.id, name: plan.name });
+    res.json({
+      success: true,
+      treatmentPlanId: plan.id,
+      name: plan.name,
+      invoiceNum: invoice ? invoice.invoiceNum : null,
+    });
   } catch (e) {
     console.error("[wellness-packages] confirm-payment error:", e.message);
     res.status(500).json({ error: "Failed to confirm payment", code: "PACKAGE_CONFIRM_FAILED" });
@@ -894,6 +1090,10 @@ router.post("/packages/plans/:planId/request-session", verifyToken, async (req, 
     const preferred = parseWallClock(req.body?.preferredDate);
     if (preferred && Number.isNaN(preferred.getTime())) {
       return res.status(400).json({ error: "preferredDate is not a valid date", code: "INVALID_DATE" });
+    }
+    const preferredValidation = validatePreferredRequestDate(preferred, plan);
+    if (preferredValidation) {
+      return res.status(preferredValidation.status).json(preferredValidation.body);
     }
 
     const note = String(req.body?.note || "").trim().slice(0, 1000);
@@ -1004,6 +1204,11 @@ router.post("/packages/session-requests/:visitId/accept", schedulingGate, async 
       }
       visitDate = when;
     }
+    // Checked against the slot that will actually be saved — omitting
+    // visitDate inherits the requested one, which is the case most likely to
+    // be stale.
+    const staleSlot = validateAcceptSlot(visitDate);
+    if (staleSlot) return res.status(staleSlot.status).json(staleSlot.body);
 
     const updated = await prisma.visit.update({
       where: { id: visit.id },
@@ -1069,4 +1274,8 @@ module.exports.normalizePackageBody = normalizePackageBody;
 module.exports.saleBlockReason = saleBlockReason;
 module.exports.priceBreakdown = priceBreakdown;
 module.exports.planRequestBlockReason = planRequestBlockReason;
+module.exports.alreadyHeldBlockReason = alreadyHeldBlockReason;
+module.exports.validateAcceptSlot = validateAcceptSlot;
+module.exports.raisePackageInvoice = raisePackageInvoice;
 module.exports.parseWallClock = parseWallClock;
+module.exports.validatePreferredRequestDate = validatePreferredRequestDate;

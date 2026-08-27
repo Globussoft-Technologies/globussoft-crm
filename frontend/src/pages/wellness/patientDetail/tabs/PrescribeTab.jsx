@@ -9,7 +9,9 @@ import { RestoredBanner, RxDetailModal } from '../shared/components';
 
 const INITIAL_RX = {
   visitId: '',
-  drugs: [{ name: '', drugId: '', strengthValue: '', strengthUnit: '', dosage: '', frequency: '', duration: '' }],
+  // `qty` is units DISPENSED off the shelf — blank means 1. Distinct from
+  // `dosage`, which is how much the patient takes per administration.
+  drugs: [{ name: '', drugId: '', strengthValue: '', strengthUnit: '', dosage: '', frequency: '', duration: '', qty: '' }],
   // How long the whole course runs. Optional: left blank the prescription has
   // no stated validity, which is NOT the same as expired.
   validityDays: '',
@@ -31,7 +33,36 @@ function extractNumber(value) {
 // Typeahead over the tenant's Drug catalogue (GET /api/wellness/drugs?q=…).
 // Free-text entry still works — selecting a row just auto-fills the sibling
 // dosage/frequency/duration inputs from the drug's stored defaults.
-function DrugAutocomplete({ value, onChange, onPick }) {
+/**
+ * Stock chip for one catalogue row in the typeahead.
+ *
+ * A drug that isn't tracked (threshold 0) shows its count plainly rather than
+ * a reassuring "in stock" — the clinic never said it was managing that one.
+ */
+function DrugStockTag({ drug }) {
+  const qty = Number(drug.quantity ?? 0);
+  const threshold = Number(drug.lowStockThreshold ?? 0);
+
+  let fg = 'var(--text-secondary)';
+  let label = `${qty} in stock`;
+  if (qty <= 0) {
+    fg = 'var(--danger-color)';
+    label = 'out of stock';
+  } else if (threshold > 0 && qty <= threshold) {
+    fg = 'var(--warning-color)';
+    label = `${qty} left — low`;
+  } else if (threshold > 0) {
+    fg = 'var(--success-color)';
+  }
+
+  return (
+    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: fg, whiteSpace: 'nowrap' }}>
+      {label}
+    </span>
+  );
+}
+
+function DrugAutocomplete({ value, onChange, onPick, onQuickAdd }) {
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
   const debounceRef = useRef(null);
@@ -43,13 +74,20 @@ function DrugAutocomplete({ value, onChange, onPick }) {
     const ac = new AbortController();
     abortRef.current = ac;
     const trimmed = (q || '').trim();
-    const url = trimmed
-      ? `/api/wellness/drugs?q=${encodeURIComponent(trimmed)}&isActive=true&limit=20`
-      : `/api/wellness/drugs?isActive=true&limit=20`;
+    // `fields=summary` is the slim typeahead shape — it now carries quantity +
+    // lowStockThreshold and drops the admin-only notes blob.
+    const base = `/api/wellness/drugs?isActive=true&limit=20&fields=summary`;
+    const url = trimmed ? `${base}&q=${encodeURIComponent(trimmed)}` : base;
     fetchApi(url, { signal: ac.signal, silent: true })
       .then((data) => {
         if (ac.signal.aborted) return;
-        setResults(Array.isArray(data) ? data : []);
+        // Passing `limit` puts the route into its PAGINATED shape, so the
+        // response is `{ items, page, total, hasMore }` — not a bare array.
+        // Reading it as an array silently discarded every result, which is why
+        // searching the catalogue appeared to match nothing at all. Accept
+        // both shapes so neither the paginated nor the plain response breaks.
+        const rows = Array.isArray(data) ? data : (data?.items ?? []);
+        setResults(Array.isArray(rows) ? rows : []);
       })
       .catch(() => { /* typeahead is best-effort; ignore failures */ });
   };
@@ -83,7 +121,7 @@ function DrugAutocomplete({ value, onChange, onPick }) {
         autoComplete="off"
         style={inputStyle}
       />
-      {open && results.length > 0 && (
+      {open && (results.length > 0 || (value || '').trim().length >= 2) && (
         <ul
           role="listbox"
           style={{
@@ -94,8 +132,11 @@ function DrugAutocomplete({ value, onChange, onPick }) {
             marginTop: 4,
             maxHeight: 240,
             overflowY: 'auto',
-            background: 'var(--surface-color, #1f2937)',
-            border: '1px solid rgba(255,255,255,0.1)',
+            // --modal-bg is the only fully opaque surface token in BOTH
+            // themes; --surface-color is translucent, which let the form
+            // behind bleed through this list in light mode.
+            background: 'var(--modal-bg)',
+            border: '1px solid var(--border-color)',
             borderRadius: 8,
             listStyle: 'none',
             padding: 4,
@@ -109,7 +150,7 @@ function DrugAutocomplete({ value, onChange, onPick }) {
               key={d.id}
               role="option"
               onMouseDown={(e) => { e.preventDefault(); onPick(d); setOpen(false); }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-bg)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
               style={{
                 padding: '0.45rem 0.6rem',
@@ -119,13 +160,18 @@ function DrugAutocomplete({ value, onChange, onPick }) {
                 color: 'var(--text-primary)',
               }}
             >
-              <div style={{ fontWeight: 500 }}>
-                {d.name}
-                {d.strengthValue && d.strengthUnit && (
-                  <span style={{ color: 'var(--text-secondary)', fontWeight: 400, marginLeft: 6 }}>
-                    {d.strengthValue}{d.strengthUnit}
-                  </span>
-                )}
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.6rem' }}>
+                <span style={{ fontWeight: 500 }}>
+                  {d.name}
+                  {d.strengthValue && d.strengthUnit && (
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 400, marginLeft: 6 }}>
+                      {d.strengthValue}{d.strengthUnit}
+                    </span>
+                  )}
+                </span>
+                {/* Stock at the point of prescribing — the doctor should know
+                    before writing it, not after the patient asks. */}
+                <DrugStockTag drug={d} />
               </div>
               {(d.genericName || d.dosageForm) && (
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
@@ -134,6 +180,30 @@ function DrugAutocomplete({ value, onChange, onPick }) {
               )}
             </li>
           ))}
+          {/* Nothing matched — offer to add it rather than leaving the doctor
+              to type free text the catalogue will never learn about (and whose
+              stock therefore can never be tracked). */}
+          {!results.some(
+            (d) => d.name.toLowerCase() === (value || '').trim().toLowerCase(),
+          ) && (value || '').trim().length >= 2 && (
+            <li
+              role="option"
+              onMouseDown={(e) => { e.preventDefault(); onQuickAdd((value || '').trim()); setOpen(false); }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-bg)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              style={{
+                padding: '0.45rem 0.6rem',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+                color: 'var(--accent-color)',
+                borderTop: results.length > 0 ? '1px solid var(--border-color)' : 'none',
+                marginTop: results.length > 0 ? 4 : 0,
+              }}
+            >
+              + Add &ldquo;{(value || '').trim()}&rdquo; to the drug catalogue
+            </li>
+          )}
         </ul>
       )}
     </div>
@@ -167,8 +237,30 @@ export default function PrescribeTab({ patient, onSaved }) {
   };
   const addDrug = () => setDraft((s) => ({
     ...s,
-    drugs: [...s.drugs, { name: '', drugId: '', strengthValue: '', strengthUnit: '', dosage: '', frequency: '', duration: '' }],
+    drugs: [...s.drugs, { name: '', drugId: '', strengthValue: '', strengthUnit: '', dosage: '', frequency: '', duration: '', qty: '' }],
   }));
+
+  // Add a missing drug to the catalogue without leaving the consultation.
+  // The row lands at quantity 0 and the admins are notified to set stock —
+  // a prescriber guessing at counts is how a stock ledger becomes fiction.
+  const quickAddDrug = async (index, name) => {
+    try {
+      const created = await fetchApi('/api/wellness/drugs/quick-add', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      });
+      setDraft((st) => {
+        const next = [...st.drugs];
+        next[index] = { ...next[index], name: created.name, drugId: created.id || '' };
+        return { ...st, drugs: next };
+      });
+      notify.success(
+        created.created
+          ? `${created.name} added to the catalogue. An admin has been asked to set its stock.`
+          : `${created.name} is already in the catalogue.`,
+      );
+    } catch (_err) { /* fetchApi already toasted */ }
+  };
 
   const validDrugs = drugs.filter((d) => d.name && d.name.trim());
   // Mirrors the server's derivation (issue date + N days) purely so the
@@ -188,7 +280,7 @@ export default function PrescribeTab({ patient, onSaved }) {
     }
     setSaving(true);
     try {
-      await fetchApi('/api/wellness/prescriptions', {
+      const res = await fetchApi('/api/wellness/prescriptions', {
         method: 'POST',
         body: JSON.stringify({
           visitId, patientId: patient.id,
@@ -201,7 +293,19 @@ export default function PrescribeTab({ patient, onSaved }) {
       });
       clearDraft();
       onSaved();
-      notify.success('Prescription saved.');
+      // Say what came off the shelf. A silent decrement is indistinguishable
+      // from a broken one, and the doctor is the person who can spot a wrong
+      // count while the patient is still in the room.
+      const moved = res?.stock?.adjusted || [];
+      const unknown = res?.stock?.unmatched || [];
+      let msg = 'Prescription saved.';
+      if (moved.length) {
+        msg += ` Stock updated: ${moved.map((m) => `${m.name} −${m.units} (${m.quantityAfter} left)`).join(', ')}.`;
+      }
+      if (unknown.length) {
+        msg += ` Not in the catalogue, so stock was not changed: ${unknown.join(', ')}.`;
+      }
+      notify.success(msg);
     } catch (_err) { /* fetchApi already toasted */ } finally { setSaving(false); }
   };
 
@@ -300,10 +404,11 @@ export default function PrescribeTab({ patient, onSaved }) {
 
         <div style={{ marginBottom: '0.5rem' }}><label style={labelStyle}>Drugs</label></div>
         {drugs.map((d, i) => (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 0.8fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
             <DrugAutocomplete
               value={d.name}
               onChange={(v) => setDrug(i, 'name', v)}
+              onQuickAdd={(name) => quickAddDrug(i, name)}
               onPick={(drug) => setDraft((s) => {
                 const next = [...s.drugs];
                 next[i] = {
@@ -322,6 +427,18 @@ export default function PrescribeTab({ patient, onSaved }) {
             <input type="number" min="1" placeholder="Dosage" value={d.dosage} onChange={(e) => setDrug(i, 'dosage', e.target.value === '' ? '' : parseInt(e.target.value, 10) || '')} style={inputStyle} />
             <input type="number" min="1" placeholder="Frequency" value={d.frequency} onChange={(e) => setDrug(i, 'frequency', e.target.value === '' ? '' : parseInt(e.target.value, 10) || '')} style={inputStyle} />
             <input type="number" min="1" placeholder="Duration" value={d.duration} onChange={(e) => setDrug(i, 'duration', e.target.value === '' ? '' : parseInt(e.target.value, 10) || '')} style={inputStyle} />
+            {/* Units taken off the shelf. Blank = 1, so stock still moves when
+                the doctor fills nothing in — which is the common case. */}
+            <input
+              type="number"
+              min="1"
+              max="1000"
+              placeholder="Qty"
+              title="Units dispensed — leave blank for 1"
+              value={d.qty}
+              onChange={(e) => setDrug(i, 'qty', e.target.value === '' ? '' : parseInt(e.target.value, 10) || '')}
+              style={inputStyle}
+            />
           </div>
         ))}
         <button type="button" onClick={addDrug} style={{ background: 'transparent', border: '1px dashed rgba(255,255,255,0.15)', color: 'var(--text-secondary)', padding: '0.4rem 0.75rem', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', marginBottom: '1rem' }}>

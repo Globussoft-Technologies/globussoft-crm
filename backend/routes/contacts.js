@@ -57,7 +57,16 @@ function normalizeContactPhone(contact) {
   return normalizedPhone === contact.phone ? contact : { ...contact, phone: normalizedPhone };
 }
 
-function workflowContactPayload(contact, userId, changedFields = []) {
+/**
+ * Build the payload a contact.* workflow rule sees.
+ *
+ * `previous` is the prior-value snapshot the changed / changed_to /
+ * changed_from condition operators read. Without it a rule can only test the
+ * post-update state, which makes "status moved off Lead" or "owner was
+ * reassigned" impossible to express. Optional so the create path — where
+ * there is no prior state — simply omits it.
+ */
+function workflowContactPayload(contact, userId, changedFields = [], previous = null) {
   const callifiedStatus = String(contact.callifiedLeadStatus || "").toLowerCase();
   const isJunk = contact.status === "Junk" || callifiedStatus === "junk";
   const isQualified = ["Prospect", "Customer"].includes(contact.status) || callifiedStatus === "qualified";
@@ -84,6 +93,7 @@ function workflowContactPayload(contact, userId, changedFields = []) {
     metaIsJunk: isJunk,
     metaIsQualified: isQualified,
     changedFields,
+    ...(previous ? { previous } : {}),
     userId,
     tenantId: contact.tenantId,
   };
@@ -1884,7 +1894,17 @@ const updateContactById = async (req, res) => {
     try {
       require("../lib/eventBus").emitEvent(
         "contact.updated",
-        workflowContactPayload(contact, req.user.userId, Object.keys(req.body || {})),
+        workflowContactPayload(contact, req.user.userId, Object.keys(req.body || {}), {
+          status: existing.status,
+          source: existing.source,
+          assignedToId: existing.assignedToId,
+          email: existing.email,
+          phone: existing.phone,
+          company: existing.company,
+          aiScore: existing.aiScore,
+          tags: parseContactTags(existing.tagsJson),
+          callifiedLeadStatus: existing.callifiedLeadStatus,
+        }),
         req.user.tenantId,
         req.io
       ).catch((error) => console.error("[contacts] contact.updated workflow failed:", error.message));

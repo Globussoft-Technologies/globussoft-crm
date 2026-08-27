@@ -16,6 +16,7 @@ import {
   Pill,
   CalendarRange,
   Stethoscope,
+  Package,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { formatDate } from '../../utils/date';
@@ -60,11 +61,17 @@ const STATUS_TABS = [
 ];
 const ALL_STATUSES = 'ALL';
 
+// Chip colours come from the SEMANTIC tokens, which are tuned per theme
+// (--success-color #059669 light / #10b981 dark, etc). Hard-coded hex pairs
+// were legible on dark and washed out on light. The tint is derived from the
+// same token via color-mix, so foreground and background always move together.
+const tint = (token) => `color-mix(in srgb, var(${token}) 16%, transparent)`;
+
 const STATUS_STYLE = {
-  PENDING: { bg: 'rgba(234, 179, 8, 0.16)', fg: '#b8860b', label: 'Pending' },
-  ACCEPTED: { bg: 'rgba(56, 189, 248, 0.16)', fg: '#0284c7', label: 'Accepted' },
-  COMPLETED: { bg: 'rgba(34, 197, 94, 0.16)', fg: '#15803d', label: 'Completed' },
-  REJECTED: { bg: 'rgba(239, 68, 68, 0.16)', fg: '#b91c1c', label: 'Rejected' },
+  PENDING: { bg: tint('--warning-color'), fg: 'var(--warning-color)', label: 'Pending' },
+  ACCEPTED: { bg: tint('--accent-color'), fg: 'var(--accent-color)', label: 'Accepted' },
+  COMPLETED: { bg: tint('--success-color'), fg: 'var(--success-color)', label: 'Completed' },
+  REJECTED: { bg: tint('--danger-color'), fg: 'var(--danger-color)', label: 'Rejected' },
 };
 
 function StatusPill({ status }) {
@@ -352,7 +359,7 @@ export default function PrescriptionRequests() {
                 border: '1px solid var(--border-color)',
                 background: active
                   ? 'var(--primary-color, var(--accent-color))'
-                  : 'var(--subtle-bg-2)',
+                  : 'var(--input-bg)',
                 color: active ? '#fff' : 'inherit',
                 cursor: 'pointer',
                 fontSize: '0.85rem',
@@ -413,7 +420,7 @@ export default function PrescriptionRequests() {
               padding: '0.5rem 2.1rem 0.5rem 2.1rem',
               borderRadius: 8,
               border: '1px solid var(--border-color)',
-              background: 'var(--subtle-bg-2)',
+              background: 'var(--input-bg)',
               color: 'inherit',
               fontSize: '0.9rem',
             }}
@@ -453,7 +460,7 @@ export default function PrescriptionRequests() {
               padding: '0.4rem 0.6rem',
               borderRadius: 6,
               border: '1px solid var(--border-color)',
-              background: 'var(--subtle-bg-2)',
+              background: 'var(--input-bg)',
               color: 'inherit',
               fontSize: '0.85rem',
             }}
@@ -470,7 +477,7 @@ export default function PrescriptionRequests() {
         style={{
           border: '1px solid var(--border-color)',
           borderRadius: 10,
-          background: 'var(--subtle-bg-2)',
+          background: 'var(--surface-color)',
         }}
       >
         <TopScrollSync>
@@ -502,7 +509,7 @@ export default function PrescriptionRequests() {
                 <tr>
                   <td
                     colSpan={9}
-                    style={{ ...emptyCell, color: 'var(--danger-color, #e57373)' }}
+                    style={{ ...emptyCell, color: 'var(--danger-color)' }}
                   >
                     {error}
                   </td>
@@ -759,7 +766,7 @@ function RequestPanel({
                   <Muted>{phone || 'No phone on file'}</Muted>
                   {request.patient?.email && <Muted>{request.patient.email}</Muted>}
                   {request.patient?.allergies && (
-                    <div style={{ fontSize: '0.82rem', color: '#b91c1c', fontWeight: 600 }}>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--danger-color)', fontWeight: 600 }}>
                       Allergies: {request.patient.allergies}
                     </div>
                   )}
@@ -820,6 +827,46 @@ function RequestPanel({
                 <Field label="Raised">{formatDate(request.createdAt)}</Field>
               </div>
             </Section>
+
+            {/* Availability — advisory only. It never gates the buttons below:
+                clinic stock counts go stale, and a wrong number must not
+                hard-block a legitimate renewal. */}
+            {Array.isArray(request.stock) && request.stock.length > 0 && (
+              <Section title="Availability" icon={<Package size={15} />}>
+                <div style={{ display: 'grid', gap: '0.4rem' }}>
+                  {request.stock.map((s, i) => (
+                    <div
+                      key={`${s.name || 'med'}-${i}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem',
+                        flexWrap: 'wrap',
+                        fontSize: '0.88rem',
+                      }}
+                    >
+                      <span>{s.name || '—'}</span>
+                      <StockChip entry={s} />
+                    </div>
+                  ))}
+                </div>
+                {request.stockSummary?.unknown > 0 && (
+                  <div
+                    style={{
+                      marginTop: '0.6rem',
+                      fontSize: '0.78rem',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    {request.stockSummary.unknown} of {request.stockSummary.total}{' '}
+                    {request.stockSummary.unknown === 1 ? 'medicine is' : 'medicines are'} not in
+                    the drug catalogue — availability is unknown, not zero.{' '}
+                    <Link to="/wellness/drugs">Add them →</Link>
+                  </div>
+                )}
+              </Section>
+            )}
 
             {/* The original Rx it is asking to renew */}
             <Section title="Original prescription" icon={<Pill size={15} />}>
@@ -896,7 +943,7 @@ function RequestPanel({
                     padding: '0.6rem 0.75rem',
                     borderRadius: 8,
                     border: '1px solid var(--border-color)',
-                    background: 'var(--subtle-bg-2)',
+                    background: 'var(--input-bg)',
                     color: 'inherit',
                     fontSize: '0.88rem',
                     fontFamily: 'inherit',
@@ -963,6 +1010,52 @@ function RequestPanel({
         )}
       </>
     </ModalShell>
+  );
+}
+
+/**
+ * Availability chip for one requested medicine.
+ *
+ * `not_linked` is deliberately neutral-grey and reads "not linked", never
+ * "0" — the drug simply has no inventory item mapped to it, and rendering
+ * that as out-of-stock is exactly the wrong-decision failure the backend
+ * resolver is built to avoid.
+ */
+function StockChip({ entry }) {
+  const qty =
+    entry.quantity === null || entry.quantity === undefined ? null : `${entry.quantity}`;
+
+  const LOOK = {
+    in_stock:    { bg: tint('--success-color'), fg: 'var(--success-color)', label: qty ? `${qty} in stock` : 'In stock' },
+    low:         { bg: tint('--warning-color'), fg: 'var(--warning-color)', label: qty ? `${qty} left — low` : 'Low stock' },
+    out:         { bg: tint('--danger-color'),  fg: 'var(--danger-color)',  label: 'Out of stock' },
+    // Neutral on purpose — "unknown" must never borrow a danger colour.
+    not_tracked: { bg: 'var(--subtle-bg-3)', fg: 'var(--text-secondary)', label: qty ? `${qty} · not tracked` : 'Not tracked' },
+    not_in_catalogue: { bg: 'var(--subtle-bg-3)', fg: 'var(--text-secondary)', label: 'Not in drug catalogue' },
+  };
+  const look = LOOK[entry.state] || LOOK.not_in_catalogue;
+
+  const title = entry.drugName
+    ? `${entry.drugName}${entry.lowStockThreshold ? ` · reorder at ${entry.lowStockThreshold}` : ''}${entry.drugInactive ? ' · drug is inactive' : ''}`
+    : 'This medicine is not in the drug catalogue, so its stock is unknown';
+
+  return (
+    <span
+      title={title}
+      data-testid={`stock-${entry.state}`}
+      style={{
+        display: 'inline-block',
+        padding: '0.12rem 0.5rem',
+        borderRadius: 999,
+        background: look.bg,
+        color: look.fg,
+        fontSize: '0.75rem',
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {look.label}
+    </span>
   );
 }
 
@@ -1039,7 +1132,7 @@ function ActionButton({ onClick, disabled, busy, icon, label, danger }) {
         background: danger
           ? 'transparent'
           : 'var(--primary-color, var(--accent-color))',
-        color: danger ? 'var(--danger-color, #e57373)' : '#fff',
+        color: danger ? 'var(--danger-color)' : '#fff',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
         fontSize: '0.86rem',
@@ -1059,7 +1152,7 @@ function Section({ title, icon, children }) {
         border: '1px solid var(--border-color)',
         borderRadius: 10,
         padding: '0.9rem 1rem',
-        background: 'var(--subtle-bg-2)',
+        background: 'var(--surface-color)',
       }}
     >
       <h2
@@ -1105,7 +1198,7 @@ const secondaryButton = {
   padding: '0.4rem 0.75rem',
   borderRadius: 8,
   border: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg-2)',
+  background: 'var(--input-bg)',
   color: 'inherit',
   cursor: 'pointer',
   fontSize: '0.85rem',
@@ -1132,7 +1225,7 @@ const pagerButton = (disabled) => ({
   padding: '0.4rem 0.75rem',
   borderRadius: 8,
   border: '1px solid var(--border-color)',
-  background: disabled ? 'transparent' : 'var(--subtle-bg-2)',
+  background: disabled ? 'transparent' : 'var(--input-bg)',
   color: 'inherit',
   cursor: disabled ? 'not-allowed' : 'pointer',
   opacity: disabled ? 0.5 : 1,

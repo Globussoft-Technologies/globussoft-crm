@@ -117,6 +117,8 @@ model Tenant {
   tickets               Ticket[]
   campaigns             Campaign[]
   automationRules       AutomationRule[]
+  workflowExecutions    WorkflowExecution[]
+  workflowScheduledActions WorkflowScheduledAction[]
   emailMessages         EmailMessage[]
   callLogs              CallLog[]
   attachments           Attachment[]
@@ -1357,8 +1359,147 @@ model AutomationRule {
   condition   String? @db.Text
   isActive    Boolean @default(true)
 
+  // ── Freshsales-parity metadata (workflow-parity wave) ────────────────
+  // The builder UI has always rendered "Last updated <date>" and a
+  // "modified by" affordance, but the model carried no timestamps at all,
+  // so the list permanently read "Not run yet". These are the columns that
+  // back those cells, plus the health counters the auto-disable guard and
+  // the failure banner read.
+  //
+  // `createdById` is a PLAIN scalar, not a relation: staff churn must never
+  // cascade-delete a tenant's automation, and eventBus only ever needs the id
+  // as a fallback requester for the create_approval action (it referenced
+  // `rule.createdById` for months against a column that did not exist).
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+  createdById Int?
+  updatedById Int?
+
+  // Execution health. `lastRunAt` powers the list's "last run" cell,
+  // `consecutiveFailures` drives the auto-disable guard (Freshsales pauses a
+  // workflow and emails the admin after N consecutive failures), and
+  // `autoDisabledAt` records that the guard — not a human — flipped isActive.
+  lastRunAt           DateTime?
+  lastError           String?   @db.Text
+  runCount            Int       @default(0)
+  failureCount        Int       @default(0)
+  consecutiveFailures Int       @default(0)
+  autoDisabledAt      DateTime?
+
+  // Execution order. Was previously smuggled inside the targetState JSON
+  // blob, which meant every reorder rewrote every rule's whole config and
+  // the engine had to JSON.parse each rule just to sort. Real column; the
+  // engine still falls back to targetState.order for rows written before
+  // this migration.
+  sortOrder Int @default(0)
+
+  // Time-based ("scheduled") workflows — the entire second half of the
+  // Freshsales workflow feature, which was previously absent. NULL for every
+  // event-driven rule. Shape is documented in lib/workflowSchedule.js:
+  //   { mode: "date_field", entity, field, offsetDays, timeOfDay, ... }
+  //   { mode: "recurring",  frequency, timeOfDay, dayOfWeek, dayOfMonth, ... }
+  scheduleConfig String?   @db.Text
+  nextScheduledAt DateTime?
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  executions       WorkflowExecution[]
+  scheduledActions WorkflowScheduledAction[]
+
+  @@index([tenantId, isActive, triggerType])
+  @@index([tenantId, sortOrder])
+}
+
+/// Per-execution log for a single AutomationRule action.
+///
+/// Replaces the previous approach of scanning `AuditLog` rows with
+/// `entity="AutomationRule"`. That had three concrete failures the parity
+/// audit surfaced:
+///   1. The history panel could only fetch the last 50 tenant-wide audit rows
+///      and then filter client-side, so on a busy tenant clicking "View
+///      history" on a real workflow showed "No actions found".
+///   2. Success/failure was inferred by regex-testing the raw details JSON for
+///      the substring "fail", so any payload containing that word (a deal's
+///      lost reason, a ticket subject) was mislabelled Failed.
+///   3. "Run once per record" deduped by reading the 500 most recent audit
+///      rows and JSON.parsing each one — O(n) on every single event, and
+///      silently began re-firing past 500 executions.
+///
+/// A dedicated table with a `recordKey` index fixes all three: the dedupe is
+/// an indexed findFirst, the status is a real column, and history is a
+/// server-side filtered + paginated query.
+model WorkflowExecution {
+  id     Int            @id @default(autoincrement())
+  ruleId Int
+  rule   AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  triggerType String
+  actionType  String
+  /// SUCCESS | FAILED | SKIPPED — a real column, never a regex over the blob.
+  status      String  @default("SUCCESS")
+  /// "contactId:42" — the dedupe key for execution: "once" rules.
+  recordKey   String?
+  /// Denormalised so the history table's CONTACT column has something real to
+  /// render without an N+1 join per row.
+  contactId   Int?
+  entityLabel String?
+  error       String? @db.Text
+  details     String? @db.Text
+  durationMs  Int?
+  /// POST /:id/test and "apply to existing records" dry-runs set this so they
+  /// can be filtered out of the "N successful actions" counter.
+  isTest      Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, ruleId, createdAt])
+  @@index([tenantId, ruleId, recordKey])
+  @@index([tenantId, createdAt])
+}
+
+/// Deferred workflow actions — the backing store for the `wait` action.
+///
+/// Freshsales lets an author put a delay between actions ("wait 2 days, then
+/// send the follow-up"). Previously every action in `targetState.actions` ran
+/// synchronously inside the triggering HTTP request, so a delay was
+/// impossible to express. A `wait` action now serialises the REMAINING
+/// actions plus the frozen event payload into one of these rows; the
+/// workflowScheduler cron drains them.
+///
+/// `lockedAt`/`lockedBy` mirror the SequenceEnrollment pessimistic-lock
+/// pattern so two app instances never double-fire the same deferred action.
+model WorkflowScheduledAction {
+  id     Int            @id @default(autoincrement())
+  ruleId Int
+  rule   AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  runAt  DateTime
+  /// PENDING | DONE | FAILED | CANCELLED
+  status String   @default("PENDING")
+
+  triggerType String
+  /// JSON array of the actions still to run once the delay elapses.
+  actionsJson String @db.Text
+  /// Frozen copy of the event payload the rule fired on.
+  payloadJson String @db.Text
+  recordKey   String?
+
+  attempts  Int       @default(0)
+  lastError String?   @db.Text
+  lockedAt  DateTime?
+  lockedBy  String?
+
+  createdAt DateTime @default(now())
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, runAt])
+  @@index([ruleId])
 }
 
 model EmailMessage {
@@ -4262,6 +4403,11 @@ model Visit {
   @@index([tenantId, visitDate])
   @@index([patientId, visitDate])
   @@index([tenantId, status])
+  // Double-booking guard: "what else does this doctor hold around this time".
+  // Every booking, reschedule and assign-doctor runs this lookup, and the
+  // Assign Doctor dropdown runs it for every practitioner at once — without
+  // the index each one scans the tenant's whole visit history.
+  @@index([tenantId, doctorId, visitDate])
   @@index([tenantId, locationId, visitDate])
   // Wave 2 Agent LL — tenant-scoped bookingType + UTM filtering
   // (e.g. "show me all IN_HOME visits this week", "GROUP BY utmSource for
@@ -5919,6 +6065,22 @@ model Drug {
   notes    String? @db.Text // admin-only — scheduling info, contraindications, etc.
   isActive Boolean @default(true)
 
+  // Stock, held on the drug itself.
+  //
+  // The clinic dispenses from the same shelf the doctor prescribes off, so the
+  // drug catalogue IS the stock ledger — there is no separate inventory row to
+  // reconcile against. Prescribing decrements `quantity`; when it lands at or
+  // below `lowStockThreshold` the admins are notified.
+  //
+  //   quantity           units on hand. Not nullable — "unknown stock" is not a
+  //                      state we want, and 0 is the honest default for a drug
+  //                      nobody has counted yet.
+  //   lowStockThreshold  reorder point. 0 means "don't alert on this one",
+  //                      matching the convention Product.threshold already uses
+  //                      (see cron/lowStockEngine.js).
+  quantity          Int @default(0)
+  lowStockThreshold Int @default(0)
+
   tenantId  Int      @default(1)
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
@@ -5930,6 +6092,9 @@ model Drug {
   @@index([tenantId, name])
   @@index([tenantId, genericName])
   @@index([tenantId, isActive])
+  // Drives the low-stock sweep: "which drugs in this tenant are at or below
+  // their reorder point".
+  @@index([tenantId, quantity])
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { formatDate } from '../../../utils/date';
 import SingleSelectDropdown from './SingleSelectDropdown';
+import { nowDateTimeInput, isPastDateTimeInput } from './shared';
 
 /**
  * Stored timestamp → the `YYYY-MM-DDTHH:mm` a datetime-local input wants, in
@@ -57,6 +58,13 @@ export default function SessionRequestsPanel({ doctors = [], onHandled }) {
     const draft = draftFor(req);
     if (!draft.doctorId) {
       notify.error('Pick who is taking this session first');
+      return;
+    }
+    // The field is pre-filled with the date the patient asked for, which may
+    // have gone by while the request sat in the queue — confirming it would
+    // book a session into the past.
+    if (isPastDateTimeInput(draft.visitDate)) {
+      notify.error('That time has already passed — pick a new slot for this session');
       return;
     }
     setBusyId(req.id);
@@ -147,6 +155,7 @@ export default function SessionRequestsPanel({ doctors = [], onHandled }) {
                 </div>
                 <input
                   type="datetime-local"
+                  min={nowDateTimeInput()}
                   value={draft.visitDate}
                   onChange={(e) => setDraft(req, { visitDate: e.target.value })}
                   data-testid={`session-request-date-${req.id}`}

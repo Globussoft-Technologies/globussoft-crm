@@ -192,7 +192,9 @@ const input = {
   padding: '0.5rem 0.7rem',
   borderRadius: 8,
   border: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg-2)',
+  // --input-bg is defined in BOTH themes; --subtle-bg-2 is a 2% tint that
+  // renders as an invisible field on the light ground.
+  background: 'var(--input-bg)',
   color: 'inherit',
   fontSize: '0.9rem',
 };
@@ -204,7 +206,7 @@ const secondaryButton = {
   padding: '0.45rem 0.85rem',
   borderRadius: 8,
   border: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg-2)',
+  background: 'var(--input-bg)',
   color: 'inherit',
   cursor: 'pointer',
   fontSize: '0.85rem',

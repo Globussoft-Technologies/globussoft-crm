@@ -34,11 +34,16 @@ import { drugLabel, OPEN_STATUSES } from '../../hooks/usePrescriptionRenewals';
  * mean.
  */
 
+// Semantic tokens, not fixed hex — they are tuned per theme, so the chip
+// stays legible on both the cream and the near-black ground. The tint is
+// derived from the same token so fore/background can never drift apart.
+const tint = (token) => `color-mix(in srgb, var(${token}) 16%, transparent)`;
+
 const STATUS_STYLE = {
-  PENDING: { bg: 'rgba(234, 179, 8, 0.16)', fg: '#b8860b', label: 'Pending' },
-  ACCEPTED: { bg: 'rgba(56, 189, 248, 0.16)', fg: '#0284c7', label: 'Accepted' },
-  COMPLETED: { bg: 'rgba(34, 197, 94, 0.16)', fg: '#15803d', label: 'Completed' },
-  REJECTED: { bg: 'rgba(239, 68, 68, 0.16)', fg: '#b91c1c', label: 'Declined' },
+  PENDING: { bg: tint('--warning-color'), fg: 'var(--warning-color)', label: 'Pending' },
+  ACCEPTED: { bg: tint('--accent-color'), fg: 'var(--accent-color)', label: 'Accepted' },
+  COMPLETED: { bg: tint('--success-color'), fg: 'var(--success-color)', label: 'Completed' },
+  REJECTED: { bg: tint('--danger-color'), fg: 'var(--danger-color)', label: 'Declined' },
 };
 
 function StatusPill({ status }) {
@@ -173,8 +178,8 @@ export default function MyPrescriptionRequests() {
             padding: '1rem',
             borderRadius: 10,
             border: '1px solid var(--border-color)',
-            background: 'var(--subtle-bg-2)',
-            color: 'var(--danger-color, #e57373)',
+            background: 'var(--surface-color)',
+            color: 'var(--danger-color)',
             fontSize: '0.9rem',
           }}
         >
@@ -335,7 +340,7 @@ const card = {
   border: '1px solid var(--border-color)',
   borderRadius: 10,
   padding: '0.9rem 1rem',
-  background: 'var(--subtle-bg-2)',
+  background: 'var(--surface-color)',
 };
 
 const cardHeader = {
@@ -364,7 +369,7 @@ const secondaryButton = {
   padding: '0.45rem 0.85rem',
   borderRadius: 8,
   border: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg-2)',
+  background: 'var(--input-bg)',
   color: 'inherit',
   cursor: 'pointer',
   fontSize: '0.85rem',

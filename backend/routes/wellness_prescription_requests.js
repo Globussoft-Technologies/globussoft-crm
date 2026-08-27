@@ -41,6 +41,7 @@ const { verifyToken } = require("../middleware/auth");
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const renewals = require("../lib/prescriptionRenewalService");
 const { writeAudit } = require("../lib/audit");
+const { resolveStockForDrugs, summarizeStock } = require("../lib/drugStock");
 
 const readGate = [
   verifyToken,
@@ -175,7 +176,39 @@ router.get("/prescription-requests/:id", readGate, async (req, res) => {
       );
     });
 
-    res.json(renewals.toPublicRequest(request));
+    const payload = renewals.toPublicRequest(request);
+
+    // Per-medicine availability, so the reviewer isn't deciding blind about
+    // whether the clinic can actually supply what was asked for. ADVISORY
+    // ONLY — it never gates the accept/reject actions, because clinic stock
+    // counts go stale and a wrong number must not hard-block a legitimate
+    // renewal.
+    //
+    // Scoped to what was REQUESTED: a partial request asks about those
+    // medicines, a whole-prescription request about all of them.
+    try {
+      const subject = payload.isFullPrescription
+        ? payload.prescription?.drugs
+        : payload.requestedDrugs;
+      const entries = await resolveStockForDrugs({
+        tenantId: req.user.tenantId,
+        drugs: Array.isArray(subject) ? subject : [],
+      });
+      payload.stock = entries;
+      payload.stockSummary = summarizeStock(entries);
+    } catch (stockErr) {
+      // Best-effort: the request itself is the point of this endpoint. A stock
+      // lookup failure degrades to "no availability shown", never to a 500 that
+      // blocks the review.
+      console.warn(
+        "[wellness] prescription-request stock lookup failed:",
+        stockErr.message,
+      );
+      payload.stock = null;
+      payload.stockSummary = null;
+    }
+
+    res.json(payload);
   } catch (err) {
     sendRenewalError(
       res,

@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Package, Eye, EyeOff, Archive, RotateCcw, AlertTriangle, CalendarClock, ShoppingBag, Loader, CheckCircle2, CalendarPlus } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { formatDate } from '../../../utils/date';
+import SingleSelectDropdown from './SingleSelectDropdown';
+import { isPastDateInput, todayDateInput } from './shared';
 
 // Day counts the builder offers, spelled back out. Anything else falls back to
 // a plain day count rather than guessing at a name for it.
@@ -18,6 +20,30 @@ function pastSellBy(sellByDate) {
   if (!sellByDate) return false;
   const when = new Date(sellByDate);
   return !Number.isNaN(when.getTime()) && when.getTime() < Date.now();
+}
+
+// Same slabs the builder offers, so a package edited here and one built there
+// can only ever carry the same set.
+const TAX_OPTIONS = [
+  { value: 0, label: 'No Tax' },
+  { value: 5, label: 'GST 5%' },
+  { value: 18, label: 'GST 18%' },
+];
+
+// Matches MAX_SESSIONS in routes/wellness_packages.js — the server rejects
+// anything outside this, and a field that lets you type a doomed value is a
+// worse experience than one that doesn't.
+const MIN_SESSIONS = 1;
+const MAX_SESSIONS = 60;
+
+/**
+ * Still has sessions on it, and still in time to use them — the state in which
+ * buying the same package again would charge for something unused.
+ */
+function holdsUsableSessions(plan) {
+  if (!plan) return false;
+  if (plan.completedSessions >= plan.totalSessions) return false;
+  return !planLapsed(plan);
 }
 
 /** True once a plan's use-by date has gone. */
@@ -56,9 +82,81 @@ function toDateInput(value) {
 export default function ActivePackagesTab({ packages, loading, onChanged, readOnly = false, onBuy = null, buyingId = null, onRequestSession = null }) {
   const notify = useNotify();
   const [busyId, setBusyId] = useState(null);
+  // What the card should show while a toggle is in flight. Publishing is a PUT
+  // plus the parent's refetch — roughly half a second — and a badge that only
+  // flips at the end of that reads as a dead click, so the card shows the
+  // outcome straight away and the request catches up behind it.
+  const [optimistic, setOptimistic] = useState({});
+  // Sessions and discount are typed, not picked, so they are held as drafts and
+  // saved on blur — a PUT per keystroke would re-price the package on the way
+  // to a number the user has not finished typing.
+  const [terms, setTerms] = useState({});
+  const minSellByDate = todayDateInput();
 
-  const patch = async (pkg, body, successMessage) => {
+  const termFor = (pkg) => terms[pkg.id] || {
+    sessions: String(pkg.sessions ?? ''),
+    discountPercent: String(pkg.discountPercent ?? 0),
+  };
+  const setTerm = (pkg, next) => setTerms((t) => ({ ...t, [pkg.id]: { ...termFor(pkg), ...next } }));
+  const clearTerm = (pkg) => setTerms((t) => {
+    const { [pkg.id]: _drop, ...rest } = t;
+    return rest;
+  });
+
+  /**
+   * Save a typed number, or put the old one back.
+   *
+   * Editing sessions or discount re-prices the package at TODAY'S service
+   * prices — that is the documented behaviour of the API and the reason the
+   * note under these fields exists. Packages patients already bought keep the
+   * price they were sold at; only the catalog entry moves.
+   */
+  const commitNumber = async (pkg, field, raw, { min, max, label, suffix = '' }) => {
+    const current = Number(pkg[field] ?? 0);
+    const n = Number(raw);
+    if (raw === '' || !Number.isInteger(n) || n < min || n > max) {
+      notify.error(`${label} must be a whole number between ${min} and ${max}`);
+      setTerm(pkg, { [field]: String(current) });
+      return;
+    }
+    if (n === current) return;
+    await patch(pkg, { [field]: n }, `"${pkg.name}" now ${n}${suffix} ${label.toLowerCase()}`);
+    // Drop the draft so the field re-seeds from the freshly reloaded package.
+    clearTerm(pkg);
+  };
+
+  // Drop an optimistic flag once the reloaded list actually carries it. Doing
+  // this on arrival rather than when the PUT resolves is what stops the badge
+  // snapping back to its old value for the frame between the two.
+  useEffect(() => {
+    setOptimistic((current) => {
+      const ids = Object.keys(current);
+      if (ids.length === 0) return current;
+      const next = {};
+      for (const id of ids) {
+        const live = packages.find((p) => String(p.id) === id);
+        const caughtUp = live && Object.entries(current[id]).every(([k, v]) => live[k] === v);
+        if (!caughtUp) next[id] = current[id];
+      }
+      return Object.keys(next).length === ids.length ? current : next;
+    });
+  }, [packages]);
+
+  const forget = (pkgId) => setOptimistic((current) => {
+    if (!(pkgId in current)) return current;
+    const { [pkgId]: _dropped, ...rest } = current;
+    return rest;
+  });
+
+  const patch = async (pkg, body, successMessage, showAsIfDone = null) => {
+    if (Object.prototype.hasOwnProperty.call(body, 'sellByDate') && isPastDateInput(body.sellByDate, minSellByDate)) {
+      notify.error('Sell-by date cannot be in the past');
+      return;
+    }
     setBusyId(pkg.id);
+    if (showAsIfDone) {
+      setOptimistic((current) => ({ ...current, [pkg.id]: { ...(current[pkg.id] || {}), ...showAsIfDone } }));
+    }
     try {
       await fetchApi(`/api/wellness/packages/${pkg.id}`, {
         method: 'PUT',
@@ -67,6 +165,8 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
       notify.success(successMessage);
       onChanged?.();
     } catch (err) {
+      // The card is showing something that did not happen — put it back.
+      forget(pkg.id);
       notify.error(err?.message || 'Could not update the package');
     } finally {
       setBusyId(null);
@@ -76,7 +176,17 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
   const remove = async (pkg) => {
     // Retire, not delete — anything already quoted against this package must
     // keep resolving. A hard delete is a separate, deliberate action.
-    if (!window.confirm(`Retire "${pkg.name}"? It stops being offered but stays on record.`)) return;
+    // notify.confirm, not window.confirm: the native dialog is chrome outside
+    // the app ("localhost:5173 says…"), unstyled and unthemeable, and it blocks
+    // the automated QA tooling that drives these flows.
+    const confirmed = await notify.confirm({
+      title: `Retire "${pkg.name}"?`,
+      message: 'It stops being offered to customers but stays on record, so anything already sold against it keeps resolving. You can restore it later.',
+      confirmText: 'Retire package',
+      cancelText: 'Keep it live',
+      destructive: true,
+    });
+    if (!confirmed) return;
     setBusyId(pkg.id);
     try {
       await fetchApi(`/api/wellness/packages/${pkg.id}`, { method: 'DELETE' });
@@ -116,6 +226,9 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
     >
       {packages.map((pkg) => {
         const busy = busyId === pkg.id;
+        // What the card shows: the row as loaded, with an in-flight toggle
+        // applied on top so the badge and the button label change on click.
+        const view = optimistic[pkg.id] ? { ...pkg, ...optimistic[pkg.id] } : pkg;
         return (
           <div
             key={pkg.id}
@@ -127,19 +240,20 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
               display: 'flex',
               flexDirection: 'column',
               gap: '0.5rem',
-              opacity: pkg.isActive ? 1 : 0.6,
+              opacity: busy ? 0.72 : view.isActive ? 1 : 0.6,
+              transition: 'opacity 180ms ease',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'flex-start' }}>
               <div style={{ fontWeight: 600, minWidth: 0 }}>{pkg.name}</div>
               <div style={{ display: 'flex', gap: '0.25rem', flexShrink: 0 }}>
-                {!pkg.isActive && <Badge tone="muted">Retired</Badge>}
-                {pkg.isActive && pkg.isPublic && <Badge tone="success">Live</Badge>}
-                {pkg.isActive && !pkg.isPublic && <Badge tone="warn">Draft</Badge>}
+                {!view.isActive && <Badge tone="muted">Retired</Badge>}
+                {view.isActive && view.isPublic && <Badge tone="success">Live</Badge>}
+                {view.isActive && !view.isPublic && <Badge tone="warn">Draft</Badge>}
                 {/* A package past its sell-by is already gone from the customer
                     catalog — say so here rather than leaving staff to wonder
                     why a "Live" package isn't showing up. */}
-                {pkg.isActive && pastSellBy(pkg.sellByDate) && <Badge tone="warn">Past sell-by</Badge>}
+                {view.isActive && pastSellBy(pkg.sellByDate) && <Badge tone="warn">Past sell-by</Badge>}
               </div>
             </div>
 
@@ -263,6 +377,14 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
                       : `Book your sessions by ${formatDate(pkg.ownedPlan.nextDueAt)}`}
                   </span>
                 )}
+                {pkg.ownedPlan.nextDueAt && !planLapsed(pkg.ownedPlan) && (
+                  <span
+                    data-testid={`package-valid-till-${pkg.id}`}
+                    style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}
+                  >
+                    Package valid till {formatDate(pkg.ownedPlan.nextDueAt)}.
+                  </span>
+                )}
                 {!pkg.ownedPlan.nextDueAt && (
                   <span style={{ color: 'var(--text-secondary)' }}>No expiry — book whenever suits you</span>
                 )}
@@ -273,35 +395,49 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
                 {onRequestSession
                   && pkg.ownedPlan.completedSessions < pkg.ownedPlan.totalSessions
                   && !planLapsed(pkg.ownedPlan) && (
-                  <button
-                    type="button"
-                    onClick={() => onRequestSession(pkg)}
-                    data-testid={`package-request-session-${pkg.id}`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '0.35rem',
-                      marginTop: '0.35rem',
-                      padding: '0.45rem 0.75rem',
-                      background: 'rgba(16,185,129,0.16)',
-                      border: '1px solid rgba(16,185,129,0.4)',
-                      borderRadius: 7,
-                      color: '#10b981',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <CalendarPlus size={13} /> Request a session
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => onRequestSession(pkg)}
+                      data-testid={`package-request-session-${pkg.id}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.35rem',
+                        marginTop: '0.35rem',
+                        padding: '0.45rem 0.75rem',
+                        background: 'rgba(16,185,129,0.16)',
+                        border: '1px solid rgba(16,185,129,0.4)',
+                        borderRadius: 7,
+                        color: '#10b981',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <CalendarPlus size={13} /> Request a session
+                    </button>
+                    {pkg.ownedPlan.nextDueAt && (
+                      <span
+                        data-testid={`package-valid-till-${pkg.id}`}
+                        style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}
+                      >
+                        Package valid till {formatDate(pkg.ownedPlan.nextDueAt)}.
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
             )}
 
             {/* The customer's only action. Price and tax are recomputed
-                server-side at checkout — this button carries no amount. */}
-            {readOnly && onBuy && pkg.isActive && (
+                server-side at checkout — this button carries no amount.
+                Hidden while they still hold usable sessions from this package:
+                the server refuses that purchase, and offering a button that
+                cannot work is worse than offering none. It returns once the
+                sessions are spent or the window has closed. */}
+            {readOnly && onBuy && view.isActive && !holdsUsableSessions(pkg.ownedPlan) && (
               <button
                 type="button"
                 disabled={buyingId != null}
@@ -337,6 +473,97 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
               </button>
             )}
 
+            {/* The three numbers printed on the line above, made editable. Tax
+                is applied at checkout so changing it moves no stored figure;
+                sessions and discount re-price the package, which the note
+                below says out loud rather than letting the total shift
+                silently under whoever edited it. */}
+            {!readOnly && pkg.isActive && (
+              <div
+                data-testid={`package-terms-${pkg.id}`}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '0.4rem',
+                  marginTop: '0.5rem',
+                  paddingTop: '0.5rem',
+                  borderTop: '1px solid var(--border-color)',
+                }}
+              >
+                <label style={termFieldStyle}>
+                  Sessions
+                  <input
+                    type="number"
+                    min={MIN_SESSIONS}
+                    max={MAX_SESSIONS}
+                    step={1}
+                    value={termFor(pkg).sessions}
+                    disabled={busy}
+                    data-testid={`package-sessions-${pkg.id}`}
+                    onChange={(e) => setTerm(pkg, { sessions: e.target.value })}
+                    onBlur={(e) => commitNumber(pkg, 'sessions', e.target.value, {
+                      min: MIN_SESSIONS, max: MAX_SESSIONS, label: 'Sessions',
+                    })}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    style={termInputStyle}
+                  />
+                </label>
+
+                <label style={termFieldStyle}>
+                  Discount %
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={termFor(pkg).discountPercent}
+                    disabled={busy}
+                    data-testid={`package-discount-${pkg.id}`}
+                    onChange={(e) => setTerm(pkg, { discountPercent: e.target.value })}
+                    onBlur={(e) => commitNumber(pkg, 'discountPercent', e.target.value, {
+                      min: 0, max: 100, label: 'Discount', suffix: '%',
+                    })}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    style={termInputStyle}
+                  />
+                </label>
+
+                <div style={{ ...termFieldStyle, gridColumn: '1 / -1' }}>
+                  Tax
+                  <div data-testid={`package-tax-${pkg.id}`}>
+                    <SingleSelectDropdown
+                      value={Number(pkg.taxPercent) || 0}
+                      onChange={(v) => {
+                        if (Number(v) === (Number(pkg.taxPercent) || 0)) return;
+                        patch(
+                          pkg,
+                          { taxPercent: Number(v) },
+                          Number(v) === 0
+                            ? `"${pkg.name}" is now sold without tax`
+                            : `"${pkg.name}" now carries ${v}% tax`,
+                        );
+                      }}
+                      options={TAX_OPTIONS}
+                    />
+                  </div>
+                </div>
+
+                <p
+                  style={{
+                    gridColumn: '1 / -1',
+                    margin: 0,
+                    fontSize: '0.68rem',
+                    lineHeight: 1.45,
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  Changing sessions or discount re-prices this package at
+                  today&rsquo;s service prices. Packages already bought keep the price they
+                  were sold at.
+                </p>
+              </div>
+            )}
+
             {!readOnly && pkg.isActive && (
               <label
                 style={{
@@ -352,6 +579,7 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
                 <input
                   type="date"
                   value={toDateInput(pkg.sellByDate)}
+                  min={minSellByDate}
                   disabled={busy}
                   data-testid={`package-sellby-${pkg.id}`}
                   onChange={(e) => patch(
@@ -378,17 +606,22 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
 
             {!readOnly && (
               <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-                {pkg.isActive && (
+                {view.isActive && (
                   <ActionBtn
                     disabled={busy}
-                    onClick={() => patch(pkg, { isPublic: !pkg.isPublic }, pkg.isPublic ? `"${pkg.name}" hidden from customers` : `"${pkg.name}" published`)}
+                    onClick={() => patch(
+                      pkg,
+                      { isPublic: !view.isPublic },
+                      view.isPublic ? `"${pkg.name}" hidden from customers` : `"${pkg.name}" published`,
+                      { isPublic: !view.isPublic },
+                    )}
                     testId={`package-publish-${pkg.id}`}
-                    icon={pkg.isPublic ? <EyeOff size={13} /> : <Eye size={13} />}
+                    icon={view.isPublic ? <EyeOff size={13} /> : <Eye size={13} />}
                   >
-                    {pkg.isPublic ? 'Unpublish' : 'Publish'}
+                    {view.isPublic ? 'Unpublish' : 'Publish'}
                   </ActionBtn>
                 )}
-                {pkg.isActive ? (
+                {view.isActive ? (
                   <ActionBtn
                     disabled={busy}
                     onClick={() => remove(pkg)}
@@ -400,7 +633,7 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
                 ) : (
                   <ActionBtn
                     disabled={busy}
-                    onClick={() => patch(pkg, { isActive: true }, `"${pkg.name}" restored`)}
+                    onClick={() => patch(pkg, { isActive: true }, `"${pkg.name}" restored`, { isActive: true })}
                     testId={`package-restore-${pkg.id}`}
                     icon={<RotateCcw size={13} />}
                   >
@@ -415,6 +648,26 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
     </div>
   );
 }
+
+const termFieldStyle = {
+  display: 'grid',
+  gap: '0.2rem',
+  fontSize: '0.68rem',
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+  color: 'var(--text-secondary)',
+};
+
+const termInputStyle = {
+  padding: '0.25rem 0.4rem',
+  background: 'var(--subtle-bg-3)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 6,
+  color: 'var(--text-primary)',
+  fontSize: '0.75rem',
+  width: '100%',
+  boxSizing: 'border-box',
+};
 
 function Badge({ tone, children }) {
   const palette = {
@@ -432,6 +685,9 @@ function Badge({ tone, children }) {
         color: palette.fg,
         background: palette.bg,
         whiteSpace: 'nowrap',
+        // Live ⇄ Draft is a state change worth seeing happen, not a snap.
+        transition: 'color 180ms ease, background 180ms ease',
+        animation: 'fadeIn 180ms ease-out',
       }}
     >
       {children}
@@ -459,4 +715,3 @@ function ActionBtn({ children, icon, onClick, disabled, testId }) {
     </button>
   );
 }
-

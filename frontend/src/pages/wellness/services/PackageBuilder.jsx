@@ -3,7 +3,7 @@ import { Package, Copy, Check, X, Save, Loader } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { formatMoney } from '../../../utils/money';
-import { inputStyle, labelStyle } from './shared';
+import { inputStyle, isPastDateInput, labelStyle, todayDateInput } from './shared';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import SingleSelectDropdown from './SingleSelectDropdown';
 
@@ -113,6 +113,7 @@ export default function PackageBuilder({ services, onSaved }) {
   const taxAmount = Math.round((net * taxPercent) / 100);
   const payable = net + taxAmount;
   const validityLabel = VALIDITY_OPTIONS.find((o) => o.value === validity)?.label || 'No expiry';
+  const minSellByDate = todayDateInput();
 
   const pitch = selected.length
     ? `${selected.map((s) => s.name).join(' + ')} × ${sessions} sessions = ${formatMoney(payable, { maximumFractionDigits: 0 })}${taxPercent ? ' incl. tax' : ''} (${discount}% off)${validity ? `, valid ${validityLabel.toLowerCase()}` : ''}`
@@ -139,6 +140,10 @@ export default function PackageBuilder({ services, onSaved }) {
     }
     if (!selected.length) {
       notify.error('Select at least one service');
+      return;
+    }
+    if (isPastDateInput(sellByDate, minSellByDate)) {
+      notify.error('Sell-by date cannot be in the past');
       return;
     }
     setSaving(true);
@@ -312,6 +317,7 @@ export default function PackageBuilder({ services, onSaved }) {
           type="date"
           value={sellByDate}
           onChange={(e) => setSellByDate(e.target.value)}
+          min={minSellByDate}
           style={inputStyle}
           data-testid="package-sell-by-input"
         />

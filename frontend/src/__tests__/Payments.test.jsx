@@ -164,6 +164,41 @@ describe('<Payments /> — page surface', () => {
     expect(screen.getAllByText(/^Failed$/).length).toBeGreaterThanOrEqual(1);
   });
 
+  it('shows enriched service labels in the "For" column when description is absent', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') {
+        return Promise.resolve([
+          {
+            id: 11,
+            invoiceId: 201,
+            amount: 308418,
+            currency: 'INR',
+            gateway: 'razorpay',
+            status: 'SUCCESS',
+            gatewayId: 'pay_RZP201',
+            paidAt: new Date(Date.now() - 86_400_000).toISOString(),
+            createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+            metadata: {},
+            service: { id: 501, name: 'Advance Manicure female' },
+          },
+        ]);
+      }
+      if (url === '/api/payments/config') {
+        return Promise.resolve({
+          stripe: { configured: true },
+          razorpay: { configured: true },
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPayments();
+    await waitFor(() => {
+      expect(screen.getByText('Advance Manicure female')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Invoice #201')).not.toBeInTheDocument();
+  });
+
   it('shows the empty-state "No payments yet" CTA when /api/payments returns []', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/payments') return Promise.resolve([]);

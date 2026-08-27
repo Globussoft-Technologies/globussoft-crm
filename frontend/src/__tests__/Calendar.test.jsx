@@ -42,6 +42,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import { fetchApi } from '../utils/api';
+import { AuthContext } from '../App';
 import Calendar, { hoursForVisits, isHolidayForColumn } from '../pages/wellness/Calendar';
 
 const today = new Date();
@@ -74,11 +75,18 @@ function setupFetch({ visits = [], waitlist = [], holidays = [] } = {}) {
   });
 }
 
-function renderCalendar({ initialEntries } = {}) {
-  return render(
+function renderCalendar({ initialEntries, user = null } = {}) {
+  const tree = (
     <MemoryRouter initialEntries={initialEntries || ['/wellness/calendar']}>
       <Calendar />
     </MemoryRouter>
+  );
+  // Most specs render without an auth user; the self-booking gate needs one.
+  if (!user) return render(tree);
+  return render(
+    <AuthContext.Provider value={{ user, setUser: () => {}, token: 't', setToken: () => {}, tenant: { vertical: 'wellness' }, setTenant: () => {} }}>
+      {tree}
+    </AuthContext.Provider>
   );
 }
 
@@ -161,8 +169,27 @@ describe('<Calendar /> — #615 layout regressions', () => {
     await waitFor(() => {
       const g = container.querySelector('.calendar-grid');
       expect(g).toBeTruthy();
-      expect(g.style.gridTemplateColumns).toMatch(/minmax\(0,\s*1fr\)/);
+      expect(g.style.gridTemplateColumns).toMatch(/minmax\(160px,\s*1fr\)/);
     });
+  });
+
+  it('keeps top and bottom calendar scrollbars in sync', async () => {
+    setupFetch({ visits: [] });
+    renderCalendar();
+    await screen.findByText('Dr. Anjali Mukherjee');
+
+    const topScroll = document.querySelector('.top-scroll-sync__top');
+    const bottomScroll = document.querySelector('.top-scroll-sync__bottom');
+    expect(topScroll).toBeTruthy();
+    expect(bottomScroll).toBeTruthy();
+
+    topScroll.scrollLeft = 140;
+    fireEvent.scroll(topScroll);
+    expect(bottomScroll.scrollLeft).toBe(140);
+
+    bottomScroll.scrollLeft = 260;
+    fireEvent.scroll(bottomScroll);
+    expect(topScroll.scrollLeft).toBe(260);
   });
 
   it('renders practitioner column headers with a tooltip + ellipsis chain', async () => {
@@ -471,6 +498,29 @@ describe('<Calendar /> — doctor swimlanes + appointment cells', () => {
     renderCalendar();
     // The synthetic Unassigned column header shows up.
     expect(await screen.findByText('Unassigned')).toBeInTheDocument();
+  });
+
+  it('keeps pending controls readable in the Unassigned column', async () => {
+    const v = new Date(today); v.setHours(13, 0, 0, 0);
+    setupFetch({
+      visits: [{
+        id: 18, doctorId: null, patientId: 201,
+        patient: { id: 201, name: 'Rohan Verma' },
+        service: { id: 101, name: 'Botox' },
+        visitDate: v.toISOString(), status: 'booked',
+      }],
+    });
+    const { container } = renderCalendar({
+      user: { role: 'ADMIN', userType: 'STAFF' },
+    });
+
+    expect(await screen.findByText('Unassigned')).toBeInTheDocument();
+    expect(screen.getByTestId('pending-badge-18')).toBeInTheDocument();
+    expect(screen.getByTestId('assign-doctor-18')).toBeInTheDocument();
+
+    const grid = container.querySelector('.calendar-grid');
+    expect(grid).toBeTruthy();
+    expect(grid.style.minWidth).toBe('560px');
   });
 
   it('status border colour reflects the visit status (in-treatment → amber)', async () => {
@@ -1034,3 +1084,39 @@ describe('<Calendar /> — focus query-param handshake', () => {
   });
 });
 
+describe('<Calendar /> — who gets the self-booking panel', () => {
+  // The comment on this gate always said "patients, not staff/admins/doctors",
+  // but it tested `role === 'USER'` — which is exactly what every staff
+  // account carries. Doctors were shown a panel for booking themselves in.
+  beforeEach(() => {
+    fetchApi.mockReset();
+    setupFetch();
+  });
+
+  it('shows it to a patient', async () => {
+    renderCalendar({ user: { role: 'CUSTOMER', userType: 'CUSTOMER' } });
+
+    expect(await screen.findByText(/Book Appointment/i)).toBeInTheDocument();
+  });
+
+  it('shows it to a legacy patient still carrying role USER', async () => {
+    renderCalendar({ user: { role: 'USER', userType: 'CUSTOMER' } });
+
+    expect(await screen.findByText(/Book Appointment/i)).toBeInTheDocument();
+  });
+
+  it('does not show it to a doctor', async () => {
+    renderCalendar({ user: { role: 'USER', userType: 'STAFF', wellnessRole: 'doctor' } });
+
+    // Wait for the grid itself so the absence below is a real assertion.
+    await waitFor(() => expect(fetchApi).toHaveBeenCalled());
+    expect(screen.queryByText(/Book Appointment/i)).not.toBeInTheDocument();
+  });
+
+  it('does not show it to an admin', async () => {
+    renderCalendar({ user: { role: 'ADMIN', userType: 'STAFF' } });
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalled());
+    expect(screen.queryByText(/Book Appointment/i)).not.toBeInTheDocument();
+  });
+});

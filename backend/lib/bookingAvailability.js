@@ -63,6 +63,11 @@
 
 const prisma = require("./prisma");
 const { formatInTenantTZ } = require("./datetime");
+const {
+  findDoctorConflict,
+  conflictMessage,
+  DEFAULT_DURATION_MIN,
+} = require("./doctorAvailability");
 
 const WELLNESS_TZ = "Asia/Kolkata";
 
@@ -160,6 +165,26 @@ function hourBucketUtc(d) {
  *
  * @returns {Promise<{ ok: true } | { ok: false, code: string, detail: string }>}
  */
+/** Duration of the service being booked; schema default when unknown. */
+async function serviceDurationFor(serviceId) {
+  if (!serviceId) return DEFAULT_DURATION_MIN;
+  // try/catch, not `.catch()` — a missing/!unavailable prisma delegate throws
+  // SYNCHRONOUSLY, before there is a promise to attach a handler to. Duration
+  // is an optimisation for the conflict window; failing to read it must never
+  // take down a booking.
+  let svc = null;
+  try {
+    svc = await prisma.service.findUnique({
+      where: { id: Number(serviceId) },
+      select: { durationMin: true },
+    });
+  } catch {
+    svc = null;
+  }
+  const n = Number(svc?.durationMin);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_DURATION_MIN;
+}
+
 async function assertVisitSlotAvailable(visit) {
   const { tenantId, doctorId, resourceId, locationId, id: visitId } = visit;
   if (!tenantId) throw new Error("assertVisitSlotAvailable: tenantId required");
@@ -282,23 +307,27 @@ async function assertVisitSlotAvailable(visit) {
   }
 
   // ── 4. DOCTOR_DOUBLE_BOOKED ──────────────────────────────────────────
+  //
+  // Delegated to lib/doctorAvailability so this gate, bookAppointment,
+  // reschedule and assign-doctor all apply ONE rule. It also fixes the
+  // granularity: hour-bucketing via `setUTCMinutes(0,0,0)` compared clock
+  // hours, so a 50-minute visit at 14:00 IST did not conflict with a 14:30 IST
+  // booking — different buckets, overlapping reality. The shared helper
+  // compares real [start, start+duration) instants instead.
   if (doctorId) {
-    const { hourStart, hourEnd } = hourBucketUtc(visitDateObj);
-    const overlap = await prisma.visit.findFirst({
-      where: {
-        tenantId,
-        doctorId,
-        visitDate: { gte: hourStart, lt: hourEnd },
-        status: { in: ACTIVE_STATUSES },
-        ...(visitId ? { id: { not: visitId } } : {}),
-      },
-      select: { id: true, visitDate: true },
+    const durationMin = visit.durationMin || (await serviceDurationFor(visit.serviceId));
+    const clash = await findDoctorConflict({
+      tenantId,
+      doctorId,
+      startsAt: visitDateObj,
+      durationMin,
+      excludeVisitId: visitId || null,
     });
-    if (overlap) {
+    if (clash) {
       return {
         ok: false,
         code: CONFLICT_CODES.DOCTOR_DOUBLE_BOOKED,
-        detail: `Practitioner already booked at this hour (visit #${overlap.id})`,
+        detail: `${conflictMessage(clash)} (visit #${clash.id})`,
       };
     }
   }

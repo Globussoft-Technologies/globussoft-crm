@@ -3,8 +3,33 @@ const prisma = require("../lib/prisma");
 const { ensureEnum } = require("../lib/validators");
 const { resolveConfiguredWebhookUrl } = require("../lib/webhookDelivery");
 const { encryptCredential, looksLikeMaskedSentinel, maskCredential } = require("../lib/credentialMasking");
+const { requirePermission } = require("../middleware/requirePermission");
+// Triggers, actions, operators and mutable-entity metadata used to be declared
+// here AND in lib/eventBus.js AND again in the React builder, and had drifted:
+// operators the engine implemented were unreachable from the UI, and a trigger
+// with no emit site anywhere was still offered in the dropdown. One source of
+// truth now.
+const workflowSchema = require("../lib/workflowSchema");
+const {
+  SCHEDULE_ENTITIES,
+  SCHEDULE_TRIGGERS,
+  isScheduleTrigger,
+  validateScheduleConfig,
+  nextRecurringRun,
+} = require("../lib/workflowSchedule");
 
 const router = express.Router();
+
+// RBAC. The `workflows` permission set (read/write/update/delete/manage) has
+// existed in lib/permissionCatalog.js since the RBAC migration but this router
+// never enforced it, so any authenticated user — including a plain agent —
+// could create, edit, reorder or delete tenant-wide automation, and read back
+// every rule's webhook configuration. Freshsales restricts workflows to
+// admins; these guards are the equivalent.
+const canRead = requirePermission("workflows", "read");
+const canWrite = requirePermission("workflows", "write");
+const canUpdate = requirePermission("workflows", "update");
+const canDelete = requirePermission("workflows", "delete");
 
 function parseTargetState(raw) {
   if (!raw) return {};
@@ -83,116 +108,167 @@ function maskWorkflowSecrets(rule) {
   return { ...rule, targetState: JSON.stringify(target) };
 }
 
-// Supported trigger types
-const TRIGGER_TYPES = [
-  { value: "contact.created", label: "Contact Created", description: "Fires when a new contact is added" },
-  { value: "contact.updated", label: "Contact Updated", description: "Fires when a contact is modified" },
-  { value: "contact.created_or_updated", label: "Contact Created or Updated", description: "Fires when a contact is added or modified" },
-  { value: "deal.created", label: "Deal Created", description: "Fires when a new deal is created" },
-  { value: "deal.updated", label: "Deal Updated", description: "Fires whenever a deal is updated via PUT /api/deals/:id" },
-  { value: "deal.stage_changed", label: "Deal Stage Changed", description: "Fires when a deal moves pipeline stages" },
-  { value: "deal.won", label: "Deal Won", description: "Fires when a deal is marked as won" },
-  { value: "deal.lost", label: "Deal Lost", description: "Fires when a deal is marked as lost" },
-  { value: "ticket.created", label: "Ticket Created", description: "Fires when a support ticket is opened" },
-  { value: "ticket.updated", label: "Ticket Updated", description: "Fires when a ticket status changes" },
-  { value: "invoice.created", label: "Invoice Created", description: "Fires when an invoice is generated" },
-  { value: "invoice.paid", label: "Invoice Paid", description: "Fires when an invoice is marked as paid" },
-  // PRD Gap §13 wave-6a — additional invoice + payment lifecycle events.
-  { value: "invoice.completed", label: "Invoice Completed", description: "Fires when an invoice reaches its terminal PAID state (analytics-friendly)" },
-  { value: "invoice.voided", label: "Invoice Voided", description: "Fires when an invoice is voided" },
-  { value: "invoice.refunded", label: "Invoice Refunded", description: "Fires when a PAID invoice is refunded" },
-  { value: "invoice.overdue", label: "Invoice Overdue", description: "Fires when an invoice passes its due date" },
-  { value: "payment.collected", label: "Payment Collected", description: "Fires when payment is captured (gateway success or manual mark-paid)" },
-  { value: "task.created", label: "Task Created", description: "Fires when a task is created" },
-  { value: "task.completed", label: "Task Completed", description: "Fires when a task is marked complete" },
-  { value: "lead.converted", label: "Lead Converted", description: "Fires when a lead becomes a customer" },
-  // PRD Gap §13 wave-6a — wallet / cashback / gift-card / membership / attendance.
-  { value: "wallet.topup", label: "Wallet Top-up", description: "Fires on every wallet credit (manual, refund, gift-card, cashback)" },
-  { value: "wallet.spent", label: "Wallet Spent", description: "Fires on every wallet debit (redemption, reversal, manual)" },
-  { value: "cashback.credited", label: "Cashback Credited", description: "Fires when cashback is credited to a patient's wallet for a completed visit" },
-  { value: "giftcard.issued", label: "Gift Card Issued", description: "Fires when a gift card is issued by an admin/manager" },
-  { value: "giftcard.redeemed", label: "Gift Card Redeemed", description: "Fires when a gift card is redeemed against a patient's wallet" },
-  { value: "membership.plan_created", label: "Membership Plan Created", description: "Fires when an admin/manager creates a new membership plan" },
-  { value: "membership.enrolled", label: "Membership Enrolled", description: "Fires on first-time patient enrollment in a membership plan" },
-  { value: "membership.renewed", label: "Membership Renewed", description: "Fires when a patient purchases the same plan they previously held" },
-  { value: "membership.benefit_applied", label: "Membership Benefit Applied", description: "Fires when a service is redeemed against an active membership balance" },
-  { value: "membership.expired", label: "Membership Expired", description: "Fires on the active→expired transition (lazily detected on redeem)" },
-  { value: "membership.cancelled", label: "Membership Cancelled", description: "Fires when an admin/manager cancels a patient's membership" },
-  // v3.7.3 — proactive T-7 renewal-due event. Emitted by wellnessOpsEngine
-  // when a membership's endDate falls in the next 7 days AND it has not yet
-  // been notified (idempotent via expiryNotifiedAt marker). Lets workflow
-  // rules send templated email / SMS / WhatsApp ahead of the in-app
-  // notification that staff already see.
-  { value: "membership.renewal_due", label: "Membership Renewal Due (T-7)", description: "Fires once per membership when it enters the 7-day expiry window. Payload: { membershipId, patientId, patientName, planId, planName, daysLeft, endDate }" },
-  { value: "attendance.checked_in", label: "Attendance Clock-In", description: "Fires when a staff member clocks in (manual or biometric)" },
-  { value: "attendance.checked_out", label: "Attendance Clock-Out", description: "Fires when a staff member clocks out (manual or biometric)" },
-  // #1 — approval lifecycle events. Lets a rule auto-create an approval on a
-  // threshold AND lets a separate rule react when that approval is approved
-  // (e.g. advance the deal stage). Decoupled by design.
-  { value: "approval.created", label: "Approval Created", description: "Fires when an approval request is created (manually or via create_approval action)" },
-  { value: "approval.approved", label: "Approval Approved", description: "Fires when an approval request is approved" },
-  { value: "approval.rejected", label: "Approval Rejected", description: "Fires when an approval request is rejected" },
-  // #12 — SLA breach event. Fired by slaBreachEngine cron (every 5 min) when a
-  // ticket has missed its first-response SLA. Lets rules react: notify manager,
-  // escalate, send Slack ping, etc.
-  { value: "sla.breached", label: "SLA Breached", description: "Fires when a ticket misses its first-response SLA (cron: every 5 min)" },
-  // PRD Gap §13 item 4 — POS shift lifecycle. Emitted by routes/pos.js on
-  // POST /shifts/open and POST /shifts/:id/close. Lets a manager subscribe
-  // (e.g. Slack ping when a register opens, flag |variance| > N on close).
-  { value: "shift.opened", label: "POS Shift Opened", description: "Fires when a cashier opens a register shift (POST /api/pos/shifts/open)" },
-  { value: "shift.closed", label: "POS Shift Closed", description: "Fires when a register shift is closed (POST /api/pos/shifts/:id/close); payload includes variance" },
-];
+// ── Catalogue endpoints ──────────────────────────────────────────────
+// TRIGGER_TYPES / ACTION_TYPES were maintained here, in lib/eventBus.js and
+// again in the React builder. They had drifted: `nin` and `exists` worked in
+// the engine but were missing from the UI's operator list, and
+// `invoice.overdue` was advertised with no emitter anywhere. All of it now
+// comes from lib/workflowSchema.js, and `publicTriggers()` filters out any
+// trigger without a real emit site so the dropdown can never again offer
+// something that cannot fire.
+const TRIGGER_TYPES = workflowSchema.publicTriggers();
+const ACTION_TYPES = workflowSchema.ACTION_TYPES;
 
-// Supported action types
-const ACTION_TYPES = [
-  { value: "send_email", label: "Send Email", config: ["to", "subject", "body"] },
-  { value: "send_sms", label: "Send SMS", config: ["to", "message"] },
-  { value: "send_notification", label: "Send Notification", config: ["userId", "title", "message"] },
-  { value: "create_task", label: "Create Task", config: ["title", "dueInDays", "assignToId"] },
-  { value: "update_field", label: "Update Field", config: ["entity", "entityId", "field", "value"] },
-  { value: "assign_agent", label: "Assign Agent", config: ["userId"] },
-  { value: "send_webhook", label: "Send Webhook", config: ["url"] },
-  // #1 — auto-create an ApprovalRequest. targetState carries:
-  //   { entity: "Deal", reasonTemplate: "Discount > 10% on {{deal.title}}" }
-  { value: "create_approval", label: "Create Approval Request", config: ["entity", "reasonTemplate"] },
-];
-
-// GET /triggers — list supported trigger types
-router.get("/triggers", (req, res) => {
-  res.json(TRIGGER_TYPES);
+// GET /triggers — supported trigger types (optionally scoped to a module)
+router.get("/triggers", canRead, (req, res) => {
+  const module = req.query.module;
+  res.json(module ? workflowSchema.triggersForModule(module) : TRIGGER_TYPES);
 });
 
-// GET /actions — list supported action types
-router.get("/actions", (req, res) => {
-  res.json(ACTION_TYPES);
+// GET /actions — supported action types (optionally scoped to a module)
+router.get("/actions", canRead, (req, res) => {
+  const module = req.query.module;
+  res.json(module ? workflowSchema.actionsForModule(module) : ACTION_TYPES);
 });
 
-// GET /history — recent workflow execution logs
-router.get("/history", async (req, res) => {
+// GET /schema — everything the builder needs in one round trip: modules,
+// triggers, actions, condition operators, condition fields, and the schedule
+// entity/date-field catalogue for time-based rules.
+router.get("/schema", canRead, (req, res) => {
+  res.json({
+    modules: workflowSchema.MODULES,
+    triggers: TRIGGER_TYPES,
+    actions: ACTION_TYPES,
+    operators: workflowSchema.CONDITION_OPS,
+    fields: workflowSchema.FIELD_OPTIONS,
+    scheduleTriggers: SCHEDULE_TRIGGERS,
+    scheduleEntities: Object.fromEntries(
+      Object.entries(SCHEDULE_ENTITIES).map(([key, value]) => [key, { dateFields: value.dateFields }]),
+    ),
+  });
+});
+
+// GET /email-templates — picker source for the send_email action's template
+// field. Kept here (rather than making the builder call the templates API) so
+// one `workflows.read` grant is enough to configure a workflow end to end.
+router.get("/email-templates", canRead, async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-    const offset = parseInt(req.query.offset) || 0;
-
-    const logs = await prisma.auditLog.findMany({
-      where: {
-        tenantId: req.user.tenantId,
-        entity: "AutomationRule",
-        action: { in: ["WORKFLOW", "WORKFLOW_FAILED"] },
-      },
-      orderBy: { createdAt: "desc" },
-      take: limit,
-      skip: offset,
+    const templates = await prisma.emailTemplate.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, name: true, subject: true, category: true },
+      orderBy: { name: "asc" },
     });
+    res.json(templates);
+  } catch (error) {
+    console.error("[Workflows] Email template list error:", error.message);
+    res.status(500).json({ error: "Failed to fetch email templates", code: "WORKFLOW_TEMPLATES_FAILED" });
+  }
+});
 
-    const total = await prisma.auditLog.count({
-      where: {
-        tenantId: req.user.tenantId,
-        entity: "AutomationRule",
-        action: { in: ["WORKFLOW", "WORKFLOW_FAILED"] },
-      },
+// GET /sequences — picker source for add_to_sequence / remove_from_sequence.
+router.get("/sequences", canRead, async (req, res) => {
+  try {
+    const sequences = await prisma.sequence.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, name: true, isActive: true },
+      orderBy: { name: "asc" },
     });
+    res.json(sequences);
+  } catch (error) {
+    console.error("[Workflows] Sequence list error:", error.message);
+    res.status(500).json({ error: "Failed to fetch sequences", code: "WORKFLOW_SEQUENCES_FAILED" });
+  }
+});
 
-    res.json({ logs, total, limit, offset });
+// GET /assignees — picker source for assign_agent / create_task / appointments.
+router.get("/assignees", canRead, async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true, name: true, email: true, role: true },
+      orderBy: { id: "asc" },
+    });
+    res.json(users);
+  } catch (error) {
+    console.error("[Workflows] Assignee list error:", error.message);
+    res.status(500).json({ error: "Failed to fetch assignees", code: "WORKFLOW_ASSIGNEES_FAILED" });
+  }
+});
+
+/**
+ * GET /history — workflow execution log.
+ *
+ * Reads WorkflowExecution rather than scanning AuditLog. The old endpoint
+ * returned the last 50 rows for the WHOLE tenant and left the client to filter
+ * by workflow id, so on a busy tenant clicking "View history" on a real
+ * workflow showed "No actions found" — its rows had already been pushed out of
+ * the window by other workflows. Filtering and pagination are server-side now.
+ *
+ * Query: workflowId, status (success|failed|skipped|all), days, contactId,
+ *        limit, offset.
+ */
+router.get("/history", canRead, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const offset = parseInt(req.query.offset, 10) || 0;
+
+    const where = { tenantId: req.user.tenantId };
+
+    const workflowId = parseInt(req.query.workflowId, 10);
+    if (Number.isInteger(workflowId) && workflowId > 0) where.ruleId = workflowId;
+
+    const status = String(req.query.status || "all").toLowerCase();
+    if (status === "failed") where.status = "FAILED";
+    else if (status === "success") where.status = "SUCCESS";
+    else if (status === "skipped") where.status = "SKIPPED";
+
+    const days = parseInt(req.query.days, 10);
+    if (Number.isInteger(days) && days > 0) {
+      where.createdAt = { gte: new Date(Date.now() - days * 24 * 60 * 60 * 1000) };
+    }
+
+    const contactId = parseInt(req.query.contactId, 10);
+    if (Number.isInteger(contactId) && contactId > 0) where.contactId = contactId;
+
+    const [logs, total] = await Promise.all([
+      prisma.workflowExecution.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        skip: offset,
+        include: { rule: { select: { id: true, name: true } } },
+      }),
+      prisma.workflowExecution.count({ where }),
+    ]);
+
+    res.json({
+      logs: logs.map((log) => ({
+        id: log.id,
+        workflowId: log.ruleId,
+        workflowName: log.rule?.name || null,
+        triggerType: log.triggerType,
+        actionType: log.actionType,
+        // A real column. Previously the client inferred failure by regex-testing
+        // the raw details JSON for the substring "fail", so a deal whose lost
+        // reason mentioned failure was reported as a failed execution.
+        status: log.status,
+        error: log.error,
+        recordKey: log.recordKey,
+        contactId: log.contactId,
+        // Denormalised at write time. The old panel read `log.contactName` off
+        // an AuditLog row, a field that model has never had, so this column
+        // rendered the rule's own id for every single row.
+        contactLabel: log.entityLabel,
+        durationMs: log.durationMs,
+        isTest: log.isTest,
+        details: log.details,
+        createdAt: log.createdAt,
+      })),
+      total,
+      limit,
+      offset,
+      hasMore: offset + logs.length < total,
+    });
   } catch (error) {
     console.error("[Workflows] History error:", error.message);
     res.status(500).json({ error: "Failed to fetch workflow history", code: "WORKFLOW_HISTORY_FAILED" });
@@ -200,7 +276,7 @@ router.get("/history", async (req, res) => {
 });
 
 // GET / — list all automation rules for tenant
-router.get("/", async (req, res) => {
+router.get("/", canRead, async (req, res) => {
   try {
     // #920 slice 17 — payload reduction via opt-in slim shape. When the caller
     // passes ?fields=summary, GET /api/workflows returns only the columns
@@ -222,6 +298,20 @@ router.get("/", async (req, res) => {
       actionType: true,
       isActive: true,
       tenantId: true,
+      // Parity additions. The list row renders "Last updated <date>" and the
+      // failure banner, and before these columns existed it fell back to
+      // `workflow.updatedAt || workflow.createdAt` on a model that had
+      // neither — so every row permanently read "Not run yet".
+      sortOrder: true,
+      createdAt: true,
+      updatedAt: true,
+      lastRunAt: true,
+      lastError: true,
+      runCount: true,
+      failureCount: true,
+      consecutiveFailures: true,
+      autoDisabledAt: true,
+      nextScheduledAt: true,
     };
     const findArgs = { where: { tenantId: req.user.tenantId } };
     if (isSummary) findArgs.select = slimSelect;
@@ -238,7 +328,7 @@ router.get("/", async (req, res) => {
 // every resource exposes a direct GET /:id rather than forcing a list-scan.
 // PUT /order - persist the execution order for the current tenant.
 // The order is stored inside targetState to avoid changing the existing schema.
-router.put("/order", async (req, res) => {
+router.put("/order", canUpdate, async (req, res) => {
   try {
     const workflowIds = req.body?.workflowIds;
     if (!Array.isArray(workflowIds) || workflowIds.length === 0 || workflowIds.some((id) => !Number.isInteger(Number(id)) || Number(id) < 1)) {
@@ -246,16 +336,22 @@ router.put("/order", async (req, res) => {
     }
     const ids = workflowIds.map((id) => Number(id));
     if (new Set(ids).size !== ids.length) return res.status(400).json({ error: "workflowIds must not contain duplicates" });
-    const rules = await prisma.automationRule.findMany({ where: { tenantId: req.user.tenantId } });
+    const rules = await prisma.automationRule.findMany({
+      where: { tenantId: req.user.tenantId },
+      select: { id: true },
+    });
     if (rules.length !== ids.length || rules.some((rule) => !ids.includes(rule.id))) {
       return res.status(400).json({ error: "workflowIds must include every workflow in the tenant" });
     }
-    await prisma.$transaction(ids.map((id, order) => {
-      const rule = rules.find((item) => item.id === id);
-      let targetState = {};
-      try { targetState = rule.targetState ? JSON.parse(rule.targetState) : {}; } catch (_error) { targetState = {}; }
-      return prisma.automationRule.update({ where: { id: rule.id }, data: { targetState: JSON.stringify({ ...targetState, order }) } });
-    }));
+    // Writes the real `sortOrder` column. Previously the position was smuggled
+    // into the targetState JSON blob, so reordering rewrote every rule's entire
+    // configuration — a parse failure on one rule silently reset that rule's
+    // whole config to `{order:n}` — and the engine had to JSON.parse every rule
+    // just to sort them.
+    await prisma.$transaction(ids.map((id, order) => prisma.automationRule.update({
+      where: { id },
+      data: { sortOrder: order, updatedById: req.user.userId },
+    })));
     res.json({ success: true, workflowIds: ids });
   } catch (error) {
     console.error("[Workflows] Order update error:", error.message);
@@ -264,20 +360,22 @@ router.put("/order", async (req, res) => {
 });
 
 // GET /stats/actions - successful action counts per workflow for the last seven days.
-router.get("/stats/actions", async (req, res) => {
+router.get("/stats/actions", canRead, async (req, res) => {
   try {
     const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const grouped = await prisma.auditLog.groupBy({
-      by: ["entityId"],
+    // Reads the execution log, not AuditLog, and excludes manual test fires so
+    // the "N successful actions" counter reflects real traffic.
+    const grouped = await prisma.workflowExecution.groupBy({
+      by: ["ruleId"],
       where: {
         tenantId: req.user.tenantId,
-        entity: "AutomationRule",
-        action: "WORKFLOW",
+        status: "SUCCESS",
+        isTest: false,
         createdAt: { gte: since },
       },
       _count: { _all: true },
     });
-    res.json(Object.fromEntries(grouped.map((item) => [String(item.entityId), item._count._all])));
+    res.json(Object.fromEntries(grouped.map((item) => [String(item.ruleId), item._count._all])));
   } catch (error) {
     console.error("[Workflows] Stats error:", error.message);
     res.status(500).json({ error: "Failed to fetch workflow statistics", code: "WORKFLOW_STATS_FAILED" });
@@ -285,7 +383,7 @@ router.get("/stats/actions", async (req, res) => {
 });
 
 // POST /test-webhook - test settings before saving a workflow.
-router.post("/test-webhook", async (req, res) => {
+router.post("/test-webhook", canWrite, async (req, res) => {
   try {
     let config = req.body?.config || {};
     const workflowId = Number(req.body?.workflowId);
@@ -320,7 +418,7 @@ router.post("/test-webhook", async (req, res) => {
   }
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", canRead, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (Number.isNaN(id) || id < 1) {
@@ -376,9 +474,10 @@ function validateTriggerAction({ triggerType, actionType }) {
 //   - already-an-array (frontend may send the parsed shape)
 // Returns {ok:true,value:<canonical-string-or-null>} or
 //         {ok:false,status,error,code:"INVALID_CONDITION"}.
-const VALID_CONDITION_OPS = new Set([
-  "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "icontains", "startsWith", "exists",
-]);
+// Was a hand-maintained list that had to be kept in step with the engine's
+// switch and the builder's dropdown by hand — and wasn't: `exists` and `nin`
+// passed validation here and worked in the engine but never reached the UI.
+const VALID_CONDITION_OPS = new Set(workflowSchema.CONDITION_OP_VALUES);
 
 function validateCondition(raw) {
   if (raw === undefined || raw === null || raw === "") {
@@ -433,9 +532,9 @@ function validateCondition(raw) {
 }
 
 // POST / — create a new automation rule
-router.post("/", async (req, res) => {
+router.post("/", canWrite, async (req, res) => {
   try {
-    const { name, triggerType, actionType, targetState, condition, isActive } = req.body;
+    const { name, triggerType, actionType, targetState, condition, isActive, scheduleConfig } = req.body;
 
     if (!name || !triggerType || !actionType) {
       return res.status(400).json({ error: "name, triggerType, and actionType are required" });
@@ -449,9 +548,27 @@ router.post("/", async (req, res) => {
       return res.status(condCheck.status).json({ error: condCheck.error, code: condCheck.code });
     }
 
+    // Time-based rules carry their cadence in scheduleConfig; the validator
+    // also rejects a schedule attached to an event-driven trigger, which would
+    // otherwise look scheduled in the builder and never run.
+    const schedCheck = validateScheduleConfig(scheduleConfig, triggerType);
+    if (!schedCheck.ok) {
+      return res.status(400).json({ error: schedCheck.error, code: schedCheck.code });
+    }
+    if (isScheduleTrigger(triggerType) && !schedCheck.value) {
+      return res.status(400).json({ error: "A scheduled workflow needs a scheduleConfig", code: "INVALID_SCHEDULE" });
+    }
+
     let preparedTarget;
     try { preparedTarget = prepareTargetState(targetState || {}, actionType); }
     catch (error) { return res.status(400).json({ error: error.message, code: "INVALID_WEBHOOK_CONFIG" }); }
+
+    // New rules go to the end of the execution order rather than colliding on
+    // 0 with everything else in the tenant.
+    const maxOrder = await prisma.automationRule.aggregate({
+      where: { tenantId: req.user.tenantId },
+      _max: { sortOrder: true },
+    });
 
     const newRule = await prisma.automationRule.create({
       data: {
@@ -461,6 +578,16 @@ router.post("/", async (req, res) => {
         targetState: JSON.stringify(preparedTarget),
         condition: condCheck.value,
         isActive: isActive === undefined ? true : !!isActive,
+        scheduleConfig: schedCheck.value ? JSON.stringify(schedCheck.value) : null,
+        nextScheduledAt: schedCheck.value?.mode === "recurring"
+          ? nextRecurringRun(schedCheck.value, new Date())
+          : null,
+        sortOrder: (maxOrder._max.sortOrder ?? -1) + 1,
+        // `createdById` is a real column as of the parity migration. The engine
+        // has referenced `rule.createdById` (as the fallback requester for the
+        // create_approval action) since long before the column existed.
+        createdById: req.user.userId,
+        updatedById: req.user.userId,
         tenantId: req.user.tenantId,
       },
     });
@@ -472,7 +599,7 @@ router.post("/", async (req, res) => {
 });
 
 // PUT /:id — update an existing rule
-router.put("/:id", async (req, res) => {
+router.put("/:id", canUpdate, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.automationRule.findFirst({
@@ -480,7 +607,7 @@ router.put("/:id", async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Workflow not found" });
 
-    const { name, triggerType, actionType, targetState, isActive, condition } = req.body;
+    const { name, triggerType, actionType, targetState, isActive, condition, scheduleConfig } = req.body;
 
     // #18: enforce trigger/action whitelist on update too.
     const enumErr = validateTriggerAction({ triggerType, actionType });
@@ -504,7 +631,44 @@ router.put("/:id", async (req, res) => {
     }
     // #19: allow toggling isActive via PUT so the frontend rule-builder can
     // PATCH {isActive:false} without using the dedicated /toggle endpoint.
-    if (isActive !== undefined) data.isActive = !!isActive;
+    if (isActive !== undefined) {
+      data.isActive = !!isActive;
+      // Re-enabling clears the auto-disable state, so a rule the failure guard
+      // paused starts from a clean slate instead of tripping again on the next
+      // single failure.
+      if (isActive) {
+        data.autoDisabledAt = null;
+        data.consecutiveFailures = 0;
+        data.lastError = null;
+      }
+    }
+
+    // Schedule validated against the EFFECTIVE trigger (the incoming one when
+    // supplied, otherwise the stored one) so switching a rule from event-driven
+    // to scheduled — or back — is checked correctly.
+    const effectiveTrigger = triggerType !== undefined ? triggerType : existing.triggerType;
+    if (scheduleConfig !== undefined) {
+      const schedCheck = validateScheduleConfig(scheduleConfig, effectiveTrigger);
+      if (!schedCheck.ok) {
+        return res.status(400).json({ error: schedCheck.error, code: schedCheck.code });
+      }
+      data.scheduleConfig = schedCheck.value ? JSON.stringify(schedCheck.value) : null;
+      data.nextScheduledAt = schedCheck.value?.mode === "recurring"
+        ? nextRecurringRun(schedCheck.value, new Date())
+        : null;
+    } else if (triggerType !== undefined && !isScheduleTrigger(triggerType) && existing.scheduleConfig) {
+      // Converted away from a scheduled trigger — drop the now-meaningless
+      // schedule instead of leaving the cron a rule it can never fire.
+      data.scheduleConfig = null;
+      data.nextScheduledAt = null;
+    }
+
+    if (isScheduleTrigger(effectiveTrigger)
+      && !(data.scheduleConfig ?? existing.scheduleConfig)) {
+      return res.status(400).json({ error: "A scheduled workflow needs a scheduleConfig", code: "INVALID_SCHEDULE" });
+    }
+
+    data.updatedById = req.user.userId;
 
     const updated = await prisma.automationRule.update({
       where: { id: existing.id },
@@ -518,7 +682,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // DELETE /:id — delete an automation rule
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", canDelete, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.automationRule.findFirst({
@@ -535,7 +699,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 // PUT /:id/toggle — toggle isActive
-router.put("/:id/toggle", async (req, res) => {
+router.put("/:id/toggle", canUpdate, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.automationRule.findFirst({
@@ -543,9 +707,17 @@ router.put("/:id/toggle", async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Workflow not found" });
 
+    const enabling = !existing.isActive;
     const rule = await prisma.automationRule.update({
       where: { id: existing.id },
-      data: { isActive: !existing.isActive },
+      data: {
+        isActive: enabling,
+        updatedById: req.user.userId,
+        // Turning a rule back on clears whatever the failure guard recorded,
+        // otherwise a rule it paused would trip again on its very next failure
+        // instead of getting a fresh run of attempts.
+        ...(enabling ? { autoDisabledAt: null, consecutiveFailures: 0, lastError: null } : {}),
+      },
     });
     res.json(maskWorkflowSecrets(rule));
   } catch (error) {
@@ -555,7 +727,7 @@ router.put("/:id/toggle", async (req, res) => {
 });
 
 // POST /:id/test — manually fire a rule with a mock payload
-router.post("/:id/test", async (req, res) => {
+router.post("/:id/test", canWrite, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.automationRule.findFirst({
@@ -608,6 +780,159 @@ router.post("/:id/test", async (req, res) => {
   } catch (error) {
     console.error("[Workflows] Test error:", error.message);
     res.status(500).json({ error: "Failed to test workflow", code: "WORKFLOW_TEST_FAILED" });
+  }
+});
+
+/**
+ * POST /:id/run-now — apply a workflow to records that already exist.
+ *
+ * Freshsales lets an author backfill a workflow over the records that matched
+ * before it was switched on; without it, a rule only ever affects records
+ * touched after creation, and there was no way to catch up.
+ *
+ * Two modes:
+ *   • A scheduled rule runs its normal scheduler pass immediately.
+ *   • An event-driven rule is replayed over its module's existing records, with
+ *     its own conditions applied to each.
+ *
+ * `dryRun` (the default) evaluates conditions and reports how many records
+ * WOULD be affected without executing a single action — so nobody discovers
+ * the blast radius by emailing 4,000 contacts.
+ */
+router.post("/:id/run-now", canWrite, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ error: "id must be a positive integer", code: "INVALID_ID" });
+    }
+    const rule = await prisma.automationRule.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!rule) return res.status(404).json({ error: "Workflow not found" });
+
+    const dryRun = req.body?.dryRun !== false;
+    const limit = Math.min(Math.max(parseInt(req.body?.limit, 10) || 100, 1), 1000);
+
+    if (isScheduleTrigger(rule.triggerType)) {
+      const { runScheduledRule } = require("../cron/workflowScheduler");
+      if (dryRun) {
+        return res.json({
+          success: true,
+          dryRun: true,
+          message: "This is a scheduled workflow. Running it now performs one scheduler pass over its matching records.",
+        });
+      }
+      const result = await runScheduledRule(rule, new Date(), req.app.get("io"));
+      return res.json({ success: true, dryRun: false, ...result });
+    }
+
+    // Which record set to replay over: the builder stores the module on
+    // targetState, and the trigger prefix is the fallback for older rules.
+    let target = {};
+    try { target = rule.targetState ? JSON.parse(rule.targetState) : {}; } catch (_error) { target = {}; }
+    const moduleName = target.module || rule.triggerType.split(".")[0];
+    const entityConfig = workflowSchema.WORKFLOW_ENTITIES[moduleName];
+    if (!entityConfig) {
+      return res.status(400).json({
+        error: `Run-now supports ${Object.keys(workflowSchema.WORKFLOW_ENTITIES).join(", ")} workflows only`,
+        code: "RUN_NOW_UNSUPPORTED",
+      });
+    }
+
+    const eventBus = require("../lib/eventBus");
+    const where = { tenantId: req.user.tenantId };
+    if (entityConfig.softDelete) where.deletedAt = null;
+
+    const records = await prisma[entityConfig.model].findMany({
+      where,
+      take: limit + 1,
+      orderBy: { id: "desc" },
+    });
+    const truncated = records.length > limit;
+    const batch = truncated ? records.slice(0, limit) : records;
+
+    let matched = 0;
+    let fired = 0;
+    let failed = 0;
+
+    for (const record of batch) {
+      const payload = {
+        ...record,
+        [entityConfig.idKey]: record.id,
+        userId: req.user.userId,
+        contactId: record.contactId ?? (moduleName === "contact" ? record.id : null),
+      };
+      if (!eventBus.evaluateCondition(rule.condition, payload)) continue;
+      matched += 1;
+      if (dryRun) continue;
+      try {
+        await eventBus.executeAction(rule, payload, req.user.tenantId, req.app.get("io"), 0);
+        fired += 1;
+      } catch (error) {
+        failed += 1;
+        await eventBus.recordWorkflowExecution(rule, payload, req.user.tenantId, { status: "FAILED", error });
+      }
+    }
+
+    res.json({
+      success: true,
+      dryRun,
+      module: moduleName,
+      examined: batch.length,
+      matched,
+      fired,
+      failed,
+      truncated,
+      message: dryRun
+        ? `${matched} of ${batch.length} existing ${moduleName} records match this workflow's conditions. Re-run with dryRun:false to apply it.`
+        : `Applied to ${fired} ${moduleName} record(s)${failed ? `, ${failed} failed` : ""}.`,
+    });
+  } catch (error) {
+    console.error("[Workflows] Run-now error:", error.message);
+    res.status(500).json({ error: "Failed to run workflow", code: "WORKFLOW_RUN_NOW_FAILED" });
+  }
+});
+
+/**
+ * GET /:id/health — execution health for one workflow.
+ * Backs the builder's failure banner and the "why did this switch itself off?"
+ * question that auto-disable would otherwise answer only in the server log.
+ */
+router.get("/:id/health", canRead, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ error: "id must be a positive integer", code: "INVALID_ID" });
+    }
+    const rule = await prisma.automationRule.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      select: {
+        id: true, name: true, isActive: true, lastRunAt: true, lastError: true,
+        runCount: true, failureCount: true, consecutiveFailures: true,
+        autoDisabledAt: true, nextScheduledAt: true, createdAt: true, updatedAt: true,
+      },
+    });
+    if (!rule) return res.status(404).json({ error: "Workflow not found" });
+
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const [recent, pending] = await Promise.all([
+      prisma.workflowExecution.groupBy({
+        by: ["status"],
+        where: { tenantId: req.user.tenantId, ruleId: id, isTest: false, createdAt: { gte: since } },
+        _count: { _all: true },
+      }),
+      prisma.workflowScheduledAction.count({
+        where: { tenantId: req.user.tenantId, ruleId: id, status: "PENDING" },
+      }),
+    ]);
+
+    res.json({
+      ...rule,
+      autoDisabled: !!rule.autoDisabledAt,
+      pendingDelayedActions: pending,
+      last7Days: Object.fromEntries(recent.map((row) => [row.status, row._count._all])),
+    });
+  } catch (error) {
+    console.error("[Workflows] Health error:", error.message);
+    res.status(500).json({ error: "Failed to fetch workflow health", code: "WORKFLOW_HEALTH_FAILED" });
   }
 });
 

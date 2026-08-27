@@ -2857,8 +2857,135 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 .workflow-history-row b {
   color: #173c61;
 }
+/* Status was previously always red, because the old panel inferred failure by
+   regex-testing the raw details blob and had no notion of a successful or
+   skipped run to colour differently. It is a real column now. */
 .workflow-history-status {
   color: #b03039;
+  font-weight: 600;
+}
+.workflow-history-status.is-success {
+  color: #1c7c46;
+}
+.workflow-history-status.is-skipped {
+  color: #8a6d1f;
+}
+
+/* ── Workflow parity additions ───────────────────────────────────── */
+
+/* Auto-disable / last-failure banner at the top of the editor. */
+.workflow-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #e4b4b4;
+  border-left: 3px solid #b03039;
+  border-radius: 8px;
+  background: #fdf3f3;
+  color: #7d2229;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.workflow-alert svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.workflow-alert.workflow-alert-warn {
+  border-color: #e6d2a8;
+  border-left-color: #b3861f;
+  background: #fdf8ec;
+  color: #7a5c14;
+}
+
+/* Per-row failure line under a workflow name in the list. */
+.workflow-row-error {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  color: #b03039;
+  /* min-width:0 at every nesting level so the ellipsis actually engages. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shown instead of a value box for operators that take no operand
+   ("is empty", "has changed"). */
+.workflow-operator-hint {
+  align-self: center;
+  color: #7a8899;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.workflow-action-hint {
+  margin: 4px 0 0;
+  color: #7a8899;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workflow-confirm-label,
+.workflow-inline-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+  color: #445;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.workflow-confirm-label input,
+.workflow-inline-check input {
+  margin-top: 2px;
+}
+
+/* Multi-select pool for round-robin / least-busy owner assignment. */
+.workflow-pool-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #7a8899;
+}
+.workflow-pool-picker select[multiple] {
+  min-height: 92px;
+  padding: 6px;
+}
+
+/* Time-based trigger builder. */
+.workflow-schedule-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.workflow-schedule-builder .workflow-trigger-line {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.workflow-schedule-builder input[type="number"],
+.workflow-schedule-builder input {
+  max-width: 160px;
+}
+
+@media (max-width: 720px) {
+  .workflow-schedule-builder {
+    padding: 12px;
+  }
+  .workflow-schedule-builder input,
+  .workflow-schedule-builder input[type="number"] {
+    max-width: 100%;
+  }
 }
 .workflow-history-footer {
   display: flex;

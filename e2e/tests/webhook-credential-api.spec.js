@@ -64,11 +64,6 @@ const gen = (request, token) => request.post(`${BASE_URL}/api/settings/webhook-c
 const rotate = (request, token) => request.post(`${BASE_URL}/api/settings/webhook-credential/rotate`, { headers: headers(token), data: {}, timeout: REQUEST_TIMEOUT });
 const revoke = (request, token) => request.delete(`${BASE_URL}/api/settings/webhook-credential`, { headers: headers(token), timeout: REQUEST_TIMEOUT });
 
-test.afterAll(async ({ request }) => {
-  const token = await getAdmin(request);
-  if (token) await revoke(request, token).catch(() => {});
-});
-
 // ── Auth + role gates ───────────────────────────────────────────────
 
 test.describe('Webhook Credential API — auth + role gates', () => {
@@ -101,6 +96,20 @@ test.describe('Webhook Credential API — auth + role gates', () => {
 
 test.describe('Webhook Credential API — lifecycle', () => {
   test.describe.configure({ mode: 'serial' });
+
+  // Teardown belongs to THIS block, not the file.
+  //
+  // The suite runs fullyParallel, so Playwright hands each describe to its own
+  // worker and a file-level afterAll fires once per worker — as soon as that
+  // worker runs out of tests. The auth-gates block above finishes in a few
+  // hundred milliseconds, and its worker then revoked the single per-tenant
+  // credential while this serial block was still walking it through
+  // generate → read → rotate. That is what made "GET after generate" read
+  // REVOKED instead of ACTIVE.
+  test.afterAll(async ({ request }) => {
+    const token = await getAdmin(request);
+    if (token) await revoke(request, token).catch(() => {});
+  });
 
   let firstSecret = null;
 

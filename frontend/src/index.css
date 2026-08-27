@@ -1626,28 +1626,28 @@ table.leads-table tbody tr:hover td {
   overflow: visible;
 }
 
-.contacts-split-table table.contacts-table thead tr {
+.contacts-split-table table.stable-table thead tr {
   height: 50px;
 }
 
-.contacts-split-table table.contacts-table tbody tr {
+.contacts-split-table table.stable-table tbody tr {
   height: 52px;
 }
 
-.contacts-split-table table.contacts-table th,
-.contacts-split-table table.contacts-table td {
+.contacts-split-table table.stable-table th,
+.contacts-split-table table.stable-table td {
   height: inherit;
 }
 
-table.contacts-table {
+table.stable-table {
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
   background-color: var(--surface-color);
 }
 
-table.contacts-table th,
-table.contacts-table td {
+.contacts-split-table table.stable-table th,
+.contacts-split-table table.stable-table td {
   box-sizing: border-box;
   border-right: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
@@ -1655,17 +1655,17 @@ table.contacts-table td {
   background-clip: padding-box;
 }
 
-table.contacts-table th:first-child,
-table.contacts-table td:first-child {
+.contacts-split-table table.stable-table th:first-child,
+.contacts-split-table table.stable-table td:first-child {
   border-left: 1px solid var(--border-color);
 }
 
-table.contacts-table--scrollable th:first-child,
-table.contacts-table--scrollable td:first-child {
+.contacts-table-scroll-pane table.stable-table th:first-child,
+.contacts-table-scroll-pane table.stable-table td:first-child {
   border-left: 0;
 }
 
-table.contacts-table thead th {
+.contacts-split-table table.stable-table thead th {
   position: sticky;
   top: 16px;
   z-index: 6;
@@ -1673,15 +1673,15 @@ table.contacts-table thead th {
   box-shadow: inset 0 -1px 0 var(--border-color);
 }
 
-table.contacts-table thead tr:first-child th {
+.contacts-split-table table.stable-table thead tr:first-child th {
   border-top: 1px solid var(--border-color);
 }
 
-table.contacts-table tbody td {
+.contacts-split-table table.stable-table tbody td {
   transition: background-color 0.15s ease;
 }
 
-table.contacts-table tbody tr:hover td {
+.contacts-split-table table.stable-table tbody tr:hover td {
   background-color: var(--surface-hover);
 }
 

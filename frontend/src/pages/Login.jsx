@@ -50,7 +50,8 @@ const Login = () => {
   const [rememberMe, setRememberMe] = useState(true);
 
   const { setUser, setToken, setTenant } = useContext(AuthContext);
-  const { theme, setTheme } = useContext(ThemeContext);
+  const themeContext = useContext(ThemeContext) || {};
+  const { theme, setTheme = () => {} } = themeContext;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 

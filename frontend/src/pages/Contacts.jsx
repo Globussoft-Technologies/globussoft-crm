@@ -1637,8 +1637,8 @@ const Contacts = () => {
           >
             <div className="contacts-table-frozen-spacer" />
             <table
+              className="stable-table"
               ref={contactsFrozenTableRef}
-              className="contacts-table contacts-table--frozen"
               style={{
                 width: contactsFrozenTableWidthPx,
                 minWidth: contactsFrozenTableWidthPx,
@@ -1718,8 +1718,8 @@ const Contacts = () => {
               hideBottomScrollbar
             >
               <table
+                className="stable-table"
                 ref={contactsScrollableTableRef}
-                className="contacts-table contacts-table--scrollable"
                 style={{
                   width: '100%',
                   minWidth: contactsScrollableTableMinWidth,

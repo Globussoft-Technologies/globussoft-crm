@@ -10,6 +10,9 @@ import { RestoredBanner, RxDetailModal } from '../shared/components';
 const INITIAL_RX = {
   visitId: '',
   drugs: [{ name: '', drugId: '', strengthValue: '', strengthUnit: '', dosage: '', frequency: '', duration: '' }],
+  // How long the whole course runs. Optional: left blank the prescription has
+  // no stated validity, which is NOT the same as expired.
+  validityDays: '',
   instructions: '',
 };
 
@@ -142,7 +145,7 @@ export default function PrescribeTab({ patient, onSaved }) {
   const notify = useNotify();
   const initial = { ...INITIAL_RX, visitId: patient.visits[0]?.id || '' };
   const [draft, setDraft, isDirty, clearDraft] = useFormAutosave(`rx-${patient.id}`, initial);
-  const { visitId, drugs, instructions } = draft;
+  const { visitId, drugs, validityDays, instructions } = draft;
   const [saving, setSaving] = useState(false);
   const [openRx, setOpenRx] = useState(null);
   const [showAllPastRx, setShowAllPastRx] = useState(false);
@@ -154,6 +157,7 @@ export default function PrescribeTab({ patient, onSaved }) {
 
   const setVisitId = (v) => setDraft((s) => ({ ...s, visitId: v }));
   const setInstructions = (v) => setDraft((s) => ({ ...s, instructions: v }));
+  const setValidityDays = (v) => setDraft((s) => ({ ...s, validityDays: v }));
   const setDrug = (i, k, v) => {
     setDraft((s) => {
       const next = [...s.drugs];
@@ -167,6 +171,12 @@ export default function PrescribeTab({ patient, onSaved }) {
   }));
 
   const validDrugs = drugs.filter((d) => d.name && d.name.trim());
+  // Mirrors the server's derivation (issue date + N days) purely so the
+  // clinician sees the date they are committing to. The backend recomputes it;
+  // this is never sent.
+  const lapseDate = validityDays
+    ? formatDate(new Date(Date.now() + Number(validityDays) * 86400000))
+    : '';
   const canSave = !!visitId && validDrugs.length > 0;
 
   const submit = async (e) => {
@@ -183,6 +193,9 @@ export default function PrescribeTab({ patient, onSaved }) {
         body: JSON.stringify({
           visitId, patientId: patient.id,
           drugs: validDrugs,
+          // Omitted when blank so the backend stores null ("no stated
+          // validity") rather than coercing an empty string to 0.
+          ...(validityDays ? { validityDays: Number(validityDays) } : {}),
           instructions,
         }),
       });
@@ -247,6 +260,9 @@ export default function PrescribeTab({ patient, onSaved }) {
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
                       {new Date(rx.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
                       {rx.doctor?.name && <> • {rx.doctor.name}</>}
+                      {rx.validUntil && (
+                        <> • valid until {formatDate(rx.validUntil)}</>
+                      )}
                     </div>
                   </div>
                   <FileText size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
@@ -311,6 +327,32 @@ export default function PrescribeTab({ patient, onSaved }) {
         <button type="button" onClick={addDrug} style={{ background: 'transparent', border: '1px dashed rgba(255,255,255,0.15)', color: 'var(--text-secondary)', padding: '0.4rem 0.75rem', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', marginBottom: '1rem' }}>
           + Add drug
         </button>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <label style={labelStyle}>Validity</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <input
+              type="number"
+              min="1"
+              max="365"
+              placeholder="e.g. 30"
+              value={validityDays}
+              onChange={(e) => setValidityDays(e.target.value === '' ? '' : parseInt(e.target.value, 10) || '')}
+              style={{ ...inputStyle, width: 140 }}
+            />
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              days
+              {/* Echo the resulting lapse date back live. Without it "30" is an
+                  abstract number; with it the clinician can sanity-check the
+                  date the patient will be prompted to renew. */}
+              {lapseDate && <> — lapses <strong>{lapseDate}</strong></>}
+            </span>
+          </div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+            Optional. How long this course should last — used to remind the
+            patient to ask for a renewal before it runs out.
+          </div>
+        </div>
 
         <div style={{ marginBottom: '1rem' }}>
           <label style={labelStyle}>Instructions</label>

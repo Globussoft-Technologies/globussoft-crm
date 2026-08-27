@@ -21,6 +21,11 @@
  *     DELETE /api/attendance/devices/:id              (admin)
  *   Webhook:
  *     POST   /api/attendance/biometric/webhook        (X-API-Key auth)
+ *   CSV / XLSX import-export (dashboard toolbar):
+ *     GET    /api/attendance/export?from&to&format    (manager+)
+ *     GET    /api/attendance/import-template?format   (admin)
+ *     GET    /api/attendance/import-meta              (admin)
+ *     POST   /api/attendance/import                   (admin)
  *
  * Acceptance per endpoint:
  *   ✅ Happy path: clock-in once → 201; clock-out once → 200 with totalMinutes
@@ -32,6 +37,10 @@
  *   ✅ Webhook source tracking: created row has source=BIOMETRIC, biometricDeviceId set
  *   ✅ Webhook idempotency: same-second retry returns 200 + dedup=true
  *   ✅ Device CRUD: admin only on POST/PUT/DELETE; key returned only on POST
+ *   ✅ Export: BOM-prefixed CSV / XLSX attachment; manager 200, plain user 403
+ *   ✅ Import: admin-only; missing columns → 400 MISSING_FIELDS; unknown
+ *      employee → per-row error, not a 500; re-upload of the same
+ *      (employee, date) updates instead of duplicating
  *
  * Test environment:
  *   - BASE_URL defaults to https://crm.globusdemos.com
@@ -487,5 +496,164 @@ test.describe('Attendance — biometric webhook', () => {
     });
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe('DEVICE_MISMATCH');
+  });
+});
+
+// ==============================================================
+// CSV / XLSX import + export (Attendance dashboard toolbar)
+//
+//   GET  /api/attendance/export?from&to&format   ADMIN | MANAGER
+//   GET  /api/attendance/import-template?format  ADMIN
+//   GET  /api/attendance/import-meta             ADMIN
+//   POST /api/attendance/import                  ADMIN
+//
+// These four are gated by verifyRole, NOT verifyWellnessRole, because the
+// dashboard is mounted for the travel vertical too — the wellness CSV
+// registry would 403 those tenants. The gate split is the point of the
+// role assertions below: a MANAGER can export but must not import.
+// ==============================================================
+
+async function uploadAttendanceCsv(request, csv, who = 'admin', query = '') {
+  return request.post(`${BASE_URL}/api/attendance/import${query}`, {
+    headers: await authHdr(request, who),
+    multipart: {
+      file: { name: 'attendance.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') },
+    },
+    timeout: REQUEST_TIMEOUT,
+  });
+}
+
+test.describe('Attendance — CSV import / export', () => {
+  test('401 when export called without auth', async ({ request }) => {
+    const res = await request.get(`${BASE_URL}/api/attendance/export`, { timeout: REQUEST_TIMEOUT });
+    expect(res.status()).toBe(401);
+  });
+
+  test('GET /export returns a BOM-prefixed CSV attachment', async ({ request }) => {
+    const res = await authGet(request, '/api/attendance/export?from=2026-01-01&to=2026-12-31');
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toContain('text/csv');
+    expect(res.headers()['content-disposition']).toContain('attachment');
+    const body = await res.text();
+    expect(body.charCodeAt(0)).toBe(0xfeff);
+    // Header row is the import contract, so an export re-uploads cleanly.
+    expect(body).toContain('employeeEmail');
+    expect(body).toContain('checkIn');
+  });
+
+  test('GET /export?format=xlsx returns a spreadsheet attachment', async ({ request }) => {
+    const res = await authGet(request, '/api/attendance/export?format=xlsx');
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toContain('spreadsheetml.sheet');
+  });
+
+  test('GET /export rejects an inverted date range', async ({ request }) => {
+    const res = await authGet(request, '/api/attendance/export?from=2026-12-31&to=2026-01-01');
+    expect(res.status()).toBe(400);
+  });
+
+  test('GET /export 403 for plain users, 200 for managers', async ({ request }) => {
+    const asUser = await authGet(request, '/api/attendance/export', 'user');
+    expect(asUser.status()).toBe(403);
+
+    const asManager = await authGet(request, '/api/attendance/export', 'manager');
+    expect(asManager.status()).toBe(200);
+  });
+
+  test('GET /import-meta surfaces the column contract (admin only)', async ({ request }) => {
+    const asManager = await authGet(request, '/api/attendance/import-meta', 'manager');
+    expect(asManager.status()).toBe(403);
+
+    const res = await authGet(request, '/api/attendance/import-meta');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.entity).toBe('attendance');
+    expect(body.requiredHeaders).toEqual(['employeeEmail', 'date']);
+    expect(body.headers).toContain('totalMinutes');
+    expect(body.thresholds.rows).toBeGreaterThan(0);
+  });
+
+  test('GET /import-template returns a CSV starter file', async ({ request }) => {
+    const res = await authGet(request, '/api/attendance/import-template');
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-disposition']).toContain('attendance-template.csv');
+    expect(await res.text()).toContain('employeeEmail');
+  });
+
+  test('POST /import is ADMIN-only', async ({ request }) => {
+    const res = await uploadAttendanceCsv(
+      request,
+      'employeeEmail,date\nnobody@example.com,2026-01-15\n',
+      'manager',
+    );
+    expect(res.status()).toBe(403);
+  });
+
+  test('POST /import 400s on a missing identity column', async ({ request }) => {
+    const res = await uploadAttendanceCsv(request, 'employeeName,checkIn\nSomeone,09:00\n');
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('MISSING_FIELDS');
+  });
+
+  test('POST /import 400s on a header-only file', async ({ request }) => {
+    const res = await uploadAttendanceCsv(request, 'employeeEmail,date\n');
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('EMPTY_CSV');
+  });
+
+  test('POST /import reports an unknown employee as a row error, not a 500', async ({ request }) => {
+    const res = await uploadAttendanceCsv(
+      request,
+      'employeeEmail,date\nnot-a-real-user@example.invalid,2026-01-15\n',
+    );
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.inserted).toBe(0);
+    expect(body.errors).toHaveLength(1);
+    expect(body.errors[0].column).toBe('employeeEmail');
+    // Envelope carries both the toolbar keys and the legacy pair.
+    expect(body.errors[0].row).toBe(2);
+    expect(body.errors[0].rowNumber).toBe(2);
+    expect(body.errors[0].reason).toBe(body.errors[0].message);
+  });
+
+  test('POST /import upserts on (employee, date) and round-trips', async ({ request }) => {
+    const email = FIXTURES.admin.email;
+    // A date far enough in the past that no seeded/demo row collides on the
+    // first pass but the second pass is guaranteed to match it.
+    const day = '2021-03-04';
+    const csv = (status) =>
+      `employeeEmail,date,checkIn,checkOut,status,notes\n`
+      + `${email},${day},09:00,17:30,${status},${RUN_TAG}\n`;
+
+    const first = await uploadAttendanceCsv(request, csv('PRESENT'));
+    expect(first.status()).toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody.errors).toEqual([]);
+    expect(firstBody.inserted + firstBody.updated).toBe(1);
+    // 09:00 → 17:30 is 8h30m.
+    expect(firstBody.skipped).toBe(0);
+
+    // Re-uploading the same natural key must update, never duplicate.
+    const second = await uploadAttendanceCsv(request, csv('LATE'));
+    expect(second.status()).toBe(200);
+    const secondBody = await second.json();
+    expect(secondBody.updated).toBe(1);
+    expect(secondBody.inserted).toBe(0);
+
+    // The row is visible through /list with the imported values.
+    const list = await authGet(request, `/api/attendance/list?from=${day}&to=${day}`);
+    expect(list.status()).toBe(200);
+    const row = (await list.json()).items.find((r) => r.notes === RUN_TAG);
+    expect(row).toBeTruthy();
+    expect(row.status).toBe('LATE');
+    expect(row.totalMinutes).toBe(510);
+
+    // And the exported CSV for that day carries it back out.
+    const exported = await authGet(request, `/api/attendance/export?from=${day}&to=${day}`);
+    expect(exported.status()).toBe(200);
+    expect(await exported.text()).toContain(RUN_TAG);
+
+    await authDelete(request, `/api/attendance/${row.id}`).catch(() => {});
   });
 });

@@ -17,7 +17,10 @@ const prisma = require("../lib/prisma");
 const {
   normalizePrescriptionDrugs,
   normalizePrescriptionList,
+  parseValidityDays,
+  computeValidUntil,
 } = require("../lib/prescriptionHelpers");
+const prescriptionRenewals = require("../lib/prescriptionRenewalService");
 const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
 const {
   getAllTreatmentPlans,
@@ -2410,6 +2413,10 @@ function isNormalizedPhoneTarget(target) {
 }
 
 const ALLOWED_VISIT_STATUSES = new Set([
+  // A patient asking for a session out of a package they already paid for.
+  // Not on anyone's calendar until a practitioner accepts it and a slot is
+  // chosen — see routes/wellness_packages.js.
+  "requested",
   "booked",
   "arrived",
   "in-treatment",
@@ -2424,6 +2431,9 @@ const ALLOWED_VISIT_STATUSES = new Set([
 // natural forward progression and a few corrective backward transitions
 // (e.g. accidentally marking arrived  back to booked).
 const VISIT_TRANSITIONS = {
+  // Accepting a request books it; declining cancels it. Nothing else moves
+  // INTO `requested` — a staff-created visit is a booking, not a request.
+  requested: new Set(["requested", "booked", "cancelled"]),
   booked: new Set([
     "booked",
     "arrived",
@@ -3095,6 +3105,19 @@ router.get("/visits", phiReadGate, async (req, res) => {
         patient: { select: { id: true, name: true, phone: true } },
         service: { select: { id: true, name: true, category: true } },
         doctor: { select: { id: true, name: true } },
+        // A session out of a package a patient already paid for looks exactly
+        // like a walk-in booking without this — same patient, same service,
+        // no clue that it is already covered. The staff list needs to tell
+        // them apart before anyone tries to charge for it again.
+        treatmentPlan: {
+          select: {
+            id: true,
+            name: true,
+            totalSessions: true,
+            completedSessions: true,
+            servicePackageId: true,
+          },
+        },
       };
     } else {
       visitFindArgs.select = listProjection("Visit", false);
@@ -3574,6 +3597,44 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     }
 
     const updated = await prisma.visit.update({ where: { id }, data });
+
+    // A session out of a package is only spent when the visit actually
+    // completes. POST /visits already did this for a visit logged as completed
+    // outright; a visit that was booked first and completed later never
+    // decremented anything, so a package's remaining sessions never moved.
+    //
+    // Guarded on the INCOMING transition, so re-saving an already-completed
+    // visit (the matrix permits completed → completed) cannot spend a second
+    // session. Capped at the plan's total: a clinic that runs an extra sitting
+    // as a courtesy should not push the counter past what was sold.
+    if (
+      updated.treatmentPlanId &&
+      data.status === "completed" &&
+      existing.status !== "completed"
+    ) {
+      try {
+        const plan = await prisma.treatmentPlan.findFirst({
+          where: { id: updated.treatmentPlanId, tenantId: req.user.tenantId },
+          select: { id: true, totalSessions: true, completedSessions: true },
+        });
+        if (plan && plan.completedSessions < plan.totalSessions) {
+          const done = plan.completedSessions + 1;
+          await prisma.treatmentPlan.update({
+            where: { id: plan.id },
+            data: {
+              completedSessions: done,
+              // The course finishing is the plan's own end state, not
+              // something staff should have to remember to set.
+              ...(done >= plan.totalSessions ? { status: "completed" } : {}),
+            },
+          });
+        }
+      } catch (planErr) {
+        // The visit is the source of truth and is already saved; a counter
+        // that failed to move must not fail the clinical update.
+        console.error("[wellness] session decrement failed:", planErr.message);
+      }
+    }
 
     // Gap #22: auto-credit loyalty when a visit is updated to 'completed'
     // with amountCharged > 0. Idempotent via single 'earned' ledger row per visit.
@@ -4389,6 +4450,14 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
 router.post("/prescriptions", requireClinicalRole, async (req, res) => {
   try {
     const { visitId, patientId, doctorId, drugs, instructions } = req.body;
+    // How long this course runs. Optional — a clinician who doesn't state it
+    // leaves both columns null, which means "no stated validity", NOT expired.
+    let validityDays;
+    try {
+      validityDays = parseValidityDays(req.body.validityDays);
+    } catch (err) {
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
     if (!visitId || !patientId) {
       return res
         .status(400)
@@ -4407,6 +4476,10 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
         code: "DRUG_NAME_REQUIRED",
       });
     }
+    // Anchor the lapse date to issue time. `createdAt` defaults to now() in
+    // the DB, so pass the same instant explicitly and keep the two consistent
+    // rather than letting them drift by the width of the insert.
+    const issuedAt = new Date();
     const rx = await prisma.prescription.create({
       data: {
         visitId: parseInt(visitId),
@@ -4414,6 +4487,9 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
         doctorId: doctorId ? parseInt(doctorId) : req.user.userId,
         drugs: JSON.stringify(namedDrugs),
         instructions,
+        validityDays,
+        validUntil: computeValidUntil(issuedAt, validityDays),
+        createdAt: issuedAt,
         tenantId: req.user.tenantId,
       },
     });
@@ -4431,6 +4507,8 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
         doctorId: rx.doctorId,
         drugNames: namedDrugs.map((d) => d.name).slice(0, 20),
         drugCount: namedDrugs.length,
+        validityDays: rx.validityDays,
+        validUntil: rx.validUntil,
       },
     );
     res.status(201).json(normalizePrescriptionDrugs(rx));
@@ -4477,6 +4555,19 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
     }
     if (req.body.instructions !== undefined)
       data.instructions = req.body.instructions;
+    if (req.body.validityDays !== undefined) {
+      let validityDays;
+      try {
+        validityDays = parseValidityDays(req.body.validityDays);
+      } catch (err) {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
+      data.validityDays = validityDays;
+      // Re-anchored to the ORIGINAL issue date, not to now: a 30-day course
+      // written last week has three weeks left, not thirty days. Amending the
+      // stated validity must not silently restart the patient's clock.
+      data.validUntil = computeValidUntil(existing.createdAt, validityDays);
+    }
     const updated = await prisma.prescription.update({ where: { id }, data });
     // #179: audit Rx amendment. This row is the medico-legal trail 
     // capture before/after drug arrays so the diff is reconstructible without
@@ -4505,6 +4596,8 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
         newDrugs,
         priorInstructions: existing.instructions || null,
         newInstructions: updated.instructions || null,
+        priorValidityDays: existing.validityDays ?? null,
+        newValidityDays: updated.validityDays ?? null,
       },
     );
     res.json(normalizePrescriptionDrugs(updated));
@@ -8521,9 +8614,37 @@ function compareReportRows(a, b, keyField) {
   );
 }
 
+// A report EXPORT must contain every row, never one page of them.
+//
+// The .csv / .pdf / .xlsx siblings re-use the same compute helper as the JSON
+// endpoint, and that helper paginates (REPORT_PAGE_SIZE_DEFAULT = 10). The
+// exporters then append a TOTAL row built from `result.totals`, which is
+// computed over the FULL set. The result was a spreadsheet holding 10 rows
+// under a total covering all 149 — an export whose own rows don't add up to
+// its own total, which is worse than no export at all because it looks
+// authoritative.
+//
+// Detecting the export by path rather than by a flag each route sets means a
+// future export sibling cannot forget to opt in.
+const REPORT_EXPORT_PATH_RE = /\.(csv|pdf|xlsx)$/i;
+const isReportExportRequest = (req) =>
+  REPORT_EXPORT_PATH_RE.test(String(req?.path || req?.route?.path || ""));
+
 function paginateReportRows(rows, req, keyField = "id") {
+  const sortedAll = [...rows].sort((a, b) => compareReportRows(a, b, keyField));
+  if (isReportExportRequest(req)) {
+    return {
+      rows: sortedAll,
+      pagination: {
+        limit: sortedAll.length,
+        total: sortedAll.length,
+        hasMore: false,
+        nextCursor: null,
+      },
+    };
+  }
   const { limit, cursor } = parseReportPagination(req);
-  const sorted = [...rows].sort((a, b) => compareReportRows(a, b, keyField));
+  const sorted = sortedAll;
   let start = 0;
   const decoded = cursor ? decodeReportCursor(cursor) : null;
   if (decoded) {
@@ -8931,6 +9052,301 @@ async function computePerLocation(req) {
   };
 }
 
+// ── Per-product sales (Reports → "Per Product" tab) ─────────────────
+//
+// Two sources, one row shape:
+//
+//   live   — POS. SaleLineItem rows with lineType='PRODUCT' whose Sale is
+//            COMPLETED and whose Sale.createdAt falls in the window.
+//   import — a ProductSalesImport batch whose declared period overlaps the
+//            window. This is the migration path: a clinic arriving with
+//            months of product sales in a CSV/XLSX export from its previous
+//            PMS gets history in the tab on day one, and the SAME tab starts
+//            reading POS the moment sales are rung here.
+//
+// `?source=` selects: auto (default) | live | import. `auto` prefers live and
+// only falls back to the imported snapshot when POS has nothing in the
+// window, so the tab silently graduates from imported to live data as the
+// clinic onboards — no setting to flip, no UI change. The response always
+// says which source it used (`source`) so the page can badge it.
+//
+// The two sources are never summed. An imported snapshot and POS covering the
+// same period are two recordings of one truth, and adding them double-counts
+// every product.
+//
+// Column semantics, the tax split, the row rollup and the snapshot-import
+// parser are all prisma-free, so they live in lib/productSalesReport.js and
+// are unit-tested there. This file keeps the two data loaders (they are
+// queries) and the routes.
+const {
+  PER_PRODUCT_EXPORT_HEADERS,
+  roundMoney2,
+  splitProductTax,
+  finalizeProductRow,
+  sumProductTotals,
+  normalizeProductImportRows,
+  isBatchSafeToCombine,
+  mergeProductRows,
+} = require("../lib/productSalesReport");
+
+// The POS cutover: the timestamp of this tenant's first COMPLETED product
+// sale. Before it, product sales exist only in imported snapshots; from it
+// onward they exist only in POS. Null means POS has never rung a product, so
+// the imported snapshot is the only source there is.
+async function findProductPosCutover(tenantId) {
+  const first = await prisma.saleLineItem.findFirst({
+    where: {
+      tenantId,
+      lineType: "PRODUCT",
+      sale: { tenantId, status: "COMPLETED" },
+    },
+    select: { sale: { select: { createdAt: true } } },
+    orderBy: { sale: { createdAt: "asc" } },
+  });
+  return first?.sale?.createdAt || null;
+}
+
+// Live POS aggregation. Returns rows in the shared per-product shape.
+async function loadLiveProductSales(tenantId, from, to) {
+  const lineItems = await prisma.saleLineItem.findMany({
+    where: {
+      tenantId,
+      lineType: "PRODUCT",
+      // Only money that actually settled. DRAFT / VOIDED / REFUNDED sales
+      // are excluded the same way every other reports tab excludes
+      // non-completed visits.
+      sale: {
+        tenantId,
+        status: "COMPLETED",
+        createdAt: { gte: from, lte: to },
+      },
+    },
+    select: {
+      refId: true,
+      name: true,
+      quantity: true,
+      unitPrice: true,
+      lineDiscount: true,
+    },
+  });
+  if (lineItems.length === 0) return [];
+
+  const productIds = [
+    ...new Set(lineItems.map((li) => li.refId).filter(Boolean)),
+  ];
+  const products = productIds.length
+    ? await prisma.product.findMany({
+        where: { tenantId, id: { in: productIds } },
+        select: {
+          id: true,
+          name: true,
+          hsnCode: true,
+          tax: true,
+          isTaxIncluded: true,
+        },
+      })
+    : [];
+  const productById = new Map(products.map((p) => [p.id, p]));
+
+  const acc = new Map();
+  for (const li of lineItems) {
+    const product = productById.get(li.refId);
+    // SaleLineItem.name is the display name frozen at sale time — it is the
+    // right label even when the catalogue row was since renamed or deleted.
+    const label = li.name || product?.name || "Unknown product";
+    const key = li.refId ? `p:${li.refId}` : `n:${label.toLowerCase()}`;
+    if (!acc.has(key)) {
+      acc.set(key, {
+        key,
+        productId: li.refId || null,
+        name: label,
+        hsnCode: product?.hsnCode || null,
+        taxRate: Number(product?.tax) || 0,
+        taxIncluded: !!product?.isTaxIncluded,
+        productCount: 0,
+        grossSales: 0,
+        discount: 0,
+      });
+    }
+    const row = acc.get(key);
+    const qty = Number(li.quantity) || 0;
+    row.productCount += qty;
+    row.grossSales += qty * (Number(li.unitPrice) || 0);
+    row.discount += Number(li.lineDiscount) || 0;
+  }
+
+  return [...acc.values()].map((row) => {
+    const charged = row.grossSales - row.discount;
+    const split = splitProductTax(charged, row.taxRate, row.taxIncluded);
+    return finalizeProductRow({ ...row, ...split });
+  });
+}
+
+// Imported-snapshot aggregation. Rows from every batch whose declared period
+// overlaps the window are summed per product. Batches cannot overlap each
+// other (the importer rejects a second batch covering an already-covered
+// period), so this is a concatenation, never a merge of two recordings of the
+// same sale.
+async function loadImportedProductSales(tenantId, from, to) {
+  const batches = await prisma.productSalesImport.findMany({
+    where: { tenantId, periodStart: { lte: to }, periodEnd: { gte: from } },
+    select: {
+      id: true,
+      fileName: true,
+      periodStart: true,
+      periodEnd: true,
+      createdAt: true,
+    },
+    orderBy: { periodStart: "asc" },
+  });
+  if (batches.length === 0) return { rows: [], batches: [] };
+
+  const importRows = await prisma.productSalesImportRow.findMany({
+    where: { tenantId, importId: { in: batches.map((b) => b.id) } },
+    select: {
+      productId: true,
+      productName: true,
+      hsnCode: true,
+      productCount: true,
+      grossSales: true,
+      discount: true,
+      netSales: true,
+      tax: true,
+      totalSales: true,
+    },
+  });
+
+  const acc = new Map();
+  for (const r of importRows) {
+    const label = r.productName || "Unknown product";
+    const key = r.productId ? `p:${r.productId}` : `n:${label.toLowerCase()}`;
+    if (!acc.has(key)) {
+      acc.set(key, {
+        key,
+        productId: r.productId || null,
+        name: label,
+        hsnCode: r.hsnCode || null,
+        productCount: 0,
+        grossSales: 0,
+        discount: 0,
+        netSales: 0,
+        tax: 0,
+        totalSales: 0,
+      });
+    }
+    const row = acc.get(key);
+    row.productCount += Number(r.productCount) || 0;
+    row.grossSales += Number(r.grossSales) || 0;
+    row.discount += Number(r.discount) || 0;
+    row.netSales += Number(r.netSales) || 0;
+    row.tax += Number(r.tax) || 0;
+    row.totalSales += Number(r.totalSales) || 0;
+    if (!row.hsnCode && r.hsnCode) row.hsnCode = r.hsnCode;
+  }
+
+  return {
+    rows: [...acc.values()].map(finalizeProductRow),
+    batches: batches.map((b) => ({
+      id: b.id,
+      fileName: b.fileName,
+      periodStart: b.periodStart,
+      periodEnd: b.periodEnd,
+      createdAt: b.createdAt,
+    })),
+  };
+}
+
+const PRODUCT_REPORT_SOURCES = new Set(["auto", "live", "import"]);
+
+async function computePerProduct(req) {
+  const tenantId = req.user.tenantId;
+  const _rr = reportRange(req);
+  if (_rr.error) return { error: _rr.error };
+  const { from, to } = _rr;
+
+  const requested = String(req.query.source || "auto").toLowerCase();
+  if (!PRODUCT_REPORT_SOURCES.has(requested)) {
+    return {
+      error: {
+        status: 400,
+        error: "source must be one of: auto, live, import",
+        code: "INVALID_SOURCE",
+      },
+    };
+  }
+
+  let rows = [];
+  let source = "none";
+  let batches = [];
+  let cutoverAt = null;
+
+  if (requested === "live") {
+    rows = await loadLiveProductSales(tenantId, from, to);
+    source = rows.length > 0 ? "live" : "none";
+  } else if (requested === "import") {
+    const imported = await loadImportedProductSales(tenantId, from, to);
+    rows = imported.rows;
+    batches = imported.batches;
+    source = imported.rows.length > 0 ? "import" : "none";
+  } else {
+    // auto — the everyday path, and the one that has to survive the cutover.
+    //
+    // POS is authoritative from the cutover onward. An imported snapshot is
+    // authoritative before it. A window can span both, so include each side
+    // for the part of time it owns, and add them ONLY when the snapshot ends
+    // strictly before the cutover (see isBatchSafeToCombine — anything else
+    // risks counting the same sale twice).
+    const liveRows = await loadLiveProductSales(tenantId, from, to);
+    cutoverAt = await findProductPosCutover(tenantId);
+    const imported = await loadImportedProductSales(tenantId, from, to);
+    const safeBatchIds = new Set(
+      imported.batches
+        .filter((b) => isBatchSafeToCombine(b, cutoverAt))
+        .map((b) => b.id),
+    );
+    const combinable = safeBatchIds.size === imported.batches.length;
+
+    if (liveRows.length > 0 && imported.rows.length > 0 && combinable) {
+      rows = mergeProductRows(liveRows, imported.rows);
+      batches = imported.batches;
+      source = "mixed";
+    } else if (liveRows.length > 0) {
+      // Either there is nothing imported for this window, or a batch overlaps
+      // POS's own period and cannot be added without risking a double count.
+      rows = liveRows;
+      batches = combinable ? [] : imported.batches;
+      source = "live";
+    } else if (imported.rows.length > 0) {
+      rows = imported.rows;
+      batches = imported.batches;
+      source = "import";
+    }
+  }
+
+  const totals = sumProductTotals(rows);
+  const paginated = paginateReportRows(rows, req, "key");
+  return {
+    window: { from, to },
+    // Which source produced these rows:
+    //   live   — POS only
+    //   import — an imported snapshot only
+    //   mixed  — POS from the cutover onward PLUS a snapshot that ends before
+    //            it; disjoint periods, so the two are added
+    //   none   — neither covers this window
+    source,
+    requestedSource: requested,
+    // This tenant's first COMPLETED product sale, or null if POS has never
+    // rung one. The boundary between "imported history" and "live data".
+    posCutoverAt: cutoverAt,
+    totals: { ...totals, products: rows.length },
+    // The snapshot(s) contributing to these figures — lets the page name the
+    // file(s) and the period(s) they actually cover.
+    importBatches: batches,
+    rows: paginated.rows,
+    pagination: paginated.pagination,
+  };
+}
+
 router.get(
   "/reports/pnl-by-service",
   // #207/#216 financial-leak fix: financial reports are admin/manager ONLY.
@@ -9121,11 +9537,18 @@ async function renderReportPdf(title, columns, rows, range, clinic, options = {}
     acc.push(i === 0 ? left : acc[i - 1] + colWidths[i - 1]);
     return acc;
   }, []);
+  // Column headers whose cells are numeric / currency get right-aligned.
+  // `count|gross|discount|net|tax|sales` were added for the Per Product
+  // report; verified against the other four reports' headers first — none of
+  // their column names contain any of these substrings, so their PDFs are
+  // unchanged.
   const numericColumns = new Set(
     columns
       .map((name, index) => ({ name: String(name).toLowerCase(), index }))
       .filter(({ name }) =>
-        /visits|patients|leads|junk|qualified|revenue|cost|contribution|rate|%|rev/.test(name),
+        /visits|patients|leads|junk|qualified|revenue|cost|contribution|rate|%|rev|count|gross|discount|net|tax|sales/.test(
+          name,
+        ),
       )
       .map(({ index }) => index),
   );
@@ -9840,6 +10263,488 @@ router.get(
     } catch (e) {
       console.error("[reports] attribution.xlsx:", e.message);
       res.status(500).json({ error: "Failed to export attribution XLSX" });
+    }
+  },
+);
+
+// ── Per-product report: JSON + exports + snapshot import ────────────
+//
+// Read surface mirrors the four sibling report tabs exactly (same
+// admin/manager gate, same from/to/limit/cursor contract, same
+// .csv/.pdf/.xlsx export trio). The extra endpoints are the import side:
+// /reports/per-product/imports (list, upload, delete) plus a template
+// download, which is how a migrating clinic loads the product-sales export
+// from the PMS it is leaving.
+
+const perProductExportRow = (r) => [
+  r.name,
+  r.hsnCode || "--",
+  r.productCount,
+  fmtMoney(r.grossSales),
+  fmtMoney(r.discount),
+  fmtMoney(r.netSales),
+  fmtMoney(r.tax),
+  fmtMoney(r.totalSales),
+];
+
+const perProductTotalsRow = (totals) => [
+  "TOTAL",
+  "",
+  totals.productCount,
+  fmtMoney(totals.grossSales),
+  fmtMoney(totals.discount),
+  fmtMoney(totals.netSales),
+  fmtMoney(totals.tax),
+  fmtMoney(totals.totalSales),
+];
+
+router.get(
+  "/reports/per-product",
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
+  verifyWellnessRole(["admin", "manager"]),
+  async (req, res) => {
+    try {
+      const result = await computePerProduct(req);
+      if (result.error)
+        return res.status(result.error.status).json(result.error);
+      res.json(result);
+    } catch (e) {
+      console.error("[reports] per-product:", e.message);
+      res.status(500).json({ error: "Failed to compute per-product report" });
+    }
+  },
+);
+
+router.get(
+  "/reports/per-product.csv",
+  adminOrPerm("reports", "export"),
+  async (req, res) => {
+    try {
+      const result = await computePerProduct(req);
+      if (result.error)
+        return res.status(result.error.status).json(result.error);
+      const rows = result.rows.map(perProductExportRow);
+      rows.push([]);
+      rows.push(perProductTotalsRow(result.totals));
+      sendCsv(
+        res,
+        "per-product",
+        result.window,
+        rowsToCsv(PER_PRODUCT_EXPORT_HEADERS, rows),
+      );
+    } catch (e) {
+      console.error("[reports] per-product.csv:", e.message);
+      res.status(500).json({ error: "Failed to export per-product CSV" });
+    }
+  },
+);
+
+router.get(
+  "/reports/per-product.pdf",
+  adminOrPerm("reports", "export"),
+  async (req, res) => {
+    try {
+      const result = await computePerProduct(req);
+      if (result.error)
+        return res.status(result.error.status).json(result.error);
+      const clinic = await primaryClinic(req.user.tenantId);
+      const rows = result.rows.map(perProductExportRow);
+      rows.push(perProductTotalsRow(result.totals));
+      const buf = await renderReportPdf(
+        "Product Sales",
+        PER_PRODUCT_EXPORT_HEADERS,
+        rows,
+        result.window,
+        clinic,
+        {
+          columns: [
+            { weight: 3.0 },
+            { weight: 0.9 },
+            { weight: 0.9 },
+            { weight: 1.1 },
+            { weight: 1.0 },
+            { weight: 1.1 },
+            { weight: 0.9 },
+            { weight: 1.1 },
+          ],
+        },
+      );
+      sendPdf(res, "per-product", result.window, buf);
+    } catch (e) {
+      console.error("[reports] per-product.pdf:", e.message);
+      res.status(500).json({ error: "Failed to export per-product PDF" });
+    }
+  },
+);
+
+router.get(
+  "/reports/per-product.xlsx",
+  adminOrPerm("reports", "export"),
+  async (req, res) => {
+    try {
+      const result = await computePerProduct(req);
+      if (result.error)
+        return res.status(result.error.status).json(result.error);
+      const rows = result.rows.map(perProductExportRow);
+      rows.push([]);
+      rows.push(perProductTotalsRow(result.totals));
+      sendXlsxReport(
+        res,
+        "per-product",
+        result.window,
+        "Product Sales",
+        PER_PRODUCT_EXPORT_HEADERS,
+        rows,
+      );
+    } catch (e) {
+      console.error("[reports] per-product.xlsx:", e.message);
+      res.status(500).json({ error: "Failed to export per-product XLSX" });
+    }
+  },
+);
+
+// ── Per-product snapshot import ─────────────────────────────────────
+//
+// Accepts the product-sales export every clinic PMS produces, in the exact
+// column set the tab renders:
+//
+//   Product Name, HSN Code, Product Count, Gross Sales, Discount,
+//   Net Sales, Tax, Total Sales
+//
+// Tolerances, because these files are pasted out of another vendor's UI:
+//   - header matching is case- and space-insensitive, with aliases
+//     ("Product", "Qty", "Gross", "Total")
+//   - money cells arrive as "₹2,321,176.00" / "(1,234.00)" / "--" and are
+//     parsed to numbers
+//   - a leading "Total" row (which every such export carries) is DROPPED —
+//     keeping it would double the batch's totals, since we re-derive the
+//     rollup by summing the product rows
+//   - Net/Tax are back-filled from Total when the file omits them
+//
+// A batch is all-or-nothing: rows are validated first and the whole upload
+// is rejected on the first unusable row, so a half-loaded period can never
+// silently under-report.
+
+// 5 MB cap, memory storage — these exports are a few hundred rows.
+const productSalesImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+function readImportFile(req) {
+  if (req.file && req.file.buffer) {
+    const name = String(req.file.originalname || "").toLowerCase();
+    if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+      return {
+        fileName: req.file.originalname || null,
+        parsed: parseXlsxImportBuffer(req.file.buffer),
+      };
+    }
+    return {
+      fileName: req.file.originalname || null,
+      parsed: parseImportCsvText(req.file.buffer.toString("utf8")),
+    };
+  }
+  // Raw-body path — lets a caller POST text/csv (or JSON {csv}) without
+  // building a multipart body. Same shape out.
+  const raw =
+    typeof req.body === "string"
+      ? req.body
+      : typeof req.body?.csv === "string"
+        ? req.body.csv
+        : null;
+  if (!raw) return null;
+  return {
+    fileName: req.body?.fileName || null,
+    parsed: parseImportCsvText(raw),
+  };
+}
+
+// lib/csvIO's parser, aliased locally so the two call sites above read the
+// same whichever format arrived.
+function parseImportCsvText(text) {
+  const { parseCsv: parseCsvText } = require("../lib/csvIO");
+  return parseCsvText(text);
+}
+function parseXlsxImportBuffer(buffer) {
+  const { parseXlsxBuffer } = require("../lib/csvIO");
+  return parseXlsxBuffer(buffer);
+}
+
+// Best-effort catalogue match, resolved once at import time: exact name,
+// then SKU, then product code — all case-insensitive. A miss is fine and
+// leaves productId null; the row still reports under its frozen name.
+async function resolveImportedProductIds(tenantId, rows) {
+  if (rows.length === 0) return;
+  const catalogue = await prisma.product.findMany({
+    where: { tenantId },
+    select: { id: true, name: true, sku: true, productCode: true },
+  });
+  const byKey = new Map();
+  for (const p of catalogue) {
+    for (const candidate of [p.name, p.sku, p.productCode]) {
+      const k = String(candidate || "").trim().toLowerCase();
+      if (k && !byKey.has(k)) byKey.set(k, p.id);
+    }
+  }
+  for (const row of rows) {
+    row.productId = byKey.get(row.productName.trim().toLowerCase()) || null;
+  }
+}
+
+// GET /reports/per-product/imports — batches, newest period first.
+router.get(
+  "/reports/per-product/imports",
+  verifyWellnessRole(["admin", "manager"]),
+  async (req, res) => {
+    try {
+      const batches = await prisma.productSalesImport.findMany({
+        where: { tenantId: req.user.tenantId },
+        orderBy: [{ periodStart: "desc" }, { id: "desc" }],
+        take: 200,
+      });
+      res.json({ rows: batches, total: batches.length });
+    } catch (e) {
+      console.error("[reports] per-product/imports:", e.message);
+      res.status(500).json({ error: "Failed to list product-sales imports" });
+    }
+  },
+);
+
+// GET /reports/per-product/import-template?format=csv|xlsx
+router.get(
+  "/reports/per-product/import-template",
+  verifyWellnessRole(["admin", "manager"]),
+  (req, res) => {
+    const sample = [
+      ["Hair Fact - Gold Veg (M)", "3304", "88", "228515.00", "1417.40", "216394.71", "10702.89", "227097.60"],
+      ["GLYCURA MARINE COLLAGEN", "2106", "37", "99533.00", "215.92", "94587.69", "4729.39", "99317.08"],
+    ];
+    if (String(req.query.format || "csv").toLowerCase() === "xlsx") {
+      const XLSX = loadXlsx();
+      const ws = XLSX.utils.aoa_to_sheet([PER_PRODUCT_EXPORT_HEADERS, ...sample]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Product Sales");
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      );
+      res.setHeader(
+        "Content-Disposition",
+        'attachment; filename="product-sales-import-template.xlsx"',
+      );
+      res.setHeader("Content-Length", buf.length);
+      return res.send(buf);
+    }
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="product-sales-import-template.csv"',
+    );
+    // BOM so Excel auto-detects UTF-8 — same as sendCsv().
+    res.write("﻿");
+    return res.end(rowsToCsv(PER_PRODUCT_EXPORT_HEADERS, sample));
+  },
+);
+
+// POST /reports/per-product/imports — upload one snapshot.
+//
+// Body: multipart file field `file` (CSV or XLSX), or a raw text/csv body.
+// Query/body: periodStart, periodEnd (YYYY-MM-DD, required), note, replace.
+//
+// Overlapping periods are refused (409) unless ?replace=true, which deletes
+// the overlapping batches first. Two snapshots covering the same days are
+// two recordings of the same sales — silently keeping both would double
+// every figure in the report.
+router.post(
+  "/reports/per-product/imports",
+  verifyWellnessRole(["admin", "manager"]),
+  express.text({ type: ["text/csv", "text/plain"], limit: "5mb" }),
+  productSalesImportUpload.single("file"),
+  async (req, res) => {
+    try {
+      const tenantId = req.user.tenantId;
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const pick = (name) => req.query[name] ?? body[name];
+
+      const periodStartRaw = pick("periodStart");
+      const periodEndRaw = pick("periodEnd");
+      if (!periodStartRaw || !periodEndRaw) {
+        return res.status(400).json({
+          error: "periodStart and periodEnd are required (YYYY-MM-DD)",
+          code: "PERIOD_REQUIRED",
+        });
+      }
+      const periodStart = new Date(`${String(periodStartRaw).slice(0, 10)}T00:00:00.000Z`);
+      const periodEnd = new Date(`${String(periodEndRaw).slice(0, 10)}T23:59:59.999Z`);
+      if (Number.isNaN(periodStart.getTime()) || Number.isNaN(periodEnd.getTime())) {
+        return res.status(400).json({
+          error: "periodStart and periodEnd must be valid dates",
+          code: "INVALID_DATE_RANGE",
+        });
+      }
+      if (periodStart > periodEnd) {
+        return res.status(400).json({
+          error: "'periodStart' must be on or before 'periodEnd'",
+          code: "INVERTED_DATE_RANGE",
+        });
+      }
+
+      const file = readImportFile(req);
+      if (!file) {
+        return res.status(400).json({
+          error: "Attach a CSV or XLSX file in the 'file' field.",
+          code: "NO_FILE",
+        });
+      }
+
+      const { rows, errors } = normalizeProductImportRows(file.parsed);
+      if (errors.length > 0) {
+        return res.status(400).json({
+          error: "Import rejected — fix the rows below and re-upload.",
+          code: "INVALID_ROWS",
+          errors: errors.slice(0, 50),
+          errorCount: errors.length,
+        });
+      }
+      if (rows.length === 0) {
+        return res.status(400).json({
+          error: "No product rows found in the file.",
+          code: "EMPTY_FILE",
+        });
+      }
+
+      const overlapping = await prisma.productSalesImport.findMany({
+        where: {
+          tenantId,
+          periodStart: { lte: periodEnd },
+          periodEnd: { gte: periodStart },
+        },
+        select: { id: true, fileName: true, periodStart: true, periodEnd: true },
+      });
+      const replace =
+        String(pick("replace") ?? "").toLowerCase() === "true" ||
+        pick("replace") === true;
+      if (overlapping.length > 0 && !replace) {
+        return res.status(409).json({
+          error:
+            "Another import already covers part of this period. Delete it, or re-upload with replace=true.",
+          code: "PERIOD_OVERLAP",
+          conflicts: overlapping,
+        });
+      }
+
+      await resolveImportedProductIds(tenantId, rows);
+
+      const totals = rows.reduce(
+        (acc, r) => ({
+          productCount: acc.productCount + r.productCount,
+          grossSales: acc.grossSales + r.grossSales,
+          discount: acc.discount + r.discount,
+          netSales: acc.netSales + r.netSales,
+          tax: acc.tax + r.tax,
+          totalSales: acc.totalSales + r.totalSales,
+        }),
+        { productCount: 0, grossSales: 0, discount: 0, netSales: 0, tax: 0, totalSales: 0 },
+      );
+
+      // One transaction so a failure part-way cannot leave a batch header
+      // whose rows are missing (which would report as an all-zero period).
+      const batch = await prisma.$transaction(async (tx) => {
+        if (replace && overlapping.length > 0) {
+          await tx.productSalesImport.deleteMany({
+            where: { tenantId, id: { in: overlapping.map((o) => o.id) } },
+          });
+        }
+        const created = await tx.productSalesImport.create({
+          data: {
+            tenantId,
+            fileName: file.fileName ? String(file.fileName).slice(0, 190) : null,
+            periodStart,
+            periodEnd,
+            note: pick("note") ? String(pick("note")).slice(0, 1000) : null,
+            rowCount: rows.length,
+            productCount: Math.round(totals.productCount),
+            grossSales: roundMoney2(totals.grossSales),
+            discount: roundMoney2(totals.discount),
+            netSales: roundMoney2(totals.netSales),
+            tax: roundMoney2(totals.tax),
+            totalSales: roundMoney2(totals.totalSales),
+            importedBy: req.user.userId || null,
+          },
+        });
+        await tx.productSalesImportRow.createMany({
+          data: rows.map((r) => ({
+            tenantId,
+            importId: created.id,
+            productName: r.productName,
+            hsnCode: r.hsnCode,
+            productId: r.productId || null,
+            productCount: r.productCount,
+            grossSales: r.grossSales,
+            discount: r.discount,
+            netSales: r.netSales,
+            tax: r.tax,
+            totalSales: r.totalSales,
+          })),
+        });
+        return created;
+      });
+
+      writeAudit(
+        "ProductSalesImport",
+        "CREATE",
+        batch.id,
+        req.user.userId,
+        tenantId,
+        {
+          fileName: batch.fileName,
+          rowCount: rows.length,
+          replacedImportIds: replace ? overlapping.map((o) => o.id) : [],
+        },
+      );
+
+      res.status(201).json({
+        import: batch,
+        imported: rows.length,
+        matchedProducts: rows.filter((r) => r.productId).length,
+        replaced: replace ? overlapping.length : 0,
+      });
+    } catch (e) {
+      console.error("[reports] per-product/imports POST:", e.message);
+      res.status(500).json({ error: "Failed to import product sales" });
+    }
+  },
+);
+
+// DELETE /reports/per-product/imports/:id — rows cascade with the batch.
+router.delete(
+  "/reports/per-product/imports/:id",
+  verifyWellnessRole(["admin", "manager"]),
+  async (req, res) => {
+    try {
+      const tenantId = req.user.tenantId;
+      const id = parseInt(req.params.id, 10);
+      const existing = await prisma.productSalesImport.findFirst({
+        where: { tenantId, id },
+        select: { id: true, fileName: true },
+      });
+      if (!existing)
+        return res.status(404).json({ error: "Import not found" });
+      await prisma.productSalesImport.delete({ where: { id } });
+      writeAudit(
+        "ProductSalesImport",
+        "DELETE",
+        id,
+        req.user.userId,
+        tenantId,
+        { fileName: existing.fileName },
+      );
+      res.json({ ok: true, id });
+    } catch (e) {
+      console.error("[reports] per-product/imports DELETE:", e.message);
+      res.status(500).json({ error: "Failed to delete product-sales import" });
     }
   },
 );
@@ -12707,6 +13612,83 @@ router.get(
     } catch (e) {
       console.error("[wellness] portal prescriptions error:", e.message);
       res.status(500).json({ error: "Failed to load prescriptions" });
+    }
+  },
+);
+
+// ─── Prescription renewal / medicine requests — PATIENT side ───────────────
+//
+// The Android app's entry point into the renewal workflow. These two live
+// here rather than in routes/wellness_prescription_requests.js (which owns
+// the staff half) purely because `verifyPatientToken` is defined in this
+// file — every /portal/* route in the app has to sit next to it. All the
+// actual logic is in lib/prescriptionRenewalService.js, so the patient and
+// staff halves cannot drift on validation or status semantics.
+//
+// Authorisation is layered exactly like the /portal/prescriptions read above:
+// the CUSTOMER-role RBAC grant gates the surface, and the service ALSO
+// re-reads the prescription scoped to `patientId` + `tenantId`, so a patient
+// can never raise a request against an Rx that is not theirs even if the
+// grant is misconfigured.
+
+// POST /portal/prescription-requests
+// Body: { prescriptionId (required), medicines? [], durationDays?, from?, to?, notes? }
+//
+// `medicines` omitted / empty ⇒ renew the COMPLETE prescription. When
+// supplied, every entry must name a drug that is actually on that
+// prescription (see resolveRequestedDrugs) — the request can never widen
+// into something the doctor never prescribed.
+router.post(
+  "/portal/prescription-requests",
+  verifyPatientToken,
+  requirePortalPermission("my_prescription_requests", "write"),
+  async (req, res) => {
+    try {
+      const request = await prescriptionRenewals.createRenewalRequest({
+        patientId: req.patient.id,
+        tenantId: req.patient.tenantId,
+        body: req.body || {},
+        io: req.io,
+      });
+      res.status(201).json(prescriptionRenewals.toPublicRequest(request));
+    } catch (err) {
+      if (err && err.name === "RenewalRequestError") {
+        return res
+          .status(err.status)
+          .json({ error: err.message, code: err.code });
+      }
+      console.error(
+        "[wellness] portal create prescription request error:",
+        err.message,
+      );
+      res.status(500).json({
+        error: "Failed to submit the renewal request",
+        code: "RENEWAL_REQUEST_FAILED",
+      });
+    }
+  },
+);
+
+// GET /portal/prescription-requests — the patient's own request history, so
+// the app can show "requested — pending review" against a prescription
+// instead of letting them tap Renew again and hit the duplicate guard.
+router.get(
+  "/portal/prescription-requests",
+  verifyPatientToken,
+  requirePortalPermission("my_prescription_requests", "read"),
+  async (req, res) => {
+    try {
+      const items = await prescriptionRenewals.listRequestsForPatient(
+        req.patient.id,
+        { limit: req.query.limit, status: req.query.status },
+      );
+      res.json(items.map((r) => prescriptionRenewals.toPublicRequest(r)));
+    } catch (err) {
+      console.error(
+        "[wellness] portal list prescription requests error:",
+        err.message,
+      );
+      res.status(500).json({ error: "Failed to load renewal requests" });
     }
   },
 );

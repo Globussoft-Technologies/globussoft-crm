@@ -14,7 +14,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const fetchApiMock = vi.fn();
@@ -67,6 +67,244 @@ describe('<ActivePackagesTab />', () => {
     expect(screen.getByText(/15,300/)).toBeInTheDocument();
     // Gross shown struck through so the saving is visible.
     expect(screen.getByText(/18,000/)).toBeInTheDocument();
+  });
+
+  it('spells out the commercial terms — tax, validity and sell-by', () => {
+    render(
+      <ActivePackagesTab
+        packages={[{ ...DRAFT, taxPercent: 18, validityDays: 180, sellByDate: '2099-12-31T00:00:00.000Z' }]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getByText(/\+18% tax/)).toBeInTheDocument();
+    expect(screen.getByText(/Valid 6 months after purchase/i)).toBeInTheDocument();
+    // "Sell by <date>" — the bare "Sell by" label belongs to the date editor.
+    expect(screen.getByText(/Sell by \d/)).toBeInTheDocument();
+  });
+
+  it('says a published package past its sell-by is hidden from customers', () => {
+    // The confusing state: the card reads "Live" while the customer catalog
+    // has already dropped it. Staff must not have to guess why.
+    render(
+      <ActivePackagesTab
+        packages={[{ ...LIVE, sellByDate: '2020-01-01T00:00:00.000Z' }]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getByText('Past sell-by')).toBeInTheDocument();
+    expect(screen.getByText(/Hidden from customers/i)).toBeInTheDocument();
+  });
+
+  it('does not claim a DRAFT is hidden by its sell-by — it was never listed', () => {
+    render(
+      <ActivePackagesTab
+        packages={[{ ...DRAFT, sellByDate: '2020-01-01T00:00:00.000Z' }]}
+        loading={false}
+      />
+    );
+
+    expect(screen.queryByText(/Hidden from customers/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/has passed/i)).toBeInTheDocument();
+  });
+
+  it('puts a lapsed package back on sale by changing its sell-by date', async () => {
+    // Without this the date could only be set at build time, so a package that
+    // ran past it was stuck off the catalog until someone rebuilt it.
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    render(
+      <ActivePackagesTab
+        packages={[{ ...LIVE, sellByDate: '2020-01-01T00:00:00.000Z' }]}
+        loading={false}
+        onChanged={onChanged}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('package-sellby-2'), { target: { value: '2027-01-31' } });
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledOnce());
+    const [url, opts] = fetchApiMock.mock.calls[0];
+    expect(url).toBe('/api/wellness/packages/2');
+    expect(opts.method).toBe('PUT');
+    // Sell-by only — no bundle/sessions/discount, so the package cannot be
+    // re-priced at today's service prices on the way through.
+    expect(JSON.parse(opts.body)).toEqual({ sellByDate: '2027-01-31' });
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(user).toBeTruthy();
+  });
+
+  it('clearing the date sends an explicit null, not an empty string', async () => {
+    render(
+      <ActivePackagesTab
+        packages={[{ ...LIVE, sellByDate: '2027-01-31T00:00:00.000Z' }]}
+        loading={false}
+        onChanged={vi.fn()}
+      />
+    );
+
+    fireEvent.change(screen.getByTestId('package-sellby-2'), { target: { value: '' } });
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(fetchApiMock.mock.calls[0][1].body)).toEqual({ sellByDate: null });
+  });
+
+  it('gives customers a buy button and no staff controls', () => {
+    render(<ActivePackagesTab packages={[LIVE]} loading={false} readOnly onBuy={vi.fn()} />);
+
+    expect(screen.getByTestId('package-buy-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('package-publish-2')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('package-retire-2')).not.toBeInTheDocument();
+  });
+
+  it('hands the whole package to the checkout, never a price', async () => {
+    // The amount is the server's business — anything sent from here could be
+    // tampered with before it reaches the gateway.
+    const user = userEvent.setup();
+    const onBuy = vi.fn();
+    render(<ActivePackagesTab packages={[LIVE]} loading={false} readOnly onBuy={onBuy} />);
+
+    await user.click(screen.getByTestId('package-buy-2'));
+
+    expect(onBuy).toHaveBeenCalledWith(expect.objectContaining({ id: 2, name: 'Published Bundle' }));
+  });
+
+  it('shows no buy button to staff, who are managing rather than buying', () => {
+    render(<ActivePackagesTab packages={[LIVE]} loading={false} onBuy={vi.fn()} onChanged={vi.fn()} />);
+
+    expect(screen.queryByTestId('package-buy-2')).not.toBeInTheDocument();
+    expect(screen.getByTestId('package-publish-2')).toBeInTheDocument();
+  });
+
+  it('locks every buy button while one checkout is opening', () => {
+    render(
+      <ActivePackagesTab
+        packages={[LIVE, { ...LIVE, id: 5, name: 'Second Bundle' }]}
+        loading={false}
+        readOnly
+        onBuy={vi.fn()}
+        buyingId={2}
+      />
+    );
+
+    expect(screen.getByTestId('package-buy-2')).toBeDisabled();
+    expect(screen.getByTestId('package-buy-5')).toBeDisabled();
+    expect(screen.getByText(/Opening checkout/i)).toBeInTheDocument();
+  });
+
+  it('does not offer a retired package for sale', () => {
+    render(<ActivePackagesTab packages={[RETIRED]} loading={false} readOnly onBuy={vi.fn()} />);
+
+    expect(screen.queryByTestId('package-buy-3')).not.toBeInTheDocument();
+  });
+
+  it('tells a buyer the package is theirs, with what is left and until when', () => {
+    // Before this the card looked identical before and after paying — the one
+    // thing a buyer wants to know is how long they have to use it.
+    render(
+      <ActivePackagesTab
+        packages={[{
+          ...LIVE,
+          ownedPlan: {
+            id: 77,
+            status: 'active',
+            totalSessions: 4,
+            completedSessions: 1,
+            startedAt: '2026-08-26T13:00:00.000Z',
+            nextDueAt: '2099-09-02T13:00:00.000Z',
+          },
+        }]}
+        loading={false}
+        readOnly
+        onBuy={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('package-owned-2')).toBeInTheDocument();
+    expect(screen.getByText(/You bought this/i)).toBeInTheDocument();
+    expect(screen.getByText(/3 of 4 sessions left/i)).toBeInTheDocument();
+    expect(screen.getByText(/Book your sessions by/i)).toBeInTheDocument();
+    // Buying a second course stays possible, but reads as a repeat.
+    expect(screen.getByTestId('package-buy-2')).toHaveTextContent(/Buy again/i);
+  });
+
+  it('warns when the window to use a bought package has run out', () => {
+    render(
+      <ActivePackagesTab
+        packages={[{
+          ...LIVE,
+          ownedPlan: {
+            id: 78,
+            status: 'active',
+            totalSessions: 4,
+            completedSessions: 0,
+            startedAt: '2020-01-01T00:00:00.000Z',
+            nextDueAt: '2020-02-01T00:00:00.000Z',
+          },
+        }]}
+        loading={false}
+        readOnly
+        onBuy={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/Ran out on/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Book your sessions by/i)).not.toBeInTheDocument();
+  });
+
+  it('says a package with no expiry can be booked whenever', () => {
+    render(
+      <ActivePackagesTab
+        packages={[{
+          ...LIVE,
+          ownedPlan: { id: 79, status: 'active', totalSessions: 4, completedSessions: 0, startedAt: '2026-08-26T13:00:00.000Z', nextDueAt: null },
+        }]}
+        loading={false}
+        readOnly
+        onBuy={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/No expiry — book whenever suits you/i)).toBeInTheDocument();
+  });
+
+  it('shows no ownership panel on a package the viewer has not bought', () => {
+    render(<ActivePackagesTab packages={[LIVE]} loading={false} readOnly onBuy={vi.fn()} />);
+
+    expect(screen.queryByTestId('package-owned-2')).not.toBeInTheDocument();
+    expect(screen.getByTestId('package-buy-2')).toHaveTextContent(/Buy package/i);
+  });
+
+  it('keeps the ownership panel out of the staff view', () => {
+    // Staff are looking at the catalog they sell, not at their own purchases.
+    render(
+      <ActivePackagesTab
+        packages={[{ ...LIVE, ownedPlan: { id: 80, status: 'active', totalSessions: 4, completedSessions: 0, startedAt: null, nextDueAt: null } }]}
+        loading={false}
+        onChanged={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId('package-owned-2')).not.toBeInTheDocument();
+  });
+
+  it('offers no sell-by editor to customers', () => {
+    render(<ActivePackagesTab packages={[{ ...LIVE, sellByDate: '2027-01-31T00:00:00.000Z' }]} loading={false} readOnly />);
+
+    expect(screen.queryByTestId('package-sellby-2')).not.toBeInTheDocument();
+  });
+
+  it('says nothing about terms a package does not carry', () => {
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} />);
+
+    expect(screen.queryByText(/tax/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Valid /i)).not.toBeInTheDocument();
+    // No "Sell by <date>" line. The editor's own "Sell by" label still shows —
+    // that is the control for setting one, not a claim that one exists.
+    expect(screen.queryByText(/Sell by \d/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('package-sellby-1')).toHaveValue('');
+    expect(screen.queryByText('Past sell-by')).not.toBeInTheDocument();
   });
 
   it('distinguishes draft, live and retired at a glance', () => {

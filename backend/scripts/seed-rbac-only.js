@@ -71,6 +71,8 @@ const CUSTOMER_PERMISSIONS = [
   'my_prescriptions.read',
   // Patient appointment management — /wellness/my-bookings.
   'my_bookings.read',
+  // Android-app prescription renewal flow — raise + list your OWN requests.
+  'my_prescription_requests.read', 'my_prescription_requests.write',
   'consents.read',
 ];
 

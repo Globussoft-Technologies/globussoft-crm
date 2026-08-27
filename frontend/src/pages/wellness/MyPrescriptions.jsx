@@ -19,13 +19,28 @@ import {
   Download,
   FileText,
   AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatDate } from '../../utils/date';
+import { usePermissions } from '../../hooks/usePermissions';
+import PrescriptionRenewalComposer from '../../components/wellness/PrescriptionRenewalComposer';
+import { useRenewalRequests } from '../../hooks/usePrescriptionRenewals';
 
 export default function MyPrescriptions() {
   const notify = useNotify();
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  // Renewal is a separate grant from viewing: a clinic can let patients see
+  // their Rx without opening a request channel. Until permissions resolve we
+  // optimistically enable — the backend is the real gate, and a briefly
+  // disabled button reads as a broken page.
+  const canRequest =
+    !permsReady || hasPermission('my_prescription_requests', 'write');
+  // Which prescriptions already have a request in flight, so we don't offer an
+  // action the backend would refuse with 409.
+  const { openByPrescription, reload: reloadRequests } = useRenewalRequests();
+  const [renewFor, setRenewFor] = useState(null);
   const [data, setData] = useState({ patient: null, prescriptions: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -174,13 +189,31 @@ export default function MyPrescriptions() {
                       {rx.visit?.service?.name && ` · ${rx.visit.service.name}`}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => downloadRx(rx.id)}
-                    style={pdfButtonStyle}
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      flexWrap: 'wrap',
+                    }}
                   >
-                    <Download size={13} /> PDF
-                  </button>
+                    {/* Asking for a repeat belongs ON the prescription — this
+                        is where a patient looking at their medicines expects
+                        it. The dedicated My Prescription Requests page still
+                        exists to TRACK what they have asked for. */}
+                    <RenewAction
+                      openRequest={openByPrescription.get(rx.id)}
+                      canRequest={canRequest}
+                      onClick={() => setRenewFor(rx)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => downloadRx(rx.id)}
+                      style={pdfButtonStyle}
+                    >
+                      <Download size={13} /> PDF
+                    </button>
+                  </div>
                 </div>
                 {drugs.length > 0 && (
                   <ul
@@ -227,7 +260,76 @@ export default function MyPrescriptions() {
           })}
         </div>
       )}
+
+      {renewFor && (
+        <PrescriptionRenewalComposer
+          prescription={renewFor}
+          notify={notify}
+          onClose={() => setRenewFor(null)}
+          onSubmitted={() => {
+            setRenewFor(null);
+            notify.success?.('Your renewal request has been sent to the clinic.');
+            // Refresh the overlay so this card immediately shows "Renewal
+            // pending" rather than offering the action again.
+            reloadRequests();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Per-prescription renewal action.
+ *
+ * Three states, and each says WHY rather than just going quiet:
+ *   - actionable                → "Request renewal"
+ *   - a request already open    → the status, disabled (a second one is a 409)
+ *   - no `my_prescription_requests.write` grant → disabled with the reason
+ *
+ * Silently hiding the control in the last two cases reads as a missing
+ * feature; the patient needs to know whether they already asked.
+ */
+function RenewAction({ openRequest, canRequest, onClick }) {
+  const blocked = Boolean(openRequest) || !canRequest;
+  const label = openRequest
+    ? `Renewal ${openRequest.status.toLowerCase()}`
+    : 'Request renewal';
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={blocked}
+      data-testid={`renew-rx-${openRequest ? openRequest.prescriptionId : ''}`}
+      title={
+        openRequest
+          ? `You already have a renewal request for this prescription (${openRequest.status.toLowerCase()})`
+          : !canRequest
+            ? 'Renewal requests are not enabled for your account'
+            : 'Ask the clinic to repeat this prescription'
+      }
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.3rem',
+        padding: '0.4rem 0.8rem',
+        // Secondary treatment: PDF stays the filled primary on this card, so
+        // the new action sits beside it without competing for the same weight.
+        background: 'transparent',
+        border: '1px solid var(--border-color)',
+        borderRadius: 6,
+        color: 'inherit',
+        cursor: blocked ? 'not-allowed' : 'pointer',
+        opacity: blocked ? 0.55 : 1,
+        fontSize: '0.8rem',
+      }}
+    >
+      {/* --accent-color, NOT --primary-color: in the wellness theme
+          --primary-color is charcoal in BOTH modes, so as a foreground it
+          renders charcoal-on-black. */}
+      <RefreshCw size={13} style={{ color: 'var(--accent-color)' }} /> {label}
+    </button>
   );
 }
 

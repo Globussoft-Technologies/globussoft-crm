@@ -15,6 +15,7 @@ import {
   Upload,
   UserPlus,
   Tags as BulkTagIcon,
+  PhoneCall,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -22,6 +23,7 @@ import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { formatDate } from "../../utils/date";
 import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
 import PageHeader from "../../components/PageHeader";
+import CallifiedCallDialog from "../../components/CallifiedCallDialog";
 import TopScrollSync from "../../components/TopScrollSync";
 
 import PatientPager from "./patients/PatientPager";
@@ -246,6 +248,29 @@ export default function Patients() {
   // visually mute that single row's trash icon while the DELETE
   // round-trips, without locking the rest of the table.
   const [deletingId, setDeletingId] = useState(null);
+
+  // Callified calling. `callifiedReady` gates the whole action — a tenant with
+  // no Callified credentials should not see a button that always fails.
+  // `callTarget` is the patient whose call dialog is open.
+  const [callifiedReady, setCallifiedReady] = useState(false);
+  const [callTarget, setCallTarget] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchApi("/api/wellness/callified/status", { silent: true })
+      .then((res) => {
+        if (cancelled) return;
+        setCallifiedReady(Boolean(res?.configured && res?.enabled));
+      })
+      // A 403 here just means this role may not place calls; a 503 means the
+      // tenant has no Callified credentials. Either way: no call action.
+      .catch(() => {
+        if (!cancelled) setCallifiedReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Soft-delete a single patient via DELETE /api/wellness/patients/:id.
   // ADMIN-only on the backend (others get a 403 toast); we still show the
   // button to everyone because role isn't surfaced into this page and a
@@ -933,6 +958,12 @@ export default function Patients() {
                           alignItems: "center",
                         }}
                       >
+                        {callifiedReady && (
+                          <PatientCallButton
+                            patient={p}
+                            onCall={() => setCallTarget(p)}
+                          />
+                        )}
                         <button
                           onClick={() => startEdit(p)}
                           title="Edit patient"
@@ -1019,6 +1050,22 @@ export default function Patients() {
             if (!editingPatient) updateParams({ page: 1 });
             setReloadTick((t) => t + 1);
           }}
+        />
+      )}
+      {callTarget && (
+        <CallifiedCallDialog
+          customer={{
+            name: callTarget.name,
+            phone: callTarget.phone,
+            subtitle: callTarget.email || null,
+          }}
+          endpoints={{
+            context: `/api/wellness/callified/patients/${callTarget.id}/context`,
+            campaigns: "/api/wellness/callified/campaigns",
+            aiCall: `/api/wellness/callified/patients/${callTarget.id}/ai-call`,
+            manualCall: `/api/wellness/callified/patients/${callTarget.id}/manual-call`,
+          }}
+          onClose={() => setCallTarget(null)}
         />
       )}
       {showBulkTagModal && (
@@ -1128,6 +1175,41 @@ const primaryTealBtn = {
   cursor: "pointer",
   fontWeight: 500,
 };
+/**
+ * Per-row call action.
+ *
+ * A patient with no dialable number still gets the control, disabled with a
+ * reason — silently hiding it reads as a missing feature, and the operator
+ * needs to know WHY they cannot call so they can go fix the phone number.
+ * Same rule the Appointments row uses, so the two surfaces behave alike.
+ */
+function PatientCallButton({ patient, onCall }) {
+  const phone = patient.phone || "";
+  const dialable = phone.replace(/\D/g, "").length >= 10;
+
+  return (
+    <button
+      onClick={onCall}
+      disabled={!dialable}
+      title={dialable ? `Call ${patient.name}` : "No valid phone number on file"}
+      aria-label={`Call ${patient.name}`}
+      data-testid={`patient-call-${patient.id}`}
+      style={{
+        background: "none",
+        border: "none",
+        color: "var(--accent-color)",
+        cursor: dialable ? "pointer" : "not-allowed",
+        opacity: dialable ? 1 : 0.4,
+        padding: "0.25rem",
+        display: "inline-flex",
+        alignItems: "center",
+      }}
+    >
+      <PhoneCall size={16} />
+    </button>
+  );
+}
+
 const primaryMenuStyle = {
   position: "absolute",
   top: "calc(100% + 6px)",

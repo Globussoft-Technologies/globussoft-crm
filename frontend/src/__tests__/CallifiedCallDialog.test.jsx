@@ -18,6 +18,7 @@
 
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -74,15 +75,18 @@ function installFetch({ context = CONTEXT_OK, campaigns = CAMPAIGNS_TWO, onPost 
   });
 }
 
+// The footer links to the Call History page, so the dialog needs router
+// context even though it renders no routes of its own.
 function renderDialog(props = {}) {
   return render(
-    <CallifiedCallDialog
-      customer={{ name: 'Asha Menon', phone: '9876543210', subtitle: 'Body Polishing' }}
-      endpoints={ENDPOINTS}
-      onClose={props.onClose || vi.fn()}
-      onCalled={props.onCalled}
-      onViewHistory={props.onViewHistory}
-    />,
+    <MemoryRouter>
+      <CallifiedCallDialog
+        customer={{ name: 'Asha Menon', phone: '9876543210', subtitle: 'Body Polishing' }}
+        endpoints={ENDPOINTS}
+        onClose={props.onClose || vi.fn()}
+        onCalled={props.onCalled}
+      />
+    </MemoryRouter>,
   );
 }
 
@@ -124,18 +128,60 @@ describe('CallifiedCallDialog', () => {
     expect(screen.queryByTestId('callified-call-mode-ai')).not.toBeInTheDocument();
   });
 
-  test('both modes stay disabled until a campaign is picked', async () => {
+  test('opens on the first active campaign so the dialog is ready to call', async () => {
+    // Contract changed: the dialog used to open with nothing selected and both
+    // modes disabled. A default is now chosen, and the notice below the field
+    // is what stops that default from being silent.
     installFetch();
     renderDialog();
 
-    const ai = await screen.findByTestId('callified-call-mode-ai');
-    expect(ai).toBeDisabled();
-    expect(screen.getByTestId('callified-call-mode-manual')).toBeDisabled();
+    await waitFor(() =>
+      expect(screen.getByTestId('callified-call-dialog-campaign')).toHaveValue('42'),
+    );
+    expect(screen.getByTestId('callified-call-mode-ai')).toBeEnabled();
+    expect(screen.getByTestId('callified-call-mode-manual')).toBeEnabled();
+  });
+
+  test('says out loud that the campaign was picked for you, and names it', async () => {
+    // The campaign carries the voice and the script, so a default nobody
+    // noticed is how the wrong script reaches a customer.
+    installFetch();
+    renderDialog();
+
+    const notice = await screen.findByTestId('callified-campaign-default-notice');
+    expect(notice).toHaveTextContent(/we picked/i);
+    expect(notice).toHaveTextContent('Reminder Campaign');
+    expect(notice).toHaveTextContent(/voice and script/i);
+  });
+
+  test('drops the notice once the caller chooses for themselves', async () => {
+    installFetch();
+    renderDialog();
+    await screen.findByTestId('callified-campaign-default-notice');
 
     fireEvent.change(screen.getByTestId('callified-call-dialog-campaign'), {
-      target: { value: '42' },
+      target: { value: '43' },
     });
-    await waitFor(() => expect(ai).toBeEnabled());
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('callified-campaign-default-notice')).not.toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('callified-call-mode-ai')).toBeEnabled();
+  });
+
+  test('both modes go back to disabled if the campaign is cleared', async () => {
+    installFetch();
+    renderDialog();
+    await waitFor(() =>
+      expect(screen.getByTestId('callified-call-dialog-campaign')).toHaveValue('42'),
+    );
+
+    fireEvent.change(screen.getByTestId('callified-call-dialog-campaign'), {
+      target: { value: '' },
+    });
+
+    await waitFor(() => expect(screen.getByTestId('callified-call-mode-ai')).toBeDisabled());
+    expect(screen.getByText(/Pick a campaign to enable calling/i)).toBeInTheDocument();
   });
 
   test('preselects the campaign when there is only one to choose', async () => {
@@ -146,6 +192,8 @@ describe('CallifiedCallDialog', () => {
       expect(screen.getByTestId('callified-call-dialog-campaign')).toHaveValue('42'),
     );
     expect(screen.getByTestId('callified-call-mode-ai')).toBeEnabled();
+    // Nothing was decided on the caller's behalf — there was no choice to make.
+    expect(screen.queryByTestId('callified-campaign-default-notice')).not.toBeInTheDocument();
   });
 
   test('AI Call posts to the ai-call endpoint with the chosen campaign', async () => {
@@ -254,13 +302,21 @@ describe('CallifiedCallDialog', () => {
     expect(screen.queryByTestId('callified-call-mode-ai')).not.toBeInTheDocument();
   });
 
-  test('offers call history once a contact is known', async () => {
+  // Call History is its own page now. The dialog no longer renders history
+  // inline — it points at the page and closes itself on the way out, so the
+  // modal is not left mounted over the page the user just navigated to.
+  test('points at the Call History page instead of showing history inline', async () => {
     installFetch({ context: { ...CONTEXT_OK, contactId: 11 } });
-    const onViewHistory = vi.fn();
-    renderDialog({ onViewHistory });
+    const onClose = vi.fn();
+    renderDialog({ onClose });
 
-    fireEvent.click(await screen.findByTestId('callified-call-dialog-history'));
-    expect(onViewHistory).toHaveBeenCalledWith(11);
+    const link = await screen.findByTestId('callified-call-dialog-history-link');
+    expect(link).toHaveAttribute('href', '/wellness/call-history');
+    // The old in-dialog drawer shortcut must not creep back.
+    expect(screen.queryByTestId('callified-call-dialog-history')).not.toBeInTheDocument();
+
+    fireEvent.click(link);
+    expect(onClose).toHaveBeenCalled();
   });
 });
 

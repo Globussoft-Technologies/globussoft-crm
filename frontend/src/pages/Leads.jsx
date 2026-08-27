@@ -48,6 +48,11 @@ import {
 } from "../utils/travelSubBrand";
 import { useActiveSubBrand } from "../utils/subBrand";
 import CallifiedLeadCallDialog from "../components/CallifiedLeadCallDialog";
+import { useLeadCalling } from "../hooks/useLeadCalling";
+import {
+  LeadCallButton as WellnessLeadCallButton,
+  LeadCallDialog as WellnessLeadCallDialog,
+} from "../components/wellness/LeadCallAction";
 import CallifiedCallDetailsDrawer from "../components/CallifiedCallDetailsDrawer";
 import CallifiedCallStatusDrawer from "../components/CallifiedCallStatusDrawer";
 import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolbar";
@@ -1023,6 +1028,12 @@ const Leads = () => {
     useState(false);
   const [bulkCampaignSaving, setBulkCampaignSaving] = useState(false);
   const [leadBulkActionsOpen, setLeadBulkActionsOpen] = useState(false);
+  // Wellness Callified calling — the AI / Manual chooser used by Appointments
+  // and Patients. Distinct from the generic-vertical flow below, which has its
+  // own dialog, auto-campaign rules and lead-status sync; the hook returns
+  // disabled on every non-wellness tenant so the two never both appear.
+  const wellnessCall = useLeadCalling();
+
   // Callified AI calling state
   const [callifiedCallLead, setCallifiedCallLead] = useState(null);
   const [callifiedDetailsLead, setCallifiedDetailsLead] = useState(null);
@@ -6810,6 +6821,12 @@ const Leads = () => {
                           })}
                           onClick={(e) => e.stopPropagation()}
                         >
+                          {wellnessCall.enabled && (
+                            <WellnessLeadCallButton
+                              lead={lead}
+                              onCall={() => wellnessCall.open(lead)}
+                            />
+                          )}
                           <button
                             onClick={() => setPreviewLead(lead)}
                             title="Preview lead"
@@ -6857,6 +6874,10 @@ const Leads = () => {
             </TopScrollSync>
           </div>
         </div>
+        <WellnessLeadCallDialog
+          lead={wellnessCall.target}
+          onClose={wellnessCall.close}
+        />
         {headerMenuState &&
           headerMenuRect &&
           createPortal(

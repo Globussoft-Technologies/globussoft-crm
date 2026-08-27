@@ -74,7 +74,7 @@ describe('<OwnerDashboard />', () => {
     expect(screen.getByText(/Occupancy/i)).toBeInTheDocument();
     expect(screen.getByText(/New leads today/i)).toBeInTheDocument();
     expect(screen.getByText(/Pending approvals/i)).toBeInTheDocument();
-    expect(screen.getByText(/Active treatment plans/i)).toBeInTheDocument();
+    expect(screen.getByText(/Active packages/i)).toBeInTheDocument();
   });
 
   it('formatRupees output appears (₹84,500 today, ₹92,300 yesterday)', async () => {

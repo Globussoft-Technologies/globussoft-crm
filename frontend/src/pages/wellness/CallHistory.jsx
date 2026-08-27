@@ -55,6 +55,11 @@ const STATUS_OPTIONS = [
   { value: 'FAILED', label: 'Failed' },
 ];
 
+// Outcomes that mean "we do not know yet", as opposed to a call that ran and
+// failed. Callified reports the final status asynchronously, so a row can sit
+// in one of these for a while — and a recording may still land against it.
+const PENDING_STATUSES = new Set(['INITIATED', 'CONNECTED']);
+
 const MODE_OPTIONS = [
   { value: '', label: 'AI + Manual' },
   { value: 'ai', label: 'AI calls' },
@@ -466,9 +471,16 @@ function CallDetailDrawer({ call, onClose }) {
         ) : !transcript ? (
           <>
             <div style={infoRow}>
-              {call.duration
-                ? "Callified does not say which recording belongs to which attempt, so this call could not be matched to one."
-                : "This call never connected, so there is no recording or transcript."}
+              {/* INITIATED / CONNECTED are UNRESOLVED, not failed — Callified
+                  accepted the call and has not reported an outcome back yet.
+                  Saying "never connected" here reads as a failure for a call
+                  that may still be ringing, or may already have happened and
+                  simply not been processed. */}
+              {PENDING_STATUSES.has(call.status)
+                ? "Call initiated — Callified has not reported an outcome yet. The recording and transcript appear here once the call finishes and is processed."
+                : call.duration
+                  ? "Callified does not say which recording belongs to which attempt, so this call could not be matched to one."
+                  : "This call never connected, so there is no recording or transcript."}
             </div>
             {/* Everything Callified holds for this customer. Listing them is
                 honest; picking one at random and labelling it "this call"

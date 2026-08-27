@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Calendar, Clock, Stethoscope, Info, Sparkles } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { loadRazorpaySdk } from "../../utils/razorpay";
 import { AuthContext } from "../../App";
 import PageHeader from "../../components/PageHeader";
 
@@ -284,18 +285,6 @@ export default function BookAppointment() {
         return { base: serviceBase, tax, fee: 49, total };
       })()
     : null;
-
-  // Lazy-load the Razorpay Checkout SDK on demand. Called when the user
-  // picks "Pay now" so we don't ship the SDK to users who don't need it.
-  const loadRazorpaySdk = () =>
-    new Promise((resolve, reject) => {
-      if (typeof window !== "undefined" && window.Razorpay) return resolve();
-      const script = document.createElement("script");
-      script.src = "https://checkout.razorpay.com/v1/checkout.js";
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error("Could not load Razorpay SDK"));
-      document.body.appendChild(script);
-    });
 
   const resetFormAfterSuccess = () => {
     setFormData({

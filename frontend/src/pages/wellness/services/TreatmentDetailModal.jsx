@@ -39,7 +39,7 @@ export default function TreatmentDetailModal({ treatment, onClose, onChanged }) 
         method: 'PUT',
         body: JSON.stringify({ status: newStatus }),
       });
-      notify.success(`Treatment plan marked as ${newStatus}`);
+      notify.success(`Package marked as ${newStatus}`);
       onChanged && onChanged();
     } catch (_err) { /* fetchApi already surfaced the message */ }
   };
@@ -54,7 +54,7 @@ export default function TreatmentDetailModal({ treatment, onClose, onChanged }) 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '1.5rem', gap: '1rem' }}>
           <div>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.25rem' }}>{treatment.name}</h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Treatment Plan Details</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Package Details</p>
           </div>
           <span style={{ background: statusColor[treatment.status] || statusColor.active, color: '#fff', padding: '0.4rem 0.8rem', borderRadius: 6, fontSize: '0.8rem', textTransform: 'uppercase', fontWeight: 600, whiteSpace: 'nowrap' }}>
             {statusLabel}
@@ -85,8 +85,8 @@ export default function TreatmentDetailModal({ treatment, onClose, onChanged }) 
           </Section>
         )}
 
-        {/* Treatment Plan Details */}
-        <Section title="Treatment Plan Details">
+        {/* Package Details */}
+        <Section title="Package Details">
           <DetailRow label="Total Sessions" value={treatment.totalSessions} />
           <DetailRow label="Completed Sessions" value={treatment.completedSessions} />
           <DetailRow label="Progress" value={`${progressPercent}%`} />

@@ -582,6 +582,17 @@ const WellnessPrescriptions = lazy(
 const WellnessMyPrescriptions = lazy(
   () => import("./pages/wellness/MyPrescriptions"),
 );
+// Prescription renewal / medicine requests raised by patients from the
+// Android app — the clinic-side queue (gated on prescription_requests.read).
+const WellnessPrescriptionRequests = lazy(
+  () => import("./pages/wellness/PrescriptionRequests"),
+);
+// Patient-side counterpart — the surface a CUSTOMER role's
+// `my_prescription_requests.read` grant unlocks. Without it that grant has no
+// page behind it and the customer's sidebar stays empty.
+const WellnessMyPrescriptionRequests = lazy(
+  () => import("./pages/wellness/MyPrescriptionRequests"),
+);
 const WellnessPublicBooking = lazy(
   () => import("./pages/wellness/PublicBooking"),
 );
@@ -1672,6 +1683,30 @@ export default function App() {
                           </WellnessOnly>
                         }
                       />
+                      {/* Prescription renewal / medicine requests raised by
+                        patients from the Android app. Notifications to the
+                        admin + prescribing doctor deep-link here with
+                        ?request=<id>, which opens the review panel directly.
+                        Gated on prescription_requests.read via the page
+                        catalog (Sidebar) AND this RoleGuard; the backend
+                        routes carry the same permission plus tenant scope. */}
+                      <Route
+                        path="wellness/prescription-requests"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "prescription_requests",
+                                action: "read",
+                              }}
+                              feature="Prescription Requests"
+                              lockedInPlace
+                            >
+                              <WellnessPrescriptionRequests />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
                       {/* Staff-authed self-view of own Rx. Sidebar surfacing comes
                         from the page catalog entry (gated on my_prescriptions.read).
                         Backend `/api/wellness/my-prescriptions[/:id/pdf]` is gated
@@ -1690,6 +1725,28 @@ export default function App() {
                               lockedInPlace
                             >
                               <WellnessMyPrescriptions />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Patient-facing renewal surface. Same /portal/*
+                        endpoints the Android app calls — verifyPatientToken
+                        accepts a CUSTOMER session token and resolves it to the
+                        caller's own linked Patient row, so the web and the app
+                        see the same requests. */}
+                      <Route
+                        path="wellness/my-prescription-requests"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "my_prescription_requests",
+                                action: "read",
+                              }}
+                              feature="My Prescription Requests"
+                              lockedInPlace
+                            >
+                              <WellnessMyPrescriptionRequests />
                             </RoleGuard>
                           </WellnessOnly>
                         }

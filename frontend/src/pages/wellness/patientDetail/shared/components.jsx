@@ -139,6 +139,16 @@ export function RxDetailModal({ rx, patient, onClose }) {
               <div><strong>Registration Number:</strong> {rx.doctor.registrationNumber}</div>
             )}
             <div><strong>Date:</strong> {new Date(rx.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}</div>
+            {/* Only rendered when a validity was stated — a prescription
+                without one is not expired, it simply has no end date, and
+                printing "Valid until —" would imply otherwise. */}
+            {rx.validUntil && (
+              <div>
+                <strong>Valid until:</strong>{' '}
+                {new Date(rx.validUntil).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                {rx.validityDays ? ` (${rx.validityDays} days)` : ''}
+              </div>
+            )}
           </div>
         </div>
 

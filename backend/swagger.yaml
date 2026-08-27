@@ -3576,19 +3576,38 @@ paths:
                 items: { $ref: "#/components/schemas/Prescription" }
     post:
       summary: "[WELLNESS] Issue a prescription (clinical role required)"
-      description: Only users with `wellnessRole ∈ {doctor, professional}` may write prescriptions.
+      description: >
+        Only users with `wellnessRole ∈ {doctor, professional}` may write
+        prescriptions. `validityDays` is optional: supply it to state how long
+        the course runs and the server derives `validUntil` from the issue
+        date. Omit it and both columns stay NULL, which means "no stated
+        validity" — NOT expired. Any `validUntil` in the body is ignored.
       tags: [Wellness — Visits & Clinical]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/Prescription" }
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/Prescription"
+                - type: object
+                  properties:
+                    validityDays:
+                      type: integer
+                      nullable: true
+                      minimum: 1
+                      maximum: 365
+                      description: >
+                        How long the prescribed course lasts, in whole days.
+                        Drives the renewal reminder.
       responses:
         "201":
           description: Created; PDF rendered.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Prescription" }
+        "400":
+          description: INVALID_VALIDITY_DAYS — validityDays outside 1..365.
         "403":
           description: Caller's `wellnessRole` is not clinical.
   /wellness/prescriptions/{id}:
@@ -3596,6 +3615,10 @@ paths:
       - $ref: "#/components/parameters/IdPath"
     put:
       summary: "[WELLNESS] Update a prescription (clinical role required; only the original prescriber)"
+      description: >
+        Amending `validityDays` re-anchors `validUntil` to the ORIGINAL issue
+        date, not to now — a 30-day course written last week has three weeks
+        left, not thirty days. Send an empty value to clear the validity.
       tags: [Wellness — Visits & Clinical]
       requestBody:
         required: true
@@ -3605,6 +3628,107 @@ paths:
       responses:
         "200": { description: Updated. }
         "403": { description: Not the original prescriber. }
+  /wellness/prescription-requests:
+    get:
+      summary: "[WELLNESS] List prescription renewal / medicine requests"
+      description: >
+        Clinic-side queue of renewal requests raised by patients from the
+        Android app. Tenant-scoped from the JWT. Requires
+        `prescription_requests.read` (or a legacy clinical `prescriptions.read`
+        grant); helper roles are denied. `counts` is the per-status tally
+        across the same filters MINUS the status filter, so the admin page's
+        status tabs keep their badges while the operator switches tabs.
+      tags: [Wellness — Visits & Clinical]
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [PENDING, ACCEPTED, REJECTED, COMPLETED] }
+        - in: query
+          name: patientId
+          schema: { type: integer }
+        - in: query
+          name: doctorId
+          schema: { type: integer }
+        - in: query
+          name: q
+          description: Free-text over patient name / phone / email.
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 200 }
+        - in: query
+          name: skip
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Requests page plus per-status counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { type: object }
+                  total: { type: integer }
+                  counts:
+                    type: object
+                    additionalProperties: { type: integer }
+        "403": { description: Caller lacks prescription_requests.read. }
+  /wellness/prescription-requests/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      summary: "[WELLNESS] Review one prescription renewal request"
+      description: >
+        The review screen's single fetch - the request, the patient, the
+        ORIGINAL prescription (drugs normalised like every other Rx response)
+        and the request's status history. Calling the customer from this
+        screen reuses /wellness/callified/patients/{patientId}/*.
+      tags: [Wellness — Visits & Clinical]
+      responses:
+        "200":
+          description: The request, with prescription and history embedded.
+        "404": { description: Not found in this tenant. }
+  /wellness/prescription-requests/{id}/status:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    patch:
+      summary: "[WELLNESS] Accept / reject / complete a renewal request"
+      description: >
+        Requires `prescription_requests.update` (or `prescriptions.write`).
+        Legal moves - PENDING to ACCEPTED/REJECTED/COMPLETED, ACCEPTED to
+        COMPLETED/REJECTED. REJECTED and COMPLETED are terminal. `note` is
+        MANDATORY when rejecting, because the patient is notified of the
+        outcome. The update is a compare-and-set on the current status, so
+        two reviewers racing produce one 409 rather than a silent overwrite.
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [ACCEPTED, REJECTED, COMPLETED] }
+                note:
+                  type: string
+                  description: Required on REJECTED; echoed to the patient.
+                fulfilledPrescriptionId:
+                  type: integer
+                  nullable: true
+                  description: >
+                    The NEW prescription issued off the back of this request.
+                    Must belong to the same patient and tenant.
+      responses:
+        "200": { description: Updated request. }
+        "400": { description: INVALID_STATUS or REJECTION_REASON_REQUIRED. }
+        "404": { description: REQUEST_NOT_FOUND. }
+        "409":
+          description: >
+            REQUEST_CLOSED, INVALID_TRANSITION, STATUS_UNCHANGED, or
+            CONCURRENT_UPDATE.
   /wellness/consents:
     get:
       summary: "[WELLNESS] List consent forms"
@@ -3776,6 +3900,95 @@ paths:
       tags: [Wellness — Operations]
       responses:
         "200": { description: Per-location report. }
+  /wellness/reports/per-product:
+    get:
+      summary: "[WELLNESS] Per-product sales (POS, or an imported snapshot)"
+      description: >
+        Product sales for the window, from POS (SaleLineItem lineType=PRODUCT
+        on a COMPLETED Sale) and/or an imported snapshot. The two are summed
+        ONLY across the POS cutover — the tenant's first COMPLETED product
+        sale. A snapshot ending strictly before it covers a disjoint period, so
+        adding is safe; a snapshot overlapping POS is never added, because it
+        could describe the same sales. `source` says which produced the rows
+        (live | import | mixed | none) and `posCutoverAt` names the boundary.
+      tags: [Wellness — Operations]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          schema: { type: string, format: date }
+        - in: query
+          name: source
+          description: auto (default, prefers live POS) | live | import
+          schema: { type: string, enum: [auto, live, import] }
+      responses:
+        "200": { description: "Per-product rows + a `source` discriminator." }
+        "400": { description: Invalid date range or unknown source. }
+  /wellness/reports/per-product/imports:
+    get:
+      summary: "[WELLNESS] List imported product-sales snapshots"
+      tags: [Wellness — Operations]
+      responses:
+        "200": { description: Import batches, newest period first. }
+    post:
+      summary: "[WELLNESS] Import a product-sales snapshot (CSV or XLSX)"
+      description: >
+        Loads a product-sales export from the clinic's previous system so the
+        Per Product report has history before POS does. periodStart/periodEnd
+        are required — the export files carry no dates. A period overlapping an
+        existing import is refused with 409 unless replace=true.
+      tags: [Wellness — Operations]
+      parameters:
+        - in: query
+          name: periodStart
+          required: true
+          schema: { type: string, format: date }
+        - in: query
+          name: periodEnd
+          required: true
+          schema: { type: string, format: date }
+        - in: query
+          name: replace
+          description: Delete the overlapping batches first.
+          schema: { type: boolean }
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                periodStart: { type: string, format: date }
+                periodEnd: { type: string, format: date }
+                note: { type: string }
+                replace: { type: boolean }
+          text/csv:
+            schema: { type: string }
+      responses:
+        "201": { description: "{ import, imported, matchedProducts, replaced }" }
+        "400": { description: "Missing period, unreadable file, or per-row errors." }
+        "409": { description: "Another import already covers part of this period." }
+  /wellness/reports/per-product/import-template:
+    get:
+      summary: "[WELLNESS] Download the product-sales import template"
+      tags: [Wellness — Operations]
+      parameters:
+        - in: query
+          name: format
+          schema: { type: string, enum: [csv, xlsx] }
+      responses:
+        "200": { description: Template file. }
+  /wellness/reports/per-product/imports/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    delete:
+      summary: "[WELLNESS] Delete an imported product-sales snapshot"
+      tags: [Wellness — Operations]
+      responses:
+        "200": { description: Deleted; its rows cascade. }
+        "404": { description: Import not found. }
   /wellness/reports/attribution:
     get:
       summary: "[WELLNESS] Patient-source attribution"
@@ -3867,6 +4080,70 @@ paths:
       tags: [Wellness — Portal & Public]
       responses:
         "200": { description: Prescriptions. }
+  /wellness/portal/prescription-requests:
+    get:
+      summary: "[WELLNESS] Patient-portal - my renewal requests"
+      description: >
+        The signed-in patient's own request history, newest first. Requires
+        the CUSTOMER-role grant `my_prescription_requests.read`; the handler
+        also scopes by the token's patientId.
+      tags: [Wellness — Portal & Public]
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [PENDING, ACCEPTED, REJECTED, COMPLETED] }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 200 }
+      responses:
+        "200": { description: The patient's renewal requests. }
+    post:
+      summary: "[WELLNESS] Patient-portal - request a prescription renewal"
+      description: >
+        Raise a renewal against one of the caller's OWN prescriptions.
+        `prescriptionId` is the only required field. Omit `medicines` (or send
+        an empty array) to request the COMPLETE prescription; supply medicine
+        names to request only those - every name must already appear on that
+        prescription. The prescribing doctor and the tenant are resolved
+        server-side from the prescription row, so any doctor id in the body is
+        ignored. On success the tenant admins and the prescribing doctor are
+        notified with a deep link to the request. Requires
+        `my_prescription_requests.write`.
+      tags: [Wellness — Portal & Public]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prescriptionId]
+              properties:
+                prescriptionId: { type: integer }
+                medicines:
+                  type: array
+                  nullable: true
+                  description: >
+                    Medicine names (or objects carrying a `name`) taken from
+                    the prescription. Omitted or empty means renew everything.
+                  items: { type: string }
+                durationDays:
+                  type: integer
+                  nullable: true
+                  description: e.g. 60 for "another two months". Max 365.
+                from: { type: string, format: date, nullable: true }
+                to: { type: string, format: date, nullable: true }
+                notes: { type: string, nullable: true }
+      responses:
+        "201": { description: Request created. }
+        "400":
+          description: >
+            PRESCRIPTION_ID_REQUIRED, MEDICINE_NOT_ON_PRESCRIPTION,
+            INVALID_DURATION, DURATION_TOO_LONG or INVALID_DATE.
+        "404": { description: PRESCRIPTION_NOT_FOUND - not this patient's Rx. }
+        "409":
+          description: >
+            REQUEST_ALREADY_OPEN (one open request per prescription) or
+            PRESCRIPTION_CANCELLED.
   /wellness/public/tenant/{slug}:
     parameters:
       - in: path

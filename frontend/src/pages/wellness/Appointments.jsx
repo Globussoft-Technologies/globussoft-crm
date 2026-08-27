@@ -1,12 +1,11 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, Search, Filter, RefreshCw, UserPlus, Phone } from 'lucide-react';
+import { Calendar, Search, Filter, RefreshCw, UserPlus, Phone, Package } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
 import { useNotify } from '../../utils/notify';
 import { AssignDoctorModal, displayStatus } from './Calendar';
 import CallifiedCallDialog from '../../components/CallifiedCallDialog';
-import CallifiedCallDetailsDrawer from '../../components/CallifiedCallDetailsDrawer';
 
 /**
  * Appointments - tenant-wide list view.
@@ -22,6 +21,12 @@ const STATUS_OPTIONS = [
   { value: '', label: 'Any status' },
   { value: 'booked', label: 'Booked' },
   { value: 'pending', label: 'Pending (unassigned)', clientOnly: true },
+  // A patient asking to use a session they already paid for. Waiting on the
+  // clinic to accept it — answered from Catalog → Active Packages.
+  { value: 'requested', label: 'Requested (package)' },
+  // Not a status: everything that came out of a bought package, whatever
+  // stage it is at. Same clientOnly trick as "Pending (unassigned)".
+  { value: 'package', label: 'From a package', clientOnly: true },
   { value: 'confirmed', label: 'Confirmed' },
   { value: 'arrived', label: 'Arrived' },
   { value: 'in-treatment', label: 'In treatment' },
@@ -29,6 +34,10 @@ const STATUS_OPTIONS = [
   { value: 'cancelled', label: 'Cancelled' },
   { value: 'no-show', label: 'No-show' },
 ];
+
+const CLIENT_ONLY_STATUSES = new Set(
+  STATUS_OPTIONS.filter((o) => o.clientOnly).map((o) => o.value),
+);
 
 const PAGE_SIZE = 100;
 
@@ -50,7 +59,6 @@ export default function Appointments() {
   // so nobody is offered a button that can only fail.
   const [callifiedReady, setCallifiedReady] = useState(null);
   const [callTarget, setCallTarget] = useState(null);
-  const [historyContact, setHistoryContact] = useState(null);
 
   const today = useMemo(() => todayLocalDate(), []);
   const oneWeekFromToday = useMemo(() => addDaysLocal(today, 7), [today]);
@@ -103,7 +111,9 @@ export default function Appointments() {
         qs.set('limit', String(PAGE_SIZE));
         qs.set('offset', String(nextOffset));
         if (doctorId) qs.set('doctorId', doctorId);
-        if (status && status !== 'pending') qs.set('status', status);
+        // clientOnly entries are UI filters, not server statuses — sending
+        // one would filter everything away.
+        if (status && !CLIENT_ONLY_STATUSES.has(status)) qs.set('status', status);
 
         const res = await fetchApi(`/api/wellness/visits?${qs.toString()}`, { silent: true });
         const nextRows = Array.isArray(res) ? res : Array.isArray(res?.visits) ? res.visits : [];
@@ -180,11 +190,14 @@ export default function Appointments() {
     if (status === 'pending') {
       rows = rows.filter((v) => v.status === 'booked' && !v.doctorId);
     }
+    if (status === 'package') {
+      rows = rows.filter((v) => Boolean(v.treatmentPlan));
+    }
 
     const term = search.trim().toLowerCase();
     if (term) {
       rows = rows.filter((v) => {
-        const blob = `${v.patient?.name || ''} ${v.service?.name || ''} ${v.doctor?.name || ''}`.toLowerCase();
+        const blob = `${v.patient?.name || ''} ${v.service?.name || ''} ${v.doctor?.name || ''} ${v.treatmentPlan?.name || ''}`.toLowerCase();
         return blob.includes(term);
       });
     }
@@ -452,6 +465,31 @@ export default function Appointments() {
                     {v.service?.name || (
                       <span style={{ color: 'var(--text-secondary)' }}>-</span>
                     )}
+                    {/* Already paid for as part of a package — say so on the
+                        row, next to the service it is being taken against. */}
+                    {v.treatmentPlan && (
+                      <div
+                        data-testid={`appointments-package-${v.id}`}
+                        title={`Session from the package "${v.treatmentPlan.name}" — already paid for`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          marginTop: '0.25rem',
+                          padding: '0.1rem 0.45rem',
+                          borderRadius: 999,
+                          fontSize: '0.68rem',
+                          fontWeight: 600,
+                          background: 'rgba(16,185,129,0.12)',
+                          color: '#10b981',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        <Package size={11} />
+                        Package · session {Math.min(v.treatmentPlan.completedSessions + 1, v.treatmentPlan.totalSessions)} of{' '}
+                        {v.treatmentPlan.totalSessions}
+                      </div>
+                    )}
                   </Td>
                   <Td>
                     <StatusBadge status={displayStatus(v)} />
@@ -485,6 +523,23 @@ export default function Appointments() {
                           visit={v}
                           onCall={() => setCallTarget(v)}
                         />
+                      )}
+                      {/* Accepting needs a practitioner AND flips the status,
+                          which the assign-doctor modal does not do — send
+                          staff to the queue that handles both. */}
+                      {v.status === 'requested' && (
+                        <Link
+                          to="/wellness/services?tab=activetreatments"
+                          data-testid={`appointments-review-request-${v.id}`}
+                          style={{
+                            fontSize: '0.8rem',
+                            color: 'var(--text-primary)',
+                            textDecoration: 'underline',
+                            textUnderlineOffset: '2px',
+                          }}
+                        >
+                          Review request
+                        </Link>
                       )}
                       <Link
                         to={`/wellness/calendar?focus=${v.id}${v.visitDate ? `&date=${isoLocalDate(v.visitDate)}` : ''}`}
@@ -565,21 +620,6 @@ export default function Appointments() {
             manualCall: `/api/wellness/callified/visits/${callTarget.id}/manual-call`,
           }}
           onClose={() => setCallTarget(null)}
-          onViewHistory={(contactId) => {
-            setHistoryContact({
-              id: contactId,
-              name: callTarget.patient?.name,
-              phone: callTarget.patient?.phone,
-            });
-            setCallTarget(null);
-          }}
-        />
-      )}
-
-      {historyContact && (
-        <CallifiedCallDetailsDrawer
-          lead={historyContact}
-          onClose={() => setHistoryContact(null)}
         />
       )}
     </div>
@@ -667,6 +707,8 @@ function isoLocalDate(input) {
 function StatusBadge({ status }) {
   const palette = {
     pending: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+    // A package session a patient has asked for, not yet accepted by the clinic.
+    requested: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
     booked: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
     scheduled: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
     'checked-in': { fg: '#0ea5e9', bg: 'rgba(14,165,233,0.1)' },

@@ -11,7 +11,7 @@ import {
 import { fetchApi, getAuthToken } from "../../../utils/api";
 import { useNotify } from "../../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../../utils/timing";
-import ModalShell from "./ModalShell";
+import ModalShell from "../../../components/wellness/ModalShell";
 import TagPickerPopover from "./TagPickerPopover";
 import {
   filterLabelStyle,

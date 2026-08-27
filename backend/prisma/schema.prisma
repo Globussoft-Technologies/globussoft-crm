@@ -173,6 +173,7 @@ model Tenant {
   services             Service[]
   visits               Visit[]
   prescriptions        Prescription[]
+  prescriptionRequests PrescriptionRequest[]
   consentForms         ConsentForm[]
   consentTemplates     ConsentTemplate[]
   treatmentPlans       TreatmentPlan[]
@@ -452,6 +453,10 @@ model Tenant {
   sales           Sale[]
   invoiceCounters InvoiceCounter[]
   saleLineItems   SaleLineItem[]
+  // Per-Product report — snapshots imported from the clinic's previous PMS
+  // while POS history builds up. See ProductSalesImport.
+  productSalesImports     ProductSalesImport[]
+  productSalesImportRows  ProductSalesImportRow[]
   // #779 — petty-cash deposits/withdrawals against open shifts.
   pettyCashLedger PettyCashLedger[]
 
@@ -638,6 +643,13 @@ model User {
   // Wellness vertical
   doctorVisits        Visit[]        @relation("DoctorVisits")
   doctorPrescriptions Prescription[] @relation("DoctorPrescriptions")
+  // Renewal requests raised against an Rx THIS user prescribed — the
+  // doctor half of the notify-on-request fan-out. Distinct from
+  // `reviewedPrescriptionRequests`, which is whoever actioned the request
+  // (often an admin, not the original prescriber).
+  doctorPrescriptionRequests   PrescriptionRequest[]      @relation("DoctorPrescriptionRequests")
+  reviewedPrescriptionRequests PrescriptionRequest[]      @relation("PrescriptionRequestReviewer")
+  prescriptionRequestEvents    PrescriptionRequestEvent[]
   // One self-booking User → many Patient rows (one per tenant the user
   // is registered at). Enforcement that there's at most ONE Patient per
   // (tenantId, userId) lives in the @@unique constraint on the Patient
@@ -3997,8 +4009,9 @@ model Patient {
   userId Int?
   user   User? @relation("PatientUser", fields: [userId], references: [id], onDelete: SetNull)
 
-  visits              Visit[]
-  prescriptions       Prescription[]
+  visits               Visit[]
+  prescriptions        Prescription[]
+  prescriptionRequests PrescriptionRequest[]
   consents            ConsentForm[]
   treatmentPlans      TreatmentPlan[]
   // Agent B: waitlist back-relation
@@ -4283,6 +4296,21 @@ model Prescription {
   status      String?
   dispensedAt DateTime?
 
+  // How long this prescription is meant to last, captured at prescribing time.
+  //   validityDays : what the clinician entered ("30 days"). The record of
+  //                  intent — kept verbatim rather than re-derived, because a
+  //                  later amendment to `drugs` must not silently rewrite how
+  //                  long the doctor said the course runs.
+  //   validUntil   : createdAt + validityDays, computed server-side. Stored
+  //                  rather than derived on read so the renewal-reminder sweep
+  //                  can do an INDEXED range scan ("expiring in the next 7
+  //                  days"); `DATE_ADD(createdAt, INTERVAL validityDays DAY)`
+  //                  in a WHERE clause cannot use an index.
+  // Both additive nullable — every existing Rx keeps null, meaning "no stated
+  // validity", and nothing downstream may treat null as expired.
+  validityDays Int?
+  validUntil   DateTime?
+
   visitId Int?
   visit   Visit? @relation(fields: [visitId], references: [id], onDelete: SetNull)
 
@@ -4301,8 +4329,141 @@ model Prescription {
 
   createdAt DateTime @default(now())
 
+  // Renewal / medicine requests a patient raised against this Rx.
+  renewalRequests PrescriptionRequest[]
+
   @@index([tenantId, createdAt])
   @@index([patientId])
+  // Drives the (not-yet-built) renewal-reminder sweep: "which prescriptions in
+  // this tenant lapse between X and Y". Leading tenantId keeps it tenant-scoped.
+  @@index([tenantId, validUntil])
+}
+
+// Prescription renewal / medicine request raised by a patient from the
+// Android app (or the patient portal).
+//
+// WHY A SEPARATE TABLE AND NOT A Prescription FLAG
+//   A renewal request is a *demand*, not a prescription. It carries no
+//   prescribing authority, it can be rejected, and several requests can
+//   stack against the same Rx over time. Folding it into Prescription would
+//   mean either mutating a medico-legal record on every patient tap or
+//   creating draft Rx rows no doctor authored — both unacceptable. The
+//   issued Rx stays immutable; this row is the workflow around it.
+//
+// FULL-PRESCRIPTION VS SPECIFIC-MEDICINE REQUESTS
+//   `requestedDrugs` is NULL when the patient asked to renew the WHOLE
+//   prescription (the app sent only a prescriptionId). It holds a JSON
+//   array — same JSON-string-column convention as Prescription.drugs —
+//   when the patient picked specific medicines. An empty array is
+//   normalised to NULL on write so "whole prescription" has exactly one
+//   representation downstream.
+//
+// TRUST BOUNDARY
+//   patientId, doctorId and tenantId are ALL resolved server-side from the
+//   prescription row + the portal token. The client supplies a prescription
+//   id and, optionally, a medicine selection / duration / note — nothing it
+//   says about who prescribed what is trusted.
+model PrescriptionRequest {
+  id Int @id @default(autoincrement())
+
+  // The Rx being renewed. Always required — a request with no prescription
+  // is not a renewal, it is a new consultation.
+  prescriptionId Int
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  patientId Int
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  // Prescribing doctor, copied from Prescription.doctorId at request time.
+  // Nullable because Prescription.doctorId is itself nullable (SetNull on
+  // user deletion) and legacy rows may carry no prescriber.
+  doctorId Int?
+  doctor   User? @relation("DoctorPrescriptionRequests", fields: [doctorId], references: [id], onDelete: SetNull)
+
+  // JSON array of the specific medicines requested; NULL = whole Rx.
+  requestedDrugs String? @db.Text
+
+  // What the patient asked for, in whichever form the app collected it.
+  // Duration and an explicit window are independent and both optional — an
+  // app may send "another 60 days", or "1 Sep → 31 Oct", or neither and
+  // leave the call to the doctor.
+  requestedDurationDays Int?
+  requestedFrom         DateTime?
+  requestedTo           DateTime?
+
+  // Free-text from the patient ("the 10mg made me drowsy").
+  notes String? @db.Text
+
+  // PENDING | ACCEPTED | REJECTED | COMPLETED. String (not enum) for
+  // additive safety — same rationale as Prescription.status above.
+  status String @default("PENDING")
+
+  // Who actioned it last, and what they said. `reviewNote` is echoed to the
+  // patient on reject / complete so a refusal is never silent.
+  reviewedById Int?
+  reviewedBy   User?     @relation("PrescriptionRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  reviewNote   String?   @db.Text
+
+  // Set when a doctor issues a NEW Prescription off the back of this
+  // request. Deliberately a plain Int, not a relation: the fulfilment Rx
+  // must outlive this row being cascade-deleted with its source Rx.
+  fulfilledPrescriptionId Int?
+
+  // Restrict (not Cascade) on Tenant deletion, mirroring Prescription — the
+  // row records a patient's medication demand and is discoverable in a
+  // clinical audit.
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events PrescriptionRequestEvent[]
+
+  // The admin listing is "newest first, optionally filtered by status", so
+  // the leading (tenantId, status) pair serves the filtered read and
+  // (tenantId, createdAt) the unfiltered one.
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([patientId, createdAt])
+  @@index([doctorId, status])
+  @@index([prescriptionId])
+}
+
+// Append-only history for a renewal request — one row per state change.
+//
+// AuditLog already records every transition for compliance, but it is
+// tenant-wide, hash-chained and admin-gated; the review screen needs a
+// cheap request-scoped "what has happened to this so far" list it can
+// render inline. This is that list, not a replacement for the audit trail.
+model PrescriptionRequestEvent {
+  id Int @id @default(autoincrement())
+
+  requestId Int
+  request   PrescriptionRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  // CREATED | ACCEPTED | REJECTED | COMPLETED
+  action String
+
+  // Status either side of the change. `fromStatus` is null on CREATED.
+  fromStatus String?
+  toStatus   String?
+
+  note String? @db.Text
+
+  // Null actor = the patient raised it from the app (portal tokens carry a
+  // Patient id, never a User id). `actorType` disambiguates.
+  actorUserId Int?
+  actor       User?  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorType   String @default("user") // user | patient | system
+
+  tenantId Int @default(1)
+
+  createdAt DateTime @default(now())
+
+  @@index([requestId, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model ConsentForm {
@@ -4428,6 +4589,14 @@ model TreatmentPlan {
   serviceId Int?
   service   Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
 
+  /// The catalog package this plan was bought from, when it came from a
+  /// customer purchase rather than being written up by hand. Lets the customer
+  /// catalog say "you already own this" and show the window left to use it.
+  /// SetNull, not Cascade: deleting a package must never delete the plans
+  /// patients paid for.
+  servicePackageId Int?
+  servicePackage   ServicePackage? @relation(fields: [servicePackageId], references: [id], onDelete: SetNull)
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -4435,6 +4604,7 @@ model TreatmentPlan {
 
   @@index([tenantId, status])
   @@index([patientId])
+  @@index([tenantId, servicePackageId])
   // #534 (PERF-1): TreatmentPlan list query is `where: { tenantId, patientId? }
   // orderBy: { startedAt: desc }`. Same shape as Patient — composite index
   // covers both the tenant filter and the orderBy. Saves the filesort.
@@ -9952,6 +10122,17 @@ model ServicePackage {
   price    Float  @default(0)
   currency String @default("INR")
 
+  /// GST applied when the package is SOLD, on top of `price`. 0 = no tax.
+  /// The builder offers 0 / 5 / 18, but the column takes any 0-100 rate so a
+  /// slab change is a data edit, not a migration.
+  taxPercent Float @default(0)
+  /// How long the package stays usable after a customer buys it, in days
+  /// (7 = a week, 365 = a year). Null = no expiry.
+  validityDays Int?
+  /// Last date the package may be SOLD. Past it the customer catalog stops
+  /// listing the package; staff keep seeing it, flagged. Null = sell forever.
+  sellByDate DateTime?
+
   /// Off = retired; the package stops being offered but existing sales keep
   /// resolving against it.
   isActive Boolean @default(true)
@@ -9962,10 +10143,94 @@ model ServicePackage {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// Plans created when customers bought this package.
+  plans TreatmentPlan[]
+
   createdBy Int?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([tenantId, isActive])
   @@index([tenantId, isPublic, isActive])
+}
+
+/// ─────────────────────────────────────────────────────────────────────
+/// Per-Product sales reporting — imported snapshots.
+///
+/// The live source of truth for the "Per Product" tab on /wellness/reports
+/// is POS: SaleLineItem rows with lineType='PRODUCT' belonging to a
+/// COMPLETED Sale. Clinics migrating onto the CRM, however, have months of
+/// product sales that only exist as a CSV/XLSX export from the system they
+/// are leaving. These two tables hold those exports so the tab has history
+/// on day one and switches to live POS numbers with no UI change once the
+/// clinic starts ringing sales here.
+///
+/// A batch (ProductSalesImport) is a whole uploaded file covering one
+/// period. Re-uploading the same period does NOT merge — the operator
+/// deletes the old batch and uploads again — because a partial merge of two
+/// snapshot exports silently double-counts every overlapping product.
+model ProductSalesImport {
+  id       Int    @id @default(autoincrement())
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Original upload filename, for the "which file was this?" column.
+  fileName String?
+  /// Period this snapshot covers. Set by the operator at upload time — the
+  /// export files themselves carry no date column, so the report window can
+  /// only be matched against an operator-declared period.
+  periodStart DateTime
+  periodEnd   DateTime
+  /// Optional free-text note ("Zenoti export, Jan-Mar FY25").
+  note String? @db.Text
+
+  /// Denormalised batch rollup so the imports list renders without
+  /// aggregating every row. Equals the sum of the batch's rows.
+  rowCount     Int   @default(0)
+  productCount Int   @default(0)
+  grossSales   Float @default(0)
+  discount     Float @default(0)
+  netSales     Float @default(0)
+  tax          Float @default(0)
+  totalSales   Float @default(0)
+
+  importedBy Int?
+  createdAt  DateTime @default(now())
+
+  rows ProductSalesImportRow[]
+
+  @@index([tenantId, periodStart, periodEnd])
+  @@index([tenantId, createdAt])
+}
+
+/// One product line of an imported snapshot. Column set mirrors the export
+/// shape every clinic PMS produces: gross → discount → net → tax → total.
+///
+/// `productId` is a best-effort match against the tenant's Product catalogue
+/// (exact name, then SKU, case-insensitive) resolved once at import time and
+/// left null when the product is not in the catalogue. It is deliberately NOT
+/// a foreign key: an imported snapshot is a historical record and must keep
+/// resolving after the catalogue row is renamed or retired. `productName` is
+/// the frozen display name, always populated.
+model ProductSalesImportRow {
+  id       Int    @id @default(autoincrement())
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  importId Int
+  import   ProductSalesImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  productName String
+  hsnCode     String?
+  productId   Int?
+
+  productCount Int   @default(0)
+  grossSales   Float @default(0)
+  discount     Float @default(0)
+  netSales     Float @default(0)
+  tax          Float @default(0)
+  totalSales   Float @default(0)
+
+  @@index([tenantId, importId])
+  @@index([tenantId, productName])
 }

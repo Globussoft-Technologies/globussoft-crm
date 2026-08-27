@@ -6,6 +6,10 @@
 //   GET  /api/attendance/me?from&to              -- own attendance history
 //   GET  /api/attendance/staff/:userId?from&to   -- manager/admin: another user's history
 //   GET  /api/attendance/summary?from&to&userId  -- manager/admin: aggregate stats
+//   GET  /api/attendance/export?from&to&format   -- manager/admin: CSV / XLSX of the list view
+//   GET  /api/attendance/import-template?format  -- admin: starter CSV / XLSX
+//   GET  /api/attendance/import-meta             -- admin: column contract + size caps
+//   POST /api/attendance/import                  -- admin: CSV / XLSX upload, upsert by (user, date)
 //   POST /api/attendance/biometric/webhook       -- X-API-Key auth via BiometricDevice.apiKey
 //   GET  /api/attendance/devices                 -- admin: list registered biometric devices
 //   POST /api/attendance/devices                 -- admin: register a new device
@@ -36,10 +40,16 @@
 // keys are impossible because @@unique([apiKey]) makes the key globally unique).
 
 const express = require("express");
+const multer = require("multer");
 const prisma = require("../lib/prisma");
 const crypto = require("crypto");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { writeAudit } = require("../lib/audit");
+// CSV / XLSX import-export for the Attendance dashboard toolbar — same
+// helper pair routes/embassy_rules.js uses (RFC4180 + formula-injection
+// sanitising on the way out, tolerant parsing on the way in).
+const { serializeRows, parseCsv, setCsvDownloadHeaders } = require("../lib/csvHelpers");
+const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
 // #665: shared inverted-date-range guard — see lib/validateDateRange.js. Pre-this
 // the three history endpoints (/me /staff/:id /summary) silently returned empty
 // rows when the operator passed to < from.
@@ -921,6 +931,517 @@ router.get("/by-month", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (re
     res.status(500).json({ error: "Failed to compute monthly attendance rollup" });
   }
 });
+
+// ==============================================================
+// CSV / XLSX import + export (Attendance dashboard toolbar).
+//
+//   GET  /api/attendance/import-meta       column contract + size caps
+//   GET  /api/attendance/import-template   downloadable starter file
+//   GET  /api/attendance/export            the current filtered view
+//   POST /api/attendance/import            multipart upload, synchronous
+//
+// Wired to the shared frontend <CsvImportExportToolbar> through its
+// `endpoints` override — the same escape hatch routes/embassy_rules.js uses.
+// We deliberately do NOT register an entity in the /api/wellness/csv/:entity
+// registry: verifyWellnessRole rejects non-wellness tenants, and this page is
+// also mounted at /travel/attendance. These four routes keep attendance.js's
+// own vertical-agnostic verifyRole gates instead:
+//   - export : ADMIN | MANAGER — the same read gate as /list and /summary
+//   - import : ADMIN only — an import can overwrite existing rows, so it is
+//              gated exactly like PUT / DELETE /:id
+//
+// Declared BEFORE the /:id family below for the same reason /summary and
+// /by-month are: a literal path segment must never fall through to :id.
+//
+// Import semantics (also surfaced to the operator via /import-meta):
+//   - the natural key is (employee, date) — the same @@unique([tenantId,
+//     userId, date]) tuple clock-in dedupes on. A match is UPDATED, anything
+//     else is INSERTED, so re-uploading an export is idempotent.
+//   - ONLY columns actually present in the uploaded header are written. A
+//     file carrying just employeeEmail,date,status leaves clockInAt / notes
+//     on the matched row untouched; a file that DOES carry `checkIn` with an
+//     empty cell clears it. That is what makes partial uploads safe.
+//   - the derived export columns (checkInType / checkOutType /
+//     checkInRecordedVia / checkOutRecordedVia) are read-only and ignored on
+//     import — they come from the shift policy + location IDs, not the sheet.
+
+const ATTENDANCE_IMPORT_MAX_ROWS = 5000;
+const ATTENDANCE_IMPORT_MAX_BYTES = 5 * 1024 * 1024;
+const ATTENDANCE_XLSX_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const ATTENDANCE_STATUSES = ["PRESENT", "HALF_DAY", "LATE", "ABSENT", "HOLIDAY"];
+
+const attendanceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: ATTENDANCE_IMPORT_MAX_BYTES },
+});
+
+// Export column order == import contract order, so an exported file is a
+// valid upload with no reshuffling. `key` reads the decorated row built by
+// buildAttendanceExportRow() below.
+const ATTENDANCE_EXPORT_COLUMNS = [
+  { key: "employeeName", header: "employeeName" },
+  { key: "employeeEmail", header: "employeeEmail" },
+  { key: "date", header: "date" },
+  { key: "checkIn", header: "checkIn" },
+  { key: "checkOut", header: "checkOut" },
+  { key: "checkInType", header: "checkInType" },
+  { key: "checkOutType", header: "checkOutType" },
+  { key: "checkInRecordedVia", header: "checkInRecordedVia" },
+  { key: "checkOutRecordedVia", header: "checkOutRecordedVia" },
+  { key: "status", header: "status" },
+  { key: "absent", header: "absent" },
+  { key: "totalMinutes", header: "totalMinutes" },
+  { key: "notes", header: "notes" },
+];
+
+const ATTENDANCE_CSV_HEADERS = ATTENDANCE_EXPORT_COLUMNS.map((c) => c.header);
+
+// Everything except the two identity columns is optional, so the toolbar's
+// pre-upload preview only warns about genuinely missing columns.
+const ATTENDANCE_REQUIRED_HEADERS = ["employeeEmail", "date"];
+const ATTENDANCE_OPTIONAL_HEADERS = ATTENDANCE_CSV_HEADERS.filter(
+  (h) => !ATTENDANCE_REQUIRED_HEADERS.includes(h),
+);
+
+// Computed on export, ignored on import.
+const ATTENDANCE_READONLY_HEADERS = [
+  "checkInType",
+  "checkOutType",
+  "checkInRecordedVia",
+  "checkOutRecordedVia",
+];
+
+const ATTENDANCE_TEMPLATE_SAMPLE = {
+  employeeName: "# optional - only used when employeeEmail is blank",
+  employeeEmail: "# required - staff login email, e.g. nurse@clinic.com",
+  date: "# required - YYYY-MM-DD",
+  checkIn: "# ISO-8601 (2026-08-18T09:05:00Z) or HH:mm on that date",
+  checkOut: "# ISO-8601 or HH:mm - blank means still clocked in",
+  checkInType: "# read-only, ignored on import",
+  checkOutType: "# read-only, ignored on import",
+  checkInRecordedVia: "# read-only, ignored on import",
+  checkOutRecordedVia: "# read-only, ignored on import",
+  status: `# one of ${ATTENDANCE_STATUSES.join(" | ")} (default PRESENT)`,
+  absent: "# Yes | No - only read when status is blank",
+  totalMinutes: "# optional - recomputed when checkIn AND checkOut are set",
+  notes: "# optional free text",
+};
+
+function setAttendanceXlsxHeaders(res, filename) {
+  res.setHeader("Content-Type", ATTENDANCE_XLSX_CONTENT_TYPE);
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+}
+
+function resolveAttendanceFormat(req) {
+  return String(req.query.format || "csv").toLowerCase() === "xlsx" ? "xlsx" : "csv";
+}
+
+function isAttendanceXlsxUpload(file) {
+  if (!file) return false;
+  const name = String(file.originalname || "").toLowerCase();
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")) return true;
+  const mime = String(file.mimetype || "").toLowerCase();
+  return mime === ATTENDANCE_XLSX_CONTENT_TYPE || mime === "application/vnd.ms-excel";
+}
+
+function readAttendanceUpload(req) {
+  if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+    return isAttendanceXlsxUpload(req.file)
+      ? parseXlsxBuffer(req.file.buffer)
+      : parseCsv(req.file.buffer.toString("utf8"));
+  }
+  if (typeof req.body === "string" && req.body.length > 0) return parseCsv(req.body);
+  if (req.body && typeof req.body.csv === "string" && req.body.csv.length > 0) {
+    return parseCsv(req.body.csv);
+  }
+  return null;
+}
+
+// Mirrors /list's filters minus its 500-row display cap.
+function buildAttendanceExportWhere(req) {
+  const where = { tenantId: req.user.tenantId };
+  const from = parseISO(req.query.from);
+  const to = parseISO(req.query.to);
+  if (from && to) where.date = { gte: from, lte: to };
+  else if (from) where.date = { gte: from };
+  else if (to) where.date = { lte: to };
+  if (req.query.userId) {
+    const uid = parseInt(req.query.userId, 10);
+    if (Number.isFinite(uid)) where.userId = uid;
+  }
+  if (req.query.status) where.status = String(req.query.status);
+  return where;
+}
+
+// The wire labels match the on-screen table exactly, so what an operator
+// exports reads like what they were looking at when they clicked Export.
+const ATTENDANCE_ARRIVAL_LABELS = { EARLY: "Early", ON_TIME: "On Time", AFTER: "Late" };
+const ATTENDANCE_DEPARTURE_LABELS = { EARLY: "Early", ON_TIME: "On Time", LATE: "Late" };
+
+function buildAttendanceExportRow(r) {
+  return {
+    employeeName: r.user?.name || `User #${r.userId}`,
+    employeeEmail: r.user?.email || "",
+    date: r.date ? new Date(r.date).toISOString().slice(0, 10) : "",
+    checkIn: r.clockInAt ? new Date(r.clockInAt).toISOString() : "",
+    checkOut: r.clockOutAt ? new Date(r.clockOutAt).toISOString() : "",
+    checkInType: ATTENDANCE_ARRIVAL_LABELS[classifyPunctuality(r)] || "N/A",
+    checkOutType: ATTENDANCE_DEPARTURE_LABELS[classifyDeparture(r)] || "N/A",
+    checkInRecordedVia: r.clockInLocationId ? "biometric" : "manual",
+    checkOutRecordedVia: r.clockOutLocationId ? "biometric" : "manual",
+    status: r.status || "",
+    absent: r.status === "ABSENT" ? "Yes" : "No",
+    totalMinutes: r.totalMinutes ?? "",
+    notes: r.notes || "",
+  };
+}
+
+// "09:05" / "9:05:30" -> a Date on the row's UTC day anchor; anything else
+// falls through to Date parsing. Returns undefined for a blank cell and null
+// for an unparseable one, so the caller can tell "clear it" from "reject it".
+const ATTENDANCE_TIME_ONLY_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+
+function parseAttendanceStamp(value, dayAnchor) {
+  const raw = value == null ? "" : String(value).trim();
+  if (raw === "") return undefined;
+  const timeOnly = ATTENDANCE_TIME_ONLY_RE.exec(raw);
+  if (timeOnly) {
+    if (!dayAnchor) return null;
+    const h = parseInt(timeOnly[1], 10);
+    const m = parseInt(timeOnly[2], 10);
+    const s = timeOnly[3] ? parseInt(timeOnly[3], 10) : 0;
+    if (h > 23 || m > 59 || s > 59) return null;
+    return new Date(Date.UTC(
+      dayAnchor.getUTCFullYear(), dayAnchor.getUTCMonth(), dayAnchor.getUTCDate(), h, m, s,
+    ));
+  }
+  const dt = new Date(raw);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+router.get("/import-meta", verifyToken, verifyRole(["ADMIN"]), (req, res) => {
+  res.json({
+    entity: "attendance",
+    headers: ATTENDANCE_CSV_HEADERS,
+    optionalHeaders: ATTENDANCE_OPTIONAL_HEADERS,
+    requiredHeaders: ATTENDANCE_REQUIRED_HEADERS,
+    readOnlyHeaders: ATTENDANCE_READONLY_HEADERS,
+    naturalKey: ["employeeEmail", "date"],
+    description:
+      "Rows are matched on (employee, date): a match is updated, anything else is inserted. Only the columns present in your file are written, so omitting a column leaves it untouched.",
+    thresholds: {
+      rows: ATTENDANCE_IMPORT_MAX_ROWS,
+      bytes: ATTENDANCE_IMPORT_MAX_BYTES,
+    },
+  });
+});
+
+router.get("/import-template", verifyToken, verifyRole(["ADMIN"]), (req, res) => {
+  try {
+    if (resolveAttendanceFormat(req) === "xlsx") {
+      const buf = toXlsxBuffer(
+        ATTENDANCE_CSV_HEADERS,
+        [ATTENDANCE_TEMPLATE_SAMPLE],
+        "Attendance Template",
+      );
+      setAttendanceXlsxHeaders(res, "attendance-template.xlsx");
+      return res.send(buf);
+    }
+    setCsvDownloadHeaders(res, "attendance-template.csv");
+    return res.send(serializeRows(ATTENDANCE_EXPORT_COLUMNS, [ATTENDANCE_TEMPLATE_SAMPLE]));
+  } catch (e) {
+    console.error("[attendance] template error:", e.message);
+    return res.status(500).json({
+      error: "Failed to generate attendance template",
+      code: "ATTENDANCE_TEMPLATE_FAILED",
+    });
+  }
+});
+
+router.get("/export", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const dv = validateDateRange({ from: req.query.from, to: req.query.to });
+    if (dv.error) return res.status(dv.error.status).json(dv.error);
+
+    const rows = await prisma.attendance.findMany({
+      where: buildAttendanceExportWhere(req),
+      orderBy: [{ date: "desc" }, { clockInAt: "desc" }],
+      take: 10000,
+      include: { user: { select: { id: true, name: true, email: true } } },
+    });
+    const exportRows = rows.map(buildAttendanceExportRow);
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    if (resolveAttendanceFormat(req) === "xlsx") {
+      const buf = toXlsxBuffer(ATTENDANCE_CSV_HEADERS, exportRows, "Attendance Export");
+      setAttendanceXlsxHeaders(res, `attendance-export-${stamp}.xlsx`);
+      return res.send(buf);
+    }
+    setCsvDownloadHeaders(res, `attendance-export-${stamp}.csv`);
+    return res.send(serializeRows(ATTENDANCE_EXPORT_COLUMNS, exportRows));
+  } catch (e) {
+    console.error("[attendance] export error:", e.message);
+    return res.status(500).json({
+      error: "Failed to export attendance rows",
+      code: "ATTENDANCE_EXPORT_FAILED",
+    });
+  }
+});
+
+router.post(
+  "/import",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  attendanceUpload.single("file"),
+  async (req, res) => {
+    try {
+      const parsed = readAttendanceUpload(req);
+      if (!parsed) {
+        return res.status(400).json({ error: "No CSV/Excel body or file uploaded", code: "NO_CSV" });
+      }
+
+      const headers = Array.isArray(parsed.headers)
+        ? parsed.headers.map((h) => String(h).trim())
+        : [];
+      const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+      const missing = ATTENDANCE_REQUIRED_HEADERS.filter((h) => !headers.includes(h));
+      if (missing.length > 0) {
+        return res.status(400).json({
+          error: `missing required column(s): ${missing.join(", ")}`,
+          code: "MISSING_FIELDS",
+        });
+      }
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
+      }
+      if (rows.length > ATTENDANCE_IMPORT_MAX_ROWS) {
+        return res.status(413).json({
+          error: `Too many rows. Max ${ATTENDANCE_IMPORT_MAX_ROWS}`,
+          code: "TOO_MANY_ROWS",
+        });
+      }
+
+      // Which writable columns did the operator actually supply? Anything
+      // outside this set is left alone on an update — see the semantics note
+      // at the top of this block.
+      const supplied = (h) => headers.includes(h);
+
+      // One staff lookup for the whole batch so the per-row loop never
+      // hammers prisma. Keyed by lower-cased email AND name, mirroring
+      // lib/csvEntities.js's findStaff().
+      const staff = await prisma.user.findMany({
+        where: { tenantId: req.user.tenantId },
+        select: { id: true, name: true, email: true },
+      });
+      const norm = (s) => String(s || "").trim().toLowerCase();
+      const staffByEmail = new Map(staff.filter((u) => u.email).map((u) => [norm(u.email), u.id]));
+      const staffByName = new Map(staff.map((u) => [norm(u.name), u.id]));
+
+      let inserted = 0;
+      let updated = 0;
+      let skipped = 0;
+      const errors = [];
+      // Two rows for the same (employee, date) inside ONE upload would race
+      // the unique constraint. We flag the collision and let the later row
+      // win as an update rather than surfacing a duplicate-key 500.
+      const seen = new Set();
+
+      const pushError = (rowNumber, column, value, message) => {
+        errors.push({
+          row: rowNumber,
+          rowNumber,
+          column,
+          value: value == null ? "" : String(value),
+          message,
+          reason: message,
+        });
+      };
+
+      for (let i = 0; i < rows.length; i += 1) {
+        const raw = rows[i];
+        const rowNumber = i + 2; // 1-based + header offset
+        try {
+          const emailCell = String(raw.employeeEmail ?? "").trim();
+          const nameCell = String(raw.employeeName ?? "").trim();
+          const dateCell = String(raw.date ?? "").trim();
+
+          // Blank line, or the template's commented sample row.
+          const allBlank = ATTENDANCE_CSV_HEADERS.every(
+            (h) => String(raw[h] ?? "").trim() === "",
+          );
+          if (allBlank || emailCell.startsWith("#") || dateCell.startsWith("#")) {
+            skipped += 1;
+            continue;
+          }
+
+          const userId = emailCell
+            ? staffByEmail.get(norm(emailCell)) || null
+            : (nameCell ? staffByName.get(norm(nameCell)) || null : null);
+          if (!userId) {
+            pushError(
+              rowNumber,
+              emailCell || !nameCell ? "employeeEmail" : "employeeName",
+              emailCell || nameCell,
+              emailCell || nameCell
+                ? "no staff member in your organisation with this email or name"
+                : "employeeEmail is required",
+            );
+            skipped += 1;
+            continue;
+          }
+
+          const parsedDate = dateCell ? new Date(dateCell) : null;
+          if (!parsedDate || Number.isNaN(parsedDate.getTime())) {
+            pushError(rowNumber, "date", dateCell, "date is required (YYYY-MM-DD)");
+            skipped += 1;
+            continue;
+          }
+          const day = anchorDay(parsedDate);
+
+          const dedupeKey = `${userId}|${day.getTime()}`;
+          if (seen.has(dedupeKey)) {
+            pushError(
+              rowNumber,
+              "date",
+              dateCell,
+              "duplicate (employee, date) earlier in this file — the later row wins",
+            );
+          }
+          seen.add(dedupeKey);
+
+          const data = {};
+
+          if (supplied("checkIn")) {
+            const clockInAt = parseAttendanceStamp(raw.checkIn, day);
+            if (clockInAt === null) {
+              pushError(rowNumber, "checkIn", raw.checkIn, "checkIn must be an ISO-8601 timestamp or HH:mm");
+              skipped += 1;
+              continue;
+            }
+            data.clockInAt = clockInAt === undefined ? null : clockInAt;
+          }
+          if (supplied("checkOut")) {
+            const clockOutAt = parseAttendanceStamp(raw.checkOut, day);
+            if (clockOutAt === null) {
+              pushError(rowNumber, "checkOut", raw.checkOut, "checkOut must be an ISO-8601 timestamp or HH:mm");
+              skipped += 1;
+              continue;
+            }
+            data.clockOutAt = clockOutAt === undefined ? null : clockOutAt;
+          }
+
+          if (supplied("status")) {
+            const statusCell = String(raw.status ?? "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+            if (statusCell) {
+              if (!ATTENDANCE_STATUSES.includes(statusCell)) {
+                pushError(
+                  rowNumber,
+                  "status",
+                  raw.status,
+                  `status must be one of ${ATTENDANCE_STATUSES.join(", ")}`,
+                );
+                skipped += 1;
+                continue;
+              }
+              data.status = statusCell;
+            } else if (supplied("absent")) {
+              // Blank status + an explicit Absent flag: honour the flag, so a
+              // hand-edited export round-trips the way the table reads.
+              const absentCell = String(raw.absent ?? "").trim().toLowerCase();
+              if (["yes", "true", "1", "y"].includes(absentCell)) data.status = "ABSENT";
+              else if (["no", "false", "0", "n"].includes(absentCell)) data.status = "PRESENT";
+            }
+          }
+
+          if (supplied("notes")) {
+            const notesCell = String(raw.notes ?? "").trim();
+            data.notes = notesCell ? notesCell.slice(0, 2000) : null;
+          }
+
+          const existing = await prisma.attendance.findUnique({
+            where: { tenantId_userId_date: { tenantId: req.user.tenantId, userId, date: day } },
+          });
+
+          // Recompute totalMinutes off the POST-MERGE timestamps, exactly like
+          // PUT /:id does — an import that only moves clockOutAt still lands a
+          // correct duration.
+          const finalIn = data.clockInAt !== undefined ? data.clockInAt : (existing?.clockInAt ?? null);
+          const finalOut = data.clockOutAt !== undefined ? data.clockOutAt : (existing?.clockOutAt ?? null);
+          if (finalIn && finalOut) {
+            if (finalOut.getTime() < finalIn.getTime()) {
+              pushError(rowNumber, "checkOut", raw.checkOut, "checkOut is before checkIn");
+              skipped += 1;
+              continue;
+            }
+            data.totalMinutes = Math.max(
+              0,
+              Math.round((finalOut.getTime() - finalIn.getTime()) / 60000),
+            );
+          } else if (supplied("totalMinutes")) {
+            const minutesCell = String(raw.totalMinutes ?? "").trim();
+            if (minutesCell === "") {
+              data.totalMinutes = null;
+            } else {
+              const mins = parseInt(minutesCell, 10);
+              if (!Number.isFinite(mins) || mins < 0) {
+                pushError(
+                  rowNumber,
+                  "totalMinutes",
+                  raw.totalMinutes,
+                  "totalMinutes must be a non-negative whole number",
+                );
+                skipped += 1;
+                continue;
+              }
+              data.totalMinutes = mins;
+            }
+          } else if (data.clockOutAt === null) {
+            data.totalMinutes = null;
+          }
+
+          if (existing) {
+            await prisma.attendance.update({ where: { id: existing.id }, data });
+            updated += 1;
+          } else {
+            await prisma.attendance.create({
+              data: {
+                tenantId: req.user.tenantId,
+                userId,
+                date: day,
+                status: data.status || "PRESENT",
+                source: "CSV_IMPORT",
+                ...data,
+              },
+            });
+            inserted += 1;
+          }
+        } catch (rowErr) {
+          pushError(rowNumber, "(row)", "", rowErr?.message || String(rowErr));
+          skipped += 1;
+        }
+      }
+
+      await writeAudit("Attendance", "CSV_IMPORT", null, req.user.userId, req.user.tenantId, {
+        rowCount: rows.length,
+        inserted,
+        updated,
+        skipped,
+        errorCount: errors.length,
+      });
+
+      // `imported` is the legacy alias the older CSV surfaces return; the
+      // shared toolbar reads `inserted` first and falls back to it.
+      return res.json({ inserted, imported: inserted, updated, skipped, errors });
+    } catch (e) {
+      console.error("[attendance] import error:", e.message);
+      return res.status(500).json({
+        error: "Failed to import attendance rows",
+        code: "ATTENDANCE_IMPORT_FAILED",
+      });
+    }
+  },
+);
 
 // PUT /api/attendance/:id — ADMIN-only edit. Whitelisted fields: clockInAt,
 // clockOutAt, status, notes. totalMinutes is recomputed if both timestamps

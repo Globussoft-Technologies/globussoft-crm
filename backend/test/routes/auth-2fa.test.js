@@ -360,7 +360,7 @@ describe('POST /verify — login-step-2 surface', () => {
     const secret = speakeasy.generateSecret({ length: 20 }).base32;
     prisma.user.findUnique.mockResolvedValue({
       id: 7, email: 'rishu@enhancedwellness.in', name: 'Rishu',
-      role: 'ADMIN', wellnessRole: null, tenantId: 2,
+      role: 'ADMIN', wellnessRole: null, themePreference: 'dark', tenantId: 2,
       twoFactorEnabled: true, twoFactorSecret: secret,
       backupCodes: JSON.stringify([]),
       tenant: { id: 2, name: 'Enhanced Wellness', slug: 'wellness',
@@ -390,6 +390,7 @@ describe('POST /verify — login-step-2 surface', () => {
     expect(decoded.jti).toMatch(/^[a-f0-9]{32}$/); // 16 random bytes hex-encoded
 
     expect(res.body.user.email).toBe('rishu@enhancedwellness.in');
+    expect(res.body.user.themePreference).toBe('dark');
     expect(res.body.tenant.vertical).toBe('wellness');
     expect(res.body.tenant.defaultCurrency).toBe('INR');
   });
@@ -402,7 +403,7 @@ describe('POST /verify — login-step-2 surface', () => {
     let currentBackup = JSON.stringify([hashed]);
 
     prisma.user.findUnique.mockImplementation(async () => ({
-      id: 7, email: 'r@x.com', name: 'R', role: 'USER', wellnessRole: null,
+      id: 7, email: 'r@x.com', name: 'R', role: 'USER', wellnessRole: null, themePreference: 'system',
       tenantId: 1, twoFactorEnabled: true, twoFactorSecret: secret,
       backupCodes: currentBackup,
       tenant: { id: 1, name: 'T', slug: 't', plan: 'free', vertical: 'generic',

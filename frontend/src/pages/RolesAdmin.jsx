@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { createPortal } from 'react-dom';
 import { AuthContext } from '../App';
-import { LayoutGrid, Pencil, Plus, Shield, Trash2, Users, X, UserMinus, UserPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
+import { LayoutGrid, Pencil, Plus, Shield, Trash2, Users, X, UserPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { usePermissions, invalidatePermissionCache } from '../hooks/usePermissions';
@@ -2765,20 +2765,21 @@ function UsersModal({ role, canManage, onClose, onChange }) {
     }
   };
 
-  const unassign = async (userId) => {
+  const deleteMember = async (userId) => {
     const ok = await notify.confirm({
-      title: 'Remove role',
-      message: 'Remove this role from the user?',
-      confirmText: 'Remove',
+      title: 'Delete user account',
+      message:
+        'This permanently deletes the user account and any directly linked CRM profile rows. The same email can be used again later.',
+      confirmText: 'Delete',
       destructive: true,
     });
     if (!ok) return;
     setBusyUserId(userId);
     try {
-      await fetchApi(`/api/roles/${role.id}/assign/${userId}`, {
+      await fetchApi(`/api/roles/${role.id}/members/${userId}`, {
         method: 'DELETE',
       });
-      notify.success?.('Role removed');
+      notify.success?.('User deleted');
       await load();
       onChange?.();
     } catch {
@@ -2793,7 +2794,7 @@ function UsersModal({ role, canManage, onClose, onChange }) {
       title={`Members of ${role.name}`}
       subtitle={
         canManage
-          ? 'Assign or remove users from this role. Changes apply immediately.'
+          ? 'Assign users to this role, or permanently delete a member. Changes apply immediately.'
           : 'You do not have permission to manage role assignments.'
       }
       onClose={onClose}
@@ -2875,7 +2876,7 @@ function UsersModal({ role, canManage, onClose, onChange }) {
                     <Td>
                       <button
                         type="button"
-                        onClick={() => unassign(u.id)}
+                        onClick={() => deleteMember(u.id)}
                         className="btn-secondary"
                         disabled={busyUserId === u.id}
                         style={{
@@ -2885,8 +2886,8 @@ function UsersModal({ role, canManage, onClose, onChange }) {
                           fontSize: '0.75rem',
                         }}
                       >
-                        <UserMinus size={12} />
-                        {busyUserId === u.id ? 'Removing…' : 'Remove'}
+                        <Trash2 size={12} />
+                        {busyUserId === u.id ? 'Deleting…' : 'Delete'}
                       </button>
                     </Td>
                   )}

@@ -1,8 +1,8 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
-import { useState, useEffect, useContext, useRef } from 'react';
-import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, SlidersHorizontal, GitMerge, EyeOff } from 'lucide-react';
+import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
+import { Search, Plus, Trash2, Pencil, RefreshCw, Download, X, FileSpreadsheet, UserCheck, ChevronDown, ChevronUp, ArrowUpDown, SlidersHorizontal, GitMerge, EyeOff } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import ReturnToBanner from '../components/ReturnToBanner';
 import DuplicateContactModal from '../components/DuplicateContactModal';
@@ -96,6 +96,30 @@ const ALLOWED_STATUSES = new Set(['Lead', 'Prospect', 'Customer', 'Churned', 'Ju
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
 const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
 const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
+const CONTACTS_COLUMN_LAYOUT_STORAGE_KEY = 'globuscrm.contacts.columnLayout.v1';
+const CONTACTS_COLUMN_MIN_WIDTH = 72;
+const CONTACTS_SELECT_COLUMN_WIDTH = 48;
+const CONTACTS_NAME_COLUMN_MIN_WIDTH = 220;
+const CONTACTS_NAME_COLUMN_MAX_WIDTH = 380;
+const CONTACTS_ACTIONS_COLUMN_WIDTH = 120;
+const CONTACTS_COLUMN_DEFAULT_WIDTHS = {
+  select: CONTACTS_SELECT_COLUMN_WIDTH,
+  name: 240,
+  email: 220,
+  phone: 150,
+  company: 180,
+  aiScore: 118,
+  status: 110,
+  assignedTo: 170,
+  createdAt: 145,
+  actions: CONTACTS_ACTIONS_COLUMN_WIDTH,
+};
+const CONTACTS_SCORE_BUCKETS = [
+  { value: '0-25', label: '0 - 25', min: 0, max: 25 },
+  { value: '26-50', label: '26 - 50', min: 26, max: 50 },
+  { value: '51-75', label: '51 - 75', min: 51, max: 75 },
+  { value: '76-100', label: '76 - 100', min: 76, max: 100 },
+];
 
 function validateCsvRow(row) {
   const issues = [];
@@ -162,10 +186,10 @@ const Contacts = () => {
   // (personal per-user preference — see components/ColumnPicker.jsx).
   // null = "not loaded yet, show every builtin column".
   const [visibleColumns, setVisibleColumns] = useState(null);
-  const isColVisible = (key) => {
+  const isColVisible = useCallback((key) => {
     if (isWellness || isTravel || visibleColumns === null) return true;
     return visibleColumns.includes(key);
-  };
+  }, [isTravel, isWellness, visibleColumns]);
   const staffBrandSuffix = (member) => {
     if (!isTravel) return '';
     const brands = accessibleSubBrands(member).map(subBrandShortLabel);
@@ -234,12 +258,43 @@ const Contacts = () => {
   // (backend/routes/contacts.js FILTERABLE_FIELDS) so it isn't bounded by
   // the same-page 500-row client cap the way the dropdowns above are.
   const [advancedFilters, setAdvancedFilters] = useState([]);
-  const SCORE_BUCKETS = [
-    { value: '0-25', label: '0 - 25', min: 0, max: 25 },
-    { value: '26-50', label: '26 - 50', min: 26, max: 50 },
-    { value: '51-75', label: '51 - 75', min: 51, max: 75 },
-    { value: '76-100', label: '76 - 100', min: 76, max: 100 },
-  ];
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
+  const [columnLayout, setColumnLayout] = useState(() => {
+    if (typeof window === 'undefined') return { widths: {} };
+    try {
+      const saved = window.localStorage.getItem(CONTACTS_COLUMN_LAYOUT_STORAGE_KEY);
+      if (!saved) return { widths: {} };
+      const parsed = JSON.parse(saved);
+      return {
+        widths: parsed?.widths && typeof parsed.widths === 'object' ? parsed.widths : {},
+      };
+    } catch (_err) {
+      return { widths: {} };
+    }
+  });
+  const resizeStateRef = useRef(null);
+  const contactsFrozenTableRef = useRef(null);
+  const contactsScrollableTableRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        CONTACTS_COLUMN_LAYOUT_STORAGE_KEY,
+        JSON.stringify(columnLayout),
+      );
+    } catch (_err) {
+      // Table interaction should continue even if layout persistence fails.
+    }
+  }, [columnLayout]);
+
+  useEffect(
+    () => () => {
+      if (!resizeStateRef.current) return;
+      window.removeEventListener('mousemove', resizeStateRef.current.onMove);
+      window.removeEventListener('mouseup', resizeStateRef.current.onUp);
+    },
+    [],
+  );
 
   const handleFindDupes = async () => {
     try {
@@ -295,7 +350,86 @@ const Contacts = () => {
     } catch { notify.error('Dismiss failed'); }
   };
 
-  const fetchContacts = () => {
+  const getColumnDefaultWidth = (key) =>
+    CONTACTS_COLUMN_DEFAULT_WIDTHS[key] || (key.startsWith('cf_') ? 160 : 140);
+  const getColumnWidth = (key) => {
+    const savedWidth = Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
+    if (key === 'select') return CONTACTS_SELECT_COLUMN_WIDTH;
+    if (key === 'name') {
+      return Math.max(
+        CONTACTS_NAME_COLUMN_MIN_WIDTH,
+        Math.min(savedWidth, CONTACTS_NAME_COLUMN_MAX_WIDTH),
+      );
+    }
+    if (key === 'actions') {
+      return Math.max(CONTACTS_ACTIONS_COLUMN_WIDTH, savedWidth);
+    }
+    if (key === 'assignedTo') {
+      return Math.max(150, savedWidth);
+    }
+    return Math.max(CONTACTS_COLUMN_MIN_WIDTH, savedWidth);
+  };
+  const setColumnWidth = (key, width) => {
+    const minWidth =
+      key === 'select'
+        ? CONTACTS_SELECT_COLUMN_WIDTH
+        : key === 'name'
+          ? CONTACTS_NAME_COLUMN_MIN_WIDTH
+          : key === 'actions'
+            ? CONTACTS_ACTIONS_COLUMN_WIDTH
+            : key === 'assignedTo'
+              ? 150
+              : CONTACTS_COLUMN_MIN_WIDTH;
+    const maxWidth = key === 'name' ? CONTACTS_NAME_COLUMN_MAX_WIDTH : Number.POSITIVE_INFINITY;
+    const nextWidth = Math.max(minWidth, Math.min(Math.round(width), maxWidth));
+    setColumnLayout((prev) => ({
+      widths: { ...(prev.widths || {}), [key]: nextWidth },
+    }));
+  };
+  const startColumnResize = (key, event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = getColumnWidth(key);
+    const onMove = (moveEvent) => {
+      setColumnWidth(key, startWidth + moveEvent.clientX - startX);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      resizeStateRef.current = null;
+    };
+    resizeStateRef.current = { onMove, onUp };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+  const toggleContactSort = (key) => {
+    setSortConfig((prev) => {
+      if (prev.key !== key) return { key, direction: 'asc' };
+      if (prev.direction === 'asc') return { key, direction: 'desc' };
+      if (prev.direction === 'desc') return { key: null, direction: null };
+      return { key, direction: 'asc' };
+    });
+  };
+  const getContactSortValue = useCallback((contact, key) => {
+    if (key === 'name') return contact.name || '';
+    if (key === 'email') return contact.email || '';
+    if (key === 'phone') return contact.phone || '';
+    if (key === 'company') return contact.company || '';
+    if (key === 'aiScore') return Number.isFinite(Number(contact.aiScore)) ? Number(contact.aiScore) : null;
+    if (key === 'status') return contact.status || '';
+    if (key === 'assignedTo') return contact.assignedTo?.name || contact.assignedTo?.email || '';
+    if (key === 'createdAt') return contact.createdAt ? new Date(contact.createdAt).getTime() : null;
+    if (key.startsWith('cf_')) {
+      const fieldKey = key.slice(3);
+      const raw = contact.customFields?.[fieldKey];
+      if (Array.isArray(raw)) return raw.join(', ');
+      return raw ?? '';
+    }
+    return '';
+  }, []);
+
+  const fetchContacts = useCallback(() => {
     const qs = advancedFilters.length > 0
       ? `?filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
       : '';
@@ -303,7 +437,7 @@ const Contacts = () => {
         setContacts(Array.isArray(data) ? data : []);
         setLoading(false);
       }).catch(() => { setContacts([]); setLoading(false); });
-  };
+  }, [advancedFilters]);
 
   const handleRescore = async () => {
     setRescoring(true);
@@ -320,7 +454,7 @@ const Contacts = () => {
   useEffect(() => {
     fetchContacts();
     fetchApi('/api/staff').then(data => setStaff(data)).catch(() => {});
-  }, []);
+  }, [fetchContacts]);
 
   // Refetch (server-side) whenever the FilterPanel's filter set changes.
   // Skips the very first render — the mount effect above already fetched
@@ -329,7 +463,7 @@ const Contacts = () => {
   useEffect(() => {
     if (isFirstFiltersRender.current) { isFirstFiltersRender.current = false; return; }
     fetchContacts();
-  }, [advancedFilters]);
+  }, [fetchContacts]);
 
   // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
   // Own effect keyed on [isWellness, isTravel] (not the mount-only effect
@@ -536,38 +670,676 @@ const Contacts = () => {
     fetchContacts();
   };
 
-  // #461: derive the visible rows from `contacts` + the two filter inputs.
-  // Search matches name / email / company / title (case-insensitive). The
-  // dropdown supports the canonical statuses; 'All' disables status filtering.
-  // A selected Saved View additionally restricts to its fixed membership
-  // list — applied first so search/status still narrow within the view.
-  const visibleContacts = contacts.filter((c) => {
-    if (activeViewMemberIds && !activeViewMemberIds.has(c.id)) return false;
-    if (statusFilter !== 'All' && c.status !== statusFilter) return false;
-    if (assignedToFilter === 'unassigned' && c.assignedToId) return false;
-    if (assignedToFilter && assignedToFilter !== 'unassigned' && String(c.assignedToId || '') !== assignedToFilter) return false;
-    if (scoreFilter) {
-      const bucket = SCORE_BUCKETS.find(b => b.value === scoreFilter);
-      if (bucket && (c.aiScore < bucket.min || c.aiScore > bucket.max)) return false;
-    }
+  // #461: derive the visible rows from `contacts` + the filter inputs, then
+  // optionally apply the current header sort. Search matches name / email /
+  // company / title (case-insensitive). The dropdown supports the canonical
+  // statuses; 'All' disables status filtering. A selected Saved View
+  // additionally restricts to its fixed membership list first so
+  // search/status still narrow within the view.
+  const visibleContacts = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    if (!term) return true;
-    return (
-      (c.name || '').toLowerCase().includes(term) ||
-      (c.email || '').toLowerCase().includes(term) ||
-      (c.company || '').toLowerCase().includes(term) ||
-      (c.title || '').toLowerCase().includes(term)
-    );
-  });
+    return contacts.filter((c) => {
+      if (activeViewMemberIds && !activeViewMemberIds.has(c.id)) return false;
+      if (statusFilter !== 'All' && c.status !== statusFilter) return false;
+      if (assignedToFilter === 'unassigned' && c.assignedToId) return false;
+      if (assignedToFilter && assignedToFilter !== 'unassigned' && String(c.assignedToId || '') !== assignedToFilter) return false;
+      if (scoreFilter) {
+        const bucket = CONTACTS_SCORE_BUCKETS.find(b => b.value === scoreFilter);
+        if (bucket && (c.aiScore < bucket.min || c.aiScore > bucket.max)) return false;
+      }
+      if (!term) return true;
+      return (
+        (c.name || '').toLowerCase().includes(term) ||
+        (c.email || '').toLowerCase().includes(term) ||
+        (c.company || '').toLowerCase().includes(term) ||
+        (c.title || '').toLowerCase().includes(term)
+      );
+    });
+  }, [activeViewMemberIds, assignedToFilter, contacts, scoreFilter, searchTerm, statusFilter]);
 
-  // colSpan for the loading/empty-state row must track exactly how many
-  // <th> render in the header above, including the generic-only optional
-  // columns the "Customize table" picker can hide.
-  const visibleCfCols = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
-  const contactsColSpan = 2 /* Name + Actions */
-    + (isAdmin ? 1 : 0) /* bulk-select checkbox column */
-    + ['email', 'phone', 'company', 'aiScore', 'status', 'assignedTo', 'createdAt'].filter(isColVisible).length
-    + visibleCfCols;
+  const sortedContacts = useMemo(() => {
+    if (!sortConfig.key || !sortConfig.direction) return visibleContacts;
+    const direction = sortConfig.direction === 'desc' ? -1 : 1;
+    const collator = new Intl.Collator(undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    });
+    return [...visibleContacts].sort((a, b) => {
+      const aValue = getContactSortValue(a, sortConfig.key);
+      const bValue = getContactSortValue(b, sortConfig.key);
+      const aNull = aValue === null || aValue === undefined || aValue === '';
+      const bNull = bValue === null || bValue === undefined || bValue === '';
+      if (aNull && bNull) return 0;
+      if (aNull) return 1;
+      if (bNull) return -1;
+      if (typeof aValue === 'number' && typeof bValue === 'number') {
+        return (aValue - bValue) * direction;
+      }
+      return collator.compare(String(aValue), String(bValue)) * direction;
+    });
+  }, [getContactSortValue, sortConfig.direction, sortConfig.key, visibleContacts]);
+
+  const visibleCustomFieldDefs = useMemo(
+    () =>
+      customFieldDefs.filter((f) =>
+        isWellness || isTravel || visibleColumns === null
+          ? true
+          : visibleColumns.includes(`cf_${f.fieldKey}`),
+      ),
+    [customFieldDefs, isTravel, isWellness, visibleColumns],
+  );
+
+  const contactsFrozenColumnDefs = useMemo(
+    () => [
+      ...(isAdmin
+        ? [
+            {
+              key: 'select',
+              label: '',
+              sortable: false,
+              resizable: false,
+            },
+          ]
+        : []),
+      {
+        key: 'name',
+        label: 'Name',
+        sortable: true,
+        resizable: true,
+      },
+    ],
+    [isAdmin],
+  );
+
+  const contactsScrollableColumnDefs = useMemo(
+    () => [
+      ...(isColVisible('email')
+        ? [
+            {
+              key: 'email',
+              label: 'Email',
+              sortable: true,
+              resizable: true,
+            },
+          ]
+        : []),
+      ...(isColVisible('phone')
+        ? [
+            {
+              key: 'phone',
+              label: 'Phone',
+              sortable: true,
+              resizable: true,
+            },
+          ]
+        : []),
+      ...(isColVisible('company')
+        ? [
+            {
+              key: 'company',
+              label: 'Category',
+              sortable: true,
+              resizable: true,
+            },
+          ]
+        : []),
+      ...(isColVisible('aiScore')
+        ? [
+            {
+              key: 'aiScore',
+              label: 'Lead Score',
+              sortable: true,
+              resizable: true,
+            },
+          ]
+        : []),
+      ...(isColVisible('status')
+        ? [
+            {
+              key: 'status',
+              label: 'Status',
+              sortable: true,
+              resizable: true,
+            },
+          ]
+        : []),
+      ...visibleCustomFieldDefs.map((field) => ({
+        key: `cf_${field.fieldKey}`,
+        label: field.label,
+        sortable: true,
+        resizable: true,
+        field,
+        customField: true,
+      })),
+      ...(isColVisible('assignedTo')
+        ? [
+            {
+              key: 'assignedTo',
+              label: 'Assigned To',
+              sortable: true,
+              resizable: true,
+            },
+          ]
+        : []),
+      ...(isColVisible('createdAt')
+        ? [
+            {
+              key: 'createdAt',
+              label: 'Created',
+              sortable: true,
+              resizable: true,
+            },
+          ]
+        : []),
+      {
+        key: 'actions',
+        label: 'Actions',
+        sortable: false,
+        resizable: true,
+      },
+    ],
+    [isColVisible, visibleCustomFieldDefs],
+  );
+
+  const contactsFrozenTableWidth = contactsFrozenColumnDefs.reduce(
+    (sum, column) => sum + getColumnWidth(column.key),
+    0,
+  );
+  const contactsScrollableTableWidth = contactsScrollableColumnDefs.reduce(
+    (sum, column) => sum + getColumnWidth(column.key),
+    0,
+  );
+  const contactsScrollableTableBaseWidth = contactsScrollableColumnDefs.reduce(
+    (sum, column) => sum + getColumnDefaultWidth(column.key),
+    0,
+  );
+  const contactsScrollableTableMinWidth = `${Math.max(
+    contactsScrollableTableWidth,
+    contactsScrollableTableBaseWidth,
+  )}px`;
+  const contactsFrozenTableWidthPx = `${contactsFrozenTableWidth}px`;
+  const contactsRowSyncSignature = useMemo(
+    () =>
+      sortedContacts
+        .map((contact) =>
+          [
+            contact.id,
+            contact.name,
+            contact.title,
+            contact.email,
+            contact.phone,
+            contact.company,
+            contact.aiScore ?? '',
+            contact.status ?? '',
+            contact.assignedToId ?? '',
+            contact.createdAt ?? '',
+            JSON.stringify(contact.customFields || {}),
+          ].join('|'),
+        )
+        .concat(JSON.stringify(columnLayout), contactsScrollableColumnDefs.map((column) => column.key).join(','))
+        .join('::'),
+    [columnLayout, contactsScrollableColumnDefs, sortedContacts],
+  );
+
+  useLayoutEffect(() => {
+    if (sortedContacts.length === 0) return undefined;
+    const frozenTable = contactsFrozenTableRef.current;
+    const scrollableTable = contactsScrollableTableRef.current;
+    if (!frozenTable || !scrollableTable) return undefined;
+
+    const syncTablePairHeight = (leftRow, rightRow) => {
+      if (!leftRow || !rightRow) return;
+      const height = Math.max(
+        Math.ceil(leftRow.getBoundingClientRect().height),
+        Math.ceil(rightRow.getBoundingClientRect().height),
+      );
+      const nextHeight = `${height}px`;
+      if (leftRow.style.height !== nextHeight) {
+        leftRow.style.height = nextHeight;
+      }
+      if (rightRow.style.height !== nextHeight) {
+        rightRow.style.height = nextHeight;
+      }
+    };
+
+    const syncSplitTableRowHeights = () => {
+      const frozenHeaderRow = frozenTable.querySelector('thead tr');
+      const scrollHeaderRow = scrollableTable.querySelector('thead tr');
+      const frozenRows = Array.from(frozenTable.querySelectorAll('tbody tr'));
+      const scrollRows = Array.from(scrollableTable.querySelectorAll('tbody tr'));
+      if (
+        frozenRows.length === 0 ||
+        frozenRows.length !== scrollRows.length ||
+        !frozenHeaderRow ||
+        !scrollHeaderRow
+      ) {
+        return;
+      }
+
+      syncTablePairHeight(frozenHeaderRow, scrollHeaderRow);
+      frozenRows.forEach((frozenRow, index) => {
+        const scrollRow = scrollRows[index];
+        if (!scrollRow) return;
+        syncTablePairHeight(frozenRow, scrollRow);
+      });
+    };
+
+    syncSplitTableRowHeights();
+    return () => {
+      frozenTable?.querySelectorAll('thead tr, tbody tr').forEach((row) => {
+        row.style.height = '';
+      });
+      scrollableTable?.querySelectorAll('thead tr, tbody tr').forEach((row) => {
+        row.style.height = '';
+      });
+    };
+  }, [contactsRowSyncSignature, sortedContacts.length]);
+
+  const getContactHeaderCellStyle = (extra = {}) => ({
+    padding: '1rem',
+    color: 'var(--text-secondary)',
+    fontWeight: '500',
+    fontSize: '0.875rem',
+    verticalAlign: 'middle',
+    overflow: 'hidden',
+    position: 'relative',
+    ...extra,
+  });
+  const getContactBodyCellStyle = (extra = {}) => ({
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    padding: '1rem',
+    ...extra,
+  });
+  const renderContactsHeaderCell = (column, extra = {}, cellProps = {}, leadingControls = null) => {
+    const { key, label, sortable = true, resizable = true, align = 'left' } = column;
+    const active = sortConfig.key === key && sortConfig.direction;
+    const ariaSort = active
+      ? sortConfig.direction === 'asc'
+        ? 'ascending'
+        : 'descending'
+      : 'none';
+    const controls = sortable ? (
+      <button
+        type="button"
+        onClick={() => toggleContactSort(key)}
+        aria-label={`Sort by ${label || key}`}
+        title={`Sort by ${label || key}`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.3rem',
+          border: 'none',
+          background: 'transparent',
+          padding: 0,
+          color: 'inherit',
+          cursor: 'pointer',
+          minWidth: 0,
+          textAlign: align,
+        }}
+      >
+        <span
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {label}
+        </span>
+        <span
+          style={{
+            display: 'inline-flex',
+            flexShrink: 0,
+            color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+          }}
+        >
+          {active ? (
+            sortConfig.direction === 'asc' ? (
+              <ChevronUp size={12} />
+            ) : (
+              <ChevronDown size={12} />
+            )
+          ) : (
+            <ArrowUpDown size={12} />
+          )}
+        </span>
+      </button>
+    ) : (
+      <span
+        style={{
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </span>
+    );
+
+    return (
+      <th
+        {...cellProps}
+        style={getContactHeaderCellStyle({
+          textAlign: align,
+          ...extra,
+        })}
+        aria-sort={sortable ? ariaSort : undefined}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+            gap: '0.4rem',
+            minWidth: 0,
+            width: '100%',
+          }}
+        >
+          {leadingControls}
+          {controls}
+        </div>
+        {resizable && key !== 'select' && (
+          <span
+            role="separator"
+            aria-label={`Resize ${label} column`}
+            aria-orientation="vertical"
+            title={`Drag to resize ${label}`}
+            onMouseDown={(e) => startColumnResize(key, e)}
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              width: 8,
+              height: '100%',
+              cursor: 'col-resize',
+              touchAction: 'none',
+              borderRight: '2px solid transparent',
+            }}
+          />
+        )}
+      </th>
+    );
+  };
+  const renderFrozenContactRow = (contact) => (
+    <tr
+      key={contact.id}
+      className="table-row-hover"
+      style={{ borderBottom: '1px solid var(--border-color)' }}
+    >
+      {isAdmin && (
+        <td style={getContactBodyCellStyle({ padding: '1rem' })}>
+          <input
+            type="checkbox"
+            checked={selectedContacts.includes(contact.id)}
+            onChange={() => toggleSelectContact(contact.id)}
+            style={{ cursor: 'pointer' }}
+            aria-label={`Select ${contact.name || contact.email || 'contact'}`}
+          />
+        </td>
+      )}
+      <td style={getContactBodyCellStyle({ padding: '1rem' })}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            minWidth: 0,
+          }}
+        >
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <Link
+              to={`/contacts/${contact.id}`}
+              style={{
+                color: 'var(--text-primary)',
+                textDecoration: 'none',
+                display: 'block',
+                pointerEvents: 'all',
+                position: 'relative',
+                zIndex: 10,
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontWeight: 600,
+              }}
+              className="hover-underline"
+            >
+              {contact.name || 'Unnamed contact'}
+            </Link>
+            <div
+              style={{
+                fontSize: '0.75rem',
+                color: 'var(--text-secondary)',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={contact.title || ''}
+            >
+              {contact.title || ''}
+            </div>
+          </div>
+        </div>
+      </td>
+    </tr>
+  );
+  const renderScrollableContactCell = (contact, column) => {
+    switch (column.key) {
+      case 'email':
+        return (
+          <td
+            key={column.key}
+            style={getContactBodyCellStyle({
+              color: 'var(--text-secondary)',
+            })}
+            title={contact.email || ''}
+          >
+            {contact.email || '\u2014'}
+          </td>
+        );
+      case 'phone':
+        return (
+          <td
+            key={column.key}
+            style={getContactBodyCellStyle({ color: 'var(--text-secondary)' })}
+          >
+            {contact.phone || '\u2014'}
+          </td>
+        );
+      case 'company':
+        return (
+          <td
+            key={column.key}
+            style={getContactBodyCellStyle({ color: 'var(--text-secondary)' })}
+            title={contact.company || ''}
+          >
+            {contact.company || '\u2014'}
+          </td>
+        );
+      case 'aiScore':
+        return (
+          <td key={column.key} style={getContactBodyCellStyle()}>
+            <span
+              style={{
+                padding: '0.25rem 0.75rem',
+                borderRadius: '999px',
+                fontSize: '0.75rem',
+                fontWeight: 'bold',
+                backgroundColor:
+                  contact.aiScore > 75
+                    ? 'rgba(16, 185, 129, 0.1)'
+                    : contact.aiScore > 40
+                      ? 'rgba(245, 158, 11, 0.1)'
+                      : 'rgba(239, 68, 68, 0.1)',
+                color:
+                  contact.aiScore > 75
+                    ? 'var(--success-color)'
+                    : contact.aiScore > 40
+                      ? 'var(--warning-color)'
+                      : '#ef4444',
+              }}
+            >
+              {contact.aiScore}/100
+            </span>
+          </td>
+        );
+      case 'status':
+        return (
+          <td key={column.key} style={getContactBodyCellStyle()}>
+            <span
+              style={{
+                padding: '0.25rem 0.75rem',
+                borderRadius: '999px',
+                fontSize: '0.75rem',
+                backgroundColor:
+                  contact.status === 'Lead'
+                    ? 'rgba(59, 130, 246, 0.1)'
+                    : 'rgba(16, 185, 129, 0.1)',
+                color:
+                  contact.status === 'Lead'
+                    ? 'var(--accent-color)'
+                    : 'var(--success-color)',
+              }}
+            >
+              {contact.status || '\u2014'}
+            </span>
+          </td>
+        );
+      case 'assignedTo':
+        return (
+          <td key={column.key} style={getContactBodyCellStyle()}>
+            {canEditAssignedTo ? (
+              <select
+                className="input-field"
+                value={contact.assignedToId || ''}
+                onChange={(e) => handleAssign(contact.id, e.target.value)}
+                style={{
+                  padding: '0.375rem 0.5rem',
+                  fontSize: '0.8rem',
+                  minWidth: '130px',
+                  background: 'var(--input-bg)',
+                }}
+              >
+                <option value="">Unassigned</option>
+                {assignableStaff(contact).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {staffOptionLabel(s)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span
+                style={{
+                  fontSize: '0.875rem',
+                  color: contact.assignedToId
+                    ? 'var(--text-primary)'
+                    : 'var(--text-secondary)',
+                }}
+                title={contact.assignedTo?.name || contact.assignedTo?.email || 'Unassigned'}
+              >
+                {contact.assignedTo?.name || contact.assignedTo?.email || 'Unassigned'}
+              </span>
+            )}
+          </td>
+        );
+      case 'createdAt':
+        return (
+          <td
+            key={column.key}
+            style={getContactBodyCellStyle({ color: 'var(--text-secondary)', fontSize: '0.875rem' })}
+            title={contact.createdAt ? formatDate(contact.createdAt) : ''}
+          >
+            {contact.createdAt ? formatDate(contact.createdAt) : '\u2014'}
+          </td>
+        );
+      case 'actions':
+        return (
+          <td
+            key={column.key}
+            style={getContactBodyCellStyle({ textAlign: 'right', whiteSpace: 'nowrap' })}
+          >
+            <button
+              onClick={() => setEditingContact(contact)}
+              aria-label={`Edit contact ${contact.name || contact.email || ''}`}
+              title="Edit contact"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                marginRight: '0.5rem',
+              }}
+            >
+              <Pencil size={16} />
+            </button>
+            <button
+              onClick={() => handleDelete(contact.id)}
+              aria-label={`Delete contact ${contact.name || contact.email || ''}`}
+              title="Delete contact"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#ef4444',
+                cursor: 'pointer',
+              }}
+            >
+              <Trash2 size={18} />
+            </button>
+          </td>
+        );
+      default:
+        if (column.key.startsWith('cf_') && column.field) {
+          return (
+            <td
+              key={column.key}
+              style={getContactBodyCellStyle({
+                padding: '0.5rem 1rem',
+                color: 'var(--text-secondary)',
+                fontSize: '0.875rem',
+              })}
+            >
+              <InlineCellEditor
+                contactId={contact.id}
+                field={column.field}
+                value={contact.customFields?.[column.field.fieldKey]}
+                onSaved={(newValue) => {
+                  setContacts((prev) =>
+                    prev.map((c) =>
+                      c.id === contact.id
+                        ? {
+                            ...c,
+                            customFields: {
+                              ...c.customFields,
+                              [column.field.fieldKey]: newValue,
+                            },
+                          }
+                        : c,
+                    ),
+                  );
+                }}
+              />
+            </td>
+          );
+        }
+        return null;
+    }
+  };
+  const renderScrollableContactRow = (contact) => (
+    <tr
+      key={contact.id}
+      style={{ borderBottom: '1px solid var(--border-color)' }}
+      className="table-row-hover"
+    >
+      {contactsScrollableColumnDefs.map((column) =>
+        renderScrollableContactCell(contact, column),
+      )}
+    </tr>
+  );
 
   return (
     <div style={{ padding: '2rem' }}>
@@ -830,7 +1602,7 @@ const Contacts = () => {
             aria-label="Filter by lead score"
           >
             <option value="">All Scores</option>
-            {SCORE_BUCKETS.map(b => (
+            {CONTACTS_SCORE_BUCKETS.map(b => (
               <option key={b.value} value={b.value}>{b.label}</option>
             ))}
           </select>
@@ -855,221 +1627,166 @@ const Contacts = () => {
           )}
         </div>
         
-        {/* #633: stable-table — pins tableLayout=fixed so row hover never
-            shifts column widths. Columns use FIXED pixel widths (not
-            percentages) so a column's content (phone numbers, dates, etc.)
-            gets a sane minimum instead of stretching/shrinking proportionally
-            once minWidth forces the table wider than its container — that
-            proportional stretch was what caused phone numbers to wrap
-            awkwardly. TopScrollSync adds a second scrollbar pinned to the
-            TOP of the table (mirrors the bottom one) so the user can scroll
-            right from wherever they already are, without having to scroll
-            all the way down the page to reach the native bottom scrollbar
-            first. tableMinWidth is computed once and shared between the
-            table's own minWidth and TopScrollSync's spacer so the two
-            scrollbars stay in lockstep. */}
-        {(() => {
-          const visibleCfColsList = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`));
-          const colWidths = {
-            name: 220, email: 220, phone: 150, company: 160,
-            aiScore: 110, status: 110, assignedTo: 150, createdAt: 120,
-          };
-          const tableMinWidth = (isAdmin ? 40 : 0) /* bulk-select checkbox column */
-            + colWidths.name
-            + (isColVisible('email') ? colWidths.email : 0)
-            + (isColVisible('phone') ? colWidths.phone : 0)
-            + (isColVisible('company') ? colWidths.company : 0)
-            + (isColVisible('aiScore') ? colWidths.aiScore : 0)
-            + (isColVisible('status') ? colWidths.status : 0)
-            + visibleCfColsList.length * 160
-            + (isColVisible('assignedTo') ? colWidths.assignedTo : 0)
-            + (isColVisible('createdAt') ? colWidths.createdAt : 0)
-            + 120; /* Actions — wide enough for Edit + Delete icons and the "Actions" header without truncating */
-          return (
-        <TopScrollSync scrollWidth={`${tableMinWidth}px`}>
-        <table className="stable-table" style={{ borderCollapse: 'collapse', textAlign: 'left', minWidth: `${tableMinWidth}px` }}>
-          <colgroup>
-            {isAdmin && <col style={{ width: '40px' }} />}
-            <col style={{ width: `${colWidths.name}px` }} />
-            {isColVisible('email') && <col style={{ width: `${colWidths.email}px` }} />}
-            {isColVisible('phone') && <col style={{ width: `${colWidths.phone}px` }} />}
-            {isColVisible('company') && <col style={{ width: `${colWidths.company}px` }} />}
-            {isColVisible('aiScore') && <col style={{ width: `${colWidths.aiScore}px` }} />}
-            {isColVisible('status') && <col style={{ width: `${colWidths.status}px` }} />}
-            {visibleCfColsList.map(f => <col key={f.id} style={{ width: '160px' }} />)}
-            {isColVisible('assignedTo') && <col style={{ width: `${colWidths.assignedTo}px` }} />}
-            {isColVisible('createdAt') && <col style={{ width: `${colWidths.createdAt}px` }} />}
-            <col style={{ width: '120px' }} />
-          </colgroup>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
-              {isAdmin && (
-                <th style={{ padding: '1rem', width: '40px' }}>
-                  <input type="checkbox" checked={selectedContacts.length === visibleContacts.length && visibleContacts.length > 0} onChange={toggleSelectAllContacts} style={{ cursor: 'pointer' }} />
-                </th>
-              )}
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
-              {isColVisible('email') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>}
-              {isColVisible('phone') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>}
-              {isColVisible('company') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Category</th>}
-              {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
-              {isColVisible('aiScore') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>}
-              {isColVisible('status') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Status</th>}
-              {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields),
-                  each independently toggleable via the "Customize table" picker. */}
-              {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => (
-                <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
-              ))}
-              {isColVisible('assignedTo') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>}
-              {isColVisible('createdAt') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>}
-              <th style={{ padding: '1rem', textAlign: 'right', whiteSpace: 'nowrap' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={contactsColSpan} style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
-            ) : visibleContacts.length === 0 ? (
-              <tr><td colSpan={contactsColSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                {contacts.length === 0
-                  ? 'No contacts yet. Click "Add Contact" or import a CSV.'
-                  : `No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}.`}
-              </td></tr>
-            ) : visibleContacts.map(contact => (
-              <tr key={contact.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
-                {isAdmin && (
-                  <td style={{ padding: '1rem' }}>
-                    <input type="checkbox" checked={selectedContacts.includes(contact.id)} onChange={() => toggleSelectContact(contact.id)} style={{ cursor: 'pointer' }} />
-                  </td>
-                )}
-                <td style={{ padding: '1rem' }}>
-                  <div style={{ fontWeight: '500' }}>
-                    <Link to={`/contacts/${contact.id}`} style={{ color: 'var(--text-primary)', textDecoration: 'none', display: 'block', pointerEvents: 'all', position: 'relative', zIndex: 10 }} className="hover-underline">
-                      {contact.name}
-                    </Link>
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{contact.title}</div>
-                </td>
-                {/* #488: long emails (auto-generated test rows like
-                    `arjun.mehta.17779656822@e2e.dev`) used to truncate mid-string
-                    on narrow viewports with no affordance. Cap the cell width,
-                    add ellipsis, and surface the full address via the native
-                    title-attribute tooltip on hover. */}
-                {isColVisible('email') && (
-                  <td
-                    style={{
-                      padding: '1rem',
-                      color: 'var(--text-secondary)',
-                      maxWidth: 240,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                    title={contact.email || ''}
-                  >
-                    {contact.email}
-                  </td>
-                )}
-                {isColVisible('phone') && <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.phone || '—'}</td>}
-                {isColVisible('company') && <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.company}</td>}
-                {isColVisible('aiScore') && (
-                  <td style={{ padding: '1rem' }}>
-                    <span style={{
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: '999px',
-                      fontSize: '0.75rem',
-                      fontWeight: 'bold',
-                      backgroundColor: contact.aiScore > 75 ? 'rgba(16, 185, 129, 0.1)' : contact.aiScore > 40 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                      color: contact.aiScore > 75 ? 'var(--success-color)' : contact.aiScore > 40 ? 'var(--warning-color)' : '#ef4444'
-                    }}>
-                      {contact.aiScore}/100
-                    </span>
-                  </td>
-                )}
-                {isColVisible('status') && (
-                  <td style={{ padding: '1rem' }}>
-                    <span style={{
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: '999px',
-                      fontSize: '0.75rem',
-                      backgroundColor: contact.status === 'Lead' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(16, 185, 129, 0.1)',
-                      color: contact.status === 'Lead' ? 'var(--accent-color)' : 'var(--success-color)'
-                    }}>
-                      {contact.status}
-                    </span>
-                  </td>
-                )}
-                {/* Generic-vertical-only Lead custom fields — inline
-                    click-to-add/edit/remove directly in the cell
-                    (Freshsales-style), no need to open a separate edit
-                    form just to fill in one field. Each field's column is
-                    independently toggleable via the picker. */}
-                {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => (
-                  <td key={f.id} style={{ padding: '0.5rem 1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                    <InlineCellEditor
-                      contactId={contact.id}
-                      field={f}
-                      value={contact.customFields?.[f.fieldKey]}
-                      onSaved={(newValue) => {
-                        setContacts(prev => prev.map(c => c.id === contact.id
-                          ? { ...c, customFields: { ...c.customFields, [f.fieldKey]: newValue } }
-                          : c));
-                      }}
-                    />
-                  </td>
+        {/* Split-table layout: freeze the name column, keep the rest in a
+            synced scrollable pane, and preserve the existing filters and
+            row actions without changing the fetch or CRUD flows. */}
+        <div className="contacts-split-table">
+          <div
+            className="contacts-table-frozen-pane"
+            style={{ width: contactsFrozenTableWidthPx }}
+          >
+            <div className="contacts-table-frozen-spacer" />
+            <table
+              className="stable-table"
+              ref={contactsFrozenTableRef}
+              style={{
+                width: contactsFrozenTableWidthPx,
+                minWidth: contactsFrozenTableWidthPx,
+                borderCollapse: 'separate',
+                borderSpacing: 0,
+                textAlign: 'left',
+                tableLayout: 'fixed',
+              }}
+            >
+              <colgroup>
+                {contactsFrozenColumnDefs.map((column) => (
+                  <col
+                    key={column.key}
+                    style={{ width: `${getColumnWidth(column.key)}px` }}
+                  />
                 ))}
-                {isColVisible('assignedTo') && (
-                  <td style={{ padding: '1rem' }}>
-                    {canEditAssignedTo ? (
-                      <select
-                        className="input-field"
-                        value={contact.assignedToId || ''}
-                        onChange={e => handleAssign(contact.id, e.target.value)}
-                        style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
-                      >
-                        <option value="">Unassigned</option>
-                        {assignableStaff(contact).map(s => (
-                          <option key={s.id} value={s.id}>{staffOptionLabel(s)}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span style={{ fontSize: '0.875rem', color: contact.assignedToId ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                        {contact.assignedTo?.name || contact.assignedTo?.email || 'Unassigned'}
-                      </span>
+              </colgroup>
+              <thead>
+                <tr style={{ backgroundColor: 'var(--table-header-bg)' }}>
+                  {contactsFrozenColumnDefs.map((column) =>
+                    column.key === 'select'
+                      ? renderContactsHeaderCell(
+                          column,
+                          {},
+                          { key: column.key },
+                          <input
+                            type="checkbox"
+                            checked={
+                              selectedContacts.length === sortedContacts.length &&
+                              sortedContacts.length > 0
+                            }
+                            onChange={toggleSelectAllContacts}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label="Select all contacts"
+                            style={{ cursor: 'pointer', margin: 0 }}
+                          />,
+                        )
+                      : renderContactsHeaderCell(
+                          column,
+                          { paddingRight: '2rem' },
+                          { key: column.key },
+                        ),
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    {contactsFrozenColumnDefs.map((column) => (
+                      <td
+                        key={column.key}
+                        style={getContactBodyCellStyle({ padding: '2rem' })}
+                      />
+                    ))}
+                  </tr>
+                ) : sortedContacts.length === 0 ? (
+                  <tr>
+                    {contactsFrozenColumnDefs.map((column) => (
+                      <td
+                        key={column.key}
+                        style={getContactBodyCellStyle({ padding: '2rem' })}
+                      />
+                    ))}
+                  </tr>
+                ) : (
+                  sortedContacts.map(renderFrozenContactRow)
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="contacts-table-scroll-pane">
+            <TopScrollSync
+              forceScrollbar
+              scrollWidth={contactsScrollableTableMinWidth}
+              stickyTop
+              stickyTopOffset={0}
+              hideBottomScrollbar
+            >
+              <table
+                className="stable-table"
+                ref={contactsScrollableTableRef}
+                style={{
+                  width: '100%',
+                  minWidth: contactsScrollableTableMinWidth,
+                  borderCollapse: 'separate',
+                  borderSpacing: 0,
+                  textAlign: 'left',
+                  tableLayout: 'fixed',
+                }}
+              >
+                <colgroup>
+                  {contactsScrollableColumnDefs.map((column) => (
+                    <col
+                      key={column.key}
+                      style={{ width: `${getColumnWidth(column.key)}px` }}
+                    />
+                  ))}
+                </colgroup>
+                <thead>
+                  <tr style={{ backgroundColor: 'var(--table-header-bg)' }}>
+                    {contactsScrollableColumnDefs.map((column) =>
+                      renderContactsHeaderCell(
+                        column,
+                        column.key === 'actions'
+                          ? { textAlign: 'right', paddingRight: '2rem' }
+                          : { paddingRight: '2rem' },
+                        { key: column.key },
+                      ),
                     )}
-                  </td>
-                )}
-                {isColVisible('createdAt') && (
-                  <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                    {contact.createdAt ? formatDate(contact.createdAt) : '—'}
-                  </td>
-                )}
-                <td style={{ padding: '1rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <button
-                    onClick={() => setEditingContact(contact)}
-                    aria-label={`Edit contact ${contact.name || contact.email || ''}`}
-                    title="Edit contact"
-                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', marginRight: '0.5rem' }}
-                  >
-                    <Pencil size={16} />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(contact.id)}
-                    aria-label={`Delete contact ${contact.name || contact.email || ''}`}
-                    title="Delete contact"
-                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        </TopScrollSync>
-          );
-        })()}
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td
+                        colSpan={contactsScrollableColumnDefs.length}
+                        style={{
+                          padding: '2rem',
+                          textAlign: 'center',
+                        }}
+                      >
+                        Loading contacts...
+                      </td>
+                    </tr>
+                  ) : sortedContacts.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={contactsScrollableColumnDefs.length}
+                        style={{
+                          padding: '2rem',
+                          textAlign: 'center',
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        {contacts.length === 0
+                          ? 'No contacts yet. Click "Add Contact" or import a CSV.'
+                          : `No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}.`}
+                      </td>
+                    </tr>
+                  ) : (
+                    sortedContacts.map(renderScrollableContactRow)
+                  )}
+                </tbody>
+              </table>
+            </TopScrollSync>
+          </div>
+        </div>
       </div>
-
       {showImportModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--catalogue-modal-backdrop)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div className="card" style={{ padding: '2rem', width: '600px', maxHeight: '80vh', overflowY: 'auto' }}>

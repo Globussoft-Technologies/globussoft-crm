@@ -159,6 +159,75 @@ async function countAdminUsersForTenant(tenantId) {
   return prisma.userRole.count({ where: { roleId: adminRole.id } });
 }
 
+function deletedContactEmail(userId, tenantId) {
+  return `deleted-contact-${tenantId}-${userId}-${Date.now()}@redacted.local`;
+}
+
+async function clearDeletedMemberIdentity(tx, { user, tenantId }) {
+  const contactSummary = { hardDeleted: 0, tombstoned: 0 };
+  const patientSummary = { hardDeleted: 0, softDeleted: 0 };
+  const now = new Date();
+
+  const contactRows = user.email
+    ? await tx.contact.findMany({
+        where: { tenantId, email: user.email },
+        select: { id: true },
+      })
+    : [];
+
+  for (const contact of contactRows) {
+    try {
+      await tx.contact.delete({ where: { id: contact.id } });
+      contactSummary.hardDeleted += 1;
+    } catch (err) {
+      if (err && err.code === "P2025") {
+        continue;
+      }
+      if (err && err.code !== "P2003") throw err;
+
+      await tx.contact.update({
+        where: { id: contact.id },
+        data: {
+          email: deletedContactEmail(user.id, tenantId),
+          deletedAt: now,
+        },
+      });
+      contactSummary.tombstoned += 1;
+    }
+  }
+
+  const patientRows = await tx.patient.findMany({
+    where: {
+      tenantId,
+      OR: [
+        { userId: user.id },
+        ...(user.email ? [{ email: user.email }] : []),
+      ],
+    },
+    select: { id: true },
+  });
+
+  for (const patient of patientRows) {
+    try {
+      await tx.patient.delete({ where: { id: patient.id } });
+      patientSummary.hardDeleted += 1;
+    } catch (err) {
+      if (err && err.code === "P2025") {
+        continue;
+      }
+      if (err && err.code !== "P2003") throw err;
+
+      await tx.patient.update({
+        where: { id: patient.id },
+        data: { deletedAt: now },
+      });
+      patientSummary.softDeleted += 1;
+    }
+  }
+
+  return { contactSummary, patientSummary };
+}
+
 // Build the Set<"module.action"> a role currently holds. Re-used by the
 // accessible-pages endpoint + the landingPath validator + the auto-clear
 // hook after a permissions bulk-update. Returns an empty Set if the role
@@ -1355,6 +1424,134 @@ router.post(
     } catch (err) {
       console.error("[roles] assign error:", err);
       res.status(500).json({ error: "Failed to assign role" });
+    }
+  },
+);
+
+// DELETE /api/roles/:id/members/:userId — hard-delete the user account
+// represented by this member row. The Roles modal uses this path when an
+// operator removes a participant from the member list so the account,
+// its direct CRM identity mirrors, and any reusable email constraints are
+// cleared in one action.
+router.delete(
+  "/:id/members/:userId",
+  verifyToken,
+  requirePermission("roles", "manage"),
+  async (req, res) => {
+    try {
+      const roleId = parseInt(req.params.id);
+      const userId = parseInt(req.params.userId);
+
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      if (!role) {
+        return res.status(404).json({ error: "Role not found" });
+      }
+
+      if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const user = await prisma.user.findFirst({
+        where: { id: userId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          tenantId: true,
+          userType: true,
+        },
+      });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      if (!req.user.isOwner && user.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (user.tenantId !== role.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (req.user.userId === user.id) {
+        return res.status(400).json({ error: "Cannot delete your own account." });
+      }
+      if (user.userType === "OWNER") {
+        return res.status(403).json({
+          error: "Cannot delete the tenant owner.",
+          code: "OWNER_PROTECTED",
+        });
+      }
+
+      const targetHasAdminRole =
+        role.key === "ADMIN" ||
+        !!(await prisma.userRole.findFirst({
+          where: {
+            userId: user.id,
+            role: {
+              tenantId: role.tenantId,
+              key: "ADMIN",
+            },
+          },
+          select: { id: true },
+        }));
+
+      if (targetHasAdminRole) {
+        const adminUserCount = await countAdminUsersForTenant(role.tenantId);
+        if (adminUserCount <= 1) {
+          return res.status(409).json({
+            error:
+              "Cannot delete the only ADMIN — assign ADMIN to another user first, then delete this account.",
+            code: "LAST_ADMIN_PROTECTION",
+          });
+        }
+      }
+
+      const auditDetails = {
+        roleId,
+        roleKey: role.key,
+        targetUserId: user.id,
+        targetEmail: user.email,
+        targetName: user.name,
+        targetUserType: user.userType,
+        hardDelete: true,
+      };
+      const cleanup = await prisma.$transaction(async (tx) => {
+        const result = await clearDeletedMemberIdentity(tx, {
+          user,
+          tenantId: role.tenantId,
+        });
+        await tx.user.delete({ where: { id: user.id } });
+        return result;
+      });
+
+      // Clear this user's permission cache. The account is gone, but
+      // clearing the cache keeps any concurrent request from using stale
+      // role-derived permissions while the delete is propagating.
+      clearUserCache(user.id, role.tenantId);
+
+      try {
+        await writeAudit(
+          "User",
+          "DELETE_USER",
+          user.id,
+          req.user.userId,
+          role.tenantId,
+          {
+            ...auditDetails,
+            contactCleanup: cleanup.contactSummary,
+            patientCleanup: cleanup.patientSummary,
+          },
+        );
+      } catch (auditErr) {
+        console.error("[roles] delete member audit error:", auditErr);
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[roles] delete member error:", err);
+      if (err && err.code === "P2025") {
+        return res.status(404).json({ error: "User not found" });
+      }
+      res.status(500).json({ error: "Failed to delete user" });
     }
   },
 );

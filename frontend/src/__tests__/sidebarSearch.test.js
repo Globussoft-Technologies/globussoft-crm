@@ -58,5 +58,20 @@ describe('filterSidebarPages', () => {
 
     expect(filtered.map((page) => page.path)).toEqual(['/developer']);
   });
+
+  it('hides Gmail from travel page search when TMC is active', () => {
+    const pages = [
+      { path: '/gmail', label: 'Gmail Sync', description: 'Gmail inbox integration' },
+      { path: '/developer', label: 'Developer', description: 'API + webhook console' },
+    ];
+
+    const filtered = filterSidebarPages(pages, {
+      vertical: 'travel',
+      activeSubBrand: 'tmc',
+    });
+
+    expect(filtered.map((page) => page.path)).toEqual(['/developer']);
+    expect(filtered.find((page) => page.path === '/gmail')).toBeUndefined();
+  });
 });
 

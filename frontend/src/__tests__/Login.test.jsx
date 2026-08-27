@@ -79,7 +79,7 @@ vi.mock('react-router-dom', async () => {
   return { ...real, useNavigate: () => navigateMock };
 });
 
-import { AuthContext } from '../App';
+import { AuthContext, ThemeContext } from '../App';
 import Login from '../pages/Login';
 
 // Stable auth-context mock — per CLAUDE.md "RTL: stable mock object
@@ -90,6 +90,7 @@ import Login from '../pages/Login';
 const setUserMock = vi.fn();
 const setTokenMock = vi.fn();
 const setTenantMock = vi.fn();
+const setThemeMock = vi.fn();
 const authValue = {
   user: null,
   token: '',
@@ -98,13 +99,19 @@ const authValue = {
   setToken: setTokenMock,
   setTenant: setTenantMock,
 };
+const themeValue = {
+  theme: 'light',
+  setTheme: setThemeMock,
+};
 
 function renderLogin() {
   return render(
     <MemoryRouter>
-      <AuthContext.Provider value={authValue}>
-        <Login />
-      </AuthContext.Provider>
+      <ThemeContext.Provider value={themeValue}>
+        <AuthContext.Provider value={authValue}>
+          <Login />
+        </AuthContext.Provider>
+      </ThemeContext.Provider>
     </MemoryRouter>
   );
 }
@@ -127,6 +134,7 @@ describe('<Login /> — page surface', () => {
     setUserMock.mockClear();
     setTokenMock.mockClear();
     setTenantMock.mockClear();
+    setThemeMock.mockClear();
     originalFetch = global.fetch;
     // Default impl returns a 404 for any unexpected endpoint. Tests that
     // exercise a specific endpoint override this with mockImplementation.

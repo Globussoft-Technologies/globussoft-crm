@@ -169,10 +169,12 @@ const ALLOWED_ORIGINS = [
   // that fetches the public CRM-rendered landing-page HTML from the browser.
   "https://themodernclassroom.in",
   "https://www.themodernclassroom.in",
-  // Dr. Haror's external marketing site — consumes the public wellness
-  // catalog + payment endpoints (POST /api/wellness/public/payment/order +
-  // /confirm). Hardcoded because it's part of the product surface, not a
-  // one-off env override.
+  // Dr. Enhance Wellness external marketing site — submits public enquiries
+  // and also consumes the public wellness catalog + payment endpoints.
+  // Hardcoded because it's part of the product surface, not a one-off env
+  // override.
+  "https://drenhance.com",
+  "https://www.drenhance.com",
   "https://enhancewellness.globusdemos.com",
   "http://localhost:8080",
   "http://127.0.0.1:8080",

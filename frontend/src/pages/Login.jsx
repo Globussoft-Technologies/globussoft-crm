@@ -1,8 +1,9 @@
 import { useState, useContext, useEffect } from "react";
 import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { Mail, Square } from "lucide-react";
-import { AuthContext } from "../App";
+import { AuthContext, ThemeContext } from "../App";
 import { safeNext } from "../utils/safeNext";
+import { resolveThemePreference } from "../utils/themePreference";
 import PasswordInput from "../components/PasswordInput";
 
 // SSO providers (Google / Microsoft) hidden for now — pending tenant-level
@@ -49,6 +50,8 @@ const Login = () => {
   const [rememberMe, setRememberMe] = useState(true);
 
   const { setUser, setToken, setTenant } = useContext(AuthContext);
+  const themeContext = useContext(ThemeContext) || {};
+  const { theme, setTheme = () => {} } = themeContext;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -113,7 +116,10 @@ const Login = () => {
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((profile) => {
-          if (profile) setUser(profile);
+          if (profile) {
+            setUser(profile);
+            setTheme(resolveThemePreference(theme, profile.themePreference));
+          }
         })
         .catch(() => {})
         .finally(() => {
@@ -259,6 +265,7 @@ const Login = () => {
     // explicitly scrub localStorage when disabled (session-only).
     setToken(data.token, { remember: rememberMe });
     if (data.tenant && setTenant) setTenant(data.tenant);
+    setTheme(resolveThemePreference(theme, data.user?.themePreference));
     // Set data-vertical synchronously — the App.jsx useEffect that mirrors
     // tenant.vertical onto the body fires AFTER the render that follows
     // setTenant, so the first frame on /wellness can otherwise read

@@ -25,7 +25,7 @@
 //       - sets secure=true in production, false otherwise
 //       - caller overrides win over defaults
 //   - buildAllowlist helper
-//       - includes the 6 hardcoded defaults
+//       - includes the hardcoded defaults
 //       - extends with FRONTEND_URL env var
 //       - extends with CORS_ALLOWED_ORIGINS (comma-separated)
 //       - dedupes overlapping entries
@@ -462,7 +462,7 @@ describe('originCheck — disallowed origins return 403', () => {
 });
 
 describe('buildAllowlist', () => {
-  test('includes the 6 hardcoded defaults', () => {
+  test('includes the hardcoded defaults', () => {
     const list = buildAllowlist();
     expect(list).toContain('https://crm.globusdemos.com');
     expect(list).toContain('http://localhost:5173');
@@ -470,6 +470,8 @@ describe('buildAllowlist', () => {
     expect(list).toContain('http://127.0.0.1:5173');
     expect(list).toContain('http://127.0.0.1:5000');
     expect(list).toContain('https://globuscrm.globussoft.com');
+    expect(list).toContain('https://drenhance.com');
+    expect(list).toContain('https://www.drenhance.com');
     expect(list).toContain('https://empcloud.com');
     expect(list).toContain('https://www.empcloud.com');
     expect(list).toContain('https://app.empcloud.com');

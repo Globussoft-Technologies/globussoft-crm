@@ -5,6 +5,7 @@ import React, {
   useEffect,
   useMemo,
   useCallback,
+  useRef,
   Suspense,
 } from "react";
 import { flushSync } from "react-dom";
@@ -33,7 +34,42 @@ import {
   clearAuthToken,
   markAuthReady,
 } from "./utils/api";
+import {
+  VALID_THEME_VALUES,
+  resolveThemePreference,
+} from "./utils/themePreference";
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
+
+const THEME_STORAGE_KEY = "theme";
+const PUBLIC_LIGHT_THEME_ROUTES = new Set([
+  "/login",
+  "/signup",
+  "/reset-password",
+  "/customer/register",
+  "/get-started",
+  "/super-admin/login",
+]);
+
+function shouldDefaultPublicThemeToLight(pathname) {
+  if (!pathname) return false;
+  for (const route of PUBLIC_LIGHT_THEME_ROUTES) {
+    if (pathname === route || pathname.startsWith(`${route}/`)) return true;
+  }
+  return false;
+}
+
+function readPersistedTheme() {
+  if (typeof window === "undefined") return null;
+  try {
+    const localTheme = localStorage.getItem(THEME_STORAGE_KEY);
+    if (VALID_THEME_VALUES.has(localTheme)) return localTheme;
+    const sessionTheme = sessionStorage.getItem(THEME_STORAGE_KEY);
+    if (VALID_THEME_VALUES.has(sessionTheme)) return sessionTheme;
+  } catch {
+    /* ignore storage access issues and fall back below */
+  }
+  return null;
+}
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Home = lazy(() => import("./pages/Home"));
@@ -913,15 +949,27 @@ export default function App() {
   // and getting 403s. We render a splash until `loading` flips false on
   // first effect tick (synchronous-after-mount).
   const [loading, setLoading] = useState(true);
-  const [theme, setTheme] = useState(() => {
-    const stored = localStorage.getItem("theme");
+  const [theme, setThemeState] = useState(() => {
+    const stored = readPersistedTheme();
     if (stored) return stored;
+    if (
+      typeof window !== "undefined" &&
+      !token &&
+      shouldDefaultPublicThemeToLight(window.location.pathname)
+    ) {
+      return "light";
+    }
     return window.matchMedia("(prefers-color-scheme: dark)").matches
       ? "dark"
       : "light";
   });
+  const themeRef = useRef(theme);
   const [subscription, setSubscription] = useState(null);
   const [daysRemaining, setDaysRemaining] = useState(null);
+
+  useEffect(() => {
+    themeRef.current = theme;
+  }, [theme]);
 
   useEffect(() => {
     // Token storage is owned by setAuthToken/clearAuthToken in utils/api.js
@@ -932,6 +980,35 @@ export default function App() {
       clearAuthToken();
     }
   }, [token]);
+
+  const saveThemePreference = useCallback(
+    async (nextTheme) => {
+      const authToken = getAuthToken();
+      if (!authToken) return;
+      try {
+        await fetch("/api/user/theme", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ theme: nextTheme }),
+        });
+      } catch {
+        /* best-effort background sync */
+      }
+    },
+    [],
+  );
+
+  const setTheme = useCallback(
+    (nextTheme) => {
+      if (!VALID_THEME_VALUES.has(nextTheme)) return;
+      setThemeState(nextTheme);
+      void saveThemePreference(nextTheme);
+    },
+    [saveThemePreference],
+  );
 
   // #347 + #1284: gate initial mount until we've finished rehydrating the
   // token from sessionStorage AND validated it against the server. Without
@@ -968,6 +1045,7 @@ export default function App() {
           if (!cancelled) {
             setUser(profile);
             if (profile.tenant) setTenant(profile.tenant);
+            setTheme(resolveThemePreference(themeRef.current, profile?.themePreference));
           }
         } else if (res.status === 401 || res.status === 403) {
           // The token is expired, revoked, or for the wrong tenant/vertical.
@@ -998,7 +1076,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, setTheme]);
 
   useEffect(() => {
     if (user) {
@@ -1042,7 +1120,12 @@ export default function App() {
         : "light";
     }
     document.documentElement.setAttribute("data-theme", effectiveTheme);
-    localStorage.setItem("theme", theme);
+    try {
+      sessionStorage.setItem(THEME_STORAGE_KEY, theme);
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      /* ignore storage write failures */
+    }
   }, [theme]);
 
   useEffect(() => {
@@ -1159,11 +1242,9 @@ export default function App() {
   // transition was removed in index.css).
   const toggleTheme = () => {
     const advance = () =>
-      setTheme((t) => {
-        if (t === "light") return "dark";
-        if (t === "dark") return "system";
-        return "light";
-      });
+      setTheme(
+        theme === "light" ? "dark" : theme === "dark" ? "system" : "light",
+      );
     if (typeof document.startViewTransition === "function") {
       document.startViewTransition(() => {
         flushSync(advance);
@@ -1212,8 +1293,9 @@ export default function App() {
     const profile = await res.json();
     setUser(profile);
     localStorage.setItem("user", JSON.stringify(profile));
+    setTheme(resolveThemePreference(themeRef.current, profile?.themePreference));
     return profile;
-  }, []);
+  }, [setTheme]);
 
   // #529 / #530: memoise the AuthContext value so consumers don't re-render
   // (and re-fire mount effects) on every App render. State setters from

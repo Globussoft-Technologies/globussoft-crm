@@ -12483,11 +12483,15 @@ router.post("/public/enquiry", publicEnquiryLimiter, async (req, res) => {
     const syntheticEmail = email || `wellness-enquiry-${tenant.slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@inbound.local`;
     const note = buildPublicLeadNote({ service, message });
 
-    const duplicate = await findDuplicateContactFull({
-      email: email || null,
-      phone: phone || null,
-      tenantId: tenant.id,
-    });
+    // Public website enquiries should keep showing up as fresh leads even if
+    // a family/shared phone number repeats across submissions. Email remains
+    // the stable dedupe key because the Contact model enforces it per tenant.
+    const duplicate = email
+      ? await findDuplicateContactFull({
+        email,
+        tenantId: tenant.id,
+      })
+      : null;
 
     if (duplicate) {
       const existing = duplicate.contact;

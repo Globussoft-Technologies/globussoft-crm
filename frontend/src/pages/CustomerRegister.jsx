@@ -34,6 +34,43 @@ const EXISTING_EMAIL_MESSAGE = "This email already exists. Sign in to your accou
 const SELECT_ORG_MESSAGE = "Select your organization first to verify email availability.";
 const EMAIL_CHECK_FAILED_MESSAGE = "Unable to check email availability. Please try again.";
 const MIN_ORG_SUGGESTION_CHARS = 3;
+const ORGANIZATION_SUGGESTION_PANEL_STYLE = {
+  position: "absolute",
+  top: "calc(100% + 6px)",
+  left: 0,
+  right: 0,
+  zIndex: 20,
+  background: "var(--modal-bg)",
+  border: "1px solid var(--border-color)",
+  borderRadius: 10,
+  boxShadow: "0 14px 40px rgba(0, 0, 0, 0.24)",
+  overflow: "hidden",
+};
+const ORGANIZATION_SUGGESTION_ITEM_STYLE = {
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  gap: "0.75rem",
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  borderBottom: "1px solid var(--border-color)",
+  padding: "0.7rem 0.85rem",
+  cursor: "pointer",
+  color: "var(--text-primary)",
+};
+const ORGANIZATION_SUGGESTION_BADGE_STYLE = {
+  flexShrink: 0,
+  padding: "0.18rem 0.55rem",
+  borderRadius: 999,
+  fontSize: "0.7rem",
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  color: "var(--primary-color, var(--accent-color))",
+  background: "var(--accent-bg)",
+  border: "1px solid var(--border-color)",
+};
 
 function normalizeOrganizationKey(value) {
   return String(value || "")
@@ -538,18 +575,7 @@ export default function CustomerRegister() {
                 <div
                   id="cr-organization-suggestions"
                   role="listbox"
-                  style={{
-                    position: "absolute",
-                    top: "calc(100% + 6px)",
-                    left: 0,
-                    right: 0,
-                    zIndex: 20,
-                    background: "#fff",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: 10,
-                    boxShadow: "0 14px 40px rgba(15, 23, 42, 0.12)",
-                    overflow: "hidden",
-                  }}
+                  style={ORGANIZATION_SUGGESTION_PANEL_STYLE}
                 >
                   {organizationSuggestions.map((tenant) => (
                     <button
@@ -562,18 +588,7 @@ export default function CustomerRegister() {
                         ev.preventDefault();
                         selectOrganization(tenant);
                       }}
-                      style={{
-                        width: "100%",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.75rem",
-                        textAlign: "left",
-                        background: "transparent",
-                        border: "none",
-                        borderBottom: "1px solid rgba(15, 23, 42, 0.06)",
-                        padding: "0.7rem 0.85rem",
-                        cursor: "pointer",
-                      }}
+                      style={ORGANIZATION_SUGGESTION_ITEM_STYLE}
                     >
                       <span style={{ minWidth: 0, flex: 1 }}>
                         <span
@@ -601,17 +616,7 @@ export default function CustomerRegister() {
                         </span>
                       </span>
                       <span
-                        style={{
-                          flexShrink: 0,
-                          padding: "0.18rem 0.55rem",
-                          borderRadius: 999,
-                          fontSize: "0.7rem",
-                          fontWeight: 600,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.04em",
-                          color: "var(--primary-color, var(--accent-color))",
-                          background: "rgba(99, 102, 241, 0.08)",
-                        }}
+                        style={ORGANIZATION_SUGGESTION_BADGE_STYLE}
                       >
                         {tenant.vertical || "generic"}
                       </span>
@@ -623,15 +628,7 @@ export default function CustomerRegister() {
                 <div
                   role="status"
                   style={{
-                    position: "absolute",
-                    top: "calc(100% + 6px)",
-                    left: 0,
-                    right: 0,
-                    zIndex: 20,
-                    background: "#fff",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: 10,
-                    boxShadow: "0 14px 40px rgba(15, 23, 42, 0.12)",
+                    ...ORGANIZATION_SUGGESTION_PANEL_STYLE,
                     padding: "0.7rem 0.85rem",
                     color: "var(--text-secondary)",
                     fontSize: "0.85rem",

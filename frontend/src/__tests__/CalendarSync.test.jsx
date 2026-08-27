@@ -135,6 +135,18 @@ const sampleGoogleEvents = [
   },
 ];
 
+function localDateTimeInput({ daysFromNow = 1, hour = 10, minute = 0 } = {}) {
+  const date = new Date();
+  date.setDate(date.getDate() + daysFromNow);
+  date.setHours(hour, minute, 0, 0);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hh}:${mm}`;
+}
+
 // Default mock — both providers offline (events reject), so the page settles
 // to "Not connected" + empty events list.
 function makeOfflineMock() {
@@ -526,8 +538,9 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     });
 
     const dtInputs = container.querySelectorAll('input[type="datetime-local"]');
-    fireEvent.change(dtInputs[0], { target: { value: '2026-08-27T10:00' } });
-    expect(dtInputs[1]).toHaveAttribute('min', '2026-08-27T10:00');
+    const startValue = localDateTimeInput({ daysFromNow: 1, hour: 10 });
+    fireEvent.change(dtInputs[0], { target: { value: startValue } });
+    expect(dtInputs[1]).toHaveAttribute('min', startValue);
   });
 
   it('Create-Event validation: rejects a past start time and never posts the event', async () => {
@@ -542,8 +555,8 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       target: { value: 'Retro meeting' },
     });
     const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
-    fireEvent.change(dtInputs[0], { target: { value: '2026-08-25T10:00' } });
-    fireEvent.change(dtInputs[1], { target: { value: '2026-08-25T11:00' } });
+    fireEvent.change(dtInputs[0], { target: { value: localDateTimeInput({ daysFromNow: -1, hour: 10 }) } });
+    fireEvent.change(dtInputs[1], { target: { value: localDateTimeInput({ daysFromNow: -1, hour: 11 }) } });
 
     fireEvent.click(screen.getByRole('button', { name: /^Create Event$/i }));
 
@@ -569,8 +582,8 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       target: { value: 'Short overlap' },
     });
     const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
-    fireEvent.change(dtInputs[0], { target: { value: '2026-08-27T10:00' } });
-    fireEvent.change(dtInputs[1], { target: { value: '2026-08-27T09:30' } });
+    fireEvent.change(dtInputs[0], { target: { value: localDateTimeInput({ daysFromNow: 1, hour: 10 }) } });
+    fireEvent.change(dtInputs[1], { target: { value: localDateTimeInput({ daysFromNow: 1, hour: 9, minute: 30 }) } });
 
     fireEvent.click(screen.getByRole('button', { name: /^Create Event$/i }));
 
@@ -954,8 +967,8 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     // they have no accessible name (the label is sibling DOM).
     const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
     expect(dtInputs.length).toBeGreaterThanOrEqual(2);
-    fireEvent.change(dtInputs[0], { target: { value: '2026-08-27T10:00' } });
-    fireEvent.change(dtInputs[1], { target: { value: '2026-08-27T11:00' } });
+    fireEvent.change(dtInputs[0], { target: { value: localDateTimeInput({ daysFromNow: 1, hour: 10 }) } });
+    fireEvent.change(dtInputs[1], { target: { value: localDateTimeInput({ daysFromNow: 1, hour: 11 }) } });
 
     const submitBtn = screen.getByRole('button', { name: /^Create Event$/i });
     await waitFor(() => expect(submitBtn).not.toBeDisabled());
@@ -1331,11 +1344,13 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
   it('events list truncates at 50: with 51 events returned, only the first 50 render', async () => {
     // Build a 51-event response sorted by startTime so we can pin the 50th
     // (rendered) and the 51st (NOT rendered) by title.
+    const eventDay = new Date();
+    eventDay.setDate(eventDay.getDate() + 1);
     const big = Array.from({ length: 51 }, (_, i) => ({
       id: `g-evt-${i + 1}`,
       title: `Bulk meeting ${String(i + 1).padStart(3, '0')}`,
-      startTime: new Date(2026, 7, 27, 9, i).toISOString(),
-      endTime: new Date(2026, 7, 27, 10, i).toISOString(),
+      startTime: new Date(eventDay.getFullYear(), eventDay.getMonth(), eventDay.getDate(), 9, i).toISOString(),
+      endTime: new Date(eventDay.getFullYear(), eventDay.getMonth(), eventDay.getDate(), 10, i).toISOString(),
       attendees: '[]',
     }));
     fetchApiMock.mockImplementation((url, opts) => {

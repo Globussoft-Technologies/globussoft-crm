@@ -28,6 +28,19 @@ const taxInput = {
   display: "block",
   boxSizing: "border-box",
 };
+const button = {
+  border: "1px solid var(--border-color, rgba(148,163,184,.28))",
+  borderRadius: 8,
+  background: "var(--button-bg, rgba(255,255,255,.06))",
+  color: "var(--text-primary)",
+  padding: "9px 12px",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 7,
+  fontWeight: 700,
+  cursor: "pointer",
+};
 const getCustomerTripValue = (row) =>
   Number(row?.amount || 0);
 

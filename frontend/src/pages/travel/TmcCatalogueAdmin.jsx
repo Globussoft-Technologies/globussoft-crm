@@ -1378,7 +1378,6 @@ export default function TmcCatalogueAdmin() {
           pageSize={PAGE_SIZE}
           total={total}
           onChange={(nextPage) => setPage(nextPage)}
-          showRangeLabel={false}
           style={{ margin: 0, paddingTop: 12, paddingBottom: 0 }}
         />
         </div>

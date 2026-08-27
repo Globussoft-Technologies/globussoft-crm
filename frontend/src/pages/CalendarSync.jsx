@@ -489,6 +489,7 @@ const CALENDAR_SYNC_ITEM_STYLE = {
   background: "var(--surface-hover)",
   border: "1px solid var(--border-color)",
 };
+const CALENDAR_SYNC_MAX_RENDERED_MEETINGS = 50;
 
 function getMeetingReminderAlertKey(event, reminderKey) {
   return `meeting-${event?._provider || "unknown"}-${event?.id}-${reminderKey}`;
@@ -983,7 +984,8 @@ export default function CalendarSync() {
         if (!start) return false;
         return formatLocalDateKey(start) === meetingDateFilter;
       })
-      .slice(0, 50);
+      .sort((a, b) => new Date(a.startTime) - new Date(b.startTime))
+      .slice(0, CALENDAR_SYNC_MAX_RENDERED_MEETINGS);
   }, [meetingDateFilter, meetingRows, meetingStatusFilter]);
 
   const pendingAlerts = useMemo(() => {
@@ -1189,12 +1191,12 @@ export default function CalendarSync() {
       setToast("Please enter valid start and end times");
       return;
     }
-    if (createStartIsPast) {
-      setToast("Start time must be now or in the future");
-      return;
-    }
     if (createEndIsInvalid) {
       setToast("End time must be after the start time");
+      return;
+    }
+    if (createStartIsPast) {
+      setToast("Start time must be now or in the future");
       return;
     }
     setBusy((b) => ({ ...b, [providerKey]: true }));
@@ -1670,7 +1672,7 @@ export default function CalendarSync() {
 
   const renderMeetingRows = (rows = []) => (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      {rows.slice(0, 50).map((ev) => {
+      {rows.slice(0, CALENDAR_SYNC_MAX_RENDERED_MEETINGS).map((ev) => {
         const provider =
           PROVIDERS.find((p) => p.key === ev._provider) || PROVIDERS[0];
         const count = attendeeCount(ev.attendees);

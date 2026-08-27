@@ -36,6 +36,9 @@ prisma.travelSupplier = {
   create: vi.fn(),
   update: vi.fn(),
 };
+prisma.travelSupplierPayable = {
+  groupBy: vi.fn(),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1,
@@ -87,6 +90,7 @@ beforeEach(() => {
   prisma.travelSupplier.count.mockReset();
   prisma.travelSupplier.create.mockReset();
   prisma.travelSupplier.update.mockReset();
+  prisma.travelSupplierPayable.groupBy.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -162,6 +166,198 @@ describe('POST /api/travel/suppliers', () => {
       .send({ name: 'Foo', subBrand: 'tmc' });
     expect(res.status).toBe(403);
     expect(prisma.travelSupplier.create).not.toHaveBeenCalled();
+  });
+
+  test('persists supplier payment destination for Accounts', async () => {
+    prisma.travelSupplier.create.mockResolvedValue({
+      id: 43, tenantId: 1, subBrand: 'tmc', name: 'Payable Supplier',
+      supplierCategory: 'other', isActive: true,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Payable Supplier', subBrand: 'tmc',
+        beneficiaryName: ' Payable Supplier Pvt Ltd ', bankName: ' HDFC Bank ',
+        bankAccountNumber: ' 001234567890 ', ifscCode: 'hdfc0001234',
+        upiId: 'accounts@hdfc',
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.travelSupplier.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          beneficiaryName: 'Payable Supplier Pvt Ltd', bankName: 'HDFC Bank',
+          bankAccountNumber: '001234567890', ifscCode: 'HDFC0001234',
+          upiId: 'accounts@hdfc',
+        }),
+      }),
+    );
+  });
+
+  test('rejects an invalid IFSC without creating a supplier', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'Bad Bank Co', subBrand: 'tmc', ifscCode: 'INVALID' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_IFSC' });
+    expect(prisma.travelSupplier.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/travel/suppliers/import-template', () => {
+  test('CSV template carries the fields Accounts needs to make payments', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/import-template?format=csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.text).toContain('beneficiaryName,bankName,bankAccountNumber,ifscCode,upiId');
+    expect(res.text).toContain('# Required: subBrand, name, supplierCategory, beneficiaryName, bankName, bankAccountNumber, ifscCode');
+  });
+});
+
+describe('POST /api/travel/suppliers/import.csv', () => {
+  test('rejects rows missing bank details required for Accounts', async () => {
+    const csv = [
+      'subBrand,name,supplierCategory,beneficiaryName,bankName,bankAccountNumber,ifscCode,upiId',
+      'tmc,Incomplete Supplier,hotel,,,,,',
+    ].join('\n');
+
+    const res = await request(makeApp())
+      .post('/api/travel/suppliers/import.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from(csv), 'travel-suppliers-import.csv');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      imported: 0,
+      updated: 0,
+      skipped: 0,
+      total: 1,
+    });
+    expect(res.body.errors).toHaveLength(1);
+    expect(res.body.errors[0].reason).toMatch(/beneficiaryName/);
+    expect(res.body.errors[0].reason).toMatch(/bankName/);
+    expect(res.body.errors[0].reason).toMatch(/bankAccountNumber/);
+    expect(res.body.errors[0].reason).toMatch(/ifscCode/);
+    expect(prisma.travelSupplier.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/travel/suppliers/export.xlsx', () => {
+  test('exports suppliers as XLSX with the current filter set', async () => {
+    prisma.travelSupplier.findMany.mockResolvedValue([
+      {
+        id: 7,
+        subBrand: 'tmc',
+        name: 'Excel Supplier',
+        supplierCategory: 'hotel',
+        contactPerson: 'Accounts',
+        phone: '+91 98765 43210',
+        email: 'pay@excel.test',
+        gstin: '27ABCDE1234F1Z5',
+        addressLine: 'Bengaluru',
+        status: 'active',
+        paymentTermsKind: 'net',
+        paymentTermsDays: 30,
+        creditLimit: '50000',
+        creditCurrency: 'INR',
+        taxRegimeCode: 'regular',
+        primaryContactRole: 'Accounts payable',
+        commissionPercent: '5',
+        beneficiaryName: 'Excel Supplier Pvt Ltd',
+        bankName: 'HDFC Bank',
+        bankAccountNumber: '001234567890',
+        ifscCode: 'HDFC0001234',
+        upiId: 'accounts@hdfc',
+        notes: 'Export row',
+      },
+    ]);
+    prisma.travelSupplierPayable.groupBy.mockResolvedValue([
+      {
+        supplierId: 7,
+        _sum: { amount: '12500.50' },
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/export.xlsx?subBrand=tmc&supplierCategory=hotel')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/vnd.openxmlformats-officedocument.spreadsheetml.sheet/);
+    expect(res.headers['content-disposition']).toContain('travel-suppliers-export.xlsx');
+    expect(Number(res.headers['content-length'] || 0)).toBeGreaterThan(0);
+    expect(prisma.travelSupplierPayable.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 1,
+          supplierId: { in: [7] },
+          status: { notIn: ['paid', 'cancelled'] },
+        }),
+      }),
+    );
+  });
+});
+
+describe('GET /api/travel/suppliers/export.csv', () => {
+  test('includes live outstanding amount in the report download', async () => {
+    prisma.travelSupplier.findMany.mockResolvedValue([
+      {
+        id: 8,
+        subBrand: 'tmc',
+        name: 'CSV Supplier',
+        supplierCategory: 'hotel',
+        contactPerson: 'Accounts',
+        phone: '+91 98765 43210',
+        email: 'pay@csv.test',
+        gstin: '27ABCDE1234F1Z5',
+        addressLine: 'Bengaluru',
+        status: 'active',
+        paymentTermsKind: 'net',
+        paymentTermsDays: 45,
+        creditLimit: '75000',
+        creditCurrency: 'INR',
+        taxRegimeCode: 'regular',
+        primaryContactRole: 'Accounts payable',
+        commissionPercent: '5',
+        beneficiaryName: 'CSV Supplier Pvt Ltd',
+        bankName: 'HDFC Bank',
+        bankAccountNumber: '001234567890',
+        ifscCode: 'HDFC0001234',
+        upiId: 'accounts@hdfc',
+        notes: 'Export row',
+      },
+    ]);
+    prisma.travelSupplierPayable.groupBy.mockResolvedValue([
+      {
+        supplierId: 8,
+        _sum: { amount: '9876.50' },
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/suppliers/export.csv?subBrand=tmc&supplierCategory=hotel')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.text).toContain('outstandingAmount');
+    expect(res.text).toContain('9876.50');
+    expect(res.text).toContain('CSV Supplier');
+    expect(prisma.travelSupplier.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 1,
+          subBrand: 'tmc',
+          supplierCategory: 'hotel',
+        }),
+      }),
+    );
   });
 });
 
@@ -304,6 +500,30 @@ describe('PUT /api/travel/suppliers/:id — slice 1 (#903) update validation', (
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_GSTIN' });
     expect(prisma.travelSupplier.update).not.toHaveBeenCalled();
+  });
+
+  test('updates and normalizes payment destination fields', async () => {
+    prisma.travelSupplier.findFirst.mockResolvedValue({
+      id: 62, tenantId: 1, subBrand: 'tmc', name: 'Bank Update', isActive: true,
+    });
+    prisma.travelSupplier.update.mockResolvedValue({
+      id: 62, tenantId: 1, subBrand: 'tmc', name: 'Bank Update', isActive: true,
+      beneficiaryName: 'Bank Update Pvt Ltd', ifscCode: 'ICIC0001234',
+    });
+    const res = await request(makeApp())
+      .put('/api/travel/suppliers/62')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ beneficiaryName: ' Bank Update Pvt Ltd ', ifscCode: 'icic0001234' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.travelSupplier.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 62 },
+        data: expect.objectContaining({
+          beneficiaryName: 'Bank Update Pvt Ltd', ifscCode: 'ICIC0001234',
+        }),
+      }),
+    );
   });
 });
 

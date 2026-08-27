@@ -6,7 +6,7 @@
 // statements and keeps pending files separate from already-applied files.
 
 import { useEffect, useRef, useState } from "react";
-import { Upload } from "lucide-react";
+import { Pencil, Upload } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { formatMoney } from "../../utils/money";
 import { useNotify } from "../../utils/notify";
@@ -15,18 +15,6 @@ const box = {
   border: "1px solid var(--border-color, rgba(148,163,184,.18))",
   borderRadius: 12,
   background: "rgba(255,255,255,.025)",
-};
-
-const button = {
-  border: "1px solid #5b7cfa",
-  borderRadius: 8,
-  padding: "8px 11px",
-  background: "transparent",
-  color: "var(--text-primary)",
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 7,
-  fontWeight: 700,
 };
 
 const taxInput = {
@@ -585,10 +573,13 @@ export function TripTaxTable({
   trips,
   customers,
   suppliers,
+  payables = [],
   tripTaxes,
   selectedTripId = "",
   onChange,
 }) {
+  const [editingRowId, setEditingRowId] = useState(null);
+  const [drafts, setDrafts] = useState({});
   if (!trips.length) return null;
   const displayedTrips = selectedTripId
     ? trips
@@ -597,25 +588,61 @@ export function TripTaxTable({
         const earnings = customers
           .filter((row) => String(row.itineraryId) === id)
           .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
-        const spent = suppliers
+        const spent = payables
           .filter((row) => String(row.itineraryId) === id)
           .reduce((sum, row) => sum + Number(row.amount || 0), 0);
         return earnings > 0 || spent > 0;
       });
   if (!displayedTrips.length) return null;
+  const startEditing = (rowId) => {
+    const next = {};
+    displayedTrips.forEach((trip) => {
+      const id = String(trip.id);
+      const earnings = customers
+        .filter((row) => String(row.itineraryId) === id)
+        .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
+      const spent = payables
+        .filter((row) => String(row.itineraryId) === id)
+        .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      const tax = tripTaxes[id] || {};
+      next[id] = {
+        tripName: trip.destination || `Trip ${id}`,
+        earnings: String(earnings),
+        spent: String(spent),
+        gstRate: tax.gstRate ?? "",
+        tcsRate: tax.tcsRate ?? "",
+        gstAmount: String((earnings * Number(tax.gstRate || 0)) / 100),
+        tcsAmount: String((earnings * Number(tax.tcsRate || 0)) / 100),
+        profit: String(
+          earnings -
+            spent -
+            (earnings * Number(tax.gstRate || 0)) / 100 -
+            (earnings * Number(tax.tcsRate || 0)) / 100,
+        ),
+      };
+    });
+    setDrafts(next);
+    setEditingRowId(String(rowId));
+  };
+  const updateDraft = (id, key, value) => {
+    setDrafts((current) => ({
+      ...current,
+      [id]: { ...(current[id] || {}), [key]: value },
+    }));
+    if (key === "gstRate" || key === "tcsRate") onChange?.(id, key, value);
+  };
   return (
     <div style={{ ...box, padding: 12, marginTop: 14 }}>
-      <strong>Trip totals and taxes</strong>
-      <small
-        style={{
-          display: "block",
-          color: "var(--text-secondary)",
-          marginTop: 3,
-        }}
-      >
-        Enter GST and TCS percentages. Tax amounts are calculated from trip
-        earnings.
-      </small>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <div>
+          <strong>Trip totals and taxes</strong>
+          <small style={{ display: "block", color: "var(--text-secondary)", marginTop: 3 }}>
+            {editingRowId
+              ? "Edit the selected row, then click its edit icon again to finish."
+              : "Click a row's edit icon to edit all columns in that row."}
+          </small>
+        </div>
+      </div>
       <div style={{ overflowX: "auto", marginTop: 10 }}>
         <table
           style={{
@@ -628,6 +655,7 @@ export function TripTaxTable({
           <thead>
             <tr>
               {[
+                "Actions",
                 "Trip / Place",
                 "Earnings",
                 "Spent",
@@ -643,7 +671,7 @@ export function TripTaxTable({
                     top: 0,
                     zIndex: 1,
                     background: "var(--modal-bg, #ffffff)",
-                    textAlign: label === "Trip / Place" ? "left" : "right",
+                    textAlign: label === "Trip / Place" || label === "Actions" ? "left" : "right",
                     padding: "8px",
                     color: "var(--text-secondary)",
                     fontSize: 11,
@@ -659,12 +687,16 @@ export function TripTaxTable({
           <tbody>
             {displayedTrips.map((trip) => {
               const id = String(trip.id);
-              const earnings = customers
+              const editing = editingRowId === id;
+              const calculatedEarnings = customers
                 .filter((row) => String(row.itineraryId) === id)
                 .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
-              const spent = suppliers
+              const calculatedSpent = payables
                 .filter((row) => String(row.itineraryId) === id)
                 .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+              const draft = drafts[id] || {};
+              const earnings = editing ? Number(draft.earnings || 0) : calculatedEarnings;
+              const spent = editing ? Number(draft.spent || 0) : calculatedSpent;
               const international = Boolean(
                 trip.international ||
                   trip.isInternational ||
@@ -673,46 +705,102 @@ export function TripTaxTable({
                   ),
               );
               const tax = tripTaxes[id] || {};
-              const gstRate = Number(tax.gstRate || 0);
-              const tcsRate = Number(tax.tcsRate || 0);
+              const gstRate = Number(editing ? draft.gstRate || 0 : tax.gstRate || 0);
+              const tcsRate = Number(editing ? draft.tcsRate || 0 : tax.tcsRate || 0);
+              const gstAmount = editing
+                ? Number(draft.gstAmount || 0)
+                : (earnings * gstRate) / 100;
+              const tcsAmount = editing
+                ? Number(draft.tcsAmount || 0)
+                : (earnings * tcsRate) / 100;
+              const profit = editing
+                ? Number(draft.profit || 0)
+                : earnings - spent - gstAmount - tcsAmount;
               return (
                 <tr key={id}>
-                  <td style={{ padding: "9px 8px", fontWeight: 700 }}>
-                    {trip.destination || `Trip ${id}`}
-                  </td>
-                  <td style={{ padding: "9px 8px", textAlign: "right" }}>
-                    {formatMoney(earnings)}
-                  </td>
-                  <td style={{ padding: "9px 8px", textAlign: "right" }}>
-                    {formatMoney(spent)}
-                  </td>
                   <td style={{ padding: "9px 8px" }}>
-                    <input
-                      aria-label={`GST percentage for ${trip.destination || id}`}
-                      value={tax.gstRate ?? ""}
-                      onChange={(event) =>
-                        onChange?.(id, "gstRate", event.target.value)
-                      }
-                      inputMode="decimal"
-                      placeholder="%"
+                    <button
+                      type="button"
+                      onClick={() => (editing ? setEditingRowId(null) : startEditing(id))}
+                      aria-label={`${editing ? "Finish editing" : "Edit"} row for ${trip.destination || id}`}
+                      title={editing ? "Finish editing row" : "Edit row"}
                       style={{
-                        ...taxInput,
-                        width: 64,
-                        padding: "7px 6px",
-                        textAlign: "right",
+                        border: 0,
+                        background: "transparent",
+                        color: "var(--text-secondary)",
+                        cursor: "pointer",
+                        padding: 3,
+                        display: "inline-flex",
+                        alignItems: "center",
                       }}
-                    />
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  </td>
+                  <td style={{ padding: "9px 8px", fontWeight: 700 }}>
+                    {editing ? (
+                      <input
+                        aria-label={`Trip name for ${trip.destination || id}`}
+                        value={draft.tripName || ""}
+                        onChange={(event) => updateDraft(id, "tripName", event.target.value)}
+                        style={{ ...taxInput, width: "100%", marginLeft: 0 }}
+                      />
+                    ) : (
+                      trip.destination || `Trip ${id}`
+                    )}
                   </td>
                   <td style={{ padding: "9px 8px", textAlign: "right" }}>
-                    {formatMoney((earnings * gstRate) / 100)}
+                    {editing ? (
+                      <input
+                        aria-label={`Earnings for ${trip.destination || id}`}
+                        value={draft.earnings ?? ""}
+                        onChange={(event) => updateDraft(id, "earnings", event.target.value)}
+                        inputMode="decimal"
+                        style={{ ...taxInput, width: 100 }}
+                      />
+                    ) : formatMoney(earnings)}
+                  </td>
+                  <td style={{ padding: "9px 8px", textAlign: "right" }}>
+                    {editing ? (
+                      <input
+                        aria-label={`Spent for ${trip.destination || id}`}
+                        value={draft.spent ?? ""}
+                        onChange={(event) => updateDraft(id, "spent", event.target.value)}
+                        inputMode="decimal"
+                        style={{ ...taxInput, width: 100 }}
+                      />
+                    ) : formatMoney(spent)}
                   </td>
                   <td style={{ padding: "9px 8px" }}>
-                    {international ? (
+                    {editing ? (
+                      <input
+                        aria-label={`GST percentage for ${trip.destination || id}`}
+                        value={draft.gstRate ?? ""}
+                        onChange={(event) => updateDraft(id, "gstRate", event.target.value)}
+                        inputMode="decimal"
+                        placeholder="%"
+                        style={{ ...taxInput, width: 64, padding: "7px 6px", textAlign: "right" }}
+                      />
+                    ) : `${tax.gstRate ?? 0}%`}
+                  </td>
+                  <td style={{ padding: "9px 8px", textAlign: "right" }}>
+                    {editing ? (
+                      <input
+                        aria-label={`GST amount for ${trip.destination || id}`}
+                        value={draft.gstAmount ?? ""}
+                        onChange={(event) => updateDraft(id, "gstAmount", event.target.value)}
+                        inputMode="decimal"
+                        style={{ ...taxInput, width: 100 }}
+                      />
+                    ) : formatMoney(gstAmount)}
+                  </td>
+                  <td style={{ padding: "9px 8px" }}>
+                    {editing && international ? (
                       <input
                         aria-label={`TCS percentage for ${trip.destination || id}`}
-                        value={tax.tcsRate ?? ""}
+                        value={draft.tcsRate ?? ""}
                         onChange={(event) =>
-                          onChange?.(id, "tcsRate", event.target.value)
+                          updateDraft(id, "tcsRate", event.target.value)
                         }
                         inputMode="decimal"
                         placeholder="%"
@@ -723,6 +811,8 @@ export function TripTaxTable({
                           textAlign: "right",
                         }}
                       />
+                    ) : international ? (
+                      `${tax.tcsRate ?? 0}%`
                     ) : (
                       <span
                         style={{
@@ -736,9 +826,19 @@ export function TripTaxTable({
                     )}
                   </td>
                   <td style={{ padding: "9px 8px", textAlign: "right" }}>
-                    {international
-                      ? formatMoney((earnings * tcsRate) / 100)
-                      : "—"}
+                    {international || editing ? (
+                      <input
+                        aria-label={`TCS amount for ${trip.destination || id}`}
+                        value={international ? draft.tcsAmount ?? "" : ""}
+                        onChange={(event) => updateDraft(id, "tcsAmount", event.target.value)}
+                        inputMode="decimal"
+                        placeholder={international ? "0" : "—"}
+                        disabled={!international}
+                        style={{ ...taxInput, width: 100 }}
+                      />
+                    ) : (
+                      "—"
+                    )}
                   </td>
                 </tr>
               );

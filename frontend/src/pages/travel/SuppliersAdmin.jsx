@@ -309,8 +309,106 @@ const EMPTY_FORM = {
   creditCurrency: "INR",
   taxRegimeCode: "",
   primaryContactRole: "",
+  beneficiaryName: "",
+  bankName: "",
+  bankAccountNumber: "",
+  ifscCode: "",
+  upiId: "",
   notes: "",
 };
+
+function HeaderDropdown({ label, icon: Icon, items, align = "left" }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event) => {
+      if (rootRef.current && !rootRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={secondaryBtn}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {Icon ? <Icon size={14} /> : null}
+        {label}
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label={label}
+          style={{
+            position: "absolute",
+            top: "calc(100% + 8px)",
+            left: align === "right" ? "auto" : 0,
+            right: align === "right" ? 0 : "auto",
+            minWidth: 190,
+            padding: 8,
+            borderRadius: 14,
+            border: "1px solid var(--border-color)",
+            background: "var(--modal-bg, var(--bg-color))",
+            color: "var(--text-primary)",
+            boxShadow: "0 16px 40px rgba(15, 23, 42, 0.24)",
+            zIndex: 40,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          {items.map((item) => {
+            const ItemIcon = item.icon || null;
+            return (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  item.onClick();
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  width: "100%",
+                  border: "none",
+                  borderRadius: 10,
+                  padding: "8px 10px",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+              >
+                {ItemIcon ? <ItemIcon size={14} /> : null}
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function SuppliersAdmin() {
   const notify = useNotify();
@@ -402,6 +500,7 @@ export default function SuppliersAdmin() {
   // Mark-as-paid confirmation dialog state.
   const [pendingPay, setPendingPay] = useState(null); // { supplierId, payable } | null
   const [payRefInput, setPayRefInput] = useState("");
+  const [pendingUploadFormat, setPendingUploadFormat] = useState(null); // "csv" | "xlsx" | null
 
   // Slice 9 (#903) — payables aging panel state. Loaded once on mount via
   // GET /api/travel/payables/aging. `aging` is null until first response;
@@ -672,6 +771,11 @@ export default function SuppliersAdmin() {
       creditCurrency: s.creditCurrency || "INR",
       taxRegimeCode: s.taxRegimeCode || "",
       primaryContactRole: s.primaryContactRole || "",
+      beneficiaryName: s.beneficiaryName || "",
+      bankName: s.bankName || "",
+      bankAccountNumber: s.bankAccountNumber || "",
+      ifscCode: s.ifscCode || "",
+      upiId: s.upiId || "",
       notes: s.notes || "",
     });
     setEditingId(s.id);
@@ -728,6 +832,11 @@ export default function SuppliersAdmin() {
         creditCurrency: form.creditCurrency || null,
         taxRegimeCode: form.taxRegimeCode || null,
         primaryContactRole: form.primaryContactRole || null,
+        beneficiaryName: form.beneficiaryName?.trim() || null,
+        bankName: form.bankName?.trim() || null,
+        bankAccountNumber: form.bankAccountNumber?.trim() || null,
+        ifscCode: form.ifscCode?.trim().toUpperCase() || null,
+        upiId: form.upiId?.trim() || null,
         notes: form.notes || null,
       };
       if (editingId) {
@@ -945,14 +1054,15 @@ export default function SuppliersAdmin() {
     }
   };
 
-  const exportCsv = async () => {
+  const exportFile = async (format) => {
     try {
       const qs = new URLSearchParams();
       if (subBrand) qs.set("subBrand", subBrand);
       if (supplierCategory) qs.set("supplierCategory", supplierCategory);
       if (includeInactive) qs.set("includeInactive", "1");
       const suffix = qs.toString() ? `?${qs.toString()}` : "";
-      const res = await fetch(`/api/travel/suppliers/export.csv${suffix}`, {
+      const ext = format === "xlsx" ? "xlsx" : "csv";
+      const res = await fetch(`/api/travel/suppliers/export.${ext}${suffix}`, {
         headers: { Authorization: `Bearer ${getAuthToken()}` },
       });
       if (!res.ok) throw new Error(`Export failed (${res.status})`);
@@ -960,7 +1070,7 @@ export default function SuppliersAdmin() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "travel-suppliers.csv";
+      a.download = `travel-suppliers.${ext}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -969,6 +1079,32 @@ export default function SuppliersAdmin() {
       notify.error(e.message || "Failed to export suppliers");
     }
   };
+
+  const promptBulkImport = (format) => {
+    setPendingUploadFormat(format);
+  };
+
+  const confirmBulkImport = () => {
+    if (!pendingUploadFormat) return;
+    setPendingUploadFormat(null);
+    fileRef.current?.click();
+  };
+
+  useEffect(() => {
+    if (!pendingUploadFormat) return undefined;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setPendingUploadFormat(null);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [pendingUploadFormat]);
 
   const importCsv = async (event) => {
     const file = event.target.files?.[0];
@@ -1042,26 +1178,41 @@ export default function SuppliersAdmin() {
             Master list — Hotel / Flight / Transport / Visa Consul / Other.
           </p>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <button type="button" onClick={exportCsv} style={secondaryBtn}>
-            <Upload size={14} /> Export CSV
-          </button>
-          <button type="button" onClick={() => downloadTemplate("csv")} style={secondaryBtn}>
-            <Download size={14} /> Download CSV Template
-          </button>
-          <button type="button" onClick={() => downloadTemplate("xlsx")} style={secondaryBtn}>
-            <Download size={14} /> Download Excel Template
-          </button>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <HeaderDropdown
+            label="Export"
+            icon={Upload}
+            items={[
+              { label: "CSV", icon: Upload, onClick: () => exportFile("csv") },
+              { label: "Excel", icon: Upload, onClick: () => exportFile("xlsx") },
+            ]}
+          />
+          <HeaderDropdown
+            label="Templates"
+            icon={Download}
+            items={[
+              { label: "CSV", icon: Download, onClick: () => downloadTemplate("csv") },
+              { label: "Excel", icon: Download, onClick: () => downloadTemplate("xlsx") },
+            ]}
+          />
           {canCreate && (
             <>
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                style={secondaryBtn}
-                title="Bulk-import suppliers from CSV or Excel using the downloadable template."
-              >
-                <Download size={14} /> Import CSV/Excel
-              </button>
+              <HeaderDropdown
+                label="Upload"
+                icon={Download}
+                items={[
+                  {
+                    label: "CSV",
+                    icon: Download,
+                    onClick: () => promptBulkImport("csv"),
+                  },
+                  {
+                    label: "Excel",
+                    icon: Download,
+                    onClick: () => promptBulkImport("xlsx"),
+                  },
+                ]}
+              />
               <input
                 ref={fileRef}
                 type="file"
@@ -1078,26 +1229,93 @@ export default function SuppliersAdmin() {
         </div>
       </header>
 
-      <div
-        className="glass"
-        style={{
-          padding: 12,
-          marginBottom: 16,
-          display: "flex",
-          flexDirection: "column",
-          gap: 6,
-        }}
-      >
-        <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-          Bulk Import Guide
+      {pendingUploadFormat && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Bulk import guide confirmation"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1200,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            background: "var(--overlay-bg, rgba(0, 0, 0, 0.55))",
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+          }}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setPendingUploadFormat(null);
+          }}
+        >
+          <div
+            style={{
+              width: "min(520px, 100%)",
+              borderRadius: 22,
+              border: "1px solid var(--border-color)",
+              background: "var(--modal-bg, var(--bg-color))",
+              color: "var(--text-primary)",
+              boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+              padding: 22,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-secondary)" }}>
+                  Bulk Import Guide
+                </div>
+                <div style={{ marginTop: 8, fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>
+                  Review the guide before uploading
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingUploadFormat(null)}
+                aria-label="Close bulk import guide"
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 999,
+                  border: "1px solid var(--border-color)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                <XCircle size={16} aria-hidden />
+              </button>
+            </div>
+            <div style={{ marginTop: 14, fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+              You are about to start a <strong style={{ color: "var(--text-primary)" }}>{pendingUploadFormat === "xlsx" ? "Excel" : "CSV"}</strong> bulk import.
+              Make sure the file matches the template exactly.
+            </div>
+            <div style={{ marginTop: 14, display: "grid", gap: 10, fontSize: 14, color: "var(--text-secondary)" }}>
+              <div>Required fields: <strong style={{ color: "var(--text-primary)" }}>subBrand, name, supplierCategory, beneficiaryName, bankName, bankAccountNumber, ifscCode</strong>.</div>
+              <div>UPI ID remains optional, but bank details are required for import.</div>
+              <div>Use the downloaded template before uploading.</div>
+              <div>Accounts will use the uploaded file to import supplier payment details.</div>
+            </div>
+            <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setPendingUploadFormat(null)}
+                style={secondaryBtn}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmBulkImport}
+                style={primaryBtnBranded}
+              >
+                Continue to file picker
+              </button>
+            </div>
+          </div>
         </div>
-        <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-          Required for import: <strong style={{ color: "var(--text-primary)" }}>subBrand, name, supplierCategory</strong>.
-        </div>
-        <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-          Optional: contactPerson, phone, email, gstin, addressLine, status, paymentTermsKind, paymentTermsDays, creditLimit, creditCurrency, taxRegimeCode, primaryContactRole, commissionPercent, notes.
-        </div>
-      </div>
+      )}
 
       <div
         className="glass"
@@ -1672,31 +1890,17 @@ export default function SuppliersAdmin() {
             style={inputStyle}
             aria-label="Email"
           />
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <input
-              placeholder="GSTIN (15 chars)"
-              type="text"
-              maxLength={15}
-              value={form.gstin}
-              onChange={(e) =>
-                setForm({ ...form, gstin: e.target.value.toUpperCase() })
-              }
-              style={inputStyle}
-              aria-label="GSTIN"
-              aria-describedby="gstin-hint"
-            />
-            {/* PRD_TRAVEL_SUPPLIER_MASTER #903 slice 2 — inline format hint. */}
-            <span
-              id="gstin-hint"
-              style={{
-                fontSize: 11,
-                color: "var(--text-secondary)",
-                paddingLeft: 2,
-              }}
-            >
-              {GSTIN_HINT}
-            </span>
-          </div>
+          <input
+            placeholder="GSTIN (e.g. 22ABCDE1234F1Z5)"
+            type="text"
+            maxLength={15}
+            value={form.gstin}
+            onChange={(e) =>
+              setForm({ ...form, gstin: e.target.value.toUpperCase() })
+            }
+            style={inputStyle}
+            aria-label="GSTIN"
+          />
           <input
             placeholder="Address"
             value={form.addressLine}
@@ -1829,6 +2033,57 @@ export default function SuppliersAdmin() {
               <option key={r} value={r} />
             ))}
           </datalist>
+          <div
+            style={{
+              gridColumn: "1 / -1",
+              marginTop: 6,
+              paddingTop: 12,
+              borderTop: "1px solid var(--border-color)",
+              fontSize: 13,
+              fontWeight: 700,
+              color: "var(--text-primary)",
+            }}
+          >
+            Payment destination (for Accounts)
+          </div>
+          <input
+            placeholder="Beneficiary name"
+            value={form.beneficiaryName}
+            onChange={(e) => setForm({ ...form, beneficiaryName: e.target.value })}
+            style={inputStyle}
+            aria-label="Beneficiary name"
+          />
+          <input
+            placeholder="Bank name"
+            value={form.bankName}
+            onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+            style={inputStyle}
+            aria-label="Bank name"
+          />
+          <input
+            placeholder="Bank account number"
+            value={form.bankAccountNumber}
+            onChange={(e) => setForm({ ...form, bankAccountNumber: e.target.value })}
+            style={inputStyle}
+            aria-label="Bank account number"
+            autoComplete="off"
+          />
+          <input
+            placeholder="IFSC (e.g. HDFC0001234)"
+            maxLength={11}
+            value={form.ifscCode}
+            onChange={(e) => setForm({ ...form, ifscCode: e.target.value.toUpperCase() })}
+            style={inputStyle}
+            aria-label="IFSC code"
+          />
+          <input
+            placeholder="UPI ID (optional)"
+            value={form.upiId}
+            onChange={(e) => setForm({ ...form, upiId: e.target.value })}
+            style={inputStyle}
+            aria-label="UPI ID"
+            autoComplete="off"
+          />
           {/* Slice 2 (#903) — operator notes (multi-line). Spans full row width. */}
           <textarea
             placeholder="Notes (free-form)"

@@ -2185,7 +2185,10 @@ function renderTravelNav({
       {/* <Link to="/travel/automation-health" icon={Activity} label="Check-in Automation Health" requiredPermission={{ module: "web_checkins", action: "read" }} /> */}
       <Link to="/travel/passport-verification" icon={BadgeCheck} label="Passport" requiredPermission={{ module: "passport", action: "manage" }} />
       <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" requiredPermission={{ module: "cost_master", action: "read" }} />
-      <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" requiredPermission={{ module: "sightseeing", action: "read" }} />
+      {/* TMC does not use Sightseeing Master. Keep it visible for other brands and All (4). */}
+      {activeSubBrand !== "tmc" && (
+        <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" requiredPermission={{ module: "sightseeing", action: "read" }} />
+      )}
       <Link to="/travel/itinerary-templates" icon={LayoutTemplate} label="Itinerary Templates" requiredPermission={{ module: "itinerary_templates", action: "read" }} />
       <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" requiredPermission={{ module: "pricing", action: "manage" }} />
       <Link to="/travel/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
@@ -2202,7 +2205,10 @@ function renderTravelNav({
       <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" requiredPermission={{ module: "quotes", action: "write" }} />
       <Link to="/travel/quote-templates" icon={FileStack} label="Quote Templates" requiredPermission={{ module: "quote_templates", action: "read" }} />
       <Link to="/travel/cancellation-policies" icon={Ban} label="Cancellation Policies" requiredPermission={{ module: "cancellation_policies", action: "read" }} />
-      <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" requiredPermission={{ module: "suppliers", action: "manage" }} />
+      {/* TMC does not use Supplier credentials. Keep it visible for other brands and All (4). */}
+      {activeSubBrand !== "tmc" && (
+        <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" requiredPermission={{ module: "suppliers", action: "manage" }} />
+      )}
       {inBrand("rfu") && (
         <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" requiredPermission={{ module: "religious_packets", action: "read" }} />
       )}

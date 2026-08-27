@@ -11,6 +11,19 @@ import { io } from "socket.io-client";
 import { fetchApi } from "../utils/api";
 import { AuthContext } from "../App";
 
+const getNotificationTime = (notification) => {
+  const value =
+    notification?.createdAt ||
+    notification?.created_at ||
+    notification?.time ||
+    notification?.timestamp;
+  const time = value ? new Date(value).getTime() : NaN;
+  return Number.isFinite(time) ? time : 0;
+};
+
+const sortNewestFirst = (list) =>
+  [...list].sort((a, b) => getNotificationTime(b) - getNotificationTime(a));
+
 const NotificationBell = () => {
   const navigate = useNavigate();
   const { user } = useContext(AuthContext);
@@ -61,7 +74,7 @@ const NotificationBell = () => {
         : Array.isArray(data?.notifications)
           ? data.notifications
           : [];
-      setNotifications(list);
+      setNotifications(sortNewestFirst(list));
       // Recompute the unread count from the panel payload itself — single
       // source of truth. If the panel shows 4 items and 2 are unread, the
       // badge reflects 2 (not 7 from a stale role's /unread-count).
@@ -119,7 +132,7 @@ const NotificationBell = () => {
       // If the dropdown happens to be open, prepend the new notification so
       // it shows up without a re-fetch.
       if (payload.notification) {
-        setNotifications((prev) => [payload.notification, ...prev]);
+        setNotifications((prev) => sortNewestFirst([payload.notification, ...prev]));
       }
     });
 
@@ -337,6 +350,7 @@ const NotificationBell = () => {
             notifications.map((n) => (
               <div
                 key={n.id}
+                title={`${n.title}\n${n.message}`}
                 onClick={() => {
                   if (!n.isRead) markAsRead(n.id);
                   if (n.link) {
@@ -397,6 +411,7 @@ const NotificationBell = () => {
                         borderLeft: `3px solid ${typeColor(n.type)}`,
                         paddingLeft: 6,
                       }}
+                      title={n.title}
                     >
                       {n.title}
                     </span>
@@ -421,6 +436,7 @@ const NotificationBell = () => {
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
                     }}
+                    title={n.message}
                   >
                     {n.message}
                   </p>

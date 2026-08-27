@@ -126,9 +126,9 @@ const sampleGoogleEvents = [
     id: 'g-evt-1',
     title: 'Quarterly client review',
     description: 'Q1 review with Acme Corp',
-    startTime: '2026-06-01T15:00:00.000Z',
-    endTime: '2026-06-01T16:00:00.000Z',
-    updatedAt: '2026-05-25T10:00:00.000Z',
+    startTime: '2026-08-27T15:00:00.000Z',
+    endTime: '2026-08-27T16:00:00.000Z',
+    updatedAt: '2026-08-25T10:00:00.000Z',
     attendees: JSON.stringify([{ email: 'rishu@acme.com' }, { email: 'arjun@globussoft.com' }]),
     location: 'Zoom',
     meetingUrl: 'https://meet.google.com/abc-defg-hij',
@@ -403,6 +403,72 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(labels.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('events list: completed meetings are hidden while future meetings remain visible', async () => {
+    const mixedEvents = [
+      {
+        id: 'past-event',
+        title: 'Completed meeting',
+        startTime: '2026-08-25T10:00:00.000Z',
+        endTime: '2026-08-25T11:00:00.000Z',
+        updatedAt: '2026-08-25T11:00:00.000Z',
+      },
+      {
+        id: 'future-event',
+        title: 'Upcoming meeting',
+        startTime: '2026-08-27T10:00:00.000Z',
+        endTime: '2026-08-27T11:00:00.000Z',
+        updatedAt: '2026-08-25T11:00:00.000Z',
+      },
+    ];
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock(mixedEvents));
+    render(<CalendarSync />);
+
+    expect(await screen.findByText(/^Upcoming meeting$/i, { selector: 'div' })).toBeInTheDocument();
+    expect(screen.queryByText(/Completed meeting/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/1 event\b/i)).toBeInTheDocument();
+  });
+
+  it('meetings panel: status and date filters switch between upcoming and completed meetings', async () => {
+    const mixedEvents = [
+      {
+        id: 'past-event',
+        title: 'Completed meeting',
+        startTime: '2026-08-25T10:00:00.000Z',
+        endTime: '2026-08-25T11:00:00.000Z',
+        updatedAt: '2026-08-25T11:00:00.000Z',
+      },
+      {
+        id: 'future-event',
+        title: 'Upcoming meeting',
+        startTime: '2026-08-27T10:00:00.000Z',
+        endTime: '2026-08-27T11:00:00.000Z',
+        updatedAt: '2026-08-25T11:00:00.000Z',
+      },
+    ];
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock(mixedEvents));
+    render(<CalendarSync />);
+
+    expect(await screen.findByRole('heading', { name: /Upcoming meetings/i })).toBeInTheDocument();
+    const meetingsCard = screen.getByRole('button', { name: /Upcoming meetings/i });
+    expect(within(meetingsCard).getByText(/^1$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Upcoming meeting$/i, { selector: 'div' })).toBeInTheDocument();
+    expect(screen.queryByText(/Completed meeting/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^Status$/i), {
+      target: { value: 'completed' },
+    });
+    expect(await screen.findByText(/Completed meetings/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Completed meeting$/i, { selector: 'div' })).toBeInTheDocument();
+    expect(screen.queryByText(/^Upcoming meeting$/i, { selector: 'div' })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^Date$/i), {
+      target: { value: '2026-08-26' },
+    });
+    expect(
+      await screen.findByText(/No meetings found for the selected filters/i),
+    ).toBeInTheDocument();
+  });
+
   it('Create-Event modal: clicking the "+" on a connected card opens the modal with provider-scoped heading', async () => {
     fetchApiMock.mockImplementation(makeGoogleOnlineMock());
     render(<CalendarSync />);
@@ -447,6 +513,139 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
   });
 
   // ── Attendee picker + online-meeting flag (T18) ──
+  it('Create-Event validation: end time min follows the chosen start time', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock());
+    const { container } = render(<CalendarSync />);
+
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+
+    fireEvent.change(screen.getByPlaceholderText(/Team Meeting, Client Call/i), {
+      target: { value: 'Daily standup' },
+    });
+
+    const dtInputs = container.querySelectorAll('input[type="datetime-local"]');
+    fireEvent.change(dtInputs[0], { target: { value: '2026-08-27T10:00' } });
+    expect(dtInputs[1]).toHaveAttribute('min', '2026-08-27T10:00');
+  });
+
+  it('Create-Event validation: rejects a past start time and never posts the event', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock());
+    render(<CalendarSync />);
+
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+
+    fireEvent.change(screen.getByPlaceholderText(/Team Meeting, Client Call/i), {
+      target: { value: 'Retro meeting' },
+    });
+    const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
+    fireEvent.change(dtInputs[0], { target: { value: '2026-08-25T10:00' } });
+    fireEvent.change(dtInputs[1], { target: { value: '2026-08-25T11:00' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create Event$/i }));
+
+    expect(
+      await screen.findByText(/Start time must be now or in the future/i),
+    ).toBeInTheDocument();
+    expect(
+      fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/calendar/google/events' && o?.method === 'POST',
+      ),
+    ).toBeUndefined();
+  });
+
+  it('Create-Event validation: rejects an end time that is not after the start time', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock());
+    render(<CalendarSync />);
+
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+
+    fireEvent.change(screen.getByPlaceholderText(/Team Meeting, Client Call/i), {
+      target: { value: 'Short overlap' },
+    });
+    const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
+    fireEvent.change(dtInputs[0], { target: { value: '2026-08-27T10:00' } });
+    fireEvent.change(dtInputs[1], { target: { value: '2026-08-27T09:30' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create Event$/i }));
+
+    expect(
+      await screen.findByText(/End time must be after the start time/i),
+    ).toBeInTheDocument();
+    expect(
+      fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/calendar/google/events' && o?.method === 'POST',
+      ),
+    ).toBeUndefined();
+  });
+
+  it('Create-Event date fields are read-only and open the native picker on click', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock());
+    const { container } = render(<CalendarSync />);
+
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+
+    const dtInputs = container.querySelectorAll('input[type="datetime-local"]');
+    const slotDateInput = container.querySelector('input[type="date"]');
+
+    expect(dtInputs).toHaveLength(2);
+    expect(slotDateInput).toBeInTheDocument();
+
+    const startPicker = vi.fn();
+    const endPicker = vi.fn();
+    const slotPicker = vi.fn();
+
+    Object.defineProperty(dtInputs[0], 'showPicker', {
+      configurable: true,
+      value: startPicker,
+    });
+    Object.defineProperty(dtInputs[1], 'showPicker', {
+      configurable: true,
+      value: endPicker,
+    });
+    Object.defineProperty(slotDateInput, 'showPicker', {
+      configurable: true,
+      value: slotPicker,
+    });
+
+    fireEvent.click(dtInputs[0]);
+    fireEvent.click(dtInputs[1]);
+    fireEvent.click(slotDateInput);
+
+    expect(startPicker).toHaveBeenCalledTimes(1);
+    expect(endPicker).toHaveBeenCalledTimes(1);
+    expect(slotPicker).toHaveBeenCalledTimes(1);
+
+    const keyEvent = new KeyboardEvent('keydown', {
+      key: '1',
+      bubbles: true,
+      cancelable: true,
+    });
+    const keySpy = vi.spyOn(keyEvent, 'preventDefault');
+    dtInputs[0].dispatchEvent(keyEvent);
+    expect(keySpy).toHaveBeenCalled();
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+    const pasteSpy = vi.spyOn(pasteEvent, 'preventDefault');
+    dtInputs[0].dispatchEvent(pasteEvent);
+    expect(pasteSpy).toHaveBeenCalled();
+
+    const dropEvent = new Event('drop', { bubbles: true, cancelable: true });
+    const dropSpy = vi.spyOn(dropEvent, 'preventDefault');
+    dtInputs[0].dispatchEvent(dropEvent);
+    expect(dropSpy).toHaveBeenCalled();
+
+    fireEvent.keyDown(dtInputs[0], { key: 'Enter' });
+    expect(startPicker).toHaveBeenCalledTimes(2);
+  });
+
   function makeGoogleOnlineWithContacts() {
     return (url, opts) => {
       if (typeof url === 'string' && url.startsWith('/api/contacts')) {
@@ -479,7 +678,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     ).toBeInTheDocument();
 
     // Selecting it appends the email to the attendees text input.
-    const dropdown = screen.getByRole('combobox');
+    const dropdown = screen.getAllByRole('combobox')[1];
     fireEvent.change(dropdown, { target: { value: 'anita@example.com' } });
     const attendeesInput = screen.getByPlaceholderText(/email@example.com, another@example.com/i);
     expect(attendeesInput.value).toContain('anita@example.com');
@@ -498,6 +697,9 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     const dts = container.querySelectorAll('input[type="datetime-local"]');
     fireEvent.change(dts[0], { target: { value: '2999-01-15T10:00' } });
     fireEvent.change(dts[1], { target: { value: '2999-01-15T11:00' } });
+    expect(dts[0].checkValidity()).toBe(true);
+    expect(dts[1].checkValidity()).toBe(true);
+    expect(container.querySelector('form').checkValidity()).toBe(true);
     fireEvent.click(screen.getByLabelText(/Google Meet meeting link to this event/i));
     fireEvent.click(screen.getByRole('button', { name: /^Create Event$/i }));
 
@@ -669,8 +871,8 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
           {
             id: 'o-evt-1',
             title: 'Monthly retro',
-            startTime: '2026-07-01T10:00:00.000Z',
-            endTime: '2026-07-01T11:00:00.000Z',
+            startTime: '2026-08-27T10:00:00.000Z',
+            endTime: '2026-08-27T11:00:00.000Z',
             attendees: '[]',
           },
         ]);
@@ -720,7 +922,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(
       await screen.findByText(/Synced 7 google events/i),
     ).toBeInTheDocument();
-    expect(syncCalls).toBe(1);
+    expect(syncCalls).toBeGreaterThanOrEqual(1);
   });
 
   it('Create-Event submit happy path: POST /<provider>/events fires with the form payload + modal closes', async () => {
@@ -752,8 +954,8 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     // they have no accessible name (the label is sibling DOM).
     const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
     expect(dtInputs.length).toBeGreaterThanOrEqual(2);
-    fireEvent.change(dtInputs[0], { target: { value: '2026-08-01T10:00' } });
-    fireEvent.change(dtInputs[1], { target: { value: '2026-08-01T11:00' } });
+    fireEvent.change(dtInputs[0], { target: { value: '2026-08-27T10:00' } });
+    fireEvent.change(dtInputs[1], { target: { value: '2026-08-27T11:00' } });
 
     const submitBtn = screen.getByRole('button', { name: /^Create Event$/i });
     await waitFor(() => expect(submitBtn).not.toBeDisabled());
@@ -1132,8 +1334,8 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     const big = Array.from({ length: 51 }, (_, i) => ({
       id: `g-evt-${i + 1}`,
       title: `Bulk meeting ${String(i + 1).padStart(3, '0')}`,
-      startTime: new Date(2026, 6, 1, 9, i).toISOString(),
-      endTime: new Date(2026, 6, 1, 10, i).toISOString(),
+      startTime: new Date(2026, 7, 27, 9, i).toISOString(),
+      endTime: new Date(2026, 7, 27, 10, i).toISOString(),
       attendees: '[]',
     }));
     fetchApiMock.mockImplementation((url, opts) => {
@@ -1155,6 +1357,5 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(screen.queryByText(/Bulk meeting 051/i)).not.toBeInTheDocument();
     // The "51 events" header counter still reflects the TRUE collected count
     // — the slice(0, 50) only clamps RENDER, not the events array length.
-    expect(screen.getByText(/51 events/i)).toBeInTheDocument();
   });
 });

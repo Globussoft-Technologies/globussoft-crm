@@ -8705,6 +8705,13 @@ model TravelSupplier {
   taxRegimeCode         String?
   primaryContactRole    String?
   notes                 String?                             @db.Text
+  // Payment destination used by Accounts when settling supplier payables.
+  // bankAccountNumber + upiId are transparently encrypted by lib/prisma.js.
+  beneficiaryName       String?
+  bankName              String?
+  bankAccountNumber     String?                             @db.Text
+  ifscCode              String?
+  upiId                  String?                             @db.Text
   // PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e) — default supplier-side
   // commission rate (e.g. 7.50% IATA inward commission for air bookings,
   // 10% hotel commission, etc.). Override-able per

@@ -156,6 +156,7 @@ prisma.calendarEvent = {
   findFirst: vi.fn(),
   findMany: vi.fn(),
   upsert: vi.fn(),
+  deleteMany: vi.fn(),
 };
 
 // Pin env vars so /connect doesn't 500 in tests that exercise the
@@ -203,6 +204,7 @@ beforeEach(() => {
   prisma.calendarEvent.findFirst.mockReset();
   prisma.calendarEvent.findMany.mockReset();
   prisma.calendarEvent.upsert.mockReset();
+  prisma.calendarEvent.deleteMany.mockReset();
 
   // Sensible defaults — happy-path resolves.
   oauth2State.generateAuthUrl.mockReturnValue(
@@ -642,9 +644,19 @@ describe('POST /api/calendar/google/events', () => {
   });
 
   test('409 when conflicting event exists in the same window', async () => {
-    prisma.calendarEvent.findFirst.mockResolvedValueOnce({
-      id: 42,
-      title: 'Pre-existing',
+    prisma.calendarEvent.findMany.mockResolvedValueOnce([
+      {
+        id: 42,
+        title: 'Pre-existing',
+        description: 'Busy',
+      },
+    ]);
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
+      calendarId: 'primary',
     });
     const app = makeApp();
     const res = await request(app)
@@ -657,6 +669,64 @@ describe('POST /api/calendar/google/events', () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/conflict/i);
     expect(calendarState.events.insert).not.toHaveBeenCalled();
+  });
+
+  test('conflict lookup excludes birthday rows so old birthdays do not block meetings', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
+      calendarId: 'primary',
+    });
+    calendarState.events.insert.mockResolvedValue({
+      data: { id: 'gcal-birthday-safe', summary: 'Team meeting' },
+    });
+    prisma.calendarEvent.findMany.mockResolvedValue([
+      { title: 'Family birthday', description: 'Birthday' },
+    ]);
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/calendar/google/events')
+      .send({
+        title: 'Team meeting',
+        startTime: futureIso(3600_000),
+        endTime: futureIso(7200_000),
+      });
+    expect(res.status).toBe(201);
+    const lookup = prisma.calendarEvent.findMany.mock.calls[0][0];
+    expect(lookup.where.userId).toBe(7);
+    expect(lookup.where.tenantId).toBe(1);
+  });
+
+  test('birthday all-day events are transparent and do not trip the overlap conflict check', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
+      calendarId: 'primary',
+    });
+    calendarState.events.insert.mockResolvedValue({
+      data: {
+        id: 'gcal-bday-id',
+        summary: 'Dev birthday',
+      },
+    });
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/calendar/google/events')
+      .send({
+        title: 'Dev birthday',
+        description: 'Birthday',
+        startDate: '2026-08-27',
+        endDate: '2026-08-28',
+        allDay: true,
+      });
+    expect(res.status).toBe(201);
+    expect(prisma.calendarEvent.findFirst).not.toHaveBeenCalled();
+    const insertArgs = calendarState.events.insert.mock.calls[0][0];
+    expect(insertArgs.requestBody.transparency).toBe('transparent');
   });
 
   test('happy path — creates Google event + upserts CalendarEvent row, returns 201', async () => {

@@ -190,6 +190,54 @@ function buildStaffMeetingNotification({ recipientLabel, date, time, agenda }) {
   ].filter(Boolean).join(" ");
 }
 
+function buildLocalMeetingStart(date, time) {
+  const start = new Date(`${date}T${time}:00`);
+  return Number.isFinite(start.getTime()) ? start : null;
+}
+
+function formatInboxDateKey(date) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function floorInboxDateToMinute(date) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return null;
+  const copy = new Date(date);
+  copy.setSeconds(0, 0);
+  return copy;
+}
+
+function currentInboxTimeKey(date = new Date()) {
+  const safe = floorInboxDateToMinute(date);
+  if (!safe) return "";
+  const hours = String(safe.getHours()).padStart(2, "0");
+  const minutes = String(safe.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function openInboxNativePicker(e) {
+  const input = e?.currentTarget;
+  if (!input || typeof input.showPicker !== "function") return;
+  try {
+    input.showPicker();
+  } catch {
+    // Some browsers expose showPicker but still reject the call.
+  }
+}
+
+function blockInboxManualDateEntry(e) {
+  if (e?.key === "Tab") return;
+  if (e?.key === "Enter" || e?.key === " ") {
+    e.preventDefault();
+    openInboxNativePicker(e);
+    return;
+  }
+  e.preventDefault();
+}
+
 function formatStaffOptionLabel(staff) {
   const name = staff?.name?.trim() || staff?.email?.trim() || `Staff ${staff?.id}`;
   return staff?.email ? `${name} — ${staff.email}` : name;
@@ -586,6 +634,17 @@ export default function Inbox() {
       return;
     }
 
+    const meetingStart = buildLocalMeetingStart(meetData.date, meetData.time);
+    const now = floorInboxDateToMinute(new Date());
+    if (!meetingStart) {
+      notify.error("Please choose a valid meeting date and time.");
+      return;
+    }
+    if (now && meetingStart < now) {
+      notify.error("Meeting start time must be now or in the future.");
+      return;
+    }
+
     try {
       const isPatient = String(meetData.contactId).startsWith("patient:");
       const rawId = isPatient ? meetData.contactId.slice("patient:".length) : meetData.contactId;
@@ -609,7 +668,7 @@ export default function Inbox() {
       const selectedStaffEmails = [...new Set(selectedStaff.map((staff) => staff.email).filter(Boolean))];
       const selectedStaffNames = selectedStaff.map((staff) => staff.name || staff.email);
 
-      await fetchApi(endpoint, {
+      const activity = await fetchApi(endpoint, {
         method: "POST",
         body: JSON.stringify({
           type: "Meeting",
@@ -622,6 +681,46 @@ export default function Inbox() {
           }),
         }),
       });
+
+      const meetingEnd = meetingStart ? new Date(meetingStart) : null;
+      if (meetingEnd) {
+        meetingEnd.setMinutes(meetingEnd.getMinutes() + 30);
+      }
+
+      if (meetingStart && meetingEnd) {
+        const calendarPayload = {
+          title: `Meeting with ${recipientLabel}`,
+          description: buildMeetingActivityDescription({
+            date: meetData.date,
+            time: meetData.time,
+            agenda: meetData.description,
+            staffNames: selectedStaffNames,
+            recipientLabel,
+          }),
+          startTime: meetingStart.toISOString(),
+          endTime: meetingEnd.toISOString(),
+          attendees: [recipientEmail, ...selectedStaffEmails].filter(Boolean),
+          contactId: activity?.contactId || (!isPatient ? rawId : undefined),
+        };
+
+        for (const provider of ["google", "outlook"]) {
+          try {
+            await fetchApi(`/api/calendar/${provider}/events`, {
+              method: "POST",
+              body: JSON.stringify(calendarPayload),
+            });
+            break;
+          } catch (calendarErr) {
+            const status = calendarErr?.status || calendarErr?.body?.status;
+            const message = String(calendarErr?.message || calendarErr?.body?.error || "").toLowerCase();
+            if (status === 404 || message.includes("not connected")) {
+              continue;
+            }
+            console.warn("Meeting calendar sync failed:", calendarErr);
+            break;
+          }
+        }
+      }
 
       let contactEmailDelivered = false;
       let staffEmailDelivered = false;
@@ -1594,8 +1693,13 @@ export default function Inbox() {
                     type="date"
                     required
                     className="input-field"
+                    min={formatInboxDateKey(new Date())}
                     value={meetData.date}
                     onChange={(e) => setMeetData({ ...meetData, date: e.target.value })}
+                    onClick={openInboxNativePicker}
+                    onKeyDown={blockInboxManualDateEntry}
+                    onPaste={(e) => e.preventDefault()}
+                    onDrop={(e) => e.preventDefault()}
                   />
                 </div>
                 <div style={{ flex: 1 }}>
@@ -1613,8 +1717,13 @@ export default function Inbox() {
                     type="time"
                     required
                     className="input-field"
+                    min={meetData.date === formatInboxDateKey(new Date()) ? currentInboxTimeKey() : undefined}
                     value={meetData.time}
                     onChange={(e) => setMeetData({ ...meetData, time: e.target.value })}
+                    onClick={openInboxNativePicker}
+                    onKeyDown={blockInboxManualDateEntry}
+                    onPaste={(e) => e.preventDefault()}
+                    onDrop={(e) => e.preventDefault()}
                   />
                 </div>
               </div>

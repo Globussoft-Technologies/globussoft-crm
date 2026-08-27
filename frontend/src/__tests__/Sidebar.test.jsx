@@ -215,6 +215,8 @@ function renderSidebar({
     subBrandAccess: subBrandAccess === null ? null : JSON.stringify(subBrandAccess),
   };
   const tenant = { name: tenantName, vertical, logoUrl, brandColor };
+  if (activeSubBrand) window.sessionStorage.setItem('travel.activeSubBrand', activeSubBrand);
+  else window.sessionStorage.removeItem('travel.activeSubBrand');
   return render(
     <MemoryRouter initialEntries={[path]}>
       <AuthContext.Provider
@@ -306,6 +308,12 @@ describe('Sidebar — load-bearing render surface', () => {
       // Pin lower bound at 40 (allow for future trimming).
       const navLinks = container.querySelectorAll('a.nav-link');
       expect(navLinks.length).toBeGreaterThanOrEqual(40);
+    });
+
+    it('hides Sightseeing Master for TMC', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', activeSubBrand: 'tmc' });
+      expect(screen.queryByText('Sightseeing Master')).toBeNull();
+      expect(screen.queryByText('Web Check-ins')).toBeNull();
     });
   });
 

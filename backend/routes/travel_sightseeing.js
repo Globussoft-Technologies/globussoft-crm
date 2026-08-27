@@ -173,6 +173,9 @@ function validateSubBrandForImport(raw, allowed) {
   if (!VALID_SUB_BRANDS.has(subBrand)) {
     throw new Error(`invalid subBrand: ${subBrand}`);
   }
+  if (subBrand === "tmc") {
+    throw new Error("sightseeing creation is disabled for TMC");
+  }
   if (!canAccessSubBrand(allowed, subBrand)) {
     throw new Error(`sub-brand access denied: ${subBrand}`);
   }
@@ -546,6 +549,12 @@ router.post(
   async (req, res) => {
     try {
       const body = pickMutable(req.body || {});
+      if (body.subBrand === "tmc") {
+        return res.status(403).json({
+          error: "Sightseeing creation is disabled for TMC",
+          code: "TMC_SIGHTSEEING_DISABLED",
+        });
+      }
 
       if (!body.destinationName || typeof body.destinationName !== "string") {
         return res.status(400).json({
@@ -1418,6 +1427,12 @@ router.patch(
       // If the caller is trying to MOVE this row to a different sub-brand,
       // re-gate against the new value too.
       if (body.subBrand !== undefined && body.subBrand !== existing.subBrand) {
+        if (body.subBrand === "tmc") {
+          return res.status(403).json({
+            error: "Sightseeing creation is disabled for TMC",
+            code: "TMC_SIGHTSEEING_DISABLED",
+          });
+        }
         if (body.subBrand && !canAccessSubBrand(allowed, body.subBrand)) {
           return res.status(403).json({
             error: "Forbidden sub-brand",

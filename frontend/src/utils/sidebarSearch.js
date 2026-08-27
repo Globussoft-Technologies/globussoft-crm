@@ -182,10 +182,18 @@ export function filterSidebarPages(pages, { vertical = null, activeSubBrand = nu
   for (const page of pages) {
     const spec = TRAVEL_SIDEBAR_PAGE_MAP.get(page?.path);
     if (!spec) continue;
-    // TMC does not use Web Check-ins or the Gmail page. Keep them
-    // searchable for the other sub-brands and for the All (4) view,
-    // but hide them when TMC is active.
-    if ((page?.path === "/travel/web-checkins" || page?.path === "/gmail") && activeSubBrand === "tmc") continue;
+    // TMC does not use Web Check-ins, Sightseeing Master, Supplier
+    // Credentials, or the Gmail page. Keep them searchable for the other
+    // sub-brands and for the All (4) view, but hide them when TMC is active.
+    if (
+      activeSubBrand === 'tmc' &&
+      (
+        page?.path === '/travel/web-checkins' ||
+        page?.path === '/travel/sightseeing' ||
+        page?.path === '/travel/suppliers' ||
+        page?.path === '/gmail'
+      )
+    ) continue;
     if (spec.brand && activeSubBrand && spec.brand !== activeSubBrand) continue;
     filtered.push({
       ...page,

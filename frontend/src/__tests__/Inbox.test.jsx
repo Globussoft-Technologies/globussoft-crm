@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AuthContext } from "../App";
 
@@ -136,6 +136,12 @@ function defaultFetch(url, opts) {
   if (opts?.method === "POST" && url === "/api/communications/send-email") {
     return Promise.resolve({ success: true, delivered: true, email: { id: 999 } });
   }
+  if (opts?.method === "POST" && url === "/api/calendar/google/events") {
+    return Promise.resolve({ id: "cal-1" });
+  }
+  if (opts?.method === "POST" && url === "/api/calendar/outlook/events") {
+    return Promise.resolve({ id: "cal-2" });
+  }
   if (opts?.method === "POST" && url === "/api/notifications") {
     return Promise.resolve({
       success: true,
@@ -156,6 +162,26 @@ function renderInbox({ user = adminUser } = {}) {
       <Inbox />
     </AuthContext.Provider>,
   );
+}
+
+function formatLocalDateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatLocalTimeKey(date) {
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function setNativeInputValue(input, value) {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  descriptor?.set?.call(input, value);
+  fireEvent.input(input, { target: { value } });
+  fireEvent.change(input, { target: { value } });
 }
 
 describe("<Inbox />", () => {
@@ -447,8 +473,24 @@ describe("<Inbox />", () => {
     const timeInput = document.querySelector('input[type="time"]');
     expect(dateInput).toBeTruthy();
     expect(timeInput).toBeTruthy();
-    await user.type(dateInput, "2026-12-01");
-    await user.type(timeInput, "14:30");
+
+    const datePicker = vi.fn();
+    const timePicker = vi.fn();
+    Object.defineProperty(dateInput, "showPicker", { value: datePicker, configurable: true });
+    Object.defineProperty(timeInput, "showPicker", { value: timePicker, configurable: true });
+
+    await user.click(dateInput);
+    await user.click(timeInput);
+    expect(datePicker).toHaveBeenCalled();
+    expect(timePicker).toHaveBeenCalled();
+    expect(fireEvent.keyDown(dateInput, { key: "1", code: "Digit1" })).toBe(false);
+    expect(fireEvent.keyDown(timeInput, { key: "1", code: "Digit1" })).toBe(false);
+
+    const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    setNativeInputValue(dateInput, formatLocalDateKey(start));
+    setNativeInputValue(timeInput, formatLocalTimeKey(start));
+    expect(dateInput).toHaveValue(formatLocalDateKey(start));
+    expect(timeInput).toHaveValue(formatLocalTimeKey(start));
     await user.type(screen.getByPlaceholderText(/Zoom\/Google Meet links/i), "product demo agenda");
 
     await user.click(screen.getByRole("button", { name: /send invites/i }));
@@ -462,6 +504,16 @@ describe("<Inbox />", () => {
       expect(body.type).toBe("Meeting");
       expect(body.description).toMatch(/product demo agenda/);
       expect(body.description).toMatch(/Assigned staff: Travel Telecaller, RFU Advisor\./);
+
+      const calendarCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === "/api/calendar/google/events" && opts?.method === "POST",
+      );
+      expect(calendarCall).toBeTruthy();
+      const calendarBody = JSON.parse(calendarCall[1].body);
+      expect(calendarBody.title).toBe("Meeting with Rishu Goyal");
+      expect(calendarBody.attendees).toEqual(
+        expect.arrayContaining([sampleContact.email, "telecaller@travelstall.demo", "rfu-advisor@travelstall.demo"]),
+      );
 
       const contactEmailCall = fetchApiMock.mock.calls.find(
         ([url, opts]) => url === "/api/communications/send-email" && opts?.method === "POST" && JSON.parse(opts.body).to === sampleContact.email,
@@ -483,6 +535,43 @@ describe("<Inbox />", () => {
       expect(
         notificationCalls.map(([, opts]) => JSON.parse(opts.body).targetUserId).sort(),
       ).toEqual(["staff-1", "staff-2"]);
+    });
+  }, 15_000);
+
+  it("blocks meetings scheduled in the past", async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /schedule meeting/i })).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /schedule meeting/i }));
+
+    await user.selectOptions(screen.getByRole("combobox"), "c1");
+    await user.type(screen.getByPlaceholderText(/Zoom\/Google Meet links/i), "past agenda");
+
+    const past = new Date(Date.now() - 60 * 60 * 1000);
+    const dateInput = document.querySelector('input[type="date"]');
+    const timeInput = document.querySelector('input[type="time"]');
+    setNativeInputValue(dateInput, formatLocalDateKey(past));
+    setNativeInputValue(timeInput, formatLocalTimeKey(past));
+    expect(dateInput).toHaveValue(formatLocalDateKey(past));
+    expect(timeInput).toHaveValue(formatLocalTimeKey(past));
+    dateInput.removeAttribute("min");
+    timeInput.removeAttribute("min");
+
+    await user.click(screen.getByRole("button", { name: /send invites/i }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith("Meeting start time must be now or in the future.");
+      expect(
+        fetchApiMock.mock.calls.some(
+          ([url, opts]) => typeof url === "string" && url.includes("/activities") && opts?.method === "POST",
+        ),
+      ).toBe(false);
+      expect(
+        fetchApiMock.mock.calls.some(
+          ([url, opts]) => typeof url === "string" && url.includes("/api/calendar/") && opts?.method === "POST",
+        ),
+      ).toBe(false);
     });
   }, 15_000);
 });

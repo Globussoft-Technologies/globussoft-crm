@@ -59,8 +59,11 @@ describe('filterSidebarPages', () => {
     expect(filtered.map((page) => page.path)).toEqual(['/developer']);
   });
 
-  it('hides Gmail from travel page search when TMC is active', () => {
+  it('hides TMC-only travel pages and Gmail from travel page search when TMC is active', () => {
     const pages = [
+      { path: '/travel/web-checkins', label: 'Web Check-ins', description: 'Queue' },
+      { path: '/travel/sightseeing', label: 'Sightseeing Master', description: 'POI catalog' },
+      { path: '/travel/suppliers', label: 'Supplier credentials', description: 'Supplier vault' },
       { path: '/gmail', label: 'Gmail Sync', description: 'Gmail inbox integration' },
       { path: '/developer', label: 'Developer', description: 'API + webhook console' },
     ];
@@ -71,7 +74,6 @@ describe('filterSidebarPages', () => {
     });
 
     expect(filtered.map((page) => page.path)).toEqual(['/developer']);
-    expect(filtered.find((page) => page.path === '/gmail')).toBeUndefined();
   });
 });
 

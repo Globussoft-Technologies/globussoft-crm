@@ -2369,6 +2369,10 @@ if (process.env.DISABLE_CRONS === "1") {
   // PRD Gap §12 #4e — daily 08:30 IST no-show risk Notification fan-out.
   initNoShowRiskCron();
 
+  // Initialize Calendar Reminder Engine (every minute, meeting notifications)
+  const { initCalendarReminderCron } = require("./cron/calendarReminderEngine");
+  initCalendarReminderCron(io);
+
   // Initialize Wellness Ops Engine (hourly: NPS surveys + junk-lead retention)
   const { initWellnessOpsCron } = require("./cron/wellnessOpsEngine");
   initWellnessOpsCron();

@@ -47,6 +47,7 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import CountBadge from "../../components/CountBadge";
+import Pagination from "../../components/ui/Pagination";
 import { AuthContext } from "../../App";
 
 // Server-side enum values per backend/routes/travel_tmc_catalogue.js
@@ -137,9 +138,7 @@ export default function TmcCatalogueAdmin() {
   const [total, setTotal] = useState(0);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(1);
   const [loadError, setLoadError] = useState(null);
   const [reloadTick, setReloadTick] = useState(0);
 
@@ -155,54 +154,34 @@ export default function TmcCatalogueAdmin() {
   const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
   const [pendingReviewTripIds, setPendingReviewTripIds] = useState(() => new Set());
   const [titleSearch, setTitleSearch] = useState("");
-  const listContainerRef = useRef(null);
   const formRef = useRef(null);
   const requestSeqRef = useRef(0);
   const bulkFileInputRef = useRef(null);
   const rowsRef = useRef([]);
-  const offsetRef = useRef(0);
-  const hasMoreRef = useRef(true);
   const loadingRef = useRef(true);
-  const loadingMoreRef = useRef(false);
 
   useEffect(() => {
     rowsRef.current = rows;
   }, [rows]);
 
   useEffect(() => {
-    offsetRef.current = offset;
-  }, [offset]);
-
-  useEffect(() => {
-    hasMoreRef.current = hasMore;
-  }, [hasMore]);
-
-  useEffect(() => {
     loadingRef.current = loading;
   }, [loading]);
 
-  useEffect(() => {
-    loadingMoreRef.current = loadingMore;
-  }, [loadingMore]);
-
   const load = useCallback(async ({ reset = false } = {}) => {
     const requestSeq = ++requestSeqRef.current;
-    const startOffset = reset ? 0 : offsetRef.current;
+    const currentPage = reset ? 1 : page;
+    const startOffset = (currentPage - 1) * PAGE_SIZE;
 
     if (reset) {
       setLoading(true);
-      setLoadingMore(false);
       setLoadError(null);
       setRows([]);
       setTotal(0);
-      setOffset(0);
-      setHasMore(true);
       rowsRef.current = [];
-      offsetRef.current = 0;
-      hasMoreRef.current = true;
     } else {
-      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
-      setLoadingMore(true);
+      if (loadingRef.current && rowsRef.current.length > 0) return;
+      setLoading(true);
     }
 
     const params = new URLSearchParams();
@@ -226,20 +205,13 @@ export default function TmcCatalogueAdmin() {
       const totalCount = Number.isFinite(Number(res?.total))
         ? Number(res.total)
         : items.length;
-      const nextRows = reset ? items : [...rowsRef.current, ...items];
-      const nextOffset = startOffset + items.length;
-      const nextHasMore = Number.isFinite(totalCount)
-        ? nextOffset < totalCount
-        : items.length === PAGE_SIZE;
-
-      rowsRef.current = nextRows;
-      offsetRef.current = nextOffset;
-      hasMoreRef.current = nextHasMore;
-
-      setRows(nextRows);
+      rowsRef.current = items;
+      setRows(items);
       setTotal(totalCount);
-      setOffset(nextOffset);
-      setHasMore(nextHasMore);
+      const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+      if (currentPage > totalPages) {
+        setPage(totalPages);
+      }
     } catch (e) {
       if (requestSeq !== requestSeqRef.current) return;
       const msg = e?.body?.error || e?.message || "Failed to load catalogue";
@@ -247,20 +219,16 @@ export default function TmcCatalogueAdmin() {
       notify.error(msg);
       setRows([]);
       setTotal(0);
-      setHasMore(false);
       rowsRef.current = [];
-      offsetRef.current = 0;
-      hasMoreRef.current = false;
     } finally {
       if (requestSeq === requestSeqRef.current) {
         setLoading(false);
-        setLoadingMore(false);
       }
     }
-  }, [tab, notify]);
+  }, [tab, notify, page]);
 
   useEffect(() => {
-    load({ reset: true });
+    load();
   }, [load, reloadTick]);
 
   const reload = useCallback(() => {
@@ -275,15 +243,10 @@ export default function TmcCatalogueAdmin() {
           .includes(normalizedTitleSearch),
       )
     : rows;
-
-  const handleListScroll = useCallback((e) => {
-    const el = e.currentTarget;
-    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
-    const threshold = 72;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
-      load({ reset: false });
-    }
-  }, [load]);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageStart = total === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
+  const pageEnd = Math.min(safePage * PAGE_SIZE, total);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -869,6 +832,7 @@ export default function TmcCatalogueAdmin() {
           role="tab"
           aria-selected={tab === STATUS_ACTIVE}
           onClick={() => {
+            setPage(1);
             setTab(STATUS_ACTIVE);
           }}
           style={tab === STATUS_ACTIVE ? tabActive : tabIdle}
@@ -880,6 +844,7 @@ export default function TmcCatalogueAdmin() {
           role="tab"
           aria-selected={tab === STATUS_ARCHIVED}
           onClick={() => {
+            setPage(1);
             setTab(STATUS_ARCHIVED);
           }}
           style={tab === STATUS_ARCHIVED ? tabActive : tabIdle}
@@ -898,9 +863,9 @@ export default function TmcCatalogueAdmin() {
           aria-live="polite"
           style={{ color: "var(--text-secondary)", fontSize: 12, whiteSpace: "nowrap", marginLeft: 8 }}
         >
-          {visibleRows.length === 0
+          {total === 0
             ? `Showing 0 of ${total.toLocaleString()}`
-            : `Showing 1–${Math.min(visibleRows.length, total).toLocaleString()} of ${total.toLocaleString()}`}
+            : `Showing ${pageStart.toLocaleString()}–${pageEnd.toLocaleString()} of ${total.toLocaleString()}`}
         </span>
       </div>
 
@@ -1273,16 +1238,8 @@ export default function TmcCatalogueAdmin() {
         </div>
       ) : (
         <div
-          ref={listContainerRef}
-          onScroll={handleListScroll}
           role="list"
           aria-label={`${tab} catalogue entries`}
-          style={{
-            maxHeight: "72vh",
-            overflowY: "auto",
-            paddingRight: 4,
-            scrollBehavior: "smooth",
-          }}
         >
         <div
           style={{
@@ -1416,30 +1373,13 @@ export default function TmcCatalogueAdmin() {
             </div>
           ))}
         </div>
-        <div style={{ paddingTop: 12 }}>
-          {loadingMore && (
-            <div style={{ ...emptyStyle, padding: 16 }}>Loading more&hellip;</div>
-          )}
-          {!loadingMore && hasMore && (
-            <div
-              aria-hidden="true"
-              style={{ height: 1 }}
-              data-testid="tmc-catalogue-scroll-sentinel"
-            />
-          )}
-          {!hasMore && total > 0 && (
-            <div
-              style={{
-                padding: "12px 0",
-                textAlign: "center",
-                color: "var(--text-secondary)",
-                fontSize: 12,
-              }}
-            >
-              You&apos;ve reached the end of the catalogue.
-            </div>
-          )}
-        </div>
+        <Pagination
+          page={safePage}
+          pageSize={PAGE_SIZE}
+          total={total}
+          onChange={(nextPage) => setPage(nextPage)}
+          style={{ margin: 0, paddingTop: 12, paddingBottom: 0 }}
+        />
         </div>
       )}
       </section>

@@ -70,6 +70,7 @@ vi.mock('../utils/notify', () => ({
 
 import { AuthContext } from '../App';
 import SightseeingMaster from '../pages/travel/SightseeingMaster';
+import { ActiveSubBrandProvider } from '../utils/subBrand';
 
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
 
@@ -128,19 +129,26 @@ function installFetchMock({
   });
 }
 
-function renderPage(user = ADMIN_USER) {
+function renderPage(user = ADMIN_USER, activeSubBrand = null) {
+  if (activeSubBrand) {
+    sessionStorage.setItem('travel.activeSubBrand', activeSubBrand);
+  } else {
+    sessionStorage.removeItem('travel.activeSubBrand');
+  }
   return render(
     <MemoryRouter>
-      <AuthContext.Provider
-        value={{
-          user,
-          token: 'tk',
-          tenant: { id: 1, defaultCurrency: 'INR' },
-          loading: false,
-        }}
-      >
-        <SightseeingMaster />
-      </AuthContext.Provider>
+      <ActiveSubBrandProvider>
+        <AuthContext.Provider
+          value={{
+            user,
+            token: 'tk',
+            tenant: { id: 1, defaultCurrency: 'INR' },
+            loading: false,
+          }}
+        >
+          <SightseeingMaster />
+        </AuthContext.Provider>
+      </ActiveSubBrandProvider>
     </MemoryRouter>,
   );
 }
@@ -152,10 +160,12 @@ beforeEach(() => {
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
+  sessionStorage.removeItem('travel.activeSubBrand');
   installFetchMock();
 });
 
 afterEach(() => {
+  sessionStorage.removeItem('travel.activeSubBrand');
   vi.restoreAllMocks();
 });
 
@@ -175,6 +185,14 @@ describe('<SightseeingMaster /> â€” page chrome', () => {
       );
       expect(calls.length).toBeGreaterThan(0);
     });
+  });
+
+  it('hides create/import controls and shows the TMC notice when TMC is active', async () => {
+    renderPage(ADMIN_USER, 'tmc');
+    expect(await screen.findByText('Masjid al-Haram')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add sightseeing/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Import CSV\/Excel/i })).toBeNull();
+    expect(screen.getByText(/Sightseeing creation is disabled for TMC/i)).toBeInTheDocument();
   });
 });
 
@@ -248,6 +266,16 @@ describe('<SightseeingMaster /> â€” create flow', () => {
       );
       expect(reList.length).toBeGreaterThan(0);
     });
+  });
+
+  it('does not include TMC in the sub-brand dropdown', async () => {
+    renderPage();
+    await screen.findByText('Masjid al-Haram');
+    fireEvent.click(screen.getByRole('button', { name: /Add sightseeing/i }));
+
+    const subBrandSelect = screen.getByLabelText('subBrand');
+    const optionLabels = within(subBrandSelect).getAllByRole('option').map((option) => option.textContent || '');
+    expect(optionLabels.some((label) => /TMC/i.test(label))).toBe(false);
   });
 });
 

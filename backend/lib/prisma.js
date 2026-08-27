@@ -21,6 +21,7 @@ const ENCRYPTED_FIELDS = {
   Visit: ['notes', 'vitals'],
   Prescription: ['drugs', 'instructions'],
   ConsentForm: ['signatureSvg'],
+  TravelSupplier: ['bankAccountNumber', 'upiId'],
 };
 
 function encryptInput(modelName, data) {

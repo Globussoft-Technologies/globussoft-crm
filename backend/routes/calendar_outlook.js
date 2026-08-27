@@ -367,14 +367,21 @@ router.post("/events", verifyToken, async (req, res) => {
     const tenantId = req.user.tenantId;
 
     // Check for conflicting events (same timing)
-    const conflictingEvent = await prisma.calendarEvent.findFirst({
+    const overlappingEvents = await prisma.calendarEvent.findMany({
       where: {
         userId,
         tenantId,
         startTime: { lt: end },
         endTime: { gt: start },
       },
+      select: {
+        title: true,
+        description: true,
+      },
     });
+    const conflictingEvent = overlappingEvents.find(
+      (event) => !/birthday/i.test(`${event?.title || ""} ${event?.description || ""}`),
+    );
     if (conflictingEvent) {
       return res.status(409).json({ error: "Event time conflicts with an existing event. Please choose a different time." });
     }

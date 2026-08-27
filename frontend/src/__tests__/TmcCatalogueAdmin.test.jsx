@@ -283,8 +283,7 @@ describe('<TmcCatalogueAdmin /> — refresh control', () => {
     expect(screen.getByText('Madhya Pradesh Wildlife Trail')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Refresh list/i }));
-    expect(screen.getByText(/Loading/i)).toBeInTheDocument();
-    expect(screen.queryByText('Golden Triangle Heritage Trail')).not.toBeInTheDocument();
+    expect(screen.getByText('Golden Triangle Heritage Trail')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(fetchApiMock.mock.calls.filter(([u]) => String(u).includes('status=active&limit=10&offset=0'))).toHaveLength(2);
@@ -323,8 +322,8 @@ describe('<TmcCatalogueAdmin /> — empty states', () => {
   });
 });
 
-describe('<TmcCatalogueAdmin /> — infinite scroll', () => {
-  it('requests the next slice when the list container scrolls to the bottom', async () => {
+describe('<TmcCatalogueAdmin /> — pagination', () => {
+  it('shows the pager and requests the next page when Next is clicked', async () => {
     const activePage1 = Array.from({ length: 10 }, (_, idx) =>
       makeRow({
         id: 100 + idx,
@@ -382,13 +381,13 @@ describe('<TmcCatalogueAdmin /> — infinite scroll', () => {
     renderPage();
     expect(await screen.findByText('Active Trip 1')).toBeInTheDocument();
 
-    const list = screen.getByRole('list', { name: /active catalogue entries/i });
-    Object.defineProperties(list, {
-      scrollTop: { value: 1000, writable: true, configurable: true },
-      clientHeight: { value: 500, writable: true, configurable: true },
-      scrollHeight: { value: 1400, writable: true, configurable: true },
-    });
-    fireEvent.scroll(list);
+    expect(screen.getByRole('button', { name: /Previous page/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Next page/i })).toBeEnabled();
+    expect(screen.getByRole('navigation', { name: /Pagination/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/Showing 1[\u2013-]10 of 12/i)).toHaveLength(2);
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -398,6 +397,7 @@ describe('<TmcCatalogueAdmin /> — infinite scroll', () => {
     });
     expect(await screen.findByText('Active Trip 11')).toBeInTheDocument();
     expect(screen.getByText('Active Trip 12')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Previous page/i })).toBeEnabled();
   });
 });
 

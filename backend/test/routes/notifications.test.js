@@ -654,10 +654,19 @@ describe('POST / — create + deliver', () => {
     const res = await request(makeApp())
       .post('/api/notifications')
       .set('Authorization', makeBearer({ userId: 7, tenantId: 1, role: 'USER' }))
-      .send({ title: 'self', message: 'note', targetUserId: 7 });
+      .send({
+        title: 'self',
+        message: 'note',
+        targetUserId: 7,
+        entityType: 'calendar_alert',
+        entityId: 1234,
+      });
     expect(res.status).toBe(201);
     expect(res.body.delivered).toBe(1);
     expect(res.body.notification.id).toBe(11);
+    const createArgs = prisma.notification.create.mock.calls[0][0];
+    expect(createArgs.data.entityType).toBe('calendar_alert');
+    expect(createArgs.data.entityId).toBe(1234);
     // Self-notify must NOT audit (#179: only cross-user is security-relevant)
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });

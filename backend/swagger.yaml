@@ -3685,6 +3685,15 @@ paths:
         ORIGINAL prescription (drugs normalised like every other Rx response)
         and the request's status history. Calling the customer from this
         screen reuses /wellness/callified/patients/{patientId}/*.
+
+
+        Also returns `stock[]` and `stockSummary` - per-medicine availability
+        for what was requested, resolved through the explicit Drug.productId
+        link (see /wellness/drugs/stock-mapping). ADVISORY ONLY: it never gates
+        the accept/reject actions. State `not_linked` means "no inventory item
+        is mapped to this medicine" - it is NOT out of stock and must never be
+        rendered as zero. If the lookup fails, both fields come back null and
+        the review still loads.
       tags: [Wellness — Visits & Clinical]
       responses:
         "200":
@@ -3729,6 +3738,77 @@ paths:
           description: >
             REQUEST_CLOSED, INVALID_TRANSITION, STATUS_UNCHANGED, or
             CONCURRENT_UPDATE.
+  /wellness/drugs/stock-mapping:
+    get:
+      summary: "[WELLNESS] Drug to inventory mapping (read)"
+      description: >
+        Every active drug, its linked Product, and - for UNLINKED drugs only -
+        a name-similarity suggestion above the confidence floor. Suggestions are
+        proposals for a human to confirm, never applied automatically: the two
+        catalogues do not share naming, and a wrong confirmed link silently
+        feeds a wrong stock number into a clinical decision. Requires
+        `prescriptions.read`.
+      tags: [Wellness - Visits & Clinical]
+      parameters:
+        - in: query
+          name: unlinked
+          description: "true / 1 - only drugs with no product link yet."
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Drugs with links + suggestions, plus the product list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { type: object }
+                  total: { type: integer }
+                  linked: { type: integer }
+                  products:
+                    type: array
+                    items: { type: object }
+    put:
+      summary: "[WELLNESS] Drug to inventory mapping (bulk save)"
+      description: >
+        Confirm up to 500 links in one pass - the mapping is a one-sitting job
+        over a whole catalogue. `productId: null` clears a link and means "not a
+        stocked item", which stays expressible. The WHOLE batch is validated
+        before anything is written, so a rejected request leaves nothing
+        half-applied. Both the drug and the product must belong to the caller's
+        tenant. Requires `prescriptions.write`.
+      tags: [Wellness - Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [links]
+              properties:
+                links:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: object
+                    required: [drugId]
+                    properties:
+                      drugId: { type: integer }
+                      productId: { type: integer, nullable: true }
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  updated: { type: integer }
+        "400": { description: INVALID_LINKS, TOO_MANY_LINKS or INVALID_PRODUCT_ID. }
+        "404": { description: DRUG_NOT_FOUND or PRODUCT_NOT_FOUND - nothing written. }
   /wellness/consents:
     get:
       summary: "[WELLNESS] List consent forms"

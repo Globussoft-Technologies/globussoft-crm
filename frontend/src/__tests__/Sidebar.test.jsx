@@ -194,6 +194,7 @@ function renderSidebar({
   activeSubBrand = null,
   accessiblePages = null, // null → empty catalog (back-compat default)
   permissions = null,     // null → default per-role set; pass array of "module.action" strings to override
+  userType = null,        // 'STAFF' | 'CUSTOMER' — what separates a doctor from a patient
 } = {}) {
   // Capture the catalog into a closure variable read by the default
   // mock impl set in beforeEach. This lets per-test overrides (e.g.
@@ -211,6 +212,7 @@ function renderSidebar({
     name: 'Maya Iyer',
     email: 'maya@acme.test',
     role,
+    userType,
     wellnessRole,
     subBrandAccess: subBrandAccess === null ? null : JSON.stringify(subBrandAccess),
   };
@@ -1685,10 +1687,13 @@ describe('Sidebar — load-bearing render surface', () => {
       { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
     ];
 
-    it('shows customerOnly pages for a customer-tier USER', async () => {
+    it('shows customerOnly pages for a USER-role account stamped CUSTOMER', async () => {
+      // A legacy customer carries role USER with the customer userType — the
+      // userType is what makes them a customer, not the role.
       renderSidebar({
         vertical: 'wellness',
         role: 'USER',
+        userType: 'CUSTOMER',
         accessiblePages: CUSTOMER_PAGES,
       });
       await screen.findByText('My Transactions');
@@ -1696,10 +1701,28 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Point of Sale')).toBeTruthy();
     });
 
+    it('hides customerOnly pages from a doctor, who is also role USER', async () => {
+      // Every staff account is role USER / userType STAFF. Reading the role
+      // alone put the patient storefront in the nav of every doctor, nurse
+      // and telecaller.
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'USER',
+        userType: 'STAFF',
+        wellnessRole: 'doctor',
+        accessiblePages: CUSTOMER_PAGES,
+      });
+      // The ordinary Finance sibling still renders, so the catalog resolved…
+      await screen.findByText('Point of Sale');
+      // …and only the customer storefront entry is gone.
+      expect(screen.queryByText('My Transactions')).toBeNull();
+    });
+
     it('shows customerOnly pages for a CUSTOMER role', async () => {
       renderSidebar({
         vertical: 'wellness',
         role: 'CUSTOMER',
+        userType: 'CUSTOMER',
         accessiblePages: CUSTOMER_PAGES,
       });
       await screen.findByText('My Transactions');

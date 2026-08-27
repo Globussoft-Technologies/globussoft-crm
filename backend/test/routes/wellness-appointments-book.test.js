@@ -45,9 +45,14 @@ prisma.visit.create = vi.fn();
 prisma.visit.findFirst = vi.fn();
 prisma.visit.findUnique = vi.fn();
 prisma.visit.update = vi.fn();
+// Booking now runs the doctor double-booking guard, which reads the doctor's
+// surrounding visits as a list and compares real time intervals.
+prisma.visit.findMany = vi.fn().mockResolvedValue([]);
 
 prisma.service = prisma.service || {};
 prisma.service.findFirst = vi.fn();
+// The guard reads the booked service's durationMin to size the conflict window.
+prisma.service.findUnique = vi.fn().mockResolvedValue({ durationMin: 30 });
 
 prisma.payment = prisma.payment || {};
 prisma.payment.create = vi.fn();

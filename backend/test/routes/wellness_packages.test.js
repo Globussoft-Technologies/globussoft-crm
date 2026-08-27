@@ -21,6 +21,9 @@ const {
   saleBlockReason,
   priceBreakdown,
   planRequestBlockReason,
+  alreadyHeldBlockReason,
+  validatePreferredRequestDate,
+  validateAcceptSlot,
 } = requireCJS('../../routes/wellness_packages');
 
 describe('parseServiceIds', () => {
@@ -303,5 +306,109 @@ describe('planRequestBlockReason', () => {
     ]) {
       expect(planRequestBlockReason(plan).status).toBe(409);
     }
+  });
+});
+
+describe('validatePreferredRequestDate', () => {
+  const activePlan = { nextDueAt: '2026-09-03T13:00:00.000Z' };
+  const now = new Date('2026-08-27T12:00:00+05:30');
+
+  test('allows no preferred date', () => {
+    expect(validatePreferredRequestDate(null, activePlan, now)).toBeNull();
+  });
+
+  test('rejects a preferred date before Thursday, August 27, 2026', () => {
+    expect(
+      validatePreferredRequestDate(new Date('2026-08-26T12:00:00+05:30'), activePlan, now)?.body.code,
+    ).toBe('PAST_PREFERRED_DATE');
+  });
+
+  test('rejects a preferred date after the package validity day', () => {
+    const result = validatePreferredRequestDate(new Date('2026-09-04T12:00:00+05:30'), activePlan, now);
+    expect(result?.body.code).toBe('PREFERRED_DATE_AFTER_VALIDITY');
+    expect(result?.body.latestDate).toBe('2026-09-03');
+  });
+
+  test('allows today and the last valid day', () => {
+    expect(validatePreferredRequestDate(new Date('2026-08-27T09:00:00+05:30'), activePlan, now)).toBeNull();
+    expect(validatePreferredRequestDate(new Date('2026-09-03T09:00:00+05:30'), activePlan, now)).toBeNull();
+  });
+});
+
+// ── Buying a package you already hold ───────────────────────────────
+
+describe('alreadyHeldBlockReason', () => {
+  const held = { id: 77, totalSessions: 4, completedSessions: 0, nextDueAt: null };
+
+  test('a package never bought is buyable', () => {
+    expect(alreadyHeldBlockReason(null)).toBeNull();
+  });
+
+  test('holding it with every session unused blocks a second purchase', () => {
+    // The reported bug: a customer could buy the same package again while
+    // holding it untouched — money taken for something they have not used, and
+    // a second plan the catalog cannot show them.
+    const blocked = alreadyHeldBlockReason(held);
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe('PACKAGE_ALREADY_HELD');
+    expect(blocked.body.sessionsLeft).toBe(4);
+    expect(blocked.body.treatmentPlanId).toBe(77);
+  });
+
+  test('the refusal says how much is left, so it reads as help not a wall', () => {
+    expect(alreadyHeldBlockReason({ ...held, completedSessions: 1 }).body.error)
+      .toMatch(/3 of 4 sessions left/);
+  });
+
+  test('a part-used package is still blocked', () => {
+    expect(alreadyHeldBlockReason({ ...held, completedSessions: 3 }).body.code)
+      .toBe('PACKAGE_ALREADY_HELD');
+  });
+
+  test('an exhausted package can be bought again — that is the whole point', () => {
+    expect(alreadyHeldBlockReason({ ...held, completedSessions: 4 })).toBeNull();
+    expect(alreadyHeldBlockReason({ ...held, completedSessions: 5 })).toBeNull();
+  });
+
+  test('a lapsed window frees it too — those sessions can no longer be used', () => {
+    expect(alreadyHeldBlockReason({ ...held, nextDueAt: '2020-01-01T00:00:00.000Z' })).toBeNull();
+  });
+
+  test('a future window keeps the block', () => {
+    expect(alreadyHeldBlockReason({ ...held, nextDueAt: '2099-01-01T00:00:00.000Z' }).body.code)
+      .toBe('PACKAGE_ALREADY_HELD');
+  });
+});
+
+// ── Confirming a slot ───────────────────────────────────────────────
+
+describe('validateAcceptSlot', () => {
+  const now = new Date('2026-08-27T17:01:40.000Z');
+
+  test('a slot later today is fine', () => {
+    expect(validateAcceptSlot(new Date('2026-08-27T18:00:00.000Z'), now)).toBeNull();
+  });
+
+  test('the current minute is fine — seconds must not lose the slot', () => {
+    // The picker carries minutes. Choosing 17:01 and pressing Accept at
+    // 17:01:40 has to work, or every on-the-hour booking is a coin flip.
+    expect(validateAcceptSlot(new Date('2026-08-27T17:01:00.000Z'), now)).toBeNull();
+  });
+
+  test('a minute ago is refused', () => {
+    expect(validateAcceptSlot(new Date('2026-08-27T17:00:59.000Z'), now).body.code)
+      .toBe('PAST_VISIT_DATE');
+  });
+
+  test('the date the patient asked for, now gone by, is refused', () => {
+    // The queue pre-fills this, so it is the case that actually happens: a
+    // request sits for a few days and the requested date passes.
+    const blocked = validateAcceptSlot(new Date('2026-08-24T10:00:00.000Z'), now);
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.error).toMatch(/already passed/i);
+  });
+
+  test('no slot at all is not an error here', () => {
+    expect(validateAcceptSlot(null, now)).toBeNull();
   });
 });

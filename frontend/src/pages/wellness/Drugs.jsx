@@ -31,8 +31,39 @@ const DANGER_ICON_BTN_STYLE = {
   color: 'var(--danger-color, #ef4444)',
 };
 
-const HEADER_GRID_TEMPLATE = 'minmax(150px, 1.35fr) minmax(180px, 1.65fr) minmax(90px, 0.9fr) minmax(90px, 0.9fr) minmax(140px, 1.25fr) minmax(90px, 0.75fr) minmax(92px, 0.6fr)';
+const HEADER_GRID_TEMPLATE = 'minmax(150px, 1.35fr) minmax(180px, 1.65fr) minmax(90px, 0.9fr) minmax(90px, 0.9fr) minmax(140px, 1.25fr) minmax(110px, 0.95fr) minmax(90px, 0.75fr) minmax(92px, 0.6fr)';
 const ROW_GRID_TEMPLATE = HEADER_GRID_TEMPLATE;
+/**
+ * Quantity on hand, with the reorder point as context.
+ *
+ * A drug with threshold 0 is not being tracked, so its count is shown plainly
+ * rather than dressed as "in stock" — the clinic never claimed to be managing
+ * it. Colours come from the semantic tokens so they hold in both themes.
+ */
+function StockCell({ drug }) {
+  const qty = Number(drug.quantity ?? 0);
+  const threshold = Number(drug.lowStockThreshold ?? 0);
+
+  let color = 'var(--text-primary)';
+  let note = threshold > 0 ? `reorder at ${threshold}` : 'not tracked';
+  if (qty <= 0) {
+    color = 'var(--danger-color)';
+    note = 'out of stock';
+  } else if (threshold > 0 && qty <= threshold) {
+    color = 'var(--warning-color)';
+    note = `low · reorder at ${threshold}`;
+  }
+
+  return (
+    <span>
+      <span style={{ fontWeight: 600, color, fontVariantNumeric: 'tabular-nums' }}>{qty}</span>
+      <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginLeft: 6 }}>
+        {note}
+      </span>
+    </span>
+  );
+}
+
 const TABLE_CELL_STYLE = {
   padding: '0.75rem 0.75rem',
   minWidth: 0,
@@ -60,6 +91,8 @@ const EMPTY_FORM = {
   genericName: '',
   dosageForm: 'tablet',
   strengthValue: '',
+  quantity: '',
+  lowStockThreshold: '',
   strengthUnit: '',
   defaultDosage: '',
   defaultFrequency: '',
@@ -166,6 +199,8 @@ export default function Drugs() {
       genericName: drug.genericName || '',
       dosageForm: drug.dosageForm || 'tablet',
       strengthValue: drug.strengthValue || '',
+      quantity: drug.quantity ?? '',
+      lowStockThreshold: drug.lowStockThreshold ?? '',
       strengthUnit: drug.strengthUnit || '',
       defaultDosage: drug.defaultDosage || '',
       defaultFrequency: drug.defaultFrequency || '',
@@ -234,6 +269,7 @@ export default function Drugs() {
         {d.strengthValue ? `${d.strengthValue} ${d.strengthUnit || ''}`.trim() : '—'}
       </div>
       <div style={TABLE_CELL_STYLE}>{d.defaultDosage || '—'}</div>
+      <div style={TABLE_CELL_STYLE}><StockCell drug={d} /></div>
       <div style={TABLE_CELL_STYLE}>
         <span
           style={{
@@ -394,6 +430,11 @@ export default function Drugs() {
             </select>
             <input placeholder="Strength value (e.g. 500)" value={form.strengthValue} onChange={(e) => setForm({ ...form, strengthValue: e.target.value })} />
             <input placeholder="Strength unit (mg, ml, %, IU...)" value={form.strengthUnit} onChange={(e) => setForm({ ...form, strengthUnit: e.target.value })} />
+            {/* Stock lives on the drug: the clinic dispenses from the same
+                shelf the doctor prescribes off, so there is no separate
+                inventory row to reconcile against. */}
+            <input type="number" min="0" placeholder="Quantity in stock (e.g. 40)" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
+            <input type="number" min="0" placeholder="Low-stock threshold (0 = no alert)" value={form.lowStockThreshold} onChange={(e) => setForm({ ...form, lowStockThreshold: e.target.value })} />
             <input placeholder="Default dosage (e.g. 1 tablet)" value={form.defaultDosage} onChange={(e) => setForm({ ...form, defaultDosage: e.target.value })} />
             <input placeholder="Default frequency (e.g. twice daily)" value={form.defaultFrequency} onChange={(e) => setForm({ ...form, defaultFrequency: e.target.value })} />
             <input placeholder="Default duration (e.g. 5 days)" value={form.defaultDuration} onChange={(e) => setForm({ ...form, defaultDuration: e.target.value })} />
@@ -464,6 +505,7 @@ export default function Drugs() {
               <div style={TABLE_HEADER_CELL_STYLE}>Form</div>
               <div style={TABLE_HEADER_CELL_STYLE}>Strength</div>
               <div style={TABLE_HEADER_CELL_STYLE}>Default dosage</div>
+              <div style={TABLE_HEADER_CELL_STYLE}>Stock</div>
               <div style={TABLE_HEADER_CELL_STYLE}>Status</div>
               <div style={{ ...TABLE_HEADER_CELL_STYLE, textAlign: 'right' }}>Actions</div>
             </div>

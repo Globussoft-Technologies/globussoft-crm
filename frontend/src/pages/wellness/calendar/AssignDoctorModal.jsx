@@ -21,11 +21,27 @@ export default function AssignDoctorModal({ visit, notify, onClose, onAssigned }
     return isoLocalDate(d);
   }, [visit?.visitDate]);
 
+  // The appointment's local clock time. Without it the availability endpoint
+  // could only answer day-level questions (leave, block-times), so a doctor who
+  // already had an appointment in this very slot was still offered — and the
+  // server then rejected the assignment with SLOT_TAKEN after the click.
+  const visitTime = useMemo(() => {
+    const d = new Date(visit.visitDate);
+    if (Number.isNaN(d.getTime())) return null;
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }, [visit?.visitDate]);
+
   useEffect(() => {
     if (!visitDay) return;
     let cancelled = false;
     setLoadingDocs(true);
-    fetchApi(`/api/wellness/doctors/availability?date=${visitDay}`)
+    const params = new URLSearchParams({ date: visitDay });
+    // Ask about this exact slot, sized by the booked service, and ignore the
+    // appointment being assigned so it never counts as its own conflict.
+    if (visitTime) params.set('time', visitTime);
+    if (visit?.serviceId) params.set('serviceId', String(visit.serviceId));
+    if (visit?.id) params.set('excludeVisitId', String(visit.id));
+    fetchApi(`/api/wellness/doctors/availability?${params.toString()}`)
       .then((data) => {
         if (cancelled) return;
         setDoctors(Array.isArray(data) ? data : []);
@@ -39,7 +55,7 @@ export default function AssignDoctorModal({ visit, notify, onClose, onAssigned }
         if (!cancelled) setLoadingDocs(false);
       });
     return () => { cancelled = true; };
-  }, [visitDay, notify]);
+  }, [visitDay, visitTime, visit?.serviceId, visit?.id, notify]);
 
   const submit = async () => {
     if (!selectedDoctorId || submitting) return;
@@ -149,12 +165,17 @@ export default function AssignDoctorModal({ visit, notify, onClose, onAssigned }
                   </div>
                   {d.available === false && (
                     <span
+                      // Say WHY. "Unavailable" leaves the operator guessing
+                      // whether the doctor is on leave or simply already booked
+                      // at this hour — different problems with different fixes.
+                      title={d.unavailableReason || 'Unavailable'}
                       style={{
                         fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: 999,
-                        background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 600,
+                        background: 'color-mix(in srgb, var(--danger-color) 15%, transparent)',
+                        color: 'var(--danger-color)', fontWeight: 600, whiteSpace: 'nowrap',
                       }}
                     >
-                      Unavailable
+                      {d.unavailableReason || 'Unavailable'}
                     </span>
                   )}
                 </label>

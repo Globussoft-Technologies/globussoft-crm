@@ -11,5 +11,6 @@ export { default as Spinner } from './Spinner';
 export { default as Skeleton, SkeletonRow, SkeletonTable } from './Skeleton';
 export { default as SearchInput } from './SearchInput';
 export { default as SearchHighlight } from './SearchHighlight';
+export { default as SearchableSelect } from './SearchableSelect';
 export { default as Pagination } from './Pagination';
 export { default as Modal } from './Modal';

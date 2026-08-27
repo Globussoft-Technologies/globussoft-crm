@@ -36,8 +36,12 @@ export default function CalendarGrid() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const { hasPermission } = usePermissions();
-  // Only regular users (patients) can book appointments, not staff/admins/doctors
-  const canBookAppointment = user?.role === 'USER';
+  // Only patients book for themselves here — staff book through the visit
+  // modal. This said so already, but tested `role === 'USER'`, which is what
+  // every staff account carries (userType STAFF); doctors were shown the
+  // self-booking panel. userType is the stamp that actually separates them.
+  const canBookAppointment =
+    String(user?.userType || '').toUpperCase() === 'CUSTOMER' || user?.role === 'CUSTOMER';
   // Assignment/reassignment of practitioners is gated on the appointments.assign
   // permission (or admin/manager). Doctors can see pending visits but cannot
   // assign them to other doctors.

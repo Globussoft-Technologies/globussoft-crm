@@ -125,9 +125,20 @@ router.put('/:id', verifyToken, async (req, res) => {
       {
         ticketId: ticket.id,
         subject: ticket.subject,
+        description: ticket.description,
         priority: ticket.priority,
         status: ticket.status,
         assigneeId: ticket.assigneeId,
+        contactId: ticket.contactId,
+        userId: req.user.userId,
+        changedFields: Object.keys(data),
+        // Prior-value snapshot for the changed / changed_to / changed_from
+        // condition operators — e.g. "priority was escalated to Critical".
+        previous: {
+          status: existing.status,
+          priority: existing.priority,
+          assigneeId: existing.assigneeId,
+        },
       },
       req.user.tenantId,
       'support/put'

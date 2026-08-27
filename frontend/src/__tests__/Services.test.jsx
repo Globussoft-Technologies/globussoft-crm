@@ -36,6 +36,17 @@ vi.mock('../utils/api', () => ({
   getAuthToken: vi.fn(() => 'test-token'),
 }));
 
+const notify = {
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  confirm: vi.fn((input) => Promise.resolve(window.confirm(typeof input === 'string' ? input : input?.message || ''))),
+  prompt: vi.fn(),
+};
+vi.mock('../utils/notify', () => ({
+  useNotify: () => notify,
+}));
+
 // Default to a fully-permissioned viewer so existing assertions on New
 // service / per-card Edit / Deactivate keep passing. The SUT now hides
 // these when the viewer lacks services.write.
@@ -58,6 +69,7 @@ vi.mock('../hooks/usePermissions', () => ({
 }));
 
 import { fetchApi } from '../utils/api';
+import { AuthContext } from '../App';
 import Services from '../pages/wellness/Services';
 
 const services = [
@@ -976,8 +988,16 @@ describe('<Services /> — PackageBuilder multi-service selection', () => {
 
 describe('<Services /> — PackageBuilder tax, validity and sell-by', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-27T12:00:00'));
     fetchApi.mockReset();
     fetchApi.mockImplementation(defaultFetchRouter);
+    notify.success.mockReset();
+    notify.error.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const openBuilder = async (user) => {
@@ -994,7 +1014,7 @@ describe('<Services /> — PackageBuilder tax, validity and sell-by', () => {
   };
 
   it('adds the selected tax on top of the package price rather than inside it', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await openBuilder(user);
 
     // Default bundle: 8500 × 6 = 51,000 gross, 15% off → 43,350 net.
@@ -1012,7 +1032,7 @@ describe('<Services /> — PackageBuilder tax, validity and sell-by', () => {
   });
 
   it('sends tax, validity and sell-by with the saved package', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await openBuilder(user);
 
     await user.type(screen.getByTestId('package-name-input'), 'Glow Season Bundle');
@@ -1040,7 +1060,7 @@ describe('<Services /> — PackageBuilder tax, validity and sell-by', () => {
   it('omits validity and sell-by when they are left alone', async () => {
     // No expiry and no sell-by is the default, and has to reach the API as an
     // explicit null rather than an empty string the validator would reject.
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await openBuilder(user);
 
     await user.type(screen.getByTestId('package-name-input'), 'Plain Bundle');
@@ -1056,6 +1076,108 @@ describe('<Services /> — PackageBuilder tax, validity and sell-by', () => {
       expect(body.validityDays).toBeNull();
       expect(body.sellByDate).toBeNull();
     });
+  });
+
+  it('blocks saving a package with a past sell-by date', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await openBuilder(user);
+
+    await user.type(screen.getByTestId('package-name-input'), 'Expired Bundle');
+    fireEvent.change(screen.getByTestId('package-sell-by-input'), { target: { value: '2026-08-26' } });
+
+    await user.click(screen.getByTestId('package-save'));
+
+    expect(notify.error).toHaveBeenCalledWith('Sell-by date cannot be in the past');
+    const packagePosts = fetchApi.mock.calls.filter(
+      ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+    );
+    expect(packagePosts).toHaveLength(0);
+  });
+
+  it('does not offer past dates in the builder sell-by input', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await openBuilder(user);
+
+    expect(screen.getByTestId('package-sell-by-input')).toHaveAttribute('min', '2026-08-27');
+  });
+});
+
+describe('<Services /> — who is offered a package to buy', () => {
+  // Staff are role USER / userType STAFF. Reading role === 'USER' as
+  // "customer" put a Buy button in front of every doctor, nurse and
+  // telecaller — and buying from a staff account would mint a Patient record
+  // named after them.
+  const LIVE_PACKAGE = {
+    id: 3,
+    name: 'Strict removal',
+    serviceIds: [10],
+    services: [{ id: 10, name: 'GFC Hair', basePrice: 8500 }],
+    missingServiceIds: [],
+    sessions: 4,
+    discountPercent: 15,
+    grossPrice: 59992,
+    price: 50993,
+    isActive: true,
+    isPublic: true,
+  };
+
+  const renderAs = async ({ userType, role, canWrite }) => {
+    usePermissionsMock.mockReturnValue({
+      ...FULL_PERMS,
+      userType,
+      hasPermission: () => canWrite,
+    });
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/packages') return Promise.resolve({ packages: [LIVE_PACKAGE] });
+      if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    render(
+      <AuthContext.Provider value={{ user: { role }, tenant: { name: 'Clinic' } }}>
+        <MemoryRouter><Services /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /^Packages$/i }));
+    return user;
+  };
+
+  afterEach(() => {
+    usePermissionsMock.mockReturnValue(FULL_PERMS);
+  });
+
+  it('offers a customer the package to buy', async () => {
+    await renderAs({ userType: 'CUSTOMER', role: 'CUSTOMER', canWrite: false });
+
+    await waitFor(() => expect(screen.getByTestId('package-buy-3')).toBeInTheDocument());
+    expect(screen.queryByText(/Build a package/i)).not.toBeInTheDocument();
+  });
+
+  it('offers a doctor nothing to buy — they may look, not purchase', async () => {
+    await renderAs({ userType: 'STAFF', role: 'USER', canWrite: false });
+
+    // The catalog they sell is visible…
+    await waitFor(() => expect(screen.getByText('Strict removal')).toBeInTheDocument());
+    // …without a purchase, and without the builder they cannot save from.
+    expect(screen.queryByTestId('package-buy-3')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Build a package/i)).not.toBeInTheDocument();
+  });
+
+  it('gives a doctor no publish or retire controls either', async () => {
+    await renderAs({ userType: 'STAFF', role: 'USER', canWrite: false });
+
+    await waitFor(() => expect(screen.getByText('Strict removal')).toBeInTheDocument());
+    expect(screen.queryByTestId('package-publish-3')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('package-terms-3')).not.toBeInTheDocument();
+  });
+
+  it('gives someone who can manage the catalog the builder, not a Buy button', async () => {
+    await renderAs({ userType: 'STAFF', role: 'ADMIN', canWrite: true });
+
+    await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
+    expect(screen.queryByTestId('package-buy-3')).not.toBeInTheDocument();
   });
 });
 

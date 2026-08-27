@@ -983,7 +983,7 @@ router.get("/", async (req, res) => {
     if (invoiceIds.length > 0) {
       const invoices = await prisma.invoice.findMany({
         where: { id: { in: invoiceIds }, tenantId },
-        select: { id: true, visitId: true },
+        select: { id: true, visitId: true, invoiceNum: true },
       });
       invoices.forEach((inv) => { invoiceMap[inv.id] = inv; });
     }
@@ -1028,6 +1028,48 @@ router.get("/", async (req, res) => {
       if (visitId) paymentVisitMap[p.id] = visitId;
     }
 
+    const posInvoiceNums = [
+      ...new Set(
+        payments
+          .map((p) => (p.invoiceId ? invoiceMap[p.invoiceId]?.invoiceNum : null))
+          .filter(Boolean),
+      ),
+    ];
+    const saleByInvoiceNum = {};
+    const cashierIds = [];
+    if (posInvoiceNums.length > 0 && prisma.sale?.findMany) {
+      const sales = await prisma.sale.findMany({
+        where: { tenantId, invoiceNumber: { in: posInvoiceNums } },
+        select: {
+          id: true,
+          invoiceNumber: true,
+          cashierId: true,
+          lineItems: {
+            select: {
+              id: true,
+              lineType: true,
+              name: true,
+            },
+            orderBy: { id: "asc" },
+          },
+        },
+      });
+      sales.forEach((sale) => {
+        saleByInvoiceNum[sale.invoiceNumber] = sale;
+        if (Number.isFinite(sale.cashierId)) cashierIds.push(sale.cashierId);
+      });
+    }
+
+    const cashierMap = {};
+    const uniqueCashierIds = [...new Set(cashierIds.filter(Number.isFinite))];
+    if (uniqueCashierIds.length > 0 && prisma.user?.findMany) {
+      const cashiers = await prisma.user.findMany({
+        where: { id: { in: uniqueCashierIds }, tenantId },
+        select: { id: true, name: true },
+      });
+      cashiers.forEach((u) => { cashierMap[u.id] = u; });
+    }
+
     res.json(payments.map((p) => {
       let contact = p.contactId ? (contactMap[p.contactId] || null) : null;
       let travelInvoiceNum = null;
@@ -1045,8 +1087,26 @@ router.get("/", async (req, res) => {
         itineraryId = Number(parsedMetaMap[p.id].itineraryId) || null;
       }
       const visitId = paymentVisitMap[p.id];
-      const service = visitId ? (visitServiceMap[visitId] || null) : null;
-      const staff = visitId ? (visitStaffMap[visitId] || null) : null;
+      let service = visitId ? (visitServiceMap[visitId] || null) : null;
+      let staff = visitId ? (visitStaffMap[visitId] || null) : null;
+      if (!service || !staff) {
+        const invoiceNum = p.invoiceId ? invoiceMap[p.invoiceId]?.invoiceNum : null;
+        const sale = invoiceNum ? saleByInvoiceNum[invoiceNum] : null;
+        if (sale) {
+          if (!service) {
+            const preferredLine =
+              sale.lineItems.find((line) =>
+                ["SERVICE", "PACKAGE", "MEMBERSHIP"].includes(String(line.lineType || "").toUpperCase()),
+              ) || sale.lineItems[0] || null;
+            if (preferredLine?.name) {
+              service = { id: preferredLine.id, name: preferredLine.name };
+            }
+          }
+          if (!staff && sale.cashierId) {
+            staff = cashierMap[sale.cashierId] || null;
+          }
+        }
+      }
       return { ...serialize(p), contact, travelInvoiceNum, itineraryId, service, staff };
     }));
   } catch (err) {

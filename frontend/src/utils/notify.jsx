@@ -179,7 +179,7 @@ function ToastStack({ toasts, onDismiss }) {
       role="region"
       aria-label="Notifications"
       style={{
-        position: 'fixed', top: 80, right: 24, zIndex: 10000,
+        position: 'fixed', top: 80, right: 24, zIndex: 20000,
         display: 'flex', flexDirection: 'column', gap: 10,
         maxWidth: 420, pointerEvents: 'none',
       }}

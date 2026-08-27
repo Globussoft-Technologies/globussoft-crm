@@ -7,6 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Stethoscope, Plus, Pencil, Trash2, Upload, X, Search, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 
 const ICON_BTN_STYLE = {
   display: 'inline-flex',
@@ -191,6 +192,15 @@ export default function ServiceCategories() {
           </span>
         ) : null}
       >
+        {canManageServices && (
+          <CsvImportExportToolbar
+            entity="service-categories"
+            label="Service Categories"
+            filters={{ q: q || undefined }}
+            formats={['csv', 'xlsx']}
+            onImported={load}
+          />
+        )}
         {canManageServices && (
           <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
             <Plus size={16} /> {showAdd ? 'Cancel' : 'New category'}

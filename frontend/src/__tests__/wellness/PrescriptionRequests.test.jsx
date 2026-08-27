@@ -90,8 +90,17 @@ const PARTIAL_REQUEST = {
   requestedDurationDays: null,
 };
 
+const STOCK = [
+  { name: 'Azithromycin 500mg', state: 'in_stock', quantity: 24, lowStockThreshold: 5,  drugId: 1, drugName: 'Azithromycin', drugInactive: false },
+  { name: 'Biotin 10000mcg',    state: 'low',      quantity: 3,  lowStockThreshold: 10, drugId: 2, drugName: 'Biotin',       drugInactive: false },
+  { name: 'Minoxidil 5%',       state: 'out',      quantity: 0,  lowStockThreshold: 5,  drugId: 3, drugName: 'Minoxidil',    drugInactive: false },
+  { name: 'Cetaphil Cleanser',  state: 'not_in_catalogue', quantity: null, lowStockThreshold: null, drugId: null, drugName: null, drugInactive: false },
+];
+
 const DETAIL = {
   ...FULL_RX_REQUEST,
+  stock: STOCK,
+  stockSummary: { summary: 'out', out: 1, low: 1, unknown: 1, total: 4 },
   patient: {
     id: 3,
     name: 'Asha Menon',
@@ -288,6 +297,55 @@ describe('PrescriptionRequests — review panel', () => {
     // Allergies are surfaced — a renewal decision must not miss them.
     expect(within(dialog).getByText(/Penicillin/)).toBeInTheDocument();
     expect(within(dialog).getByText('Running low')).toBeInTheDocument();
+  });
+
+  it('shows per-medicine availability, with unknown distinct from out of stock', async () => {
+    renderPage('/wellness/prescription-requests?request=30');
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('Availability');
+
+    // Each state renders its own chip.
+    expect(within(dialog).getByTestId('stock-in_stock')).toHaveTextContent('24 in stock');
+    expect(within(dialog).getByTestId('stock-low')).toHaveTextContent(/low/i);
+    expect(within(dialog).getByTestId('stock-out')).toHaveTextContent('Out of stock');
+
+    // The load-bearing distinction: a medicine the catalogue has never seen
+    // must read as unknown, never as a zero the doctor could decline against.
+    const unknown = within(dialog).getByTestId('stock-not_in_catalogue');
+    expect(unknown).toHaveTextContent(/not in drug catalogue/i);
+    expect(unknown).not.toHaveTextContent('0');
+  });
+
+  it('explains the unknowns and links to the mapping screen', async () => {
+    renderPage('/wellness/prescription-requests?request=30');
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('Availability');
+    expect(
+      within(dialog).getByText(/not in\s+the drug catalogue/i),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/unknown, not zero/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole('link', { name: /Add them/i })).toHaveAttribute(
+      'href',
+      '/wellness/drugs',
+    );
+  });
+
+  it('never blocks the decision on stock — accept stays live with an out-of-stock item', async () => {
+    renderPage('/wellness/prescription-requests?request=30');
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('Availability');
+    // Advisory only: clinic counts go stale, and a wrong number must not
+    // hard-block a legitimate renewal.
+    expect(within(dialog).getByRole('button', { name: /Accept/ })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: /Reject/ })).toBeEnabled();
+  });
+
+  it('omits the Availability section when the backend could not resolve stock', async () => {
+    detailResponse = { ...DETAIL, stock: null, stockSummary: null };
+    renderPage('/wellness/prescription-requests?request=30');
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('Original prescription');
+    expect(within(dialog).queryByText('Availability')).toBeNull();
   });
 
   it('renders the request history', async () => {

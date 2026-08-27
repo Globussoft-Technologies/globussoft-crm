@@ -5,6 +5,11 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true });
 const prisma = require("./prisma");
 const { sendSms, resolveProviderConfig } = require("../services/smsProvider");
+// Shared vocabulary (triggers / actions / operators / mutable entities) and the
+// implementations for the actions added in the parity wave. Neither module
+// requires eventBus, so there is no cycle.
+const workflowSchema = require("./workflowSchema");
+const workflowActions = require("./workflowActions");
 
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
@@ -90,16 +95,39 @@ function getIO() {
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
-async function sendSendGrid(to, subject, body) {
+/**
+ * Split "a@x.com, b@y.com" into SendGrid's [{email}] shape.
+ * Returns undefined for empty input so the key is omitted from the payload —
+ * SendGrid rejects an empty cc/bcc array outright.
+ */
+function toRecipientList(raw) {
+  if (!raw) return undefined;
+  const list = (Array.isArray(raw) ? raw : String(raw).split(","))
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .map((email) => ({ email }));
+  return list.length ? list : undefined;
+}
+
+async function sendSendGrid(to, subject, body, options = {}) {
   if (!SENDGRID_API_KEY) {
     console.log(`[WorkflowEngine] SendGrid not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
   }
 
   const htmlBody = body.replace(/\n/g, "<br>");
+  // cc / bcc / fromName were not expressible before: the action only ever
+  // accepted to/subject/body, so a rule could not copy a manager on a
+  // notification or send under a human-looking sender name.
+  const personalization = { to: [{ email: to }] };
+  const cc = toRecipientList(options.cc);
+  const bcc = toRecipientList(options.bcc);
+  if (cc) personalization.cc = cc;
+  if (bcc) personalization.bcc = bcc;
+
   const payload = {
-    personalizations: [{ to: [{ email: to }] }],
-    from: { email: FROM_EMAIL },
+    personalizations: [personalization],
+    from: options.fromName ? { email: FROM_EMAIL, name: options.fromName } : { email: FROM_EMAIL },
     subject: subject,
     content: [
       { type: "text/plain", value: body },
@@ -236,6 +264,79 @@ function evaluateCondition(conditionJson, payload) {
       case "startsWith":
         if (actual == null || !String(actual).startsWith(String(value))) return false;
         break;
+      case "endsWith":
+        if (actual == null || !String(actual).endsWith(String(value))) return false;
+        break;
+      // `exists` shipped in the engine but was missing from the builder's
+      // operator list, so it was unreachable from the UI. `not_exists` is its
+      // inverse and had no implementation at all — "is empty" was simply not
+      // expressible.
+      case "not_exists":
+        if (!(actual == null || actual === "")) return false;
+        break;
+
+      // ── Relative-date operators ───────────────────────────────────────
+      // `value` is a whole number of days. A field that is absent or
+      // unparseable as a date fails the clause rather than throwing, so one
+      // bad row never aborts a whole event's rule evaluation.
+      case "date_within_next":
+      case "date_within_past":
+      case "date_before":
+      case "date_after": {
+        const when = actual == null ? null : new Date(actual);
+        if (!when || Number.isNaN(when.getTime())) return false;
+        const days = Number(value);
+        if (!Number.isFinite(days)) return false;
+        const now = Date.now();
+        const boundary = now + days * 24 * 60 * 60 * 1000;
+        if (op === "date_within_next" && !(when.getTime() >= now && when.getTime() <= boundary)) return false;
+        if (op === "date_within_past" && !(when.getTime() <= now && when.getTime() >= now - days * 24 * 60 * 60 * 1000)) return false;
+        if (op === "date_before" && !(when.getTime() < boundary)) return false;
+        if (op === "date_after" && !(when.getTime() > boundary)) return false;
+        break;
+      }
+
+      // ── Change-tracking operators ─────────────────────────────────────
+      // "stage changed from Proposal to Won" was impossible to express: the
+      // payload carried the prior value on some events but no operator could
+      // read it. These consult, in order of preference:
+      //   1. payload.previous.<field> — the explicit prior-value snapshot that
+      //      contact.updated / deal.updated / ticket.updated now attach;
+      //   2. the from*/to* pair on deal.stage_changed (fromStage / toStage);
+      //   3. payload.changedFields — a list of keys that were written, which
+      //      is enough for a bare `changed` test but not for from/to.
+      case "changed":
+      case "changed_to":
+      case "changed_from": {
+        const previous = lookupField(`previous.${field}`, payload);
+        const capitalised = String(field).charAt(0).toUpperCase() + String(field).slice(1);
+        const pairedFrom = lookupField(`from${capitalised}`, payload);
+        const pairedTo = lookupField(`to${capitalised}`, payload);
+
+        const before = previous !== undefined ? previous : pairedFrom;
+        const after = pairedTo !== undefined ? pairedTo : actual;
+
+        if (op === "changed") {
+          if (before !== undefined) {
+            if (String(before) === String(after)) return false;
+          } else {
+            // No snapshot available — fall back to the changed-key list.
+            const changedFields = lookupField("changedFields", payload);
+            const list = Array.isArray(changedFields)
+              ? changedFields
+              : String(changedFields || "").split(",").map((k) => k.trim());
+            if (!list.includes(field)) return false;
+          }
+          break;
+        }
+        // from/to comparisons genuinely need the prior value; without it the
+        // honest answer is "cannot tell", which is a non-match.
+        if (before === undefined) return false;
+        if (op === "changed_to" && !(String(after) == String(value) && String(before) !== String(after))) return false;
+        if (op === "changed_from" && !(String(before) == String(value) && String(before) !== String(after))) return false;
+        break;
+      }
+
       default:
         console.warn(`[WorkflowEngine] Unknown condition op: ${op}`);
         return false;
@@ -269,6 +370,10 @@ function renderTemplate(template, payload) {
 function workflowRecordKey(payload) {
   const idFields = ["contactId", "dealId", "ticketId", "taskId", "meetingId", "callId", "invoiceId", "paymentId", "approvalId", "membershipId", "shiftId"];
   const field = idFields.find((key) => payload[key] !== undefined && payload[key] !== null);
+  // A scheduled firing already carries a date-bucketed key (see
+  // lib/workflowSchedule.js). Respect it — recomputing from the payload here
+  // would strip the date and collapse every occurrence into one dedupe slot.
+  if (payload.__recordKey) return String(payload.__recordKey);
   return field ? `${field}:${payload[field]}` : null;
 }
 
@@ -281,42 +386,31 @@ function runsOncePerRecord(rule) {
   }
 }
 
+/**
+ * Execution order for a rule.
+ *
+ * `sortOrder` is a real column as of the parity migration. Rules written
+ * before it lived with their order smuggled inside the targetState JSON, so
+ * that remains the fallback — the migration backfills what it can parse, and
+ * this covers the rest without a second pass over the table.
+ */
 function ruleExecutionOrder(rule) {
+  if (Number.isFinite(Number(rule?.sortOrder)) && Number(rule.sortOrder) !== 0) {
+    return Number(rule.sortOrder);
+  }
   try {
     const targetState = rule.targetState ? JSON.parse(rule.targetState) : {};
     const order = Number(targetState.order);
-    return Number.isFinite(order) ? order : Number.MAX_SAFE_INTEGER;
+    return Number.isFinite(order) ? order : Number(rule?.sortOrder) || Number.MAX_SAFE_INTEGER;
   } catch (_error) {
-    return Number.MAX_SAFE_INTEGER;
+    return Number(rule?.sortOrder) || Number.MAX_SAFE_INTEGER;
   }
 }
 
-const WORKFLOW_ENTITIES = {
-  contact: {
-    model: "contact",
-    idKey: "contactId",
-    assigneeField: "assignedToId",
-    mutableFields: new Set(["name", "email", "phone", "company", "title", "status", "source", "assignedToId"]),
-  },
-  deal: {
-    model: "deal",
-    idKey: "dealId",
-    assigneeField: "ownerId",
-    mutableFields: new Set(["title", "amount", "currency", "probability", "stage", "expectedClose", "lostReason", "ownerId"]),
-  },
-  task: {
-    model: "task",
-    idKey: "taskId",
-    assigneeField: "userId",
-    mutableFields: new Set(["title", "dueDate", "status", "priority", "notes", "userId"]),
-  },
-  ticket: {
-    model: "ticket",
-    idKey: "ticketId",
-    assigneeField: "assigneeId",
-    mutableFields: new Set(["subject", "description", "status", "priority", "assigneeId"]),
-  },
-};
+// Entity metadata now lives in lib/workflowSchema.js so the route validator,
+// the builder UI and this engine cannot drift apart again. Re-exported below
+// for the existing importers that reach for eventBus.WORKFLOW_ENTITIES.
+const { WORKFLOW_ENTITIES } = workflowSchema;
 
 function resolveActionValue(value, payload) {
   if (value == null || value === "") return value;
@@ -325,7 +419,7 @@ function resolveActionValue(value, payload) {
 }
 
 function coerceEntityValue(entity, field, value) {
-  const numericFields = new Set(["assignedToId", "ownerId", "userId", "assigneeId", "amount", "probability"]);
+  const numericFields = new Set(["assignedToId", "ownerId", "userId", "assigneeId", "amount", "probability", "aiScore"]);
   const dateFields = new Set(["expectedClose", "dueDate"]);
   if (numericFields.has(field)) {
     const numeric = Number(value);
@@ -340,37 +434,228 @@ function coerceEntityValue(entity, field, value) {
   return value;
 }
 
+/**
+ * A short human label for the history table's record column.
+ *
+ * Denormalised onto WorkflowExecution at write time. The old history panel
+ * tried to read `log.contactName` off an AuditLog row — a field that has never
+ * existed on that model — so the column silently rendered the rule's own id
+ * for every row.
+ */
+function payloadLabel(payload) {
+  return (
+    payload.name
+    || payload.title
+    || payload.subject
+    || payload.invoiceNum
+    || payload.email
+    || (payload.contactId ? `Contact #${payload.contactId}` : null)
+    || null
+  );
+}
+
+/**
+ * Record one action execution.
+ *
+ * Two rows are written on purpose, and they are not redundant:
+ *
+ *   • WorkflowExecution — the OPERATIONAL record. Indexed on
+ *     (tenantId, ruleId, recordKey) so "run once per record" is a cheap
+ *     lookup, and on (tenantId, ruleId, createdAt) so the history panel can
+ *     filter and paginate server-side. Status is a real column.
+ *   • AuditLog — the COMPLIANCE record, unchanged, so the tenant-wide audit
+ *     trail and anything already reading `entity="AutomationRule"` keeps
+ *     working exactly as before.
+ *
+ * Neither write is allowed to break the action that just succeeded, hence the
+ * try/catch: losing a log line is bad, rolling back a sent email is worse.
+ */
+async function recordWorkflowExecution(rule, payload, tenantId, options = {}) {
+  const {
+    status = "SUCCESS",
+    actionType = rule.actionType,
+    error,
+    details,
+    durationMs,
+    isTest = !!payload._test,
+  } = options;
+
+  const recordKey = workflowRecordKey(payload);
+  const errorText = error ? String(error.message || error) : null;
+
+  try {
+    await prisma.workflowExecution.create({
+      data: {
+        ruleId: rule.id,
+        triggerType: rule.triggerType,
+        actionType: actionType || "unknown",
+        status,
+        recordKey,
+        contactId: Number(payload.contactId) || null,
+        entityLabel: payloadLabel(payload),
+        error: errorText,
+        details: details ? JSON.stringify(details).slice(0, 60000) : null,
+        durationMs: Number.isFinite(durationMs) ? Math.round(durationMs) : null,
+        isTest,
+        tenantId,
+      },
+    });
+  } catch (e) {
+    console.error("[WorkflowEngine] execution log write failed:", e.message);
+  }
+
+  try {
+    await prisma.auditLog.create({
+      data: {
+        action: status === "SUCCESS" ? "WORKFLOW" : "WORKFLOW_FAILED",
+        entity: "AutomationRule",
+        entityId: rule.id,
+        details: JSON.stringify({
+          trigger: rule.triggerType,
+          action: actionType,
+          recordKey,
+          error: errorText || undefined,
+          webhook: details?.webhook || error?.webhookResult || undefined,
+          payload: { ...payload, body: undefined },
+        }),
+        tenantId,
+      },
+    });
+  } catch (e) {
+    console.error("[WorkflowEngine] audit log write failed:", e.message);
+  }
+}
+
+// Back-compat alias. The old name is referenced by existing unit tests.
 async function writeWorkflowLog(rule, payload, tenantId, action, error, executionDetails) {
-  await prisma.auditLog.create({
-    data: {
-      action,
-      entity: "AutomationRule",
-      entityId: rule.id,
-      details: JSON.stringify({
-        trigger: rule.triggerType,
-        action: rule.actionType,
-        recordKey: workflowRecordKey(payload),
-        error: error ? String(error.message || error) : undefined,
-        webhook: executionDetails?.webhook || error?.webhookResult || undefined,
-        payload: { ...payload, body: undefined },
-      }),
-      tenantId,
-    },
+  return recordWorkflowExecution(rule, payload, tenantId, {
+    status: action === "WORKFLOW_FAILED" ? "FAILED" : "SUCCESS",
+    error,
+    details: executionDetails,
   });
 }
 
+/**
+ * How many consecutive failures before a rule is paused automatically.
+ *
+ * Freshsales pauses a failing workflow and tells the admin. Without this a
+ * rule pointed at a dead webhook retries on every single matching event
+ * forever, burning quota and filling the log with identical errors. Opt out
+ * with WORKFLOW_AUTO_DISABLE_THRESHOLD=0.
+ */
+const AUTO_DISABLE_THRESHOLD = (() => {
+  const v = parseInt(process.env.WORKFLOW_AUTO_DISABLE_THRESHOLD, 10);
+  return Number.isFinite(v) && v >= 0 ? v : 10;
+})();
+
+/**
+ * Update the rule's health counters after an execution, and pause it when it
+ * has failed too many times in a row.
+ *
+ * Best-effort: a counter update must never turn a successful action into a
+ * failed one, so everything is inside a try/catch.
+ */
+async function updateRuleHealth(rule, tenantId, { failed, error, isTest }) {
+  // A manual test must not be able to trip the auto-disable guard, or
+  // debugging a broken rule would switch it off underneath you.
+  if (isTest) return null;
+
+  try {
+    const data = failed
+      ? {
+        lastRunAt: new Date(),
+        runCount: { increment: 1 },
+        failureCount: { increment: 1 },
+        consecutiveFailures: { increment: 1 },
+        lastError: String(error?.message || error || "").slice(0, 2000) || null,
+      }
+      : {
+        lastRunAt: new Date(),
+        runCount: { increment: 1 },
+        consecutiveFailures: 0,
+        lastError: null,
+      };
+
+    const updated = await prisma.automationRule.update({
+      where: { id: rule.id },
+      data,
+      select: { id: true, name: true, isActive: true, consecutiveFailures: true, createdById: true },
+    });
+
+    if (
+      failed
+      && AUTO_DISABLE_THRESHOLD > 0
+      && updated.isActive
+      && updated.consecutiveFailures >= AUTO_DISABLE_THRESHOLD
+    ) {
+      await prisma.automationRule.update({
+        where: { id: rule.id },
+        data: { isActive: false, autoDisabledAt: new Date() },
+      });
+      console.warn(
+        `[WorkflowEngine] Rule ${rule.id} ("${updated.name}") auto-disabled after ${updated.consecutiveFailures} consecutive failures`,
+      );
+      await notifyRuleOwners(updated, tenantId, error);
+    }
+    return updated;
+  } catch (e) {
+    console.error("[WorkflowEngine] rule health update failed:", e.message);
+    return null;
+  }
+}
+
+/** Tell someone a workflow was switched off. Author first, admins otherwise. */
+async function notifyRuleOwners(rule, tenantId, error) {
+  try {
+    let userIds = [];
+    if (rule.createdById) {
+      const author = await prisma.user.findFirst({
+        where: { id: rule.createdById, tenantId },
+        select: { id: true },
+      });
+      if (author) userIds = [author.id];
+    }
+    if (!userIds.length) {
+      const admins = await prisma.user.findMany({
+        where: { tenantId, role: { in: ["ADMIN", "MANAGER"] } },
+        select: { id: true },
+      });
+      userIds = admins.map((u) => u.id);
+    }
+    if (!userIds.length) return;
+
+    await notifyMany({
+      userIds,
+      tenantId,
+      title: `Workflow paused: ${rule.name}`,
+      message: `"${rule.name}" was switched off automatically after ${AUTO_DISABLE_THRESHOLD} consecutive failures. Last error: ${String(error?.message || error || "unknown")}`,
+      type: "error",
+      link: "/workflows",
+      entityType: "AutomationRule",
+      entityId: rule.id,
+      category: "workflow",
+    });
+  } catch (e) {
+    console.error("[WorkflowEngine] auto-disable notification failed:", e.message);
+  }
+}
+
+/**
+ * Has this rule already run for this record?
+ *
+ * Previously this loaded the 500 most recent AuditLog rows for the rule and
+ * JSON.parsed each one looking for a matching recordKey — an O(n) scan on
+ * every single event, which also meant a rule silently started re-firing once
+ * it had more than 500 executions behind it. Now it is one indexed lookup
+ * against WorkflowExecution's (tenantId, ruleId, recordKey) index.
+ */
 async function hasWorkflowRun(rule, tenantId, recordKey) {
   if (!recordKey) return false;
-  const logs = await prisma.auditLog.findMany({
-    where: { tenantId, entity: "AutomationRule", action: "WORKFLOW", entityId: rule.id },
-    orderBy: { createdAt: "desc" },
-    take: 500,
-    select: { details: true },
+  const existing = await prisma.workflowExecution.findFirst({
+    where: { tenantId, ruleId: rule.id, recordKey, status: "SUCCESS", isTest: false },
+    select: { id: true },
   });
-  return logs.some((log) => {
-    try { return JSON.parse(log.details || "{}").recordKey === recordKey; }
-    catch (_error) { return false; }
-  });
+  return !!existing;
 }
 
 /**
@@ -417,7 +702,8 @@ async function emitEvent(eventName, payload, tenantId, io, depth = 0) {
       await executeAction(rule, payload, tenantId, io, depth);
     } catch (e) {
       console.error(`[WorkflowEngine] Rule ${rule.id} failed:`, e.message);
-      await writeWorkflowLog(rule, payload, tenantId, "WORKFLOW_FAILED", e);
+      await recordWorkflowExecution(rule, payload, tenantId, { status: "FAILED", error: e });
+      await updateRuleHealth(rule, tenantId, { failed: true, error: e, isTest: !!payload._test });
     }
   }
 
@@ -428,6 +714,11 @@ async function emitEvent(eventName, payload, tenantId, io, depth = 0) {
 
 /**
  * Execute a single automation rule action.
+ *
+ * Two shapes are supported:
+ *   • `targetState.actions` — an ordered array, written by the builder UI.
+ *   • a bare `targetState` object with `rule.actionType` — the legacy shape
+ *     from before the multi-action builder. Still executed unchanged.
  */
 async function executeAction(rule, payload, tenantId, io, depth = 0) {
   let config = {};
@@ -440,42 +731,173 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
     }
   }
 
-  // The workflow builder stores each configured action in targetState.actions.
-  // Keep the legacy single-action shape working while executing every action
-  // configured through the new UI in the order the user selected.
   if (Array.isArray(config.actions)) {
-    const result = { attempted: 0, succeeded: 0, failed: 0 };
-    for (const action of config.actions) {
-      if (!action || !action.type) continue;
-      result.attempted += 1;
-      try {
-        await executeAction({
-          ...rule,
-          actionType: action.type,
-          targetState: JSON.stringify(action.config || {}),
-        }, payload, tenantId, io, depth);
-        result.succeeded += 1;
-      } catch (error) {
-        result.failed += 1;
-        console.error(`[WorkflowEngine] Rule ${rule.id} action ${action.type} failed:`, error.message);
-        await writeWorkflowLog({ ...rule, actionType: action.type }, payload, tenantId, "WORKFLOW_FAILED", error);
-      }
-    }
-    return result;
+    return runActionList(rule, config.actions, payload, tenantId, io, depth);
   }
 
-  let executionDetails;
-  switch (rule.actionType) {
-    case "send_email": {
-      const to = config.to || payload.email;
-      const subject = config.subject || `Notification: ${rule.name}`;
-      const body = renderTemplate(config.body || `Workflow "${rule.name}" was triggered.`, payload);
-      if (to) {
-        const sent = await sendSendGrid(resolveActionValue(to, payload), renderTemplate(subject, payload), body);
-        if (!sent.sent) throw new Error(`Email was not sent: ${sent.reason || "provider error"}`);
-      } else {
-        throw new Error("No email recipient was resolved");
+  return runActionWithRetry(rule, rule.actionType, config, payload, tenantId, io, depth);
+}
+
+/**
+ * Walk an ordered action list.
+ *
+ * A `wait` action parks everything after it in WorkflowScheduledAction and
+ * stops the walk — the scheduler cron resumes the tail when the delay
+ * elapses. Actually sleeping here would pin an HTTP request (and a pooled DB
+ * connection) open for hours or days.
+ */
+async function runActionList(rule, actions, payload, tenantId, io, depth = 0) {
+  const result = { attempted: 0, succeeded: 0, failed: 0, deferred: false };
+
+  for (let index = 0; index < actions.length; index += 1) {
+    const action = actions[index];
+    if (!action || !action.type) continue;
+
+    if (action.type === "wait") {
+      const remaining = actions.slice(index + 1).filter((item) => item && item.type);
+      try {
+        const outcome = await workflowActions.scheduleRemainingActions(
+          action.config || {},
+          remaining,
+          payload,
+          tenantId,
+          rule,
+          workflowRecordKey(payload),
+        );
+        result.attempted += 1;
+        result.succeeded += 1;
+        result.deferred = !!outcome.deferred;
+        await recordWorkflowExecution(rule, payload, tenantId, {
+          status: "SUCCESS",
+          actionType: "wait",
+          details: outcome,
+        });
+      } catch (error) {
+        result.attempted += 1;
+        result.failed += 1;
+        console.error(`[WorkflowEngine] Rule ${rule.id} wait failed:`, error.message);
+        await recordWorkflowExecution(rule, payload, tenantId, {
+          status: "FAILED",
+          actionType: "wait",
+          error,
+        });
       }
+      // Everything after the wait is now the scheduler's problem.
+      break;
+    }
+
+    result.attempted += 1;
+    try {
+      await runActionWithRetry(rule, action.type, action.config || {}, payload, tenantId, io, depth);
+      result.succeeded += 1;
+    } catch (error) {
+      result.failed += 1;
+      console.error(`[WorkflowEngine] Rule ${rule.id} action ${action.type} failed:`, error.message);
+      await recordWorkflowExecution(rule, payload, tenantId, {
+        status: "FAILED",
+        actionType: action.type,
+        error,
+      });
+    }
+  }
+
+  await updateRuleHealth(rule, tenantId, {
+    failed: result.failed > 0,
+    error: result.failed > 0 ? new Error(`${result.failed} action(s) failed`) : null,
+    isTest: !!payload._test,
+  });
+
+  return result;
+}
+
+/**
+ * Which actions are worth retrying, and how hard.
+ *
+ * Only the three that cross a network boundary. Retrying a prisma.update that
+ * failed validation ("stage must be a number") just burns time and writes the
+ * same error three times; retrying a webhook that got a 503 is the difference
+ * between a lost automation and a delivered one.
+ *
+ * Freshsales retries failed webhook deliveries rather than dropping them on the
+ * first blip, and without this a single transient 502 permanently lost the
+ * action AND pushed the rule one step closer to the auto-disable threshold.
+ */
+const RETRYABLE_ACTIONS = new Set(["send_webhook", "send_email", "send_sms"]);
+
+const DEFAULT_RETRY_ATTEMPTS = (() => {
+  const v = parseInt(process.env.WORKFLOW_RETRY_ATTEMPTS, 10);
+  return Number.isFinite(v) && v >= 1 ? Math.min(v, 5) : 3;
+})();
+
+const RETRY_BASE_DELAY_MS = (() => {
+  const v = parseInt(process.env.WORKFLOW_RETRY_BASE_MS, 10);
+  return Number.isFinite(v) && v >= 0 ? v : 500;
+})();
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Run one action, retrying transient failures with exponential backoff.
+ *
+ * Retries wrap runSingleAction from the OUTSIDE, which matters: that function
+ * writes its SUCCESS execution row as its last statement, so a failed attempt
+ * throws before logging anything and a retry cannot produce duplicate SUCCESS
+ * rows. The caller still owns the FAILED row, written once, after the last
+ * attempt gives up.
+ *
+ * A test fire never retries — an author debugging a broken webhook wants the
+ * error now, not in four seconds.
+ */
+async function runActionWithRetry(rule, actionType, config, payload, tenantId, io, depth = 0) {
+  const configured = Number(config?.retryAttempts);
+  const maxAttempts = payload?._test || !RETRYABLE_ACTIONS.has(actionType)
+    ? 1
+    : Math.max(1, Math.min(5, Number.isFinite(configured) && configured >= 1 ? configured : DEFAULT_RETRY_ATTEMPTS));
+
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await runSingleAction(rule, actionType, config, payload, tenantId, io, depth);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) break;
+      const delay = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+      console.warn(
+        `[WorkflowEngine] Rule ${rule.id} action ${actionType} attempt ${attempt}/${maxAttempts} failed (${error.message}); retrying in ${delay}ms`,
+      );
+      await sleep(delay);
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Run exactly one action and log it.
+ *
+ * Throws on failure so the caller decides whether that aborts the list. Every
+ * branch either completes its side effect or throws — an action must never
+ * `break` out of the switch having done nothing while the caller records
+ * SUCCESS, which is exactly how the old `create_approval` path could log a
+ * green execution for a request it never created.
+ */
+async function runSingleAction(rule, actionType, config, payload, tenantId, io, depth = 0) {
+  const startedAt = Date.now();
+  let executionDetails;
+
+  switch (actionType) {
+    case "send_email": {
+      const content = await workflowActions.resolveEmailContent(config, tenantId);
+      const to = config.to || payload.email;
+      if (!to) throw new Error("No email recipient was resolved");
+      const subject = renderTemplate(content.subject || `Notification: ${rule.name}`, payload);
+      const body = renderTemplate(content.body || `Workflow "${rule.name}" was triggered.`, payload);
+      const sent = await sendSendGrid(resolveActionValue(to, payload), subject, body, {
+        cc: config.cc ? resolveActionValue(config.cc, payload) : null,
+        bcc: config.bcc ? resolveActionValue(config.bcc, payload) : null,
+        fromName: config.fromName ? renderTemplate(config.fromName, payload) : null,
+      });
+      if (!sent.sent) throw new Error(`Email was not sent: ${sent.reason || "provider error"}`);
+      executionDetails = { email: { to, templateId: content.templateId, messageId: sent.id } };
       break;
     }
 
@@ -484,18 +906,20 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
       const userId = Number.isInteger(configuredUserId) && configuredUserId > 0
         ? configuredUserId
         : payload.userId;
-      if (userId) {
-        await prisma.notification.create({
-          data: {
-            title: config.title || rule.name,
-            message: config.message || `Workflow triggered: ${rule.name}`,
-            userId,
-            tenantId,
-            type: "info",
-          },
-        });
-        if (io) io.emit("notification_new", { userId });
-      }
+      // Previously a missing userId silently fell through and still logged a
+      // successful execution.
+      if (!userId) throw new Error("No notification recipient was resolved");
+      await prisma.notification.create({
+        data: {
+          title: renderTemplate(config.title || rule.name, payload),
+          message: renderTemplate(config.message || `Workflow triggered: ${rule.name}`, payload),
+          userId,
+          tenantId,
+          type: "info",
+        },
+      });
+      if (io) io.emit("notification_new", { userId });
+      executionDetails = { notification: { userId } };
       break;
     }
 
@@ -508,15 +932,54 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
         ? configuredAssigneeId
         : payload.userId || null;
       dueDate.setDate(dueDate.getDate() + dueInDays);
-      await prisma.task.create({
+      const task = await prisma.task.create({
         data: {
-          title: config.title || `Follow up: ${rule.name}`,
+          title: renderTemplate(config.title || `Follow up: ${rule.name}`, payload),
           dueDate,
+          priority: config.priority || undefined,
+          type: config.taskType || undefined,
+          notes: config.notes ? renderTemplate(config.notes, payload) : undefined,
           userId,
           contactId: payload.contactId || null,
           tenantId,
         },
       });
+      executionDetails = { taskId: task.id };
+      break;
+    }
+
+    case "create_appointment": {
+      executionDetails = await workflowActions.createAppointment(config, payload, tenantId, rule, renderTemplate);
+      break;
+    }
+
+    case "create_deal": {
+      executionDetails = await workflowActions.createDeal(config, payload, tenantId, rule, renderTemplate);
+      break;
+    }
+
+    case "add_tag": {
+      executionDetails = await workflowActions.applyTags(config, payload, tenantId, { remove: false });
+      break;
+    }
+
+    case "remove_tag": {
+      executionDetails = await workflowActions.applyTags(config, payload, tenantId, { remove: true });
+      break;
+    }
+
+    case "add_to_sequence": {
+      executionDetails = await workflowActions.addToSequence(config, payload, tenantId);
+      break;
+    }
+
+    case "remove_from_sequence": {
+      executionDetails = await workflowActions.removeFromSequence(config, payload, tenantId);
+      break;
+    }
+
+    case "delete_record": {
+      executionDetails = await workflowActions.deleteRecord(config, payload, tenantId);
       break;
     }
 
@@ -533,23 +996,28 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
       if (!record) throw new Error(`${entity} record not found in this tenant`);
       const resolvedValue = resolveActionValue(config.value, payload);
       await model.update({ where: { id: record.id }, data: { [field]: coerceEntityValue(entity, field, resolvedValue) } });
+      executionDetails = { entity, entityId: record.id, field, value: resolvedValue };
       break;
     }
 
     case "assign_agent": {
-      const userId = Number(config.userId);
-      if (!Number.isInteger(userId) || userId < 1) throw new Error("A valid assignee user ID is required");
-      const entity = String(config.entity || Object.keys(WORKFLOW_ENTITIES).find((key) => payload[WORKFLOW_ENTITIES[key].idKey]) || "").toLowerCase();
+      const entity = String(
+        config.entity
+        || Object.keys(WORKFLOW_ENTITIES).find((key) => payload[WORKFLOW_ENTITIES[key].idKey])
+        || "",
+      ).toLowerCase();
       const entityConfig = WORKFLOW_ENTITIES[entity];
       if (!entityConfig) throw new Error(`Unsupported workflow entity: ${entity || "missing"}`);
       const entityId = Number(config.entityId || payload[entityConfig.idKey]);
       if (!Number.isInteger(entityId) || entityId < 1) throw new Error(`Missing ${entityConfig.idKey} for assign_agent`);
-      const user = await prisma.user.findFirst({ where: { id: userId, tenantId }, select: { id: true } });
-      if (!user) throw new Error("Assignee not found in this tenant");
+      // Rotation / least-busy / inherit-owner all resolve here; `specific`
+      // preserves the original fixed-userId behaviour byte for byte.
+      const assigneeId = await workflowActions.resolveAssignee(config, payload, tenantId, rule, entityConfig);
       const model = prisma[entityConfig.model];
       const record = await model.findFirst({ where: { id: entityId, tenantId }, select: { id: true } });
       if (!record) throw new Error(`${entity} record not found in this tenant`);
-      await model.update({ where: { id: record.id }, data: { [entityConfig.assigneeField]: user.id } });
+      await model.update({ where: { id: record.id }, data: { [entityConfig.assigneeField]: assigneeId } });
+      executionDetails = { entity, entityId: record.id, assigneeId, mode: config.mode || "specific" };
       break;
     }
 
@@ -559,6 +1027,7 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
       // Dry-run from POST /:id/test should not require a live SMS provider.
       if (payload._test) {
         console.log(`[WorkflowEngine] SMS test dry-run: to=${to}`);
+        executionDetails = { sms: { to, dryRun: true } };
         break;
       }
       const provider = await resolveProviderConfig(prisma, tenantId);
@@ -579,6 +1048,7 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
           : { status: "FAILED", errorMessage: sent.error || "SMS provider rejected the message" },
       });
       if (!sent.success) throw new Error(sent.error || "SMS provider rejected the message");
+      executionDetails = { sms: { to, messageId: message.id } };
       break;
     }
 
@@ -603,34 +1073,31 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
     }
 
     case "create_approval": {
-      // #1 — auto-create an ApprovalRequest. Config shape:
-      //   { entity: "Deal", reasonTemplate: "Discount > 10% on {{deal.title}}" }
-      // entity is required; entityId is resolved from the event payload via
-      // `<entity-lowercase>Id` (dealId, contactId, etc.). requesterId comes
-      // from payload.userId / payload.actorId, or falls back to the rule's
-      // createdById. Emits `approval.created` so chained rules can react.
+      // Config shape: { entity: "Deal", reasonTemplate: "Discount > 10% on {{deal.title}}" }
+      // entityId is resolved from the event payload via `<entity-lowercase>Id`.
+      //
+      // Every branch below now THROWS instead of `break`-ing. Previously a
+      // missing entity / entityId / requesterId logged a console warning, fell
+      // out of the switch, and still wrote a successful WORKFLOW audit row —
+      // so a rule that never created a single approval looked perfectly
+      // healthy in the history panel.
       const entity = config.entity;
       if (!entity || typeof entity !== "string") {
-        console.warn(`[WorkflowEngine] create_approval rule ${rule.id}: missing entity`);
-        break;
+        throw new Error("create_approval requires an entity");
       }
       const idKey = entity.toLowerCase() + "Id";
       const entityId = payload[idKey] != null ? Number(payload[idKey]) : null;
       if (!entityId || Number.isNaN(entityId)) {
-        console.warn(
-          `[WorkflowEngine] create_approval rule ${rule.id}: payload.${idKey} not found`
-        );
-        break;
+        throw new Error(`create_approval: payload.${idKey} not found`);
       }
       const reason = renderTemplate(config.reasonTemplate || "", payload) || null;
 
-      const requesterId =
-        payload.userId || payload.actorId || rule.createdById || null;
+      // `rule.createdById` is a real column as of the parity migration; it
+      // used to be read off a model that did not have it, so this fallback
+      // was always undefined.
+      const requesterId = payload.userId || payload.actorId || rule.createdById || null;
       if (!requesterId) {
-        console.warn(
-          `[WorkflowEngine] create_approval rule ${rule.id}: no requesterId resolvable`
-        );
-        break;
+        throw new Error("create_approval: no requester could be resolved from the payload or the rule's author");
       }
 
       const created = await prisma.approvalRequest.create({
@@ -643,13 +1110,11 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
           tenantId,
         },
       });
+      executionDetails = { approvalId: created.id };
 
       // Chain trigger so other rules can subscribe to approval.created.
-      // Use bus.emit directly to avoid recursion through emitEvent (which
-      // would re-load rules); a downstream rule listening on approval.created
-      // will still fire because we re-enter via emitEvent below — but we
-      // protect against infinite loops by NOT chaining create_approval onto
-      // approval.created itself in rule authoring.
+      // depth+1 keeps MAX_EVENT_CHAIN_DEPTH honest against a rule that
+      // creates an approval in response to approval.created.
       try {
         await emitEvent(
           "approval.created",
@@ -662,7 +1127,7 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
           },
           tenantId,
           io,
-          depth + 1
+          depth + 1,
         );
       } catch (e) {
         console.error("[WorkflowEngine] approval.created emit failed:", e.message);
@@ -670,12 +1135,25 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
       break;
     }
 
+    case "wait": {
+      // Only reachable for a legacy single-action rule whose sole action is a
+      // wait. There is nothing after it to defer, so this is a no-op rather
+      // than an error — the multi-action path in runActionList handles the
+      // real case.
+      executionDetails = { deferred: false, reason: "wait is the only action on this rule" };
+      break;
+    }
+
     default:
-      console.warn(`[WorkflowEngine] Unknown actionType: ${rule.actionType}`);
+      throw new Error(`Unknown actionType: ${actionType}`);
   }
 
-  // Log execution in audit log
-  await writeWorkflowLog(rule, payload, tenantId, "WORKFLOW", undefined, executionDetails);
+  await recordWorkflowExecution(rule, payload, tenantId, {
+    status: "SUCCESS",
+    actionType,
+    details: executionDetails,
+    durationMs: Date.now() - startedAt,
+  });
   return { attempted: 1, succeeded: 1, failed: 0 };
 }
 
@@ -688,7 +1166,7 @@ async function testRule(rule, payload, tenantId, io) {
     const result = await executeAction(rule, testPayload, tenantId, io);
     return { conditionsMatched: true, ...(result || { attempted: 1, succeeded: 1, failed: 0 }) };
   } catch (error) {
-    await writeWorkflowLog(rule, testPayload, tenantId, "WORKFLOW_FAILED", error);
+    await recordWorkflowExecution(rule, testPayload, tenantId, { status: "FAILED", error });
     return { conditionsMatched: true, attempted: 1, succeeded: 0, failed: 1, error: error.message };
   }
 }
@@ -742,4 +1220,15 @@ module.exports = {
   testRule,
   setIO,
   getIO,
+  // Parity wave additions.
+  runSingleAction,
+  runActionWithRetry,
+  runActionList,
+  recordWorkflowExecution,
+  writeWorkflowLog,
+  hasWorkflowRun,
+  updateRuleHealth,
+  payloadLabel,
+  WORKFLOW_ENTITIES,
+  AUTO_DISABLE_THRESHOLD,
 };

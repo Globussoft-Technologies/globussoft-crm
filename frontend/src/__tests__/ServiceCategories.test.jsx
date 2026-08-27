@@ -204,11 +204,17 @@ beforeEach(() => {
 });
 
 describe('<ServiceCategories /> — page chrome', () => {
-  it('renders heading + "New category" CTA + categories-count sub-copy', async () => {
+  it('renders heading + import/export + "New category" CTA + categories-count sub-copy', async () => {
     installFetchMock();
     renderPage();
     expect(
       screen.getByRole('heading', { name: /Service categories/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Export Service Categories/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Import Service Categories/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /New category/i }),

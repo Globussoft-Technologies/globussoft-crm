@@ -55,6 +55,11 @@ prisma.prescriptionRequestEvent.create = vi.fn();
 prisma.prescription = prisma.prescription || {};
 prisma.prescription.findFirst = vi.fn();
 
+// The review endpoint resolves per-medicine availability through
+// lib/drugStock.js, which reads quantity straight off the drug catalogue.
+prisma.drug = prisma.drug || {};
+prisma.drug.findMany = vi.fn();
+
 prisma.patientNotification = prisma.patientNotification || {};
 prisma.patientNotification.create = vi.fn().mockResolvedValue({ id: 1 });
 
@@ -133,6 +138,7 @@ beforeEach(() => {
   prisma.auditLog.findFirst.mockResolvedValue(null);
   prisma.userRole.findMany.mockResolvedValue([]);
   prisma.user.findUnique.mockResolvedValue(null);
+  prisma.drug.findMany.mockResolvedValue([]);
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -243,6 +249,81 @@ describe('GET /prescription-requests/:id', () => {
     // Drugs come back normalised, same as every other Rx response.
     expect(res.body.prescription.drugs[0]).toMatchObject({ dosage: 1, frequency: 2 });
     expect(res.body.history).toHaveLength(1);
+  });
+
+  test('attaches per-medicine availability, scoped to what was requested', async () => {
+    // Partial request → availability is about the REQUESTED medicine only,
+    // not everything on the source prescription.
+    prisma.prescriptionRequest.findFirst.mockResolvedValue({
+      ...ROW,
+      requestedDrugs: '[{"name":"Minoxidil 5%"}]',
+      prescription: {
+        id: 9,
+        drugs: '[{"name":"Minoxidil 5%"},{"name":"Tramadol"}]',
+        createdAt: new Date(),
+      },
+    });
+    prisma.drug.findMany.mockResolvedValue([
+      { id: 96, name: 'Minoxidil', quantity: 6, lowStockThreshold: 25, isActive: true },
+    ]);
+
+    const res = await request(makeApp()).get('/api/wellness/prescription-requests/30');
+
+    expect(res.status).toBe(200);
+    expect(res.body.stock).toHaveLength(1);
+    expect(res.body.stock[0]).toMatchObject({
+      name: 'Minoxidil 5%',
+      state: 'low',
+      drugName: 'Minoxidil',
+      quantity: 6,
+    });
+    expect(res.body.stockSummary).toMatchObject({ summary: 'low', low: 1, total: 1 });
+  });
+
+  test('a medicine the catalogue has never seen reports unknown, never out of stock', async () => {
+    prisma.prescriptionRequest.findFirst.mockResolvedValue({
+      ...ROW,
+      requestedDrugs: '[{"name":"Tramadol"}]',
+    });
+    prisma.drug.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp()).get('/api/wellness/prescription-requests/30');
+
+    expect(res.body.stock[0].state).toBe('not_in_catalogue');
+    expect(res.body.stock[0].state).not.toBe('out');
+    // A wholly-unknown set must not read as available.
+    expect(res.body.stockSummary.summary).toBe('unknown');
+  });
+
+  test('a full-prescription request reports on every medicine on the Rx', async () => {
+    prisma.prescriptionRequest.findFirst.mockResolvedValue({
+      ...ROW,
+      requestedDrugs: null, // full-Rx
+      prescription: {
+        id: 9,
+        drugs: '[{"name":"A"},{"name":"B"},{"name":"C"}]',
+        createdAt: new Date(),
+      },
+    });
+    const res = await request(makeApp()).get('/api/wellness/prescription-requests/30');
+    expect(res.body.stock).toHaveLength(3);
+  });
+
+  test('a stock lookup failure degrades to null, it does not 500 the review', async () => {
+    prisma.prescriptionRequest.findFirst.mockResolvedValue({
+      ...ROW,
+      requestedDrugs: '[{"name":"Minoxidil 5%"}]',
+    });
+    prisma.drug.findMany.mockRejectedValue(new Error('inventory db is down'));
+
+    const res = await request(makeApp()).get('/api/wellness/prescription-requests/30');
+
+    // The request itself is the point of this endpoint — losing availability
+    // must not cost the reviewer the whole screen.
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(30);
+    expect(res.body.stock).toBeNull();
+    expect(res.body.stockSummary).toBeNull();
   });
 
   test('a non-numeric id is a 404, not a 500', async () => {

@@ -94,6 +94,46 @@ export const srOnly = {
   border: 0,
 };
 
+/** Local YYYY-MM-DD for date inputs, without UTC rollover. */
+export function todayDateInput(now = new Date()) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/** Date-ish value -> local YYYY-MM-DD for date inputs, without UTC rollover. */
+export function dateInputValue(value) {
+  if (!value) return '';
+  const when = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(when.getTime()) ? '' : todayDateInput(when);
+}
+
+/** True when a YYYY-MM-DD input falls before the local calendar day. */
+export function isPastDateInput(value, today = todayDateInput()) {
+  return Boolean(value) && value < today;
+}
+
+/**
+ * Local wall clock -> `YYYY-MM-DDTHH:mm`, the shape a datetime-local input
+ * reads and writes. Built from the local parts rather than sliced off an ISO
+ * string, which would hand back UTC and shift the clock.
+ */
+export function nowDateTimeInput(now = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${todayDateInput(now)}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+/**
+ * True when a `YYYY-MM-DDTHH:mm` input is already behind us. Compared as
+ * strings, which is exact for this fixed-width format, and to the CURRENT
+ * MINUTE — picking the minute it is now must not be rejected because a few
+ * seconds elapsed between choosing and saving.
+ */
+export function isPastDateTimeInput(value, now = nowDateTimeInput()) {
+  return Boolean(value) && value < now;
+}
+
 // ── Portal dropdown anchoring ─────────────────────────────────────
 //
 // Both dropdowns render their menu in a portal with `position: fixed` (to

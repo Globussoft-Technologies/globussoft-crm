@@ -11,6 +11,8 @@ v3.5.x form / list / modal consistency cluster:
 - **#691** Modal dialogs — `<Modal />` (page-level) + `notify.confirm` (yes/no).
 - **#694** Pagination — `<Pagination />` (page-numbers + jump, URL-syncable).
 - **#695** Search inputs — `<SearchInput />` (debounced 250 ms, clear-X).
+- Searchable dropdowns — `<SearchableSelect />` (combobox for long,
+  tenant-grown option lists).
 
 ## Why a single conventions doc
 
@@ -287,6 +289,47 @@ import { SearchInput } from '../components/ui';
 - The clear-X (`<X />` icon) appears when the value is non-empty.
 - Place ONLY on the left of the toolbar; do not embed search inside a
   column header (deprecated; was used on Audit Log only).
+
+---
+
+## Searchable single-select — `<SearchableSelect />`
+
+A native `<select>` has no search. Use `<SearchableSelect />` for any
+dropdown whose option count grows with tenant data — service catalogues,
+staff/doctor rosters, product lists, locations. Rule of thumb: **more
+than ~25 options, or a list the tenant can add to, means searchable.**
+
+```jsx
+import { SearchableSelect } from '../components/ui';
+
+<SearchableSelect
+  value={form.serviceId}
+  onChange={(serviceId) => setForm({ ...form, serviceId })}
+  options={services.map((s) => ({
+    value: String(s.id),
+    label: s.name,
+    hint: s.basePrice ? `(₹${s.basePrice})` : '',   // muted trailing text
+    keywords: s.category,                            // searchable, not shown
+    disabled: s.isActive === false,
+  }))}
+  placeholder="Search services by name…"
+  emptyLabel="No service matches that search"
+  ariaLabel="Service"
+/>
+```
+
+- Same `value` / `onChange(value)` contract as a controlled `<select>`,
+  so it drops into existing form state with no other changes. Note
+  `onChange` receives the **value**, not an event.
+- Include an empty-value option (`{ value: '', label: '— None —' }`) as
+  the first entry to keep the "unset" choice one click away; the
+  component recognises `''` as unset and suppresses the clear-X for it.
+- Keyboard: ↑/↓ move (skipping disabled rows), Enter selects, Esc closes.
+  Enter is swallowed while open so it never submits the enclosing form.
+- The trigger is a real `<input>`, so the vertical themes'
+  `input, select, textarea { … !important }` rules give it the exact
+  chrome of the native selects beside it, in light and dark mode alike.
+  Don't re-skin it with an inline `background`.
 
 ---
 

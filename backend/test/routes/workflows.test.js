@@ -86,6 +86,28 @@ prisma.auditLog.groupBy = vi.fn();
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 
+// ── Parity-wave models ────────────────────────────────────────────────
+// /history and /stats/actions read WorkflowExecution rather than scanning
+// AuditLog: the old endpoint fetched the last 50 rows for the WHOLE tenant and
+// left the client to filter by workflow id, which on a busy tenant meant a real
+// workflow's history rendered empty. POST / reads the current max sortOrder so
+// a new rule lands at the end of the execution order instead of colliding on 0.
+prisma.workflowExecution = prisma.workflowExecution || {};
+prisma.workflowExecution.findMany = vi.fn();
+prisma.workflowExecution.findFirst = vi.fn();
+prisma.workflowExecution.count = vi.fn();
+prisma.workflowExecution.groupBy = vi.fn();
+prisma.workflowExecution.create = vi.fn().mockResolvedValue({ id: 1 });
+prisma.workflowScheduledAction = prisma.workflowScheduledAction || {};
+prisma.workflowScheduledAction.count = vi.fn().mockResolvedValue(0);
+prisma.automationRule.aggregate = vi.fn();
+prisma.emailTemplate = prisma.emailTemplate || {};
+prisma.emailTemplate.findMany = vi.fn().mockResolvedValue([]);
+prisma.sequence = prisma.sequence || {};
+prisma.sequence.findMany = vi.fn().mockResolvedValue([]);
+prisma.user = prisma.user || {};
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
+
 // ── eventBus stubs (CJS self-mocking seam) ─────────────────────────────
 // The /:id/test handler does `const { emitEvent } = require('../lib/eventBus')`
 // at request time; we patch the exports BEFORE requiring the router so the
@@ -128,8 +150,19 @@ beforeEach(() => {
   prisma.auditLog.findMany.mockReset();
   prisma.auditLog.count.mockReset();
   prisma.auditLog.groupBy.mockReset();
+  prisma.workflowExecution.findMany.mockReset();
+  prisma.workflowExecution.findFirst.mockReset();
+  prisma.workflowExecution.count.mockReset();
+  prisma.workflowExecution.groupBy.mockReset();
+  prisma.automationRule.aggregate.mockReset();
   eventBus.emitEvent.mockReset();
   eventBus.testRule.mockReset();
+
+  prisma.workflowExecution.findMany.mockResolvedValue([]);
+  prisma.workflowExecution.findFirst.mockResolvedValue(null);
+  prisma.workflowExecution.count.mockResolvedValue(0);
+  prisma.workflowExecution.groupBy.mockResolvedValue([]);
+  prisma.automationRule.aggregate.mockResolvedValue({ _max: { sortOrder: null } });
 
   // Sensible defaults — individual tests override.
   prisma.automationRule.findMany.mockResolvedValue([]);
@@ -202,26 +235,38 @@ describe('GET /actions — list supported action types', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET /history — workflow execution history', () => {
-  test('200 default limit=50 offset=0 with tenant-scoped findMany + count', async () => {
-    prisma.auditLog.findMany.mockResolvedValue([
-      { id: 1, entity: 'AutomationRule', action: 'WORKFLOW', detail: 'fired', createdAt: new Date() },
+  test('200 default limit=50 offset=0, reading WorkflowExecution tenant-scoped', async () => {
+    prisma.workflowExecution.findMany.mockResolvedValue([
+      {
+        id: 1, ruleId: 12, triggerType: 'deal.won', actionType: 'send_email',
+        status: 'SUCCESS', recordKey: 'dealId:5', contactId: 3,
+        entityLabel: 'Acme Ltd', error: null, details: null, durationMs: 12,
+        isTest: false, createdAt: new Date(), rule: { id: 12, name: 'Notify on win' },
+      },
     ]);
-    prisma.auditLog.count.mockResolvedValue(1);
+    prisma.workflowExecution.count.mockResolvedValue(1);
 
     const res = await request(makeApp({ tenantId: 42 })).get('/api/workflows/history');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ total: 1, limit: 50, offset: 0 });
+    expect(res.body).toMatchObject({ total: 1, limit: 50, offset: 0, hasMore: false });
     expect(res.body.logs).toHaveLength(1);
-    expect(prisma.auditLog.findMany).toHaveBeenCalledWith({
-      where: { tenantId: 42, entity: 'AutomationRule', action: { in: ['WORKFLOW', 'WORKFLOW_FAILED'] } },
+    // Status is a real column now. It used to be inferred client-side by
+    // regex-testing the raw details JSON for the substring "fail", so any
+    // payload containing that word was mislabelled a failure.
+    expect(res.body.logs[0]).toMatchObject({
+      workflowId: 12,
+      workflowName: 'Notify on win',
+      status: 'SUCCESS',
+      contactLabel: 'Acme Ltd',
+    });
+    expect(prisma.workflowExecution.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 42 },
       orderBy: { createdAt: 'desc' },
       take: 50,
       skip: 0,
-    });
-    expect(prisma.auditLog.count).toHaveBeenCalledWith({
-      where: { tenantId: 42, entity: 'AutomationRule', action: { in: ['WORKFLOW', 'WORKFLOW_FAILED'] } },
-    });
+    }));
+    expect(prisma.workflowExecution.count).toHaveBeenCalledWith({ where: { tenantId: 42 } });
   });
 
   test('200 honors ?limit + ?offset and caps limit at 200', async () => {
@@ -231,9 +276,24 @@ describe('GET /history — workflow execution history', () => {
     expect(res.status).toBe(200);
     expect(res.body.limit).toBe(200); // capped from 999
     expect(res.body.offset).toBe(25);
-    expect(prisma.auditLog.findMany).toHaveBeenCalledWith(
+    expect(prisma.workflowExecution.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ take: 200, skip: 25 }),
     );
+  });
+
+  test('?workflowId + ?status + ?days filter SERVER-side', async () => {
+    // The whole point of the rewrite: the old endpoint returned the last 50
+    // rows for the entire tenant and left the client to filter by id, so on a
+    // busy tenant a real workflow's history rendered "No actions found".
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/workflows/history?workflowId=12&status=failed&days=30');
+
+    expect(res.status).toBe(200);
+    const where = prisma.workflowExecution.findMany.mock.calls[0][0].where;
+    expect(where.tenantId).toBe(42);
+    expect(where.ruleId).toBe(12);
+    expect(where.status).toBe('FAILED');
+    expect(where.createdAt.gte).toBeInstanceOf(Date);
   });
 });
 
@@ -242,19 +302,21 @@ describe('GET /history — workflow execution history', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET /stats/actions - seven-day successful action counts', () => {
-  test('groups successful audit entries by workflow within the tenant', async () => {
-    prisma.auditLog.groupBy.mockResolvedValue([
-      { entityId: 12, _count: { _all: 4 } },
-      { entityId: 15, _count: { _all: 1 } },
+  test('groups successful executions by workflow within the tenant, excluding test fires', async () => {
+    prisma.workflowExecution.groupBy.mockResolvedValue([
+      { ruleId: 12, _count: { _all: 4 } },
+      { ruleId: 15, _count: { _all: 1 } },
     ]);
 
     const res = await request(makeApp({ tenantId: 42 })).get('/api/workflows/stats/actions');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ 12: 4, 15: 1 });
-    expect(prisma.auditLog.groupBy).toHaveBeenCalledWith(expect.objectContaining({
-      by: ['entityId'],
-      where: expect.objectContaining({ tenantId: 42, entity: 'AutomationRule', action: 'WORKFLOW' }),
+    // isTest:false keeps manual test fires out of the "N successful actions"
+    // counter, so the number reflects real traffic.
+    expect(prisma.workflowExecution.groupBy).toHaveBeenCalledWith(expect.objectContaining({
+      by: ['ruleId'],
+      where: expect.objectContaining({ tenantId: 42, status: 'SUCCESS', isTest: false }),
       _count: { _all: true },
     }));
   });
@@ -507,9 +569,13 @@ describe('PUT /:id — update automation rule', () => {
       .send({ name: 'Renamed' });
 
     expect(res.status).toBe(200);
+    // updatedById rides along on every write now — the model gained real
+    // authorship columns, which is what backs the list's "last updated" cell
+    // (it previously read `updatedAt` off a model that had no timestamps at
+    // all, so every row permanently said "Not run yet").
     expect(prisma.automationRule.update).toHaveBeenCalledWith({
       where: { id: 50 },
-      data: { name: 'Renamed' },
+      data: { name: 'Renamed', updatedById: 7 },
     });
   });
 
@@ -522,9 +588,33 @@ describe('PUT /:id — update automation rule', () => {
       .send({ isActive: 0 /* falsy → coerced to false */ });
 
     expect(res.status).toBe(200);
+    // Disabling must NOT clear the failure counters — only re-enabling does,
+    // so a rule the auto-disable guard paused gets a fresh run of attempts
+    // instead of tripping again on its very next failure.
     expect(prisma.automationRule.update).toHaveBeenCalledWith({
       where: { id: 50 },
-      data: { isActive: false },
+      data: { isActive: false, updatedById: 7 },
+    });
+  });
+
+  test('200 re-enabling via PUT clears the auto-disable state', async () => {
+    prisma.automationRule.findFirst.mockResolvedValue({ id: 50, tenantId: 1, isActive: false });
+    prisma.automationRule.update.mockResolvedValue({ id: 50, isActive: true });
+
+    const res = await request(makeApp())
+      .put('/api/workflows/50')
+      .send({ isActive: true });
+
+    expect(res.status).toBe(200);
+    expect(prisma.automationRule.update).toHaveBeenCalledWith({
+      where: { id: 50 },
+      data: {
+        isActive: true,
+        autoDisabledAt: null,
+        consecutiveFailures: 0,
+        lastError: null,
+        updatedById: 7,
+      },
     });
   });
 });
@@ -556,7 +646,28 @@ describe('PUT /:id/toggle — flip isActive', () => {
     expect(res.status).toBe(200);
     expect(prisma.automationRule.update).toHaveBeenCalledWith({
       where: { id: 50 },
-      data: { isActive: false },
+      data: { isActive: false, updatedById: 7 },
+    });
+  });
+
+  test('200 re-enabling clears the auto-disable state', async () => {
+    prisma.automationRule.findFirst.mockResolvedValue({
+      id: 51, tenantId: 1, isActive: false, autoDisabledAt: new Date(), consecutiveFailures: 10,
+    });
+    prisma.automationRule.update.mockResolvedValue({ id: 51, tenantId: 1, isActive: true });
+
+    const res = await request(makeApp()).put('/api/workflows/51/toggle');
+
+    expect(res.status).toBe(200);
+    expect(prisma.automationRule.update).toHaveBeenCalledWith({
+      where: { id: 51 },
+      data: {
+        isActive: true,
+        updatedById: 7,
+        autoDisabledAt: null,
+        consecutiveFailures: 0,
+        lastError: null,
+      },
     });
   });
 });
@@ -667,6 +778,11 @@ describe('GET /api/workflows?fields=summary — opt-in slim shape (#920 slice 17
     const res = await request(makeApp({ tenantId: 99 })).get('/api/workflows?fields=summary');
     expect(res.status).toBe(200);
     const args = prisma.automationRule.findMany.mock.calls[0][0];
+    // The slim shape gained the parity-wave metadata columns: the list row
+    // renders "Last updated / Last run" and a failure banner, and before these
+    // existed it fell back to `updatedAt || createdAt` on a model that had
+    // neither, so every row permanently read "Not run yet". They are all
+    // scalars — the point of the slim shape is dropping the @db.Text blobs.
     expect(args.select).toEqual({
       id: true,
       name: true,
@@ -674,10 +790,21 @@ describe('GET /api/workflows?fields=summary — opt-in slim shape (#920 slice 17
       actionType: true,
       isActive: true,
       tenantId: true,
+      sortOrder: true,
+      createdAt: true,
+      updatedAt: true,
+      lastRunAt: true,
+      lastError: true,
+      runCount: true,
+      failureCount: true,
+      consecutiveFailures: true,
+      autoDisabledAt: true,
+      nextScheduledAt: true,
     });
-    // The heavy @db.Text JSON blobs MUST be dropped from the slim shape.
+    // The heavy @db.Text JSON blobs MUST still be dropped from the slim shape.
     expect(args.select.targetState).toBeUndefined();
     expect(args.select.condition).toBeUndefined();
+    expect(args.select.scheduleConfig).toBeUndefined();
     // Sanity: no include snuck in.
     expect(args.include).toBeUndefined();
   });

@@ -33,11 +33,19 @@ const LOGGED_OUT_AUTH = Object.freeze({
   subscription: null,
 });
 
-const DEFAULT_THEME = Object.freeze({
-  theme: 'system',
-  setTheme: () => {},
-  toggleTheme: () => {},
-});
-
 export const AuthContext = createContext(LOGGED_OUT_AUTH);
-export const ThemeContext = createContext(DEFAULT_THEME);
+
+/**
+ * ThemeContext has NO default, and that asymmetry is deliberate.
+ *
+ * Layout renders the theme toggle as `{toggleTheme && <button …>}` — the
+ * presence of the function IS the signal that a working theme system is
+ * mounted. A default carrying a no-op `toggleTheme` makes that signal lie: the
+ * button appears outside the provider and silently does nothing, which is worse
+ * than no button. (It also fails Layout.test.jsx, which pins exactly this.)
+ *
+ * The crash this file exists to prevent was AuthContext's — `const { user } =
+ * useContext(AuthContext)` with no fallback. Every ThemeContext consumer that
+ * matters already guards with `|| {}`.
+ */
+export const ThemeContext = createContext();

@@ -121,14 +121,31 @@ function stubLocation({ search = '', hrefSetter = vi.fn(), pathname = '/' } = {}
   };
 }
 
+function isoDateTime({ daysFromNow = 1, hour = 10, minute = 0 } = {}) {
+  const date = new Date();
+  date.setDate(date.getDate() + daysFromNow);
+  date.setHours(hour, minute, 0, 0);
+  date.setMilliseconds(0);
+  return date.toISOString();
+}
+
+function dateKey(daysFromNow = 0) {
+  const date = new Date();
+  date.setDate(date.getDate() + daysFromNow);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 const sampleGoogleEvents = [
   {
     id: 'g-evt-1',
     title: 'Quarterly client review',
     description: 'Q1 review with Acme Corp',
-    startTime: '2026-08-27T15:00:00.000Z',
-    endTime: '2026-08-27T16:00:00.000Z',
-    updatedAt: '2026-08-25T10:00:00.000Z',
+    startTime: isoDateTime({ daysFromNow: 1, hour: 15 }),
+    endTime: isoDateTime({ daysFromNow: 1, hour: 16 }),
+    updatedAt: isoDateTime({ daysFromNow: -2, hour: 10 }),
     attendees: JSON.stringify([{ email: 'rishu@acme.com' }, { email: 'arjun@globussoft.com' }]),
     location: 'Zoom',
     meetingUrl: 'https://meet.google.com/abc-defg-hij',
@@ -420,16 +437,16 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       {
         id: 'past-event',
         title: 'Completed meeting',
-        startTime: '2026-08-25T10:00:00.000Z',
-        endTime: '2026-08-25T11:00:00.000Z',
-        updatedAt: '2026-08-25T11:00:00.000Z',
+        startTime: isoDateTime({ daysFromNow: -2, hour: 10 }),
+        endTime: isoDateTime({ daysFromNow: -2, hour: 11 }),
+        updatedAt: isoDateTime({ daysFromNow: -2, hour: 11 }),
       },
       {
         id: 'future-event',
         title: 'Upcoming meeting',
-        startTime: '2026-08-27T10:00:00.000Z',
-        endTime: '2026-08-27T11:00:00.000Z',
-        updatedAt: '2026-08-25T11:00:00.000Z',
+        startTime: isoDateTime({ daysFromNow: 1, hour: 10 }),
+        endTime: isoDateTime({ daysFromNow: 1, hour: 11 }),
+        updatedAt: isoDateTime({ daysFromNow: -2, hour: 11 }),
       },
     ];
     fetchApiMock.mockImplementation(makeGoogleOnlineMock(mixedEvents));
@@ -445,16 +462,16 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       {
         id: 'past-event',
         title: 'Completed meeting',
-        startTime: '2026-08-25T10:00:00.000Z',
-        endTime: '2026-08-25T11:00:00.000Z',
-        updatedAt: '2026-08-25T11:00:00.000Z',
+        startTime: isoDateTime({ daysFromNow: -2, hour: 10 }),
+        endTime: isoDateTime({ daysFromNow: -2, hour: 11 }),
+        updatedAt: isoDateTime({ daysFromNow: -2, hour: 11 }),
       },
       {
         id: 'future-event',
         title: 'Upcoming meeting',
-        startTime: '2026-08-27T10:00:00.000Z',
-        endTime: '2026-08-27T11:00:00.000Z',
-        updatedAt: '2026-08-25T11:00:00.000Z',
+        startTime: isoDateTime({ daysFromNow: 1, hour: 10 }),
+        endTime: isoDateTime({ daysFromNow: 1, hour: 11 }),
+        updatedAt: isoDateTime({ daysFromNow: -2, hour: 11 }),
       },
     ];
     fetchApiMock.mockImplementation(makeGoogleOnlineMock(mixedEvents));
@@ -474,7 +491,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(screen.queryByText(/^Upcoming meeting$/i, { selector: 'div' })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/^Date$/i), {
-      target: { value: '2026-08-26' },
+      target: { value: dateKey(-1) },
     });
     expect(
       await screen.findByText(/No meetings found for the selected filters/i),
@@ -884,8 +901,8 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
           {
             id: 'o-evt-1',
             title: 'Monthly retro',
-            startTime: '2026-08-27T10:00:00.000Z',
-            endTime: '2026-08-27T11:00:00.000Z',
+            startTime: isoDateTime({ daysFromNow: 1, hour: 10 }),
+            endTime: isoDateTime({ daysFromNow: 1, hour: 11 }),
             attendees: '[]',
           },
         ]);
@@ -1158,8 +1175,8 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       target: { value: 'Doomed kickoff' },
     });
     const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
-    fireEvent.change(dtInputs[0], { target: { value: '2026-09-01T10:00' } });
-    fireEvent.change(dtInputs[1], { target: { value: '2026-09-01T11:00' } });
+    fireEvent.change(dtInputs[0], { target: { value: localDateTimeInput({ daysFromNow: 1, hour: 10 }) } });
+    fireEvent.change(dtInputs[1], { target: { value: localDateTimeInput({ daysFromNow: 1, hour: 11 }) } });
 
     const submitBtn = screen.getByRole('button', { name: /^Create Event$/i });
     await waitFor(() => expect(submitBtn).not.toBeDisabled());

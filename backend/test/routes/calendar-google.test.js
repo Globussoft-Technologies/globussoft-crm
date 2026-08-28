@@ -594,6 +594,18 @@ describe('POST /api/calendar/google/events', () => {
     return new Date(Date.now() + offsetMs).toISOString();
   }
 
+  // All-day events are validated against TODAY's date key, not a timestamp,
+  // so they need `YYYY-MM-DD` rather than an ISO datetime. Relative for the
+  // same reason futureIso is: a literal date passes until the day it names
+  // slips into the past, then the route's "cannot create events in the past"
+  // guard 400s and the suite goes red with no code change behind it.
+  function futureDateKey(daysFromNow) {
+    const d = new Date();
+    d.setDate(d.getDate() + daysFromNow);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
   test('400 when title/startTime/endTime missing', async () => {
     const app = makeApp();
     const res = await request(app)
@@ -719,8 +731,8 @@ describe('POST /api/calendar/google/events', () => {
       .send({
         title: 'Dev birthday',
         description: 'Birthday',
-        startDate: '2026-08-27',
-        endDate: '2026-08-28',
+        startDate: futureDateKey(1),
+        endDate: futureDateKey(2),
         allDay: true,
       });
     expect(res.status).toBe(201);

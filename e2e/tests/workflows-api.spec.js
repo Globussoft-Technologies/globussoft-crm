@@ -890,11 +890,19 @@ test.describe('Workflows API — POST /:id/test', () => {
     const res = await post(request, token, `/api/workflows/${created.id}/test`, {});
     expect(res.status()).toBe(200);
 
-    // Tiny gap so the audit-log create has committed before we count.
-    await new Promise((r) => setTimeout(r, 250));
-    const after = await get(request, token, '/api/workflows/history?limit=200');
-    const afterBody = await after.json();
-    const afterTotal = afterBody.total;
+    // Poll rather than sleep once. The engine retries a failed action three
+    // times with backoff (500ms, 1000ms) BEFORE it writes the execution row,
+    // so a `send_sms` probe rule — which has no provider configured and is
+    // meant to fail — lands its row ~1.5-2s after /test returns. A fixed
+    // 250ms gap was reading the table before the engine had finished.
+    const deadline = Date.now() + 15000;
+    let afterBody;
+    let afterTotal;
+    do {
+      await new Promise((r) => setTimeout(r, 250));
+      afterBody = await (await get(request, token, '/api/workflows/history?limit=200')).json();
+      afterTotal = afterBody.total;
+    } while (afterTotal <= beforeTotal && Date.now() < deadline);
 
     // The route fires emitEvent(triggerType) which fans out to EVERY active
     // rule in this tenant matching that trigger — not just the one being
@@ -906,12 +914,14 @@ test.describe('Workflows API — POST /:id/test', () => {
       `/test should grow history total by at least 1; got delta ${afterTotal - beforeTotal}`
     ).toBeGreaterThan(beforeTotal);
 
-    const ourRuleHit = afterBody.logs.find(
-      (l) => l.entity === 'AutomationRule' && l.entityId === created.id
-    );
+    // /history serves WorkflowExecution rows, so the rule is referenced by
+    // `workflowId`. It used to serve AuditLog rows keyed (entity, entityId) —
+    // the compliance row is still written, it is just no longer what this
+    // endpoint returns.
+    const ourRuleHit = afterBody.logs.find((l) => l.workflowId === created.id);
     expect(
       ourRuleHit,
-      `expected an audit row with entityId=${created.id} after /test fired this rule; latest entityIds: ${JSON.stringify(afterBody.logs.slice(0, 5).map((l) => l.entityId))}`
+      `expected a history row with workflowId=${created.id} after /test fired this rule; latest workflowIds: ${JSON.stringify(afterBody.logs.slice(0, 5).map((l) => l.workflowId))}`
     ).toBeTruthy();
   });
 

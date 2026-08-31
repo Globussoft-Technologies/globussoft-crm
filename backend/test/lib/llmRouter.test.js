@@ -237,6 +237,11 @@ describe('llmRouter — module shape', () => {
       // Airport/city name → IATA resolver for the flight search box (2026-06-19;
       // 2026-06-23 primary gemini-flash → gpt-4 to match the search provider).
       "airport-iata": { primary: "gpt-4", fallback: "gemini-flash" },
+      // AI curriculum-to-itinerary matching (2026-08-24) — objective
+      // extraction from uploaded curriculum PDFs, and the final ranking
+      // step that combines curriculum objectives + itinerary excerpts.
+      "curriculum-objective-extraction": { primary: "gemini-flash", fallback: "gpt-4o-mini" },
+      "curriculum-itinerary-match": { primary: "gemini-flash", fallback: "gpt-4o-mini" },
     });
   });
 
@@ -255,8 +260,10 @@ describe('llmRouter — module shape', () => {
     // 'lead-conversation-summary' + 'lead-narrative-summary' (PR #1203) +
     // 'lead-capture-consolidate' (PR #1210) +
     // 'callified-lead-status' (Callified lead hot/cold classification) +
-    // 'travel-knowledge-rag' (RAG brochure recommendation report) = 24.
-    expect(r.VALID_TASKS).toHaveLength(24);
+    // 'travel-knowledge-rag' (RAG brochure recommendation report) +
+    // 'curriculum-objective-extraction' + 'curriculum-itinerary-match'
+    // (AI curriculum-to-itinerary matching, 2026-08-24) = 26.
+    expect(r.VALID_TASKS).toHaveLength(26);
   });
 });
 
@@ -509,7 +516,7 @@ describe('routeRequest', () => {
         // can render line items without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();
         expect(Array.isArray(JSON.parse(out.text))).toBe(true);
-      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary' || task === 'lead-capture-consolidate' || task === 'callified-lead-status' || task === 'travel-knowledge-rag') {
+      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary' || task === 'lead-capture-consolidate' || task === 'callified-lead-status' || task === 'travel-knowledge-rag' || task === 'curriculum-objective-extraction' || task === 'curriculum-itinerary-match') {
         // Stub returns parseable JSON objects so lead summary consumers and the
         // RAG report generator can render without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();

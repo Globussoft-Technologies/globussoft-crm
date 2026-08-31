@@ -24,6 +24,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 const geocodeSuggestionsMock = vi.fn();
 vi.mock("../lib/geocoder", () => ({
   geocodeSuggestions: (...args) => geocodeSuggestionsMock(...args),
+  geocodeSuggest: (...args) => geocodeSuggestionsMock(...args),
 }));
 
 import LocationAutocomplete from "../components/travel/LocationAutocomplete";
@@ -87,7 +88,7 @@ describe("LocationAutocomplete", () => {
       vi.advanceTimersByTime(300);
     });
     expect(geocodeSuggestionsMock).toHaveBeenCalledTimes(1);
-    expect(geocodeSuggestionsMock).toHaveBeenCalledWith("Goa", { limit: 6 });
+    expect(geocodeSuggestionsMock).toHaveBeenCalledWith("Goa", 6);
   });
 
   it("renders suggestion rows after the fetch resolves", async () => {

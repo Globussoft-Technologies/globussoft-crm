@@ -24,13 +24,19 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  AlertTriangle, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
-  Download, FileJson, Info, Plus, Save, Send, Settings, Trash2, Upload,
+  AlertTriangle, Check, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
+  Download, FileJson, Info, Lightbulb, Pencil, Plus, Save, Send, Settings, Trash2, Upload, X,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 import DiagnosticPublicFormPanel from './DiagnosticPublicFormPanel';
+import DiagnosticNotificationPanel from './DiagnosticNotificationPanel';
+import {
+  SUGGESTED_DIAGNOSTIC_QUESTIONS,
+  SUGGESTION_CATEGORY_LABELS,
+  questionMatchesSuggestion,
+} from '../../components/travel/suggestedDiagnosticQuestions';
 
 const SUB_BRANDS = [
   { value: 'tmc', label: 'TMC (school trips)' },
@@ -107,6 +113,14 @@ export default function DiagnosticBuilder() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [templateSearch, setTemplateSearch] = useState('');
+  // Snapshot of what's actually persisted for the currently-loaded bank —
+  // { templateName, qJson, rJson } | null (null while drafting a brand-new
+  // template, where there's nothing yet to compare against). Used by
+  // onSaveAndUse to skip creating a pointless new version when nothing
+  // changed (every save otherwise unconditionally creates v(N+1) — harmless
+  // in isolation, but clicking Save repeatedly with no edits was flooding
+  // the template picker with dozens of identical versions).
+  const [savedSnapshot, setSavedSnapshot] = useState(null);
   const fileRef = useRef(null);
 
   const defaultTemplateName = useCallback(
@@ -116,29 +130,34 @@ export default function DiagnosticBuilder() {
 
   const loadTemplateIntoEditor = useCallback((bank) => {
     if (!bank) return;
-    setQJson(prettyJson(bank.questionsJson, QUESTIONS_EXAMPLE));
-    setRJson(prettyJson(bank.scoringRulesJson, SCORING_EXAMPLE));
+    const q = prettyJson(bank.questionsJson, QUESTIONS_EXAMPLE);
+    const r = prettyJson(bank.scoringRulesJson, SCORING_EXAMPLE);
+    const name = bank.templateName || defaultTemplateName();
+    setQJson(q);
+    setRJson(r);
     setSelectedBankId(String(bank.id));
-    setTemplateName(bank.templateName || defaultTemplateName());
+    setTemplateName(name);
     setBankInfo({
       existing: true,
       id: bank.id,
       version: bank.version,
-      templateName: bank.templateName || defaultTemplateName(),
+      templateName: name,
       isActive: bank.isActive !== false,
     });
+    setSavedSnapshot({ templateName: name, qJson: q, rJson: r });
     setIsCreatingTemplate(false);
     setTemplatePickerOpen(false);
     setTemplateSearch('');
   }, [defaultTemplateName]);
 
-  const beginTemplateDraft = useCallback(() => {
-    const fallbackName = defaultTemplateName();
+  const beginTemplateDraft = useCallback((name) => {
+    const resolvedName = String(name || '').trim() || defaultTemplateName();
     setQJson(QUESTIONS_EXAMPLE);
     setRJson(SCORING_EXAMPLE);
     setSelectedBankId('');
-    setTemplateName(fallbackName);
-    setBankInfo({ existing: false, templateName: fallbackName });
+    setTemplateName(resolvedName);
+    setBankInfo({ existing: false, templateName: resolvedName });
+    setSavedSnapshot(null);
     setIsCreatingTemplate(true);
   }, [defaultTemplateName]);
 
@@ -263,6 +282,16 @@ export default function DiagnosticBuilder() {
       notify.error('Template name is required');
       return;
     }
+    if (
+      bankInfo?.existing &&
+      savedSnapshot &&
+      cleanTemplateName === savedSnapshot.templateName &&
+      jsonEquivalent(qJson, savedSnapshot.qJson) &&
+      jsonEquivalent(rJson, savedSnapshot.rJson)
+    ) {
+      notify.info('No changes to save — this template is already up to date.');
+      return;
+    }
     setSaving(true);
     try {
       const created = await fetchApi('/api/travel/diagnostic-banks', {
@@ -288,9 +317,9 @@ export default function DiagnosticBuilder() {
     }
   };
 
-  const onRenameTemplate = async () => {
+  const onRenameTemplate = async (nextName) => {
     if (!bankInfo?.existing || !bankInfo?.id) return;
-    const cleanTemplateName = String(templateName || '').trim();
+    const cleanTemplateName = String(nextName ?? templateName ?? '').trim();
     if (!cleanTemplateName) {
       notify.error('Template name is required');
       return;
@@ -301,7 +330,7 @@ export default function DiagnosticBuilder() {
         method: 'PATCH',
         body: JSON.stringify({ templateName: cleanTemplateName }),
       });
-      notify.success('Template renamed');
+      notify.success(`Renamed to "${cleanTemplateName}".`);
       await loadBanks(bankInfo.id);
     } catch (e) {
       notify.error(e?.body?.error || 'Failed to rename template');
@@ -309,6 +338,102 @@ export default function DiagnosticBuilder() {
       setRenamingTemplate(false);
     }
   };
+
+  const onClickRename = async () => {
+    if (!bankInfo?.existing || !bankInfo?.id) return;
+    const current = bankInfo.templateName || templateName || '';
+    const next = await notify.prompt({
+      title: 'Rename template',
+      message: 'Give this template a clear name so your team can recognize it later.',
+      defaultValue: current,
+      placeholder: 'Template name',
+      confirmText: 'Rename',
+    });
+    if (next == null) return; // cancelled
+    const cleanName = String(next).trim();
+    if (!cleanName) {
+      notify.error('Template name is required');
+      return;
+    }
+    if (cleanName === current) return;
+    setTemplateName(cleanName);
+    await onRenameTemplate(cleanName);
+  };
+
+  const onClickNewTemplate = async () => {
+    const brandLabel = SUB_BRANDS.find((s) => s.value === subBrand)?.label || subBrand.toUpperCase();
+    const next = await notify.prompt({
+      title: 'New template',
+      message: `Name your new ${brandLabel} template. You'll build out its questions and scoring next, then save it to finish creating it.`,
+      defaultValue: defaultTemplateName(),
+      placeholder: 'Template name',
+      confirmText: 'Start template',
+    });
+    if (next == null) return; // cancelled
+    const cleanName = String(next).trim();
+    if (!cleanName) {
+      notify.error('Template name is required');
+      return;
+    }
+    beginTemplateDraft(cleanName);
+  };
+
+  // Bulk delete (2026-08-25) — invoked from TemplatePicker's multi-select
+  // mode. Reuses the existing single-bank DELETE endpoint (no bulk endpoint
+  // exists and none is needed) fired in parallel via Promise.allSettled so
+  // one failing row never blocks the rest. Returns true once the user has
+  // confirmed and the requests were issued (success or partial failure),
+  // false if they cancelled — TemplatePicker uses that to decide whether to
+  // clear its selection.
+  const onBulkDeleteTemplates = useCallback(async (ids) => {
+    const idSet = new Set(ids.map(String));
+    const selectedRows = banks.filter((row) => idSet.has(String(row.id)));
+    if (!selectedRows.length) return false;
+
+    const willWipeAll = idSet.size === banks.length;
+    const includesCurrent = idSet.has(String(selectedBankId));
+    // Cap the listed names — the confirm modal has no scroll/max-height, so
+    // an unbounded list (seen with a 99-row bulk selection) blows past the
+    // viewport and hides the confirm/cancel buttons entirely.
+    const NAME_LIST_LIMIT = 10;
+    const nameLines = selectedRows
+      .slice(0, NAME_LIST_LIMIT)
+      .map((row) => `• ${row.templateName || defaultTemplateName()} (v${row.version ?? '—'})`);
+    if (selectedRows.length > NAME_LIST_LIMIT) {
+      nameLines.push(`…and ${selectedRows.length - NAME_LIST_LIMIT} more.`);
+    }
+    const names = nameLines.join('\n');
+    const warnings = [
+      includesCurrent
+        ? 'The template you are currently editing is included — the editor will switch to another template afterward.'
+        : null,
+      willWipeAll
+        ? 'This removes every saved template for this sub-brand — you will start from a blank draft afterward.'
+        : null,
+    ].filter(Boolean);
+
+    const ok = await notify.confirm({
+      title: `Delete ${selectedRows.length} template${selectedRows.length > 1 ? 's' : ''}?`,
+      message: ['This cannot be undone.', '', names, ...(warnings.length ? ['', ...warnings] : [])].join('\n'),
+      confirmText: `Delete ${selectedRows.length}`,
+      destructive: true,
+    });
+    if (!ok) return false;
+
+    const results = await Promise.allSettled(
+      selectedRows.map((row) => fetchApi(`/api/travel/diagnostic-banks/${row.id}`, { method: 'DELETE' })),
+    );
+    const failedCount = results.filter((r) => r.status === 'rejected').length;
+    const succeededCount = selectedRows.length - failedCount;
+    if (succeededCount > 0) {
+      notify.success(`Deleted ${succeededCount} template${succeededCount > 1 ? 's' : ''}.`);
+    }
+    if (failedCount > 0) {
+      notify.error(`Failed to delete ${failedCount} template${failedCount > 1 ? 's' : ''}. Try again.`);
+    }
+    await loadBanks();
+    return true;
+  }, [banks, selectedBankId, defaultTemplateName, notify, loadBanks]);
 
   const onDeleteTemplate = async () => {
     if (!bankInfo?.existing || !bankInfo?.id) return;
@@ -385,66 +510,72 @@ export default function DiagnosticBuilder() {
             </button>
           ))}
         </div>
-        <div style={{ ...fieldGrid, marginTop: 16 }}>
-          <Field label="Active template" info="Choose the saved diagnostic template to edit and use for this travel brand.">
-            <TemplatePicker
-              banks={banks}
-              loading={loadingBank}
-              selectedBankId={selectedBankId}
-              search={templateSearch}
-              open={templatePickerOpen}
-              onSearchChange={setTemplateSearch}
-              onOpenChange={setTemplatePickerOpen}
-              onPick={(bank) => {
-                setSelectedBankId(String(bank.id));
-                loadTemplateIntoEditor(bank);
-              }}
-            />
-          </Field>
-          <Field label="Template name" info="Use a clear name so your team can recognize this template later.">
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                value={templateName}
-                onChange={(e) => setTemplateName(e.target.value)}
-                style={{ ...input, flex: '1 1 240px' }}
-                placeholder="Template name"
-              />
-              {bankInfo?.existing && !isCreatingTemplate && (
-                <button
-                  type="button"
-                  onClick={onRenameTemplate}
-                  disabled={renamingTemplate}
-                  style={renamingTemplate ? primaryBtnDisabled : secondaryBtn}
-                >
-                  {renamingTemplate ? 'Renaming...' : 'Rename'}
+        <div style={{ marginTop: 16 }}>
+          <Field label="Active template" info="Choose the saved diagnostic template to edit and use for this travel brand. Each save creates a new version, so a template can have several versions listed here — the newest is shown first.">
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 320px', minWidth: 240 }}>
+                <TemplatePicker
+                  banks={banks}
+                  loading={loadingBank}
+                  selectedBankId={selectedBankId}
+                  search={templateSearch}
+                  open={templatePickerOpen}
+                  onSearchChange={setTemplateSearch}
+                  onOpenChange={setTemplatePickerOpen}
+                  onPick={(bank) => {
+                    setSelectedBankId(String(bank.id));
+                    loadTemplateIntoEditor(bank);
+                  }}
+                  onBulkDelete={onBulkDeleteTemplates}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {bankInfo?.existing && !isCreatingTemplate && (
+                  <button
+                    type="button"
+                    onClick={onClickRename}
+                    disabled={renamingTemplate}
+                    style={renamingTemplate ? primaryBtnDisabled : secondaryBtn}
+                    title="Rename this template"
+                  >
+                    <Pencil size={14} aria-hidden /> {renamingTemplate ? 'Renaming...' : 'Rename'}
+                  </button>
+                )}
+                {bankInfo?.existing && !isCreatingTemplate && (
+                  <button
+                    type="button"
+                    onClick={onDeleteTemplate}
+                    disabled={deletingTemplate}
+                    style={deletingTemplate ? primaryBtnDisabled : dangerBtn}
+                    title="Delete this template version"
+                  >
+                    <Trash2 size={14} aria-hidden /> {deletingTemplate ? 'Deleting...' : 'Delete'}
+                  </button>
+                )}
+                <button type="button" onClick={onClickNewTemplate} style={primaryBtn} title="Start a new template from scratch">
+                  <Plus size={14} aria-hidden /> New template
                 </button>
-              )}
-              {bankInfo?.existing && !isCreatingTemplate && (
-                <button
-                  type="button"
-                  onClick={onDeleteTemplate}
-                  disabled={deletingTemplate}
-                  style={deletingTemplate ? primaryBtnDisabled : dangerBtn}
-                >
-                  {deletingTemplate ? 'Deleting...' : 'Delete'}
-                </button>
-              )}
-              <button type="button" onClick={beginTemplateDraft} style={secondaryBtn}>
-                Create template
-              </button>
+              </div>
             </div>
           </Field>
         </div>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '10px 0 0' }}>
-          {loadingBank
-            ? 'Loading this brand’s current templates…'
-            : isCreatingTemplate
-              ? 'You are creating a fresh template. Saving will create it and make it the one in use for this sub-brand.'
+        {isCreatingTemplate ? (
+          <div style={draftBanner}>
+            <Lightbulb size={16} aria-hidden style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>
+              <strong>Creating &ldquo;{templateName}&rdquo;</strong> — build out its questions and scoring below, then click{' '}
+              <strong>Save and use</strong> to finish creating it. Nothing is saved until you do.
+            </span>
+          </div>
+        ) : (
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '10px 0 0' }}>
+            {loadingBank
+              ? 'Loading this brand’s current templates…'
               : bankInfo?.existing
-                ? `Editing template "${bankInfo.templateName || templateName}".`
+                ? `Editing "${bankInfo.templateName || templateName}" (version ${bankInfo.version ?? '—'}). Saving creates a new version — the current one is kept in the history above.`
                 : 'No diagnostic template exists for this brand yet — starting from a fresh template.'}
-        </p>
+          </p>
+        )}
       </section>
 
       <ModeTabs mode={mode} onChange={setMode} subBrand={subBrand} />
@@ -514,6 +645,13 @@ export default function DiagnosticBuilder() {
           notify={notify}
         />
       )}
+      {mode === 'notifications' && (
+        <DiagnosticNotificationPanel
+          subBrand={subBrand}
+          notify={notify}
+          isAdmin={isAdmin}
+        />
+      )}
       {mode === 'engineWeights' && subBrand === 'tmc' && (
         <EngineWeightsPanel notify={notify} isAdmin={isAdmin} />
       )}
@@ -534,17 +672,23 @@ export default function DiagnosticBuilder() {
         </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
-        <button
-          type="button"
-          onClick={onSaveAndUse}
-          disabled={saving}
-          style={saving ? primaryBtnDisabled : primaryBtn}
-          aria-label={isCreatingTemplate ? 'Create and use template' : 'Save and use template'}
-        >
-          <Save size={16} aria-hidden /> {saving ? 'Saving...' : isCreatingTemplate ? 'Create and use' : 'Save and use'}
-        </button>
-      </div>
+      {/* Only the Visual/Advanced-JSON tabs edit qJson/rJson — Public Form
+          and Recommendation Settings each have their own dedicated Save
+          button for a completely different payload, so showing this bar
+          there too was a redundant, overlapping second "Save" control. */}
+      {(mode === 'visual' || mode === 'json') && (
+        <div style={saveBar}>
+          <button
+            type="button"
+            onClick={onSaveAndUse}
+            disabled={saving}
+            style={saving ? primaryBtnDisabled : { ...primaryBtn, boxShadow: '0 8px 24px rgba(79, 70, 229, 0.35)' }}
+            aria-label={isCreatingTemplate ? 'Create and use template' : 'Save and use template'}
+          >
+            <Save size={16} aria-hidden /> {saving ? 'Saving...' : isCreatingTemplate ? 'Create and use' : 'Save and use'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -587,6 +731,15 @@ function ModeTabs({ mode, onChange, subBrand }) {
       >
         Public form
       </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={mode === 'notifications'}
+        onClick={() => onChange('notifications')}
+        style={mode === 'notifications' ? tabActive : tabIdle}
+      >
+        Notifications
+      </button>
     </div>
   );
 }
@@ -594,6 +747,7 @@ function ModeTabs({ mode, onChange, subBrand }) {
 // ─── Questions visual editor ──────────────────────────────────────────
 
 function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
+  const [suggestOpen, setSuggestOpen] = useState(false);
   const parsed = tryParse(json);
   if (!parsed || !Array.isArray(parsed.questions)) {
     return (
@@ -619,6 +773,18 @@ function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
     ]);
   };
 
+  const addSuggestedQuestion = (suggestion) => {
+    writeQuestions([
+      ...questions,
+      {
+        id: suggestion.question.id,
+        text: suggestion.question.text,
+        type: suggestion.question.type,
+        options: suggestion.question.options.map((o) => ({ ...o })),
+      },
+    ]);
+  };
+
   const updateQuestion = (idx, patch) =>
     writeQuestions(questions.map((q, i) => (i === idx ? { ...q, ...patch } : q)));
 
@@ -633,14 +799,48 @@ function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
     writeQuestions(next);
   };
 
+  const setAllRequired = (required) =>
+    writeQuestions(questions.map((q) => ({ ...q, required })));
+
+  const allRequired = questions.length > 0 && questions.every((q) => q.required);
+  const noneRequired = questions.length === 0 || questions.every((q) => !q.required);
+
   return (
     <section style={card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, flexWrap: 'wrap', gap: 8 }}>
         <h2 style={{ ...cardTitle, marginBottom: 0 }}>Questions ({questions.length})</h2>
-        <button type="button" onClick={addQuestion} style={addBtn}>
-          <Plus size={14} aria-hidden /> Add question
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => setSuggestOpen(true)} style={secondaryBtn}>
+            <Lightbulb size={14} aria-hidden /> Suggested questions
+          </button>
+          <button type="button" onClick={addQuestion} style={addBtn}>
+            <Plus size={14} aria-hidden /> Add question
+          </button>
+        </div>
       </div>
+      {questions.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            Customers must answer required questions before they can submit.
+          </span>
+          <button
+            type="button"
+            onClick={() => setAllRequired(true)}
+            disabled={allRequired}
+            style={allRequired ? bulkRequireBtnActive : bulkRequireBtn}
+          >
+            <CheckCircle size={13} aria-hidden /> Require all
+          </button>
+          <button
+            type="button"
+            onClick={() => setAllRequired(false)}
+            disabled={noneRequired}
+            style={noneRequired ? bulkRequireBtnActive : bulkRequireBtn}
+          >
+            Make all optional
+          </button>
+        </div>
+      )}
       {questions.length === 0 ? (
         <p style={emptyHint}>No questions yet — click <em>Add question</em> to start.</p>
       ) : (
@@ -657,7 +857,116 @@ function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
           />
         ))
       )}
+      {suggestOpen && (
+        <SuggestedQuestionsPanel
+          questions={questions}
+          onAdd={addSuggestedQuestion}
+          onClose={() => setSuggestOpen(false)}
+        />
+      )}
     </section>
+  );
+}
+
+// Suggested-questions panel — self-contained modal listing curated TMC
+// diagnostic questions (frontend/src/components/travel/suggestedDiagnosticQuestions.js)
+// with "why this helps" copy tied to the curriculum-matching and RAG
+// recommendation systems. Adding a suggestion pushes a normal question
+// object through the same writeQuestions() path "Add question" uses, so it
+// plugs into the existing add/edit/reorder flow with zero backend changes.
+// Suggestions already present in the question list (matched by id or by
+// close text match — see questionMatchesSuggestion) are left out of the list.
+function SuggestedQuestionsPanel({ questions, onAdd, onClose }) {
+  const visibleSuggestions = SUGGESTED_DIAGNOSTIC_QUESTIONS.filter(
+    (suggestion) => !questions.some((q) => questionMatchesSuggestion(q, suggestion)),
+  );
+
+  return (
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      role="presentation"
+      style={suggestModalBackdrop}
+    >
+      <div style={suggestModalCard} role="dialog" aria-modal="true" aria-labelledby="suggested-questions-title">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <h2
+            id="suggested-questions-title"
+            style={{ margin: 0, fontSize: 18, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}
+          >
+            <Lightbulb size={18} aria-hidden /> Suggested questions
+          </h2>
+          <button type="button" onClick={onClose} aria-label="Close" style={iconBtn}>
+            <X size={16} aria-hidden />
+          </button>
+        </div>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 14px' }}>
+          Common TMC diagnostic questions that feed curriculum matching and the AI recommendation
+          engine. Add the ones relevant to your form.
+        </p>
+        {visibleSuggestions.length === 0 ? (
+          <p style={emptyHint}>All suggested questions have already been added.</p>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {visibleSuggestions.map((suggestion) => (
+              <div key={suggestion.question.id} style={suggestCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ minWidth: 0, flex: '1 1 280px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 14 }}>{suggestion.question.text}</strong>
+                      <span style={suggestBadge(suggestion.category)}>
+                        {SUGGESTION_CATEGORY_LABELS[suggestion.category] || suggestion.category}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                      {QUESTION_TYPES.find((t) => t.value === suggestion.question.type)?.label || suggestion.question.type}
+                      {Array.isArray(suggestion.question.options) && suggestion.question.options.length > 0 && (
+                        <> · {suggestion.question.options.map((o) => o.label).join(', ')}</>
+                      )}
+                    </div>
+                    <p style={{ margin: '8px 0 0', fontSize: 13, lineHeight: 1.5 }}>
+                      <Info size={12} aria-hidden style={{ verticalAlign: -1, marginRight: 4, color: 'var(--text-secondary)' }} />
+                      {suggestion.why}
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => onAdd(suggestion)} style={addBtnSmall}>
+                    <Plus size={12} aria-hidden /> Add
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Standard pill toggle switch — same visual pattern used across the travel
+// admin pages (e.g. CostMaster.jsx, DiagnosticPublicFormPanel.jsx). Kept
+// locally since no shared toggle component exists yet in this codebase.
+function PillToggle({ active, onChange, label }) {
+  return (
+    <button
+      type="button"
+      onClick={onChange}
+      role="switch"
+      aria-checked={active}
+      aria-label={label}
+      style={{
+        position: 'relative', width: 36, height: 20, borderRadius: 999,
+        border: active ? '1px solid var(--success-color, #3ecf7e)' : '1px solid var(--border-color)',
+        background: active ? 'rgba(62,207,126,0.18)' : 'var(--surface-color)',
+        cursor: 'pointer', padding: 0, flexShrink: 0,
+        transition: 'background .15s ease, border-color .15s ease',
+      }}
+    >
+      <span style={{
+        position: 'absolute', top: 2, left: active ? 17 : 2,
+        width: 14, height: 14, borderRadius: '50%',
+        background: active ? 'var(--success-color, #3ecf7e)' : 'var(--text-secondary)',
+        transition: 'left .15s ease, background .15s ease',
+      }} />
+    </button>
   );
 }
 
@@ -681,16 +990,26 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
           <span style={{ fontWeight: 700 }}>Question {index + 1}</span>
           <div style={microHint}>This is what the customer will answer on the public diagnostic form.</div>
         </div>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <IconBtn onClick={onMoveUp} disabled={index === 0} title="Move up" aria-label="Move question up">
-            <ChevronUp size={14} aria-hidden />
-          </IconBtn>
-          <IconBtn onClick={onMoveDown} disabled={index === total - 1} title="Move down" aria-label="Move question down">
-            <ChevronDown size={14} aria-hidden />
-          </IconBtn>
-          <IconBtn onClick={onRemove} title="Remove question" aria-label="Remove question" danger>
-            <Trash2 size={14} aria-hidden />
-          </IconBtn>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: question.required ? 'var(--success-color, #3ecf7e)' : 'var(--text-secondary)', cursor: 'pointer' }}>
+            Required
+            <PillToggle
+              active={Boolean(question.required)}
+              onChange={() => onChange({ required: !question.required })}
+              label={`Question ${index + 1} required`}
+            />
+          </label>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <IconBtn onClick={onMoveUp} disabled={index === 0} title="Move up" aria-label="Move question up">
+              <ChevronUp size={14} aria-hidden />
+            </IconBtn>
+            <IconBtn onClick={onMoveDown} disabled={index === total - 1} title="Move down" aria-label="Move question down">
+              <ChevronDown size={14} aria-hidden />
+            </IconBtn>
+            <IconBtn onClick={onRemove} title="Remove question" aria-label="Remove question" danger>
+              <Trash2 size={14} aria-hidden />
+            </IconBtn>
+          </div>
         </div>
       </div>
 
@@ -1012,6 +1331,16 @@ function Field({ label, info, children }) {
   );
 }
 
+// Short, locale-formatted date for disambiguating same-named template
+// versions in the picker (e.g. several saves of "TMC Template" each create
+// a new version row — see the file header note on POST /diagnostic-banks).
+function formatBankTimestamp(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 function TemplatePicker({
   banks,
   loading,
@@ -1021,7 +1350,11 @@ function TemplatePicker({
   onSearchChange,
   onOpenChange,
   onPick,
+  onBulkDelete,
 }) {
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkSelectedIds, setBulkSelectedIds] = useState(() => new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const selected = banks.find((row) => String(row.id) === String(selectedBankId));
   const selectedLabel = selected
     ? selected.templateName || `${String(selected.subBrand || '').toUpperCase()} Template`
@@ -1034,8 +1367,89 @@ function TemplatePicker({
     })
     : banks;
 
+  // "Current" = the highest-version row for this sub-brand — the one the
+  // public form + diagnostic engine actually resolve to. NOT the same as
+  // the row's own `isActive` flag: every saved version keeps isActive=true
+  // forever (nothing in this app flips it off on a new save — see
+  // travel_diagnostics.js's POST /diagnostic-banks comment), so isActive
+  // alone can't tell versions apart. Verified this against a real dropdown
+  // where every entry showed "Live".
+  const currentBankId = banks.reduce(
+    (best, row) => (!best || Number(row.version || 0) > Number(best.version || 0) ? row : best),
+    null,
+  )?.id;
+
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointerDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        onOpenChange(false);
+      }
+    };
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') onOpenChange(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open, onOpenChange]);
+
+  // Exit multi-select whenever the dropdown closes (outside click, Escape,
+  // or a normal single-template pick) so it never reopens mid-selection for
+  // an unrelated reason.
+  useEffect(() => {
+    if (!open) {
+      setBulkMode(false);
+      setBulkSelectedIds(new Set());
+    }
+  }, [open]);
+
+  const toggleBulkSelected = (id) => {
+    setBulkSelectedIds((prev) => {
+      const next = new Set(prev);
+      const key = String(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const allVisibleSelected = visibleBanks.length > 0 && visibleBanks.every((row) => bulkSelectedIds.has(String(row.id)));
+
+  const handleSelectAllVisible = () => {
+    setBulkSelectedIds((prev) => {
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        visibleBanks.forEach((row) => next.delete(String(row.id)));
+        return next;
+      }
+      const next = new Set(prev);
+      visibleBanks.forEach((row) => next.add(String(row.id)));
+      return next;
+    });
+  };
+
+  const handleBulkDeleteClick = async () => {
+    if (!bulkSelectedIds.size || !onBulkDelete) return;
+    setBulkDeleting(true);
+    try {
+      const proceeded = await onBulkDelete([...bulkSelectedIds]);
+      if (proceeded) {
+        setBulkMode(false);
+        setBulkSelectedIds(new Set());
+      }
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
   return (
-    <div style={templatePickerWrap}>
+    <div style={templatePickerWrap} ref={wrapRef}>
       <input
         type="text"
         value={open ? search : selectedLabel}
@@ -1064,24 +1478,112 @@ function TemplatePicker({
       </button>
       {open && !loading && banks.length > 0 && (
         <div style={templatePickerMenu}>
+          {banks.length > 1 && (
+            <div style={templatePickerBulkBar}>
+              {!bulkMode ? (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setBulkMode(true)}
+                  style={templatePickerBulkToggle}
+                >
+                  <Trash2 size={12} aria-hidden /> Select multiple to delete
+                </button>
+              ) : (
+                <>
+                  <span style={templatePickerBulkCount}>
+                    {bulkSelectedIds.size ? `${bulkSelectedIds.size} selected` : 'Select templates to delete'}
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={handleSelectAllVisible}
+                    style={templatePickerBulkLink}
+                  >
+                    {allVisibleSelected ? 'Clear' : 'Select all'}
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => { setBulkMode(false); setBulkSelectedIds(new Set()); }}
+                    style={templatePickerBulkLink}
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
+          )}
           {visibleBanks.length === 0 ? (
             <div style={templatePickerEmpty}>No templates match this search.</div>
           ) : (
             visibleBanks.map((row) => {
               const label = row.templateName || `${String(row.subBrand || '').toUpperCase()} Template`;
               const active = String(row.id) === String(selectedBankId);
+              const meta = [
+                Number.isFinite(row.version) ? `v${row.version}` : null,
+                String(row.id) === String(currentBankId) ? 'Current' : null,
+                formatBankTimestamp(row.updatedAt || row.createdAt),
+              ].filter(Boolean).join(' · ');
+
+              if (bulkMode) {
+                const checked = bulkSelectedIds.has(String(row.id));
+                return (
+                  <button
+                    key={row.id}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={checked}
+                    className="template-picker-option"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => toggleBulkSelected(row.id)}
+                    style={templatePickerOption}
+                  >
+                    <span style={checked ? templatePickerCheckboxChecked : templatePickerCheckbox}>
+                      {checked && <Check size={11} aria-hidden />}
+                    </span>
+                    <span style={templatePickerOptionText}>
+                      <span style={templatePickerOptionName}>{label}</span>
+                      {meta && <span style={templatePickerOptionMeta}>{meta}</span>}
+                    </span>
+                  </button>
+                );
+              }
+
               return (
                 <button
                   key={row.id}
                   type="button"
+                  className={active ? 'template-picker-option template-picker-option--active' : 'template-picker-option'}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onPick(row)}
                   style={active ? templatePickerOptionActive : templatePickerOption}
                 >
-                  {label}
+                  <span style={templatePickerOptionCheck}>
+                    {active && <Check size={14} aria-hidden />}
+                  </span>
+                  <span style={templatePickerOptionText}>
+                    <span style={templatePickerOptionName}>{label}</span>
+                    {meta && <span style={templatePickerOptionMeta}>{meta}</span>}
+                  </span>
                 </button>
               );
             })
+          )}
+          {bulkMode && bulkSelectedIds.size > 0 && (
+            <div style={templatePickerBulkFooter}>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={handleBulkDeleteClick}
+                disabled={bulkDeleting}
+                style={bulkDeleting ? templatePickerBulkDeleteBtnDisabled : templatePickerBulkDeleteBtn}
+              >
+                <Trash2 size={14} aria-hidden />
+                {bulkDeleting ? 'Deleting…' : `Delete ${bulkSelectedIds.size} selected`}
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -1165,6 +1667,25 @@ function prettyJson(s, fallback) {
   }
 }
 
+// Order-of-keys-independent JSON equality (array order still matters) — used
+// to tell whether the editor's current questions/scoring actually differ
+// from what's persisted, so an unmodified "Save and use" click can skip
+// creating a no-op version instead of always minting v(N+1).
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+function jsonEquivalent(a, b) {
+  try {
+    return stableStringify(JSON.parse(a)) === stableStringify(JSON.parse(b));
+  } catch {
+    return false; // unparseable — never claim "unchanged", let validate() surface the real error
+  }
+}
+
 // ─── Recommendation Settings panel (TMC) ──────────────────────────────
 //
 // PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.3.3 + §3.3.7 + §3.8.
@@ -1240,14 +1761,28 @@ function EngineWeightsPanel({ notify, isAdmin }) {
   const [baseline, setBaseline] = useState(DEFAULT_TMC_WEIGHTS);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState([]);
+  // "Max recommendations shown" (topK) — a separate admin-configurable
+  // setting from the weights above (see backend/lib/diagnosticRecommendationSettings.js).
+  // Loaded alongside the weights but saved independently, so this doesn't
+  // get tangled into the already-tested weights auto-bump-version flow.
+  const [topK, setTopK] = useState(10);
+  const [topKBaseline, setTopKBaseline] = useState(10);
+  const [topKSaving, setTopKSaving] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
     setLoadError(null);
-    fetchApi('/api/travel/engine-weights', { silent: true })
-      .then((res) => {
-        // Tolerate either a bare row OR an envelope { engineWeights }.
-        const row = res?.engineWeights || res;
+    Promise.all([
+      fetchApi('/api/travel/engine-weights', { silent: true }).catch((e) => {
+        // 404 = no row yet; show the §3.3.3 defaults so the first save
+        // POSTs a brand-new row. Other errors surface to the operator.
+        if (e?.status === 404) return null;
+        throw e;
+      }),
+      fetchApi('/api/travel/diagnostics/recommendation-settings?subBrand=tmc', { silent: true }).catch(() => null),
+    ])
+      .then(([weightsRes, topKRes]) => {
+        const row = weightsRes?.engineWeights || weightsRes;
         if (row && typeof row === 'object') {
           const merged = { ...DEFAULT_TMC_WEIGHTS, ...row };
           setWeights(merged);
@@ -1256,21 +1791,39 @@ function EngineWeightsPanel({ notify, isAdmin }) {
           setWeights(DEFAULT_TMC_WEIGHTS);
           setBaseline(DEFAULT_TMC_WEIGHTS);
         }
+        const resolvedTopK = Number.isFinite(topKRes?.topK) ? topKRes.topK : 10;
+        setTopK(resolvedTopK);
+        setTopKBaseline(resolvedTopK);
       })
       .catch((e) => {
-        // 404 = no row yet; show the §3.3.3 defaults so the first save
-        // POSTs a brand-new row. Other errors surface to the operator.
-        if (e?.status === 404) {
-          setWeights(DEFAULT_TMC_WEIGHTS);
-          setBaseline(DEFAULT_TMC_WEIGHTS);
-        } else {
-          setLoadError(e?.message || 'Failed to load engine weights');
-        }
+        setLoadError(e?.message || 'Failed to load engine weights');
       })
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const onSaveTopK = async () => {
+    if (!isAdmin) {
+      notify.error('Recommendation settings are ADMIN-only.');
+      return;
+    }
+    setTopKSaving(true);
+    try {
+      const res = await fetchApi('/api/travel/diagnostics/recommendation-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ subBrand: 'tmc', topK }),
+      });
+      const saved = Number.isFinite(res?.topK) ? res.topK : topK;
+      setTopK(saved);
+      setTopKBaseline(saved);
+      notify.success(`Max recommendations shown set to ${saved}.`);
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || 'Failed to save recommendation count');
+    } finally {
+      setTopKSaving(false);
+    }
+  };
 
   const updateField = (key, raw) => {
     const next = { ...weights };
@@ -1397,6 +1950,52 @@ function EngineWeightsPanel({ notify, isAdmin }) {
           <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
             Minimum score needed for the system to treat a trip as a strong recommendation.
           </span>
+        </Field>
+      </div>
+
+      {/* Kept OUT of fieldGrid deliberately — it's a display-count cap with
+          its own independent Save action, not another per-answer weight, so
+          sharing the weight sliders' auto-fit grid let it land cramped into
+          a narrow column next to an unrelated slider at common viewport
+          widths (reported 2026-08-27). A full-width bordered section reads
+          clearly regardless of how many weight fields wrap above it. */}
+      <div style={topKSection}>
+        <Field
+          label="Max recommendations shown"
+          info="How many trip recommendations a school sees after submitting a diagnostic — shown in the on-screen report and the downloaded PDF. Applies to both the curriculum-fit list and the AI-matched recommendation list."
+        >
+          <div style={{ ...sliderControl, gridTemplateColumns: 'minmax(170px, 420px) 58px' }}>
+            <input
+              type="range"
+              value={topK}
+              onChange={(e) => setTopK(Number(e.target.value))}
+              style={rangeInput}
+              className="diagnostic-weight-range"
+              aria-label="Max recommendations shown"
+              min={3}
+              max={20}
+              step={1}
+            />
+            <span style={sliderValue}>{topK}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6, gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+              Applies to both curriculum-fit and AI-matched recommendations.
+            </span>
+            <button
+              type="button"
+              onClick={onSaveTopK}
+              disabled={topKSaving || !isAdmin || topK === topKBaseline}
+              style={{
+                ...addBtnSmall,
+                opacity: (topKSaving || !isAdmin || topK === topKBaseline) ? 0.5 : 1,
+                cursor: (topKSaving || !isAdmin || topK === topKBaseline) ? 'not-allowed' : 'pointer',
+              }}
+              aria-label="Save recommendation count"
+            >
+              {topKSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
         </Field>
       </div>
       {errors.length > 0 && (
@@ -1526,6 +2125,25 @@ const secondaryBtn = {
   background: 'var(--surface-color)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', cursor: 'pointer',
 };
+// Sticky (not fixed) footer bar — the app's scrollable region is `<main
+// className="app-main">` (see components/Layout.jsx), not the viewport, and
+// it sits beside the sidebar rather than under it. `position: sticky`
+// against that ancestor keeps the button reachable without scrolling to the
+// page bottom while staying correctly confined to the content column (a
+// fixed/viewport-relative bar would either sit under the sidebar or need
+// its offset hardcoded and re-broken every time the sidebar width changes).
+const saveBar = {
+  position: 'sticky',
+  bottom: 0,
+  zIndex: 20,
+  marginTop: 16,
+  padding: '12px 0',
+  display: 'flex',
+  justifyContent: 'flex-end',
+  background: 'var(--bg-color)',
+  borderTop: '1px solid var(--border-color)',
+  boxShadow: '0 -8px 24px rgba(15, 23, 42, 0.12)',
+};
 const dangerBtn = {
   ...secondaryBtn,
   color: 'var(--danger-color)',
@@ -1542,6 +2160,17 @@ const addBtnSmall = {
   ...addBtn,
   padding: '4px 10px', fontSize: 12,
 };
+const bulkRequireBtn = {
+  display: 'inline-flex', alignItems: 'center', gap: 4,
+  padding: '4px 10px', borderRadius: 6, fontWeight: 600, fontSize: 12,
+  background: 'transparent', color: 'var(--text-secondary)',
+  border: '1px solid var(--border-color)', cursor: 'pointer',
+};
+const bulkRequireBtnActive = {
+  ...bulkRequireBtn,
+  opacity: 0.5,
+  cursor: 'default',
+};
 const iconBtn = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   width: 28, height: 28, padding: 0, borderRadius: 6,
@@ -1557,6 +2186,11 @@ const input = {
 const fieldGrid = {
   display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
   gap: 16, marginTop: 6,
+};
+const topKSection = {
+  marginTop: 16, padding: 14, borderRadius: 10,
+  border: '1px solid var(--border-color)',
+  background: 'var(--subtle-bg, rgba(91, 110, 248, 0.04))',
 };
 const questionSetupGrid = {
   display: 'grid',
@@ -1685,16 +2319,17 @@ const templatePickerMenu = {
 };
 const templatePickerOption = {
   width: '100%',
-  display: 'block',
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 8,
   padding: '8px 10px',
+  marginBottom: 2,
   border: 'none',
   borderRadius: 6,
   background: 'transparent',
   color: 'var(--text-primary)',
   textAlign: 'left',
   fontFamily: 'inherit',
-  fontSize: 13,
-  fontWeight: 600,
   cursor: 'pointer',
 };
 const templatePickerOptionActive = {
@@ -1702,12 +2337,149 @@ const templatePickerOptionActive = {
   background: 'var(--primary-color)',
   color: '#fff',
 };
+const templatePickerOptionCheck = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 14,
+  flexShrink: 0,
+  marginTop: 2,
+};
+const templatePickerOptionText = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  minWidth: 0,
+};
+const templatePickerOptionName = {
+  fontSize: 13,
+  fontWeight: 600,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+const templatePickerOptionMeta = {
+  fontSize: 11,
+  fontWeight: 500,
+  opacity: 0.75,
+};
 const templatePickerEmpty = {
   padding: '10px',
   color: 'var(--text-secondary)',
   fontSize: 13,
 };
+const templatePickerBulkBar = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 1,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '2px 4px 8px',
+  marginBottom: 4,
+  borderBottom: '1px solid var(--border-color)',
+  background: 'var(--bg-color)',
+};
+const templatePickerBulkToggle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '4px 8px',
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 12,
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  border: '1px dashed var(--border-color)',
+  cursor: 'pointer',
+};
+const templatePickerBulkCount = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: 'var(--text-primary)',
+};
+const templatePickerBulkLink = {
+  padding: '2px 6px',
+  borderRadius: 4,
+  fontWeight: 600,
+  fontSize: 12,
+  background: 'transparent',
+  color: 'var(--primary-color)',
+  border: 'none',
+  cursor: 'pointer',
+};
+const templatePickerBulkFooter = {
+  position: 'sticky',
+  bottom: 0,
+  zIndex: 1,
+  marginTop: 4,
+  padding: '8px 4px 2px',
+  borderTop: '1px solid var(--border-color)',
+  background: 'var(--bg-color)',
+};
+const templatePickerBulkDeleteBtn = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  width: '100%',
+  padding: '8px 10px',
+  borderRadius: 6,
+  fontWeight: 700,
+  fontSize: 13,
+  color: '#fff',
+  background: 'var(--danger-color, #dc2626)',
+  border: 'none',
+  cursor: 'pointer',
+};
+const templatePickerBulkDeleteBtnDisabled = {
+  ...templatePickerBulkDeleteBtn,
+  opacity: 0.6,
+  cursor: 'not-allowed',
+};
+const templatePickerCheckbox = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 16,
+  height: 16,
+  marginTop: 2,
+  flexShrink: 0,
+  borderRadius: 4,
+  border: '1.5px solid var(--border-color)',
+  background: 'transparent',
+  color: '#fff',
+};
+const templatePickerCheckboxChecked = {
+  ...templatePickerCheckbox,
+  background: 'var(--primary-color)',
+  borderColor: 'var(--primary-color)',
+};
+const draftBanner = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+  marginTop: 10,
+  padding: '10px 14px',
+  borderRadius: 8,
+  border: '1px solid color-mix(in srgb, var(--warning-color, #d97706) 40%, var(--border-color))',
+  background: 'color-mix(in srgb, var(--warning-color, #d97706) 10%, transparent)',
+  color: 'var(--text-primary)',
+  fontSize: 13,
+  lineHeight: 1.5,
+};
 const diagnosticBuilderCss = `
+  .template-picker-option:hover:not(.template-picker-option--active) {
+    background: var(--hover-bg, rgba(99, 102, 241, 0.12)) !important;
+  }
+  .template-picker-option--active:hover {
+    filter: brightness(1.08);
+  }
+  .template-picker-option:focus-visible {
+    outline: 2px solid var(--primary-color, #5b6cff);
+    outline-offset: -2px;
+  }
+
   @media (max-width: 760px) {
     .diagnostic-question-layout {
       grid-template-columns: 1fr !important;
@@ -1771,3 +2543,34 @@ const diagnosticBuilderCss = `
 const emptyHint = {
   color: 'var(--text-secondary)', fontSize: 13, fontStyle: 'italic', margin: '4px 0',
 };
+const suggestModalBackdrop = {
+  position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.45)',
+  backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  zIndex: 1000, padding: '1rem',
+};
+const suggestModalCard = {
+  ...card,
+  width: '100%', maxWidth: 640, maxHeight: '85vh', overflowY: 'auto',
+  margin: 0,
+};
+const suggestCard = {
+  ...subCard,
+  marginBottom: 0,
+};
+const SUGGESTION_CATEGORY_COLORS = {
+  curriculum: { background: 'rgba(91, 108, 255, 0.14)', color: 'var(--primary-color)' },
+  both: { background: 'rgba(147, 51, 234, 0.14)', color: '#9333ea' },
+  recommendation: { background: 'rgba(6, 182, 212, 0.14)', color: '#0891b2' },
+  advisor: { background: 'rgba(217, 119, 6, 0.14)', color: '#b45309' },
+};
+function suggestBadge(category) {
+  const colors = SUGGESTION_CATEGORY_COLORS[category] || {
+    background: 'rgba(108, 117, 125, 0.14)', color: 'var(--text-secondary)',
+  };
+  return {
+    display: 'inline-block', padding: '2px 8px', borderRadius: 999,
+    fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
+    ...colors,
+  };
+}

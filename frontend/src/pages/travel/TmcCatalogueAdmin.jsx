@@ -31,6 +31,7 @@
 // Edit / Delete / Promote buttons) but still browse the catalogue.
 
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Edit2,
   Plus,
@@ -43,6 +44,10 @@ import {
   FileDown,
   FileSpreadsheet,
   Import,
+  Folder,
+  FileText,
+  ExternalLink,
+  ChevronRight,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -55,6 +60,10 @@ import { AuthContext } from "../../App";
 // router for tests).
 const STATUS_ACTIVE = "active";
 const STATUS_ARCHIVED = "archived";
+// Third pseudo-tab — not a catalogue status, just switches the List panel
+// to the read-only GDrive browser (requirement: show the full existing
+// sub-brand PDF tree + the new "CRM Itineraries" output folder together).
+const TAB_DRIVE = "drive";
 const PAGE_SIZE = 10;
 
 // Sub-set of TmcTripCatalogue fields surfaced in the create/edit form.
@@ -129,6 +138,7 @@ function stringifyListField(raw) {
 
 export default function TmcCatalogueAdmin() {
   const notify = useNotify();
+  const [searchParams] = useSearchParams();
   const { user } = useContext(AuthContext) || {};
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN" || role === "OWNER";
@@ -307,6 +317,22 @@ export default function TmcCatalogueAdmin() {
     setEditingId(row.id);
     setShowForm(true);
   };
+
+  // "Add to Diagnostic KB" deep-link (from the itinerary editor): opens the
+  // edit form for a freshly AI-drafted row so the operator reviews/promotes
+  // it via this existing edit flow, no separate review UI. New rows always
+  // land status=archived (human-verify gate), so switch to that tab too.
+  useEffect(() => {
+    const editIdParam = searchParams.get("edit");
+    if (!editIdParam) return;
+    const editId = Number(editIdParam);
+    if (!Number.isFinite(editId)) return;
+    setTab(STATUS_ARCHIVED);
+    fetchApi(`/api/travel-tmc-catalogue/${editId}`)
+      .then((row) => { if (row) handleEdit(row); })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const handleSubmit = async (e) => {
     if (e?.preventDefault) e.preventDefault();
@@ -853,6 +879,16 @@ export default function TmcCatalogueAdmin() {
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={tab === TAB_DRIVE}
+          onClick={() => setTab(TAB_DRIVE)}
+          style={tab === TAB_DRIVE ? tabActive : tabIdle}
+          title="Browse the connected Google Drive folder (existing trips + newly generated itineraries)"
+        >
+          Drive Library
+        </button>
+        <button
+          type="button"
           onClick={reload}
           style={{ ...secondaryBtn, marginLeft: "auto" }}
           aria-label="Refresh list"
@@ -1219,7 +1255,9 @@ export default function TmcCatalogueAdmin() {
       )}
 
       {/* List */}
-      {loading && rows.length === 0 ? (
+      {tab === TAB_DRIVE ? (
+        <TmcDriveBrowser notify={notify} />
+      ) : loading && rows.length === 0 ? (
         <div style={emptyStyle}>Loading&hellip;</div>
       ) : loadError ? (
         <div
@@ -1383,6 +1421,121 @@ export default function TmcCatalogueAdmin() {
         </div>
       )}
       </section>
+    </div>
+  );
+}
+
+// Read-only GDrive browser (requirement #7) — shows the full existing
+// sub-brand PDF tree (the 187 previously-synced trips) plus the new
+// "CRM Itineraries" output folder together, in one breadcrumb-navigable
+// list. On-demand only (a "Refresh" re-fetches the current folder — no
+// sync/cron/webhook). Mirrors the breadcrumb pattern used by
+// KnowledgeBaseAdmin.jsx's folder picker, hand-rolled here (no shared
+// component exists in this codebase) since this page's styling differs.
+function TmcDriveBrowser({ notify }) {
+  const [breadcrumbs, setBreadcrumbs] = useState([{ id: "root", name: "Drive root" }]);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorCode, setErrorCode] = useState(null);
+
+  const currentFolderId = breadcrumbs[breadcrumbs.length - 1].id;
+
+  const load = useCallback((parentId) => {
+    setLoading(true);
+    setErrorCode(null);
+    fetchApi(`/api/travel/knowledge-base/browse?parentId=${encodeURIComponent(parentId)}`)
+      .then((res) => setItems(Array.isArray(res?.items) ? res.items : []))
+      .catch((e) => {
+        setItems([]);
+        setErrorCode(e?.body?.code || null);
+        if (e?.body?.code !== "DRIVE_NOT_CONNECTED") {
+          notify.error(e?.body?.error || "Failed to browse Drive");
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [notify]);
+
+  useEffect(() => { load(currentFolderId); }, [currentFolderId, load]);
+
+  const openFolder = (folder) => setBreadcrumbs((prev) => [...prev, { id: folder.id, name: folder.name }]);
+  const jumpBreadcrumb = (index) => setBreadcrumbs((prev) => prev.slice(0, index + 1));
+
+  const folders = items.filter((i) => i.isFolder);
+  const files = items.filter((i) => !i.isFolder);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 12, fontSize: 13 }}>
+        {breadcrumbs.map((bc, i) => (
+          <span key={bc.id + i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            {i > 0 && <ChevronRight size={12} style={{ color: "var(--text-secondary)" }} />}
+            <button
+              type="button"
+              onClick={() => jumpBreadcrumb(i)}
+              disabled={i === breadcrumbs.length - 1}
+              style={{
+                background: "none", border: "none", padding: "2px 4px", cursor: i === breadcrumbs.length - 1 ? "default" : "pointer",
+                color: i === breadcrumbs.length - 1 ? "var(--text-primary)" : "var(--accent-color, #3b82f6)",
+                fontWeight: i === breadcrumbs.length - 1 ? 600 : 400, fontSize: 13,
+              }}
+            >
+              {bc.name}
+            </button>
+          </span>
+        ))}
+        <button
+          type="button"
+          onClick={() => load(currentFolderId)}
+          style={{ ...secondaryBtn, marginLeft: "auto" }}
+          aria-label="Refresh Drive folder"
+        >
+          <RotateCw size={14} /> Refresh
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={emptyStyle}>Loading&hellip;</div>
+      ) : errorCode === "DRIVE_NOT_CONNECTED" ? (
+        <div style={emptyStyle}>
+          Google Drive is not connected. Connect it in Travel Knowledge Base settings to browse trip files here.
+        </div>
+      ) : items.length === 0 ? (
+        <div style={emptyStyle}>This folder is empty.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {folders.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => openFolder(f)}
+              style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", textAlign: "left",
+                border: "1px solid var(--border-color)", borderRadius: 6, background: "transparent",
+                color: "var(--text-primary)", cursor: "pointer", fontSize: 13,
+              }}
+            >
+              <Folder size={15} /> {f.name}
+            </button>
+          ))}
+          {files.map((f) => (
+            <a
+              key={f.id}
+              href={f.webViewLink || "#"}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "8px 10px",
+                border: "1px solid var(--border-color)", borderRadius: 6, textDecoration: "none",
+                color: "var(--text-primary)", fontSize: 13,
+              }}
+            >
+              <FileText size={15} />
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+              {f.webViewLink && <ExternalLink size={12} style={{ color: "var(--text-secondary)" }} />}
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

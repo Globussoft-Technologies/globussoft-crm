@@ -1,22 +1,36 @@
 /**
- * brochureS3Store.js — isolated S3 storage helpers for the brochure engine.
+ * brochureS3Store.js — isolated object-storage helpers for the brochure engine.
  *
- * Wraps the shared backend/services/s3Service.js so the brochure routes/bridge
- * don't need to know S3 key layout or tenant-prefix rules. If S3 is not
- * configured (AWS_S3_BUCKET_NAME missing), every helper reports disabled and
- * the caller falls back to local-disk / base64 behavior.
+ * Wraps backend/services/s3Service.js AND backend/services/ociObjectStorageService.js
+ * so the brochure routes/bridge don't need to know key layout or tenant-prefix rules.
+ *
+ * Priority:
+ *   1. OCI Object Storage (OCI_* env vars) — used for new uploads when configured.
+ *   2. AWS S3 (AWS_* env vars) — used for new uploads when OCI is not configured.
+ *   3. Local disk / base64 fallback — when neither object store is configured.
+ *
+ * Reads (stream/delete) detect the URL type (OCI native URL vs S3 URL) and use the
+ * matching service, so historical S3 brochures keep working after a migration.
  */
 'use strict';
 
 const s3Service = require('../services/s3Service');
+const ociService = require('../services/ociObjectStorageService');
 
-function isEnabled() {
+function isS3Configured() {
   return !!s3Service.BUCKET_NAME && !!s3Service.S3_BASE_URL;
 }
 
+function isEnabled() {
+  return isS3Configured() || ociService.isConfigured();
+}
+
 function isS3Url(url) {
-  if (!url || typeof url !== 'string' || !s3Service.S3_BASE_URL) return false;
-  // Normalize URLs to handle trailing slashes consistently
+  if (!url || typeof url !== 'string') return false;
+  // Native OCI URL produced by ociService.
+  if (ociService.isOciUrl(url)) return true;
+  // Legacy S3 URL.
+  if (!s3Service.S3_BASE_URL) return false;
   const normalizedBaseUrl = s3Service.S3_BASE_URL.replace(/\/$/, '');
   const normalizedUrl = url.replace(/\/$/, '');
   return normalizedUrl.startsWith(normalizedBaseUrl + '/') || normalizedUrl === normalizedBaseUrl;
@@ -39,9 +53,13 @@ function runFileName(runId, ext) {
 }
 
 async function uploadBrochureArtifact(tenantId, runId, buffer, ext, contentType) {
-  if (!isEnabled()) throw new Error('S3 not configured');
+  if (!isEnabled()) throw new Error('Object storage not configured');
   const fileName = runFileName(runId, ext);
-  return s3Service.uploadFile(buffer, fileName, contentType, tenantPrefix(tenantId, 'brochures'));
+  const prefix = tenantPrefix(tenantId, 'brochures');
+  if (ociService.isConfigured()) {
+    return ociService.uploadFile(buffer, fileName, contentType, prefix);
+  }
+  return s3Service.uploadFile(buffer, fileName, contentType, prefix);
 }
 
 async function uploadBrochurePdf(tenantId, runId, pdfBuffer) {
@@ -53,27 +71,71 @@ async function uploadBrochureHtml(tenantId, runId, htmlBuffer) {
 }
 
 async function uploadBrandImage(tenantId, file) {
-  if (!isEnabled()) throw new Error('S3 not configured');
+  if (!isEnabled()) throw new Error('Object storage not configured');
+  const prefix = tenantPrefix(tenantId, 'brand-kits');
+  if (ociService.isConfigured()) {
+    return ociService.uploadImage(
+      file.buffer,
+      file.originalname || 'brand-image',
+      file.mimetype,
+      prefix,
+    );
+  }
   return s3Service.uploadImage(
     file.buffer,
     file.originalname || 'brand-image',
     file.mimetype,
-    tenantPrefix(tenantId, 'brand-kits'),
+    prefix,
+  );
+}
+
+/**
+ * Store an operator-supplied REFERENCE document (itinerary/costing/flight/
+ * hotel/terms file) for the Brochure Engine's Source Control step. These are
+ * never parsed or fed to the composer — they're an audit trail of what the
+ * operator worked from, mirroring Block 1's "use only the approved brief"
+ * discipline. Any file type is accepted (route-level filter still applies).
+ */
+async function uploadReferenceFile(tenantId, file) {
+  if (!isEnabled()) throw new Error('Object storage not configured');
+  const prefix = tenantPrefix(tenantId, 'brochure-reference-files');
+  if (ociService.isConfigured()) {
+    return ociService.uploadFile(
+      file.buffer,
+      file.originalname || 'reference-file',
+      file.mimetype,
+      prefix,
+    );
+  }
+  return s3Service.uploadFile(
+    file.buffer,
+    file.originalname || 'reference-file',
+    file.mimetype,
+    prefix,
   );
 }
 
 async function deleteBrandImage(tenantId, url) {
-  if (!isEnabled()) return { deleted: false, reason: 's3-disabled' };
-  const key = s3Service.extractKeyFromUrl(url);
+  if (!isEnabled()) return { deleted: false, reason: 'object-storage-disabled' };
+  let key;
+  if (ociService.isOciUrl(url)) {
+    key = ociService.extractKeyFromUrl(url);
+  } else {
+    key = s3Service.extractKeyFromUrl(url);
+  }
   if (!key || !isTenantKey(tenantId, key, 'brand-kits')) {
     return { deleted: false, reason: 'not-owned-or-unparseable' };
   }
   try {
-    await s3Service.deleteFile(key);
+    if (ociService.isOciUrl(url)) {
+      await ociService.deleteFile(key);
+    } else {
+      await s3Service.deleteFile(key);
+    }
     return { deleted: true };
   } catch (err) {
     // Ignore not-found errors; everything else is logged but not thrown so preset
-    // CRUD doesn't fail because of a stale/missing S3 object.
+    // CRUD doesn't fail because of a stale/missing object.
     if (err.name === 'NoSuchKey' || err.Code === 'NoSuchKey' || err.code === 'NoSuchKey') {
       return { deleted: true, reason: 'already-gone' };
     }
@@ -84,10 +146,15 @@ async function deleteBrandImage(tenantId, url) {
 
 function extractBrochureKey(tenantId, url) {
   if (!isS3Url(url)) {
-    console.log('[brochureS3Store] extractBrochureKey: not an S3 URL -', url);
+    console.log('[brochureS3Store] extractBrochureKey: not an object-storage URL -', url);
     return null;
   }
-  const key = s3Service.extractKeyFromUrl(url);
+  let key;
+  if (ociService.isOciUrl(url)) {
+    key = ociService.extractKeyFromUrl(url);
+  } else {
+    key = s3Service.extractKeyFromUrl(url);
+  }
   if (!key) {
     console.log('[brochureS3Store] extractBrochureKey: could not extract key from URL -', url);
     return null;
@@ -106,18 +173,17 @@ function extractBrochureKey(tenantId, url) {
 }
 
 /**
- * Stream a brochure artifact back from S3. Validates that the URL belongs to
- * the requesting tenant before streaming so one tenant can't probe another's
- * S3 keys.
+ * Stream a brochure artifact back from object storage. Validates that the URL
+ * belongs to the requesting tenant before streaming so one tenant can't probe
+ * another's object keys.
  * @param {number} tenantId
- * @param {string} url - Full S3 URL stored on the brochure row
+ * @param {string} url - Full object-storage URL stored on the brochure row
  * @returns {Promise<{ stream: import('stream').Readable, contentType?: string, contentLength?: number, contentDisposition?: string }>}
  */
 async function streamBrochure(tenantId, url) {
-  if (!isEnabled()) throw new Error('S3 not configured');
+  if (!isEnabled()) throw new Error('Object storage not configured');
   const key = extractBrochureKey(tenantId, url);
   if (!key) {
-    // Log for debugging: the URL doesn't match the expected tenant brochure pattern
     console.warn(
       '[brochureS3Store] streamBrochure: invalid or mismatched URL for tenant',
       tenantId,
@@ -125,6 +191,9 @@ async function streamBrochure(tenantId, url) {
       url
     );
     throw new Error('Not a valid S3 brochure URL for this tenant');
+  }
+  if (ociService.isOciUrl(url)) {
+    return ociService.getObjectStream(key);
   }
   return s3Service.getObjectStream(key);
 }
@@ -136,6 +205,7 @@ module.exports = {
   uploadBrochureHtml,
   uploadBrochureArtifact,
   uploadBrandImage,
+  uploadReferenceFile,
   deleteBrandImage,
   streamBrochure,
   extractBrochureKey,

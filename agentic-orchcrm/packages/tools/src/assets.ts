@@ -25,9 +25,59 @@ export interface PhotoResult {
 }
 
 /**
+ * Confirm a candidate URL actually serves a real image.
+ *
+ * The keyless sources (Openverse, Wikimedia) regularly hand back URLs that
+ * 404, redirect to an HTML interstitial, or block hotlinking — the image then
+ * silently renders as a blank/grey box. That is not just cosmetic: the print
+ * preflight (`auditPrintLayout`) rejects a whole design if ANY image fails to
+ * load, so a single dead URL made every AI-composed attempt fail and forced
+ * the plain deterministic fallback template. Verifying here means only
+ * loadable photos ever reach the designer.
+ */
+async function imageLoads(url: string): Promise<boolean> {
+  const ok = (res: Response) =>
+    res.ok && (res.headers.get('content-type') || '').toLowerCase().startsWith('image/');
+  try {
+    const head = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(6000),
+      headers: { 'User-Agent': UA, Accept: 'image/*' },
+    });
+    if (ok(head)) return true;
+    // Some CDNs don't implement HEAD (405) — retry with a 1-byte ranged GET
+    // rather than writing the photo off as broken.
+    if (head.status !== 405 && head.status !== 403 && head.status !== 501) return false;
+  } catch {
+    /* fall through to the ranged GET below */
+  }
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(6000),
+      headers: { 'User-Agent': UA, Accept: 'image/*', Range: 'bytes=0-0' },
+    });
+    try { await res.body?.cancel(); } catch { /* best-effort */ }
+    return ok(res) || (res.status === 206 && (res.headers.get('content-type') || '').toLowerCase().startsWith('image/'));
+  } catch {
+    return false;
+  }
+}
+
+/** Drop every candidate that doesn't actually serve an image (checked in parallel). */
+async function keepLoadable(photos: PhotoResult[]): Promise<PhotoResult[]> {
+  if (!photos.length) return photos;
+  const verdicts = await Promise.all(photos.map((p) => imageLoads(p.url)));
+  return photos.filter((_, i) => verdicts[i]);
+}
+
+/**
  * Real photo search with a graceful free-source fallback chain:
  * Pexels (key) -> Unsplash (key) -> Openverse (keyless) -> Wikimedia (keyless).
- * Returns direct image URLs suitable for an <img src>.
+ * Returns direct image URLs suitable for an <img src>, every one of them
+ * verified to actually load (see imageLoads above).
  */
 export async function searchPhotos(query: string, count = 4): Promise<PhotoResult[]> {
   const q = query.trim();
@@ -44,7 +94,8 @@ export async function searchPhotos(query: string, count = 4): Promise<PhotoResul
     const out = ((r?.photos as any[]) ?? [])
       .map((p) => ({ url: p?.src?.large2x || p?.src?.large || p?.src?.original, source: 'pexels', alt: p?.alt }))
       .filter((p) => p.url);
-    if (out.length) return out.slice(0, n);
+    const live = await keepLoadable(out);
+    if (live.length) return live.slice(0, n);
   }
 
   // 2) Unsplash — free key.
@@ -56,7 +107,8 @@ export async function searchPhotos(query: string, count = 4): Promise<PhotoResul
     const out = ((r?.results as any[]) ?? [])
       .map((p) => ({ url: p?.urls?.regular, source: 'unsplash', alt: p?.alt_description }))
       .filter((p) => p.url);
-    if (out.length) return out.slice(0, n);
+    const live = await keepLoadable(out);
+    if (live.length) return live.slice(0, n);
   }
 
   // 3) Openverse — keyless, commercially-licensed CC media.
@@ -66,10 +118,11 @@ export async function searchPhotos(query: string, count = 4): Promise<PhotoResul
   const ovOut = ((ov?.results as any[]) ?? [])
     .map((p) => ({ url: p?.url, source: 'openverse', alt: p?.title }))
     .filter((p) => p.url);
-  if (ovOut.length) return ovOut.slice(0, n);
+  const ovLive = await keepLoadable(ovOut);
+  if (ovLive.length) return ovLive.slice(0, n);
 
   // 4) Wikimedia Commons — keyless, great for named landmarks.
-  return wikimediaSearch(q, n);
+  return keepLoadable(await wikimediaSearch(q, n));
 }
 
 async function wikimediaSearch(query: string, n: number): Promise<PhotoResult[]> {
@@ -186,15 +239,22 @@ export async function geocode(
  */
 export async function routeMapUrl(
   cities: string[],
-  opts?: { width?: number; height?: number; color?: string },
+  opts?: { width?: number; height?: number; color?: string; countryHint?: string },
 ): Promise<string> {
   const geoapify = envKey('GEOAPIFY_API_KEY');
   const maptiler = envKey('MAPTILER_API_KEY');
   if (!geoapify && !maptiler) return '';
 
+  // Bare city names (or a garbled/placeholder entry that slipped through
+  // upstream) can otherwise geocode to a same-named place anywhere in the
+  // world — appending the trip's own destination country to the query
+  // string biases Nominatim toward the right part of the world instead of a
+  // wrong-country false match, and makes an unresolvable placeholder just
+  // fail to geocode (silently skipped below) rather than land somewhere odd.
+  const country = (opts?.countryHint || '').trim();
   const pts: GeoPoint[] = [];
   for (const c of cities.slice(0, 8)) {
-    const g = await geocode(c);
+    const g = await geocode(country ? `${c}, ${country}` : c);
     if (g) pts.push(g);
     await new Promise((resolve) => setTimeout(resolve, 1100)); // honor Nominatim 1 req/s
   }
@@ -205,29 +265,41 @@ export async function routeMapUrl(
   // Geoapify's validator requires LOWERCASE hex for marker/line colours.
   const color = (opts?.color ?? 'e4002b').replace('#', '').toLowerCase();
 
+  const markers = pts
+    .map((p) => `lonlat:${p.lon},${p.lat};type:material;color:%23${color};size:medium`)
+    .join('|');
+
   // Geoapify Static Maps — FREE tier (3000/day) incl. markers + route polyline.
   // Preferred over MapTiler, whose Static Maps require a paid plan.
   if (geoapify) {
-    const lons = pts.map((p) => p.lon);
-    const lats = pts.map((p) => p.lat);
-    const padX = (Math.max(...lons) - Math.min(...lons)) * 0.15 + 0.25;
-    const padY = (Math.max(...lats) - Math.min(...lats)) * 0.15 + 0.25;
-    const area = `rect:${Math.min(...lons) - padX},${Math.min(...lats) - padY},${Math.max(...lons) + padX},${Math.max(...lats) + padY}`;
-    const markers = pts
-      .map((p) => `lonlat:${p.lon},${p.lat};type:material;color:%23${color};size:medium`)
-      .join('|');
+    let areaOrCenter: string;
+    if (pts.length === 1) {
+      // The multi-point bounding-box padding formula below degenerates for a
+      // single point (zero-width box + a fixed 0.25° pad = the ENTIRE visible
+      // area), which rendered a whole state/region around one pin instead of
+      // a usable city-level view for any single-destination trip. A lone
+      // point has no bounds to fit — use an explicit close-in city zoom instead.
+      areaOrCenter = `center=lonlat:${pts[0]!.lon},${pts[0]!.lat}&zoom=11.5`;
+    } else {
+      const lons = pts.map((p) => p.lon);
+      const lats = pts.map((p) => p.lat);
+      const padX = (Math.max(...lons) - Math.min(...lons)) * 0.15 + 0.25;
+      const padY = (Math.max(...lats) - Math.min(...lats)) * 0.15 + 0.25;
+      areaOrCenter = `area=rect:${Math.min(...lons) - padX},${Math.min(...lats) - padY},${Math.max(...lons) + padX},${Math.max(...lats) + padY}`;
+    }
     const geometry =
       pts.length >= 2
         ? `&geometry=polyline:${pts.map((p) => `${p.lon},${p.lat}`).join(',')};linecolor:%23${color};linewidth:4`
         : '';
-    return `https://maps.geoapify.com/v1/staticmap?style=osm-bright-smooth&width=${width}&height=${height}&area=${area}&marker=${markers}${geometry}&apiKey=${geoapify}`;
+    return `https://maps.geoapify.com/v1/staticmap?style=osm-bright-smooth&width=${width}&height=${height}&${areaOrCenter}&marker=${markers}${geometry}&apiKey=${geoapify}`;
   }
 
   // MapTiler fallback (requires a plan that includes Static Maps).
-  const markers = pts.map((p) => `${p.lon},${p.lat}`).join('|');
+  const markerParam = pts.map((p) => `${p.lon},${p.lat}`).join('|');
   const path =
     pts.length >= 2
       ? `&path=stroke:0x${color}|width:4|${pts.map((p) => `${p.lon},${p.lat}`).join('|')}`
       : '';
-  return `https://api.maptiler.com/maps/basic-v2/static/auto/${width}x${height}.png?key=${maptiler}&markers=${markers}${path}`;
+  const centerParam = pts.length === 1 ? `${pts[0]!.lon},${pts[0]!.lat},11.5` : 'auto';
+  return `https://api.maptiler.com/maps/basic-v2/static/${centerParam}/${width}x${height}.png?key=${maptiler}&markers=${markerParam}${path}`;
 }

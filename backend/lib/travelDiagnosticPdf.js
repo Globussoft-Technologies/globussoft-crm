@@ -57,7 +57,11 @@ async function generateDiagnosticPdfBestEffort(diag, bank, opts = {}) {
       }
     }
 
-    const pdfBuf = await pdfRenderer.renderTravelDiagnosticPdf(diag, contact, bank, { logoBuffer, ragResult });
+    const pdfBuf = await pdfRenderer.renderTravelDiagnosticPdf(diag, contact, bank, {
+      logoBuffer,
+      ragResult,
+      cancellationPolicy: opts?.cancellationPolicy || null,
+    });
     const rand = crypto.randomBytes(16).toString("hex");
     const filename = `diag-${diag.id}-${rand}.pdf`;
     const filepath = path.join(DIAG_PDF_DIR, filename);

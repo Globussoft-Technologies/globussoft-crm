@@ -1,28 +1,11 @@
 /**
  * BrochureEngine.test.jsx — vitest + RTL coverage for the Travel-vertical
- * Brochure Engine page (frontend/src/pages/travel/BrochureEngine.jsx).
+ * TMC School Brochure Engine page (frontend/src/pages/travel/BrochureEngine.jsx).
  *
- * Lands at /travel/brochures. Wraps the vendored agentic-orchcrm engine. This
- * suite pins the CRM-side UI contract added by the BROCHURE_HANDOFF work:
- *   1. Page chrome: heading + Generate/History tabs + Brief textarea.
- *   2. Mount fetches: GET /sectors + GET /models + GET /brochures (history).
- *   3. Sector select is populated from /sectors.
- *   4. Model picker: strategy select renders; the pre-run cost estimate is
- *      computed from the catalog (deterministic fixture → "$0.015").
- *   5. Brand kit: opening the panel + adding a contact line persists it; the
- *      "Place logo" button is absent until a logo is set.
- *   6. Generate button: disabled with an empty brief, enabled once typed; a
- *      click POSTs /runs with the goal + the selected strategy in the body.
- *
- * Mocking discipline (per CLAUDE.md RTL standing rules):
- *   - fetchApi mocked at ../utils/api (the page's dep, not global fetch);
- *     getAuthToken stubbed so the SSE URL builds.
- *   - notifyObj is a STABLE module-level reference (Wave 11/12 rule).
- *   - EventSource stubbed globally so the run's openStream() doesn't throw.
- *   - Data-dependent assertions use findBy / waitFor.
+ * The page is now a 5-step wizard with itinerary import.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -31,7 +14,6 @@ vi.mock('../utils/api', () => ({
   getAuthToken: () => 'test-token',
 }));
 
-// Stable notify object — RTL standing rule (no fresh object per render).
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
@@ -40,10 +22,8 @@ const notifyObj = { error: notifyError, info: notifyInfo, success: notifySuccess
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 
 import BrochureEngine from '../pages/travel/BrochureEngine';
+import { summarizeImportedHotels, summarizeImportedTransfers } from '../utils/brochureEditorial';
 
-// Two available models. Under the 'recommended' strategy the engine routes
-// every tier to the cheapest/balanced model 'a' (see resolveStrategyAssignment),
-// so the deterministic cost works out to $0.015 across TIER_TOKENS.
 const MODELS_FIXTURE = {
   tiers: ['reasoning', 'balanced', 'fast', 'writing'],
   strategies: ['recommended', 'cheapest', 'smartest', 'custom'],
@@ -54,47 +34,19 @@ const MODELS_FIXTURE = {
   ],
 };
 
-const EXISTING_BRAND_KITS_FIXTURE = {
-  brandKits: [
-    {
-      id: 42,
-      tenantId: 1,
-      subBrand: 'tmc',
-      version: 3,
-      isActive: true,
-      updatedAt: '2026-08-01T00:00:00Z',
-    },
-  ],
-};
-
-const BRAND_KIT_DETAIL_FIXTURE = {
-  brandKit: {
-    id: 42,
-    logoUrl: '/uploads/brand-kits/1/_default/logo.png',
-    primaryColor: '#265855',
-    secondaryColor: '#CD9481',
-    accentColor: '#0e6b4f',
-    bgColor: '#FAF6EE',
-    textColor: '#1A1A1A',
-    tagline: 'Crafted journeys',
-    supportPhone: '+91 98765 43210',
-    supportEmail: 'hello@agency.com',
-    socialLinksJson: '[{"network":"instagram","url":"https://ig"}]',
-  },
-};
-
 function wireFetch() {
   fetchApiMock.mockImplementation((url, opts) => {
     if (url === '/api/travel/brochures/sectors') {
-      return Promise.resolve({ sectors: [{ key: 'travel', name: 'Travel Brochure', description: 'agency-grade', styles: ['tmc-press', 'editorial-sakura'] }] });
+      return Promise.resolve({ sectors: [{ key: 'travel', name: 'Travel Brochure', styles: ['tmc-school'] }] });
     }
     if (url === '/api/travel/brochures/models') return Promise.resolve(MODELS_FIXTURE);
-    if (url === '/api/brand-kits?fields=summary') return Promise.resolve(EXISTING_BRAND_KITS_FIXTURE);
-    if (url === '/api/brand-kits/42') return Promise.resolve(BRAND_KIT_DETAIL_FIXTURE);
     if (url === '/api/travel/brochures/runs' && opts?.method === 'POST') {
       return Promise.resolve({ runId: 'br_test123', brochureId: 7, status: 'running' });
     }
     if (url === '/api/travel/brochures') return Promise.resolve({ brochures: [] });
+    if (url === '/api/travel/brochures/brand-profiles') return Promise.resolve({ profiles: [] });
+    if (url === '/api/brand-kits?fields=summary&isActive=true') return Promise.resolve({ brandKits: [] });
+    if (url === '/api/travel/itineraries?fields=summary') return Promise.resolve({ itineraries: [] });
     return Promise.resolve({});
   });
 }
@@ -107,166 +59,302 @@ function renderPage() {
   );
 }
 
+async function fillStep1() {
+  // Brand & School step
+  fireEvent.change(screen.getByTestId('input-schoolName'), { target: { value: 'Delhi Public School' } });
+  fireEvent.change(screen.getByTestId('tmc-brand-kit-id'), { target: { value: 'tmc-default' } });
+}
+
+async function fillStep2() {
+  // Trip Details step
+  fireEvent.click(screen.getByTestId('step-2'));
+  await waitFor(() => expect(screen.getByTestId('input-tripTitle')).toBeInTheDocument());
+  fireEvent.change(screen.getByTestId('input-tripTitle'), { target: { value: 'Japan STEM Tour 2026' } });
+  fireEvent.change(screen.getByTestId('input-destinationCountry'), { target: { value: 'Japan' } });
+  fireEvent.change(screen.getByTestId('input-travelDates-from'), { target: { value: '2026-04-01' } });
+  fireEvent.change(screen.getByTestId('input-travelDates-to'), { target: { value: '2026-04-07' } });
+  fireEvent.change(screen.getByTestId('input-durationDays'), { target: { value: '7' } });
+  fireEvent.change(screen.getByTestId('input-durationNights'), { target: { value: '6' } });
+  fireEvent.change(screen.getByTestId('input-targetGrades'), { target: { value: 'Grades 9–12' } });
+  fireEvent.change(screen.getByTestId('input-tripSummary'), { target: { value: 'A seven-day STEM and cultural immersion in Japan.' } });
+  fireEvent.change(screen.getByTestId('input-primaryObjective'), { target: { value: 'Explore robotics, sustainability and cultural heritage.' } });
+  fireEvent.change(screen.getByTestId('input-learningOutcomes-0'), { target: { value: 'Understand robotics fundamentals' } });
+  fireEvent.change(screen.getByTestId('input-learningOutcomes-1'), { target: { value: 'Experience sustainable city design' } });
+  fireEvent.change(screen.getByTestId('input-learningOutcomes-2'), { target: { value: 'Appreciate Japanese culture' } });
+  // Route cities — type each city and press Enter
+  const routeInput = screen.getByTestId('input-routeCities');
+  fireEvent.change(routeInput, { target: { value: 'Tokyo' } });
+  fireEvent.keyDown(routeInput, { key: 'Enter', code: 'Enter' });
+  fireEvent.change(routeInput, { target: { value: 'Kyoto' } });
+  fireEvent.keyDown(routeInput, { key: 'Enter', code: 'Enter' });
+  fireEvent.change(routeInput, { target: { value: 'Osaka' } });
+  fireEvent.keyDown(routeInput, { key: 'Enter', code: 'Enter' });
+  // Overnight cities — type and add
+  const overnightInput = screen.getByPlaceholderText('Search and add a city');
+  fireEvent.change(overnightInput, { target: { value: 'Tokyo' } });
+  fireEvent.keyDown(overnightInput, { key: 'Enter', code: 'Enter' });
+}
+
+async function fillStep3() {
+  // Day by Day step
+  fireEvent.click(screen.getByTestId('step-3'));
+  await waitFor(() => expect(screen.getByTestId('input-days[0]-route')).toBeInTheDocument());
+  for (let i = 0; i < 7; i += 1) {
+    fireEvent.change(screen.getByTestId(`input-days[${i}]-route`), { target: { value: 'Route line' } });
+    fireEvent.change(screen.getByTestId(`input-days[${i}]-activities`), { target: { value: 'Activities' } });
+    fireEvent.change(screen.getByTestId(`input-days[${i}]-overnightCity`), { target: { value: 'Tokyo' } });
+  }
+}
+
+async function fillStep4() {
+  // Logistics & Pricing step
+  fireEvent.click(screen.getByTestId('step-4'));
+  await waitFor(() => expect(screen.getByTestId('input-currency')).toBeInTheDocument());
+  fireEvent.change(screen.getByTestId('input-currency'), { target: { value: 'INR' } });
+  fireEvent.change(screen.getByTestId('input-pricePerPerson'), { target: { value: '250000' } });
+  fireEvent.change(screen.getByTestId('input-occupancyBasis'), { target: { value: 'Twin sharing' } });
+  fireEvent.change(screen.getByTestId('input-deposit-amount'), { target: { value: '50000' } });
+  fireEvent.change(screen.getByTestId('input-deposit-dueDate'), { target: { value: '2026-01-31' } });
+  fireEvent.change(screen.getByTestId('input-travelSeason'), { target: { value: 'Summer 2026' } });
+  fireEvent.change(screen.getByTestId('input-inclusions-0'), { target: { value: 'Flights' } });
+  fireEvent.change(screen.getByTestId('input-exclusions-0'), { target: { value: 'Visa' } });
+}
+
+async function fillStep5() {
+  // Contact & Generate step
+  fireEvent.click(screen.getByTestId('step-5'));
+  await waitFor(() => expect(screen.getByTestId('input-primaryPhone')).toBeInTheDocument());
+  fireEvent.change(screen.getByTestId('input-primaryPhone'), { target: { value: '+91 98765 43210' } });
+  fireEvent.change(screen.getByTestId('input-email'), { target: { value: 'hello@school.edu' } });
+  fireEvent.change(screen.getByTestId('input-website'), { target: { value: 'https://school.edu' } });
+  fireEvent.change(screen.getByTestId('input-callToAction'), { target: { value: 'Book by 31 Jan 2026' } });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   wireFetch();
-  // Minimal EventSource stub — the run's openStream constructs one.
+  localStorage.clear();
   global.EventSource = class {
     constructor(url) { this.url = url; this.onmessage = null; this.onerror = null; }
     close() {}
   };
 });
 
-describe('BrochureEngine page', () => {
-  it('renders the header, tabs, and brief field', async () => {
+describe('brochure itinerary editorial normalization', () => {
+  it('collapses repetitive airport and hotel-transfer rows into readable logistics', () => {
+    expect(summarizeImportedTransfers([
+      { description: 'Airport transfer to hotel in Goa' },
+      { description: 'Airport transfer to hotel' },
+      { description: 'Return transfer to airport' },
+      { description: 'Transfer back to the airport for departure' },
+      { description: 'Transfer to hotel in South Goa' },
+      { description: 'Transfer to hotel in North Goa' },
+    ])).toEqual({
+      airportTransfers: 'Airport-hotel transfers on arrival and departure',
+      intercityTransport: 'Hotel transfers between South Goa and North Goa',
+      railJourneys: '',
+    });
+  });
+
+  it('removes checkout movements and groups equivalent accommodation stays', () => {
+    expect(summarizeImportedHotels([
+      { name: 'Stay at a beach resort in South Goa', city: 'Goa, India', nights: 1 },
+      { name: 'Check-in at beach resort in South Goa', city: 'Goa, India', nights: 2 },
+      { name: 'Check-out and transfer to North Goa', city: 'Goa, India', nights: 1 },
+      { name: 'Taj Fort Aguada Resort', city: 'North Goa', category: '5-star', nights: 2, _structuredName: true },
+    ])).toEqual([
+      { name: 'Beach resort', city: 'South Goa', category: '', nights: 3 },
+      { name: 'Taj Fort Aguada Resort', city: 'North Goa', category: '5-star', nights: 2 },
+    ]);
+  });
+});
+
+describe('BrochureEngine page (wizard)', () => {
+  it('renders the header, tabs, and 5-step progress bar', async () => {
     renderPage();
     expect(screen.getByRole('heading', { name: /Brochure Engine/i })).toBeInTheDocument();
     expect(screen.getByTestId('tab-generate')).toBeInTheDocument();
     expect(screen.getByTestId('tab-history')).toBeInTheDocument();
-    expect(screen.getByTestId('brochure-goal')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('step-1')).toBeInTheDocument());
+    expect(screen.getByTestId('step-2')).toBeInTheDocument();
+    expect(screen.getByTestId('step-3')).toBeInTheDocument();
+    expect(screen.getByTestId('step-4')).toBeInTheDocument();
+    expect(screen.getByTestId('step-5')).toBeInTheDocument();
   });
 
-  it('fetches sectors, models and history on mount', async () => {
+  it('fetches models, itineraries and history on mount', async () => {
     renderPage();
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map((c) => c[0]);
-      expect(urls).toContain('/api/travel/brochures/sectors');
       expect(urls).toContain('/api/travel/brochures/models');
       expect(urls).toContain('/api/travel/brochures');
+      expect(urls).toContain('/api/travel/itineraries?fields=summary');
     });
   });
 
-  it('shows Travel as a fixed (non-dropdown) sector with its description', async () => {
+  it('model picker defaults to the default reasoning model', async () => {
     renderPage();
-    expect(await screen.findByText('agency-grade')).toBeInTheDocument(); // sector description
-    expect(screen.getByTestId('sector-static')).toHaveTextContent('Travel');
-    // Sector is no longer a dropdown — no Travel Brochure <option>.
-    expect(screen.queryByRole('option', { name: 'Travel Brochure' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('step-5'));
+    expect(await screen.findByTestId('reasoning-model-select')).toHaveValue('a');
   });
 
-  it('Template/Style offers exactly two options with Editorial Sakura as the default', async () => {
+  it('Generate is disabled when AI provider is errored', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/travel/brochures/models') return Promise.resolve({ code: 'AI_NOT_CONFIGURED', error: 'AI not configured' });
+      if (url === '/api/travel/brochures/sectors') return Promise.resolve({ sectors: [{ key: 'travel', name: 'Travel Brochure', styles: ['tmc-school'] }] });
+      if (url === '/api/travel/brochures') return Promise.resolve({ brochures: [] });
+      if (url === '/api/travel/brochures/brand-profiles') return Promise.resolve({ profiles: [] });
+      if (url === '/api/brand-kits?fields=summary&isActive=true') return Promise.resolve({ brandKits: [] });
+      if (url === '/api/travel/itineraries?fields=summary') return Promise.resolve({ itineraries: [] });
+      return Promise.resolve({});
+    });
     renderPage();
-    const select = await screen.findByTestId('style-select');
-    expect(select.value).toBe('editorial-sakura');
-    const optionTexts = within(select).getAllByRole('option').map((o) => o.textContent);
-    expect(optionTexts).toEqual(['Editorial Sakura (Default)', 'TMC Press']);
+    fireEvent.click(screen.getByTestId('step-5'));
+    expect(await screen.findByTestId('ai-provider-error')).toBeInTheDocument();
+    expect(screen.getByTestId('generate-brochure')).toBeDisabled();
   });
 
-  it('shows a deterministic pre-run cost estimate from the catalog', async () => {
+  it('shows validation summary and blocks Generate until required fields are valid', async () => {
     renderPage();
-    // Header chip on the collapsed Models panel shows the estimate.
-    expect(await screen.findByTestId('cost-estimate')).toHaveTextContent('$0.015');
-  });
-
-  it('renders the strategy picker when the Models panel is opened', async () => {
-    renderPage();
-    await screen.findByTestId('cost-estimate');
-    fireEvent.click(screen.getByText(/^Models/));
-    expect(await screen.findByRole('option', { name: /Recommended/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Cheapest/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Smartest/i })).toBeInTheDocument();
-  });
-
-  it('brand kit: opening the panel and adding a contact line persists it; no placer without a logo', async () => {
-    renderPage();
-    fireEvent.click(screen.getByText(/Brand Kit/i));
-    // No logo set → no "Place logo" button.
-    expect(screen.queryByTestId('open-placer')).not.toBeInTheDocument();
-    // Add a contact line.
-    fireEvent.click(screen.getByText('+ Add contact'));
-    const input = screen.getByPlaceholderText('+91 98765 43210');
-    fireEvent.change(input, { target: { value: '+91 99999 00000' } });
-    expect(input.value).toBe('+91 99999 00000');
-  });
-
-  it('Generate is disabled with an empty brief and enabled once typed', async () => {
-    renderPage();
+    fireEvent.click(screen.getByTestId('step-5'));
     const btn = screen.getByTestId('generate-brochure');
-    expect(btn).toBeDisabled();
-    fireEvent.change(screen.getByTestId('brochure-goal'), { target: { value: '5-day Goa trip for a couple.' } });
-    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+    expect(await screen.findByTestId('validation-summary')).toBeInTheDocument();
+    expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/required field/));
   });
 
-  it('Generate posts /runs with the goal and the selected strategy', async () => {
+  it('Generate posts /runs with tripInput, brand and models.reasoning', async () => {
     renderPage();
-    await screen.findByTestId('cost-estimate');
-    fireEvent.change(screen.getByTestId('brochure-goal'), { target: { value: '5-day Goa trip for a couple.' } });
+    await fillStep1();
+    await fillStep2();
+    await fillStep3();
+    await fillStep4();
+    await fillStep5();
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/brochures/brand-images/upload' && opts?.method === 'POST') {
+        return Promise.resolve({ urls: ['data:image/png;base64,AAA'] });
+      }
+      if (url === '/api/travel/brochures/sectors') {
+        return Promise.resolve({ sectors: [{ key: 'travel', name: 'Travel Brochure', styles: ['tmc-school'] }] });
+      }
+      if (url === '/api/travel/brochures/models') return Promise.resolve(MODELS_FIXTURE);
+      if (url === '/api/travel/brochures') return Promise.resolve({ brochures: [] });
+      if (url === '/api/travel/brochures/brand-profiles') return Promise.resolve({ profiles: [] });
+      if (url === '/api/brand-kits?fields=summary&isActive=true') return Promise.resolve({ brandKits: [] });
+      if (url === '/api/travel/itineraries?fields=summary') return Promise.resolve({ itineraries: [] });
+      if (url === '/api/travel/brochures/runs' && opts?.method === 'POST') {
+        return Promise.resolve({ runId: 'br_test123', brochureId: 7, status: 'running' });
+      }
+      return Promise.resolve({});
+    });
+
+    // Go back to step 1 to upload school logo
+    fireEvent.click(screen.getByTestId('step-1'));
+    await waitFor(() => expect(screen.getByTestId('school-logo-input')).toBeInTheDocument());
+    const file = new File(['(⌐□_□)'], 'logo.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('school-logo-input'), { target: { files: [file] } });
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/brochures/brand-images/upload', expect.objectContaining({ method: 'POST' }));
+    });
+    fireEvent.click(screen.getByTestId('school-logo-approved'));
+
+    // Go to final step and generate
+    fireEvent.click(screen.getByTestId('step-5'));
+    await waitFor(() => expect(screen.getByTestId('generate-brochure')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('generate-brochure'));
+
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find((c) => c[0] === '/api/travel/brochures/runs' && c[1]?.method === 'POST');
       expect(post).toBeTruthy();
       const body = JSON.parse(post[1].body);
-      expect(body.goal).toBe('5-day Goa trip for a couple.');
       expect(body.sectorKey).toBe('travel');
-      expect(body.styleKey).toBe('editorial-sakura'); // always explicit, defaults to editorial-sakura
-      expect(body.strategy).toBe('recommended');
+      expect(body.styleKey).toBe('tmc-school');
+      expect(body.tripInput).toBeTruthy();
+      expect(body.tripInput.tripTitle).toBe('Japan STEM Tour 2026');
+      expect(body.brand.schoolName).toBe('Delhi Public School');
+      expect(body.brand.tmcBrandKitId).toBe('tmc-default');
+      expect(body.models).toEqual({ reasoning: 'a' });
     });
+  }, 15000);
+
+  it('allows adding and removing itinerary days', async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('step-3'));
+    await waitFor(() => expect(screen.getAllByText(/Day \d+/).length).toBe(7));
+    fireEvent.click(screen.getByRole('button', { name: /Add day/i }));
+    await waitFor(() => expect(screen.getAllByText(/Day \d+/).length).toBe(8));
+    const removeBtns = screen.getAllByRole('button', { name: /Remove day/i });
+    fireEvent.click(removeBtns[removeBtns.length - 1]);
+    await waitFor(() => expect(screen.getAllByText(/Day \d+/).length).toBe(7));
   });
 
-  it('loads existing brand kits on mount and shows the selector', async () => {
+  it('imports itinerary data when Fill form is clicked', async () => {
+    const itineraryFixture = {
+      id: 42,
+      destination: 'Japan',
+      startDate: '2026-04-01T00:00:00.000Z',
+      endDate: '2026-04-07T00:00:00.000Z',
+      pax: 40,
+      totalAmount: '1000000.00',
+      currency: 'INR',
+      contact: { name: 'Greenfield Academy', email: 'info@greenfield.edu', phone: '+91 99999 88888' },
+      items: [
+        { id: 1, itemType: 'flight', dayNumber: 1, description: 'AI 301', startTime: '10:00', endTime: '14:00', locationName: 'Tokyo', position: 1 },
+        { id: 2, itemType: 'hotel', dayNumber: 1, description: 'Tokyo Hilton', locationName: 'Tokyo', position: 2 },
+        { id: 3, itemType: 'activity', dayNumber: 2, description: 'Robot museum visit', locationName: 'Tokyo', position: 3 },
+      ],
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/itineraries?fields=summary') return Promise.resolve({ itineraries: [itineraryFixture] });
+      if (url === '/api/travel/itineraries/42') return Promise.resolve({ itinerary: itineraryFixture });
+      if (url === '/api/travel/brochures/sectors') return Promise.resolve({ sectors: [{ key: 'travel', name: 'Travel Brochure', styles: ['tmc-school'] }] });
+      if (url === '/api/travel/brochures/models') return Promise.resolve(MODELS_FIXTURE);
+      if (url === '/api/travel/brochures') return Promise.resolve({ brochures: [] });
+      if (url === '/api/travel/brochures/brand-profiles') return Promise.resolve({ profiles: [] });
+      if (url === '/api/brand-kits?fields=summary&isActive=true') return Promise.resolve({ brandKits: [] });
+      return Promise.resolve({});
+    });
+
     renderPage();
-    fireEvent.click(screen.getByText(/Brand Kit/i));
-    const selector = await screen.findByTestId('existing-brand-kit');
-    expect(selector).toBeInTheDocument();
-    expect(within(selector).getByText('Custom brand kit')).toBeInTheDocument();
-    expect(within(selector).getByText('tmc — v3')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('itinerary-select')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('itinerary-select'), { target: { value: '42' } });
+    fireEvent.click(screen.getByTestId('import-itinerary'));
+    await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/filled from itinerary/i)));
+
+    // Verify imported data is on step 2
+    fireEvent.click(screen.getByTestId('step-2'));
+    await waitFor(() => expect(screen.getByTestId('input-tripTitle')).toHaveValue('Japan School Trip'));
+    expect(screen.getByTestId('input-destinationCountry')).toHaveValue('Japan');
+    expect(screen.getByTestId('input-expectedStudents')).toHaveValue(40);
+
+    // Currency and price are on step 4
+    fireEvent.click(screen.getByTestId('step-4'));
+    await waitFor(() => expect(screen.getByTestId('input-currency')).toBeInTheDocument());
+    expect(screen.getByTestId('input-currency')).toHaveValue('INR');
+    expect(screen.getByTestId('input-pricePerPerson')).toHaveValue(25000);
   });
 
-  it('selecting an existing brand kit loads its values and sends existingBrandKitId on generate', async () => {
+  it('does not lose an edit made just before navigating away, within the autosave debounce window', async () => {
+    // Reproduces the reported bug: pick a brochure accent colour, then leave
+    // the page (here: unmount, standing in for a route change) well inside
+    // the 600ms autosave debounce — before this fix, the pending edit was
+    // never flushed to the draft and silently vanished on return.
+    const { unmount } = renderPage();
+    await waitFor(() => expect(screen.getByTestId('input-schoolName')).toBeInTheDocument());
+
+    const hexInput = screen.getByTestId('input-brochureAccent');
+    fireEvent.change(hexInput, { target: { value: '#2a00fa' } });
+    await waitFor(() => expect(screen.getByTestId('input-brochureAccent')).toHaveValue('#2a00fa'));
+
+    unmount(); // navigate away — no fake timers advanced, no 600ms has passed
+
+    const saved = JSON.parse(localStorage.getItem('tmc-brochure-engine-draft-v1'));
+    expect(saved?.brand?.accent).toBe('#2a00fa');
+
+    // Coming back (a fresh mount) restores exactly what was picked.
     renderPage();
-    await screen.findByTestId('cost-estimate');
-    fireEvent.click(screen.getByText(/Brand Kit/i));
-    const selector = await screen.findByTestId('existing-brand-kit');
-    fireEvent.change(selector, { target: { value: '42' } });
-
-    // Wait for the detail fetch + UI update.
-    await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/brand-kits/42');
-    });
-
-    fireEvent.change(screen.getByTestId('brochure-goal'), { target: { value: '5-day Goa trip.' } });
-    fireEvent.click(screen.getByTestId('generate-brochure'));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find((c) => c[0] === '/api/travel/brochures/runs' && c[1]?.method === 'POST');
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect(body.existingBrandKitId).toBe(42);
-      expect(body.brand.logoUrl).toBe('/uploads/brand-kits/1/_default/logo.png');
-      expect(body.brand.colors.accent).toBe('#0e6b4f');
-      expect(body.brand.contact).toContain('+91 98765 43210');
-      expect(body.brand.socials).toContain('instagram');
-    });
-  });
-
-  it('shows the full brand-kit colour palette and lets the user pick a different accent', async () => {
-    renderPage();
-    await screen.findByTestId('cost-estimate');
-    fireEvent.click(screen.getByText(/Brand Kit/i));
-    const selector = await screen.findByTestId('existing-brand-kit');
-    fireEvent.change(selector, { target: { value: '42' } });
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Use Primary colour')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByLabelText('Use Primary colour'));
-    fireEvent.change(screen.getByTestId('brochure-goal'), { target: { value: '5-day Goa trip.' } });
-    fireEvent.click(screen.getByTestId('generate-brochure'));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find((c) => c[0] === '/api/travel/brochures/runs' && c[1]?.method === 'POST');
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect(body.brand.colors.accent).toBe('#265855');
-    });
-  });
-
-  it('pastes the empty structured template when the Template chip is clicked', async () => {
-    renderPage();
-    await screen.findByTestId('cost-estimate');
-    fireEvent.click(screen.getByRole('button', { name: /^Template$/ }));
-    const goal = screen.getByTestId('brochure-goal');
-    expect(goal.value).toContain('AGENCY:');
-    expect(goal.value).toContain('[TYPE]');
-    expect(goal.value).toContain('DAY BY DAY:');
+    await waitFor(() => expect(screen.getByTestId('input-schoolName')).toBeInTheDocument());
+    expect(screen.getByTestId('input-brochureAccent')).toHaveValue('#2a00fa');
   });
 });

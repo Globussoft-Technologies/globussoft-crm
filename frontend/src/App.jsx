@@ -333,7 +333,7 @@ const TravelKnowledgeBaseAdmin = lazy(
 // T16 — dedicated TMC catalogue admin (extracts the Promote-to-active sub-panel
 // from DiagnosticBuilder's EngineWeights tab into a first-class page).
 const TravelTmcCatalogueAdmin = lazy(
-  () => import("./pages/travel/TmcCatalogueAdmin"),
+  () => import("./pages/travel/TmcCatalogueLibrary"),
 );
 const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
 const TravelTrips = lazy(() => import("./pages/travel/Trips"));
@@ -367,9 +367,13 @@ const TravelItineraryTemplates = lazy(
 // surface  backend RBAC enforces; frontend RoleGuard mirrors so non-ADMIN
 // roles hit a friendly access-denied surface rather than a 403 from the
 // queue fetch. Backend route mounted S98 (commit 37d9ce40).
-const TravelPoiPendingApprovalQueue = lazy(
-  () => import("./pages/travel/PoiPendingApprovalQueue"),
-);
+//
+// HIDDEN 2026-08-28 — POI approval queue is temporarily removed from the UI
+// but the page component and backend route are preserved so it can be
+// re-enabled without rebuilding anything.
+// const TravelPoiPendingApprovalQueue = lazy(
+//   () => import("./pages/travel/PoiPendingApprovalQueue"),
+// );
 // S49 (TRAVEL_BIG_SCOPE_BACKLOG)  App.jsx route registration for the S31
 // QuoteTemplates admin page (frontend/src/pages/travel/QuoteTemplates.jsx,
 // commit 8fb23237). Sibling to ItineraryTemplates above. Without this lazy
@@ -489,12 +493,19 @@ const TravelReligiousPackets = lazy(
 const TravelTmcMicrositePreview = lazy(
   () => import("./pages/travel/TmcMicrositePreview"),
 );
-const TravelItineraryDetail = lazy(
-  () => import("./pages/travel/ItineraryDetail"),
+// Unified itinerary workspace — replaces the old ItineraryDetail (money /
+// status) + ItineraryEditor (days / map) two-page split, which forced an
+// operator to switch routes to give one item both a day and a price.
+const TravelItineraryWorkspace = lazy(
+  () => import("./pages/travel/ItineraryWorkspace"),
 );
-const TravelItineraryEditor = lazy(
-  () => import("./pages/travel/ItineraryEditor"),
-);
+
+// /travel/itineraries/:id/edit used to be the standalone day planner. That
+// surface is now the workspace's Plan tab, so the old path just forwards.
+function ItineraryEditRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/travel/itineraries/${id}`} replace />;
+}
 const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
 // Arc 2 #904 slice  InboundLeads admin page (STUB consumer). Operator-facing
 // list of inbound leads ingested via POST /api/travel/inbound/leads/:channel
@@ -3124,7 +3135,12 @@ export default function App() {
                   on /api/travel/pois/pending + approve + reject, frontend
                   RoleGuard mirrors to surface an access-denied panel for
                   non-ADMIN roles rather than the route's 403. SUT page
-                  shipped S12; backend mount S98 (commit 37d9ce40). */}
+                  shipped S12; backend mount S98 (commit 37d9ce40).
+
+                  HIDDEN 2026-08-28 — temporarily removed from the running UI
+                  while the page component + backend route stay intact for
+                  future re-enable. */}
+                      {/*
                       <Route
                         path="travel/pois/pending"
                         element={
@@ -3142,6 +3158,7 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
+                      */}
                       {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG)  QuoteTemplates admin
                   route registration. SUT page commit 8fb23237 (S31). Sits
                   adjacent to ItineraryTemplates because both are reusable-
@@ -3464,17 +3481,17 @@ export default function App() {
                         path="travel/itineraries/:id"
                         element={
                           <TravelOnly>
-                            <TravelItineraryDetail />
+                            <TravelItineraryWorkspace />
                           </TravelOnly>
                         }
                       />
+                      {/* The day planner is no longer a separate page — it is
+                          the workspace's Plan tab. Kept as a redirect so
+                          bookmarks and the older "Day planner" links still
+                          land somewhere sensible. */}
                       <Route
                         path="travel/itineraries/:id/edit"
-                        element={
-                          <TravelOnly>
-                            <TravelItineraryEditor />
-                          </TravelOnly>
-                        }
+                        element={<ItineraryEditRedirect />}
                       />
                       <Route
                         path="travel/leads/:contactId"

@@ -51,6 +51,11 @@ export const BROCHURE_TEMPLATE_STYLES: BrochureTemplateStyle[] = [
     name: 'Editorial Sakura',
     blurb: 'Premium magazine editorial — a cinematic masthead cover, numbered sections, a feature spread and a saturated pull-quote on warm cream paper. Refined, clean, the accent made to pop. Adapts to any destination.',
   },
+  {
+    key: 'tmc-school',
+    name: 'TMC School',
+    blurb: 'Co-branded 8-page A4 school trip brochure for The Modern Classroom. Self-hosted Staatliches + DM Sans, TMC Classroom Cyan brand cue, destination accent, cover + overview + 3-page itinerary + route map + practical info + investment/action.',
+  },
 ];
 
 export const BROCHURE_TEMPLATE_KEYS: string[] = BROCHURE_TEMPLATE_STYLES.map((t) => t.key);

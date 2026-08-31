@@ -135,6 +135,7 @@ prisma.tenant.findUnique = vi.fn().mockResolvedValue({
 prisma.tenant.findFirst = vi.fn();
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+prisma.user.findMany = vi.fn();
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 prisma.auditLog = {
@@ -147,6 +148,23 @@ prisma.ticket = {
   ...(prisma.ticket || {}),
   create: vi.fn(),
 };
+// Recommendation top-K + chosen-interests settings (2026-08-27) — both
+// zero-migration TenantSetting-backed (see diagnosticRecommendationSettings.js
+// / diagnosticChosenInterests.js).
+prisma.tenantSetting = {
+  ...(prisma.tenantSetting || {}),
+  findUnique: vi.fn(),
+  upsert: vi.fn(),
+};
+// Notification-settings routes (2026-08-28) — WhatsApp connection status
+// feeds the GET response's channelAvailability, and sendTestNotification is
+// self-mocked directly here so this file tests the ROUTE's plumbing (auth,
+// validation, response shape), not diagnosticNotifications.js's own send
+// logic (that's covered in test/lib/diagnosticNotifications.test.js).
+const whatsappWebClient = requireCJS('../../services/whatsappWebClient');
+whatsappWebClient.isConnected = vi.fn().mockReturnValue(false);
+const diagnosticNotifications = requireCJS('../../lib/diagnosticNotifications');
+diagnosticNotifications.sendTestNotification = vi.fn();
 
 const router = requireCJS('../../routes/travel_diagnostics');
 
@@ -240,6 +258,11 @@ beforeEach(() => {
   });
   pdfRenderer.renderTravelDiagnosticPdf.mockReset().mockResolvedValue(Buffer.from('stub-pdf'));
   dedup.findDuplicateContactFull.mockReset().mockResolvedValue(null);
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tenantSetting.upsert.mockReset().mockResolvedValue({});
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
+  whatsappWebClient.isConnected.mockReset().mockReturnValue(false);
+  diagnosticNotifications.sendTestNotification.mockReset();
 });
 
 // ─── Auth + vertical gates ────────────────────────────────────────────
@@ -651,6 +674,249 @@ describe('GET /diagnostics (list)', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+  });
+});
+
+// ─── GET /diagnostics/:id — chosenInterests (2026-08-27) ──────────────
+
+describe('GET /diagnostics/:id — chosenInterests', () => {
+  test('includes null chosenInterests when the school never submitted any', async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue({
+      id: 500, tenantId: 1, subBrand: 'tmc', contactId: null,
+    });
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/500')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.chosenInterests).toBeNull();
+  });
+
+  test('includes the submitted interests when present', async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue({
+      id: 500, tenantId: 1, subBrand: 'tmc', contactId: null,
+    });
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({
+        interests: [{ name: 'Hampi Heritage Trail', driveLink: 'https://drive.example/hampi' }],
+        submittedAt: '2026-08-27T10:00:00.000Z',
+      }),
+    });
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/500')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.chosenInterests).toEqual({
+      interests: [{ name: 'Hampi Heritage Trail', driveLink: 'https://drive.example/hampi' }],
+      submittedAt: '2026-08-27T10:00:00.000Z',
+    });
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: 1, key: 'travel.diagnostic.interests.500' } },
+    });
+  });
+});
+
+// ─── GET/PUT /diagnostics/recommendation-settings (2026-08-27) ────────
+
+describe('GET /diagnostics/recommendation-settings', () => {
+  test('happy: returns the default topK when unset', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/recommendation-settings?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ topK: 10, min: 3, max: 20, default: 10 });
+  });
+
+  test('happy: returns a previously-saved custom topK', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify({ topK: 15 }) });
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/recommendation-settings?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.topK).toBe(15);
+  });
+
+  test('invalid subBrand → 400 INVALID_SUB_BRAND', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/recommendation-settings?subBrand=NOPE')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_SUB_BRAND' });
+  });
+
+  test('missing Bearer → 401', async () => {
+    const res = await request(makeApp()).get('/api/travel/diagnostics/recommendation-settings?subBrand=tmc');
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('PUT /diagnostics/recommendation-settings', () => {
+  test('happy: ADMIN saves a new topK', async () => {
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/recommendation-settings')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'tmc', topK: 12 });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ topK: 12 });
+    expect(prisma.tenantSetting.upsert.mock.calls[0][0]).toMatchObject({
+      where: { tenantId_key: { tenantId: 1, key: 'travel.diagnostics.topK.tmc' } },
+    });
+  });
+
+  test('out-of-range numeric topK is clamped, not rejected', async () => {
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/recommendation-settings')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'tmc', topK: 500 });
+    expect(res.status).toBe(200);
+    expect(res.body.topK).toBe(20);
+  });
+
+  test('non-numeric topK → 400 INVALID_TOP_K', async () => {
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/recommendation-settings')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'tmc', topK: 'lots' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_TOP_K' });
+    expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+  });
+
+  test('USER role rejected (ADMIN-only write)', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/recommendation-settings')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ subBrand: 'tmc', topK: 12 });
+    expect(res.status).toBe(403);
+    expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+  });
+});
+
+// ─── GET/PUT/POST /diagnostics/notification-settings (2026-08-28) ─────
+
+describe('GET /diagnostics/notification-settings', () => {
+  test('happy: hydrates saved recipients with name/email + reports channel availability', async () => {
+    // Pin SENDGRID_API_KEY explicitly — the route reads it directly from
+    // process.env, so the assertion must not depend on the ambient
+    // environment's actual value.
+    const priorKey = process.env.SENDGRID_API_KEY;
+    delete process.env.SENDGRID_API_KEY;
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ recipients: [{ userId: 7, channels: ['db', 'email'] }] }),
+    });
+    prisma.user.findMany.mockResolvedValue([{ id: 7, name: 'Priya', email: 'priya@example.com', phone: null }]);
+    whatsappWebClient.isConnected.mockReturnValue(true);
+
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/notification-settings?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.recipients).toEqual([
+      { userId: 7, name: 'Priya', email: 'priya@example.com', hasPhone: false, channels: ['db', 'email'] },
+    ]);
+    expect(res.body.channelAvailability).toEqual({ db: true, email: false, whatsapp: true });
+    if (priorKey === undefined) delete process.env.SENDGRID_API_KEY;
+    else process.env.SENDGRID_API_KEY = priorKey;
+  });
+
+  test('drops a saved recipient whose user no longer exists in the tenant', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ recipients: [{ userId: 999, channels: ['db'] }] }),
+    });
+    prisma.user.findMany.mockResolvedValue([]); // stale id — not found
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/notification-settings?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.recipients).toEqual([]);
+  });
+
+  test('email availability reflects SENDGRID_API_KEY', async () => {
+    const prior = process.env.SENDGRID_API_KEY;
+    process.env.SENDGRID_API_KEY = 'test-key';
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/notification-settings?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.body.channelAvailability.email).toBe(true);
+    if (prior === undefined) delete process.env.SENDGRID_API_KEY;
+    else process.env.SENDGRID_API_KEY = prior;
+  });
+
+  test('missing Bearer → 401', async () => {
+    const res = await request(makeApp()).get('/api/travel/diagnostics/notification-settings?subBrand=tmc');
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('PUT /diagnostics/notification-settings', () => {
+  test('happy: ADMIN saves a recipient list', async () => {
+    prisma.user.findMany.mockResolvedValue([{ id: 7 }]);
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/notification-settings')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'tmc', recipients: [{ userId: 7, channels: ['db', 'whatsapp'] }] });
+    expect(res.status).toBe(200);
+    expect(res.body.recipients).toEqual([{ userId: 7, channels: ['db', 'whatsapp'] }]);
+    expect(prisma.tenantSetting.upsert.mock.calls[0][0]).toMatchObject({
+      where: { tenantId_key: { tenantId: 1, key: 'travel.diagnostics.notifyConfig.tmc' } },
+    });
+  });
+
+  test('a userId that does not belong to this tenant → 400 UNKNOWN_USER_ID', async () => {
+    prisma.user.findMany.mockResolvedValue([]); // requested id not found for this tenant
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/notification-settings')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'tmc', recipients: [{ userId: 999, channels: ['db'] }] });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UNKNOWN_USER_ID');
+    expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+  });
+
+  test('saving an empty list is allowed (falls back to default ADMIN/MANAGER behavior)', async () => {
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/notification-settings')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'tmc', recipients: [] });
+    expect(res.status).toBe(200);
+    expect(res.body.recipients).toEqual([]);
+  });
+
+  test('USER role rejected (ADMIN-only write)', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/notification-settings')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ subBrand: 'tmc', recipients: [] });
+    expect(res.status).toBe(403);
+    expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /diagnostics/notification-settings/test', () => {
+  test('happy: sends a test ping to the calling admin and returns the per-channel result', async () => {
+    diagnosticNotifications.sendTestNotification.mockResolvedValue({ db: 'sent', email: 'unavailable', whatsapp: 'unavailable' });
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/notification-settings/test')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN', { userId: 42 })}`)
+      .send({ subBrand: 'tmc' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ db: 'sent', email: 'unavailable', whatsapp: 'unavailable' });
+    expect(diagnosticNotifications.sendTestNotification).toHaveBeenCalledWith({
+      tenantId: 1, subBrand: 'tmc', userId: 42,
+    });
+  });
+
+  test('USER role rejected (ADMIN-only)', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/notification-settings/test')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ subBrand: 'tmc' });
+    expect(res.status).toBe(403);
+    expect(diagnosticNotifications.sendTestNotification).not.toHaveBeenCalled();
   });
 });
 

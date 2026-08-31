@@ -15,6 +15,7 @@
 //   GET  /api/travel/diagnostics/public/form/:tenantSlug/:subBrand
 //   POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit
 //   GET  /api/travel/diagnostics/public/report/:slug
+//   POST /api/travel/diagnostics/public/report/:slug/interests
 
 const express = require("express");
 const crypto = require("crypto");
@@ -25,15 +26,14 @@ const { findDuplicateContactFull } = require("../utils/deduplication");
 const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
 const {
   buildCurriculumFitForDiagnostic,
+  extractLearningProfile,
 } = require("../lib/travelDiagnosticCurriculumFit");
+const curriculumRag = require("../lib/curriculumRag");
 const travelRag = require("../lib/travelRag");
+const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
+const { resolveCancellationPolicyForForm } = require("../lib/travelDiagnosticCancellationPolicy");
+const diagnosticNotifications = require("../lib/diagnosticNotifications");
 
-const SUB_BRAND_LABELS = {
-  tmc: "TMC",
-  rfu: "RFU",
-  travelstall: "Travel Stall",
-  visasure: "Visa Sure",
-};
 const {
   getReadinessLevel,
   readinessLevelFromScore,
@@ -421,17 +421,44 @@ router.post(
       }
 
       const safeAnswers = normalizeAnswers(answers, parsed.questions);
+
+      const missingRequired = findUnansweredRequiredQuestion(parsed.questions, safeAnswers);
+      if (missingRequired) {
+        return res.status(400).json({
+          error: `"${missingRequired.text}" is required.`,
+          code: "REQUIRED_QUESTION_MISSING",
+          questionId: missingRequired.id,
+        });
+      }
+
       const result = scoreDiagnostic(parsed, safeAnswers);
       let curriculumFit = null;
+      // AI curriculum-to-itinerary matching (2026-08-24) — tried FIRST, but
+      // it self-selects out (returns null) whenever the tenant hasn't
+      // uploaded any curriculum PDFs yet for this sub-brand, so tenants who
+      // still rely solely on the admin-curated TravelCurriculumMapping table
+      // below see IDENTICAL behavior to before this feature existed.
       try {
-        curriculumFit = await buildCurriculumFitForDiagnostic({
+        const profile = extractLearningProfile(safeAnswers, parsed.questions);
+        curriculumFit = await curriculumRag.matchCurriculumForDiagnostic({
           tenantId: tenant.id,
           subBrand,
-          answers: safeAnswers,
-          questions: parsed.questions,
+          profile,
         });
       } catch (e) {
-        console.warn("[diag-public-form] curriculum mapping failed (non-fatal):", e.message);
+        console.warn("[diag-public-form] AI curriculum matching failed (non-fatal):", e.message);
+      }
+      if (!curriculumFit) {
+        try {
+          curriculumFit = await buildCurriculumFitForDiagnostic({
+            tenantId: tenant.id,
+            subBrand,
+            answers: safeAnswers,
+            questions: parsed.questions,
+          });
+        } catch (e) {
+          console.warn("[diag-public-form] curriculum mapping failed (non-fatal):", e.message);
+        }
       }
       if (!curriculumFit && String(subBrand || "").toLowerCase() === "tmc") {
         try {
@@ -508,30 +535,22 @@ router.post(
         },
       });
 
-      // Best-effort immediate notification to tenant admins/managers.
+      // Notify whoever the admin configured in the Notifications tab (db /
+      // email / WhatsApp, per person) — falls back to every ADMIN/MANAGER,
+      // in-app only, when nothing's configured yet (see
+      // diagnosticNotifications.js for the zero-config fallback).
       try {
-        const recipients = await prisma.user.findMany({
-          where: { tenantId: tenant.id, role: { in: ["ADMIN", "MANAGER"] } },
-          select: { id: true },
+        await diagnosticNotifications.notifyDiagnosticSubmitted({
+          tenantId: tenant.id,
+          subBrand,
+          diagnosticId: diag.id,
+          contactLabel: cleanName || cleanEmail || `Diagnostic #${diag.id}`,
+          score: result.score,
+          classificationLabel: result.classificationLabel,
+          recommendedTier: result.recommendedTier,
         });
-        if (recipients.length > 0) {
-          const contactLabel = cleanName || cleanEmail || `Diagnostic #${diag.id}`;
-          await prisma.notification.createMany({
-            data: recipients.map((u) => ({
-              tenantId: tenant.id,
-              userId: u.id,
-              title: `New ${SUB_BRAND_LABELS[subBrand] || subBrand} diagnostic submission`,
-              message: `${contactLabel} submitted a diagnostic and scored ${result.score} (${result.classificationLabel || result.recommendedTier}).`,
-              type: "info",
-              priority: "normal",
-              link: `/travel/diagnostics`,
-              entityType: "TravelDiagnostic",
-              entityId: diag.id,
-            })),
-          });
-        }
       } catch (notifyErr) {
-        console.warn("[diag-public-form] notification creation failed (non-fatal):", notifyErr.message);
+        console.warn("[diag-public-form] notification failed (non-fatal):", notifyErr.message);
       }
 
       // RAG + PDF best-effort, never blocks submission.
@@ -548,8 +567,14 @@ router.post(
         console.warn("[diag-public-form] RAG failed (non-fatal):", e.message);
       }
 
+      const cancellationPolicy = await resolveCancellationPolicyForForm({
+        tenantId: tenant.id,
+        subBrand,
+      });
+
       const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, {
         ragResult,
+        cancellationPolicy,
       }).catch((e) => {
         console.warn("[diag-public-form] PDF failed (non-fatal):", e.message);
         return null;
@@ -566,6 +591,7 @@ router.post(
         classificationLabel: result.classificationLabel,
         recommendedTier: result.recommendedTier,
         curriculumFit,
+        cancellationPolicy,
         reportPdfUrl,
         message:
           cleanName
@@ -653,6 +679,19 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
       }
     }
 
+    const cancellationPolicy = await resolveCancellationPolicyForForm({
+      tenantId: diag.tenantId,
+      subBrand: diag.subBrand,
+    });
+
+    // Previously-submitted "chosen interests" (2026-08-27), if any — lets a
+    // refreshed report page show the prior selection instead of a blank
+    // checklist. Never throws (see diagnosticChosenInterests.js).
+    const chosenInterests = await diagnosticChosenInterests.getChosenInterests({
+      tenantId: diag.tenantId,
+      diagnosticId: diag.id,
+    });
+
     res.json({
       diagnosticId: diag.id,
       tenantSlug: tenant?.slug || null,
@@ -660,6 +699,7 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
       subBrand: diag.subBrand,
       score: diag.score,
       classification: diag.classification,
+      cancellationPolicy,
       classificationLabel: diag.classificationLabel,
       recommendedTier: diag.recommendedTier,
       readinessLevel,
@@ -669,6 +709,7 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
       contact,
       ragResult,
       curriculumFit: parseJsonOrNull(diag.curriculumFitJson),
+      chosenInterests,
       createdAt: diag.createdAt,
     });
   } catch (e) {
@@ -679,9 +720,52 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
   }
 });
 
+// POST /api/travel/diagnostics/public/report/:slug/interests
+//
+// A school checks off which of its recommended trips it's actually
+// interested in on the report page, then clicks "Submit chosen interests".
+// Reuses the exact same slug + token auth as the GET report above (no new
+// auth pattern) — the report slug itself is the credential. Resubmitting
+// simply overwrites the prior selection (see diagnosticChosenInterests.js).
+router.post("/diagnostics/public/report/:slug/interests", async (req, res) => {
+  try {
+    const slug = String(req.params.slug || "").trim();
+    const parsed = parseReportSlug(slug);
+    if (!parsed) {
+      return res
+        .status(400)
+        .json({ error: "Invalid report slug", code: "INVALID_SLUG" });
+    }
+
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id: parsed.diagnosticId },
+    });
+    if (!diag || !reportSlugTokenMatches(diag.reportSlugToken, parsed.token)) {
+      return res
+        .status(404)
+        .json({ error: "Report not found", code: "NOT_FOUND" });
+    }
+
+    const interests = Array.isArray(req.body?.interests) ? req.body.interests : [];
+    const saved = await diagnosticChosenInterests.saveChosenInterests({
+      tenantId: diag.tenantId,
+      diagnosticId: diag.id,
+      interests,
+    });
+
+    res.json({ ok: true, ...saved });
+  } catch (e) {
+    if (e.status)
+      return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[diag-public-report] save interests error:", e.message);
+    res.status(500).json({ error: "Failed to save chosen interests" });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
 async function resolveTravelTenantBySlug(slug) {
   if (!slug) return null;
   return prisma.tenant.findFirst({
@@ -793,7 +877,7 @@ async function buildPublicCurriculumFitFallback({ tenantId, answers, questions }
         reasons: bucket.reasons.slice(0, 4),
       }))
       .sort((a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0))
-      .slice(0, 5),
+      .slice(0, 10),
   };
 }
 
@@ -832,6 +916,21 @@ function trimProfileValue(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
   return raw.length > 120 ? raw.slice(0, 120) : raw;
+}
+
+// Server-side mirror of the client-side required-question check in
+// TravelDiagnosticPublicForm.jsx — the client blocks submission first, but
+// this is the actual enforcement point since the public submit endpoint can
+// be called directly. Returns the first unanswered required question, or
+// null when all required questions are answered.
+function findUnansweredRequiredQuestion(questions, safeAnswers) {
+  for (const q of questions || []) {
+    if (!q?.required) continue;
+    const v = safeAnswers[q.id];
+    const empty = v === undefined || (Array.isArray(v) && v.length === 0) || (typeof v === "string" && v.trim() === "");
+    if (empty) return q;
+  }
+  return null;
 }
 
 function normalizeAnswers(raw, questions) {

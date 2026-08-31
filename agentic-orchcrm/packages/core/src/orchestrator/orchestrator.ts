@@ -12,13 +12,17 @@ import {
   looksLikeHtml,
   renderHtmlToArtifact,
   measureEditorialBlocks,
+  auditPrintLayout,
+  shrinkOverflowingPages,
   buildBrochureHtml,
   parseBrochureContent,
   buildFallbackBrochureContent,
   ensureBriefCoverage,
+  ensureTmcFidelity,
   getTemplate,
   type BrandKit,
   type LogoPlacement,
+  type DesignHtmlFn,
 } from '@agentic-os/tools';
 import { runAgent, type EngineDeps } from '../agent/agent-loop.js';
 import type { RunStore } from '../run/events.js';
@@ -394,7 +398,10 @@ export class Orchestrator {
         // run the completeness backstop so any labelled brief block it dropped
         // (learning outcomes, inclusions, cancellation policy, …) is still included.
         const finalContent = (hasBrochureBody(content)
-          ? ensureBriefCoverage(content as Parameters<typeof buildBrochureHtml>[0], args.goal)
+          ? ensureTmcFidelity(
+              ensureBriefCoverage(content as Parameters<typeof buildBrochureHtml>[0], args.goal),
+              args.goal,
+            )
           : buildFallbackBrochureContent(args.goal)) as Parameters<typeof buildBrochureHtml>[0];
 
         emit(store, runId, 'agent.tool_call', fin.fromAgentKey, { tool: 'render_pdf' });
@@ -411,12 +418,89 @@ export class Orchestrator {
           const brand: BrandKit | undefined = args.brand?.logoUrl
             ? { ...args.brand, placement: parseLogoPlacement(args.goal) }
             : args.brand;
-          const html = await buildBrochureHtml(finalContent, getTemplate(args.styleKey), {
+          const tpl = getTemplate(args.styleKey);
+          // Hybrid AI-design step (tmc-school only): the engine has already
+          // resolved every fact/photo/map/logo/colour deterministically (see
+          // buildTmcDesignBrief) — this call only asks the model to compose
+          // the actual page layout/typography from them. Any failure here
+          // (bad response, provider error) is swallowed by buildBrochureHtml
+          // itself, which falls back to the fully deterministic template —
+          // this closure is never allowed to be the reason generation fails.
+          const designHtml: DesignHtmlFn | undefined =
+            tpl.family === 'tmc-school'
+              ? async (brief: string) => {
+                  // 24000 gives the design room for an 8-page document, but it
+                  // EXCEEDS the hard output cap of several providers/models
+                  // (many top out at 8k–16k). Such a request is rejected
+                  // outright, so every attempt failed and the brochure silently
+                  // fell back to the plain deterministic template on every run.
+                  // Step the ceiling down and retry rather than lose the design.
+                  // The token-cap self-heal in the provider adapter clamps any of
+                  // these down to whatever the model actually allows, so starting
+                  // higher costs nothing on a model with more room (e.g. gpt-5) —
+                  // it just gives it enough space to write a properly paginated
+                  // document instead of being pressured into cramming content
+                  // tighter than the print-preflight can accept.
+                  const ladder = [32000, 24000, 16000, 8000];
+                  let lastErr: unknown;
+                  for (const maxTokens of ladder) {
+                    try {
+                      const resp = await this.deps.router.chat('reasoning', {
+                        messages: [{ role: 'user', content: brief }],
+                        maxTokens,
+                      });
+                      const text = resp.message.content;
+                      // A design cut off at the token ceiling arrives as valid-looking
+                      // HTML with no closing tags, so the only symptom downstream was
+                      // the generic "failed sanity check (too short or malformed)" —
+                      // which reads like the model produced garbage rather than that it
+                      // simply ran out of room. Name it here, and step DOWN the ladder
+                      // (a smaller budget makes the model write a tighter document
+                      // rather than the same one truncated at the same place).
+                      if (resp.finishReason === 'length') {
+                        lastErr = new Error(
+                          `design truncated at the ${maxTokens}-token ceiling (model returned no document end). ` +
+                            `A model with a larger output limit, or a more concise design, is needed.`,
+                        );
+                        emit(store, runId, 'agent.tool_result', fin.fromAgentKey, {
+                          tool: 'design_brochure',
+                          error: (lastErr as Error).message,
+                        });
+                        continue;
+                      }
+                      if (text && text.trim()) return text;
+                      lastErr = new Error('empty design response');
+                    } catch (err) {
+                      lastErr = err;
+                      // Surface it — a silently-swallowed design failure is why
+                      // this went unnoticed for so long. The run trace now shows
+                      // exactly why the AI art direction was abandoned.
+                      emit(store, runId, 'agent.tool_result', fin.fromAgentKey, {
+                        tool: 'design_brochure',
+                        error: `maxTokens ${maxTokens}: ${(err as Error).message}`,
+                      });
+                    }
+                  }
+                  throw lastErr instanceof Error ? lastErr : new Error('design request failed');
+                }
+              : undefined;
+          const html = await buildBrochureHtml(finalContent, tpl, {
             map3d,
             measure: measureEditorialBlocks,
+            ...(designHtml ? { designHtml } : {}),
+            ...(designHtml ? { designAudit: auditPrintLayout, designSalvage: shrinkOverflowingPages } : {}),
+            onDesignFallback: (reason: string) =>
+              emit(store, runId, 'agent.tool_result', fin.fromAgentKey, {
+                tool: 'design_brochure',
+                error: `AI art direction abandoned — rendered with the plain fallback template instead. Reason: ${reason}`,
+              }),
             ...(brand ? { brand } : {}),
           });
-          const art = await renderHtmlToArtifact(html, runId, fin.pdf);
+          const pdfOpts = {
+            ...fin.pdf,
+            ...((finalContent as any).__fileName ? { basePrefix: (finalContent as any).__fileName } : {}),
+          };
+          const art = await renderHtmlToArtifact(html, runId, pdfOpts);
           emit(store, runId, 'agent.tool_result', fin.fromAgentKey, { tool: 'render_pdf', result: art.url });
           const noun = fin.pdf?.label ?? 'document';
           result = `Your ${noun} is ready (${art.format.toUpperCase()}).\nDownload: ${art.url}`;

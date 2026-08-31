@@ -117,8 +117,8 @@ describe('KnowledgeBaseAdmin', () => {
 
     await waitFor(() => {
       expect(notifyConfirm).toHaveBeenCalledWith({
-        title: 'Remove Indexed File',
-        message: 'Remove this file from the index?',
+        title: 'Remove brochure',
+        message: 'Remove this brochure from the library?',
         confirmText: 'Remove',
         destructive: true,
       });
@@ -127,7 +127,7 @@ describe('KnowledgeBaseAdmin', () => {
       expect(fetchApiMock).toHaveBeenCalledWith(`/api/travel/knowledge-base/files/${INDEXED_FILE.id}`, { method: 'DELETE' });
     });
     expect(nativeConfirm).not.toHaveBeenCalled();
-    expect(notifySuccess).toHaveBeenCalledWith('File removed from index');
+    expect(notifySuccess).toHaveBeenCalledWith('Brochure removed from library');
   });
 
   it('does not delete when the in-CRM confirm modal is cancelled', async () => {

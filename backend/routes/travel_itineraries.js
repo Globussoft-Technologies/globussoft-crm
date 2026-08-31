@@ -83,6 +83,98 @@ async function fetchPdfTemplateBuffer(url, opts = {}) {
     return null;
   }
 }
+
+// G115 — Fetch the stored underprint buffer + parsed regions for whichever
+// template this itinerary's PDF should render on top of. Extracted so both
+// the download route and the "add to catalogue" upload route render
+// byte-identical PDFs.
+//
+// pdfTemplateId (a live, freely-changeable style choice made in the
+// itinerary's Publish panel) takes precedence over clonedFromTemplateId
+// (content-lineage — "this itinerary's day-plan was cloned from template
+// X", which may well be a content-only "trip template" with no PDF at all).
+// clonedFromTemplateId is only used as a PDF source when pdfTemplateId is
+// unset AND the cloned-from template happens to itself carry a PDF
+// (tpl.pdfTemplateUrl below already no-ops for a content-only template) —
+// that fallback is what keeps pre-existing itineraries, created before
+// pdfTemplateId existed, rendering exactly as they did before.
+async function resolveItineraryPdfTemplate(full, tenantId) {
+  let pdfTemplateBuffer = null;
+  let pdfTemplateSourceBuffer = null;
+  let pdfTemplateRegions = null;
+  let pdfStyleSpec = null;
+  const templateId = full.pdfTemplateId || full.clonedFromTemplateId;
+  if (templateId) {
+    try {
+      const tpl = await prisma.itineraryTemplate.findFirst({
+        where: { id: templateId, tenantId },
+        select: {
+          pdfTemplateUrl: true, pdfTemplateSourceUrl: true,
+          pdfTemplateRegions: true, pdfStyleSpecJson: true,
+        },
+      });
+      if (tpl && tpl.pdfTemplateUrl) {
+        pdfTemplateBuffer = await fetchPdfTemplateBuffer(tpl.pdfTemplateUrl);
+        const safeParse = (raw) => {
+          if (!raw) return null;
+          try {
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+          } catch (_e) {
+            return null;
+          }
+        };
+        pdfTemplateRegions = safeParse(tpl.pdfTemplateRegions);
+        pdfStyleSpec = safeParse(tpl.pdfStyleSpecJson);
+        // The template-faithful renderer needs the UNBLANKED original — the
+        // blanked copy behind pdfTemplateUrl has its body whited out on every
+        // page uniformly, which would destroy a "static" page (contact info,
+        // boilerplate) that has no variable content to strip in the first
+        // place. Fall back to the blanked copy for templates uploaded before
+        // pdfTemplateSourceUrl existed.
+        pdfTemplateSourceBuffer = tpl.pdfTemplateSourceUrl
+          ? await fetchPdfTemplateBuffer(tpl.pdfTemplateSourceUrl)
+          : pdfTemplateBuffer;
+      }
+    } catch (tplErr) {
+      console.warn("[travel-itin] PDF template lookup failed:", tplErr.message);
+    }
+  }
+  return { pdfTemplateBuffer, pdfTemplateSourceBuffer, pdfTemplateRegions, pdfStyleSpec };
+}
+
+// Render an itinerary to PDF, preferring the template-faithful renderer when
+// the itinerary is attached to an uploaded brand template.
+//
+// The template renderer reproduces the operator's own brochure — real logo and
+// footer chrome from the source pages, a TIME | ACTIVITY schedule table with
+// day bands, and the inclusions/terms blocks — so it is worth trying first.
+// Any failure (corrupt upload, unreadable page tree) falls back to the
+// standard generic renderer rather than denying the download.
+async function renderItineraryPdfBuffer(full, contact, { heroBuffer, viewerWatermark, tenantId }) {
+  const { pdfTemplateBuffer, pdfTemplateSourceBuffer, pdfTemplateRegions, pdfStyleSpec } =
+    await resolveItineraryPdfTemplate(full, tenantId);
+
+  if (pdfTemplateSourceBuffer) {
+    try {
+      return await itineraryTemplatePdf.renderItineraryOnTemplate(full, contact, {
+        templateBuffer: pdfTemplateSourceBuffer,
+        styleSpec: pdfStyleSpec,
+        regions: pdfTemplateRegions,
+        heroBuffer,
+      });
+    } catch (tplErr) {
+      console.warn("[travel-itin] template render failed, falling back:", tplErr.message);
+    }
+  }
+
+  return renderTravelItineraryPdf(full, contact, {
+    heroBuffer,
+    pdfTemplateBuffer,
+    regions: pdfTemplateRegions,
+    viewerWatermark,
+  });
+}
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
@@ -149,6 +241,22 @@ const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE 
 const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
 const cancellationRefund = require("../lib/cancellationRefund");
 const refundService = require("../lib/refundService");
+// GDrive "Add to Catalogue" — uploads generated itinerary PDFs into the
+// tenant's knowledge-base Drive root ("CRM Itineraries" subfolder). Reuses
+// the same OAuth connection the Travel Knowledge Base admin page manages.
+const googleDriveOAuth = require("../lib/googleDriveOAuth");
+const itineraryTemplatePdf = require("../services/itineraryTemplatePdf");
+const { forwardGeocode } = require("../lib/geocodeProxy");
+const KB_ROOT_FOLDER_KEY = "travel.knowledgeBase.rootFolderId";
+async function getKbRootFolderId(tenantId) {
+  const row = await prisma.tenantSetting.findUnique({
+    where: { tenantId_key: { tenantId, key: KB_ROOT_FOLDER_KEY } },
+  });
+  return row?.value || null;
+}
+// Text-only AI extraction for "Add to Diagnostic KB" — provider-agnostic via
+// aiGateway (BYOK or CRM-managed subscription; never a hardcoded provider).
+const aiGateway = require("../lib/aiGateway");
 
 // Build + emit the right customer-portal notification for a trip event.
 // Best-effort (the service swallows errors) — never blocks the request.
@@ -438,6 +546,25 @@ function assertValidItemType(itemType) {
   }
 }
 
+// Built-in ∪ tenant-defined (TravelItemType). Only used at the two
+// interactive item-creation endpoints (POST/PATCH /items) where the planner's
+// type combobox can offer a custom type — every other call site
+// (bulk-import, from-suggestion materialise, totals/search filters) keeps
+// using the synchronous built-in-only check above, unchanged.
+async function assertValidItemTypeExtended(itemType, tenantId) {
+  if (VALID_ITEM_TYPES.includes(itemType)) return;
+  const custom = await prisma.travelItemType.findFirst({
+    where: { tenantId, key: itemType, isActive: true },
+    select: { id: true },
+  });
+  if (!custom) {
+    const err = new Error(`itemType must be one of: ${VALID_ITEM_TYPES.join(", ")}, or a tenant-defined type`);
+    err.status = 400;
+    err.code = "INVALID_ITEM_TYPE";
+    throw err;
+  }
+}
+
 // ─── List + create ────────────────────────────────────────────────────
 
 // GET /api/travel/itineraries
@@ -711,15 +838,35 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
     // unrelated tenant's template id. We tolerate "" / 0 / non-numeric →
     // null (lineage is opt-in; bad inputs degrade silently to "no lineage").
     let clonedFromTemplateId = null;
+    // Seeded ONLY when the cloned-from template itself carries a PDF —
+    // preserves today's "pick a branded template up front" UX (Generate PDF
+    // uses it immediately) without conflating this live, freely-changeable
+    // style choice with clonedFromTemplateId's content-lineage meaning. A
+    // content-only "trip template" (isPdfTemplate: false) leaves this null;
+    // the operator picks a PDF style separately in the Publish panel.
+    let pdfTemplateId = null;
     let templateItemRows = [];
     let templateBaseAmount = null;
     let templateCurrency = null;
+    // Boilerplate a Trip template carries (inclusions/exclusions/terms/intro)
+    // — set via the template's "default*" fields (editable on the template
+    // itself) and copied onto every new itinerary cloned from it, same as
+    // items/price already were. Previously these columns existed on the
+    // schema but nothing ever read them back on clone, so "Save as
+    // template" → reuse silently dropped everything except the day plan
+    // and price.
+    let templateContent = null;
     if (bodyClonedFromTemplateId != null && bodyClonedFromTemplateId !== "") {
       const tid = parseInt(bodyClonedFromTemplateId, 10);
       if (Number.isFinite(tid) && tid > 0) {
         const tpl = await prisma.itineraryTemplate.findFirst({
           where: { id: tid, tenantId: req.travelTenant.id },
-          select: { id: true, templateJson: true, basePriceMinor: true, currency: true },
+          select: {
+            id: true, templateJson: true, basePriceMinor: true, currency: true,
+            defaultInclusionsJson: true, defaultExclusionsJson: true,
+            defaultOtherDetailsJson: true, defaultTermsText: true, defaultIntroText: true,
+            isPdfTemplate: true,
+          },
         });
         if (!tpl) {
           return res.status(404).json({
@@ -728,11 +875,19 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
           });
         }
         clonedFromTemplateId = tid;
+        if (tpl.isPdfTemplate) pdfTemplateId = tid;
         // Carry over the template's base price as the itinerary's starting totalAmount.
         if (tpl.basePriceMinor != null) {
           templateBaseAmount = Number(tpl.basePriceMinor) / 100;
         }
         templateCurrency = tpl.currency || null;
+        templateContent = {
+          inclusionsJson: tpl.defaultInclusionsJson || null,
+          exclusionsJson: tpl.defaultExclusionsJson || null,
+          otherDetailsJson: tpl.defaultOtherDetailsJson || null,
+          termsText: tpl.defaultTermsText || null,
+          introText: tpl.defaultIntroText || null,
+        };
         // Parse templateJson.items → ItineraryItem rows so the cloned itinerary
         // opens in the editor pre-populated with the day-by-day plan.
         try {
@@ -847,7 +1002,11 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
         shareToken: shareToken || null,
         // G047 lineage persisted; null when not cloned (manual create).
         clonedFromTemplateId,
+        // Only set when the cloned-from template is itself PDF-capable —
+        // see the field comment above.
+        pdfTemplateId,
         items: finalItemRows.length > 0 ? { create: finalItemRows } : undefined,
+        ...(templateContent || {}),
       },
       include: { items: { orderBy: { position: "asc" } } },
     });
@@ -1989,7 +2148,11 @@ router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
       where: { id, tenantId: req.travelTenant.id },
       include: {
         items: { orderBy: { position: "asc" } },
-        contact: { select: { id: true, name: true, email: true, phone: true } },
+        // `company` added (additive select, no schema change) so the Brochure
+        // Engine's "Import from itinerary" can prefill the TMC school-brochure
+        // schoolName from the actual institution name rather than the
+        // individual booking contact's name.
+        contact: { select: { id: true, name: true, email: true, phone: true, company: true } },
       },
     });
     if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
@@ -2280,8 +2443,74 @@ router.patch("/itineraries/:id", verifyToken, requireTravelTenant, async (req, r
     const {
       status, destination, startDate, endDate,
       pricingJson, totalAmount, currency, pdfUrl, shareToken, pax,
-      shareExpiresAt,
+      shareExpiresAt, clonedFromTemplateId, pdfTemplateId,
+      title, introText, inclusions, exclusions, otherDetails, termsText,
+      cancellationPolicyId, staticPageText, moneyEnabled,
     } = req.body || {};
+
+    if (staticPageText !== undefined) {
+      data.staticPageText = staticPageText ? String(staticPageText) : null;
+    }
+
+    if (moneyEnabled !== undefined) {
+      data.moneyEnabled = Boolean(moneyEnabled);
+    }
+
+    if (cancellationPolicyId !== undefined) {
+      if (cancellationPolicyId === null || cancellationPolicyId === "") {
+        data.cancellationPolicyId = null;
+      } else {
+        const cpId = parseInt(cancellationPolicyId, 10);
+        if (!Number.isFinite(cpId) || cpId <= 0) {
+          return res.status(400).json({
+            error: "cancellationPolicyId must be a positive integer or null",
+            code: "INVALID_CANCELLATION_POLICY_ID",
+          });
+        }
+        const policy = await prisma.cancellationPolicy.findFirst({
+          where: { id: cpId, tenantId: req.travelTenant.id },
+          select: { id: true },
+        });
+        if (!policy) {
+          return res.status(404).json({ error: "Cancellation policy not found", code: "CANCELLATION_POLICY_NOT_FOUND" });
+        }
+        data.cancellationPolicyId = cpId;
+      }
+    }
+
+    // Presentation content blocks used by the customer-facing PDF. The three
+    // list fields accept either a JSON array of strings or a newline-separated
+    // block (what the textarea editors send) and normalise to a JSON array;
+    // null/"" clears. Additive — callers that omit them are unaffected.
+    const normalizeBulletList = (raw) => {
+      if (raw === null || raw === "") return null;
+      let list = raw;
+      if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        if (!trimmed) return null;
+        if (trimmed.startsWith("[")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            list = Array.isArray(parsed) ? parsed : [trimmed];
+          } catch (_e) {
+            list = trimmed.split(/\r?\n/);
+          }
+        } else {
+          list = trimmed.split(/\r?\n/);
+        }
+      }
+      if (!Array.isArray(list)) return null;
+      const cleaned = list
+        .map((entry) => String(entry).replace(/^[\s•\-*]+/, "").trim())
+        .filter((entry) => entry.length > 0);
+      return cleaned.length ? JSON.stringify(cleaned) : null;
+    };
+    if (title !== undefined) data.title = title ? String(title).trim() || null : null;
+    if (introText !== undefined) data.introText = introText ? String(introText) : null;
+    if (termsText !== undefined) data.termsText = termsText ? String(termsText) : null;
+    if (inclusions !== undefined) data.inclusionsJson = normalizeBulletList(inclusions);
+    if (exclusions !== undefined) data.exclusionsJson = normalizeBulletList(exclusions);
+    if (otherDetails !== undefined) data.otherDetailsJson = normalizeBulletList(otherDetails);
 
     if (status !== undefined) {
       if (!VALID_STATUSES.includes(status)) {
@@ -2318,6 +2547,59 @@ router.patch("/itineraries/:id", verifyToken, requireTravelTenant, async (req, r
           });
         }
         data.shareExpiresAt = parsed;
+      }
+    }
+
+    // Template picker (Editor page) — attach/change/clear the template
+    // lineage on an existing itinerary post-hoc. Same validation as the
+    // create-time path (POST /itineraries). Additive to this allowlist —
+    // omitting the field (every pre-existing caller) behaves exactly as before.
+    if (clonedFromTemplateId !== undefined) {
+      if (clonedFromTemplateId === null || clonedFromTemplateId === "") {
+        data.clonedFromTemplateId = null;
+      } else {
+        const tid = parseInt(clonedFromTemplateId, 10);
+        if (!Number.isFinite(tid) || tid <= 0) {
+          return res.status(400).json({
+            error: "clonedFromTemplateId must be a positive integer or null",
+            code: "INVALID_TEMPLATE_ID",
+          });
+        }
+        const tpl = await prisma.itineraryTemplate.findFirst({
+          where: { id: tid, tenantId: req.travelTenant.id },
+          select: { id: true },
+        });
+        if (!tpl) return res.status(404).json({ error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
+        data.clonedFromTemplateId = tid;
+      }
+    }
+
+    // The live "which PDF style does Generate PDF use" choice — see the
+    // schema comment on Itinerary.pdfTemplateId for why this is a SEPARATE
+    // field from clonedFromTemplateId (content lineage) above.
+    if (pdfTemplateId !== undefined) {
+      if (pdfTemplateId === null || pdfTemplateId === "") {
+        data.pdfTemplateId = null;
+      } else {
+        const tid = parseInt(pdfTemplateId, 10);
+        if (!Number.isFinite(tid) || tid <= 0) {
+          return res.status(400).json({
+            error: "pdfTemplateId must be a positive integer or null",
+            code: "INVALID_TEMPLATE_ID",
+          });
+        }
+        const tpl = await prisma.itineraryTemplate.findFirst({
+          where: { id: tid, tenantId: req.travelTenant.id },
+          select: { id: true, isPdfTemplate: true },
+        });
+        if (!tpl) return res.status(404).json({ error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
+        if (!tpl.isPdfTemplate) {
+          return res.status(400).json({
+            error: "That template has no PDF uploaded — pick a branded PDF template, or a content-only trip template via clonedFromTemplateId instead",
+            code: "NOT_A_PDF_TEMPLATE",
+          });
+        }
+        data.pdfTemplateId = tid;
       }
     }
 
@@ -2670,6 +2952,12 @@ router.post(
       const result = await prisma.itineraryItem.deleteMany({
         where: { id: { in: parsedIds }, itineraryId: itin.id },
       });
+
+      // Deleting line items lowers the trip total — this sync call was missing,
+      // so a bulk delete left Itinerary.totalAmount reporting the pre-delete
+      // figure (and kept charging for removed lines) until an unrelated
+      // single-item edit happened to recompute it.
+      await syncItineraryAfterItemChange(itin.id);
 
       // deletedIds sorted asc for stable caller-side assertion shape.
       const deletedIds = [...parsedIds].sort((a, b) => a - b);
@@ -3046,6 +3334,50 @@ function computeItemLineTotal({ unitCost, quantity, markup, gstAmount }) {
   return Math.round((rate * qty + mk + gst) * 100) / 100;
 }
 
+// Time-of-day columns (startTime / endTime) are "HH:MM" 24h strings. Accepts
+// "9:05" and normalises to "09:05"; "" / null clears the column. Returns
+// { ok: true, value } or { ok: false, error, code } so both the POST and PATCH
+// handlers validate identically.
+const TIME_OF_DAY_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+function parseTimeOfDay(raw, fieldName) {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === null || raw === "") return { ok: true, value: null };
+  const m = TIME_OF_DAY_RE.exec(String(raw).trim());
+  if (!m) {
+    return {
+      ok: false,
+      error: `${fieldName} must be a 24-hour "HH:MM" time`,
+      code: "INVALID_TIME_OF_DAY",
+    };
+  }
+  return { ok: true, value: `${m[1].padStart(2, "0")}:${m[2]}` };
+}
+
+// Legacy read-compat: rows written before startTime/endTime/locationName became
+// real columns kept these inside detailsJson. Readers (planner, PDF) call this
+// so old and new rows behave identically. Column always wins when set.
+function resolveItemSchedule(item) {
+  let details = null;
+  if (item?.detailsJson) {
+    try {
+      const parsed = JSON.parse(item.detailsJson);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) details = parsed;
+    } catch (_e) {
+      details = null;
+    }
+  }
+  const pick = (col, key) => {
+    if (col != null && String(col).trim() !== "") return String(col);
+    const fromDetails = details && details[key];
+    return fromDetails != null && String(fromDetails).trim() !== "" ? String(fromDetails) : null;
+  };
+  return {
+    startTime: pick(item?.startTime, "startTime"),
+    endTime: pick(item?.endTime, "endTime"),
+    locationName: pick(item?.locationName, "locationName"),
+  };
+}
+
 function normalizeTemplateDetailsJson(item) {
   if (item?.detailsJson && typeof item.detailsJson === "string") {
     return item.detailsJson;
@@ -3098,11 +3430,11 @@ router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (r
     // dropped lat/lng silently, so S82's frontend geocode-on-create flow
     // (Nominatim → lat/lng in POST body) was a no-op until a follow-up PATCH.
     // All three are additive nullable columns from S8; "" / null clears them.
-    const { itemType, description, position, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, dayNumber, latitude, longitude } = req.body || {};
+    const { itemType, description, position, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, dayNumber, latitude, longitude, startTime, endTime, locationName, draftedByAi } = req.body || {};
     if (!itemType || !description) {
       return res.status(400).json({ error: "itemType + description required", code: "ITEM_MISSING_FIELDS" });
     }
-    assertValidItemType(itemType);
+    await assertValidItemTypeExtended(itemType, req.travelTenant.id);
     if (unit != null && unit !== "" && !VALID_ITEM_UNITS.includes(String(unit))) {
       return res.status(400).json({ error: `unit must be one of: ${VALID_ITEM_UNITS.join(", ")}`, code: "INVALID_UNIT" });
     }
@@ -3137,11 +3469,26 @@ router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (r
       longitudeValue = lng;
     }
 
-    // Auto-position if not provided — append to the end.
+    const startTimeParsed = parseTimeOfDay(startTime, "startTime");
+    if (!startTimeParsed.ok) {
+      return res.status(400).json({ error: startTimeParsed.error, code: startTimeParsed.code });
+    }
+    const endTimeParsed = parseTimeOfDay(endTime, "endTime");
+    if (!endTimeParsed.ok) {
+      return res.status(400).json({ error: endTimeParsed.error, code: endTimeParsed.code });
+    }
+
+    // Auto-position if not provided — append to the end OF THE TARGET DAY, not
+    // the end of the whole itinerary. The old `max(position) + 1` across every
+    // row meant a freshly-added Day 1 item sorted after Day 10's items until it
+    // was manually dragged. Scoping the max to the same dayNumber keeps each
+    // day's ordering self-contained (positions stay unique per day, which is
+    // all the planner and the PDF's `ORDER BY dayNumber, startTime, position`
+    // actually need).
     let pos = typeof position === "number" ? position : null;
     if (pos === null) {
       const maxRow = await prisma.itineraryItem.findFirst({
-        where: { itineraryId: itin.id },
+        where: { itineraryId: itin.id, dayNumber: dayNumberValue },
         orderBy: { position: "desc" },
         select: { position: true },
       });
@@ -3168,6 +3515,17 @@ router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (r
         dayNumber: dayNumberValue,
         latitude: latitudeValue,
         longitude: longitudeValue,
+        startTime: startTimeParsed.value ?? null,
+        endTime: endTimeParsed.value ?? null,
+        locationName:
+          locationName != null && String(locationName).trim() !== ""
+            ? String(locationName).trim()
+            : null,
+        // The planner's "AI Suggest" flow materialises items via this same
+        // endpoint (not the from-suggestion bulk-create route, which creates
+        // a whole NEW itinerary — not useful for filling an existing one), so
+        // it needs to be able to badge them the same way. Defaults false.
+        draftedByAi: draftedByAi === true,
         // Total is computed, never trusted from the client.
         totalPrice: computeItemLineTotal({ unitCost, quantity, markup, gstAmount }),
       },
@@ -3195,12 +3553,18 @@ router.patch("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant,
     if (!existing) return res.status(404).json({ error: "Item not found", code: "ITEM_NOT_FOUND" });
 
     const data = {};
-    const { itemType, position, description, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, dayNumber, latitude, longitude, totalPrice } = req.body || {};
+    const { itemType, position, description, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, dayNumber, latitude, longitude, totalPrice, startTime, endTime, locationName } = req.body || {};
     if (itemType !== undefined) {
-      assertValidItemType(itemType);
+      await assertValidItemTypeExtended(itemType, req.travelTenant.id);
       data.itemType = itemType;
     }
-    if (position !== undefined) data.position = Number(position);
+    if (position !== undefined) {
+      const p = Number(position);
+      if (!Number.isInteger(p) || p < 0) {
+        return res.status(400).json({ error: "position must be a non-negative integer", code: "INVALID_POSITION" });
+      }
+      data.position = p;
+    }
     if (description !== undefined) data.description = String(description);
     if (detailsJson !== undefined) data.detailsJson = detailsJson ? String(detailsJson) : null;
     if (supplierId !== undefined) data.supplierId = supplierId ? parseInt(supplierId, 10) : null;
@@ -3260,6 +3624,25 @@ router.patch("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant,
         }
         data.longitude = lng;
       }
+    }
+
+    // Time-of-day + place label. Real columns since the planner rewrite; both
+    // "" and null clear them.
+    if (startTime !== undefined) {
+      const parsed = parseTimeOfDay(startTime, "startTime");
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error, code: parsed.code });
+      data.startTime = parsed.value;
+    }
+    if (endTime !== undefined) {
+      const parsed = parseTimeOfDay(endTime, "endTime");
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error, code: parsed.code });
+      data.endTime = parsed.value;
+    }
+    if (locationName !== undefined) {
+      data.locationName =
+        locationName != null && String(locationName).trim() !== ""
+          ? String(locationName).trim()
+          : null;
     }
 
     // Recompute the line total whenever a price-affecting field changes,
@@ -3375,9 +3758,10 @@ router.post(
         if (trimmed.length > 0) description = trimmed;
       }
 
-      // Append after the current max position of THIS itinerary.
+      // Append after the current max position WITHIN THE SOURCE'S DAY, so the
+      // copy lands next to its original rather than at the end of the trip.
       const maxRow = await prisma.itineraryItem.findFirst({
-        where: { itineraryId: itin.id },
+        where: { itineraryId: itin.id, dayNumber: source.dayNumber },
         orderBy: { position: "desc" },
         select: { position: true },
       });
@@ -3395,8 +3779,26 @@ router.post(
           markup: source.markup != null ? Number(source.markup) : null,
           gstAmount: source.gstAmount != null ? Number(source.gstAmount) : null,
           totalPrice: source.totalPrice != null ? Number(source.totalPrice) : null,
+          // Previously dropped on the floor, which silently changed the copy's
+          // meaning: a duplicated hotel lost its day, its map pin and its
+          // quantity (resetting quantity to 1 while copying totalPrice verbatim
+          // left the line total disagreeing with its own components).
+          unit: source.unit ?? "per_person",
+          quantity: source.quantity != null ? Number(source.quantity) : 1,
+          direction: source.direction ?? null,
+          dayNumber: source.dayNumber ?? null,
+          latitude: source.latitude ?? null,
+          longitude: source.longitude ?? null,
+          startTime: source.startTime ?? null,
+          endTime: source.endTime ?? null,
+          locationName: source.locationName ?? null,
+          draftedByAi: source.draftedByAi === true,
         },
       });
+      // The duplicate adds a line total to the trip, so the parent's
+      // totalAmount has to be recomputed — this call was missing, leaving the
+      // header total stale until the next unrelated item edit.
+      await syncItineraryAfterItemChange(itin.id);
       res.status(201).json(created);
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -3815,7 +4217,7 @@ function tierCost(kind, budgetTier) {
 
 // Parse + normalise the structured JSON the LLM returns for itinerary-suggest
 // (real mode). Gemini is prompted to emit { summary, days:[{ dayNumber,
-// items:[{ itemType, description, estimatedCost }] }] } with realistic
+// items:[{ itemType, description, estimatedCost, startTime }] }] } with realistic
 // per-person INR costs. We defensively strip markdown fences / stray prose,
 // validate the shape, clamp itemType to VALID_ITEM_TYPES, and coerce costs.
 // Returns a clean suggestion or null so the caller can fall back to the
@@ -3857,11 +4259,29 @@ function parseLlmSuggestion(rawText, { destination }) {
       let estimatedCost = null;
       const c = Number(it.estimatedCost != null ? it.estimatedCost : it.unitCost);
       if (Number.isFinite(c) && c >= 0) estimatedCost = Math.round(c * 100) / 100;
+      // Time-of-day, when the model supplies it. Dropping it (as this parser
+      // used to) meant every AI-drafted day arrived untimed, which in turn
+      // made the generated PDF hide its TIME column entirely — the reference
+      // brochures all have one, so the output looked nothing like them.
+      let startTime = null;
+      const rawTime = typeof it.startTime === "string" ? it.startTime.trim() : "";
+      const tm = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(rawTime);
+      if (tm) startTime = `${tm[1].padStart(2, "0")}:${tm[2]}`;
+      // A short, geocodable place name when the model supplied one — the
+      // route map has nothing to plot without it (a full sentence
+      // description like "Relax at Calangute Beach" geocodes badly). Kept
+      // separate from the raw lat/lng fill-in below so a locationName can
+      // still be persisted onto the item even on the rare geocode miss.
+      const locationName = typeof it.locationName === "string" && it.locationName.trim()
+        ? it.locationName.trim().slice(0, 200)
+        : null;
       items.push({
         itemType,
         description: desc,
+        locationName,
         suggestedSupplierName: null,
         estimatedCost,
+        startTime,
         latitude: null,
         longitude: null,
       });
@@ -3875,6 +4295,52 @@ function parseLlmSuggestion(rawText, { destination }) {
     ? parsed.summary.trim()
     : `Suggested ${cleanDays.length}-day outline for ${destination}.`;
   return { summary, days: cleanDays };
+}
+
+// Best-effort: geocode each LLM-suggested item's locationName so the
+// itinerary's route map has something to plot once these items are
+// materialised — AI-drafted itineraries previously carried latitude:null
+// on every single item, so the "Route map" panel had nothing to show no
+// matter how large the trip was.
+//
+// Deliberately LLM-path-ONLY (the caller only invokes this when
+// costSource === "llm") — it never runs for the deterministic stub
+// skeleton, which keeps CI/offline test runs fully network-free exactly
+// as before (the existing suite pins the stub fallback path, which stays
+// untouched). Capped + fully fault-tolerant: any single lookup failing —
+// or the whole batch failing — just leaves that item's lat/lng null,
+// exactly like today. This never blocks or fails the suggest response.
+const MAX_SUGGEST_GEOCODE_ITEMS = 60;
+async function geocodeSuggestionItems(suggestion, destination) {
+  try {
+    const flatItems = [];
+    for (const day of suggestion.days || []) {
+      for (const item of day.items || []) flatItems.push(item);
+    }
+    const destShort = String(destination || "").split(",")[0].trim().toLowerCase();
+    await Promise.all(
+      flatItems.slice(0, MAX_SUGGEST_GEOCODE_ITEMS).map(async (item) => {
+        const place = item.locationName;
+        if (!place) return;
+        try {
+          // Append the destination for disambiguation UNLESS the model
+          // already included it (e.g. "Fort Aguada, Goa") — appending twice
+          // just makes the query noisier, not more precise.
+          const query = destShort && !place.toLowerCase().includes(destShort)
+            ? `${place}, ${destination}`
+            : place;
+          const results = await forwardGeocode(query, 1);
+          const hit = results && results[0];
+          if (hit && Number.isFinite(hit.lat) && Number.isFinite(hit.lng)) {
+            item.latitude = hit.lat;
+            item.longitude = hit.lng;
+          }
+        } catch { /* one item's geocode miss shouldn't affect the rest */ }
+      }),
+    );
+  } catch (e) {
+    console.warn("[travel-itin] suggestion geocoding skipped:", e.message);
+  }
 }
 
 // FR-3.4(d) response shape: { summary, days: [{ dayNumber, items: [...] }] }.
@@ -3922,6 +4388,15 @@ function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, 
   const mode = TRANSIT_MODES[modeKey] || TRANSIT_MODES.flight;
   const transitCost = mode.itemType === "flight" ? flightCost : transportCost;
 
+  // A plausible daily clock. Untimed skeleton items used to make the
+  // generated PDF drop its TIME column entirely (the column only renders when
+  // at least one item has a time), so a stub-mode itinerary looked nothing
+  // like the reference brochures it was meant to imitate. These are starting
+  // points the operator edits, exactly like every other suggested value.
+  const T = {
+    arrival: "09:30", arrivalTransfer: "11:00", checkIn: "13:00",
+    morning: "10:00", afternoon: "15:00", dinner: "19:30", departure: "17:00",
+  };
   const dayList = [];
   for (let d = 1; d <= days; d++) {
     const items = [];
@@ -3929,23 +4404,23 @@ function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, 
       const arrivalDesc = origin
         ? `${mode.outVerb} from ${origin} to ${destination}`
         : `${mode.outVerb} to ${destination}`;
-      items.push({ itemType: mode.itemType, description: arrivalDesc, suggestedSupplierName: null, estimatedCost: transitCost, latitude: null, longitude: null });
+      items.push({ itemType: mode.itemType, description: arrivalDesc, suggestedSupplierName: null, estimatedCost: transitCost, startTime: T.arrival, latitude: null, longitude: null });
       // An airport transfer only makes sense when arriving by air; for train/road
       // a generic transfer to the hotel still helps, so keep it but reword.
       const transferDesc = mode.arriveTransfer
         ? `Airport transfer to hotel in ${destination}`
         : `Transfer to hotel in ${destination}`;
-      items.push({ itemType: "transfer", description: transferDesc, suggestedSupplierName: null, estimatedCost: transferCost, latitude: null, longitude: null });
+      items.push({ itemType: "transfer", description: transferDesc, suggestedSupplierName: null, estimatedCost: transferCost, startTime: T.arrivalTransfer, latitude: null, longitude: null });
     }
-    items.push({ itemType: "hotel", description: `Night ${d} — stay in ${destination}`, suggestedSupplierName: null, estimatedCost: perNightHotel, latitude: null, longitude: null });
-    items.push({ itemType: "sightseeing", description: `Day ${d} — morning sightseeing in ${destination}`, suggestedSupplierName: null, estimatedCost: sightseeingCost, latitude: null, longitude: null });
-    items.push({ itemType: "activity", description: `Day ${d} — afternoon activity in ${destination}`, suggestedSupplierName: null, estimatedCost: activityCost, latitude: null, longitude: null });
-    items.push({ itemType: "meals", description: `Day ${d} — dinner in ${destination}`, suggestedSupplierName: null, estimatedCost: mealsCost, latitude: null, longitude: null });
+    items.push({ itemType: "hotel", description: `Night ${d} — stay in ${destination}`, suggestedSupplierName: null, estimatedCost: perNightHotel, startTime: T.checkIn, latitude: null, longitude: null });
+    items.push({ itemType: "sightseeing", description: `Day ${d} — morning sightseeing in ${destination}`, suggestedSupplierName: null, estimatedCost: sightseeingCost, startTime: T.morning, latitude: null, longitude: null });
+    items.push({ itemType: "activity", description: `Day ${d} — afternoon activity in ${destination}`, suggestedSupplierName: null, estimatedCost: activityCost, startTime: T.afternoon, latitude: null, longitude: null });
+    items.push({ itemType: "meals", description: `Day ${d} — dinner in ${destination}`, suggestedSupplierName: null, estimatedCost: mealsCost, startTime: T.dinner, latitude: null, longitude: null });
     if (d === days && !noTransit) {
       const returnDesc = origin
         ? `${mode.retVerb} from ${destination} to ${origin}`
         : `${mode.retVerb} from ${destination}`;
-      items.push({ itemType: mode.itemType, description: returnDesc, suggestedSupplierName: null, estimatedCost: transitCost, latitude: null, longitude: null });
+      items.push({ itemType: mode.itemType, description: returnDesc, suggestedSupplierName: null, estimatedCost: transitCost, startTime: T.departure, latitude: null, longitude: null });
     }
     dayList.push({ dayNumber: d, items });
   }
@@ -4144,6 +4619,15 @@ router.post(
           departureCity: depCity || null,
           transportPreference: transport || "flight",
         });
+      }
+
+      // Real, LLM-named places are worth geocoding for the route map; the
+      // deterministic stub's generic "Day N sightseeing in <destination>"
+      // items aren't specific enough to plot usefully, and skipping them
+      // here keeps the stub path (CI, offline, transient LLM failure)
+      // exactly as network-free as it's always been.
+      if (costSource === "llm") {
+        await geocodeSuggestionItems(suggestion, dest);
       }
 
       return res.status(200).json({
@@ -4362,6 +4846,11 @@ router.post(
           endDate: true,
           totalAmount: true,
           currency: true,
+          inclusionsJson: true,
+          exclusionsJson: true,
+          otherDetailsJson: true,
+          termsText: true,
+          introText: true,
         },
       });
       if (!full) {
@@ -4471,6 +4960,17 @@ router.post(
           basePriceMinor,
           currency: full.currency || null,
           templateJson,
+          // Round-trips "Save as template" → new-itinerary clone: whatever
+          // Inclusions/Exclusions/Other details/Terms/Cover blurb the
+          // itinerary had are captured here and re-applied by the create
+          // route (see the clonedFromTemplateId handling above) the next
+          // time this template is picked. Previously captured only the
+          // day-plan + price — the boilerplate text was silently dropped.
+          defaultInclusionsJson: full.inclusionsJson || null,
+          defaultExclusionsJson: full.exclusionsJson || null,
+          defaultOtherDetailsJson: full.otherDetailsJson || null,
+          defaultTermsText: full.termsText || null,
+          defaultIntroText: full.introText || null,
           isActive: true,
           // version + isLatest + archivedAt take their defaults (1, true, null).
           // Metric columns also default (0, null, null).
@@ -4925,38 +5425,9 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
     // which case the PDF renders without the banner. Never blocks the download.
     const heroBuffer = await fetchDestinationImageBuffer(full.destination);
 
-    // G115 — If this itinerary was cloned from a PDF-based template, fetch the
-    // stored underprint and overlay the dynamic data on top of it.
-    let pdfTemplateBuffer = null;
-    let pdfTemplateRegions = null;
-    if (full.clonedFromTemplateId) {
-      try {
-        const tpl = await prisma.itineraryTemplate.findFirst({
-          where: { id: full.clonedFromTemplateId, tenantId: req.travelTenant.id },
-          select: { pdfTemplateUrl: true, pdfTemplateRegions: true },
-        });
-        if (tpl && tpl.pdfTemplateUrl) {
-          pdfTemplateBuffer = await fetchPdfTemplateBuffer(tpl.pdfTemplateUrl);
-          pdfTemplateRegions = tpl.pdfTemplateRegions
-            ? (() => {
-                try {
-                  const parsed = JSON.parse(tpl.pdfTemplateRegions);
-                  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-                } catch (_e) {
-                  return null;
-                }
-              })()
-            : null;
-        }
-      } catch (tplErr) {
-        console.warn("[travel-itin] PDF template lookup failed:", tplErr.message);
-      }
-    }
-
-    const pdfBuf = await renderTravelItineraryPdf(full, contact, {
+    const pdfBuf = await renderItineraryPdfBuffer(full, contact, {
       heroBuffer,
-      pdfTemplateBuffer,
-      regions: pdfTemplateRegions,
+      tenantId: req.travelTenant.id,
       viewerWatermark: {
         viewerName,
         viewerEmail,
@@ -5001,6 +5472,261 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
     res.status(500).json({ error: "Failed to render itinerary PDF", code: "PDF_FAILED" });
   }
 });
+
+// GET /api/travel/itineraries/:id/static-page-preview
+//
+// Plain-text preview of what the itinerary's bound template's own "static"
+// page(s) currently say — before any per-itinerary override. Powers the
+// Details tab's two-box static-content editor: one read-only box shows this
+// (what's there today), the other lets the operator type a replacement.
+// Without this the operator was typing a replacement blind, with no way to
+// see what they were actually replacing short of opening the raw PDF.
+router.get("/itineraries/:id/static-page-preview", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+    const full = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      select: { clonedFromTemplateId: true, pdfTemplateId: true },
+    });
+    if (!full || (!full.pdfTemplateId && !full.clonedFromTemplateId)) {
+      return res.json({ text: "", hasTemplate: false });
+    }
+    const { pdfTemplateSourceBuffer, pdfStyleSpec } = await resolveItineraryPdfTemplate(full, req.travelTenant.id);
+    if (!pdfTemplateSourceBuffer) {
+      return res.json({ text: "", hasTemplate: false });
+    }
+    const text = await itineraryTemplatePdf.getStaticPageText(pdfTemplateSourceBuffer, pdfStyleSpec);
+    res.json({ text, hasTemplate: true });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] static-page-preview error:", e.message);
+    res.status(500).json({ error: "Failed to load template preview" });
+  }
+});
+
+// POST /api/travel/itineraries/:id/add-to-catalogue
+//
+// Renders the itinerary PDF (same render path as GET /:id/pdf, byte-
+// identical output) and uploads it into a "CRM Itineraries" folder nested
+// under the tenant's Travel Knowledge Base Drive root (same Drive account
+// the RAG sync already uses; the folder name deliberately doesn't match any
+// SUB_BRAND_ALIASES token so the existing sync silently skips it). Stores
+// the resulting Drive file id/link on the Itinerary row so the TMC
+// Catalogue admin's Drive browser and the editor's "View in Drive" chip can
+// both read it back.
+router.post(
+  "/itineraries/:id/add-to-catalogue",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("itineraries", "update"),
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const full = await prisma.itinerary.findFirst({
+        where: { id: itin.id, tenantId: req.travelTenant.id },
+        include: { items: { orderBy: { position: "asc" } } },
+      });
+      if (!full) {
+        return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+      }
+      const contact = full.contactId
+        ? await prisma.contact.findUnique({
+          where: { id: full.contactId },
+          select: { name: true, email: true, phone: true },
+        })
+        : { name: "Customer", email: null, phone: null };
+
+      const rootFolderId = await getKbRootFolderId(req.travelTenant.id);
+      if (!rootFolderId) {
+        return res.status(400).json({
+          error: "Configure the Knowledge Base Drive root folder first (Travel Knowledge Base settings)",
+          code: "KB_ROOT_NOT_CONFIGURED",
+        });
+      }
+
+      const pdfBuf = await renderItineraryPdfBuffer(full, contact, {
+        tenantId: req.travelTenant.id,
+      });
+
+      const drive = await googleDriveOAuth.getDriveClient(req.travelTenant.id);
+      // Keep the TMC folder as the immediate child of the configured root so
+      // the knowledge-base sync assigns these PDFs to subBrand="tmc".
+      const tmcFolderId = await googleDriveOAuth.findOrCreateFolder(drive, rootFolderId, "tmc");
+      const folderId = await googleDriveOAuth.findOrCreateFolder(drive, tmcFolderId, "CRM Itineraries");
+      const fileName = `itinerary-${full.id}-v${full.version || 1}.pdf`;
+      const { fileId, webViewLink } = await googleDriveOAuth.uploadFileToDrive(
+        drive, folderId, fileName, "application/pdf", pdfBuf,
+      );
+
+      const updated = await prisma.itinerary.update({
+        where: { id: full.id },
+        data: {
+          catalogueDriveFileId: fileId,
+          catalogueDriveViewLink: webViewLink,
+          catalogueSyncedAt: new Date(),
+        },
+        select: { catalogueDriveFileId: true, catalogueDriveViewLink: true, catalogueSyncedAt: true },
+      });
+
+      writeAudit(
+        "Itinerary", "ITINERARY_ADDED_TO_CATALOGUE", full.id, req.user.userId, req.travelTenant.id,
+        { subBrand: full.subBrand, driveFileId: fileId },
+      ).catch(() => {});
+
+      res.json({
+        success: true,
+        driveFileId: updated.catalogueDriveFileId,
+        driveViewLink: updated.catalogueDriveViewLink,
+        syncedAt: updated.catalogueSyncedAt,
+      });
+    } catch (e) {
+      if (e.code === "DRIVE_NOT_CONNECTED") {
+        return res.status(401).json({ error: e.message, code: e.code });
+      }
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] add-to-catalogue error:", e.message);
+      res.status(500).json({ error: "Failed to add itinerary to catalogue" });
+    }
+  },
+);
+
+// The closed vocabularies TmcTripCatalogue fields must match exactly — see
+// backend/prisma/schema.prisma model TmcTripCatalogue + backend/lib/tmcDiagnosticEngine.js
+// (priceBand) and backend/prisma/seed-travel.js Q1/Q2 option definitions
+// (primary outcomes / canonical skills). Kept local to this route rather
+// than a shared constants module since nothing else needs them yet.
+const TMC_PRICE_BANDS = ["upto-5k", "10k-30k", "30k-75k", "1l-2l", "2l-plus"];
+const TMC_GRADE_BANDS = ["4-6", "6-8", "9-10", "11-12"];
+const TMC_PRIMARY_OUTCOMES = ["confidence", "curiosity", "empathy", "global_awareness", "resilience", "pride"];
+const TMC_CANONICAL_SKILLS = [
+  "Empathy", "Self-awareness", "Collaboration and teamwork", "Mindfulness",
+  "Lifelong learning and curiosity", "Cultural respect and inclusion", "Emotional resilience",
+];
+const TMC_BOARDS = ["CBSE", "ICSE", "IB", "Cambridge", "State"];
+
+// Field names deliberately match POST /api/travel-tmc-catalogue's expected
+// body exactly (including the *Json suffix) so the frontend can forward
+// this draft to that existing endpoint without any remapping. That route's
+// normaliseJsonField() accepts raw arrays/objects directly (auto-
+// stringifies), so the AI can emit native JSON arrays here.
+const TMC_EXTRACT_SYSTEM_PROMPT = `You are drafting a row for a school-trip recommendation catalogue used by a curriculum-linked diagnostic sales engine. Given a travel CRM itinerary's structured data (destination, day-by-day items, pricing), propose catalogue fields as a SINGLE JSON object with EXACTLY these keys:
+{
+  "tripId": "url-safe-slug-from-destination-and-a-short-descriptor",
+  "title": "short trip title",
+  "tagline": "one sentence, no destination name",
+  "tier": "day" | "domestic" | "international",
+  "region": "e.g. North India, Europe, or null",
+  "durationDays": integer,
+  "durationNights": integer,
+  "minGradeBand": one of ${JSON.stringify(TMC_GRADE_BANDS)},
+  "maxGradeBand": one of ${JSON.stringify(TMC_GRADE_BANDS)},
+  "boardsSupportedJson": array from ${JSON.stringify(TMC_BOARDS)},
+  "minGroupSize": integer,
+  "priceBand": EXACTLY one of ${JSON.stringify(TMC_PRICE_BANDS)} (must match the itinerary's per-student price),
+  "indicativePricePerStudent": integer or null,
+  "primaryOutcomesJson": array of 1-3 keys from EXACTLY ${JSON.stringify(TMC_PRIMARY_OUTCOMES)},
+  "skillsDevelopedJson": array of 2-4 keys from EXACTLY ${JSON.stringify(TMC_CANONICAL_SKILLS)},
+  "subjectsTouchedJson": array of school subject names,
+  "anchorExperiencesJson": array of {"name","what_students_do","skill_link","subject_link"} (2-4 items, skill_link must be one of the canonical skills above),
+  "curriculumHooksJson": array of {"board","grade_band","subject","topic","hook_text"} (2-4 items, board from ${JSON.stringify(TMC_BOARDS)}, grade_band from ${JSON.stringify(TMC_GRADE_BANDS)}),
+  "reportSkillBlurb": "2-3 sentences, NEVER names the destination",
+  "summaryForBrief": "2-3 sentences, destination-specific, for the sales executive"
+}
+Respond with ONLY the JSON object, no markdown fences, no commentary.`;
+
+function parseAndValidateExtractedFields(rawText) {
+  if (!rawText || typeof rawText !== "string") return null;
+  let cleaned = rawText.trim();
+  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch) cleaned = fenceMatch[1].trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch (_e) {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (!TMC_PRICE_BANDS.includes(parsed.priceBand)) return null;
+  if (!parsed.title || !parsed.tripId) return null;
+  return parsed;
+}
+
+// POST /api/travel/itineraries/:id/extract-to-tmc-catalogue
+//
+// AI drafts TmcTripCatalogue fields from the itinerary's own structured CRM
+// data (text-only — no PDF/vision call). Provider-agnostic via
+// aiGateway.runAiRequest (BYOK or CRM-managed subscription; never a
+// hardcoded provider). Returns a DRAFT only — this route never writes to
+// TmcTripCatalogue itself. The frontend POSTs the returned draft to the
+// existing, unmodified POST /api/travel-tmc-catalogue, which force-sets
+// status="archived" (human-verify gate, PRD §3.2) — that gate is reused
+// exactly as-is, not bypassed here.
+router.post(
+  "/itineraries/:id/extract-to-tmc-catalogue",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("tmc_catalogue", "write"),
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const full = await prisma.itinerary.findFirst({
+        where: { id: itin.id, tenantId: req.travelTenant.id },
+        include: { items: { orderBy: { position: "asc" } } },
+      });
+      if (!full) {
+        return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+      }
+
+      const promptPayload = {
+        destination: full.destination,
+        subBrand: full.subBrand,
+        pax: full.pax,
+        currency: full.currency,
+        totalAmount: full.totalAmount ? Number(full.totalAmount) : null,
+        startDate: full.startDate,
+        endDate: full.endDate,
+        items: full.items.map((it) => ({
+          dayNumber: it.dayNumber,
+          itemType: it.itemType,
+          description: it.description,
+        })),
+      };
+
+      let resp;
+      try {
+        resp = await aiGateway.runAiRequest({
+          tenantId: req.travelTenant.id,
+          userId: req.user.userId,
+          task: "travel-tmc-catalogue-extract",
+          surface: "routes/travel_itineraries.js:extract-to-tmc-catalogue",
+          generationConfig: { responseMimeType: "application/json" },
+          messages: [
+            { role: "system", content: TMC_EXTRACT_SYSTEM_PROMPT },
+            { role: "user", content: JSON.stringify(promptPayload) },
+          ],
+        });
+      } catch (aiErr) {
+        if (aiErr.friendly) {
+          return res.status(aiErr.code === "AI_CREDITS_EXHAUSTED" ? 402 : 403).json({
+            error: aiErr.message, code: aiErr.code,
+          });
+        }
+        console.error("[travel-itin] extract-to-tmc-catalogue AI error:", aiErr.message);
+        return res.status(502).json({ error: "AI extraction failed", code: "AI_EXTRACT_FAILED" });
+      }
+
+      const draft = parseAndValidateExtractedFields(resp.text);
+      if (!draft) {
+        return res.status(502).json({ error: "AI returned an unparsable response", code: "AI_EXTRACT_PARSE_FAILED" });
+      }
+      res.json({ draft: { ...draft, sourceItineraryId: full.id } });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] extract-to-tmc-catalogue error:", e.message);
+      res.status(500).json({ error: "Failed to extract catalogue fields" });
+    }
+  },
+);
 
 // ─── PUBLIC ENDPOINTS (no auth) — Phase 2 50%-advance booking (PRD §4.7) ──
 //

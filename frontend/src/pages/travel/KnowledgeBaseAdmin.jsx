@@ -205,7 +205,7 @@ export default function KnowledgeBaseAdmin() {
 
   const disconnectDrive = async () => {
     if (!isAdmin) return;
-    if (!window.confirm('Disconnect Google Drive? The selected root folder will be kept; you can reconnect later.')) return;
+    if (!window.confirm('Disconnect Google Drive? Your selected brochure folder will be kept, and you can reconnect later.')) return;
     setDisconnecting(true);
     try {
       await fetchApi('/api/travel/knowledge-base/oauth/disconnect', { method: 'POST' });
@@ -267,7 +267,7 @@ export default function KnowledgeBaseAdmin() {
       setConfig((prev) => ({ ...prev, ...res }));
       setFolderInput(res.rootFolderId);
       setOauth((prev) => ({ ...prev, rootFolderId: res.rootFolderId }));
-      notify.success('Folder selected for RAG pipeline');
+      notify.success('Brochure folder selected');
     } catch (e) {
       notify.error(e.message || 'Failed to save folder');
     } finally {
@@ -286,7 +286,7 @@ export default function KnowledgeBaseAdmin() {
       setConfig((prev) => ({ ...prev, ...res }));
       setFolderInput(res.rootFolderId);
       setOauth((prev) => ({ ...prev, rootFolderId: res.rootFolderId }));
-      notify.success('Drive folder ID saved');
+      notify.success('Brochure folder saved');
     } catch (e) {
       notify.error(e.message || 'Failed to save config');
     } finally {
@@ -310,9 +310,9 @@ export default function KnowledgeBaseAdmin() {
         body: JSON.stringify({ rootFolderId }),
       });
       setActiveJobId(res.jobId || null);
-      notify.success('Sync started');
+      notify.success('Library update started');
     } catch (e) {
-      notify.error(e.message || 'Sync failed to start');
+      notify.error(e.message || 'Library update could not be started');
       setSyncing(false);
     }
   };
@@ -322,9 +322,9 @@ export default function KnowledgeBaseAdmin() {
     setStopping(true);
     try {
       await fetchApi(`/api/travel/knowledge-base/sync/${activeJobId}/stop`, { method: 'POST' });
-      notify.success('Sync stop requested');
+      notify.success('Stopping the library update');
     } catch (e) {
-      notify.error(e.message || 'Failed to stop sync');
+      notify.error(e.message || 'The library update could not be stopped');
     } finally {
       setStopping(false);
     }
@@ -335,12 +335,12 @@ export default function KnowledgeBaseAdmin() {
     setStopping(true);
     try {
       const res = await fetchApi('/api/travel/knowledge-base/sync/stop-all', { method: 'POST' });
-      notify.success(`Stopped ${res.stopped || 0} running sync job(s)`);
+      notify.success(`Stopped ${res.stopped || 0} library update${res.stopped === 1 ? '' : 's'}`);
       setSyncing(false);
       setActiveJobId(null);
       await loadAll();
     } catch (e) {
-      notify.error(e.message || 'Failed to stop running syncs');
+      notify.error(e.message || 'The library updates could not be stopped');
     } finally {
       setStopping(false);
     }
@@ -353,10 +353,15 @@ export default function KnowledgeBaseAdmin() {
       notify.error('Select a Drive folder first');
       return;
     }
-    const confirmed = window.confirm(
-      'This will delete ALL indexed PDF data for this tenant across every provider collection and start a fresh sync from the selected folder.\n\nAre you sure?',
-    );
+
+    const confirmed = await notify.confirm({
+      title: 'Rebuild library',
+      message: 'This will delete all indexed brochure data for this tenant and start a fresh sync from the selected folder.',
+      confirmText: 'Rebuild',
+      destructive: true,
+    });
     if (!confirmed) return;
+
     setSyncing(true);
     setActiveJobId(null);
     try {
@@ -365,9 +370,9 @@ export default function KnowledgeBaseAdmin() {
         body: JSON.stringify({ rootFolderId }),
       });
       setActiveJobId(res.jobId || null);
-      notify.success('Index wiped; fresh sync started');
+      notify.success('Library cleared; fresh update started');
     } catch (e) {
-      notify.error(e.message || 'Wipe and resync failed');
+      notify.error(e.message || 'The library could not be rebuilt');
       setSyncing(false);
     }
   };
@@ -387,11 +392,11 @@ export default function KnowledgeBaseAdmin() {
         setActiveJobId(null);
         await loadAll();
         if (job.status === 'completed') {
-          notify.success(`Sync completed: ${job.filesIndexed} indexed, ${job.filesFailed} failed`);
+      notify.success(`Library update finished: ${job.filesIndexed} added, ${job.filesFailed} failed`);
         } else if (job.status === 'stopped') {
-          notify.info(`Sync stopped: ${job.filesIndexed} indexed, ${job.filesFailed} failed`);
+      notify.info(`Library update stopped: ${job.filesIndexed} added, ${job.filesFailed} failed`);
         } else {
-          notify.error(`Sync ${job.status}: ${job.errorMessage || 'unknown error'}`);
+      notify.error(`Library update ${formatJobStatus(job.status).toLowerCase()}: ${job.errorMessage || 'unknown error'}`);
         }
       }
     } catch (_) {
@@ -409,14 +414,14 @@ export default function KnowledgeBaseAdmin() {
   const deleteFile = async (id) => {
     if (!isAdmin) return;
     if (!await notify.confirm({
-      title: 'Remove Indexed File',
-      message: 'Remove this file from the index?',
+      title: 'Remove brochure',
+      message: 'Remove this brochure from the library?',
       confirmText: 'Remove',
       destructive: true,
     })) return;
     try {
       await fetchApi(`/api/travel/knowledge-base/files/${id}`, { method: 'DELETE' });
-      notify.success('File removed from index');
+      notify.success('Brochure removed from library');
       await loadAll();
     } catch (e) {
       notify.error(e.message || 'Failed to remove file');
@@ -429,7 +434,7 @@ export default function KnowledgeBaseAdmin() {
     if (ids.length === 0) return;
     if (!await notify.confirm({
       title: 'Remove Selected Files',
-      message: `Remove ${ids.length} selected file${ids.length === 1 ? '' : 's'} from the index? This also deletes their Qdrant vectors.`,
+      message: `Remove ${ids.length} selected brochure${ids.length === 1 ? '' : 's'} from the library?`,
       confirmText: 'Remove',
       destructive: true,
     })) return;
@@ -439,7 +444,7 @@ export default function KnowledgeBaseAdmin() {
         method: 'POST',
         body: JSON.stringify({ ids }),
       });
-      notify.success(`${res.deleted || ids.length} file${res.deleted === 1 ? '' : 's'} removed from index`);
+      notify.success(`${res.deleted || ids.length} brochure${res.deleted === 1 ? '' : 's'} removed from library`);
       setSelectedFileIds(new Set());
       await loadAll();
     } catch (e) {
@@ -454,8 +459,8 @@ export default function KnowledgeBaseAdmin() {
     const ids = Array.from(selectedJobIds);
     if (ids.length === 0) return;
     if (!await notify.confirm({
-      title: 'Delete Selected Sync Jobs',
-      message: `Delete ${ids.length} selected sync job${ids.length === 1 ? '' : 's'} from history? Running jobs must be stopped first.`,
+      title: 'Delete selected update history',
+      message: `Delete ${ids.length} selected history item${ids.length === 1 ? '' : 's'}? Running updates must be stopped first.`,
       confirmText: 'Delete',
       destructive: true,
     })) return;
@@ -465,7 +470,7 @@ export default function KnowledgeBaseAdmin() {
         method: 'POST',
         body: JSON.stringify({ ids }),
       });
-      notify.success(`${res.deleted || ids.length} job${res.deleted === 1 ? '' : 's'} deleted`);
+      notify.success(`${res.deleted || ids.length} history item${res.deleted === 1 ? '' : 's'} deleted`);
       setSelectedJobIds(new Set());
       await loadAll();
     } catch (e) {
@@ -506,6 +511,13 @@ export default function KnowledgeBaseAdmin() {
     try { return new Date(d).toLocaleString(); } catch { return String(d); }
   };
 
+  const formatJobStatus = (value) => ({
+    running: 'Updating',
+    completed: 'Ready',
+    stopped: 'Stopped',
+    failed: 'Needs attention',
+  }[value] || value || 'Unknown');
+
   const canSync = oauth.connected && oauth.rootFolderId && config.qdrantEnabled && config.embedEnabled;
   const indexedFilesCount = filesTotal || files.length;
 
@@ -543,7 +555,7 @@ export default function KnowledgeBaseAdmin() {
         </Link>
         <div className="card" style={{ padding: 48, textAlign: 'center' }}>
           <RefreshCw size={32} style={{ marginBottom: 12, animation: 'spin 1s linear infinite' }} />
-          <div>Loading Travel Knowledge…</div>
+          <div>Loading brochure library…</div>
         </div>
       </div>
     );
@@ -557,7 +569,7 @@ export default function KnowledgeBaseAdmin() {
         </Link>
         <Link
           to="/travel/diagnostics"
-          title="Jump to Diagnostics — brochure PDFs indexed here power the trip recommendations shown on diagnostic results."
+          title="Open Diagnostics — brochures from this library help create trip recommendations."
           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 13, textDecoration: 'none' }}
         >
           <ArrowLeft size={16} /> Go to Diagnostics
@@ -569,9 +581,9 @@ export default function KnowledgeBaseAdmin() {
           <Brain size={28} color="var(--accent-color)" />
         </div>
         <div>
-          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700 }}>Travel Knowledge</h1>
+          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700 }}>Travel Brochure Library</h1>
           <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)', fontSize: 14 }}>
-            Connect Google Drive, pick the brochure root folder, and sync PDFs so TMC diagnostics can recommend trips with AI.
+            Keep your travel brochures in one place so the CRM can use them when preparing trip recommendations.
           </p>
         </div>
       </div>
@@ -590,20 +602,20 @@ export default function KnowledgeBaseAdmin() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <AlertCircle size={18} color="#eab308" />
             <span style={{ fontSize: 13 }}>
-              Qdrant is not configured. RAG recommendations will be skipped until <code>QDRANT_URL</code> is set.
+              The brochure library service is not ready yet. Please ask your system administrator to finish the one-time setup.
             </span>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
       {!oauth.configured && (
         <div className="card" style={{ padding: 20, marginBottom: 20, borderLeft: '4px solid #eab308', background: 'rgba(234,179,8,0.08)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
             <AlertCircle size={22} color="#eab308" style={{ flexShrink: 0, marginTop: 2 }} />
             <div>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>Google Drive OAuth is not configured</div>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Google Drive connection needs one-time setup</div>
               <p style={{ margin: 0, lineHeight: 1.5, fontSize: 13, ...muted }}>
-                Ask the devops team to set <code>GOOGLE_DRIVE_CLIENT_ID</code>, <code>GOOGLE_DRIVE_CLIENT_SECRET</code>, and <code>GOOGLE_DRIVE_REDIRECT_URI</code> in the backend environment.
+                Please ask your system administrator to finish the Google Drive setup before connecting.
               </p>
             </div>
           </div>
@@ -613,13 +625,13 @@ export default function KnowledgeBaseAdmin() {
       {/* Stepper */}
       <div className="card" style={{ padding: 20, marginBottom: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
-          {stepDot(STEP.CONFIG, 'Configure OAuth')}
+          {stepDot(STEP.CONFIG, 'Prepare connection')}
           <ChevronRight size={16} style={{ color: 'var(--text-secondary)' }} />
-          {stepDot(STEP.CONNECT, 'Connect Drive')}
+          {stepDot(STEP.CONNECT, 'Connect Google Drive')}
           <ChevronRight size={16} style={{ color: 'var(--text-secondary)' }} />
-          {stepDot(STEP.FOLDER, 'Pick folder')}
+          {stepDot(STEP.FOLDER, 'Choose brochure folder')}
           <ChevronRight size={16} style={{ color: 'var(--text-secondary)' }} />
-          {stepDot(STEP.SYNC, 'Sync PDFs')}
+          {stepDot(STEP.SYNC, 'Update library')}
         </div>
       </div>
 
@@ -632,17 +644,17 @@ export default function KnowledgeBaseAdmin() {
             </div>
             <div>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>1. Connect Google Drive</h2>
-              <p style={{ margin: '4px 0 0', fontSize: 12, ...muted }}>Read-only access to your brochure folders.</p>
+              <p style={{ margin: '4px 0 0', fontSize: 12, ...muted }}>The CRM will only read your brochure folders.</p>
             </div>
           </div>
 
           {!oauth.connected ? (
             <>
               <p style={{ fontSize: 13, lineHeight: 1.5, ...muted, marginBottom: 12 }}>
-                Authorise the CRM to read the Drive folder that contains the TMC, RFU, Travel Stall and Visa Sure brochure sub-folders. You only need to do this once per tenant.
+                Give the CRM permission to read the Drive folder that contains your TMC, RFU, Travel Stall, and Visa Sure brochures. You only need to do this once for your organisation.
               </p>
               <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-color)', fontSize: 12, ...muted, marginBottom: 16, lineHeight: 1.5 }}>
-                If Google shows “This app hasn&apos;t been verified”, click <strong>Continue</strong> or ask your admin to add your email as a test user in the Google Cloud OAuth consent screen. The redirect must point to the backend callback URL.
+                If Google shows a warning before connecting, follow the on-screen instructions or ask your system administrator for help.
               </div>
               {isAdmin ? (
                 <button className="btn-primary" onClick={connectDrive} disabled={connecting || !oauth.configured || completingOAuth} style={{ width: '100%', marginBottom: 12 }}>
@@ -650,7 +662,7 @@ export default function KnowledgeBaseAdmin() {
                   {connecting ? 'Opening Google…' : completingOAuth ? 'Completing…' : 'Connect Google Drive'}
                 </button>
               ) : (
-                <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-color)', fontSize: 13, ...muted, marginBottom: 12 }}>Admin only</div>
+              <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-color)', fontSize: 13, ...muted, marginBottom: 12 }}>Only an organisation administrator can connect the brochure library.</div>
               )}
               <a
                 href="/templates/brochure-template.zip"
@@ -700,6 +712,10 @@ export default function KnowledgeBaseAdmin() {
               </a>
             </div>
           )}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border-color)', fontSize: 12, lineHeight: 1.5, ...muted }}>
+            <FolderOpen size={15} style={{ flex: '0 0 auto', marginTop: 1, color: 'var(--accent-color)' }} />
+            <span><strong style={{ color: 'var(--text-primary)' }}>TMC Catalogue uses this connection.</strong> The selected brochure folder supplies the PDFs shown in TMC Catalogue, including files in <strong style={{ color: 'var(--text-primary)' }}>TMC / CRM Itineraries</strong>.</span>
+          </div>
         </div>
 
         {/* Folder picker card */}
@@ -709,13 +725,13 @@ export default function KnowledgeBaseAdmin() {
               <FolderOpen size={22} color="#eab308" />
             </div>
             <div>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>2. Select brochure root folder</h2>
-              <p style={{ margin: '4px 0 0', fontSize: 12, ...muted }}>All PDFs inside this folder tree will be indexed.</p>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>2. Choose brochure folder</h2>
+              <p style={{ margin: '4px 0 0', fontSize: 12, ...muted }}>All brochures inside this folder and its subfolders will be added.</p>
             </div>
           </div>
 
           {!oauth.connected ? (
-            <div style={{ padding: 16, borderRadius: 8, background: 'var(--bg-color)', fontSize: 13, ...muted }}>Connect Google Drive first to browse folders.</div>
+            <div style={{ padding: 16, borderRadius: 8, background: 'var(--bg-color)', fontSize: 13, ...muted }}>Connect Google Drive above before choosing a folder.</div>
           ) : (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 12, fontSize: 13 }}>
@@ -758,7 +774,7 @@ export default function KnowledgeBaseAdmin() {
                                 disabled={savingConfig || isSelected}
                                 style={{ padding: '6px 12px', fontSize: 12 }}
                               >
-                                {isSelected ? 'Selected' : 'Use for RAG'}
+                                {isSelected ? 'Selected' : 'Use this folder'}
                               </button>
                             )}
                             <button className="btn-secondary" onClick={() => enterFolder(folder)} disabled={loadingFolders} style={{ padding: '6px 12px', fontSize: 12 }}>
@@ -773,14 +789,14 @@ export default function KnowledgeBaseAdmin() {
               </div>
 
               <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 12, ...muted, marginBottom: 6, fontWeight: 600 }}>Selected root folder ID</label>
+                <label style={{ display: 'block', fontSize: 12, ...muted, marginBottom: 6, fontWeight: 600 }}>Selected folder</label>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   <input
                     type="text"
                     className="input-field"
                     value={folderInput}
                     onChange={(e) => setFolderInput(e.target.value)}
-                    placeholder="Drive folder ID"
+                    placeholder="Folder ID (optional)"
                     disabled={!isAdmin || savingConfig}
                     style={{ flex: 1, minWidth: 220 }}
                   />
@@ -795,7 +811,7 @@ export default function KnowledgeBaseAdmin() {
 
               {oauth.rootFolderId && (
                 <div style={{ fontSize: 12, color: '#22c55e', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <CheckCircle size={14} /> Root folder saved for sync.
+                  <CheckCircle size={14} /> Brochure folder saved.
                 </div>
               )}
             </>
@@ -811,8 +827,8 @@ export default function KnowledgeBaseAdmin() {
               <Database size={22} color="#22c55e" />
             </div>
             <div>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>3. Sync to Qdrant</h2>
-              <p style={{ margin: '4px 0 0', fontSize: 12, ...muted }}>Indexed PDF brochures per sub-brand.</p>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>3. Update brochure library</h2>
+              <p style={{ margin: '4px 0 0', fontSize: 12, ...muted }}>Add the latest brochures for each travel brand.</p>
             </div>
           </div>
           {isAdmin && (
@@ -826,17 +842,17 @@ export default function KnowledgeBaseAdmin() {
                 <>
                   <button className="btn-primary" onClick={runSync} disabled={syncing || !canSync}>
                     <RefreshCw size={16} style={{ marginRight: 6, animation: syncing ? 'spin 1s linear infinite' : undefined }} />
-                    {syncing ? 'Syncing…' : 'Sync now'}
+                  {syncing ? 'Updating…' : 'Update library'}
                   </button>
                   <button
                     className="btn-secondary"
                     onClick={wipeAndResync}
                     disabled={syncing || !canSync}
-                    title="Delete all indexed data and start a fresh sync from the selected folder"
+                    title="Delete the current indexed brochure data and rebuild it from the selected folder"
                     style={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)' }}
                   >
                     <Trash2 size={16} style={{ marginRight: 6 }} />
-                    Wipe & resync
+                    Rebuild library
                   </button>
                 </>
               )}
@@ -848,10 +864,8 @@ export default function KnowledgeBaseAdmin() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)', marginBottom: 16 }}>
             <Database size={16} color="var(--accent-color)" />
             <span style={{ fontSize: 13 }}>
-              Active embedding provider: <strong>{config.embedProvider}</strong>
-              {config.embedModel && ` (${config.embedModel}`}
-              {config.vectorSize && `, ${config.vectorSize} dims`}
-              {config.embedModel ? ')' : ''}. New syncs index into the provider-specific Qdrant collection.
+              Search service: <strong>Ready</strong>
+              . New brochures will be added to the library automatically.
             </span>
           </div>
         )}
@@ -859,25 +873,21 @@ export default function KnowledgeBaseAdmin() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8, background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', marginBottom: 16 }}>
           <AlertCircle size={16} color="var(--accent-color)" />
           <span style={{ fontSize: 13 }}>
-            AI-based recommendations in TMC diagnostics work only when an <strong>OpenAI</strong> or <strong>Gemini</strong> key is configured in AI Settings. Other providers can sync the index but will not power the RAG answer layer.
+            Trip recommendations also need the organisation&apos;s AI service to be enabled. If this message remains after setup, please ask your system administrator to check the AI settings.
           </span>
         </div>
 
         {(() => {
           if (!status?.activeProvider || !status?.providerChunks) return null;
           const activeChunks = status.providerChunks[status.activeProvider] || 0;
-          const otherProviders = Object.entries(status.providerChunks).filter(([k]) => k !== status.activeProvider);
-          const hasOtherData = otherProviders.some(([, v]) => v > 0);
+          const hasOtherData = Object.entries(status.providerChunks)
+            .some(([k, v]) => k !== status.activeProvider && v > 0);
           if (activeChunks > 0 || !hasOtherData) return null;
-          const others = otherProviders
-            .filter(([, v]) => v > 0)
-            .map(([k, v]) => `${k}: ${v} chunks`)
-            .join(', ');
           return (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8, background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.25)', marginBottom: 16 }}>
               <AlertCircle size={16} color="#eab308" />
               <span style={{ fontSize: 13 }}>
-                Provider switched to <strong>{status.activeProvider}</strong> but the index has data only for {others}. Run a resync to populate the {status.activeProvider} collection.
+                The search setup has changed, but the existing brochures need to be refreshed. Click <strong>Update library</strong> to bring everything up to date.
               </span>
             </div>
           );
@@ -887,10 +897,10 @@ export default function KnowledgeBaseAdmin() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8, background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.25)', marginBottom: 16 }}>
             <AlertCircle size={16} color="#eab308" />
             <span style={{ fontSize: 13 }}>
-              {!oauth.connected && 'Connect Google Drive and select a folder before syncing.'}
-              {oauth.connected && !oauth.rootFolderId && 'Select a Drive folder above before syncing.'}
-              {oauth.connected && oauth.rootFolderId && !config.qdrantEnabled && 'Qdrant is not configured. Sync is disabled.'}
-              {oauth.connected && oauth.rootFolderId && config.qdrantEnabled && !config.embedEnabled && 'No supported AI provider is configured for embeddings. Configure OpenAI or Gemini in AI Settings.'}
+              {!oauth.connected && 'Connect Google Drive and choose a brochure folder before updating the library.'}
+              {oauth.connected && !oauth.rootFolderId && 'Choose a brochure folder above before updating the library.'}
+              {oauth.connected && oauth.rootFolderId && !config.qdrantEnabled && 'The brochure library service is not ready yet. Please ask your system administrator for help.'}
+              {oauth.connected && oauth.rootFolderId && config.qdrantEnabled && !config.embedEnabled && 'The search service is not ready yet. Please ask your system administrator to check the AI settings.'}
             </span>
           </div>
         )}
@@ -898,14 +908,14 @@ export default function KnowledgeBaseAdmin() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
           {(status?.stats || []).length === 0 ? (
             <div style={{ padding: 16, borderRadius: 8, background: 'var(--bg-color)', border: '1px solid var(--border-color)', ...muted, fontSize: 13 }}>
-              No files indexed yet. Run a sync after selecting a folder.
+              No brochures have been added yet. Choose a folder and update the library.
             </div>
           ) : (
             (status?.stats || []).map((s) => (
               <div key={s.subBrand} style={{ padding: 18, borderRadius: 10, background: 'var(--bg-color)', border: '1px solid var(--border-color)' }}>
                 <div style={{ fontSize: 12, ...muted, marginBottom: 4 }}>{SUB_BRAND_LABELS[s.subBrand] || s.subBrand}</div>
                 <div style={{ fontSize: 28, fontWeight: 700 }}>{s.filesActive}</div>
-                <div style={{ fontSize: 12, ...muted }}>{s.chunksInQdrant} chunks in Qdrant</div>
+                <div style={{ fontSize: 12, ...muted }}>searchable content pieces</div>
                 {s.filesFailed > 0 && <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>{s.filesFailed} failed</div>}
               </div>
             ))
@@ -914,7 +924,7 @@ export default function KnowledgeBaseAdmin() {
 
         {status?.lastJob && (
           <div style={{ marginTop: 16, fontSize: 13, ...muted }}>
-            Last sync: <strong style={{ color: 'var(--text-primary)' }}>{status.lastJob.status}</strong> on {formatDate(status.lastJob.startedAt)}
+            Last update: <strong style={{ color: 'var(--text-primary)' }}>{formatJobStatus(status.lastJob.status)}</strong> on {formatDate(status.lastJob.startedAt)}
             {status.lastJob.completedAt && ` → completed ${formatDate(status.lastJob.completedAt)}`}
             {status.lastJob.errorMessage && <div style={{ color: '#ef4444', marginTop: 4 }}>{status.lastJob.errorMessage}</div>}
           </div>
@@ -928,12 +938,12 @@ export default function KnowledgeBaseAdmin() {
             <FileText size={18} color="var(--accent-color)" />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h3 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 700 }}>Expected Drive folder structure</h3>
+            <h3 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 700 }}>How to organise your brochures</h3>
             <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, ...muted }}>
-              Select the <strong>brochure</strong> folder (or any folder that contains one immediate sub-folder per sub-brand). The sync walks every sub-brand folder recursively, so nested folders and direct PDFs inside them are all indexed.
+              Choose the main <strong>brochure</strong> folder. Inside it, keep one folder for each travel brand. The CRM will look through the folders underneath and add every PDF it finds.
             </p>
             <p style={{ margin: '8px 0 0', fontSize: 12, ...muted }}>
-              New to this? Download the template above, drop your PDFs into the matching sub-brand folders, then upload the whole <strong>brochure</strong> folder to Google Drive.
+              New to this? Download the template above, place your PDFs in the matching brand folders, then upload the whole <strong>brochure</strong> folder to Google Drive.
             </p>
             <pre style={{ margin: '12px 0 0', padding: 12, borderRadius: 8, background: 'var(--bg-color)', fontSize: 12, overflowX: 'auto', color: 'var(--text-primary)' }}>
 {`brochure/
@@ -966,8 +976,8 @@ export default function KnowledgeBaseAdmin() {
         <div className="card" style={{ padding: 24, marginTop: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
             <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0, fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
-              Recent sync jobs
-              <CountBadge count={jobs.length} title={`${jobs.length.toLocaleString()} sync jobs`} />
+              Update history
+              <CountBadge count={jobs.length} title={`${jobs.length.toLocaleString()} library updates`} />
             </h2>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {isAdmin && selectedJobIds.size > 0 && (
@@ -984,7 +994,7 @@ export default function KnowledgeBaseAdmin() {
               {isAdmin && jobs.some((j) => j.status === 'running') && (
                 <button className="btn-danger" onClick={stopAllSyncs} disabled={stopping} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <XCircle size={14} />
-                  {stopping ? 'Stopping…' : 'Stop all running syncs'}
+                  {stopping ? 'Stopping…' : 'Stop all updates'}
                 </button>
               )}
             </div>
@@ -1006,8 +1016,8 @@ export default function KnowledgeBaseAdmin() {
                   )}
                   <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Started</th>
                   <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Status</th>
-                  <th style={{ textAlign: 'right', padding: '10px 8px', fontWeight: 700 }}>Discovered</th>
-                  <th style={{ textAlign: 'right', padding: '10px 8px', fontWeight: 700 }}>Indexed</th>
+                  <th style={{ textAlign: 'right', padding: '10px 8px', fontWeight: 700 }}>Found</th>
+                  <th style={{ textAlign: 'right', padding: '10px 8px', fontWeight: 700 }}>Added</th>
                   <th style={{ textAlign: 'right', padding: '10px 8px', fontWeight: 700 }}>Failed</th>
                 </tr>
               </thead>
@@ -1028,7 +1038,7 @@ export default function KnowledgeBaseAdmin() {
                     <td style={{ padding: '10px 8px' }}>{formatDate(job.startedAt)}</td>
                     <td style={{ padding: '10px 8px' }}>
                       {job.status === 'completed' ? <CheckCircle size={14} color="#22c55e" /> : <XCircle size={14} color="#ef4444" />}
-                      {' '}<span>{job.status}</span>
+                      {' '}<span>{formatJobStatus(job.status)}</span>
                     </td>
                     <td style={{ padding: '10px 8px', textAlign: 'right' }}>{job.filesDiscovered}</td>
                     <td style={{ padding: '10px 8px', textAlign: 'right' }}>{job.filesIndexed}</td>
@@ -1046,8 +1056,8 @@ export default function KnowledgeBaseAdmin() {
         <div className="card" style={{ padding: 24, marginTop: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
             <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0, fontSize: 16, fontWeight: 700, flexWrap: 'wrap' }}>
-              Indexed files
-              <CountBadge count={indexedFilesCount} title={`${indexedFilesCount.toLocaleString()} indexed files`} />
+              Brochures in library
+              <CountBadge count={indexedFilesCount} title={`${indexedFilesCount.toLocaleString()} brochures in library`} />
             </h2>
             {isAdmin && selectedFileIds.size > 0 && (
               <button
@@ -1076,11 +1086,11 @@ export default function KnowledgeBaseAdmin() {
                       />
                     </th>
                   )}
-                  <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Sub-brand</th>
-                  <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>File</th>
-                  <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Folder path</th>
+                  <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Travel brand</th>
+                  <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Brochure</th>
+                  <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Location</th>
                   <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Status</th>
-                  <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Indexed</th>
+                  <th style={{ textAlign: 'left', padding: '10px 8px', fontWeight: 700 }}>Added</th>
                   {isAdmin && <th style={{ width: 60 }} />}
                 </tr>
               </thead>

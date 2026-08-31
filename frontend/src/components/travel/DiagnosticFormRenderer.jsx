@@ -164,7 +164,10 @@ function QuestionBlock({ question, value, onChange, onToggleMulti, theme, stylin
   return (
     <fieldset style={cardStyle}>
       <legend style={legend(theme, styling)}>
-        <span style={{ display: "block", padding: "0 4px" }}>{q.text}</span>
+        <span style={{ display: "block", padding: "0 4px" }}>
+          {q.text}
+          {q.required && <span aria-hidden="true"> *</span>}
+        </span>
       </legend>
       {q.type === "multi-select" ? (
         <div style={optionsGrid}>

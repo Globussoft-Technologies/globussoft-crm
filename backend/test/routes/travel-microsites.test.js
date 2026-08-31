@@ -115,6 +115,13 @@ import jwt from 'jsonwebtoken';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const visaDocStore = requireCJS('../../lib/visaDocStore');
+visaDocStore.storeDoc = vi.fn(async (_buffer, mimeType) => ({
+  storage: 's3',
+  url: `https://test.invalid/${mimeType.replace(/[^a-z]+/gi, '') || 'document'}`,
+  key: `visa-docs/test-${mimeType.replace(/[^a-z]+/gi, '') || 'document'}`,
+}));
+visaDocStore.removeDoc = vi.fn().mockResolvedValue(undefined);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const micrositesRouter = requireCJS('../../routes/travel_microsites');
 

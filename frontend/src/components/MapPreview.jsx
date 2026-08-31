@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -42,6 +42,14 @@ L.Icon.Default.mergeOptions({
  *   - onMarkerClick(item): optional click handler fired with the item object.
  *   - centerLat / centerLng / zoom: optional manual override. If omitted,
  *     the map auto-fits the bounding box of all items' coordinates.
+ *   - showRoute: optional, default false. Draws a dashed polyline through
+ *     the pins IN THE ORDER `items` WAS PASSED, and numbers each marker's
+ *     popup with its stop order ("Stop 3 · Day II: ..."). Opt-in and purely
+ *     additive — every existing caller that doesn't pass it keeps today's
+ *     exact behavior. The caller is responsible for passing items in the
+ *     order that actually makes sense as a route (e.g. day-then-time
+ *     order for a trip itinerary); this component just connects the dots
+ *     in array order, it has no opinion about what that order should be.
  *
  * Why
  *   Itineraries.jsx + ItineraryDetail.jsx + ItineraryDayEditor.jsx all
@@ -154,6 +162,7 @@ export default function MapPreview({
   centerLat,
   centerLng,
   zoom,
+  showRoute = false,
 }) {
   const pins = useMemo(() => pinnableItems(items), [items]);
   const bounds = useMemo(() => computeBounds(items), [items]);
@@ -193,7 +202,14 @@ export default function MapPreview({
           data-testid="tile-layer"
         />
         {autoFitBounds ? <FitBounds bounds={autoFitBounds} /> : null}
-        {pins.map((it) => {
+        {showRoute && pins.length > 1 && (
+          <Polyline
+            data-testid="route-line"
+            positions={pins.map((it) => [Number(it.latitude), Number(it.longitude)])}
+            pathOptions={{ color: '#4b5563', weight: 2, opacity: 0.6, dashArray: '6 6' }}
+          />
+        )}
+        {pins.map((it, idx) => {
           const day = Number(it.dayNumber) || 1;
           const color = colorForDay(day);
           return (
@@ -210,7 +226,9 @@ export default function MapPreview({
             >
               <Popup data-testid={`popup-${it.id}`}>
                 <div style={{ fontWeight: 600, color }}>
-                  {`Day ${day}: ${it.locationName || it.description || ''}`}
+                  {showRoute
+                    ? `Stop ${idx + 1} · Day ${day}: ${it.locationName || it.description || ''}`
+                    : `Day ${day}: ${it.locationName || it.description || ''}`}
                 </div>
               </Popup>
             </Marker>

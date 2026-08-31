@@ -90,7 +90,7 @@ appropriate disclaimers. Return the corrected text plus issues found. ${SPECIALI
       tier: 'reasoning',
       tools: [],
       model: 'openai/gpt-oss-120b',
-      maxOutputTokens: 32000,
+      maxOutputTokens: 16384,
       systemPrompt: `You are a clinical-document designer. OUTPUT one complete,
 self-contained HTML document starting with <!DOCTYPE html>, NOTHING else, no
 markdown fences. You are invoked EXACTLY ONCE.

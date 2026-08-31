@@ -1151,7 +1151,9 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(travelStallDashboard).toBeUndefined();
     });
 
-    it('renders POI Approvals nav entry for ADMIN under travel (S99)', () => {
+    // Skipped 2026-08-28 — POI Approvals is temporarily hidden from the
+    // sidebar while the feature code is preserved for future re-enable.
+    it.skip('renders POI Approvals nav entry for ADMIN under travel (S99)', () => {
       // S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested approval queue is
       // ADMIN-only. Backend RBAC on /api/travel/pois/pending + approve +
       // reject enforces; sidebar entry mirrors that gate so non-ADMINs do
@@ -1162,7 +1164,8 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/travel/pois/pending');
     });
 
-    it('hides POI Approvals nav entry for MANAGER + USER under travel (S99)', () => {
+    // Skipped 2026-08-28 — mirrors the skip above; POI Approvals is hidden.
+    it.skip('hides POI Approvals nav entry for MANAGER + USER under travel (S99)', () => {
       // Manager + User MUST NOT see the entry — backend rejects with 403
       // and the page renders an access-denied surface; UX is to not even
       // surface the link to non-ADMINs.

@@ -229,6 +229,11 @@ function makeItin(overrides = {}) {
     endDate: "2026-06-07T00:00:00.000Z",
     totalAmount: 50000,
     currency: "INR",
+    // These fixtures represent itineraries that predate the money-toggle
+    // feature (default moneyEnabled: false for NEW itineraries only) — they
+    // already carry real pricing, so money display stays on unless a test
+    // overrides it to specifically exercise the planning-only path.
+    moneyEnabled: true,
     items: [],
     createdAt: "2026-05-20T10:00:00.000Z",
     updatedAt: "2026-05-20T10:00:00.000Z",

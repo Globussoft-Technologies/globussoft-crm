@@ -1,4 +1,4 @@
-﻿import {
+import {
   Children,
   Fragment,
   isValidElement,
@@ -2174,7 +2174,8 @@ function renderTravelNav({
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" requiredPermission={{ module: "diagnostics", action: "read" }} />
       <Link to="/travel/trip-knowledge" icon={Brain} label="Travel Knowledge" requiredPermission={{ module: "diagnostics", action: "write" }} />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" requiredPermission={{ module: "itineraries", action: "read" }} />
-      <Link to="/travel/pois/pending" icon={CheckSquare} label="POI Approvals" requiredPermission={{ module: "pois", action: "manage" }} />
+      {/* POI Approvals hidden from sidebar — feature preserved in code for future re-enable. */}
+      {/* <Link to="/travel/pois/pending" icon={CheckSquare} label="POI Approvals" requiredPermission={{ module: "pois", action: "manage" }} /> */}
       {inBrand("tmc") && (
         <Link to="/travel/trips" icon={Luggage} label="TMC Trips" requiredPermission={{ module: "trips", action: "read" }} />
       )}

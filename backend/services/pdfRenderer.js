@@ -106,6 +106,7 @@ function registerTravelRupeeFont(doc) {
 const hsnSacMapper = require("../lib/hsnSacMapper");
 const gstCalculation = require("../lib/gstCalculation");
 const { READINESS_LEVELS, getReadinessLevel } = require("../lib/travelDiagnosticScoring");
+const { MAX_TOP_K: MAX_RECOMMENDATIONS_SAFETY_CAP } = require("../lib/diagnosticRecommendationSettings");
 
 // ── S51 logo-image fetch + in-memory LRU cache ──────────────────────
 // Contract (called from renderTravelInvoicePdf):
@@ -3425,7 +3426,12 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     brandKitLogoBuf = await module.exports.fetchLogoBuffer(branding.thumbnailUrl);
   }
 
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  // bufferPages: true — needed so the footer loop below (drawn once per
+  // page via doc.switchToPage) can revisit earlier pages after all content
+  // has flowed. Without it, only the LAST page ever got a footer line
+  // (verified via a rendered-PDF measurement pass) even on multi-page
+  // reports.
+  const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
   const bufPromise = streamToBuffer(doc);
   const rupeeAnswerFont = registerTravelRupeeFont(doc) ? "TravelRupee" : "Helvetica";
 
@@ -3596,6 +3602,13 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
       .slice(0, 4);
     const titleText = `${recIdx + 1}. ${destination}`;
     const fit = rec.fitScore != null ? `Fit ${rec.fitScore}/100` : "";
+    // Measure with the SAME x-offset/width the actual draw call below uses
+    // (pageMargin + 22 + badgeW), not a flat guess — a narrower measurement
+    // width than the real draw width over-estimates wrapped line count and
+    // inflates cardH, leaving dead space inside every card (verified via a
+    // rendered-PDF measurement pass; see PR notes).
+    const badgeW = String(recIdx + 1).length > 1 ? 26 : 20;
+    const textOffset = 22 + badgeW;
     doc.font("Helvetica-Bold").fontSize(10.5);
     const titleH = doc.heightOfString(titleText, { width: contentW - 130, lineGap: 2 });
     const reasonsH = reasons.reduce((acc, reason) => {
@@ -3603,15 +3616,15 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
       const body = reason.learningOutcome || reason.rationale || "";
       const line = `- ${lead}${body}`;
       doc.font("Helvetica").fontSize(9.2);
-      return acc + doc.heightOfString(line, { width: contentW - 70, lineGap: 2 }) + 2;
+      return acc + doc.heightOfString(line, { width: contentW - textOffset - 18, lineGap: 2 }) + 2;
     }, 0);
     const hasBrochure = Boolean(rec.brochurePdfUrl);
     const cardH = Math.max(58, 22 + titleH + (hasBrochure ? 14 : 0) + (reasons.length ? 12 + reasonsH : 0) + 12);
     ensureAnswerSpace(cardH + 10);
     const cardTop = doc.y;
     doc.roundedRect(pageMargin, cardTop, contentW, cardH, 14).fillAndStroke("#FFFFFF", borderSoft);
-    const badgeW = drawNumberBadge(pageMargin + 12, cardTop + 12, recIdx + 1);
-    const textX = pageMargin + 22 + badgeW;
+    drawNumberBadge(pageMargin + 12, cardTop + 12, recIdx + 1);
+    const textX = pageMargin + textOffset;
     doc.font("Helvetica-Bold").fontSize(10.5).fillColor(textDark)
       .text(titleText, textX, cardTop + 13, { width: contentW - (textX - pageMargin) - 110, lineGap: 2 });
     if (fit) {
@@ -3645,7 +3658,11 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     Array.isArray(curriculumFit.recommendations) &&
     curriculumFit.recommendations.length
   ) {
-    ensureAnswerSpace(140);
+    // Reserve only what the section header itself needs (~90pt), not a
+    // guess sized for header+first-card together — over-reserving here
+    // forces an early page break that strands whatever legitimately fits
+    // in the remainder (verified via a rendered-PDF measurement pass).
+    ensureAnswerSpace(90);
     doc.moveDown(0.3);
     doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
       .text("CURRICULUM FIT", pageMargin, doc.y, { characterSpacing: 1.4 });
@@ -3667,7 +3684,9 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     doc.moveDown(0.4);
   }
 
-  doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark).text("Submitted answers");
+  ensureAnswerSpace(40);
+  doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark)
+    .text("Submitted answers", pageMargin, doc.y, { width: contentW });
   doc.y += 8;
   if (questions.length === 0) {
     doc.roundedRect(pageMargin, doc.y, contentW, 48, 14).fillAndStroke(answerBg, borderSoft);
@@ -3727,7 +3746,15 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
 
   if (ragResult && ragResult.recommendations) {
     const recs = ragResult.recommendations;
-    const trips = Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : [];
+    // Fixed safety ceiling (not the live admin-configured topK — see
+    // diagnosticRecommendationSettings.js) at render time too, not just at
+    // generation time in travelRag.js: a diagnostic scored before that cap
+    // existed can still have an already-persisted TravelDiagnosticRagResult
+    // row with more entries than any sane topK, and re-rendering its PDF
+    // must not surface them all. A legitimately larger admin-chosen topK
+    // (up to MAX_TOP_K) must NOT be re-capped down to a hardcoded 10 here.
+    const trips = (Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : [])
+      .slice(0, MAX_RECOMMENDATIONS_SAFETY_CAP);
 
     // Resolve the customer-facing 1-4 readiness level + name. Prefer the
     // explicit RAG fields; fall back to the diagnostic classification or
@@ -3752,6 +3779,10 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     }
 
     if (trips.length || readinessLevel) {
+      // Reserve only the header (+ optional readiness card) height so a
+      // near-bottom cursor doesn't let this block overflow past the footer
+      // reserve uncontrolled — mirrors the curriculum-fit section's guard.
+      ensureAnswerSpace(readinessLevel ? 150 : 90);
       doc.moveDown(0.6);
       doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
         .text("CURRICULUM ALIGNMENT RECOMMENDATIONS", pageMargin, doc.y, { characterSpacing: 1.4 });
@@ -3789,8 +3820,12 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
           .filter((learning) => !isPolicyHighlight(learning))
           .slice(0, 4);
 
+        // Offset MUST match drawTripCard's actual textX formula below
+        // (x + 20 + badgeW) — a mismatched measurement width over- or
+        // under-estimates wrapped line count and skews cardH (verified via
+        // a rendered-PDF measurement pass).
         const estimatedBadgeW = String(tIdx + 1).length > 1 ? 26 : 20;
-        const estimatedTextOffset = 22 + estimatedBadgeW;
+        const estimatedTextOffset = 20 + estimatedBadgeW;
         const bodyW = contentW - estimatedTextOffset - 18;
         const titleW = contentW - estimatedTextOffset - 110;
         doc.font("Helvetica-Bold").fontSize(10);
@@ -3866,13 +3901,75 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     }
   }
 
-  const footerY = doc.page.height - doc.page.margins.bottom - 32;
-  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
-  doc.font("Helvetica").fontSize(8).fillColor("#777")
-    .text(
-      `Generated by ${brandLabel}. This report is informational; pricing and tier recommendations follow on consultation.`,
-      50, footerY + 8, { width: doc.page.width - 100, align: "center" },
-    );
+  // Cancellation policy (additive, 2026-08-24) — admin-controlled show/hide
+  // toggle + policy choice, resolved by the route layer from
+  // TravelDiagnosticPublicForm.stylingConfigJson (see travel_diagnostics_public.js
+  // resolveCancellationPolicyForForm). opts.cancellationPolicy is null
+  // whenever the toggle is off or no policy is selected, so this section is
+  // fully opt-in and invisible by default.
+  const cancellationPolicy = opts?.cancellationPolicy || null;
+  if (cancellationPolicy && Array.isArray(cancellationPolicy.tiers) && cancellationPolicy.tiers.length) {
+    const headerH2 = 22 + (cancellationPolicy.description ? 16 : 0);
+    ensureAnswerSpace(headerH2 + 40);
+    doc.moveDown(0.4);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
+      .text("CANCELLATION POLICY", pageMargin, doc.y, { characterSpacing: 1.4 });
+    doc.y += 8;
+    doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark)
+      .text(cancellationPolicy.name || "Cancellation policy", pageMargin, doc.y, { width: contentW });
+    doc.y += 5;
+    if (cancellationPolicy.description) {
+      doc.font("Helvetica").fontSize(9.5).fillColor(textMuted)
+        .text(cancellationPolicy.description, pageMargin, doc.y, { width: contentW, lineGap: 2 });
+      doc.y += doc.heightOfString(cancellationPolicy.description, { width: contentW, lineGap: 2 }) + 6;
+    } else {
+      doc.y += 4;
+    }
+
+    // Tier shape is { daysBeforeServiceStart: int, refundPercent: 0-100 },
+    // canonically sorted largest daysBeforeServiceStart first (see
+    // travel_cancellation_policies.js assertValidTiers) — render each as a
+    // plain "N+ days before departure -> refund%" row rather than guessing
+    // at a richer shape that doesn't exist on the model.
+    cancellationPolicy.tiers.forEach((tier) => {
+      const days = Number(tier?.daysBeforeServiceStart);
+      const refund = Number(tier?.refundPercent);
+      const label = Number.isFinite(days)
+        ? `${days}+ days before departure`
+        : "Cancellation window";
+      const refundText = Number.isFinite(refund) ? `${refund}% refund` : "";
+      doc.font("Helvetica-Bold").fontSize(9.5);
+      const labelH = doc.heightOfString(label, { width: contentW - 130, lineGap: 2 });
+      const rowH = Math.max(30, 14 + labelH + 10);
+      ensureAnswerSpace(rowH + 6);
+      const rowTop = doc.y;
+      doc.roundedRect(pageMargin, rowTop, contentW, rowH, 10).fillAndStroke(answerBg, borderSoft);
+      doc.font("Helvetica-Bold").fontSize(9.5).fillColor(textDark)
+        .text(label, pageMargin + 12, rowTop + 10, { width: contentW - 130, lineGap: 2 });
+      if (refundText) {
+        doc.font("Helvetica-Bold").fontSize(9).fillColor(accent)
+          .text(refundText, pageMargin + contentW - 106, rowTop + 11, { width: 94, align: "right", lineBreak: false });
+      }
+      doc.y = rowTop + rowH + 6;
+    });
+  }
+
+  // Draw the footer on EVERY page, not just the last one — previously this
+  // ran once after all content, which only ever touched the final buffered
+  // page (pages 1..N-1 shipped with no footer at all on a multi-page
+  // report). bufferPages + switchToPage lets us revisit each page now that
+  // the full page count is known.
+  const pageRange = doc.bufferedPageRange();
+  for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
+    doc.switchToPage(i);
+    const footerY = doc.page.height - doc.page.margins.bottom - 32;
+    doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
+    doc.font("Helvetica").fontSize(8).fillColor("#777")
+      .text(
+        `Generated by ${brandLabel}. This report is informational; pricing and tier recommendations follow on consultation.`,
+        50, footerY + 8, { width: doc.page.width - 100, align: "center" },
+      );
+  }
 
   doc.end();
   return bufPromise;

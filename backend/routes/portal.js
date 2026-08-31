@@ -15,6 +15,9 @@ const {
 } = require("../lib/travelDiagnosticCurriculumFit");
 const travelRag = require("../lib/travelRag");
 const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
+const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
+const { resolveCancellationPolicyForForm } = require("../lib/travelDiagnosticCancellationPolicy");
+const diagnosticNotifications = require("../lib/diagnosticNotifications");
 const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
@@ -1479,6 +1482,7 @@ router.get("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant, 
         classificationLabel: true,
         recommendedTier: true,
         reportPdfUrl: true,
+        curriculumFitJson: true,
         createdAt: true,
       },
     });
@@ -1509,7 +1513,45 @@ router.get("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant, 
       }
     }
 
-    res.json(rows.map((d) => ({ ...d, ragResult: ragMap[d.id] || null })));
+    // Cancellation policy is a per-(tenant, subBrand) admin toggle, not
+    // per-diagnostic — resolve it once per distinct subBrand in this page
+    // of history rather than once per row.
+    const cancellationPolicyBySubBrand = {};
+    for (const subBrand of new Set(rows.map((d) => d.subBrand))) {
+      cancellationPolicyBySubBrand[subBrand] = await resolveCancellationPolicyForForm({
+        tenantId: req.portal.tenantId,
+        subBrand,
+      });
+    }
+
+    // Chosen itinerary interests the customer checked off (2026-08-27) —
+    // parity with the public report page. Null for rows never submitted.
+    const chosenInterestsById = {};
+    await Promise.all(
+      diagnosticIds.map(async (id) => {
+        chosenInterestsById[id] = await diagnosticChosenInterests.getChosenInterests({
+          tenantId: req.portal.tenantId,
+          diagnosticId: id,
+        });
+      }),
+    );
+
+    res.json(rows.map((d) => {
+      let curriculumFit = null;
+      try {
+        curriculumFit = d.curriculumFitJson ? JSON.parse(d.curriculumFitJson) : null;
+      } catch {
+        curriculumFit = null;
+      }
+      const { curriculumFitJson: _omit, ...rest } = d;
+      return {
+        ...rest,
+        ragResult: ragMap[d.id] || null,
+        curriculumFit,
+        cancellationPolicy: cancellationPolicyBySubBrand[d.subBrand] || null,
+        chosenInterests: chosenInterestsById[d.id] || null,
+      };
+    }));
   } catch (err) {
     console.error("[Portal][travel/diagnostics]", err);
     res.status(500).json({ error: "Failed to load diagnostics" });
@@ -1573,6 +1615,28 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       },
     });
 
+    // Notify whoever the admin configured in the Notifications tab
+    // (2026-08-28) — falls back to every ADMIN/MANAGER, in-app only, when
+    // nothing's configured yet. Portal submissions had NO notification at
+    // all before this.
+    try {
+      const submitter = await prisma.contact.findUnique({
+        where: { id: req.portal.contactId },
+        select: { name: true, email: true },
+      }).catch(() => null);
+      await diagnosticNotifications.notifyDiagnosticSubmitted({
+        tenantId: req.portal.tenantId,
+        subBrand: bank.subBrand,
+        diagnosticId: diag.id,
+        contactLabel: submitter?.name || submitter?.email || `Diagnostic #${diag.id}`,
+        score: result.score,
+        classificationLabel: result.classificationLabel,
+        recommendedTier: result.recommendedTier,
+      });
+    } catch (notifyErr) {
+      console.warn("[Portal][travel/diagnostics POST] notification failed (non-fatal):", notifyErr.message);
+    }
+
     // RAG knowledge-base recommendations: best-effort for any travel sub-brand
     // that has indexed PDFs. Runs only when Qdrant + OpenAI embeddings are
     // configured. Never blocks the diagnostic submission; a failure simply omits
@@ -1590,9 +1654,23 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       console.warn("[Portal][travel/diagnostics POST] RAG generation failed (non-fatal):", ragErr.message);
     }
 
+    // Cancellation policy is the same per-(tenant, subBrand) admin toggle
+    // the public report/PDF already use (2026-08-27 parity pass) — baked
+    // into the PDF and returned so the portal can show it alongside the
+    // result, same as the public diagnostic report page.
+    let cancellationPolicy = null;
+    try {
+      cancellationPolicy = await resolveCancellationPolicyForForm({
+        tenantId: req.portal.tenantId,
+        subBrand: bank.subBrand,
+      });
+    } catch (cpErr) {
+      console.warn("[Portal][travel/diagnostics POST] cancellation-policy resolve failed (non-fatal):", cpErr.message);
+    }
+
     // Best-effort branded PDF; if it fails the diagnostic row is still returned
     // and the customer can retry via the report-pdf/regen staff endpoint.
-    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, { ragResult });
+    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, { ragResult, cancellationPolicy });
 
     res.status(201).json({
       id: diag.id,
@@ -1604,12 +1682,52 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       reportPdfUrl: reportPdfUrl || diag.reportPdfUrl,
       createdAt: diag.createdAt,
       recommendations: curriculumFit?.recommendations || [],
+      curriculumFit,
+      cancellationPolicy,
+      chosenInterests: null,
       ragResult,
     });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("[Portal][travel/diagnostics POST]", err);
     res.status(500).json({ error: "Failed to submit diagnostic" });
+  }
+});
+
+// POST /api/portal/travel/diagnostics/:id/interests (2026-08-27)
+//
+// Parity with the public diagnostic report page's "Submit chosen
+// interests" — the logged-in customer checks off which recommended trips
+// they're actually interested in. Scoped to a diagnostic that belongs to
+// THIS customer (contactId + tenantId match), unlike the public route
+// which authorizes via the report-slug token instead. Resubmitting simply
+// overwrites the prior selection (see diagnosticChosenInterests.js).
+router.post("/travel/diagnostics/:id/interests", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id, contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+      select: { id: true, tenantId: true },
+    });
+    if (!diag) {
+      return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+    }
+
+    const interests = Array.isArray(req.body?.interests) ? req.body.interests : [];
+    const saved = await diagnosticChosenInterests.saveChosenInterests({
+      tenantId: diag.tenantId,
+      diagnosticId: diag.id,
+      interests,
+    });
+
+    res.json({ ok: true, ...saved });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    console.error("[Portal][travel/diagnostics/:id/interests POST]", err);
+    res.status(500).json({ error: "Failed to save chosen interests" });
   }
 });
 

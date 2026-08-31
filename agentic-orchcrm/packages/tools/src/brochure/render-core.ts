@@ -10,6 +10,9 @@
  * pricing table, the footer). We never wrap whole sections in avoid-break — that
  * is what produced near-empty pages before.
  */
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { searchPhotos, routeMapUrl, qrUrl, geocode, staticMapUrl } from '../assets.js';
 import { findCountry, renderCountryFramed, countryBbox, type LL, type Feat, type Rect, type TileColors } from './geomap.js';
 import type {
@@ -1021,6 +1024,116 @@ export function ensureBriefCoverage(content: BrochureContent, goal: string): Bro
   } as BrochureContent;
 }
 
+/**
+ * Deterministic fidelity backstop for the TMC school-brochure path. There
+ * `goal` is the exact structured TripInput JSON (not free text), so
+ * `ensureBriefCoverage`'s labelled-block parser above is a no-op for it —
+ * this path had NO safety net at all when the composer dropped or altered a
+ * field it was explicitly told to copy verbatim. Two fields have been
+ * observed doing exactly that in review: the operator's manual colour
+ * palette (composer substitutes its own destination-derived guess) and
+ * exclusions (composer prints inclusions but omits exclusions). Both are
+ * re-asserted here straight from the operator's own TripInput data — never
+ * re-derived, never trusted to the model a second time. Only fills/overrides
+ * these specific known-risk fields; a valid `goal` from any other sector
+ * (not JSON) or any other composer output is returned untouched.
+ */
+export function ensureTmcFidelity(content: BrochureContent, goal: string): BrochureContent {
+  let trip: Record<string, any>;
+  try {
+    trip = JSON.parse(goal);
+  } catch {
+    return content;
+  }
+  if (!trip || typeof trip !== 'object' || Array.isArray(trip)) return content;
+
+  const tmcPatch: Record<string, unknown> = {};
+  const patch: Record<string, unknown> = {};
+
+  // Manual colour palette is a direct, unambiguous operator choice made in
+  // the UI — never let the composer's own destination-derived guess silently
+  // replace it just because the model omitted themeMode/manualHexPalette
+  // from its JSON output.
+  if (trip.themeMode === 'manual' && trip.manualHexPalette && typeof trip.manualHexPalette === 'object') {
+    tmcPatch.themeMode = 'manual';
+    tmcPatch.manualHexPalette = trip.manualHexPalette;
+  }
+
+  // Preferred / avoided colours were pure advisory text to the composer, so
+  // they frequently had NO visible effect. Make them deterministic here:
+  // an explicitly preferred colour becomes the accent, and an accent that
+  // lands on (or very near) a colour the operator banned is replaced rather
+  // than printed. Auto theme mode only — manual mode is already exact above.
+  const hexList = (raw: unknown): string[] =>
+    String(raw ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => /^#[0-9a-f]{6}$/i.test(s));
+  if (trip.themeMode !== 'manual') {
+    // A school brand colour is an explicit operator choice too. It ranks BELOW
+    // an explicit "preferred colour" but above the model's own guess — picking
+    // one and seeing nothing change is the whole complaint this addresses.
+    const schoolColours = Array.isArray(trip.schoolBrandColours)
+      ? trip.schoolBrandColours.map((h: unknown) => String(h).trim()).filter((h: string) => /^#[0-9a-f]{6}$/i.test(h))
+      : [];
+    const preferred = [...hexList(trip.preferredColours), ...schoolColours];
+    const avoid = hexList(trip.coloursToAvoid);
+    // A colour listed as BOTH preferred and avoided is contradictory; the ban
+    // wins (the safer reading) and the conflicted entry stops being "preferred".
+    const avoidKeys = new Set(avoid.map((h) => h.toLowerCase()));
+    const usablePreferred = preferred.filter((h) => !avoidKeys.has(h.toLowerCase()));
+    const composed = content.palette?.accent;
+    const near = (a: string, b: string): boolean => {
+      const x = parseHex(a);
+      const y = parseHex(b);
+      if (!x || !y) return false;
+      return Math.abs(x.r - y.r) + Math.abs(x.g - y.g) + Math.abs(x.b - y.b) <= 60;
+    };
+    let accent = composed && parseHex(composed) ? toHex(parseHex(composed)!) : '';
+    if (usablePreferred.length && (!accent || !usablePreferred.some((h) => near(h, accent)))) {
+      accent = usablePreferred[0]!;
+    }
+    if (accent && avoid.some((h) => near(h, accent))) {
+      accent = usablePreferred[0] && !avoid.some((h) => near(h, usablePreferred[0]!))
+        ? usablePreferred[0]!
+        : '';
+    }
+    if (accent && accent.toLowerCase() !== String(composed || '').toLowerCase()) {
+      patch.palette = { ...(content.palette || {}), accent };
+    }
+  }
+
+  // Inclusions / exclusions are OPERATOR-AUTHORED COMMERCIAL TERMS — what the
+  // parent is and isn't paying for. Block 1 lists them among the facts that
+  // must be preserved exactly, so the composer has no licence to reword them,
+  // yet its "editorial normalization" pass was observed silently truncating
+  // the leading noun off individual entries ("Accommodation in selected
+  // hotels…" printing as "in selected hotels…", "Personal expenses such as
+  // shopping…" as "such as shopping…"). That reads as a typo at best and
+  // changes what was promised at worst. These two lists are therefore taken
+  // VERBATIM from the operator's own input whenever supplied — not merely
+  // backfilled when the composer dropped them.
+  const verbatimList = (raw: unknown): string[] =>
+    Array.isArray(raw) ? raw.filter((x: unknown) => typeof x === 'string' && x.trim()).map((x) => (x as string).trim()) : [];
+  const tripInclusions = verbatimList(trip.inclusions);
+  const tripExclusions = verbatimList(trip.exclusions);
+  if (tripInclusions.length) {
+    patch.inclusions = { ...(content.inclusions || {}), items: tripInclusions.map((v: string) => ({ k: '', v })) };
+    tmcPatch.inclusions = tripInclusions;
+  }
+  if (tripExclusions.length) {
+    patch.exclusions = { ...(content.exclusions || {}), items: tripExclusions.map((v: string) => ({ k: '', v })) };
+    tmcPatch.exclusions = tripExclusions;
+  }
+
+  if (!Object.keys(patch).length && !Object.keys(tmcPatch).length) return content;
+  return {
+    ...content,
+    ...patch,
+    ...(Object.keys(tmcPatch).length ? { tmc: { ...(content.tmc || {}), ...tmcPatch } } : {}),
+  } as BrochureContent;
+}
+
 // Internal: carry the resolved cover mode + map mode + brand kit on the content object.
 declare module './types.js' {
   interface BrochureContent {
@@ -1029,6 +1142,8 @@ declare module './types.js' {
     __map3d?: boolean;
     /** Server-resolved, trusted brand kit (logo + optional details). Never LLM-supplied. */
     __brand?: BrandKit;
+    /** Optional custom output filename hint (no extension). Set by family-specific renderers. */
+    __fileName?: string;
   }
 }
 
@@ -1107,6 +1222,22 @@ export interface BrandKit {
   /** Optional client-supplied URL to encode into the brochure QR code. Takes priority
    *  over the composer's own footer.qrData (so a pasted link always wins). */
   qrData?: string;
+  /** Optional school name used for co-branding the TMC School brochure. */
+  schoolName?: string;
+  /** Optional school logo data: URI for the TMC School brochure cover/interior marks. */
+  schoolLogoUrl?: string;
+  /** Operator-uploaded destination/student photos (TMC School brochure). When
+   *  present, these are used ahead of the engine's own stock-photo search —
+   *  an operator who bothered to upload real photos of the actual trip wants
+   *  those over generic destination stock. */
+  imagePool?: string[];
+  /** Operator-chosen exact position/size for the TMC logo on the TMC-school
+   *  cover — x/y are 0..1 fractions of the cover (from top-left), scale is a
+   *  multiplier on the default size (1 = default). Absent → engine/AI picks
+   *  a sensible default placement. Server-clamped. */
+  tmcLogoPlacement?: { x: number; y: number; scale: number };
+  /** Same as `tmcLogoPlacement`, for the school logo. */
+  schoolLogoPlacement?: { x: number; y: number; scale: number };
   /** Hint that the logo is dark and needs a light chip behind it on the dark cover. */
   onDark?: boolean;
   /** ADDITIONAL cover logos beyond the primary `logoUrl` — each an inert data: URI with
@@ -1191,6 +1322,41 @@ export type EdMeasureFn = (
   ids: string[],
 ) => Promise<Record<string, number> | null>;
 
+/**
+ * The TMC-school hybrid design step: the engine hands the model a fully
+ * assembled brief — every fact, every already-fetched asset URL/data-URI,
+ * the exact fonts/colours, and Block 1's design rules — and asks for a
+ * complete HTML document back. Injected by the caller (orchestrator.ts owns
+ * the model router) so this deterministic package never depends on an LLM
+ * client. The engine treats the result as UNTRUSTED: it force-injects the
+ * required fonts/print CSS and a co-branding safety net afterward, and falls
+ * back to the fully deterministic template on any failure — the model gets
+ * real creative freedom over layout/typography/colour composition, but can
+ * never be the reason a brochure fails to generate or drops required facts,
+ * assets, or logos.
+ */
+export type DesignHtmlFn = (brief: string) => Promise<string>;
+
+export type DesignAuditFn = (
+  html: string,
+  opts?: { protectedLogoUrls?: string[]; minPages?: number; maxPages?: number },
+) => Promise<{ ok: boolean; issues: string[]; pageCount: number }>;
+
+/**
+ * Deterministic salvage for a design that failed the audit ONLY on page
+ * overflow — shrinks just the offending page(s) until they fit, re-verified
+ * by the identical audit, and returns the patched HTML (or null if it
+ * couldn't be salvaged this way, e.g. the failure wasn't pure overflow).
+ * Tried BEFORE burning a full paid LLM redesign round-trip: a safe, free,
+ * deterministic fix beats asking the model to blindly regenerate a whole
+ * document and hope the new arrangement happens to fit.
+ */
+export type DesignSalvageFn = (
+  html: string,
+  issues: string[],
+  opts?: { protectedLogoUrls?: string[] },
+) => Promise<string | null>;
+
 export interface BrochureRenderOptions {
   /** Use the 3D country-silhouette map instead of the default geographic 2D basemap. */
   map3d?: boolean;
@@ -1198,6 +1364,18 @@ export interface BrochureRenderOptions {
   measure?: EdMeasureFn;
   /** Trusted brand kit (logo + optional details), resolved server-side. */
   brand?: BrandKit;
+  /** Optional hybrid AI-design step (tmc-school family only). Absent → the
+   *  fully deterministic tmc-school template renders as before. */
+  designHtml?: DesignHtmlFn;
+  /** Render-aware preflight for AI-designed HTML. A failed audit triggers the
+   * deterministic TMC template instead of shipping clipped or spill pages. */
+  designAudit?: DesignAuditFn;
+  /** Deterministic overflow salvage, tried before burning a redesign attempt. */
+  designSalvage?: DesignSalvageFn;
+  /** Called with the reason when the AI design step is abandoned and the plain
+   * deterministic template is used instead, so the caller can make an otherwise
+   * invisible quality regression visible in the run trace. */
+  onDesignFallback?: (reason: string) => void;
 }
 
 /**
@@ -1222,6 +1400,9 @@ export async function buildBrochureHtml(
   // (banded reads the logo off content.__brand inside buildBandedHtml)
   if (tpl.family === 'editorial') {
     return buildEditorialHtml(content, tpl, opts?.measure);
+  }
+  if (tpl.family === 'tmc-school') {
+    return buildTmcBrochureHtml(content, tpl, opts?.designHtml, opts?.designAudit, opts?.designSalvage, opts?.onDesignFallback, opts?.measure);
   }
 
   const c = content;
@@ -4435,6 +4616,1660 @@ function logisticsPages(c: BrochureContent, a: BandedAssets): string[] {
   });
   pages.push(page(priceBand(topMark) + fillPhoto() + (hasCta ? ctaBand() : ''), footerHtml));
   return pages;
+}
+
+// ============================================================================
+// TMC SCHOOL FAMILY — co-branded 8-page A4 school trip brochure.
+//   1. Cover (co-branding TMC + school logos)
+//   2. Overview
+//   3-5. Itinerary (paginated day cards)
+//   6. Route map
+//   7. Practical Information (cost-status grid)
+//   8. Investment & Action (payment button + payment QR)
+// ============================================================================
+
+const TMC_CYAN = '#1AAFE0';
+
+const __tmcRenderDir = path.dirname(fileURLToPath(import.meta.url));
+const __tmcFontsDir = path.resolve(__tmcRenderDir, '..', '..', '..', '..', 'public', 'fonts');
+
+const TMC_FONT_FACE_FILES: Array<{ family: string; style: string; weight: number; file: string; range: string }> = [
+  { family: 'Staatliches', style: 'normal', weight: 400, file: 'Staatliches-Regular-latin.woff2', range: "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD" },
+  { family: 'Staatliches', style: 'normal', weight: 400, file: 'Staatliches-Regular-latin-ext.woff2', range: "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF" },
+  { family: 'DM Sans', style: 'normal', weight: 400, file: 'DM-Sans-Regular-latin.woff2', range: "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD" },
+  { family: 'DM Sans', style: 'normal', weight: 400, file: 'DM-Sans-Regular-latin-ext.woff2', range: "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF" },
+  { family: 'DM Sans', style: 'normal', weight: 500, file: 'DM-Sans-Medium-latin.woff2', range: "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD" },
+  { family: 'DM Sans', style: 'normal', weight: 500, file: 'DM-Sans-Medium-latin-ext.woff2', range: "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF" },
+  { family: 'DM Sans', style: 'normal', weight: 700, file: 'DM-Sans-Bold-latin.woff2', range: "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD" },
+  { family: 'DM Sans', style: 'normal', weight: 700, file: 'DM-Sans-Bold-latin-ext.woff2', range: "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF" },
+  { family: 'DM Sans', style: 'italic', weight: 400, file: 'DM-Sans-Italic-latin.woff2', range: "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD" },
+  { family: 'DM Sans', style: 'italic', weight: 400, file: 'DM-Sans-Italic-latin-ext.woff2', range: "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF" },
+];
+
+async function buildTmcFontFaces(): Promise<string> {
+  try {
+    const faces = await Promise.all(
+      TMC_FONT_FACE_FILES.map(async (f) => {
+        const buf = await readFile(path.join(__tmcFontsDir, f.file));
+        const b64 = buf.toString('base64');
+        return `@font-face{font-family:'${f.family}';font-style:${f.style};font-weight:${f.weight};font-display:swap;src:url(data:font/woff2;base64,${b64}) format('woff2');unicode-range:${f.range}}`;
+      }),
+    );
+    return faces.join('\n');
+  } catch {
+    // If font files are missing, fall back to Arial/Arial Black system fonts.
+    return '';
+  }
+}
+
+// The "Theme mode: Auto/Manual" step's 5-colour grid (primary/secondary/
+// accent/background/text) used to be able to override the accent here too —
+// but that's a SECOND, easy-to-forget accent control fighting with the
+// dedicated "Brochure colour accent" field (Brand & School step). A stale
+// value left in that grid from earlier in a session silently outvoted a
+// freshly-chosen accent with no visible sign of why. Accent/accentSecondary
+// are now owned EXCLUSIVELY by "Brochure colour accent" (__brand.colors) —
+// the manual grid's background/text fields are unaffected (tmcBackground()/
+// tmcText() below), since there's no equivalent control for those yet.
+function tmcAccent(c: BrochureContent): string {
+  // "Brochure colour accent" (the operator-facing field the frontend always
+  // sends, defaulting to TMC's own Classroom Cyan and editable any time) is
+  // the sole authoritative accent — it must win over the composer's own
+  // guess, or an explicit operator colour choice becomes silently
+  // unpredictable (correct on some runs, overridden by the AI on others,
+  // depending on what the composer happened to derive that run).
+  // c.palette?.accent is ONLY a fallback for content generated without this
+  // field ever having been set (e.g. an older/external caller of the engine).
+  return normalizeAccent(c.__brand?.colors?.accent || c.palette?.accent || TMC_CYAN);
+}
+
+function tmcSecondary(c: BrochureContent): string {
+  // Same precedence and reasoning as tmcAccent() above.
+  return normalizeAccent(c.__brand?.colors?.accentSecondary || c.palette?.accentSecondary || TMC_CYAN);
+}
+
+// The composer (Block 1's DESTINATION-ADAPTIVE THEME step) derives a full
+// light-background + body-text hex pair per destination, but until this fix
+// only palette.accent/accentSecondary ever reached the renderer — background
+// and text were hardcoded to plain white/near-black on every single Auto-mode
+// trip, silently discarding that work and making every brochure look like the
+// same flat white page regardless of destination. These read the composer's
+// values now, with a luminance floor/ceiling so a bad LLM hex can never make
+// the page unreadable (guard, not trust).
+function normalizeBackground(hex?: string): string {
+  const v = parseHex(hex || '');
+  if (!v) return '#FFFFFF';
+  const norm = toHex(v);
+  return wcagLum(norm) >= 0.82 ? norm : '#FFFFFF';
+}
+
+function normalizeBodyText(hex?: string): string {
+  const v = parseHex(hex || '');
+  if (!v) return '#15151C';
+  const norm = toHex(v);
+  return wcagLum(norm) <= 0.25 ? norm : '#15151C';
+}
+
+function tmcBackground(c: BrochureContent): string {
+  const tmc = c.tmc;
+  if (tmc?.themeMode === 'manual' && tmc.manualHexPalette?.background) {
+    return normalizeAccent(tmc.manualHexPalette.background);
+  }
+  return normalizeBackground(c.palette?.background);
+}
+
+function tmcText(c: BrochureContent): string {
+  const tmc = c.tmc;
+  if (tmc?.themeMode === 'manual' && tmc.manualHexPalette?.text) {
+    return normalizeAccent(tmc.manualHexPalette.text);
+  }
+  return normalizeBodyText(c.palette?.text);
+}
+
+function sanitizeFileName(s: string): string {
+  return String(s ?? '')
+    .trim()
+    .replace(/[\\/:*?"<>|#%&{}[\]~$!@+='`]/g, '')
+    .replace(/\s+/g, '_')
+    .slice(0, 40);
+}
+
+function tmcSchoolName(c: BrochureContent): string {
+  return c.tmc?.schoolName || c.__brand?.schoolName || '';
+}
+
+// Logos come from the SERVER-TRUSTED brand kit only.
+//
+// These used to read `c.tmc.schoolLogoUrl` / `c.tmc.tmcLogoUrl` FIRST — but
+// `c.tmc` is composer (LLM) output, and the composer has never been given the
+// real logo URLs (they live on __brand, resolved server-side). So it filled
+// both fields by guessing, routinely putting the SAME url in both — which is
+// exactly the "both logos are the school crest, the TMC logo is missing"
+// defect. It also inverted the trust boundary: an LLM-supplied URL outranked
+// the verified data: URI. The brand kit now wins outright and the LLM's
+// guesses are ignored entirely.
+function tmcSchoolLogo(c: BrochureContent): string {
+  return c.__brand?.schoolLogoUrl || c.__brand?.coverLogos?.[0]?.url || '';
+}
+
+function tmcTmcLogo(c: BrochureContent): string {
+  const tmc = c.__brand?.logoUrl || '';
+  // Defensive: if the same asset was uploaded/resolved for both slots, render
+  // it once rather than printing the identical mark twice side by side.
+  return tmc && tmc === tmcSchoolLogo(c) ? '' : tmc;
+}
+
+function tmcCoBrandLine(c: BrochureContent): string {
+  return (
+    c.tmc?.coBrandingLine ||
+    (tmcSchoolName(c) ? `Exclusively designed for ${tmcSchoolName(c)} by The Modern Classroom` : '')
+  );
+}
+
+// When the operator has set an exact position/size for either logo (via the
+// Brochure Engine's logo placement preview), each logo is placed
+// independently and absolutely against the full cover box (x/y as 0..1
+// fractions, scale as a multiplier on its default height) instead of the
+// default side-by-side flex lockup — this is what actually makes the preview
+// WYSIWYG rather than decorative.
+function tmcCoverLogosHtml(c: BrochureContent): string {
+  const tmc = tmcTmcLogo(c);
+  const school = tmcSchoolLogo(c);
+  if (!tmc && !school) return '';
+  const tmcPlacement = c.__brand?.tmcLogoPlacement;
+  const schoolPlacement = c.__brand?.schoolLogoPlacement;
+  if (tmcPlacement || schoolPlacement) {
+    const tp = { x: 0.3, y: 0.12, scale: 1, ...tmcPlacement };
+    const sp = { x: 0.7, y: 0.12, scale: 1, ...schoolPlacement };
+    const tmcImg = tmc
+      ? `<img src="${esc(tmc)}" alt="The Modern Classroom" style="position:absolute;left:${(tp.x * 100).toFixed(1)}%;top:${(tp.y * 100).toFixed(1)}%;transform:translate(-50%,-50%);height:${(20 * tp.scale).toFixed(1)}mm;width:auto;max-width:60mm;object-fit:contain;z-index:5;filter:drop-shadow(0 1px 3px rgba(0,0,0,.4))">`
+      : '';
+    const schoolImg = school
+      ? `<img src="${esc(school)}" alt="${esc(tmcSchoolName(c) || 'School')}" style="position:absolute;left:${(sp.x * 100).toFixed(1)}%;top:${(sp.y * 100).toFixed(1)}%;transform:translate(-50%,-50%);height:${(22 * sp.scale).toFixed(1)}mm;width:auto;max-width:60mm;object-fit:contain;z-index:5;filter:drop-shadow(0 1px 3px rgba(0,0,0,.4))">`
+      : '';
+    return tmcImg + schoolImg;
+  }
+  const tmcImg = tmc ? `<img class="tmc-logo" src="${esc(tmc)}" alt="The Modern Classroom">` : '';
+  const schoolImg = school ? `<img class="school-logo" src="${esc(school)}" alt="${esc(tmcSchoolName(c) || 'School')}">` : '';
+  return `<div class="tmc-cover-logos">${tmcImg}<div class="tmc-plus"></div>${schoolImg}</div>`;
+}
+
+function tmcHeaderLogosHtml(c: BrochureContent): string {
+  const tmc = tmcTmcLogo(c);
+  const school = tmcSchoolLogo(c);
+  if (!tmc && !school) return '';
+  const tmcImg = tmc ? `<img src="${esc(tmc)}" alt="TMC">` : '';
+  const schoolImg = school ? `<img src="${esc(school)}" alt="School">` : '';
+  return `<div class="tmc-runmark">${tmcImg}${schoolImg}</div>`;
+}
+
+function tmcFooterLogosHtml(c: BrochureContent): string {
+  const tmc = tmcTmcLogo(c);
+  const school = tmcSchoolLogo(c);
+  if (!tmc && !school) return '';
+  const tmcImg = tmc ? `<img src="${esc(tmc)}" alt="TMC">` : '';
+  const schoolImg = school ? `<img src="${esc(school)}" alt="School">` : '';
+  return `<div class="tmc-foot-logos">${tmcImg}${schoolImg}</div>`;
+}
+
+function tmcContacts(c: BrochureContent): { phone?: string; email?: string; website?: string; whatsapp?: string; youtube?: string; facebook?: string; instagram?: string } {
+  return {
+    phone: c.tmc?.contacts?.phone || c.__brand?.contact?.[0] || c.footer?.contactLines?.[0] || '',
+    email: c.tmc?.contacts?.email || c.__brand?.contact?.[1] || '',
+    website: c.tmc?.contacts?.website || c.__brand?.contact?.[2] || '',
+    whatsapp: c.tmc?.contacts?.whatsapp || '',
+    youtube: c.tmc?.contacts?.youtube || '',
+    facebook: c.tmc?.contacts?.facebook || '',
+    instagram: c.tmc?.contacts?.instagram || '',
+  };
+}
+
+/**
+ * Social platforms to show, each WITH the destination it points at.
+ *
+ * The operator types a real profile URL/handle per platform and those values
+ * were previously used only to decide WHICH icon to draw — the icon itself was
+ * an inert <img>, so a reader (or a PDF click) had no way to reach the account.
+ * A row of platform logos that goes nowhere is decoration, not contact info.
+ * The URL now travels with the slug so the renderer can wrap each icon in a
+ * real link. `url` may be empty (a brand-kit slug with no address on file), in
+ * which case the caller renders the icon unlinked rather than a dead anchor.
+ */
+function tmcSocials(c: BrochureContent): { slug: string; url: string }[] {
+  const normalize = (platform: string, raw: string): string => {
+    const v = String(raw || '').trim();
+    if (!v) return '';
+    if (/^https?:\/\//i.test(v)) return v;
+    // A bare handle/number is far more common than a full URL in a CRM form.
+    const handle = v.replace(/^@/, '').trim();
+    if (!handle) return '';
+    if (platform === 'whatsapp') {
+      const digits = handle.replace(/[^\d]/g, '');
+      return digits ? `https://wa.me/${digits}` : '';
+    }
+    const host: Record<string, string> = {
+      youtube: 'https://www.youtube.com/@',
+      facebook: 'https://www.facebook.com/',
+      instagram: 'https://www.instagram.com/',
+    };
+    return host[platform] ? `${host[platform]}${encodeURIComponent(handle)}` : '';
+  };
+  const contacts = c.tmc?.contacts;
+  const fromTmc = (['whatsapp', 'youtube', 'facebook', 'instagram'] as const)
+    .map((p) => ({ slug: p, url: normalize(p, (contacts as Record<string, string> | undefined)?.[p] || '') }))
+    .filter((s) => s.url);
+  if (fromTmc.length) return fromTmc;
+  return (c.__brand?.socials ?? []).map((slug) => ({ slug, url: '' }));
+}
+
+function tmcMealsBadge(meals?: string[]): string {
+  if (!meals?.length) return '';
+  const codes = meals.map((m) => String(m).trim().toUpperCase());
+  return ['B', 'L', 'D']
+    .map((code) => `<span class="${codes.includes(code) ? 'yes' : 'no'}">${code}</span>`)
+    .join('');
+}
+
+function tmcCostStatusGrid(c: BrochureContent): string {
+  const rows = c.tmc?.costStatus ?? [];
+  if (!rows.length) return '';
+  const labels: Record<string, string> = {
+    airfare: 'Airfare',
+    gst: 'GST',
+    tcs: 'TCS',
+    travelInsurance: 'Travel insurance',
+    visaPermit: 'Visa / permit',
+    destinationEntryFee: 'Destination entry fee',
+    entranceFees: 'Entrance fees',
+    tips: 'Tips & gratuities',
+    personalExpenses: 'Personal expenses',
+    otherCompulsoryCharge: 'Other compulsory charge',
+  };
+  const statusClass = (s?: string) => {
+    const k = String(s ?? 'na').toLowerCase();
+    if (k === 'included') return 'incl';
+    if (k === 'excluded') return 'excl';
+    if (k === 'pending') return 'pend';
+    if (k === 'partly') return 'part';
+    return 'na';
+  };
+  const cells = rows
+    .map((r) => {
+      const label = labels[r.item] ?? r.item;
+      return `<div class="tmc-cost-cell"><span class="tmc-cost-label">${esc(label)}</span><span class="tmc-cost-status ${statusClass(r.status)}">${esc(r.status || 'NA')}</span></div>`;
+    })
+    .join('');
+  return `<div class="tmc-cost-grid">${cells}</div>`;
+}
+
+function tmcThemeVars(tpl: BrochureTemplate, accent: string, brandCyan: string, c: BrochureContent): string {
+  const A = normalizeAccent(accent);
+  const text = tmcText(c);
+  const bg = tmcBackground(c);
+  const sec = tmcSecondary(c);
+  const dark = '#0F172A';
+  const onAccent = contrastInk(A);
+  const vars: Record<string, string> = {
+    '--tmc-cyan': brandCyan,
+    '--tmc-accent': A,
+    '--tmc-accent-secondary': sec,
+    '--tmc-on-accent': onAccent,
+    '--tmc-ink': text,
+    '--tmc-bg': bg,
+    '--tmc-paper': '#FFFFFF',
+    '--tmc-muted': '#5A6472',
+    '--tmc-line': '#E2E8F0',
+    '--tmc-dark': dark,
+    '--tmc-on-dark': '#FFFFFF',
+    '--display': `'${tpl.fonts.display}', 'Arial Black', 'Arial Narrow Bold', Arial, sans-serif`,
+    '--body': `'${tpl.fonts.body}', Arial, sans-serif`,
+  };
+  return `:root{${Object.entries(vars)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(';')}}`;
+}
+
+const TMC_CSS = `
+*{margin:0;padding:0;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+/* Uniform zero @page margin — matches the proven editorial/banded engines
+   (see their @page{margin:0} rules). Chromium's print engine does NOT
+   reliably honor "@page :first{margin:0}" overrides via preferCSSPageSize,
+   so relying on it left the cover printed inside an 18mm inset instead of
+   true full-bleed. Interior pages get their margin from .tmc-page's own
+   18mm padding instead of the browser-level @page margin. */
+@page{size:A4 portrait;margin:0}
+html,body{font-family:var(--body), Arial, sans-serif;color:var(--tmc-ink);background:var(--tmc-bg);font-size:10.8pt;line-height:1.5}
+h1,h2,h3,h4{font-family:var(--display), 'Arial Black', Arial, sans-serif;font-weight:400;line-height:1.05;text-transform:uppercase;letter-spacing:.02em}
+h2{font-size:29pt;color:var(--tmc-accent);margin-bottom:5mm;max-width:165mm}
+h3{font-size:14pt;color:var(--tmc-ink);margin-bottom:3mm}
+p,li{font-size:10.8pt;line-height:1.55}
+ul{list-style:none;margin-left:0}
+ul li{position:relative;padding-left:4.5mm;margin-bottom:1.6mm}
+ul li::before{content:"";position:absolute;left:0;top:.55em;width:2.2mm;height:2.2mm;background:var(--tmc-accent);border-radius:50%}
+img{display:block;max-width:100%}
+.tmc-page{position:relative;display:flex;flex-direction:column;width:210mm;height:297mm;min-height:0;padding:16mm 16mm 12mm;overflow:hidden;break-after:page;background:linear-gradient(145deg,var(--tmc-paper) 0 78%,color-mix(in srgb,var(--tmc-accent) 5%,white) 100%)}
+.tmc-page::before{content:"";position:absolute;top:0;left:0;width:100%;height:2.2mm;background:linear-gradient(90deg,var(--tmc-accent),var(--tmc-accent-secondary))}
+.tmc-page:last-child{break-after:auto}
+.tmc-kicker{font:700 9pt/1 var(--body);text-transform:uppercase;letter-spacing:.22em;color:var(--tmc-accent);margin-bottom:2mm}
+.tmc-runmark{position:absolute;top:6mm;right:6mm;display:flex;align-items:center;gap:3mm;z-index:10}
+.tmc-runmark img{height:10mm;width:auto;object-fit:contain}
+.tmc-runmark.left{left:6mm;right:auto}
+.tmc-foot-line{position:static;margin-top:auto;padding-top:2mm;display:flex;justify-content:space-between;align-items:flex-end;border-top:.4mm solid var(--tmc-line);font-size:8.5pt;color:var(--tmc-muted)}
+.tmc-foot-logos{display:flex;gap:2.5mm;align-items:center}
+.tmc-foot-logos img{height:8mm;width:auto;object-fit:contain}
+.tmc-cover-logos{display:flex;align-items:center;gap:4mm}
+.tmc-cover-logos img{height:18mm;width:auto;object-fit:contain}
+.tmc-cover-logos .tmc-logo{height:20mm}
+.tmc-cover-logos .school-logo{height:22mm}
+.tmc-plus{width:6mm;height:.8mm;background:var(--tmc-cyan);border-radius:1mm}
+.tmc-cta-btn{display:inline-block;background:var(--tmc-accent);color:var(--tmc-on-accent);font-family:var(--display), Arial, sans-serif;font-size:13pt;text-transform:uppercase;letter-spacing:.04em;padding:4.5mm 9mm;border-radius:999px;text-decoration:none}
+.tmc-payment-btn{display:inline-block;background:var(--tmc-accent);color:var(--tmc-on-accent);font-family:var(--display), Arial, sans-serif;font-size:13pt;text-transform:uppercase;letter-spacing:.04em;padding:5mm 10mm;border-radius:999px;text-decoration:none}
+.tmc-qr{display:flex;flex-direction:column;align-items:center;gap:1.5mm}
+.tmc-qr img{width:28mm;height:28mm}
+.tmc-qr span{font-size:8.5pt;color:var(--tmc-muted);text-align:center}
+.tmc-cost-grid{display:grid;grid-template-columns:repeat(2, 1fr);gap:3mm;margin-top:4mm}
+.tmc-cost-cell{display:flex;justify-content:space-between;align-items:center;padding:3mm 3.5mm;background:#F8FAFC;border:1px solid var(--tmc-line);border-radius:2mm;break-inside:avoid}
+.tmc-cost-label{font-weight:700;font-size:9.5pt;text-transform:uppercase;letter-spacing:.04em;color:var(--tmc-ink)}
+.tmc-cost-status{font:800 9pt/1 var(--display);text-transform:uppercase;letter-spacing:.02em;padding:1.5mm 3mm;border-radius:999px}
+.tmc-cost-status.incl{background:#D1FAE5;color:#065F46}
+.tmc-cost-status.excl{background:#FEE2E2;color:#991B1B}
+.tmc-cost-status.pend{background:#FEF3C7;color:#92400E}
+.tmc-cost-status.part{background:#E0F2FE;color:#075985}
+.tmc-cost-status.na{background:#F1F5F9;color:#475569}
+.tmc-meals{display:flex;gap:1.5mm;margin-top:1.5mm}
+.tmc-meals span{display:flex;align-items:center;justify-content:center;width:7mm;height:7mm;border-radius:50%;font:700 8pt/1 var(--body)}
+.tmc-meals .yes{background:var(--tmc-accent);color:var(--tmc-on-accent)}
+.tmc-meals .no{background:#E2E8F0;color:#94A3B8}
+.tmc-cover{position:relative;width:210mm;height:297mm;padding:0;background:var(--tmc-dark);color:#fff;break-after:page;overflow:hidden}
+.tmc-cover .hero{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.7}
+.tmc-cover .veil{position:absolute;inset:0;background:linear-gradient(180deg, rgba(15,23,42,.62), rgba(15,23,42,.25) 45%, rgba(15,23,42,.78))}
+.tmc-cover .tmc-cover-logos{position:absolute;top:14mm;left:18mm;z-index:5}
+.tmc-cover .lock{position:absolute;left:18mm;right:18mm;bottom:38mm;z-index:5}
+.tmc-cover h1{font-size:42pt;line-height:1;color:#fff;margin-bottom:4mm}
+.tmc-cover .sub{font-size:16pt;color:#fff;opacity:.95;margin-bottom:5mm}
+.tmc-cover .meta{font-size:10.5pt;color:#fff;opacity:.9;display:flex;gap:8mm;flex-wrap:wrap;margin-bottom:6mm}
+.tmc-cover .meta span{display:flex;align-items:baseline;gap:2mm}
+.tmc-cover .meta span b{color:var(--tmc-accent);text-transform:uppercase;letter-spacing:.1em;font-size:8pt;font-weight:700}
+.tmc-cover .cobrand{position:absolute;left:18mm;right:18mm;bottom:14mm;z-index:5;font-size:10pt;color:#fff;opacity:.92;border-left:3px solid var(--tmc-accent);padding-left:4mm}
+.tmc-cover .cobrand b{display:block;font-size:11.5pt;margin-bottom:1mm}
+.tmc-overview-photos{display:grid;grid-template-columns:1.55fr 1fr 1fr;gap:3mm;margin-bottom:5mm;height:64mm}
+.tmc-overview-photos img{width:100%;height:100%;object-fit:cover;border-radius:2.5mm;box-shadow:0 2mm 6mm rgba(15,23,42,.12)}
+.tmc-overview-photos img:first-child{border-radius:2.5mm 0 0 2.5mm}
+.tmc-overview{display:grid;grid-template-columns:1fr 1fr;gap:8mm;align-items:start}
+.tmc-overview .lead{grid-column:1/-1;font-size:13pt;line-height:1.55;color:var(--tmc-ink)}
+.tmc-overview .col{display:flex;flex-direction:column;gap:3mm}
+.tmc-overview .box{padding:4.5mm;background:#F8FAFC;border-radius:2mm;border-left:3px solid var(--tmc-accent);break-inside:avoid}
+.tmc-overview .box h3{margin-bottom:2mm}
+.tmc-overview ul li{font-size:10.5pt}
+.tmc-itin-layout{display:grid;grid-template-columns:53mm minmax(0,1fr);gap:6mm;flex:1;min-height:0}
+.tmc-itin-photo{position:relative;min-height:0;border-radius:3mm;overflow:hidden;background:linear-gradient(160deg,var(--tmc-accent),var(--tmc-dark));box-shadow:0 3mm 8mm rgba(15,23,42,.16)}
+.tmc-itin-photo img{width:100%;height:100%;object-fit:cover}
+.tmc-itin-photo::after{content:"";position:absolute;inset:40% 0 0;background:linear-gradient(transparent,rgba(15,23,42,.78))}
+.tmc-itin-photo span{position:absolute;left:4mm;right:4mm;bottom:5mm;z-index:1;color:#fff;font:400 17pt/1.05 var(--display);text-transform:uppercase;letter-spacing:.035em}
+.tmc-day-stack{display:flex;flex-direction:column;gap:4mm;min-width:0}
+.tmc-day-card{position:relative;padding:4.5mm;background:rgba(248,250,252,.94);border-radius:2.5mm;border:1px solid color-mix(in srgb,var(--tmc-accent) 20%,#E2E8F0);box-shadow:0 1.5mm 4mm rgba(15,23,42,.07);break-inside:avoid}
+.tmc-day-head{display:flex;justify-content:space-between;align-items:center;gap:4mm;margin-bottom:2mm}
+.tmc-day-num{font:400 11pt/1 var(--display);text-transform:uppercase;letter-spacing:.04em;color:#fff;background:var(--tmc-accent);padding:1.5mm 4mm;border-radius:999px}
+.tmc-day-head .date{font-size:9.5pt;color:var(--tmc-muted);text-transform:uppercase;letter-spacing:.06em}
+.tmc-day-card h3{margin:0 0 2mm;font-size:13pt;color:var(--tmc-ink)}
+.tmc-day-route{font:700 10pt/1.3 var(--body);color:var(--tmc-accent);margin-bottom:2.5mm}
+.tmc-day-body{font-size:10.5pt;line-height:1.55;color:var(--tmc-ink)}
+.tmc-day-body p{margin-bottom:2mm}
+.tmc-day-tags{display:flex;gap:2mm;flex-wrap:wrap;margin-top:2.5mm}
+.tmc-day-tags span{font-size:8.5pt;text-transform:uppercase;letter-spacing:.04em;padding:1mm 2.5mm;background:#E0F2FE;color:#075985;border-radius:999px}
+.tmc-map-wrap{position:relative;width:100%;height:172mm;background:#F1F5F9;border-radius:3mm;overflow:hidden;display:flex;align-items:center;justify-content:center;box-shadow:0 3mm 8mm rgba(15,23,42,.14);border:1px solid color-mix(in srgb,var(--tmc-accent) 20%,#E2E8F0)}
+.tmc-map-wrap img{width:100%;height:100%;object-fit:cover}
+.tmc-map-empty{width:100%;height:165mm;background:repeating-linear-gradient(45deg,#F8FAFC,#F8FAFC 8mm,#F1F5F9 8mm,#F1F5F9 16mm);border-radius:2mm;display:flex;align-items:center;justify-content:center;color:var(--tmc-muted);font-size:11pt}
+.tmc-route-list{display:flex;flex-wrap:wrap;gap:2mm;margin-top:4mm}
+.tmc-route-list span{position:relative;padding:2mm 4mm;background:var(--tmc-dark);color:#fff;border-radius:999px;font-size:9.5pt}
+.tmc-route-list span:not(:last-child)::after{content:"→";position:absolute;right:-4.2mm;color:var(--tmc-accent);font-weight:800}
+.tmc-prac-hero{position:relative;height:43mm;margin-bottom:5mm;border-radius:3mm;overflow:hidden;background:linear-gradient(120deg,var(--tmc-dark),var(--tmc-accent))}
+.tmc-prac-hero img{width:100%;height:100%;object-fit:cover;opacity:.72}
+.tmc-prac-hero::after{content:"Practical confidence, clearly covered";position:absolute;left:6mm;bottom:5mm;color:#fff;font:400 20pt/1 var(--display);text-transform:uppercase;letter-spacing:.03em;text-shadow:0 1mm 3mm rgba(0,0,0,.45)}
+.tmc-prac-grid{display:grid;grid-template-columns:1fr 1fr;gap:4mm;align-items:start}
+.tmc-prac-col{display:flex;flex-direction:column;gap:3mm}
+/* A light page otherwise stacks its boxes at the top and leaves a dead band of
+   whitespace down to the footer. When the renderer knows the page is sparse it
+   adds the is-airy class, which lets the content region claim the leftover
+   height and distributes the boxes down it instead of pooling them at the top.
+   Never applied to a full page, so it can't cause an overflow. */
+.tmc-page.is-airy .tmc-prac-grid,.tmc-page.is-airy .tmc-invest{flex:1 1 auto;align-items:stretch}
+.tmc-page.is-airy .tmc-prac-col,.tmc-page.is-airy .tmc-invest-col{justify-content:space-evenly}
+.tmc-page.is-airy .tmc-itin-layout{flex:1 1 auto}
+.tmc-page.is-airy .tmc-day-stack{justify-content:space-evenly}
+.tmc-prac-box{padding:4mm;background:rgba(248,250,252,.94);border-radius:2.5mm;border:1px solid color-mix(in srgb,var(--tmc-accent) 13%,#E2E8F0);break-inside:avoid}
+.tmc-prac-box h3{font-size:12pt;margin-bottom:2.5mm}
+.tmc-prac-box p{font-size:10.2pt;line-height:1.5;margin-bottom:1.5mm}
+.tmc-prac-box li{font-size:9.8pt;line-height:1.42;margin-bottom:1.2mm}
+.tmc-kv{display:grid;grid-template-columns:1fr 1.2fr;gap:1.5mm 3mm;font-size:10pt}
+.tmc-kv .k{font-weight:700;color:var(--tmc-muted);text-transform:uppercase;letter-spacing:.04em;font-size:9pt}
+.tmc-invest{display:grid;grid-template-columns:1fr 1fr;gap:8mm;align-items:start}
+.tmc-invest-col{display:flex;flex-direction:column;gap:4mm}
+.tmc-final-photo{position:relative;flex:1 1 auto;min-height:54mm;margin:6mm 0 4mm;border-radius:3mm;overflow:hidden;background:linear-gradient(120deg,var(--tmc-dark),var(--tmc-accent))}
+.tmc-final-photo img{width:100%;height:100%;object-fit:cover;opacity:.72}
+.tmc-final-photo::after{content:"Your classroom is about to get bigger";position:absolute;left:6mm;right:6mm;bottom:5mm;color:#fff;font:400 23pt/1 var(--display);text-transform:uppercase;letter-spacing:.025em;text-shadow:0 1mm 3mm rgba(0,0,0,.5)}
+.tmc-price-box{padding:6mm;background:linear-gradient(145deg,var(--tmc-dark),color-mix(in srgb,var(--tmc-accent) 45%,var(--tmc-dark)));color:#fff;border-radius:3mm;box-shadow:0 3mm 8mm rgba(15,23,42,.18);break-inside:avoid}
+.tmc-price-box .price{font-size:28pt;color:#fff;line-height:1;margin-bottom:2mm}
+.tmc-price-box .basis{font-size:10pt;opacity:.85;margin-bottom:4mm}
+.tmc-deadline{font-size:10.5pt}
+.tmc-deadline b{color:var(--tmc-accent)}
+.tmc-contact-grid{display:grid;gap:2mm;font-size:10.5pt}
+.tmc-contact-grid a{color:var(--tmc-ink);text-decoration:none}
+.tmc-socials{display:flex;gap:2.5mm;margin-top:2mm}
+.tmc-socials img{width:6mm;height:6mm}
+.tmc-action-box{padding:5mm;background:#F8FAFC;border-radius:2mm;display:flex;flex-direction:column;gap:4mm;align-items:flex-start;break-inside:avoid}
+.tmc-qr-row{display:flex;gap:8mm;align-items:flex-start;flex-wrap:wrap}
+.tmc-page-number{position:absolute;bottom:8mm;left:50%;transform:translateX(-50%);font-size:8pt;color:var(--tmc-muted)}
+`;
+
+function buildTmcCover(c: BrochureContent, heroUrl: string, brandCyan: string, accent: string): string {
+  const tmc = c.tmc;
+  const title = c.title || tmc?.schoolName || 'School Trip';
+  const subtitle = c.subtitle || tmc?.educationalSubtitle || '';
+  const school = tmcSchoolName(c);
+  const dates = tmc?.tripDates || '';
+  const duration = tmc?.duration || '';
+  const grades = tmc?.targetGrades || '';
+  const coBrand = tmcCoBrandLine(c);
+  const tagline = c.__brand?.tagline || c.tagline || 'TRAVEL. EXPERIENCE. LEARN.';
+  const hero = heroUrl ? `<img class="hero" src="${esc(heroUrl)}" alt="">` : '';
+  const meta: string[] = [];
+  if (dates) meta.push(`<span><b>Dates</b> ${esc(dates)}</span>`);
+  if (duration) meta.push(`<span><b>Duration</b> ${esc(duration)}</span>`);
+  if (grades) meta.push(`<span><b>Grades</b> ${esc(grades)}</span>`);
+  return (
+    `<section class="tmc-cover">` +
+    hero +
+    `<div class="veil"></div>` +
+    tmcCoverLogosHtml(c) +
+    `<div class="lock">` +
+    `<div class="tmc-kicker" style="color:${esc(brandCyan)}">${esc(school || 'School Trip')}</div>` +
+    `<h1>${esc(title)}</h1>` +
+    (subtitle ? `<div class="sub">${esc(subtitle)}</div>` : '') +
+    `<div class="meta">${meta.join('')}</div>` +
+    (tagline ? `<div class="sub" style="font-size:12pt">${esc(tagline)}</div>` : '') +
+    `</div>` +
+    (coBrand ? `<div class="cobrand"><b>${esc(coBrand)}</b><span>The Modern Classroom</span></div>` : '') +
+    `</section>`
+  );
+}
+
+function buildTmcOverview(c: BrochureContent, accent: string, overviewPhotos: string[] = []): string {
+  const tmc = c.tmc;
+  const intro = c.intro?.body || c.tmc?.educationalPurpose || '';
+  const outcomes = tmc?.learningOutcomes || c.highlights?.cards?.map((card) => card.label) || [];
+  const journey = c.tmc?.tripSummary || c.intro?.heading || '';
+  const highlights = c.highlights?.cards?.slice(0, 4) || [];
+  const photoStrip = overviewPhotos.length
+    ? `<div class="tmc-overview-photos">${overviewPhotos.map((url) => `<img src="${esc(url)}" alt="">`).join('')}</div>`
+    : '';
+  return (
+    `<section class="tmc-page">` +
+    tmcHeaderLogosHtml(c) +
+    `<div class="tmc-kicker">Overview</div>` +
+    `<h2>${esc(c.title || 'Trip Overview')}</h2>` +
+    photoStrip +
+    `<div class="tmc-overview">` +
+    (intro ? `<div class="lead">${esc(intro)}</div>` : '') +
+    (journey && !intro ? `<div class="lead">${esc(journey)}</div>` : '') +
+    (highlights.length
+      ? `<div class="col"><div class="box"><h3>Highlights</h3><ul>${highlights
+          .map((h) => `<li>${esc(h.label)}${h.caption ? ` — ${esc(h.caption)}` : ''}</li>`)
+          .join('')}</ul></div></div>`
+      : '') +
+    (outcomes.length
+      ? `<div class="col"><div class="box"><h3>Learning Outcomes</h3><ul>${outcomes
+          .slice(0, 6)
+          .map((o) => `<li>${esc(o)}</li>`)
+          .join('')}</ul></div></div>`
+      : '') +
+    `</div>` +
+    `<div class="tmc-foot-line">${tmcFooterLogosHtml(c)}<span>Page 2</span></div>` +
+    `</section>`
+  );
+}
+
+// The composer sometimes writes the day heading INTO the route/location text
+// itself ("Day 1 — Airport transfer to hotel"), which then duplicates the
+// "Day N — " prefix the renderer already adds. Strip it defensively so the
+// heading is never "Day 1 — Day 1 — ...".
+// TripInput's route-cities field is authored as an arrow chain ("Manali →
+// Shimla → Delhi") by the Brochure Engine's UI, but earlier code here only
+// ever split on commas — a single-arrow string has no commas, so it parsed
+// as ONE garbled "city" and silently broke geocoding/route-map lookups for
+// every multi-city trip. Split on every separator a composer or operator
+// might plausibly use, dedupe while preserving travel order.
+/**
+ * `route.cities` is meant to be plain strings ("City, Country") per the
+ * composer's mapping guide, but the field is schema-freeform and an LLM has
+ * been observed emitting rich place objects there instead (confusing it with
+ * `route.places`). Left unguarded, an object silently stringifies to the
+ * literal text "[object Object]" wherever esc() renders it (the exact stray
+ * pill seen on the route-map page), and gets geocoded as that same literal
+ * garbage text by Nominatim — which explains a route pin landing nowhere
+ * near the actual destination. Coerce or drop anything that isn't a clean
+ * string before it ever reaches display or geocoding.
+ */
+/**
+ * Reject stock photos that are unsuitable for a SCHOOL brochure read by parents.
+ *
+ * The keyless sources (Openverse → Flickr/Wikimedia) index ordinary holiday
+ * snapshots, so a bare destination query like "Goa beach" legitimately returns
+ * photographs of individual tourists, swimwear and nightlife. A verified render
+ * put a cropped photo of a woman's body on an itinerary page of a students'
+ * brochure. Block 1 is explicit that imagery must match the route, activities
+ * and student age, so anything whose caption signals a person-focused, body,
+ * alcohol or nightlife subject is dropped: for this product the safe failure
+ * mode is landscape/architecture, never a person we cannot vet.
+ */
+/** Always disqualifying — adult, body-focused, alcohol or nightlife subjects. */
+const UNSAFE_PHOTO_ALT =
+  /\b(bikini|swimsuit|swimwear|lingerie|nude|naked|topless|nudist|butt|booty|buttocks|breast|cleavage|sexy|sensual|erotic|bitch|hot\s+girls?|beer|wine|cocktail|alcohol|drunk|nightclub|nightlife|casino|smoking|cigarette|hookah|shisha)\b/i;
+
+/**
+ * Extra caution for UNCURATED sources only (Openverse/Wikimedia index ordinary
+ * public holiday snaps). Deliberately NOT applied to Pexels/Unsplash: their
+ * captions are descriptive prose — "A man with a camera gazes at the sunset" —
+ * so these person-nouns would reject most of a curated, perfectly appropriate
+ * result set and starve the page of imagery, which is the more likely harm.
+ */
+const UNVETTED_PEOPLE_ALT =
+  /\b(girl|girls|boy|boys|woman|women|lady|ladies|man|men|guy|dude|teen|selfie|portrait|model(?:ling|ing)?|posing|couple|bride|wedding|honeymoon|party|rave|pub|bar|tattoo)\b/i;
+
+const CURATED_PHOTO_SOURCES = new Set(['pexels', 'unsplash']);
+
+function isSchoolSafePhoto(alt?: string, source?: string): boolean {
+  const caption = String(alt ?? '').trim();
+  // No caption → cannot vet it. Allowed, because most Wikimedia landmark
+  // thumbnails are untitled and rejecting them all would empty the pool.
+  if (!caption) return true;
+  if (UNSAFE_PHOTO_ALT.test(caption)) return false;
+  if (CURATED_PHOTO_SOURCES.has(String(source ?? '').toLowerCase())) return true;
+  return !UNVETTED_PEOPLE_ALT.test(caption);
+}
+
+function sanitizeCityNames(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  const out: string[] = [];
+  for (const entry of list) {
+    if (typeof entry === 'string') {
+      const t = entry.trim();
+      if (t) out.push(t);
+    } else if (entry && typeof entry === 'object') {
+      const name = (entry as any).name || (entry as any).city || (entry as any).label || '';
+      const t = String(name).trim();
+      if (t) out.push(t);
+    }
+  }
+  return out;
+}
+
+function parseRouteCities(raw: string | undefined | null): string[] {
+  const s = String(raw ?? '').trim();
+  if (!s) return [];
+  const parts = s.split(/→|->|—|;|,|\n/).map((p) => p.trim()).filter(Boolean);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of parts) {
+    const key = p.toLowerCase();
+    if (!seen.has(key)) { seen.add(key); out.push(p); }
+  }
+  return out;
+}
+
+function stripDayPrefix(text: string, dayNumber?: number): string {
+  const s = String(text ?? '').trim();
+  const withNumber = dayNumber != null ? new RegExp(`^day\\s*${dayNumber}\\s*[—–:-]\\s*`, 'i') : null;
+  const generic = /^day\s*\d+\s*[—–:-]\s*/i;
+  if (withNumber && withNumber.test(s)) return s.replace(withNumber, '').trim();
+  if (generic.test(s)) return s.replace(generic, '').trim();
+  return s;
+}
+
+function buildTmcItineraryPages(c: BrochureContent, accent: string, photos: string[] = []): string[] {
+  const days = c.tmc?.days || [];
+  if (!days.length && c.itinerary?.days?.length) {
+    // Fall back to the generic itinerary shape if the TMC block is absent.
+    return buildTmcItineraryPagesFromGeneric(c, accent, photos);
+  }
+  const pages: string[] = [];
+  // Keep 2 rich day-cards per page — each card can carry several optional
+  // fields (times, physical demands, optional activities, separate-payment
+  // items, meals, tags), so 3/page routinely overflowed a single A4 page.
+  const perPage = 2;
+  const chunks: typeof days[] = [];
+  for (let i = 0; i < days.length; i += perPage) chunks.push(days.slice(i, i + perPage));
+  chunks.forEach((chunk, idx) => {
+    const photo = photos[idx % Math.max(photos.length, 1)] || '';
+    const photoTitle = chunk.length > 1
+      ? `Days ${chunk[0]?.dayNumber}–${chunk[chunk.length - 1]?.dayNumber}`
+      : `Day ${chunk[0]?.dayNumber}`;
+    const html =
+      `<section class="tmc-page is-airy">` +
+      tmcHeaderLogosHtml(c) +
+      `<div class="tmc-kicker">Itinerary</div>` +
+      `<h2>${esc(c.title || 'Day-by-Day')}</h2>` +
+      `<div class="tmc-itin-layout">` +
+      `<div class="tmc-itin-photo">${photo ? `<img src="${esc(photo)}" alt="">` : ''}<span>${esc(photoTitle)}</span></div>` +
+      `<div class="tmc-day-stack">` +
+      chunk
+        .map((d) => {
+          const meals = tmcMealsBadge(d.meals);
+          const route = stripDayPrefix(d.route, d.dayNumber);
+          const activities = stripDayPrefix(d.activities, d.dayNumber);
+          const tags: string[] = [];
+          if (d.overnightCity) tags.push(`Overnight: ${d.overnightCity}`);
+          if (d.learningTakeaway) tags.push(`Learning: ${d.learningTakeaway}`);
+          return (
+            `<div class="tmc-day-card">` +
+            `<div class="tmc-day-head"><span class="tmc-day-num">Day ${esc(String(d.dayNumber))}</span><span class="date">${esc(d.date)}</span></div>` +
+            (route ? `<h3>${esc(route)}</h3>` : '') +
+            (activities ? `<div class="tmc-day-body">${esc(activities)}</div>` : '') +
+            (d.departureTime || d.arrivalTime || d.travelDuration
+              ? `<div class="tmc-kv" style="margin:2mm 0">` +
+                (d.departureTime ? `<span class="k">Depart</span><span class="v">${esc(d.departureTime)}</span>` : '') +
+                (d.arrivalTime ? `<span class="k">Arrive</span><span class="v">${esc(d.arrivalTime)}</span>` : '') +
+                (d.travelDuration ? `<span class="k">Travel</span><span class="v">${esc(d.travelDuration)}</span>` : '') +
+                `</div>`
+              : '') +
+            (d.physicalDemands ? `<p><b>Physical demands:</b> ${esc(d.physicalDemands)}</p>` : '') +
+            (d.optionalActivities ? `<p><b>Optional:</b> ${esc(d.optionalActivities)}</p>` : '') +
+            (d.separatePaymentItems ? `<p><b>Separate payment:</b> ${esc(d.separatePaymentItems)}</p>` : '') +
+            (meals ? `<div class="tmc-meals">${meals}</div>` : '') +
+            (tags.length ? `<div class="tmc-day-tags">${tags.slice(0, 3).map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : '') +
+            `</div>`
+          );
+        })
+        .join('') +
+      `</div></div>` +
+      `<div class="tmc-foot-line">${tmcFooterLogosHtml(c)}<span>Page ${3 + idx}</span></div>` +
+      `</section>`;
+    pages.push(html);
+  });
+  return pages;
+}
+
+function buildTmcItineraryPagesFromGeneric(c: BrochureContent, accent: string, photos: string[] = []): string[] {
+  const days = c.itinerary?.days || [];
+  const pages: string[] = [];
+  const perPage = 4;
+  for (let i = 0; i < days.length; i += perPage) {
+    const chunk = days.slice(i, i + perPage);
+    const pageIndex = Math.floor(i / perPage);
+    const photo = photos[pageIndex % Math.max(photos.length, 1)] || '';
+    pages.push(
+      `<section class="tmc-page is-airy">` +
+      tmcHeaderLogosHtml(c) +
+      `<div class="tmc-kicker">Itinerary</div>` +
+      `<h2>${esc(c.title || 'Day-by-Day')}</h2>` +
+      `<div class="tmc-itin-layout">` +
+      `<div class="tmc-itin-photo">${photo ? `<img src="${esc(photo)}" alt="">` : ''}<span>Days ${i + 1}–${i + chunk.length}</span></div>` +
+      `<div class="tmc-day-stack">` +
+      chunk
+        .map((d, idx) => {
+          const num = i + idx + 1;
+          const title = stripDayPrefix(d.title, num);
+          return (
+            `<div class="tmc-day-card">` +
+            `<div class="tmc-day-head"><span class="tmc-day-num">Day ${num}</span></div>` +
+            (title ? `<h3>${esc(title)}</h3>` : '') +
+            `<div class="tmc-day-body">${esc(stripDayPrefix(d.text, num))}</div>` +
+            `</div>`
+          );
+        })
+        .join('') +
+      `</div></div>` +
+      `<div class="tmc-foot-line">${tmcFooterLogosHtml(c)}<span>Page ${3 + Math.floor(i / perPage)}</span></div>` +
+      `</section>`,
+    );
+  }
+  return pages;
+}
+
+function buildTmcRouteMap(c: BrochureContent, mapUrl: string, accent: string): string {
+  const tmc = c.tmc;
+  const cities = tmc?.routeCities ? parseRouteCities(tmc.routeCities) : sanitizeCityNames(c.route?.cities);
+  const pageNum = 3 + buildTmcItineraryPages(c, accent).length;
+  const map = mapUrl
+    ? `<div class="tmc-map-wrap"><img src="${esc(mapUrl)}" alt="Route map"></div>`
+    : `<div class="tmc-map-empty">Route map unavailable</div>`;
+  return (
+    `<section class="tmc-page">` +
+    tmcHeaderLogosHtml(c) +
+    `<div class="tmc-kicker">Route Map</div>` +
+    `<h2>${esc(c.route?.heading || 'The Journey')}</h2>` +
+    map +
+    (cities.length
+      ? `<div class="tmc-route-list">${cities.map((city) => `<span>${esc(city)}</span>`).join('')}</div>`
+      : '') +
+    `<div class="tmc-foot-line">${tmcFooterLogosHtml(c)}<span>Page ${pageNum}</span></div>` +
+    `</section>`
+  );
+}
+
+function presentationTransport(raw: string | undefined): string {
+  const parts = String(raw || '').split(/[.;\n]+/).map((part) => part.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  let arrival = false;
+  let departure = false;
+  const areas = new Set<string>();
+  const other = new Map<string, string>();
+  for (const part of parts) {
+    const lower = part.toLowerCase();
+    if (/airport/.test(lower)) {
+      if (/return|back to|departure|to (?:the )?(?:[a-z ]+ )?airport/.test(lower)) departure = true;
+      if (/airport.*(?:hotel|resort)|from (?:the )?(?:[a-z ]+ )?airport/.test(lower)) arrival = true;
+      continue;
+    }
+    const area = part.match(/\b(?:to|in)\s+((?:north|south|east|west|central)\s+[a-z][a-z -]*)/i)?.[1];
+    if (area) areas.add(area.replace(/\b\w/g, (char) => char.toUpperCase()));
+    else if (!other.has(lower)) other.set(lower, part);
+  }
+  const summary: string[] = [];
+  if (arrival && departure) summary.push('Airport-hotel transfers on arrival and departure');
+  else if (arrival) summary.push('Arrival transfer from the airport to the hotel');
+  else if (departure) summary.push('Departure transfer from the hotel to the airport');
+  if (areas.size > 1) summary.push(`Hotel transfers between ${[...areas].join(' and ')}`);
+  else if (areas.size === 1) summary.push(`Hotel transfer to ${[...areas][0]}`);
+  summary.push(...other.values());
+  return summary.join('. ');
+}
+
+function presentationHotels(rows: NonNullable<BrochureContent['tmc']>['hotels'] = []) {
+  const grouped = new Map<string, { name: string; city: string; category: string; nights: number }>();
+  for (const row of rows || []) {
+    let name = String(row?.name || '').replace(/\s+/g, ' ').trim();
+    if (!name || /\bcheck[- ]?out\b|\btransfer\b|\bdeparture\b/i.test(name)) continue;
+    let city = String(row?.city || '').replace(/\s+/g, ' ').trim();
+    const looksNarrative = /^(?:\d+[- ]night\s+)?(?:stay|check[- ]?in)\b/i.test(name);
+    if (looksNarrative) {
+      const area = name.match(/\b(?:in|at)\s+((?:north|south|east|west|central)\s+[a-z][a-z -]*)/i)?.[1];
+      if (area) city = area.replace(/\b\w/g, (char) => char.toUpperCase());
+      name = name
+        .replace(/^\s*(?:\d+[- ]night\s+)?(?:stay|check[- ]?in)\s+(?:at|in)\s+/i, '')
+        .replace(/^(?:a|the)\s+/i, '')
+        .replace(/\s+in\s+(?:north|south|east|west|central)\s+[a-z][a-z -]*$/i, '')
+        .trim();
+      if (name) name = name.charAt(0).toUpperCase() + name.slice(1);
+    }
+    if (!name) continue;
+    const key = `${name.toLowerCase()}|${city.toLowerCase()}|${String(row?.category || '').toLowerCase()}`;
+    const existing = grouped.get(key);
+    if (existing) existing.nights += Number(row?.nights) || 1;
+    else grouped.set(key, { name, city, category: row?.category || '', nights: Number(row?.nights) || 1 });
+  }
+  return [...grouped.values()];
+}
+
+function isPresentable(value: unknown): boolean {
+  const text = String(value ?? '').trim();
+  return !!text && !/^(?:unknown|not specified|n\/a|na|null|none)$/i.test(text);
+}
+
+async function buildTmcPracticalInfo(
+  c: BrochureContent,
+  accent: string,
+  brandCyan: string,
+  photo = '',
+  tpl: BrochureTemplate,
+  fontCss: string,
+  measure?: EdMeasureFn,
+): Promise<string[]> {
+  const tmc = c.tmc;
+  const pageNumBase = 4 + buildTmcItineraryPages(c, accent).length;
+  const inclusionRows =
+    c.inclusions?.items?.map((i) => (typeof i === 'string' ? i : i.v)).filter(Boolean) ||
+    (tmc?.inclusions as string[] | undefined) ||
+    [];
+  // Block 1's quality gate requires no item to appear in both lists — the
+  // composer is instructed not to duplicate them, but enforce it here too so
+  // a model slip can never reach print. Inclusions win; the duplicate is
+  // dropped from exclusions (never silently dropped from inclusions, since
+  // "included" is the more consequential claim for pricing).
+  const inclusionKeys = new Set(inclusionRows.map((x) => String(x).trim().toLowerCase()));
+  const exclusionRows = (
+    c.exclusions?.items?.map((i) => (typeof i === 'string' ? i : i.v)).filter(Boolean) ||
+    (tmc?.exclusions as string[] | undefined) ||
+    []
+  ).filter((x) => !inclusionKeys.has(String(x).trim().toLowerCase()));
+  const safetyRows = (tmc?.safety as string[] | undefined) || [];
+  const documentRows = (tmc?.documents as string[] | undefined) || [];
+  const displayHotels = presentationHotels(tmc?.hotels || []);
+  const flights = tmc?.flights;
+  const transport = presentationTransport(tmc?.transport);
+  // Every box is a self-contained, MEASURABLE unit carrying its own fallback
+  // height estimate. Nothing is truncated with .slice() any more: an operator
+  // who fills in twelve inclusions must see twelve in the PDF, not the first
+  // eight with the rest silently dropped — the flow below simply produces
+  // another page when the content genuinely needs one.
+  type PracBox = { id: string; html: string; est: number };
+  const boxes: PracBox[] = [];
+  // Fallback estimates (mm), used only if the headless-Chrome measure pass is
+  // unavailable. Box chrome = padding + heading + border; list/prose rows are
+  // charged per WRAPPED line at the real 87mm column width.
+  const BOX_CHROME = 14;
+  const wrapped = (text: string, charsPerLine: number) =>
+    Math.max(1, Math.ceil(String(text || '').trim().length / charsPerLine));
+  const listEst = (rows: unknown[]) =>
+    BOX_CHROME + rows.reduce((sum: number, r) => sum + wrapped(String(r), 44) * 4.4 + 1.2, 0);
+  const proseEst = (...parts: string[]) =>
+    BOX_CHROME + parts.filter(Boolean).reduce((sum, p) => sum + wrapped(p, 46) * 4.6 + 1.5, 0);
+  const add = (id: string, html: string, est: number) => { if (html) boxes.push({ id, html, est }); };
+
+  add('prac-flights', flights
+    ? `<div class="tmc-prac-box"><h3>Flights</h3><p><b>Status:</b> ${esc(flights.status || 'na')}</p>${flights.details ? `<p>${esc(flights.details)}</p>` : ''}</div>`
+    : '', proseEst(flights?.status || '', flights?.details || ''));
+  add('prac-transport', transport
+    ? `<div class="tmc-prac-box"><h3>Transport</h3><p>${esc(transport)}</p></div>`
+    : '', proseEst(transport));
+  add('prac-hotels', displayHotels.length
+    ? `<div class="tmc-prac-box"><h3>Hotels</h3><div class="tmc-kv">${displayHotels
+        .map((h) => `<span class="k">${esc(h.city)}</span><span class="v">${esc(h.name)} · ${esc(h.category)} · ${h.nights}n</span>`)
+        .join('')}</div></div>`
+    : '', BOX_CHROME + displayHotels.length * 6.5);
+  add('prac-room', isPresentable(tmc?.roomSharing)
+    ? `<div class="tmc-prac-box"><h3>Room Sharing</h3><p>${esc(tmc?.roomSharing || '')}</p></div>`
+    : '', proseEst(tmc?.roomSharing || ''));
+  add('prac-safety', safetyRows.length
+    ? `<div class="tmc-prac-box"><h3>Safety</h3><ul>${safetyRows.map((x) => `<li>${esc(String(x))}</li>`).join('')}</ul></div>`
+    : '', listEst(safetyRows));
+  add('prac-meals', isPresentable(tmc?.meals) || isPresentable(tmc?.dietarySupport)
+    ? `<div class="tmc-prac-box"><h3>Meals &amp; Dietary</h3>${isPresentable(tmc?.meals) ? `<p><b>Meals:</b> ${esc(tmc?.meals || '')}</p>` : ''}${isPresentable(tmc?.dietarySupport) ? `<p><b>Dietary support:</b> ${esc(tmc?.dietarySupport || '')}</p>` : ''}</div>`
+    : '', proseEst(tmc?.meals || '', tmc?.dietarySupport || ''));
+  add('prac-inclusions', inclusionRows.length
+    ? `<div class="tmc-prac-box"><h3>Inclusions</h3><ul>${inclusionRows.map((x) => `<li>${esc(String(x))}</li>`).join('')}</ul></div>`
+    : '', listEst(inclusionRows));
+  add('prac-exclusions', exclusionRows.length
+    ? `<div class="tmc-prac-box"><h3>Exclusions</h3><ul>${exclusionRows.map((x) => `<li>${esc(String(x))}</li>`).join('')}</ul></div>`
+    : '', listEst(exclusionRows));
+  add('prac-documents', documentRows.length
+    ? `<div class="tmc-prac-box"><h3>Documents</h3><ul>${documentRows.map((x) => `<li>${esc(String(x))}</li>`).join('')}</ul></div>`
+    : '', listEst(documentRows));
+
+  // Educational context the operator explicitly fills in (and which Block 1
+  // treats as core to a TMC brochure) but which NO page rendered — asking for
+  // curriculum links and target skills and then printing neither is exactly
+  // the "why collect it if it never appears" problem. They flow with
+  // everything else now, so adding them cannot overflow a page.
+  add('prac-curriculum', isPresentable(tmc?.curriculumConnection)
+    ? `<div class="tmc-prac-box"><h3>Curriculum Connection</h3><p>${esc(tmc?.curriculumConnection || '')}</p></div>`
+    : '', proseEst(tmc?.curriculumConnection || ''));
+  add('prac-skills', isPresentable(tmc?.skills)
+    ? `<div class="tmc-prac-box"><h3>Skills Developed</h3><p>${esc(tmc?.skills || '')}</p></div>`
+    : '', proseEst(tmc?.skills || ''));
+
+  // Anything the composer routed to `sections[]` — the mapping guide sends
+  // "special requirements, optional activities, uploaded file notes" there —
+  // was silently DROPPED by this family, which renders a fixed page sequence
+  // and never looked at sections at all. Surface each one as a normal box so
+  // no operator-supplied content can vanish between the form and the PDF.
+  const scaffoldHeading = /^(map|logo|design style|source material|cover|overview|itinerary|day ?by ?day|route|practical|investment)$/i;
+  (c.sections ?? []).forEach((s, i) => {
+    const heading = String(s.heading || s.kicker || '').trim();
+    if (!heading || scaffoldHeading.test(heading)) return;
+    const bullets = (s.bullets ?? []).map((b) => String(b).trim()).filter(Boolean);
+    const rows = (s.items ?? [])
+      .map((kv) => [String(kv?.k ?? '').trim(), String(kv?.v ?? '').trim()].filter(Boolean).join(': '))
+      .filter(Boolean);
+    const body = String(s.body || '').trim();
+    if (!body && !bullets.length && !rows.length) return;
+    const listRows = [...bullets, ...rows];
+    add(`prac-section-${i}`,
+      `<div class="tmc-prac-box"><h3>${esc(heading)}</h3>` +
+      (body ? `<p>${esc(body)}</p>` : '') +
+      (listRows.length ? `<ul>${listRows.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '') +
+      `</div>`,
+      proseEst(body) + (listRows.length ? listEst(listRows) - BOX_CHROME : 0));
+  });
+
+  const costGrid = tmc?.costStatus?.length ? tmcCostStatusGrid(c) : '';
+  const costEst = tmc?.costStatus?.length ? 12 + Math.ceil(tmc.costStatus.length / 2) * 11 : 0;
+
+  const header = tmcHeaderLogosHtml(c);
+  const footer = (pageNum: number) => `<div class="tmc-foot-line">${tmcFooterLogosHtml(c)}<span>Page ${pageNum}</span></div>`;
+
+  if (!boxes.length && !costGrid) return [];
+
+  // Measure the REAL rendered height of every box in headless Chrome, exactly
+  // as the banded/editorial families already do. This family previously had no
+  // measurement at all: it guessed content volume from a hand-tuned row count
+  // and trusted CSS to fit, so any wrong guess was silently CLIPPED by the
+  // page's overflow:hidden (the cost-status grid sliced through mid-row) or
+  // stretched into a blank rectangle. Heights now come from the actual render;
+  // the per-box estimates above are only the no-Chromium fallback.
+  let measured: Record<string, number> | null = null;
+  if (measure && (boxes.length || costGrid)) {
+    try {
+      measured = await measure(
+        buildTmcPracticalMeasuringHtml(boxes, costGrid, tpl, fontCss, accent, brandCyan, c),
+        [...boxes.map((b) => b.id), ...(costGrid ? ['prac-cost'] : [])],
+      );
+    } catch {
+      measured = null;
+    }
+  }
+  const sane = (mm: number | undefined, est: number) =>
+    mm != null && Number.isFinite(mm) && mm > 0 && mm < PRAC_USABLE * 1.8 ? mm : est;
+  const hOf = (b: PracBox) => sane(measured?.[b.id], b.est);
+  const costH = costGrid ? sane(measured?.['prac-cost'], costEst) : 0;
+
+  // Greedy fill of one column at `cap` mm, never packing past the clip line.
+  const packColumns = (cap: number): PracBox[][] => {
+    const cols: PracBox[][] = [];
+    let cur: PracBox[] = [];
+    let used = 0;
+    for (const b of boxes) {
+      const h = hOf(b);
+      if (cur.length && used + PRAC_GAP + h + PRAC_SAFETY > cap) {
+        cols.push(cur);
+        cur = [];
+        used = 0;
+      }
+      used += (cur.length ? PRAC_GAP : 0) + h;
+      cur.push(b);
+    }
+    if (cur.length) cols.push(cur);
+    return cols;
+  };
+
+  let columns: PracBox[][] = boxes.length ? packColumns(PRAC_USABLE) : [];
+  if (columns.length) {
+    // Fill whole 2-column pages, but never ask for more columns than there are
+    // boxes — one box must not produce a filled column beside a stretched-empty
+    // one. Then re-pack at the SMALLEST capacity that still fits that column
+    // count, which spreads content evenly instead of cramming the early columns
+    // and leaving the last one nearly bare.
+    const targetCols = Math.min(Math.ceil(columns.length / 2) * 2, boxes.length);
+    let lo = 20;
+    let hi = PRAC_USABLE;
+    for (let i = 0; i < 20; i++) {
+      const mid = (lo + hi) / 2;
+      if (packColumns(mid).length <= targetCols) hi = mid;
+      else lo = mid;
+    }
+    const balanced = packColumns(hi);
+    if (balanced.length <= targetCols) columns = balanced;
+  }
+
+  const colPages: PracBox[][][] = [];
+  for (let i = 0; i < columns.length; i += 2) colPages.push([columns[i] ?? [], columns[i + 1] ?? []]);
+  if (!colPages.length) colPages.push([[], []]);
+
+  const colHeight = (col: PracBox[]) => col.reduce((s, b, i) => s + (i ? PRAC_GAP : 0) + hOf(b), 0);
+  const pageHeight = (cols: PracBox[][]) => Math.max(0, ...cols.map(colHeight));
+
+  // The cost grid spans the full width, so it rides on the last page only when
+  // it genuinely fits under the tallest column there; otherwise it gets a page
+  // of its own rather than being clipped.
+  const lastPageH = pageHeight(colPages[colPages.length - 1] ?? [[], []]);
+  const costFitsLast = !!costGrid && lastPageH + PRAC_COST_GAP + costH + PRAC_SAFETY <= PRAC_USABLE;
+
+  // The hero photo is optional decoration — only show it when a single page has
+  // room to spare, so it can never be the thing that pushes content off-page.
+  const heroSlack = colPages.length === 1
+    ? PRAC_USABLE - lastPageH - (costFitsLast ? PRAC_COST_GAP + costH : 0)
+    : 0;
+  const showHero = !!photo && colPages.length === 1 && heroSlack >= PRAC_HERO_MIN;
+
+  const pages = colPages.map((cols, pi) => {
+    const filled = cols.filter((col) => col.length);
+    const used = pageHeight(cols) + (pi === colPages.length - 1 && costFitsLast ? PRAC_COST_GAP + costH : 0);
+    // Only spread content vertically when there IS content to spread; a page
+    // whose columns are mostly full should stay compact and top-aligned.
+    const airy = filled.length > 0 && used < PRAC_USABLE * 0.72;
+    return (
+      `<section class="tmc-page${airy ? ' is-airy' : ''}">` +
+      header +
+      `<div class="tmc-kicker">Practical Information</div>` +
+      `<h2>${esc(pi === 0 ? 'What you need to know' : 'What else to know')}</h2>` +
+      (pi === 0 && showHero ? `<div class="tmc-prac-hero"><img src="${esc(photo)}" alt=""></div>` : '') +
+      (filled.length
+        ? `<div class="tmc-prac-grid"${filled.length === 1 ? ' style="grid-template-columns:1fr"' : ''}>` +
+          filled.map((col) => `<div class="tmc-prac-col">${col.map((b) => b.html).join('')}</div>`).join('') +
+          `</div>`
+        : '') +
+      (pi === colPages.length - 1 && costFitsLast ? `<h3 style="margin-top:6mm">Cost Status</h3>${costGrid}` : '') +
+      footer(pageNumBase + pi) +
+      `</section>`
+    );
+  });
+
+  if (costGrid && !costFitsLast) {
+    pages.push(
+      `<section class="tmc-page is-airy">` +
+      header +
+      `<div class="tmc-kicker">Practical Information</div>` +
+      `<h2>${esc('Cost status')}</h2>` +
+      costGrid +
+      footer(pageNumBase + colPages.length) +
+      `</section>`,
+    );
+  }
+  return pages;
+}
+
+// Page geometry for the practical-information flow (mm). The page is 297mm
+// tall with 16mm/12mm vertical padding; the kicker, H2 and footer rule consume
+// the rest, leaving this much for the content columns.
+const PRAC_USABLE = 236;
+const PRAC_GAP = 3; // .tmc-prac-col row gap
+const PRAC_SAFETY = 5; // never pack right up to the overflow:hidden clip line
+const PRAC_COST_GAP = 10; // heading + margin above the cost-status grid
+const PRAC_HERO_MIN = 62; // slack needed before the optional hero photo earns its place
+
+/**
+ * Probe document for the practical-info measure pass. Boxes are measured at the
+ * REAL column width (210mm page − 32mm padding − 4mm grid gap, halved = 87mm)
+ * and the cost grid at the full content width, so wrapped line counts — and
+ * therefore heights — match the final page exactly.
+ */
+function buildTmcPracticalMeasuringHtml(
+  boxes: { id: string; html: string }[],
+  costGrid: string,
+  tpl: BrochureTemplate,
+  fontCss: string,
+  accent: string,
+  brandCyan: string,
+  c: BrochureContent,
+): string {
+  const themeVars = tmcThemeVars(tpl, accent, brandCyan, c);
+  const probeCss = `.tmc-probe{width:87mm;margin:0}.tmc-probe-wide{width:178mm;margin:0}`;
+  const body =
+    boxes.map((b) => `<div class="tmc-probe" data-ed-id="${b.id}">${b.html}</div>`).join('') +
+    (costGrid ? `<div class="tmc-probe-wide" data-ed-id="prac-cost">${costGrid}</div>` : '');
+  return (
+    `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">` +
+    `<style>${fontCss}${themeVars}${TMC_CSS}${tpl.css}${probeCss}</style></head><body>${body}</body></html>`
+  );
+}
+
+function buildTmcInvestmentAction(
+  c: BrochureContent,
+  generalQr: string,
+  paymentQr: string,
+  accent: string,
+  brandCyan: string,
+  photo = '',
+  extraPracticalPages = 0,
+): string {
+  const tmc = c.tmc;
+  const price = tmc?.price;
+  const deposit = tmc?.deposit;
+  const instalments = tmc?.instalments || [];
+  const payment = tmc?.payment;
+  const contacts = tmcContacts(c);
+  const socials = tmcSocials(c);
+  const cta = c.footer?.cta || tmc?.sourceControl?.approvalContact || 'Book your seat today';
+  const pageNum = 5 + buildTmcItineraryPages(c, accent).length + extraPracticalPages;
+  // Was suppressed whenever the cancellation policy ran long or there were >2
+  // instalments — i.e. on most real trips — which is why the closing page ended
+  // as a block of text above a large band of dead white. The photo is what makes
+  // this page feel finished, so it is kept whenever one is available and simply
+  // moved BELOW the content, where it absorbs the leftover height.
+  const showFinalPhoto = !!photo;
+  return (
+    `<section class="tmc-page">` +
+    tmcHeaderLogosHtml(c) +
+    `<div class="tmc-kicker">Investment & Action</div>` +
+    `<h2>${esc('Join the Journey')}</h2>` +
+    `<div class="tmc-invest">` +
+    `<div class="tmc-invest-col">` +
+    (price
+      ? `<div class="tmc-price-box"><div class="price">${esc(price.currency || '')} ${esc(String(price.perPerson))}</div><div class="basis">per person · ${esc(price.basis || '')}</div>` +
+        (price.taxesIncluded ? `<p>✓ ${esc(price.taxesIncluded)}</p>` : '') +
+        (price.taxesExcluded ? `<p>✗ ${esc(price.taxesExcluded)}</p>` : '') +
+        (price.validity ? `<p>Validity: ${esc(price.validity)}</p>` : '') +
+        (price.minGroup ? `<p>Minimum group size: ${price.minGroup}</p>` : '') +
+        (price.singleSupplement ? `<p>Single supplement: ${esc(price.currency || '')} ${price.singleSupplement}</p>` : '') +
+        `</div>`
+      : '') +
+    (deposit
+      ? `<div class="tmc-deadline"><b>Deposit:</b> ${esc(price?.currency || '')} ${deposit.amount} due ${esc(deposit.dueDate)}</div>`
+      : '') +
+    (instalments.length
+      ? `<div class="tmc-deadline"><b>Instalments:</b> ${instalments.map((i) => `${esc(price?.currency || '')}${i.amount} by ${esc(i.dueDate)}`).join(' · ')}</div>`
+      : '') +
+    (tmc?.finalPaymentDate ? `<div class="tmc-deadline"><b>Final payment:</b> ${esc(tmc.finalPaymentDate)}</div>` : '') +
+    (tmc?.bookingDeadline ? `<div class="tmc-deadline"><b>Booking deadline:</b> ${esc(tmc.bookingDeadline)}</div>` : '') +
+    (tmc?.cancellation ? `<div class="tmc-prac-box"><h3>Cancellation</h3><p>${esc(tmc.cancellation)}</p></div>` : '') +
+    `</div>` +
+    `<div class="tmc-invest-col">` +
+    `<div class="tmc-action-box">` +
+    `<h3>Next Step</h3>` +
+    `<p>${esc(cta)}</p>` +
+    (payment?.link && payment.approved !== false
+      ? `<a class="tmc-payment-btn" href="${esc(payment.link)}" target="_blank">${esc(payment.buttonLabel || 'Make payment')}</a>`
+      : `<a class="tmc-cta-btn" href="${esc(contacts.website || '#')}">${esc('Get in touch')}</a>`) +
+    `<div class="tmc-qr-row">` +
+    (paymentQr ? `<div class="tmc-qr"><img src="${esc(paymentQr)}" alt="Payment QR"><span>Payment QR</span></div>` : '') +
+    (generalQr ? `<div class="tmc-qr"><img src="${esc(generalQr)}" alt="General QR"><span>Scan for details</span></div>` : '') +
+    `</div>` +
+    `</div>` +
+    `<div class="tmc-prac-box">` +
+    `<h3>Contact</h3>` +
+    `<div class="tmc-contact-grid">` +
+    (contacts.phone ? `<span><b>Phone:</b> <a href="tel:${esc(contacts.phone)}">${esc(contacts.phone)}</a></span>` : '') +
+    (contacts.email ? `<span><b>Email:</b> <a href="mailto:${esc(contacts.email)}">${esc(contacts.email)}</a></span>` : '') +
+    (contacts.website ? `<span><b>Web:</b> <a href="${esc(contacts.website)}">${esc(contacts.website)}</a></span>` : '') +
+    `</div>` +
+    // Each icon is a REAL link to the operator-supplied profile, so tapping it
+    // in the PDF actually opens the account (an unlinked logo row is decoration).
+    (socials.length
+      ? `<div class="tmc-socials">${socials
+          .map((s) => {
+            const icon = `<img src="https://cdn.simpleicons.org/${esc(s.slug.toLowerCase())}/${encodeURIComponent(accent.replace('#', ''))}" alt="${esc(s.slug)}">`;
+            return s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${icon}</a>` : icon;
+          })
+          .join('')}</div>`
+      : '') +
+    `</div>` +
+    `</div>` +
+    `</div>` +
+    (showFinalPhoto ? `<div class="tmc-final-photo"><img src="${esc(photo)}" alt=""></div>` : '') +
+    `<div class="tmc-foot-line">${tmcFooterLogosHtml(c)}<span>Page ${pageNum}</span></div>` +
+    `</section>`
+  );
+}
+
+// Forced print CSS — injected into the designed HTML regardless of what the
+// model wrote. This is the exact fix for the two hard bugs already found in
+// the deterministic template (Chromium ignores "@page :first" reliably, and
+// a brochure with no embedded fonts silently falls back to system fonts) —
+// the model gets creative freedom over everything ELSE, but never controls
+// whether the brochure bleeds correctly or uses the right typeface.
+function tmcForcedPrintCss(fontCss: string): string {
+  return `${fontCss}
+*{box-sizing:border-box}
+@page{size:A4 portrait;margin:0}
+html,body{margin:0;padding:0}`;
+}
+
+// Block 1, verbatim, exactly as supplied by the client — TRIAL MODE. No
+// engine-authored page-structure breakdown, no anti-overlap rules, no photo-
+// distribution mandate, no table-layout guidance: those were all engineering
+// guardrails layered on top of Block 1, and the brief is to find out whether
+// removing them entirely and trusting the model with Block 1 + the raw trip
+// data + the resolved assets produces a better result. Only two additions
+// survive, and both are Chromium PDF-export facts rather than design opinions
+// (see guardDesignedHtml): the exact font names to reference, and a warning
+// about the "@page :first" bug — omitting that one specific instruction
+// doesn't test "creative freedom", it just reproduces a known rendering bug.
+const TMC_BLOCK1_SYSTEM_PROMPT = `ROLE
+You are the brochure production engine for The Modern Classroom, an Educational Experience Design and Assurance brand, not a conventional tour operator. Convert the approved trip brief, uploaded files and active CRM Brand Kit into a finished, co-branded, multi-page A4 portrait brochure for parents, students and schools.
+
+SOURCE CONTROL
+Use only the current trip brief, uploaded files and selected Brand Kit. Never invent or transfer facts from another trip. Preserve exact names, dates, duration, route, hotels, flights, meals, prices, taxes, inclusions, exclusions, options, payment terms and contacts. If an essential fact is missing or contradictory, stop and ask focused questions. Essential blockers include dates, duration, route, itinerary, price, inclusion status, school logo and contact details. Omit non-essential unknowns. Never print prompts, placeholders, source notes, production instructions or internal comments.
+
+POSITIONING AND COPY
+Present TMC as the educational experience design and assurance partner. Write first for parents seeking safety, clarity and value, then students seeking growth and experience, then schools seeking learning outcomes and reliable execution. Use calm, specific, concise language. Avoid exaggerated claims and generic tourism copy. Use the tagline exactly: TRAVEL. EXPERIENCE. LEARN.
+
+BRAND AND CO-BRANDING
+Use the active TMC Brand Kit for the official TMC logo, wordmark, contacts, social links and QR details. An approved school logo is mandatory. Do not generate the brochure until it is uploaded. Use a transparent high-resolution PNG, ideally 800 to 1,600 px wide and never above 2,000 px. Never redraw, recolour, crop, stretch or distort either logo. Do not create a logo from typed text or a website screenshot. Display both logos in one clean co-branding area on the cover, with balanced optical prominence and safe spacing. Display both logos in a consistent small header or footer on inside pages and beside the final call-to-action. Use a light logo panel when the background reduces visibility. Do not include another partner logo without approval. Use the line: Exclusively designed for [School Name] by The Modern Classroom. Do not describe the school as tour operator or organiser unless confirmed. TMC master colours are Classroom Cyan #1AAFE0, Cyan Deep #0E7FA6, Cyan Wash #E6F6FB, Modern Charcoal #3F3F3F, Anchor Black #0E0E0E, Mist Grey #F2F4F6 and Paper White #FFFFFF. Use Staatliches for display headings and DM Sans for body copy. Use Arial Black and Arial only when the approved fonts are unavailable.
+
+DESTINATION-ADAPTIVE THEME
+Every trip needs a destination-specific visual theme. Never reuse another destination's palette or motifs. Collect Theme Mode: Auto by destination or Manual. In Auto mode, derive the visual direction from the destination's landscape, architecture, local craft, season, climate and itinerary. Select primary, secondary, accent, light-background and body-text HEX colours. Use roughly 70% light neutral, 20% destination primary or secondary and 10% accent. Keep original TMC cyan in the logo and small brand cues where suitable. In Manual mode, use supplied colours and adjust only for print readability and WCAG AA contrast. Avoid flag-only palettes, stereotypes, irrelevant decoration and sacred imagery used decoratively. Prepare an internal preflight for Theme name, Mood, Primary, Secondary, Accent, Background and Text HEX. Do not print it. If Theme Mode is blank, ask before generation. If the workflow does not pause, default to Auto.
+
+IMAGERY
+Use supplied images or the CRM's licensed image source. Do not use AI-generated destination or student photographs. Images must match the exact route, season, activities and student age. Use Indian student representation where students appear. Avoid irrelevant wildlife, landmarks, third-party branding and low-resolution images. Never use a school logo without recorded approval.
+
+PAGE STRUCTURE
+Use eight pages by default. Add pages when content needs space. Never shrink text to force eight pages. Cover: hero image, trip title, educational subtitle, school name, dates, duration, both logos and tagline. Overview: short introduction, journey snapshot, educational purpose, three to six learning outcomes and key highlights. Pages 3 to 5, itinerary: correct day number and date, route, activities, meals, overnight city, learning takeaway and physical or long-travel warning. Separate optional items and alternatives from included activities. Route map: default clean 2D map, exact travel order, accurate markers and clear path connections. Do not add unvisited places. Practical information: flights, transport, hotels, room sharing, meals, dietary support, supervision, safety, documents, inclusions and exclusions. Investment and action: price, occupancy basis, taxes, deposit, instalments, deadline, cancellation reference, CTA, contacts, social links, both logos and QR codes.
+
+PAYMENT LINK
+The payment link is optional. If an approved HTTPS payment link is supplied, place a clearly labelled Make payment button on the final page, make it clickable and add a separately labelled payment QR code when requested. Copy the URL exactly. Do not shorten, alter or invent it. If both a general QR and payment QR appear, label each clearly. If no payment link is supplied, omit the payment section without leaving a placeholder.
+
+DESIGN AND EXPORT
+Use A4 portrait, at least 18 mm safe margins, clear hierarchy, consistent spacing and minimum 10.5 pt body text. Keep text away from faces and important image areas. Maintain strong contrast. Avoid clipping, overlap, dense copy, stretched images and inconsistent footers. Show prices exactly as supplied. State currency, per-person or total basis, sharing basis, single supplement, included and excluded taxes, deposit, each instalment and due date, booking deadline and approved cancellation wording. Never invent legal or refund terms.
+
+FINAL QUALITY GATE
+Verify the school and TMC logos, approved co-branding line, destination, dates, duration, nights, route, day-date sequence, flights, hotels, meals, transport, learning outcomes, price arithmetic, taxes, deposits, instalments, insurance, visas, permits, entrance fees, options, map, images, contacts, links and QR codes. Confirm no item appears in both inclusions and exclusions. Confirm no previous-trip references, placeholders, prompts or internal notes remain. Confirm all text and images are sharp, readable and unclipped. Export a print-ready A4 PDF, targeted at 5 to 12 MB where export controls exist. File name: TMC_[School]_[Destination]_[Year]_Brochure.pdf`;
+
+/**
+ * Guided hybrid brief: Block 1 verbatim + the trip's own data (Block 2) +
+ * SHORT TOKENS standing in for the resolved asset URLs (see the ASSET_TOKENS
+ * note below) + Block 1-aligned quality-bar rules the deterministic engine
+ * already learned the hard way (full-bleed cover, no dead space, no
+ * overlap, no narrow-column text walls). The model still owns all layout/
+ * typography/creative decisions — it just never has to reproduce a real
+ * asset URL by hand.
+ */
+function buildTmcDesignBrief(
+  c: BrochureContent,
+  assets: {
+    heroUrl: string; overviewPhotos: string[]; extraPhotos: string[]; mapUrl: string;
+    generalQrUrl: string; paymentQrUrl: string; tmcLogo: string; schoolLogo: string;
+    accent: string; secondary: string; background: string; text: string; brandCyan: string;
+    tmcLogoPlacement?: { x: number; y: number; scale: number };
+    schoolLogoPlacement?: { x: number; y: number; scale: number };
+  },
+): { brief: string; tokenMap: Record<string, string> } {
+  const blockTwoData = {
+    title: c.title,
+    subtitle: c.subtitle,
+    tagline: c.__brand?.tagline || c.tagline || 'TRAVEL. EXPERIENCE. LEARN.',
+    coBrandLine: tmcCoBrandLine(c),
+    intro: c.intro,
+    highlights: c.highlights,
+    tmc: c.tmc,
+    route: c.route,
+    inclusions: c.inclusions,
+    exclusions: c.exclusions,
+    footer: c.footer,
+  };
+
+  // ASSET_TOKENS — real asset URLs (Pexels/Unsplash photos, Geoapify maps,
+  // goQR codes) commonly run 100-250+ characters with hashes/query strings.
+  // Earlier generations proved the model periodically mistypes/truncates one
+  // character somewhere when copying a URL that long by hand into an <img
+  // src>, and a SINGLE wrong character silently breaks that image (the exact
+  // grey-box/broken-logo failures seen in review). Handing over short,
+  // memorable tokens instead — and substituting the real URL back in
+  // afterward in guardDesignedHtml, byte-for-byte — makes that failure mode
+  // structurally impossible: the model never has to get a long string
+  // right, it only has to copy a short word.
+  const tokenMap: Record<string, string> = {};
+  const photoLines: string[] = [];
+  if (assets.heroUrl) { tokenMap.HERO_PHOTO = assets.heroUrl; photoLines.push('- HERO_PHOTO (use FULL-BLEED on the cover — edge to edge, no border/margin/letterboxing)'); }
+  assets.overviewPhotos.forEach((u, i) => { const t = `OVERVIEW_PHOTO_${i + 1}`; tokenMap[t] = u; photoLines.push(`- ${t} (Overview page)`); });
+  assets.extraPhotos.forEach((u, i) => { const t = `EXTRA_PHOTO_${i + 1}`; tokenMap[t] = u; photoLines.push(`- ${t} (use anywhere it strengthens the page — itinerary, route map, practical information, even the closing investment/action page can use one)`); });
+  if (assets.mapUrl) { tokenMap.ROUTE_MAP_IMAGE = assets.mapUrl; photoLines.push('- ROUTE_MAP_IMAGE (Route Map page)'); }
+  if (assets.generalQrUrl) { tokenMap.GENERAL_QR_IMAGE = assets.generalQrUrl; photoLines.push('- GENERAL_QR_IMAGE'); }
+  if (assets.paymentQrUrl) { tokenMap.PAYMENT_QR_IMAGE = assets.paymentQrUrl; photoLines.push('- PAYMENT_QR_IMAGE'); }
+  if (assets.tmcLogo) tokenMap.LOGO_TMC = assets.tmcLogo;
+  if (assets.schoolLogo) tokenMap.LOGO_SCHOOL = assets.schoolLogo;
+
+  const logoLine = (label: string, token: string, url: string, placement?: { x: number; y: number; scale: number }) => {
+    if (!url) return `- ${label}: (not supplied — omit gracefully)`;
+    const base = `- ${label}: use src="${token}" exactly`;
+    if (!placement) return `${base} — position/size at your own creative judgement (balanced with the other logo).`;
+    return `${base} — the operator has FIXED this logo's placement: horizontal position ${Math.round(placement.x * 100)}% across the cover, vertical position ${Math.round(placement.y * 100)}% down the cover, at ${Math.round(placement.scale * 100)}% of the default size. Honor this position and size exactly; you still choose everything else about how it's framed (panel, spacing, safe zone).`;
+  };
+
+  const brief = `${TMC_BLOCK1_SYSTEM_PROMPT}
+
+---
+
+TRIP BRIEF (Block 2 — the structured data for this specific trip, as JSON):
+${JSON.stringify(blockTwoData, null, 2)}
+
+REAL ASSETS AVAILABLE FOR THIS BROCHURE — CRITICAL: use each EXACT token below as the entire \`src\` attribute of an <img> tag (e.g. <img src="HERO_PHOTO">). These tokens are placeholders a build step swaps for the real, working image automatically. NEVER write a real http(s) URL yourself for any image, logo, map, or QR code — you have no way to fetch/verify one, and typing one out risks a broken image. Only use the exact tokens listed:
+${photoLines.join('\n') || '(no photos or map were resolved for this trip)'}
+${logoLine('TMC logo (co-brand on cover + small mark on every interior page + beside the final CTA)', 'LOGO_TMC', assets.tmcLogo, assets.tmcLogoPlacement)}
+${logoLine('School logo (co-brand on cover + small mark on every interior page)', 'LOGO_SCHOOL', assets.schoolLogo, assets.schoolLogoPlacement)}
+Logos: never redraw, recolour, crop, stretch, or distort — always render with object-fit:contain, balanced optical prominence between the two.
+
+DESTINATION-ADAPTIVE THEME COLOURS (derived per the DESTINATION-ADAPTIVE THEME section above): accent ${assets.accent}, secondary ${assets.secondary}, background ${assets.background}, text ${assets.text}, TMC master cyan ${assets.brandCyan}. This is a full destination palette, not a single tint to sprinkle on white — put secondary and background to real use as colour bands, tinted panels, section dividers or duotone photo treatments on interior pages (route map, practical information, investment/action), not just cover art. A brochure where every page after the cover is plain white paper with only the accent colour showing up as a heading underline reads as unfinished, not premium — commit to the palette everywhere, the same way the cover does.
+
+FONTS: self-hosted @font-face rules for "Staatliches" and "DM Sans" will be embedded into your <style> automatically — just reference those exact font-family names per the BRAND AND CO-BRANDING section above.
+
+CREATIVE DIRECTION — you are the celebrated art director of a premium travel magazine, not a forms developer. This brochure needs to feel expensive, exciting, and worth a parent's attention — full creative licence over colour, composition, typography, and layout. You decide what looks best; nothing below is a checklist to satisfy safely, it's the minimum a real print piece needs to actually work.
+
+BASE PRODUCTION REQUIREMENTS:
+1. The cover is full-bleed — the hero photo fills the entire page edge to edge, zero border or letterboxing.
+2. Let the chosen art direction determine density, whitespace and pacing; every page should feel intentional.
+3. Nothing overlaps — check every element's real position before finalizing.
+4. Curate the supplied photo library freely; use only the images that strengthen the design. Each photo token may be used AT MOST ONCE across the whole document — never place the same image (even cropped or resized) on two different pages; that reads as a mistake, not a callback. Never draw a decorative image frame, panel or placeholder box that ends up with no photo inside it — either put a real supplied photo in every frame you create, or don't create the frame.
+5. Prices, dates, facts, and both logos are exactly as supplied — never invented, never altered.
+6. When two cards/panels sit side by side (a stat card next to a text card, an outcomes list next to a duration card, etc.), do not force them to equal height and leave the shorter one's remainder as visible dead space. Either let each card size to its own natural content height (tops aligned, bottom edges free to differ), or deliberately fill the shorter card with more generous type/line-height/padding proportional to ITS OWN content so it reads as intentionally spacious — never an arbitrary blank gap at the bottom of an otherwise-finished card.
+7. Any co-branding lockup that places two logos together (cover masthead, header strips) must size its container tightly around the logos plus real breathing room — never a wide bar with the two logos stranded at opposite edges and a large empty gap between them.
+8. The two identity marks (TMC and school logo) must NEVER touch or overlap each other anywhere — on the cover, on an interior running-mark header, wherever they appear together. Give them an explicit, generous horizontal gap (a real measured margin, not marks butted together relying on rounding to keep them apart) — this is checked geometrically and a design with overlapping marks will be rejected outright, no exceptions.
+9. A decorative motif, shape, icon, cursor-like flourish or texture must never bleed across the edge of an information card, price panel, date pill or any other content container — keep decoration confined to true background/margin space, clear of every readable element's bounding box.
+10. Pick ONE background treatment per "mode" and hold it for every page in that mode — e.g. if interior pages use a warm light paper tone, EVERY interior page uses that same tone (not a sudden unrelated dark panel on just one page); if the cover and a closing page both go dark/photographic as an intentional bookend, they must share the SAME dark tone/treatment as each other, not two different, unrelated dark palettes. A page whose background looks like it escaped from a different brochure is the single most jarring thing a reader notices — never let one page's colour treatment be an outlier from its neighbours without a clear, repeated reason.
+
+ONE TECHNICAL NOTE (a Chromium PDF-export quirk, not a design instruction): if you declare your own \`@page\` rule, give it \`margin: 0\` and build interior-page margins from padding on your own page element instead — Chromium does not reliably honor "@page :first" overrides, so a nonzero \`@page\` margin here would break the cover's full bleed.
+
+SOCIAL LINKS: never print a social contact as visible running text with its raw URL spelled out (e.g. "Instagram: https://instagram.com/...") — that reads as a broken/unstyled webpage, not a print piece a parent would trust. Render each supplied platform as a small, real icon that LINKS to its exact supplied URL: \`<a href="EXACT_URL" target="_blank"><img src="https://cdn.simpleicons.org/PLATFORM_SLUG/HEXCOLOR" alt="PLATFORM_NAME" style="width:6mm;height:6mm"></a>\` — PLATFORM_SLUG is the lowercase platform name (whatsapp, youtube, facebook, instagram, twitter, linkedin, etc.) and HEXCOLOR is any 6-digit hex with the leading # stripped (your own accent or a neutral works well). Group these as a compact icon row, not a text list. If two different platforms were supplied the exact same URL, that is almost certainly a data-entry mistake upstream — still print both if given, but never invent or duplicate a URL yourself onto a platform that wasn't given one.
+
+CONTENT TO INCLUDE (order and grouping are your call — default to roughly 8 pages, more if content needs it, never fewer than the content warrants): cover; an overview with the trip's story, purpose, and learning outcomes; the full day-by-day itinerary (dates, routes, activities, meals, overnight city, learning takeaways, warnings — group MORE days per page when individual days are light on detail, rather than a fixed count per page; a page with only two short day-cards and a large empty lower half is exactly the failure to avoid — fit as many days as read cleanly on a page before starting a new one); the route map with travel order; practical information (flights, transport, hotels, meals, safety, documents, inclusions/exclusions); and investment & action (price, payment terms, deadlines, CTA, contacts, socials, both logos, QR code(s) — only if a payment link/QR was actually supplied).
+
+EDITORIAL PRESENTATION PASS — do this before designing:
+The structured data is source material, not final display copy. Preserve its meaning and exact numbers, but never print repetitive operational strings verbatim. Semantically deduplicate transfer sentences; present arrival, intercity and departure transport once each. Group accommodation by real property/stay, city and total nights; check-in, check-out and transfer instructions are itinerary movements, never hotel names. Omit empty or "Not specified" blocks unless safety requires calling out the gap. Turn long terms, inclusions and cost statuses into concise, scannable structures. Remove obvious previous-trip leakage. Presentation quality is as important as factual completeness.
+
+FINAL CREATIVE MANDATE — this supersedes any earlier aesthetic suggestion or page recipe while preserving factual, brand and print requirements:
+You are the sole creative director, editorial designer and production artist. You have complete freedom over the concept, page count, pacing, composition, grids, typography scale, image treatment, colour balance, shapes, motifs, whitespace, section order and storytelling. Do not imitate a CRM template, repeat a standard page recipe or make every brochure share the same visual grammar. The result must feel authored for this exact destination, season, school, age group, educational purpose and emotional promise.
+
+Silently form one distinctive art-direction concept from the destination's landscape, architecture, craft, climate, culture and itinerary. Commit to it as a leading international travel or culture publication would. The concept may be cinematic, refined, playful, experimental, minimal, maximal, typographic, photographic or illustration-led — choose entirely on creative merit. Do not explain it and do not print design notes.
+
+Treat available photographs as a curated library, not a checklist. Select, crop, layer and scale whichever images create the strongest brochure; using every photograph is not required. Never invent an asset URL. HERO_PHOTO is the full-bleed cover photograph and ROUTE_MAP_IMAGE is the route map when supplied. Logos are identity marks, never decorative photography: preserve their aspect ratio, colour and integrity, and balance them professionally. Honour exact operator-set logo placement when supplied. A photo you do use should be given real weight — a third of a page or more, filling its frame with confident cropping — never several equal small strips lined up side by side as a decorative row; that pattern reads as a stock-photo gallery widget, not editorial design, no matter how many you use.
+
+Communicate every supplied fact a parent, student or school needs, but decide freely how those facts become a compelling editorial story. Combine, split, reorder or visually reinterpret sections whenever that improves clarity and beauty. Let the content determine the natural page count.
+
+The only non-creative constraints are production truths: preserve supplied facts exactly; create real 210mm by 297mm A4 portrait pages with zero browser page margin and safe spacing inside each page; use a full-bleed cover; keep body text at least 10.5pt with print-safe contrast; prevent clipping, overlap, overflow, accidental continuation sheets and broken images; and use self-contained HTML/CSS without scripts, placeholders, design notes or fabricated URLs.
+
+SELF-CHECK BEFORE YOU FINALIZE (silent — do not print this checklist, just apply it): the single most common defect in this brochure is one page's content quietly growing taller than 297mm and getting clipped — every page with more than roughly two dense boxes/cards, a full list of 6+ items, or two stacked paragraphs is worth a second look. For each such page, mentally stack its actual content — box padding, heading height, every line of every list item at ~10.5–11pt with realistic line-height, image heights — against the ~260mm of usable height inside a 210×297mm page with your own margins. If a page reads tight, don't gamble on it fitting: split it into two pages, drop the density (smaller type only down to the 10.5pt floor, tighter but still-safe spacing), or move a card to a lighter neighbouring page. A slightly plainer page that is guaranteed to fit beats a denser one that risks being cut off mid-sentence.
+
+Now design and produce the complete brochure. Return ONLY one complete, self-contained HTML document — starting with <!DOCTYPE html>, ending with </html>. No markdown code fences and no commentary.`;
+
+  return { brief, tokenMap };
+}
+
+/**
+ * Defensive post-processing of the model's raw HTML: strips markdown fences,
+ * sanity-checks it's a real document, then FORCE-INJECTS the required fonts
+ * and zero-margin @page rule (never trusts the model to have gotten this
+ * right), and guarantees both logos appear somewhere even if the model
+ * dropped them from its layout. Throws on anything unusable so the caller
+ * falls back to the fully deterministic template — a broken hybrid result
+ * must never be what ships.
+ */
+function guardDesignedHtml(
+  raw: string,
+  fontCss: string,
+  logos: { tmcLogo: string; schoolLogo: string; coBrandLine: string },
+  tokenMap: Record<string, string> = {},
+): string {
+  let html = String(raw ?? '').trim();
+  // Strip a ```html ... ``` fence if the model wrapped its output despite instructions.
+  const fenced = html.match(/^```(?:html)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced?.[1]) html = fenced[1].trim();
+
+  if (html.length < 500 || !/<body[\s>]/i.test(html) || !/<\/html>/i.test(html)) {
+    throw new Error('Designed HTML failed sanity check (too short or malformed)');
+  }
+  // Guard against a raw JS-object-serialization artifact leaking into visible
+  // copy — it means the model was handed (or itself produced) an object where
+  // a plain string was expected and printed it verbatim rather than its text.
+  if (/\[object Object\]|\[object Array\]/.test(html)) {
+    throw new Error('Designed HTML contains a raw object-serialization artifact ("[object Object]") instead of real text');
+  }
+
+  // Preserve only the semantically mandatory visuals. The creative model is
+  // deliberately free to curate the remaining photo library rather than
+  // forcing every asset into a crowded, repetitive layout.
+  const visualTokens = ['HERO_PHOTO', 'ROUTE_MAP_IMAGE'].filter((token) => tokenMap[token]);
+  for (const token of visualTokens) {
+    const asImage = new RegExp(`<img\\b[^>]*\\bsrc=["']${token}["']`, 'i').test(html);
+    if (!asImage) throw new Error(`Designed HTML omitted required visual asset ${token}`);
+  }
+  for (const token of ['LOGO_TMC', 'LOGO_SCHOOL']) {
+    if (!tokenMap[token]) continue;
+    const backgroundUse = new RegExp(`background(?:-image)?\\s*:[^;}]*${token}`, 'i').test(html);
+    if (backgroundUse) throw new Error(`Designed HTML used ${token} as background artwork`);
+  }
+
+  // Swap every ASSET_TOKEN the model wrote (e.g. src="HERO_PHOTO") for the
+  // real, verbatim asset URL — byte-for-byte, no risk of the model having
+  // mistyped a 200-character Pexels/Geoapify URL by hand. This is the fix
+  // for the grey-box / broken-logo failures: the model was never asked to
+  // reproduce a long URL correctly in the first place.
+  for (const [token, url] of Object.entries(tokenMap)) {
+    if (!url) continue;
+    // Case-insensitive: tokens are plain alphanumeric/underscore (no regex
+    // metacharacters to escape), and matching case-insensitively costs
+    // nothing while covering the model varying capitalization.
+    html = html.replace(new RegExp(token, 'gi'), url);
+  }
+
+  const forced = `<style>${tmcForcedPrintCss(fontCss)}</style>`;
+  html = /<head[^>]*>/i.test(html)
+    ? html.replace(/<head([^>]*)>/i, `<head$1>${forced}`)
+    : html.replace(/<html([^>]*)>/i, `<html$1><head>${forced}</head>`);
+
+  const hasBothLogos =
+    (!logos.tmcLogo || html.includes(logos.tmcLogo)) &&
+    (!logos.schoolLogo || html.includes(logos.schoolLogo));
+  if (!hasBothLogos && (logos.tmcLogo || logos.schoolLogo)) {
+    // Safety net: the co-branding requirement can never silently vanish just
+    // because the model's layout dropped a logo — append a guaranteed strip.
+    const strip =
+      `<div style="position:fixed;top:6mm;left:0;right:0;display:flex;justify-content:center;align-items:center;gap:6mm;z-index:9999;background:rgba(255,255,255,.92);padding:3mm 6mm;border-radius:2mm;width:fit-content;margin:0 auto">` +
+      (logos.tmcLogo ? `<img src="${esc(logos.tmcLogo)}" alt="The Modern Classroom" style="height:14mm;object-fit:contain">` : '') +
+      (logos.schoolLogo ? `<img src="${esc(logos.schoolLogo)}" alt="School" style="height:14mm;object-fit:contain">` : '') +
+      `</div>`;
+    html = html.replace(/<body([^>]*)>/i, `<body$1>${strip}`);
+  }
+
+  return html;
+}
+
+async function buildTmcBrochureHtml(
+  content: BrochureContent,
+  tpl: BrochureTemplate,
+  designHtml?: DesignHtmlFn,
+  designAudit?: DesignAuditFn,
+  designSalvage?: DesignSalvageFn,
+  onDesignFallback?: (reason: string) => void,
+  measure?: EdMeasureFn,
+): Promise<string> {
+  const c = content;
+  c.__mode = tpl.cover;
+  const accent = tmcAccent(c);
+  const brandCyan = TMC_CYAN;
+
+  // Assets: search destination landmarks only; brand logos are uploaded via __brand.
+  // Route map from explicit cities (needed below too, so resolve it first).
+  const cityList = c.tmc?.routeCities ? parseRouteCities(c.tmc.routeCities) : sanitizeCityNames(c.route?.cities);
+
+  // A brochure with only 2-3 photos on one page and bare text everywhere else
+  // reads as thin/unattractive no matter how good the layout is. Build a
+  // proper gallery pool — hero query + each route city — so there's enough
+  // real photography to spread across the itinerary and practical pages too,
+  // not just the cover and overview. Operator-uploaded photos always come
+  // first (someone who uploaded real photos of the actual trip wants those
+  // over generic stock, never silently ignored in favour of it).
+  const heroQuery = c.heroQuery || c.tmc?.tripTitle || c.title || '';
+  // Uploading a logo (school/agency) ALSO adds that same URL into
+  // __brand.imagePool (so it's pickable elsewhere in the UI) — exclude every
+  // known logo/cover-mark URL here so a bare logo can never be mistaken for a
+  // destination photo and end up as the cover's hero background.
+  const knownLogoUrls = new Set(
+    [
+      c.__brand?.logoUrl,
+      c.__brand?.schoolLogoUrl,
+      ...(c.__brand?.coverLogos?.map((l) => l.url) ?? []),
+      ...(c.__brand?.interiorLogos?.items?.map((it) => it.url) ?? []),
+    ].filter(Boolean),
+  );
+  const galleryPool: string[] = [...(c.__brand?.imagePool ?? []).filter((u) => u && !knownLogoUrls.has(u))];
+  const fillGallery = async (query: string, count: number) => {
+    if (!query || galleryPool.length >= 12) return;
+    try {
+      // NOTE: do NOT bolt scenery qualifiers onto the query — measured against
+      // the live sources, "<place> landscape scenery view" returns ZERO results
+      // where "<place>" returns eight, so it silently emptied the photo pool.
+      // The caption filter below is what keeps people out, not the query.
+      const photos = await searchPhotos(query, count);
+      for (const p of photos) {
+        if (!p.url || galleryPool.includes(p.url)) continue;
+        if (!isSchoolSafePhoto(p.alt, p.source)) continue;
+        galleryPool.push(p.url);
+      }
+    } catch {}
+  };
+  // The route map is entirely independent of the photo gallery (only needs
+  // cityList/accent/destinationCountry) but was previously fetched only AFTER
+  // the whole gallery finished — Nominatim's mandatory 1.1s-per-city throttle
+  // alone adds seconds. Kick it off now so it resolves concurrently with the
+  // gallery-building below instead of strictly after it (awaited later, once
+  // both are needed for the design brief).
+  const mapPromise: Promise<string> =
+    cityList.length >= 1
+      ? routeMapUrl(cityList, { color: accent.replace('#', ''), width: 1280, height: 760, countryHint: c.tmc?.destinationCountry }).catch(
+          () => '',
+        )
+      : Promise.resolve('');
+
+  if (galleryPool.length < 12) await fillGallery(heroQuery, 4);
+  // Every remaining query (city names + day-activity diversification, added
+  // to fix the "3 images that are really one image" repeat-photo problem) is
+  // an INDEPENDENT network search — awaiting them one at a time, as before,
+  // made a single-destination trip's photo pool take 10+ sequential
+  // round-trips (each also doing its own load-verification round-trip) to
+  // fill, which was the single biggest contributor to a slow generation.
+  // Firing them in parallel bounds the wall time to the SLOWEST one query
+  // instead of the SUM of all of them, at the cost of occasionally running a
+  // couple more free/keyless searches than strictly needed once the pool is
+  // already full (fillGallery's own `>= 12` guard just makes that query a
+  // no-op — harmless, since the final pool is sliced to 12 either way).
+  const cityQueries = cityList.slice(0, 4);
+  // A single-destination trip (the common case — one city, several days)
+  // collapses every query above to near-duplicates of "<destination>" — a
+  // stock/wiki search on the bare city name keeps returning the same handful
+  // of iconic shots in slightly different crops, which is exactly the "3
+  // images that are really one image" and "itinerary pages with no photo"
+  // symptoms. Pull distinct queries from each day's actual activity so the
+  // pool has genuinely different subjects (beach, fort, cuisine, wildlife...)
+  // instead of one repeated destination-name search.
+  const dayQueries = Array.from(
+    new Set(
+      (c.tmc?.days || [])
+        .map((d) => stripDayPrefix(d.activities || d.route || '', d.dayNumber).split(/[.,;]/)[0]?.trim())
+        .filter((q): q is string => !!q && q.length >= 4),
+    ),
+  ).slice(0, 8);
+  if (galleryPool.length < 12) {
+    await Promise.all([
+      ...cityQueries.map((city) => fillGallery(city, 2)),
+      ...dayQueries.map((q) => fillGallery(`${heroQuery} ${q}`.trim(), 2)),
+    ]);
+  }
+  const heroUrl = galleryPool[0] || '';
+  const overviewPhotos = galleryPool.slice(1, 4);
+  // Extra photos beyond the cover + overview — handed to the design brief so
+  // EVERY page (itinerary, route, practical, even investment/action) can
+  // carry large, real imagery instead of staying pure text — the brief now
+  // asks for photos to be used boldly and large, which needs more source
+  // material than the old cap of 4 extras across 5+ remaining pages.
+  const extraPhotos = galleryPool.slice(4, 12);
+  // routeMapUrl itself only needs >=1 successfully-geocoded point (a
+  // single-destination trip still gets a real pinned map, not a placeholder)
+  // — started above, concurrently with the gallery build; just collect it now.
+  const mapUrl = await mapPromise;
+
+  // QR codes.
+  const generalQr = c.__brand?.qrData || c.footer?.qrData || '';
+  const generalQrUrl = generalQr ? qrUrl(generalQr, 240) : '';
+  const paymentLink = c.tmc?.payment?.link;
+  const paymentQrUrl = paymentLink && c.tmc?.payment?.qr ? qrUrl(paymentLink, 240) : '';
+
+  // Custom filename hint: TMC_<School>_<Destination>_<Year>_Brochure
+  const school = sanitizeFileName(tmcSchoolName(c) || c.__brand?.name || 'School');
+  const dest = sanitizeFileName(c.title || c.tmc?.tripTitle || 'Destination');
+  const year = new Date().getFullYear();
+  c.__fileName = `TMC_${school}_${dest}_${year}_Brochure`;
+
+  const fontCss = await buildTmcFontFaces();
+
+  // ---- Hybrid AI-design step (optional) ----
+  // Facts and assets are resolved deterministically, but the AI owns the full
+  // art direction and composition. A technically invalid first design gets
+  // one from-scratch retry with the exact print-preflight defects; only two
+  // failed attempts reach the emergency deterministic fallback.
+  if (designHtml) {
+    const tmcLogo = tmcTmcLogo(c);
+    const schoolLogo = tmcSchoolLogo(c);
+    // 4 attempts (was 3): the deterministic overflow-salvage pass tried inside
+    // the loop below resolves most overflow failures without ever needing this
+    // budget, so the extra attempt is cheap insurance for whatever the salvage
+    // pass can't fix (a genuinely different defect each time, say).
+    const maxAttempts = 4;
+    try {
+      const { brief, tokenMap } = buildTmcDesignBrief(c, {
+        heroUrl, overviewPhotos, extraPhotos, mapUrl, generalQrUrl, paymentQrUrl, tmcLogo, schoolLogo,
+        accent, secondary: tmcSecondary(c), background: tmcBackground(c), text: tmcText(c), brandCyan,
+        tmcLogoPlacement: c.__brand?.tmcLogoPlacement,
+        schoolLogoPlacement: c.__brand?.schoolLogoPlacement,
+      });
+      let attemptBrief = brief;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          const raw = await designHtml(attemptBrief);
+          const designed = guardDesignedHtml(
+            raw,
+            fontCss,
+            { tmcLogo, schoolLogo, coBrandLine: tmcCoBrandLine(c) },
+            tokenMap,
+          );
+          if (designAudit) {
+            const audit = await designAudit(designed, {
+              protectedLogoUrls: [tmcLogo, schoolLogo].filter(Boolean),
+              minPages: 5,
+              maxPages: 20,
+            });
+            if (!audit.ok) {
+              // Before spending a full paid redesign round-trip, try a free,
+              // deterministic, universally-safe fix: shrink just the
+              // offending page(s)' text until they fit, re-verified by the
+              // SAME audit. Only ships if the re-check comes back clean; a
+              // failure that isn't pure overflow (broken image, logo misuse)
+              // returns null immediately and falls through to a real retry.
+              if (designSalvage) {
+                const salvaged = await designSalvage(designed, audit.issues, {
+                  protectedLogoUrls: [tmcLogo, schoolLogo].filter(Boolean),
+                });
+                // `salvaged` is Puppeteer's re-serialization of `designed` (which
+                // already went through guardDesignedHtml once — fonts injected,
+                // asset tokens already swapped to real URLs) plus a scoped shrink
+                // style. Re-running guardDesignedHtml on it would look for the
+                // ORIGINAL placeholder tokens (e.g. src="HERO_PHOTO") that no
+                // longer exist — they're real URLs now — and wrongly throw
+                // "omitted required visual asset". Return it as-is.
+                if (salvaged) return salvaged;
+              }
+              throw new Error(`Print preflight found: ${audit.issues.join(', ')}`);
+            }
+          }
+          return designed;
+        } catch (error) {
+          if (attempt === maxAttempts - 1) throw error;
+          const msg = (error as Error).message;
+          // Tailor the retry guidance to what actually failed — generic overflow
+          // advice read as nonsense noise when the real defect was, say, the two
+          // logos overlapping, which made the feedback less useful than it looked.
+          const notes: string[] = [];
+          if (/_clips_or_overflows|_exceeds_a4/.test(msg)) {
+            notes.push(
+              'Each overflow defect above states roughly how many millimetres of A4 the offending page overran, and that page\'s heading. A generic redesign that keeps the same content density there will very likely overflow again by a similar margin. Structurally address it: split that page\'s content across two pages, or materially reduce it there (smaller/fewer images, shorter lists, tighter type) — do not just re-attempt the same layout and hope the new arrangement happens to fit.',
+            );
+          }
+          if (/logo_marks_overlap/.test(msg)) {
+            notes.push(
+              'The TMC and school logos overlapped each other — give them a real, explicit, measured gap wherever they appear together (cover, interior header marks); never place them close enough that rounding or a slightly larger asset could touch.',
+            );
+          }
+          if (/logo_used_as_hero_artwork|logo_used_as_background/.test(msg)) {
+            notes.push('A logo was used as oversized hero art or a background image — logos stay small, identity-mark sized, never stretched into decorative photography.');
+          }
+          attemptBrief = `${brief}\n\nREDESIGN REQUIRED AFTER PRINT PREFLIGHT\nThe previous composition was rejected for these production defects: ${msg}\nThis exact failure has already happened on a prior attempt, so a generic re-roll is unlikely to fix it on its own. ${notes.join(' ')} Start the design again from a blank canvas; keep full creative freedom and the same factual content everywhere else, but correct every listed defect this time. Return a complete replacement HTML document only; do not patch or explain the previous attempt.`;
+        }
+      }
+    } catch (error) {
+      // Loud on purpose: a silent fallback here is indistinguishable from "the
+      // AI designed it and this is just how it looks", which hid a total design
+      // outage across many runs. onDesignFallback lets the caller surface it in
+      // the run trace as well.
+      const why = (error as Error).message;
+      console.warn(`[tmc-brochure] AI art direction FAILED after ${maxAttempts} attempts (plus a deterministic overflow-salvage pass on each) — falling back to the plain deterministic template. Reason:`, why);
+      onDesignFallback?.(why);
+      // Fall through to the deterministic template below.
+    }
+  }
+
+  // Build pages.
+  // Photo slots used to index straight into `extraPhotos`, so whenever the pool
+  // came back short (a thin destination, a slow source) the itinerary, practical
+  // and closing pages silently got NOTHING and rendered as a flat gradient or a
+  // band of dead white. Fall back through the rest of the pool — a repeated
+  // photo is far better than an empty page, and distinct ones are still
+  // preferred while they last.
+  const photoPool = [...extraPhotos, ...overviewPhotos, heroUrl].filter(Boolean);
+  const photoAt = (i: number): string => (photoPool.length ? photoPool[i % photoPool.length]! : '');
+
+  const itinPages = buildTmcItineraryPages(
+    c,
+    accent,
+    photoPool.length ? Array.from({ length: 5 }, (_, i) => photoAt(i)) : [],
+  );
+  const pages: string[] = [];
+  pages.push(buildTmcCover(c, heroUrl, brandCyan, accent));
+  pages.push(buildTmcOverview(c, accent, overviewPhotos));
+  pages.push(...itinPages);
+  pages.push(buildTmcRouteMap(c, mapUrl, accent));
+  const practicalPages = await buildTmcPracticalInfo(c, accent, brandCyan, photoAt(5), tpl, fontCss, measure);
+  pages.push(...practicalPages);
+  pages.push(buildTmcInvestmentAction(c, generalQrUrl, paymentQrUrl, accent, brandCyan, photoAt(6), practicalPages.length - 1));
+
+  const themeVars = tmcThemeVars(tpl, accent, brandCyan, c);
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${fontCss}${themeVars}${TMC_CSS}${tpl.css}</style></head><body>${pages.join('')}</body></html>`;
 }
 
 async function buildBandedHtml(

@@ -67,6 +67,11 @@
   --subtle-bg-4: rgba(255, 255, 255, 0.04);
   --table-header-bg: rgba(0, 0, 0, 0.2);
   --tooltip-bg: rgba(11, 12, 16, 0.9);
+  /* Floating popovers (autocomplete/combobox menus). MUST stay fully opaque:
+     --surface-color is deliberately translucent for layered card surfaces, but
+     a menu that floats OVER page content shows that content straight through,
+     leaving the option labels illegibly overlapped by whatever is behind them. */
+  --popover-bg: #16181d;
   --hover-bg: rgba(255, 255, 255, 0.03);
   --kbd-bg: rgba(255, 255, 255, 0.1);
 
@@ -82,6 +87,7 @@
 
 [data-theme="light"] {
   --bg-color: #f0f2f5;
+  --popover-bg: #ffffff;
   --surface-color: rgba(255, 255, 255, 0.7);
   --surface-hover: rgba(235, 238, 245, 0.8);
   --text-primary: #1a1a2e;
@@ -196,6 +202,7 @@
   --subtle-bg-4: rgba(255, 255, 255, 0.04);
   --table-header-bg: rgba(0, 0, 0, 0.3);
   --tooltip-bg: rgba(11, 12, 16, 0.95);
+  --popover-bg: #16181d;
   --hover-bg: rgba(255, 255, 255, 0.05);
   --kbd-bg: rgba(255, 255, 255, 0.1);
 
@@ -646,6 +653,31 @@ input[type="month"]::-webkit-calendar-picker-indicator,
 input[type="week"]::-webkit-calendar-picker-indicator {
   opacity: 0.85;
   cursor: pointer;
+}
+
+/* File inputs (logo/image uploads): left unstyled, the native "Choose File"
+ * button and "No file chosen" text render with the browser's own light-mode
+ * chrome regardless of page theme — a harsh grey button + unreadable-ish text
+ * sitting on a dark card. Theme both the button (::file-selector-button is
+ * the standard pseudo-element; -webkit-file-upload-button is the older Chrome/
+ * Safari alias, both needed) and the "No file chosen" label text. */
+input[type="file"] {
+  color: var(--text-secondary);
+}
+input[type="file"]::file-selector-button,
+input[type="file"]::-webkit-file-upload-button {
+  margin-right: 10px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+}
+input[type="file"]::file-selector-button:hover,
+input[type="file"]::-webkit-file-upload-button:hover {
+  background: var(--subtle-bg-3, var(--input-bg));
 }
 
 /* Per-tag !important wins over inline `color: inherit` on the parent <select>
@@ -1168,6 +1200,59 @@ html[data-theme="dark"] .travel-flight-details-box {
 .top-scroll-sync__bottom--hidden-scrollbar {
   scrollbar-width: none;
   -ms-overflow-style: none;
+}
+
+/* Itineraries list — responsive filter bar. Below 768px it switches from a
+   single crowded row to a stacked column so every control gets full,
+   readable width instead of being squeezed onto one unreadable line. A
+   single-row flex layout can't tell "wrap to a new line" apart from
+   "shrink everything until it barely still fits" — explicit stacking here
+   removes that ambiguity. */
+.itin-filter-bar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.itin-filter-search {
+  flex: 1 1 180px;
+  min-width: 160px;
+  max-width: 320px;
+}
+.itin-filter-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+@media (max-width: 768px) {
+  .itin-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .itin-filter-bar select,
+  .itin-filter-search {
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+  }
+  .itin-filter-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+.itin-filter-actions button {
+    flex: 1;
+  }
+}
+
+/* Itineraries owns horizontal scrolling through TopScrollSync. The generic
+   mobile stable-table rule must not create a second scroll container inside
+   it, otherwise the visible top scrollbar can stop tracking the table. */
+.itineraries-table {
+  display: table;
+  width: max-content !important;
+  min-width: 1180px !important;
+  overflow: visible !important;
 }
 
 .top-scroll-sync__bottom--hidden-scrollbar::-webkit-scrollbar {

@@ -112,9 +112,9 @@ describe('<KnowledgeBaseAdmin />', () => {
 
     renderPage();
 
-    expect(await screen.findByRole('heading', { name: /Travel Knowledge/i })).toBeInTheDocument();
-    expect(screen.getByTitle('2 Total Sync Jobs')).toBeInTheDocument();
-    expect(screen.getByTitle('12 Total Indexed Files')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Travel Brochure Library/i })).toBeInTheDocument();
+    expect(screen.getByTitle('2 Total Library Updates')).toBeInTheDocument();
+    expect(screen.getByTitle('12 Total Brochures In Library')).toBeInTheDocument();
     expect(screen.getByText('Load more files (2 of 12)')).toBeInTheDocument();
   });
 });

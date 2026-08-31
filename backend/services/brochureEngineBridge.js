@@ -380,13 +380,12 @@ function listSectors() {
   return Promise.resolve([
     {
       key: "travel",
-      name: "Travel Brochure",
+      name: "TMC School Brochure",
       description:
-        "Agency-grade travel brochure — cover, day-by-day itinerary, route map, inclusions, pricing.",
-      // From packages/tools/src/brochure/templates.ts — these are TEMPLATE
-      // keys (look-and-feel), not art-direction briefs. tmc-press is the
-      // default if styleKey is omitted.
-      styles: ["tmc-press", "editorial-sakura"],
+        "The Modern Classroom school trip brochure — cover, day-by-day itinerary, route map, inclusions, pricing.",
+      // TMC school flow: only the tmc-school template is exposed for the
+      // travel sector. The route defaults styleKey to 'tmc-school'.
+      styles: ["tmc-school"],
     },
     {
       key: "report-writing",

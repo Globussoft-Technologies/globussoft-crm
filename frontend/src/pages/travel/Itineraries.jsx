@@ -345,6 +345,14 @@ function nextDateIso(dateIso) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+// N-day trip starting on dateIso ends dateIso + (N-1) days — same convention
+// used elsewhere in this codebase for deriving an end date from a day count.
+function addDaysIso(dateIso, days) {
+  const [year, month, day] = dateIso.split("-").map(Number);
+  const date = new Date(year, month - 1, day + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function openDatePicker(e) {
   try {
     e.currentTarget.showPicker?.();
@@ -691,7 +699,11 @@ export default function Itineraries() {
       )
       .catch(() => setContacts([]));
     setTemplatesLoading(true);
-    fetchApi("/api/travel/itinerary-templates?limit=100&isActive=true")
+    // Trip templates ONLY — content (destination/duration/price/day-plan)
+    // meant to pre-fill a NEW itinerary. PDF-style templates (branded PDF
+    // look, no content of their own) deliberately never show here; that
+    // choice is made later, inside the itinerary's own Publish panel.
+    fetchApi("/api/travel/itinerary-templates?limit=100&isActive=true&isPdfTemplate=false")
       .then((res) => setTemplates(Array.isArray(res?.items) ? res.items : []))
       .catch(() => setTemplates([]))
       .finally(() => setTemplatesLoading(false));
@@ -989,7 +1001,7 @@ export default function Itineraries() {
       if (form.endDate) body.endDate = form.endDate;
       if (form.totalAmount) body.totalAmount = Number(form.totalAmount);
       if (selectedTemplateId) body.clonedFromTemplateId = selectedTemplateId;
-      await fetchApi("/api/travel/itineraries", {
+      const created = await fetchApi("/api/travel/itineraries", {
         method: "POST",
         body: JSON.stringify(body),
       });
@@ -999,6 +1011,14 @@ export default function Itineraries() {
           : "Itinerary created",
       );
       setCreating(false);
+      // Go straight into the new itinerary's planner. Previously this just
+      // closed the modal and refreshed the list, leaving the operator to hunt
+      // for the row they had only just created before they could plan it.
+      const newId = created?.id ?? created?.itinerary?.id;
+      if (newId) {
+        navigate(`/travel/itineraries/${newId}`);
+        return;
+      }
       setPage(1);
       setReloadTick((t) => t + 1);
     } catch (err) {
@@ -1190,12 +1210,16 @@ export default function Itineraries() {
         </div>
       </header>
 
+      {/* Layout (row vs. stacked-column, widths) lives in the .itin-filter-*
+          CSS classes below — NOT inline styles — because inline styles
+          always win over a stylesheet's @media rule regardless of
+          specificity. The previous version kept display/flexWrap inline,
+          which made the responsive class silently unable to switch this bar
+          to a column layout on narrow viewports; it could only shrink
+          everything onto one crushed line instead of actually stacking. */}
       <div
+        className="itin-filter-bar"
         style={{
-          display: "flex",
-          gap: 12,
-          flexWrap: "wrap",
-          alignItems: "center",
           background: "var(--surface-color)",
           padding: 12,
           borderRadius: 8,
@@ -1233,13 +1257,11 @@ export default function Itineraries() {
           ))}
         </select>
         <div
+          className="itin-filter-search"
           style={{
             position: "relative",
             display: "flex",
             alignItems: "center",
-            flex: "1 1 180px",
-            minWidth: 160,
-            maxWidth: 320,
           }}
         >
           <Search
@@ -1287,22 +1309,29 @@ export default function Itineraries() {
             </button>
           )}
         </div>
-        <button
-          type="button"
-          onClick={resetFilters}
-          style={refreshBtn}
-          aria-label="Reset filters"
-        >
-          Reset filters
-        </button>
-        <button
-          type="button"
-          onClick={handleRefresh}
-          style={refreshBtn}
-          aria-label="Reload list"
-        >
-          Refresh
-        </button>
+        {/* Grouped so the two buttons wrap as ONE unit — previously each
+            button wrapped independently, so on a viewport just narrow
+            enough to not fit both, "Refresh" got stranded alone on its own
+            line while "Reset filters" stayed up top. Now they either both
+            fit on the filter row or both drop to their own row together. */}
+        <div className="itin-filter-actions">
+          <button
+            type="button"
+            onClick={resetFilters}
+            style={refreshBtn}
+            aria-label="Reset filters"
+          >
+            Reset filters
+          </button>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            style={refreshBtn}
+            aria-label="Reload list"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* S81 — selected-itinerary map panel. Shown only when the operator
@@ -1379,13 +1408,13 @@ export default function Itineraries() {
           </div>
         ) : (
           <>
-            <div data-testid="itineraries-scroll-area">
-              <TopScrollSync>
+            <div data-testid="itineraries-scroll-area" style={{ minWidth: 0, maxWidth: "100%", overflow: "hidden" }}>
+              <TopScrollSync forceScrollbar>
                 <table
-                  className="stable-table"
+                  className="stable-table itineraries-table"
                   style={{
                     width: "max-content",
-                    minWidth: "calc(100% + 1px)",
+                    minWidth: 1180,
                     borderCollapse: "collapse",
                   }}
                 >
@@ -1494,7 +1523,9 @@ export default function Itineraries() {
                         </div>
                       </td>
                       <td style={td}>
-                        {fmtMoney(it.totalAmount, it.currency)}
+                        {it.moneyEnabled
+                          ? fmtMoney(it.totalAmount, it.currency)
+                          : <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Planning only</span>}
                       </td>
                       <td style={td}>
                         <div
@@ -1675,6 +1706,13 @@ export default function Itineraries() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {/* ── Template picker ── */}
+              {/* The section header (with its own expand/collapse toggle)
+                  must always render — it was previously wrapped in the SAME
+                  `showTemplates &&` condition as the content it toggles, so
+                  with showTemplates defaulting to false, the toggle button
+                  that would ever set it to true never rendered either. The
+                  whole "Start from a trip template" option was silently
+                  unreachable from a fresh modal open. */}
               <div
                 style={{
                   borderRadius: 8,
@@ -1707,7 +1745,7 @@ export default function Itineraries() {
                     style={{ display: "flex", alignItems: "center", gap: 6 }}
                   >
                     <FileText size={14} aria-hidden />
-                    Start from a template
+                    Start from a trip template (optional)
                     {selectedTemplateId && (
                       <span
                         style={{
@@ -1735,6 +1773,11 @@ export default function Itineraries() {
                       background: "rgba(0,0,0,0.15)",
                     }}
                   >
+                    <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--text-secondary)" }}>
+                      Pre-fills destination, dates, price and — if this template was saved from a real trip — its
+                      whole day-plan. Everything stays fully editable after. (This is content only; the PDF&apos;s
+                      brand look is picked separately later, inside the itinerary&apos;s Publish panel.)
+                    </p>
                     {/* Search inside templates */}
                     <div style={{ position: "relative", marginBottom: 10 }}>
                       <Search
@@ -1795,6 +1838,15 @@ export default function Itineraries() {
                       >
                         {templates
                           .filter((t) => {
+                            // Relevance: a template scoped to a specific
+                            // sub-brand (t.subBrand set) only makes sense
+                            // when it matches what this itinerary is being
+                            // created for — templates fetched once, unscoped,
+                            // used to show every sub-brand's templates mixed
+                            // together regardless of what the operator had
+                            // picked above. null subBrand = tenant-wide, so
+                            // it stays visible everywhere.
+                            if (t.subBrand && form.subBrand && t.subBrand !== form.subBrand) return false;
                             const q = templateSearch.trim().toLowerCase();
                             if (!q) return true;
                             return (
@@ -1805,6 +1857,7 @@ export default function Itineraries() {
                               (t.category || "").toLowerCase().includes(q)
                             );
                           })
+                          .sort((a, b) => (b.usageCount || 0) - (a.usageCount || 0))
                           .map((t) => {
                             const isSelected = selectedTemplateId === t.id;
                             const price = t.basePriceMinor
@@ -1828,6 +1881,14 @@ export default function Itineraries() {
                                       totalAmount: t.basePriceMinor
                                         ? String(t.basePriceMinor / 100)
                                         : prev.totalAmount,
+                                      // Duration only ever computes forward from
+                                      // a start date that's already been typed —
+                                      // there's nothing to derive an end date
+                                      // FROM otherwise, so leave dates alone
+                                      // rather than guessing a start date too.
+                                      endDate: t.durationDays && prev.startDate
+                                        ? addDaysIso(prev.startDate, t.durationDays - 1)
+                                        : prev.endDate,
                                     }));
                                   }
                                 }}
@@ -1893,9 +1954,6 @@ export default function Itineraries() {
                                     {price && <span>{price}</span>}
                                     {t.usageCount > 0 && (
                                       <span>Used {t.usageCount}×</span>
-                                    )}
-                                    {t.pdfTemplateUrl && (
-                                      <span style={{ color: "var(--accent-color, #C89A4E)" }}>PDF template</span>
                                     )}
                                   </div>
                                 </div>

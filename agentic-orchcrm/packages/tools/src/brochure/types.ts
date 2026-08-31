@@ -78,7 +78,7 @@ export interface BrochureSection {
 /** The complete, structured brochure content. Every field is optional but `title`. */
 export interface BrochureContent {
   /** Destination-derived palette. accent is the dominant brand colour (hex). */
-  palette?: { accent?: string; accentSecondary?: string };
+  palette?: { accent?: string; accentSecondary?: string; background?: string; text?: string };
 
   // ---- Cover ----
   agencyName?: string;
@@ -133,6 +133,9 @@ export interface BrochureContent {
   // ---- Inclusions / spec grid ----
   inclusions?: { kicker?: string; heading?: string; items?: BrochureKV[] };
 
+  // ---- Exclusions ----
+  exclusions?: { kicker?: string; heading?: string; items?: BrochureKV[] };
+
   // ---- Pricing ----
   pricing?: { kicker?: string; heading?: string; rows?: BrochurePriceRow[]; note?: string };
 
@@ -147,6 +150,76 @@ export interface BrochureContent {
     qrData?: string;
     /** Simple Icons slugs, e.g. ["instagram","whatsapp","facebook"]. */
     social?: string[];
+  };
+
+  // ---- TMC School Brochure additions ----
+  tmc?: {
+    schoolName?: string;
+    schoolLogoUrl?: string;
+    tmcLogoUrl?: string;
+    coBrandingLine?: string;
+    tripDates?: string;
+    duration?: string;
+    targetGrades?: string;
+    group?: string;
+    educationalPurpose?: string;
+    learningOutcomes?: string[];
+    curriculumConnection?: string;
+    skills?: string;
+    tripTitle?: string;
+    educationalSubtitle?: string;
+    destinationCountry?: string;
+    tripSummary?: string;
+    routeCities?: string;
+    days?: Array<{
+      dayNumber: number;
+      date: string;
+      route: string;
+      departureTime?: string;
+      arrivalTime?: string;
+      activities: string;
+      meals?: string[];
+      overnightCity: string;
+      learningTakeaway?: string;
+      travelDuration?: string;
+      physicalDemands?: string;
+      optionalActivities?: string;
+      separatePaymentItems?: string;
+    }>;
+    flights?: { status: string; details: string };
+    transport?: string;
+    hotels?: Array<{ name: string; city: string; category: string; nights: number }>;
+    roomSharing?: string;
+    meals?: string;
+    dietarySupport?: string;
+    costStatus?: Array<{ item: string; status: string }>;
+    inclusions?: string[];
+    exclusions?: string[];
+    safety?: string[];
+    documents?: string[];
+    price?: {
+      currency: string;
+      perPerson: number;
+      basis: string;
+      singleSupplement?: number;
+      student?: number;
+      teacher?: number;
+      taxesIncluded?: string;
+      taxesExcluded?: string;
+      validity?: string;
+      minGroup?: number;
+    };
+    payment?: { link: string; buttonLabel: string; qr: boolean; approved: boolean; expiry?: string; instructions?: string };
+    deposit?: { amount: number; dueDate: string };
+    instalments?: Array<{ amount: number; dueDate: string }>;
+    finalPaymentDate?: string;
+    bookingDeadline?: string;
+    cancellation?: string;
+    themeMode?: string;
+    travelSeason?: string;
+    manualHexPalette?: { primary?: string; secondary?: string; accent?: string; background?: string; text?: string };
+    contacts?: { phone: string; email: string; website: string; whatsapp?: string; youtube?: string; facebook?: string; instagram?: string };
+    sourceControl?: { awaiting: string; contradictions: string; doNotPrint: string; previousRefs: string; approvalContact: string };
   };
 }
 
@@ -183,7 +256,7 @@ export interface BrochureTemplate {
    * section grammar, feature-spread highlights, accent pull-quote — a distinct
    * identity from the bold banded look).
    */
-  family?: 'flow' | 'banded' | 'editorial';
+  family?: 'flow' | 'banded' | 'editorial' | 'tmc-school';
   fonts: { display: string; body: string };
   /**
    * Optional elegant display face used ONLY for the cover wordmark (banded

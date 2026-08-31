@@ -1413,6 +1413,7 @@ app.use(
 // to /api/travel/cancellation-policies/cancellation-policies, so the real
 // /api/travel/cancellation-policies fell through to the global 404.
 app.use("/api/travel", require("./routes/travel_cancellation_policies"));
+app.use("/api/travel", require("./routes/travel_item_types"));
 app.use("/api/travel", travelQuotesRoutes);
 // G018 — FX-rate read endpoints. Mounted at /api/fx (cross-currency
 // reference data; tenant-agnostic; verifyToken at the router level).

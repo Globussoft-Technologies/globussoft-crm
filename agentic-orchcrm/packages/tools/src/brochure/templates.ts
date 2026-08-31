@@ -44,6 +44,20 @@ export const TEMPLATES: Record<string, BrochureTemplate> = {
     theme: () => ({}),
     css: ``,
   },
+
+  // 2) TMC School — co-branded 8-page A4 brochure for The Modern Classroom + school.
+  //    Self-hosted Staatliches + DM Sans, TMC Classroom Cyan master colour, destination
+  //    accent for headings when themeMode=auto, manual palette override supported.
+  'tmc-school': {
+    key: 'tmc-school',
+    name: 'TMC School',
+    blurb: 'Co-branded 8-page A4 school trip brochure for The Modern Classroom. Self-hosted Staatliches + DM Sans, TMC Classroom Cyan brand cue, destination accent, cover + overview + 3-page itinerary + route map + practical info + investment/action.',
+    family: 'tmc-school',
+    fonts: { display: 'Staatliches', body: 'DM Sans' },
+    cover: 'photo-sun',
+    theme: () => ({}),
+    css: ``,
+  },
 };
 
 export const DEFAULT_TEMPLATE_KEY = 'tmc-press';

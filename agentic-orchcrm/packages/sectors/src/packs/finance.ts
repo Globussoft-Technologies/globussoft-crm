@@ -100,7 +100,7 @@ the corrected text plus a short list of issues found. ${SPECIALIST_FOOTER}`,
       tier: 'reasoning',
       tools: [],
       model: 'openai/gpt-oss-120b',
-      maxOutputTokens: 32000,
+      maxOutputTokens: 16384,
       systemPrompt: `You are an elite financial-report art director. OUTPUT one complete,
 self-contained HTML document starting with <!DOCTYPE html> and NOTHING else — no
 commentary, no markdown fences. You are invoked EXACTLY ONCE.

@@ -32,6 +32,20 @@ export interface RenderOptions {
   footer?: { text?: string } | boolean;
 }
 
+export interface PrintLayoutAuditOptions {
+  /** Image URLs that must remain logo-sized rather than becoming hero artwork. */
+  protectedLogoUrls?: string[];
+  /** Expected number of deliberately composed A4 pages. */
+  minPages?: number;
+  maxPages?: number;
+}
+
+export interface PrintLayoutAuditResult {
+  ok: boolean;
+  issues: string[];
+  pageCount: number;
+}
+
 function outputDir(): string {
   return process.env.GENERATED_DIR || path.join(process.cwd(), 'public', 'generated');
 }
@@ -104,6 +118,349 @@ function injectPrintHardening(html: string): string {
   return snippet + html;
 }
 
+/**
+ * Wait for every <img> to actually finish (load OR error), bounded.
+ *
+ * `networkidle0` alone is NOT sufficient: it resolves on network quiet and its
+ * timeout is swallowed by the caller, so with a dozen external photo hosts the
+ * page routinely proceeded while images were still in flight. That produced
+ * BOTH visible symptoms — photos silently missing from the exported PDF, and
+ * the print preflight marking still-loading images as `image_N_failed_to_load`
+ * and rejecting every AI-composed design in favour of the plain fallback.
+ *
+ * Passed to page.evaluate as a STRING (a function literal would be rewritten
+ * by tsx/esbuild with a `__name` helper that doesn't exist in the browser).
+ */
+const SETTLE_IMAGES_JS = `(async () => {
+  var imgs = Array.prototype.slice.call(document.images);
+  await Promise.all(imgs.map(function (img) {
+    if (img.complete) return null;
+    return new Promise(function (resolve) {
+      img.addEventListener('load', resolve, { once: true });
+      img.addEventListener('error', resolve, { once: true });
+    });
+  }));
+})()`;
+
+async function settleImages(page: any, budgetMs: number): Promise<void> {
+  try {
+    await Promise.race([
+      page.evaluate(SETTLE_IMAGES_JS),
+      new Promise((resolve) => setTimeout(resolve, budgetMs)),
+    ]);
+  } catch {
+    /* Best-effort: a broken page must never block the render/preflight. */
+  }
+}
+
+/**
+ * Shared page-detection logic, exposed as a `findPages()` function so it can
+ * be spliced into other injected scripts (the salvage pass below). The SAME
+ * heuristic runs everywhere a "which element is page N" question is asked, so
+ * indices always agree between the audit, the retry prompt's page numbers,
+ * and the salvage pass that targets those exact indices.
+ */
+const LAYOUT_FIND_PAGES_JS = `function findPages(){
+  var all = Array.prototype.slice.call(document.body.querySelectorAll('*'));
+  var candidates = all.filter(function(el){
+    var cs = getComputedStyle(el);
+    var r = el.getBoundingClientRect();
+    var cls = String(el.className || '').toLowerCase();
+    return cs.breakAfter === 'page' || cs.pageBreakAfter === 'always' ||
+      ((cls.indexOf('page') !== -1 || el.tagName === 'SECTION') && r.height >= 850);
+  });
+  var pages = candidates.filter(function(el){
+    return !candidates.some(function(other){ return other !== el && other.contains(el); });
+  });
+  if (!pages.length) {
+    pages = Array.prototype.slice.call(document.body.children).filter(function(el){
+      return el.getBoundingClientRect().height >= 850;
+    });
+  }
+  return pages;
+}`;
+
+/**
+ * The full geometry probe as an invocable string: `(function(options){ ...
+ * return {issues, pageCount}; })`. Used by both `auditPrintLayout` and the
+ * salvage pass's re-check, so "does this design still have a problem" is
+ * always answered by the identical logic.
+ */
+const LAYOUT_PROBE_JS = `(function(options){
+  ${LAYOUT_FIND_PAGES_JS}
+  var issues = [];
+  var all = Array.prototype.slice.call(document.body.querySelectorAll('*'));
+  var pages = findPages();
+
+  pages.forEach(function(el, index){
+    var r = el.getBoundingClientRect();
+    var cs = getComputedStyle(el);
+    var overflowHidden = cs.overflow === 'hidden' || cs.overflowY === 'hidden';
+    var overflow = el.scrollHeight > el.clientHeight + 5 || el.scrollWidth > el.clientWidth + 5;
+    var descendants = Array.prototype.slice.call(el.querySelectorAll('*'));
+    var escaped = descendants.some(function(child){
+      var cr = child.getBoundingClientRect();
+      return cr.bottom > r.bottom + 5 || cr.right > r.right + 5 || cr.left < r.left - 5;
+    });
+    // A page failed with the SAME bare label on every one of the 3 redesign
+    // attempts (e.g. "page_6_clips_or_overflows") because that label alone
+    // gives the model nothing to act on differently — it doesn't know HOW
+    // MUCH too tall the page is or WHICH content is responsible, so a
+    // "start again from a blank canvas" redesign has no way to converge and
+    // just regenerates a same-sized page that fails the same way. Quantify
+    // the overage in real mm (viewport height 1123px = 297mm) and name the
+    // offending heading so the retry brief can say something the model can
+    // actually fix (split this page, shrink that image, trim this list) —
+    // and so the salvage pass below knows exactly which page(s) to target.
+    var mmPerPx = 297 / 1123;
+    var heading = (el.querySelector('h1,h2,h3') || {}).innerText || '';
+    var headingNote = heading ? ', heading "' + heading.trim().slice(0, 60) + '"' : '';
+    if (r.height > 1145) {
+      var overMm = Math.round((r.height - 1123) * mmPerPx);
+      issues.push('page_' + (index + 1) + '_exceeds_a4 (about ' + overMm + 'mm taller than A4' + headingNote + ')');
+    }
+    if (overflow || (overflowHidden && escaped)) {
+      var overflowMm = Math.round(Math.max(0, el.scrollHeight - el.clientHeight) * mmPerPx);
+      issues.push(
+        'page_' + (index + 1) + '_clips_or_overflows (content runs about ' +
+        (overflowMm > 0 ? overflowMm + 'mm past the bottom edge' : 'past an edge') + headingNote + ')',
+      );
+    }
+    var text = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+    if (text.length < 55 && !el.querySelector('img')) issues.push('page_' + (index + 1) + '_is_sparse');
+  });
+
+  var images = Array.prototype.slice.call(document.images);
+  images.forEach(function(img, index){
+    if (!img.complete || img.naturalWidth < 2 || img.naturalHeight < 2) {
+      issues.push('image_' + (index + 1) + '_failed_to_load');
+    }
+  });
+  var logoRectsByUrl = {};
+  (options.protectedLogoUrls || []).filter(Boolean).forEach(function(url){
+    var rects = images.filter(function(img){ return img.currentSrc === url || img.src === url; })
+      .map(function(img){ return img.getBoundingClientRect(); });
+    logoRectsByUrl[url] = rects;
+    rects.forEach(function(r){
+      if (r.width > 300 || r.height > 180) issues.push('logo_used_as_hero_artwork');
+    });
+    all.forEach(function(el){
+      if (String(getComputedStyle(el).backgroundImage || '').indexOf(url) !== -1) {
+        issues.push('logo_used_as_background');
+      }
+    });
+  });
+  // The two co-brand marks (TMC + school) are drawn as SEPARATE identity marks
+  // — every render must keep them visually distinct. A geometric check catches
+  // "the two logo circles overlap in the corner" reliably, where a text
+  // instruction to the model alone kept failing to prevent it.
+  var logoUrls = Object.keys(logoRectsByUrl);
+  for (var li = 0; li < logoUrls.length; li++) {
+    for (var lj = li + 1; lj < logoUrls.length; lj++) {
+      logoRectsByUrl[logoUrls[li]].forEach(function(a){
+        logoRectsByUrl[logoUrls[lj]].forEach(function(b){
+          var overlapW = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+          var overlapH = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+          if (overlapW > 3 && overlapH > 3) issues.push('logo_marks_overlap');
+        });
+      });
+    }
+  }
+  if (document.documentElement.scrollWidth > document.documentElement.clientWidth + 5) {
+    issues.push('document_has_horizontal_overflow');
+  }
+  return { issues: Array.from(new Set(issues)), pageCount: pages.length };
+})`;
+
+/**
+ * Render-aware preflight for AI-composed brochure HTML.
+ *
+ * A string-level sanity check cannot see the failures that matter in print:
+ * an A4 section quietly growing onto a second sheet, clipped descendants,
+ * broken images, or a logo enlarged into cover artwork. This uses the same
+ * Chromium/font/image environment as the final PDF and rejects those layouts
+ * before they can ship. Callers can then fall back to the deterministic
+ * brochure template.
+ */
+export async function auditPrintLayout(
+  rawHtml: string,
+  opts: PrintLayoutAuditOptions = {},
+): Promise<PrintLayoutAuditResult> {
+  const html = injectPrintHardening(sanitizeHtml(rawHtml));
+  const minPages = opts.minPages ?? 7;
+  const maxPages = opts.maxPages ?? 14;
+  let browser: any;
+  try {
+    const mod = (await import('puppeteer')) as unknown as { default: any };
+    const puppeteer = mod.default ?? mod;
+    browser = await Promise.race([
+      puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('launch timeout')), 8000)),
+    ]);
+    const page = await browser.newPage();
+    await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
+    try {
+      await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30_000 });
+    } catch {
+      /* Slow image hosts are reported as broken below when they truly failed. */
+    }
+    // Give slow-but-working images a real chance to finish before judging them,
+    // so a slow host is never mistaken for a broken image (which would reject
+    // an otherwise-good design).
+    await settleImages(page, 20_000);
+    try {
+      await Promise.race([
+        page.evaluate('(async()=>{try{await document.fonts.ready}catch(e){}})()'),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
+    } catch {
+      /* Font readiness is best-effort; geometry checks still provide value. */
+    }
+
+    const result = (await page.evaluate(
+      `${LAYOUT_PROBE_JS}(${JSON.stringify({ protectedLogoUrls: opts.protectedLogoUrls ?? [] })})`,
+    )) as { issues: string[]; pageCount: number };
+
+    if (result.pageCount < minPages) result.issues.push(`too_few_pages_${result.pageCount}`);
+    if (result.pageCount > maxPages) result.issues.push(`too_many_pages_${result.pageCount}`);
+    result.issues = [...new Set(result.issues)];
+    return { ok: result.issues.length === 0, ...result };
+  } catch (err) {
+    return { ok: false, issues: [`layout_audit_failed:${(err as Error).message}`], pageCount: 0 };
+  } finally {
+    try {
+      await browser?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Best-effort, fully deterministic SALVAGE for a design that failed the
+ * preflight ONLY on page-height overflow (never on a broken image, a logo
+ * misused as artwork, or horizontal overflow — text-shrinking can't fix any
+ * of those, so this bails out and lets the caller fall back to a real
+ * AI redesign for those). Repeatedly asking the model to "redesign from a
+ * blank canvas" is slow, costs real money per attempt, and is genuinely
+ * uncertain — three attempts previously failed on the IDENTICAL page for the
+ * identical reason. Font-size/line-height reduction is a universally SAFE
+ * text-reflow change: it can't move an image, break an absolute-positioned
+ * layout, or alter anything the print-preflight otherwise checks — so rather
+ * than throw the whole (otherwise good) design away, this nudges just the
+ * offending page(s) smaller, step by step, and re-runs the EXACT SAME
+ * geometry check after every step. Only ships if that re-check comes back
+ * completely clean; otherwise returns null and the caller proceeds to a real
+ * redesign as before, unblocking the AI path in the common case without ever
+ * risking a silently-broken salvage in the uncommon one.
+ *
+ * Uses Chromium's non-standard `zoom` CSS property, not `transform: scale`.
+ * The audit measures `scrollHeight`/`clientHeight` — genuine LAYOUT box
+ * dimensions — and `transform` is a paint-only effect that never changes
+ * those (an earlier version of this used per-element `font-size`, which has
+ * the same blind spot: it does nothing to an image's fixed height, and does
+ * nothing at all to any descendant that sets its OWN absolute font-size,
+ * which AI-authored CSS does constantly per Block 1's "10.5pt minimum"
+ * instruction — so it silently failed to shrink real overflow). `zoom`
+ * actually rescales the box model — images included — so it reliably moves
+ * `scrollHeight`. It's applied to a WRAPPER inserted around the page's
+ * existing children, not the page element itself, so the page keeps its
+ * correct fixed A4 box for print pagination; only its content shrinks
+ * within that unchanged frame.
+ */
+export async function shrinkOverflowingPages(
+  rawHtml: string,
+  issues: string[],
+  opts: PrintLayoutAuditOptions = {},
+): Promise<string | null> {
+  const overflowPageNums = new Set<number>();
+  for (const issue of issues) {
+    const m = issue.match(/^page_(\d+)_(?:clips_or_overflows|exceeds_a4)\b/);
+    if (m) {
+      overflowPageNums.add(parseInt(m[1]!, 10));
+      continue;
+    }
+    // Any issue that isn't overflow (or the purely cosmetic "sparse" note) needs
+    // a real redesign — never salvage past a defect this fix can't address.
+    if (!/^page_\d+_is_sparse\b/.test(issue)) return null;
+  }
+  if (!overflowPageNums.size) return null;
+
+  const html = injectPrintHardening(sanitizeHtml(rawHtml));
+  const pageNumsJson = JSON.stringify([...overflowPageNums]);
+  let browser: any;
+  try {
+    const mod = (await import('puppeteer')) as unknown as { default: any };
+    const puppeteer = mod.default ?? mod;
+    browser = await Promise.race([
+      puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('launch timeout')), 8000)),
+    ]);
+    const page = await browser.newPage();
+    await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
+    try {
+      await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30_000 });
+    } catch {
+      /* Slow image hosts settle below; still worth attempting the salvage. */
+    }
+    await settleImages(page, 20_000);
+    try {
+      await Promise.race([
+        page.evaluate('(async()=>{try{await document.fonts.ready}catch(e){}})()'),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
+    } catch {
+      /* best-effort */
+    }
+
+    for (const zoom of [0.94, 0.9, 0.86, 0.82, 0.78, 0.72]) {
+      await page.evaluate(
+        `(function(pageNums, zoom){
+          ${LAYOUT_FIND_PAGES_JS}
+          var pages = findPages();
+          pageNums.forEach(function(n){
+            var el = pages[n - 1];
+            if (!el) return;
+            // First touch: move the page's existing children into a fresh
+            // wrapper so ONLY that wrapper gets zoomed — the page element
+            // itself must stay at its real A4 box for print pagination to
+            // stay correct. Later iterations reuse the same wrapper and just
+            // change its zoom value.
+            var wrap = el.querySelector('[data-shrink-wrap]');
+            if (!wrap) {
+              wrap = document.createElement('div');
+              wrap.setAttribute('data-shrink-wrap', '1');
+              while (el.firstChild) wrap.appendChild(el.firstChild);
+              el.appendChild(wrap);
+            }
+            wrap.style.zoom = String(zoom);
+          });
+        })(${pageNumsJson}, ${zoom})`,
+      );
+      const recheck = (await page.evaluate(
+        `${LAYOUT_PROBE_JS}(${JSON.stringify({ protectedLogoUrls: opts.protectedLogoUrls ?? [] })})`,
+      )) as { issues: string[]; pageCount: number };
+      const blocking = recheck.issues.filter((i) => !/_is_sparse\b/.test(i));
+      if (!blocking.length) return await page.content();
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      await browser?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 export async function renderHtmlToArtifact(
   rawHtml: string,
   id: string,
@@ -138,6 +495,10 @@ export async function renderHtmlToArtifact(
         // Slow/large internet images — proceed and render what has loaded;
         // gradient fallbacks cover anything that didn't finish in time.
       }
+      // networkidle0's timeout above is swallowed, so without this the PDF was
+      // exported while photos were still downloading — the "images are missing
+      // from the brochure" defect. Wait for them to actually settle first.
+      await settleImages(page, 25_000);
       // Wait for web fonts so the style system's Google-font pairings render
       // deterministically. Guarded so it never blocks past the budget above.
       try {

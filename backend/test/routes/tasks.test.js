@@ -111,6 +111,9 @@ prisma.auditLog.findMany = vi.fn().mockResolvedValue([]);
 // verifyToken's revoked-token lookup hits prisma.revokedToken.findUnique.
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+// The route checks the tenant vertical before handling each request.
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: "generic" });
 
 import express from 'express';
 import request from 'supertest';
@@ -165,6 +168,7 @@ beforeEach(() => {
   prisma.task.update.mockReset();
   prisma.task.delete.mockReset();
   prisma.auditLog.create.mockReset().mockResolvedValue({});
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: "generic" });
   emitEventMock.mockReset();
 });
 

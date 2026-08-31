@@ -478,6 +478,11 @@ describe('G051 — draftedByAi provenance', () => {
 
     expect(res.status).toBe(201);
     const createArg = prisma.itineraryItem.create.mock.calls[0][0];
-    expect(createArg.data.draftedByAi).toBeUndefined();
+    // The route now always sends draftedByAi explicitly (the planner's "AI
+    // Suggest" flow materialises items through this same endpoint and needs
+    // to be able to pass draftedByAi:true) — a manual add with no
+    // draftedByAi in the body still resolves to false, just no longer by
+    // omission-and-schema-default.
+    expect(createArg.data.draftedByAi).toBe(false);
   });
 });

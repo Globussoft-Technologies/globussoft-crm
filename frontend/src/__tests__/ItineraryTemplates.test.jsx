@@ -217,7 +217,7 @@ describe('<ItineraryTemplates /> â€” page chrome', () => {
     ).toBeInTheDocument();
     expect(screen.getByTitle(/templates/i)).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Add template/i }),
+      screen.getByRole('button', { name: /Add .*template/i }),
     ).toBeInTheDocument();
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
@@ -261,7 +261,7 @@ describe('<ItineraryTemplates /> â€” create flow', () => {
     await screen.findByText('Makkah-Madinah 10-day Umrah');
     expect(screen.queryByLabelText('name')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add .*template/i }));
 
     fireEvent.change(screen.getByLabelText('name'), {
       target: { value: 'Goa Honeymoon â€” 5 nights' },
@@ -314,7 +314,7 @@ describe('<ItineraryTemplates /> â€” create validation', () => {
   it('missing name surfaces notify.error and does NOT POST', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
-    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add .*template/i }));
     fireEvent.change(screen.getByLabelText('destinationName'), {
       target: { value: 'Somewhere' },
     });
@@ -332,31 +332,38 @@ describe('<ItineraryTemplates /> â€” create validation', () => {
     expect(posts.length).toBe(0);
   });
 
-  it('missing destinationName surfaces notify.error and does NOT POST', async () => {
+  // A template is primarily a PDF style asset now (Reference PDF upload) —
+  // reusable across any destination/duration — so neither field is required
+  // any more. Leaving both blank (a pure style upload) must still POST
+  // successfully, with both sent as null rather than blocked client-side.
+  it('missing destinationName still POSTs, sent as null', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
-    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add .*template/i }));
     fireEvent.change(screen.getByLabelText('name'), {
       target: { value: 'Some Template' },
     });
     fireEvent.change(screen.getByLabelText('durationDays'), { target: { value: '7' } });
     fetchApiMock.mockClear();
+    installFetchMock();
     fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/destinationName is required/i),
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itinerary-templates' && o?.method === 'POST',
       );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.destinationName).toBeNull();
     });
-    const posts = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/travel/itinerary-templates' && o?.method === 'POST',
+    expect(notifyError).not.toHaveBeenCalledWith(
+      expect.stringMatching(/destinationName is required/i),
     );
-    expect(posts.length).toBe(0);
   });
 
-  it('missing durationDays surfaces notify.error and does NOT POST', async () => {
+  it('missing durationDays still POSTs, sent as null', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
-    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add .*template/i }));
     fireEvent.change(screen.getByLabelText('name'), {
       target: { value: 'Some Template' },
     });
@@ -364,16 +371,19 @@ describe('<ItineraryTemplates /> â€” create validation', () => {
       target: { value: 'Somewhere' },
     });
     fetchApiMock.mockClear();
+    installFetchMock();
     fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/durationDays is required/i),
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itinerary-templates' && o?.method === 'POST',
       );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.durationDays).toBeNull();
     });
-    const posts = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/travel/itinerary-templates' && o?.method === 'POST',
+    expect(notifyError).not.toHaveBeenCalledWith(
+      expect.stringMatching(/durationDays is required/i),
     );
-    expect(posts.length).toBe(0);
   });
 });
 
@@ -811,48 +821,17 @@ describe('<ItineraryTemplates /> â€” create form extras', () => {
   it('currency input auto-uppercases input (e.g. typing "usd" yields "USD")', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
-    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add .*template/i }));
 
     const currencyInput = screen.getByLabelText('currency');
     fireEvent.change(currencyInput, { target: { value: 'usd' } });
     expect(currencyInput.value).toBe('USD');
   });
 
-  it('LLM source field round-trips in the POST payload (llmGeneratedBy)', async () => {
-    renderPage();
-    await screen.findByText('Makkah-Madinah 10-day Umrah');
-    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
-
-    fireEvent.change(screen.getByLabelText('name'), {
-      target: { value: 'AI-Drafted Template' },
-    });
-    fireEvent.change(screen.getByLabelText('destinationName'), {
-      target: { value: 'Generic Destination' },
-    });
-    fireEvent.change(screen.getByLabelText('durationDays'), { target: { value: '5' } });
-    fireEvent.change(screen.getByLabelText('llmGeneratedBy'), {
-      target: { value: 'gemini-2.5-flash' },
-    });
-
-    fetchApiMock.mockClear();
-    installFetchMock();
-
-    fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
-
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/itinerary-templates' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect(body.llmGeneratedBy).toBe('gemini-2.5-flash');
-    });
-  });
-
   it('un-checking isActive in the form sends isActive:false in the POST payload', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
-    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add .*template/i }));
 
     fireEvent.change(screen.getByLabelText('name'), {
       target: { value: 'Draft Template' },
@@ -881,7 +860,7 @@ describe('<ItineraryTemplates /> â€” create form extras', () => {
   it('Cancel button closes the form without POSTing', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
-    fireEvent.click(screen.getByRole('button', { name: /Add template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add .*template/i }));
     expect(screen.getByLabelText('name')).toBeInTheDocument();
 
     fetchApiMock.mockClear();

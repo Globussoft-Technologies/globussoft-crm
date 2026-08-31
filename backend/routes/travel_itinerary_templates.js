@@ -47,6 +47,9 @@ const {
 const s3Service = require("../services/s3Service");
 const axios = require("axios");
 const { analyzePdfTemplate } = require("../lib/travelPdfTemplate");
+const aiPdfTemplateAnalysis = require("../lib/aiPdfTemplateAnalysis");
+const { PDFDocument: PdfLibDocument } = require("pdf-lib");
+const { pdfBufferToImageParts } = require("../lib/pdfToImages");
 
 // G115 — Only accept PDF template URLs that were uploaded to this tenant's
 // configured S3 bucket. This closes an authenticated SSRF vector where a
@@ -121,6 +124,12 @@ const MUTABLE_FIELDS = [
   "pdfTemplateUrl",
   "pdfTemplateRegions",
   "isPdfTemplate",
+  // Operator-confirmed page-role classification (cover/itinerary/details/
+  // static per page + accent colour). Was missing from this allowlist, so
+  // pickMutable() silently dropped it before the "caller override wins"
+  // logic below ever saw it — a confirmed review was never actually
+  // persisted, it always silently fell back to the auto-computed spec.
+  "pdfStyleSpecJson",
 ];
 
 // ---------------------------------------------------------------------------
@@ -446,7 +455,7 @@ function wrapMulter(middleware) {
 // and the blanked PDF is uploaded back to S3. Returns the blanked URL and the
 // detected overlay regions. On failure, returns the original URL and fallback
 // regions so the feature degrades gracefully.
-async function processUploadedTemplatePdf(originalUrl) {
+async function processUploadedTemplatePdf(originalUrl, { tenantId, userId } = {}) {
   if (!isTrustedPdfTemplateUrl(originalUrl)) {
     const err = new Error("pdfTemplateUrl must be a trusted S3 URL");
     err.status = 400;
@@ -479,10 +488,47 @@ async function processUploadedTemplatePdf(originalUrl) {
       "application/pdf",
       "travel-itinerary-pdf-templates"
     );
-    return { pdfTemplateUrl: blankedUrl, pdfTemplateRegions: JSON.stringify(regions) };
+
+    // Classify each page so the template-faithful renderer knows which to fill
+    // and which to reproduce untouched. Deterministic fallback when the tenant
+    // has no AI access — a spec is always produced.
+    const pageCount = Array.isArray(regions?.pages) && regions.pages.length
+      ? regions.pages.length
+      : 1;
+    let structure = null;
+    try {
+      structure = await aiPdfTemplateAnalysis.proposeTemplateStructureWithAi({
+        tenantId, userId, pdfBuffer, pageCount,
+      });
+    } catch (structErr) {
+      console.warn("[travel/itinerary-templates] structure analysis failed:", structErr.message);
+    }
+    if (!structure) structure = aiPdfTemplateAnalysis.heuristicTemplateStructure(pageCount);
+
+    const perPageBoxes = Array.isArray(regions?.pages) ? regions.pages : [];
+    const styleSpec = {
+      accentColor: structure.accentColor || null,
+      pageSize: regions?.pageSize || null,
+      pages: structure.pages.map((p) => {
+        const box = perPageBoxes.find((r) => Number(r.page) === p.index);
+        return { index: p.index, role: p.role, contentBox: box?.contentBox || regions?.contentBox || null };
+      }),
+    };
+
+    return {
+      pdfTemplateUrl: blankedUrl,
+      pdfTemplateSourceUrl: originalUrl,
+      pdfTemplateRegions: JSON.stringify(regions),
+      pdfStyleSpecJson: JSON.stringify(styleSpec),
+    };
   } catch (err) {
     console.error("[travel/itinerary-templates] PDF template processing failed, using original:", err.message);
-    return { pdfTemplateUrl: originalUrl, pdfTemplateRegions: JSON.stringify(defaultPdfTemplateRegions()) };
+    return {
+      pdfTemplateUrl: originalUrl,
+      pdfTemplateSourceUrl: originalUrl,
+      pdfTemplateRegions: JSON.stringify(defaultPdfTemplateRegions()),
+      pdfStyleSpecJson: null,
+    };
   }
 }
 
@@ -514,6 +560,203 @@ router.post(
   }
 );
 
+// POST /api/travel/itinerary-templates/analyze-pdf
+//
+// Read-only / non-persisting: runs the existing heuristic detector
+// (analyzePdfTemplate) plus a best-effort AI-vision pass, and returns the
+// proposed content region + a preview image for the operator to
+// confirm/adjust client-side. Nothing is written to S3, the DB, or a
+// template row here — the operator's confirmed box rides along on the
+// existing POST / or PATCH /:id call as `pdfTemplateRegions`, which already
+// merges caller-supplied regions over the server's own heuristic recompute.
+// MUST be declared before /:id so Express matches the literal path first.
+router.post(
+  "/analyze-pdf",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("itinerary_templates", "write"),
+  async (req, res) => {
+    try {
+      const { pdfTemplateUrl } = req.body || {};
+      if (!isTrustedPdfTemplateUrl(pdfTemplateUrl)) {
+        return res.status(400).json({ error: "pdfTemplateUrl must be a trusted S3 URL", code: "INVALID_PDF_TEMPLATE_URL" });
+      }
+      const resp = await axios.get(pdfTemplateUrl, {
+        responseType: "arraybuffer",
+        timeout: 30000,
+        maxContentLength: 15 * 1024 * 1024,
+      });
+      const pdfBuffer = Buffer.from(resp.data);
+      const { regions: heuristicRegions } = await analyzePdfTemplate(pdfBuffer);
+
+      let contentBox = heuristicRegions.contentBox;
+      let source = "heuristic";
+      let aiModel = null;
+      let aiProvider = null;
+      let previewImageBase64 = null;
+
+      const aiProposal = await aiPdfTemplateAnalysis.proposeContentRegionWithAi({
+        tenantId: req.travelTenant.id,
+        userId: req.user.userId,
+        pdfBuffer,
+        pageSize: heuristicRegions.pageSize,
+      });
+      if (aiProposal) {
+        contentBox = aiProposal.contentBox;
+        source = "ai";
+        aiModel = aiProposal.model;
+        aiProvider = aiProposal.provider;
+        previewImageBase64 = aiProposal.previewImageBase64;
+      }
+
+      res.json({ pageSize: heuristicRegions.pageSize, contentBox, source, aiModel, aiProvider, previewImageBase64 });
+    } catch (err) {
+      console.error("[itinerary-templates] analyze-pdf error:", err.message);
+      res.status(500).json({ error: "Failed to analyze PDF template" });
+    }
+  },
+);
+
+// POST /api/travel/itinerary-templates/analyze-structure
+//
+// Read-only / non-persisting: classifies EVERY page's role (cover/itinerary/
+// details/static) via AI vision, falling back to the deterministic heuristic
+// when no AI access is configured or the call fails — same fallback the
+// silent auto-classification at create/update time uses — and returns a
+// small preview image per page so the operator can review and override any
+// page's role before saving. The operator's confirmed structure rides along
+// on the POST / or PATCH /:id call as `pdfStyleSpecJson`, which now (fixed
+// alongside this endpoint) actually reaches the create/update handlers —
+// it was missing from MUTABLE_FIELDS before, so a caller-supplied override
+// was silently dropped and the auto-computed spec always won regardless.
+// MUST be declared before /:id so Express matches the literal path first.
+router.post(
+  "/analyze-structure",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("itinerary_templates", "write"),
+  async (req, res) => {
+    try {
+      const { pdfTemplateUrl } = req.body || {};
+      if (!isTrustedPdfTemplateUrl(pdfTemplateUrl)) {
+        return res.status(400).json({ error: "pdfTemplateUrl must be a trusted S3 URL", code: "INVALID_PDF_TEMPLATE_URL" });
+      }
+      const resp = await axios.get(pdfTemplateUrl, {
+        responseType: "arraybuffer",
+        timeout: 30000,
+        maxContentLength: 15 * 1024 * 1024,
+      });
+      const pdfBuffer = Buffer.from(resp.data);
+
+      const srcPdf = await PdfLibDocument.load(pdfBuffer);
+      const pageCount = srcPdf.getPageCount();
+
+      let structure = null;
+      let source = "heuristic";
+      try {
+        structure = await aiPdfTemplateAnalysis.proposeTemplateStructureWithAi({
+          tenantId: req.travelTenant.id,
+          userId: req.user.userId,
+          pdfBuffer,
+          pageCount,
+        });
+        if (structure) source = "ai";
+      } catch (structErr) {
+        console.warn("[itinerary-templates] analyze-structure AI call failed:", structErr.message);
+      }
+      if (!structure) structure = aiPdfTemplateAnalysis.heuristicTemplateStructure(pageCount);
+
+      // Small thumbnails for the review strip — same page cap the AI
+      // classification itself uses, so every classified page also gets a
+      // preview (a template with more pages than that cap only shows
+      // thumbnails for the first 8; those beyond it keep their heuristic role
+      // uneditable in this pass, an acceptable limit for a review UI).
+      const maxPreviewPages = Math.min(pageCount, 8);
+      const previewParts = await pdfBufferToImageParts(pdfBuffer, { maxPages: maxPreviewPages, scale: 0.6 });
+
+      const pages = structure.pages.map((p) => ({
+        index: p.index,
+        role: p.role,
+        previewImageBase64: previewParts[p.index - 1] ? previewParts[p.index - 1].data : null,
+      }));
+
+      res.json({
+        pageCount,
+        accentColor: structure.accentColor || null,
+        pages,
+        source,
+        aiModel: structure.model || null,
+        aiProvider: structure.provider || null,
+      });
+    } catch (err) {
+      console.error("[itinerary-templates] analyze-structure error:", err.message);
+      res.status(500).json({ error: "Failed to analyze template structure" });
+    }
+  },
+);
+
+// GET /api/travel/itinerary-templates/:id/pdf-pages
+//
+// Page thumbnails + the STORED page roles for a template's reference PDF.
+// Powers the template preview so an operator can actually see what a template
+// is — previously the preview only ever showed day-by-day items, map pins and
+// linked-master counts, all of which are empty for a PDF style template, so
+// viewing one showed four blank panels and told you nothing.
+// Deliberately does NOT re-run AI classification: it reads whatever was saved
+// at upload time, so opening a preview is free.
+router.get("/:id/pdf-pages", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const tpl = await prisma.itineraryTemplate.findFirst({
+      where: { id, tenantId: req.travelTenant.id },
+      select: { pdfTemplateUrl: true, pdfTemplateSourceUrl: true, pdfStyleSpecJson: true },
+    });
+    if (!tpl) {
+      return res.status(404).json({ error: "Template not found", code: "NOT_FOUND" });
+    }
+    // Prefer the unblanked original so the preview shows the operator's real
+    // brochure, not the body-stripped copy the legacy renderer uses.
+    const url = tpl.pdfTemplateSourceUrl || tpl.pdfTemplateUrl;
+    if (!url || !isTrustedPdfTemplateUrl(url)) {
+      return res.json({ hasPdf: false, pages: [] });
+    }
+
+    const resp = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: 30000,
+      maxContentLength: 15 * 1024 * 1024,
+    });
+    const parts = await pdfBufferToImageParts(Buffer.from(resp.data), { maxPages: 8, scale: 0.55 });
+
+    let spec = null;
+    try { spec = tpl.pdfStyleSpecJson ? JSON.parse(tpl.pdfStyleSpecJson) : null; } catch { spec = null; }
+    const specPage = (idx) => {
+      if (!spec || !Array.isArray(spec.pages)) return null;
+      return spec.pages.find((p) => Number(p.index) === idx) || null;
+    };
+
+    res.json({
+      hasPdf: true,
+      accentColor: (spec && spec.accentColor) || null,
+      pages: parts.map((img, i) => {
+        const sp = specPage(i + 1);
+        return {
+          index: i + 1,
+          role: sp && sp.role ? sp.role : null,
+          hasCustomText: Boolean(sp && sp.customText),
+          previewImageBase64: img.data,
+        };
+      }),
+    });
+  } catch (e) {
+    console.error("[itinerary-templates] pdf-pages error:", e.message);
+    res.status(500).json({ error: "Failed to load template pages" });
+  }
+});
+
 // GET /api/travel/itinerary-templates — list
 //
 // G048 — Default list filters to `isLatest=true AND archivedAt IS NULL` so
@@ -536,6 +779,18 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
     }
     if (req.query.category) {
       where.category = String(req.query.category);
+    }
+    // Trip templates (content: destination/duration/price/day-plan, applied
+    // to a NEW itinerary at create time) and PDF templates (a pure brand PDF
+    // style, applied when rendering an EXISTING itinerary) are two
+    // deliberately separate concepts that happen to share one table. Without
+    // this filter every caller saw both mixed together — the New Itinerary
+    // template picker would list branded PDF styles with no trip content,
+    // and vice versa. ?isPdfTemplate=true|false narrows to one or the other;
+    // omitted = both (existing callers, e.g. the in-workspace PDF-style
+    // picker, are unaffected).
+    if (req.query.isPdfTemplate !== undefined) {
+      where.isPdfTemplate = String(req.query.isPdfTemplate) === "true";
     }
 
     // G061 — Budget-tier facet (PRD FR-3.1.c). When ?budgetTier=budget|mid|
@@ -640,19 +895,20 @@ router.post(
           code: "MISSING_NAME",
         });
       }
-      if (!body.destinationName || typeof body.destinationName !== "string") {
+      // Both optional — a template is primarily a PDF style asset now, and a
+      // pure style upload has no meaningful destination or duration to give.
+      // Still validated for SHAPE when actually provided (e.g. a template
+      // being used the older "starter package" way, where these describe
+      // its pre-built templateJson content).
+      if (body.destinationName !== undefined && body.destinationName !== null && typeof body.destinationName !== "string") {
         return res.status(400).json({
-          error: "destinationName is required",
-          code: "MISSING_DESTINATION",
+          error: "destinationName must be a string",
+          code: "INVALID_DESTINATION",
         });
       }
-      if (body.durationDays === undefined || body.durationDays === null) {
-        return res.status(400).json({
-          error: "durationDays is required",
-          code: "MISSING_DURATION",
-        });
-      }
-      const durationDays = validateDurationDays(body.durationDays);
+      const durationDays = (body.durationDays === undefined || body.durationDays === null || body.durationDays === "")
+        ? null
+        : validateDurationDays(body.durationDays);
 
       validateCurrency(body.currency);
 
@@ -691,7 +947,7 @@ router.post(
       const createData = {
         tenantId: req.travelTenant.id,
         name: body.name,
-        destinationName: body.destinationName,
+        destinationName: body.destinationName && body.destinationName.trim() ? body.destinationName.trim() : null,
         durationDays,
         description: body.description ?? null,
         thumbnailUrl: body.thumbnailUrl ?? null,
@@ -728,11 +984,20 @@ router.post(
             code: "INVALID_PDF_TEMPLATE_URL",
           });
         }
-        const processed = await processUploadedTemplatePdf(createData.pdfTemplateUrl);
+        const processed = await processUploadedTemplatePdf(createData.pdfTemplateUrl, {
+          tenantId: req.travelTenant.id,
+          userId: req.user.userId,
+        });
         const processedRegions = normalizePdfTemplateRegions(processed.pdfTemplateRegions) || {};
         const callerRegions = normalizePdfTemplateRegions(body.pdfTemplateRegions) || {};
         createData.pdfTemplateUrl = processed.pdfTemplateUrl;
+        createData.pdfTemplateSourceUrl = processed.pdfTemplateSourceUrl || null;
         createData.pdfTemplateRegions = JSON.stringify({ ...processedRegions, ...callerRegions });
+        // Caller-supplied spec (the operator's confirmed region) wins over the
+        // automatic one, same precedence as regions above.
+        createData.pdfStyleSpecJson = body.pdfStyleSpecJson
+          ? String(body.pdfStyleSpecJson)
+          : processed.pdfStyleSpecJson;
       }
 
       applyBrandKitDefaults(createData, brandKitTenant, createData.subBrand);
@@ -875,22 +1140,34 @@ router.get("/stats", verifyToken, requireTravelTenant, async (req, res) => {
       if (!byDestination[destKey]) byDestination[destKey] = 0;
       byDestination[destKey] += 1;
 
-      const dur = Number(it.durationDays);
-      if (Number.isFinite(dur)) {
-        durationSum += dur;
-        durationCount += 1;
+      // Number(null) is 0, which Number.isFinite() happily accepts — so a
+      // null durationDays/basePriceMinor/defaultMarkupPercent (increasingly
+      // common now that style-only templates carry none of these) would
+      // silently count as a real zero and drag the average down. Style-only
+      // templates are meant to be invisible to these figures entirely, not
+      // pull them toward zero.
+      if (it.durationDays != null) {
+        const dur = Number(it.durationDays);
+        if (Number.isFinite(dur)) {
+          durationSum += dur;
+          durationCount += 1;
+        }
       }
 
-      const price = Number(it.basePriceMinor);
-      if (Number.isFinite(price)) {
-        basePriceSum += price;
-        basePriceCount += 1;
+      if (it.basePriceMinor != null) {
+        const price = Number(it.basePriceMinor);
+        if (Number.isFinite(price)) {
+          basePriceSum += price;
+          basePriceCount += 1;
+        }
       }
 
-      const markup = Number(it.defaultMarkupPercent);
-      if (Number.isFinite(markup)) {
-        markupSum += markup;
-        markupCount += 1;
+      if (it.defaultMarkupPercent != null) {
+        const markup = Number(it.defaultMarkupPercent);
+        if (Number.isFinite(markup)) {
+          markupSum += markup;
+          markupCount += 1;
+        }
       }
 
       const usage = Number(it.usageCount);
@@ -1836,7 +2113,14 @@ router.patch(
         validateCurrency(body.currency);
       }
       if (body.durationDays !== undefined) {
-        body.durationDays = validateDurationDays(body.durationDays);
+        body.durationDays = (body.durationDays === null || body.durationDays === "")
+          ? null
+          : validateDurationDays(body.durationDays);
+      }
+      if (body.destinationName !== undefined) {
+        body.destinationName = body.destinationName && String(body.destinationName).trim()
+          ? String(body.destinationName).trim()
+          : null;
       }
 
       // If the caller is trying to MOVE this row to a different sub-brand,
@@ -1905,17 +2189,26 @@ router.patch(
           }
           data.isPdfTemplate = true;
           if (data.pdfTemplateUrl !== existing.pdfTemplateUrl) {
-            const processed = await processUploadedTemplatePdf(data.pdfTemplateUrl);
+            const processed = await processUploadedTemplatePdf(data.pdfTemplateUrl, {
+              tenantId: req.travelTenant.id,
+              userId: req.user.userId,
+            });
             const processedRegions = normalizePdfTemplateRegions(processed.pdfTemplateRegions) || {};
             const callerRegions = normalizePdfTemplateRegions(data.pdfTemplateRegions) || {};
             data.pdfTemplateUrl = processed.pdfTemplateUrl;
+            data.pdfTemplateSourceUrl = processed.pdfTemplateSourceUrl || null;
             data.pdfTemplateRegions = JSON.stringify({ ...processedRegions, ...callerRegions });
+            data.pdfStyleSpecJson = data.pdfStyleSpecJson
+              ? String(data.pdfStyleSpecJson)
+              : processed.pdfStyleSpecJson;
           }
           // If the URL is unchanged, keep existing.pdfTemplateRegions.
         } else {
           data.isPdfTemplate = false;
           data.pdfTemplateRegions = null;
           data.pdfTemplateUrl = null;
+          data.pdfTemplateSourceUrl = null;
+          data.pdfStyleSpecJson = null;
         }
       }
       if (data.pdfTemplateRegions !== undefined && data.pdfTemplateRegions !== null && data.pdfTemplateUrl === existing.pdfTemplateUrl) {

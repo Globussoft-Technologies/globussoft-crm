@@ -5,6 +5,7 @@ export {
   parseBrochureContent,
   buildFallbackBrochureContent,
   ensureBriefCoverage,
+  ensureTmcFidelity,
   normalizeAccent,
   contrastInk,
   darken,
@@ -15,6 +16,9 @@ export {
   type LogoCorner,
   type LogoPlacementCustom,
   type EdMeasureFn,
+  type DesignHtmlFn,
+  type DesignAuditFn,
+  type DesignSalvageFn,
 } from './render-core.js';
 export {
   TEMPLATES,

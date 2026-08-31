@@ -22,7 +22,7 @@
 // affected), Escape closes the dropdown. Outside click closes it too.
 
 import { useEffect, useRef, useState } from "react";
-import { geocodeSuggestions } from "../../lib/geocoder";
+import { geocodeSuggest } from "../../lib/geocoder";
 
 const DEBOUNCE_MS = 300;
 const MIN_CHARS = 2;
@@ -59,7 +59,7 @@ export default function LocationAutocomplete({
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
       const seq = ++fetchSeqRef.current;
-      const results = await geocodeSuggestions(query, { limit });
+      const results = await geocodeSuggest(query, limit);
       if (seq !== fetchSeqRef.current) return; // stale response
       setSuggestions(results);
       setActiveIndex(-1);
@@ -206,7 +206,12 @@ export default function LocationAutocomplete({
                   cursor: "pointer",
                 }}
               >
-                {s.display_name}
+                <span style={{ display: "block", fontWeight: 600 }}>{s.name || s.display_name}</span>
+                {s.display_name && s.name && s.display_name !== s.name && (
+                  <span style={{ display: "block", marginTop: 2, color: "var(--text-secondary)", fontSize: 11 }}>
+                    {s.display_name}
+                  </span>
+                )}
               </button>
             ))}
         </div>

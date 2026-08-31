@@ -284,20 +284,27 @@ function ModalSlot({ modal, close }) {
           borderRadius: 12,
           minWidth: 360,
           maxWidth: 480,
+          maxHeight: '85vh',
           width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
           boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
           border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
         }}
       >
         <h3
           id="notify-modal-title"
-          style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, marginBottom: '0.5rem' }}
+          style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, marginBottom: '0.5rem', flexShrink: 0 }}
         >{modal.title}</h3>
         {modal.message && (
+          // maxHeight + scroll — an unbounded message (e.g. a long list built
+          // by a caller) must never push the confirm/cancel buttons below the
+          // fold; this box has no outer scroll of its own to fall back on.
           <p style={{
             margin: 0, marginBottom: '1rem',
             color: 'var(--text-secondary, #6b7280)',
             fontSize: '0.9rem', lineHeight: 1.45, whiteSpace: 'pre-wrap',
+            maxHeight: '50vh', overflowY: 'auto',
           }}>{modal.message}</p>
         )}
 
@@ -322,7 +329,7 @@ function ModalSlot({ modal, close }) {
           />
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexShrink: 0 }}>
           <button
             type="button"
             onClick={() => close(cancelValue)}

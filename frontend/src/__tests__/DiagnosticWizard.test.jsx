@@ -128,7 +128,9 @@ const BANK_ROW = {
   id: 42,
   version: 3,
   isActive: true,
+  templateName: 'TMC Template',
   createdAt: '2026-05-01T00:00:00Z',
+  updatedAt: '2026-05-02T00:00:00Z',
   questionsJson: JSON.stringify(QUESTIONS_FIXTURE),
   scoringRulesJson: JSON.stringify({ method: 'weighted-sum', bands: [] }),
 };
@@ -175,9 +177,9 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
     let resolveBanks;
     fetchApiMock.mockReturnValueOnce(new Promise((r) => { resolveBanks = r; }));
     renderPage();
-    expect(screen.getByText(/Loading banks/i)).toBeTruthy();
+    expect(screen.getByText(/Loading your current template/i)).toBeTruthy();
     resolveBanks({ banks: [] });
-    await waitFor(() => expect(screen.queryByText(/Loading banks/i)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/Loading your current template/i)).toBeNull());
   });
 
   it('renders all 4 sub-brand pickers and defaults to TMC', async () => {
@@ -217,29 +219,30 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
     });
   });
 
-  it('renders the empty-state CTA when no active banks exist for the brand', async () => {
+  it('renders the empty-state CTA when no template exists for the brand', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [] });
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText(/No active banks/i)).toBeTruthy();
+      expect(screen.getByText(/No diagnostic template/i)).toBeTruthy();
     });
-    expect(screen.getByRole('link', { name: /New bank/i })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /New template/i })).toBeTruthy();
   });
 
-  it('renders a bank row with version + active state when banks load', async () => {
+  it('renders the current template with its name + version when banks load', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Use bank version 3/i })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i })).toBeTruthy();
     });
-    expect(screen.getByText(/Bank v3/i)).toBeTruthy();
+    expect(screen.getByText(/TMC Template/i)).toBeTruthy();
+    expect(screen.getByText(/Version 3.*Current/i)).toBeTruthy();
   });
 
   it('picking a bank advances to step 2 + renders the first question', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     expect(screen.getByText(/Question 1 of 3/i)).toBeTruthy();
     expect(
       screen.getByRole('heading', { name: /How many trips do you organize per year/i }),
@@ -251,8 +254,8 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
   it('Next is disabled until the current question is answered, then enables', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     const nextBtn = screen.getByRole('button', { name: /Next question/i });
     expect(nextBtn.disabled).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: /1-3 trips/i }));
@@ -262,8 +265,8 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
   it('Next advances to the second question + Previous preserves the prior answer', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     fireEvent.click(screen.getByRole('button', { name: /4-10 trips/i }));
     fireEvent.click(screen.getByRole('button', { name: /Next question/i }));
     // Second question (multi-select) is now visible.
@@ -282,8 +285,8 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
   it('multi-select Q toggles values in an array (answer enables Next)', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     // Advance to multi-select Q2.
     fireEvent.click(screen.getByRole('button', { name: /1-3 trips/i }));
     fireEvent.click(screen.getByRole('button', { name: /Next question/i }));
@@ -310,8 +313,8 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
   it('on the last question Submit replaces Next + POSTs answers payload + renders the result card', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     fireEvent.click(screen.getByRole('button', { name: /1-3 trips/i }));
     fireEvent.click(screen.getByRole('button', { name: /Next question/i }));
     fireEvent.click(screen.getByRole('button', { name: /Domestic India/i }));
@@ -351,8 +354,8 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
   it('result card warnings panel renders + notify.info fires when warnings ship back', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     fireEvent.click(screen.getByRole('button', { name: /1-3 trips/i }));
     fireEvent.click(screen.getByRole('button', { name: /Next question/i }));
     fireEvent.click(screen.getByRole('button', { name: /Europe/i }));
@@ -377,14 +380,14 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
   it('Change bank rewinds from step 2 back to the bank picker', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     // Now in step 2.
     expect(screen.getByText(/Question 1 of 3/i)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Change bank/i }));
     // Back to step 1.
     expect(screen.getByRole('heading', { name: /Take a diagnostic/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Use bank version 3/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i })).toBeTruthy();
   });
 
   it('malformed bank JSON surfaces notify.error and stays on the picker step', async () => {
@@ -392,8 +395,8 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
       banks: [{ ...BANK_ROW, questionsJson: '{ not valid' }],
     });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     expect(notifyObj.error).toHaveBeenCalled();
     const msg = notifyObj.error.mock.calls[0][0];
     expect(msg).toMatch(/Bank JSON is malformed/i);
@@ -406,8 +409,8 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
       banks: [{ ...BANK_ROW, questionsJson: JSON.stringify({ questions: [] }) }],
     });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     expect(notifyObj.error).toHaveBeenCalled();
     const msg = notifyObj.error.mock.calls[0][0];
     expect(msg).toMatch(/no questions/i);
@@ -424,14 +427,14 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
       expect(notifyObj.error).toHaveBeenCalled();
     });
     expect(notifyObj.error.mock.calls[0][0]).toMatch(/Backend exploded/i);
-    expect(screen.getByText(/No active banks/i)).toBeTruthy();
+    expect(screen.getByText(/No diagnostic template/i)).toBeTruthy();
   });
 
   it('POST diagnostics failure surfaces notify.error + stays on the question step (no result card)', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     fireEvent.click(screen.getByRole('button', { name: /1-3 trips/i }));
     fireEvent.click(screen.getByRole('button', { name: /Next question/i }));
     fireEvent.click(screen.getByRole('button', { name: /Europe/i }));
@@ -455,8 +458,8 @@ describe('DiagnosticWizard — Travel multi-step diagnostic taker (PRD §4 Q13 /
   it('result card "Back to list" navigates to /travel/diagnostics', async () => {
     fetchApiMock.mockResolvedValueOnce({ banks: [BANK_ROW] });
     renderPage();
-    await waitFor(() => screen.getByRole('button', { name: /Use bank version 3/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Use bank version 3/i }));
+    await waitFor(() => screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start diagnostic with TMC Template/i }));
     fireEvent.click(screen.getByRole('button', { name: /1-3 trips/i }));
     fireEvent.click(screen.getByRole('button', { name: /Next question/i }));
     fireEvent.click(screen.getByRole('button', { name: /Europe/i }));

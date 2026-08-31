@@ -84,11 +84,17 @@ vi.mock('react-leaflet', () => {
       { 'data-testid': rest['data-testid'] || 'popup', ...rest },
       children,
     );
+  const Polyline = ({ positions, pathOptions, ...rest }) =>
+    React.createElement('div', {
+      'data-testid': rest['data-testid'] || 'route-line',
+      'data-positions': JSON.stringify(positions),
+      'data-path-options': JSON.stringify(pathOptions),
+    });
   const useMap = () => ({
     fitBounds: vi.fn(),
     setView: vi.fn(),
   });
-  return { MapContainer, TileLayer, Marker, Popup, useMap };
+  return { MapContainer, TileLayer, Marker, Popup, Polyline, useMap };
 });
 
 // Stub the leaflet CSS import so it doesn't error in jsdom.

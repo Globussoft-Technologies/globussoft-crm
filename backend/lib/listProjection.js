@@ -162,6 +162,9 @@ const PROJECTIONS = Object.freeze({
     endDate: true,
     totalAmount: true,   // currency display on the picker
     currency: true,
+    catalogueDriveFileId: true, // TMC catalogue sync state, not customer PII
+    catalogueDriveViewLink: true, // operator link to the generated PDF
+    catalogueSyncedAt: true, // last generated-PDF upload timestamp
     createdAt: true,
     // Intentionally DROPPED: pricingJson (heavy @db.Text breakdown),
     // shareToken (auth-bearing), pdfUrl (heavy + may leak), micrositeUrl.

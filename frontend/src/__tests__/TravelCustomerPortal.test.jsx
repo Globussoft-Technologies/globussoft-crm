@@ -286,12 +286,20 @@ describe('TravelCustomerPortal — self-service diagnostic', () => {
     history = [],
     postResult,
     onPost,
+    interestsResult,
+    onInterestsPost,
   } = {}) {
     globalThis.fetch = vi.fn((url, opts) => {
       if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub', aadhaarLast4: null });
       if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
       if (url.includes('/portal/travel/diagnostic-brands')) return mockJsonResponse({ brands, defaultSubBrand });
       if (url.includes('/portal/travel/diagnostic-bank')) return mockJsonResponse(bank);
+      // Checked BEFORE the general /diagnostics branch below — that branch's
+      // .includes() would otherwise also swallow this URL (it's a substring).
+      if (url.includes('/interests')) {
+        if (onInterestsPost) onInterestsPost(JSON.parse(opts.body));
+        return mockJsonResponse(interestsResult || { ok: true, submittedAt: '2026-08-27T12:00:00.000Z' });
+      }
       if (url.includes('/portal/travel/diagnostics')) {
         if (opts && opts.method === 'POST') {
           if (onPost) onPost(JSON.parse(opts.body));
@@ -413,6 +421,144 @@ describe('TravelCustomerPortal — self-service diagnostic', () => {
     fireEvent.change(select, { target: { value: 'tmc' } });
     fireEvent.click(await screen.findByRole('button', { name: /take the diagnostic/i }));
     expect(await screen.findByText(/Group size\?/i)).toBeInTheDocument();
+  });
+
+  // ─── Recommendation parity with the public diagnostic report (2026-08-27) ─
+
+  const RAG_TRIP = {
+    name: 'Hampi Heritage Trail',
+    driveLink: 'https://drive.example/hampi',
+    summary: 'A coastal-history immersion trip.',
+    learnings: ['Rock-cut temples', 'Vijayanagara history'],
+  };
+
+  test('renders RAG recommended trips (readiness score, summary, learnings, brochure link)', async () => {
+    setupLoggedIn();
+    mockDashboard({
+      history: [{
+        id: 50, subBrand: 'rfu', score: 8, classification: 'level_2',
+        classificationLabel: 'Confident Pilgrim', recommendedTier: 'primary',
+        createdAt: '2026-06-01T10:00:00.000Z',
+        ragResult: { recommendations: { readinessScore: 7, summary: 'Great overall fit.', recommendedTrips: [RAG_TRIP] } },
+      }],
+    });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    expect(await screen.findByText('Hampi Heritage Trail')).toBeInTheDocument();
+    expect(screen.getByText(/7 \/ 10/)).toBeInTheDocument();
+    expect(screen.getByText('Great overall fit.')).toBeInTheDocument();
+    expect(screen.getByText('Rock-cut temples')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /view brochure/i })).toHaveAttribute('href', 'https://drive.example/hampi');
+  });
+
+  test('checking a recommended trip and submitting POSTs chosen interests', async () => {
+    setupLoggedIn();
+    let posted = null;
+    mockDashboard({
+      history: [{
+        id: 50, subBrand: 'rfu', score: 8, classificationLabel: 'Confident Pilgrim', recommendedTier: 'primary',
+        createdAt: '2026-06-01T10:00:00.000Z',
+        ragResult: { recommendations: { recommendedTrips: [RAG_TRIP] } },
+      }],
+      onInterestsPost: (body) => { posted = body; },
+    });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    await screen.findByText('Hampi Heritage Trail');
+    expect(screen.queryByRole('button', { name: /submit chosen interests/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(/I'm interested in Hampi Heritage Trail/i));
+    fireEvent.click(screen.getByRole('button', { name: /submit chosen interests \(1\)/i }));
+
+    await waitFor(() => {
+      expect(globalThis.fetch.mock.calls.some(([u]) => u.includes('/portal/travel/diagnostics/50/interests'))).toBe(true);
+    });
+    expect(posted).toEqual({ interests: [{ name: 'Hampi Heritage Trail', driveLink: 'https://drive.example/hampi' }] });
+    expect(await screen.findByText(/noted your interests/i)).toBeInTheDocument();
+  });
+
+  test('pre-checks trips already submitted via chosenInterests', async () => {
+    setupLoggedIn();
+    mockDashboard({
+      history: [{
+        id: 50, subBrand: 'rfu', score: 8, classificationLabel: 'Confident Pilgrim', recommendedTier: 'primary',
+        createdAt: '2026-06-01T10:00:00.000Z',
+        ragResult: { recommendations: { recommendedTrips: [RAG_TRIP] } },
+        chosenInterests: { interests: [{ name: 'Hampi Heritage Trail', driveLink: '' }], submittedAt: '2026-08-27T09:00:00.000Z' },
+      }],
+    });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    await screen.findByText('Hampi Heritage Trail');
+    expect(screen.getByLabelText(/I'm interested in Hampi Heritage Trail/i).checked).toBe(true);
+    expect(screen.getByText(/noted your interests/i)).toBeInTheDocument();
+  });
+
+  test('renders curriculum-fit recommended destinations', async () => {
+    setupLoggedIn();
+    mockDashboard({
+      history: [{
+        id: 50, subBrand: 'rfu', score: 8, classificationLabel: 'Confident Pilgrim', recommendedTier: 'primary',
+        createdAt: '2026-06-01T10:00:00.000Z',
+        curriculumFit: { recommendations: [{ destination: 'Hampi Heritage Trail', fitScore: 88, reasons: [{ subject: 'History', learningOutcome: 'Colonial-era trade routes' }] }] },
+      }],
+    });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    expect(await screen.findByText(/Recommended destinations for your curriculum/i)).toBeInTheDocument();
+    expect(screen.getByText('Hampi Heritage Trail')).toBeInTheDocument();
+    expect(screen.getByText(/88% fit/)).toBeInTheDocument();
+    expect(screen.getByText(/Colonial-era trade routes/)).toBeInTheDocument();
+  });
+
+  test('renders the cancellation policy tiers', async () => {
+    setupLoggedIn();
+    mockDashboard({
+      history: [{
+        id: 50, subBrand: 'rfu', score: 8, classificationLabel: 'Confident Pilgrim', recommendedTier: 'primary',
+        createdAt: '2026-06-01T10:00:00.000Z',
+        cancellationPolicy: { name: 'Standard Policy', description: 'Refunds scale with notice.', tiers: [{ daysBeforeServiceStart: 30, refundPercent: 100 }] },
+      }],
+    });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    expect(await screen.findByText('Standard Policy')).toBeInTheDocument();
+    expect(screen.getByText('Refunds scale with notice.')).toBeInTheDocument();
+    expect(screen.getByText(/30\+ days before departure — 100% refund/)).toBeInTheDocument();
+  });
+
+  test('submit button shows "Analyzing your curriculum needs" while the diagnostic is being scored', async () => {
+    setupLoggedIn();
+    let resolvePost;
+    globalThis.fetch = vi.fn((url, opts) => {
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub' });
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      if (url.includes('/portal/travel/diagnostic-brands')) return mockJsonResponse({ brands: [{ subBrand: 'rfu' }], defaultSubBrand: 'rfu' });
+      if (url.includes('/portal/travel/diagnostic-bank')) return mockJsonResponse(RFU_BANK);
+      if (url.includes('/portal/travel/diagnostics')) {
+        if (opts && opts.method === 'POST') {
+          return new Promise((resolve) => { resolvePost = resolve; });
+        }
+        return mockJsonResponse([]);
+      }
+      return mockJsonResponse({});
+    });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    fireEvent.click(await screen.findByRole('button', { name: /take the diagnostic/i }));
+    fireEvent.click(await screen.findByLabelText(/First-time pilgrim/i));
+    fireEvent.click(screen.getByLabelText(/Wheelchair/i));
+    fireEvent.click(screen.getByRole('button', { name: /submit answers/i }));
+
+    expect(await screen.findByText(/Analyzing your curriculum needs/i)).toBeInTheDocument();
+
+    resolvePost(await mockJsonResponse({
+      id: 99, subBrand: 'rfu', score: 4, classificationLabel: 'Standard Pilgrim', recommendedTier: 'entry',
+      createdAt: '2026-06-08T10:00:00.000Z',
+    }, { status: 201 }));
+    await waitFor(() => {
+      expect(screen.getByText(/Standard Pilgrim/i)).toBeInTheDocument();
+    });
   });
 });
 

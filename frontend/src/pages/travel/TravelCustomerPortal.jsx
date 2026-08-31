@@ -66,6 +66,7 @@ import {
   Calendar,
   Download,
   FileText,
+  Send,
 } from "lucide-react";
 import TravelReviewForm from "../../components/TravelReviewForm";
 
@@ -2909,6 +2910,13 @@ function DiagnosticsCard({ token }) {
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null); // freshest submission this session
   const [taking, setTaking] = useState(false); // is the form open?
+  // Chosen itinerary interests (2026-08-27) — parity with the public
+  // diagnostic report page. Keyed by trip name (no numeric id exists on
+  // RAG recommendations).
+  const [selectedInterestNames, setSelectedInterestNames] = useState(() => new Set());
+  const [interestsSubmitting, setInterestsSubmitting] = useState(false);
+  const [interestsSubmittedAt, setInterestsSubmittedAt] = useState(null);
+  const [interestsError, setInterestsError] = useState("");
 
   // 1. Load the brands the customer can take a diagnostic for + their history.
   //    A customer may be served by several brands, so they choose which one.
@@ -3053,6 +3061,54 @@ function DiagnosticsCard({ token }) {
 
   // Latest result for the currently-selected brand.
   const latest = result || history.find((h) => h.subBrand === selected) || null;
+
+  // Pre-populate the interest checkboxes from whatever was already
+  // submitted for this result (from history) whenever the visible result
+  // changes — e.g. switching programme, or a fresh submission landing.
+  // Deliberately keyed on latest?.id only — latest is a fresh object every
+  // render, so depending on its nested fields directly would re-run (and
+  // stomp in-progress checkbox edits) on every unrelated re-render.
+  useEffect(() => {
+    const prior = latest?.chosenInterests?.interests;
+    setSelectedInterestNames(new Set(Array.isArray(prior) ? prior.map((i) => i.name) : []));
+    setInterestsSubmittedAt(latest?.chosenInterests?.submittedAt || null);
+    setInterestsError("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latest?.id]);
+
+  const toggleInterest = (name) => {
+    setSelectedInterestNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+    setInterestsError("");
+  };
+
+  const submitInterests = async () => {
+    if (!latest?.id) return;
+    const trips = latest?.ragResult?.recommendations?.recommendedTrips || [];
+    const chosen = trips
+      .filter((t) => selectedInterestNames.has(t.name))
+      .map((t) => ({ name: t.name, driveLink: t.driveLink || "" }));
+    if (!chosen.length) return;
+    setInterestsSubmitting(true);
+    setInterestsError("");
+    try {
+      const res = await portalFetch(`/travel/diagnostics/${latest.id}/interests`, {
+        token,
+        method: "POST",
+        body: { interests: chosen },
+      });
+      setInterestsSubmittedAt(res?.submittedAt || new Date().toISOString());
+      await refreshHistory();
+    } catch (err) {
+      setInterestsError(err.message || "Failed to submit your chosen interests.");
+    } finally {
+      setInterestsSubmitting(false);
+    }
+  };
 
   return (
     <section style={cardStyle} aria-labelledby="diag-heading">
@@ -3210,69 +3266,215 @@ function DiagnosticsCard({ token }) {
                     </a>
                   )}
 
-                  {latest.ragResult && (
-                    <div style={{ marginTop: 14 }}>
-                      {Number.isFinite(latest.ragResult.readinessScore) && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>Readiness score</span>
-                          <span
+                  {latest.ragResult?.recommendations && (() => {
+                    const recs = latest.ragResult.recommendations;
+                    // Fixed safety ceiling (not the live admin-configured
+                    // topK) — see backend/lib/diagnosticRecommendationSettings.js.
+                    const trips = (Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : []).slice(0, 20);
+                    return (
+                      <div style={{ marginTop: 14 }}>
+                        {Number.isFinite(recs.readinessScore) && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                            <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>Readiness score</span>
+                            <span
+                              style={{
+                                fontSize: 18,
+                                fontWeight: 700,
+                                color: "#2F7A4D",
+                                background: "rgba(47, 122, 77, 0.12)",
+                                padding: "4px 12px",
+                                borderRadius: 999,
+                              }}
+                            >
+                              {recs.readinessScore} / 10
+                            </span>
+                          </div>
+                        )}
+                        {recs.summary && (
+                          <p style={{ fontSize: 14, color: "var(--text-primary)", margin: "0 0 12px", lineHeight: 1.5 }}>
+                            {recs.summary}
+                          </p>
+                        )}
+                        {trips.length > 0 && (
+                          <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: "0 0 10px" }}>
+                            Check off the trips you&rsquo;re actually interested in — we&rsquo;ll share your picks with your advisor.
+                          </p>
+                        )}
+                        {trips.map((trip, idx) => {
+                          const checked = selectedInterestNames.has(trip.name);
+                          return (
+                            <label
+                              key={idx}
+                              style={{
+                                marginTop: 12,
+                                padding: 12,
+                                borderRadius: 10,
+                                background: "white",
+                                border: `1px solid ${checked ? "var(--primary-color, #122647)" : "rgba(18, 38, 71, 0.08)"}`,
+                                display: "flex",
+                                gap: 10,
+                                alignItems: "flex-start",
+                                cursor: "pointer",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleInterest(trip.name)}
+                                style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0, cursor: "pointer" }}
+                                aria-label={`I'm interested in ${trip.name}`}
+                              />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                                  <FileText size={16} aria-hidden style={{ color: "var(--primary-color, #122647)" }} />
+                                  <strong style={{ fontSize: 15, color: "var(--text-primary)" }}>{trip.name}</strong>
+                                  {trip.driveLink && (
+                                    <a
+                                      href={trip.driveLink}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={(e) => e.stopPropagation()}
+                                      style={{ fontSize: 12, color: "#2563eb", marginLeft: "auto" }}
+                                    >
+                                      View brochure
+                                    </a>
+                                  )}
+                                </div>
+                                {trip.summary && (
+                                  <p style={{ margin: "0 0 8px", fontSize: 13, color: "var(--text-secondary)" }}>
+                                    {trip.summary}
+                                  </p>
+                                )}
+                                {Array.isArray(trip.learnings) && trip.learnings.length > 0 && (
+                                  <ul style={{ margin: "4px 0 0", paddingLeft: 16, fontSize: 13, color: "var(--text-secondary)" }}>
+                                    {trip.learnings.map((l, li) => (
+                                      <li key={li}>{l}</li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </div>
+                            </label>
+                          );
+                        })}
+                        {trips.length > 0 && (
+                          <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                            {selectedInterestNames.size > 0 && (
+                              <button
+                                type="button"
+                                onClick={submitInterests}
+                                disabled={interestsSubmitting}
+                                style={{
+                                  padding: "9px 16px",
+                                  background: "var(--primary-color, #122647)",
+                                  color: "white",
+                                  border: "none",
+                                  borderRadius: 8,
+                                  fontWeight: 600,
+                                  cursor: interestsSubmitting ? "wait" : "pointer",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  opacity: interestsSubmitting ? 0.7 : 1,
+                                }}
+                              >
+                                <Send size={14} aria-hidden />
+                                {interestsSubmitting
+                                  ? "Submitting…"
+                                  : `Submit chosen interests (${selectedInterestNames.size})`}
+                              </button>
+                            )}
+                            {interestsSubmittedAt && !interestsSubmitting && (
+                              <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+                                <CheckCircle2 size={14} aria-hidden style={{ verticalAlign: -2, marginRight: 4, color: "#2F7A4D" }} />
+                                Thanks — we&rsquo;ve noted your interests. You can update your picks anytime.
+                              </span>
+                            )}
+                            {interestsError && (
+                              <span style={{ fontSize: 13, color: "var(--danger-color, #A8323F)" }}>{interestsError}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Curriculum-fit recommendations — parity with the public
+                      diagnostic report page's "Recommended destinations for
+                      your curriculum" section. */}
+                  {Array.isArray(latest.curriculumFit?.recommendations) && latest.curriculumFit.recommendations.length > 0 && (
+                    <div style={{ marginTop: 18 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
+                        Recommended destinations for your curriculum
+                      </div>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        {latest.curriculumFit.recommendations.map((rec, idx) => (
+                          <div
+                            key={rec.mappingIds?.[0] ?? idx}
                             style={{
-                              fontSize: 18,
-                              fontWeight: 700,
-                              color: "#2F7A4D",
-                              background: "rgba(47, 122, 77, 0.12)",
-                              padding: "4px 12px",
-                              borderRadius: 999,
+                              padding: 12,
+                              borderRadius: 10,
+                              background: "white",
+                              border: "1px solid rgba(18, 38, 71, 0.08)",
                             }}
                           >
-                            {latest.ragResult.readinessScore} / 10
-                          </span>
-                        </div>
-                      )}
-                      {latest.ragResult.summary && (
-                        <p style={{ fontSize: 14, color: "var(--text-primary)", margin: "0 0 12px", lineHeight: 1.5 }}>
-                          {latest.ragResult.summary}
-                        </p>
-                      )}
-                      {(latest.ragResult.recommendedTrips || []).map((trip, idx) => (
-                        <div
-                          key={idx}
-                          style={{
-                            marginTop: 12,
-                            padding: 12,
-                            borderRadius: 10,
-                            background: "white",
-                            border: "1px solid rgba(18, 38, 71, 0.08)",
-                          }}
-                        >
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                            <FileText size={16} aria-hidden style={{ color: "var(--primary-color, #122647)" }} />
-                            <strong style={{ fontSize: 15, color: "var(--text-primary)" }}>{trip.name}</strong>
-                            {trip.driveLink && (
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                              <strong style={{ fontSize: 15, color: "var(--text-primary)" }}>{rec.destination}</strong>
+                              {Number.isFinite(rec.fitScore) && (
+                                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>{rec.fitScore}% fit</span>
+                              )}
+                            </div>
+                            {Array.isArray(rec.reasons) && rec.reasons.length > 0 && (
+                              <ul style={{ margin: "6px 0 0", paddingLeft: 16, fontSize: 13, color: "var(--text-secondary)" }}>
+                                {rec.reasons.map((reason, ridx) => (
+                                  <li key={ridx}>{reason.rationale || reason.learningOutcome || reason.subject}</li>
+                                ))}
+                              </ul>
+                            )}
+                            {rec.brochurePdfUrl && (
                               <a
-                                href={trip.driveLink}
+                                href={rec.brochurePdfUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                style={{ fontSize: 12, color: "#2563eb", marginLeft: "auto" }}
+                                style={{ display: "inline-block", marginTop: 8, fontSize: 12, color: "#2563eb" }}
                               >
                                 View brochure
                               </a>
                             )}
                           </div>
-                          {(trip.places || []).map((place, pidx) => (
-                            <div key={pidx} style={{ marginTop: 8, fontSize: 13, color: "var(--text-secondary)" }}>
-                              <strong style={{ color: "var(--text-primary)" }}>{place.name}</strong>
-                              {place.learnings?.length > 0 && (
-                                <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
-                                  {place.learnings.map((l, li) => (
-                                    <li key={li}>{l}</li>
-                                  ))}
-                                </ul>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ))}
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cancellation policy — parity with the public diagnostic
+                      report page; admin-controlled show/hide per sub-brand. */}
+                  {latest.cancellationPolicy && Array.isArray(latest.cancellationPolicy.tiers) && latest.cancellationPolicy.tiers.length > 0 && (
+                    <div style={{ marginTop: 18 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+                        {latest.cancellationPolicy.name || "Cancellation policy"}
+                      </div>
+                      {latest.cancellationPolicy.description && (
+                        <p style={{ margin: "0 0 8px", fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                          {latest.cancellationPolicy.description}
+                        </p>
+                      )}
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {latest.cancellationPolicy.tiers.map((tier, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              padding: "8px 12px",
+                              borderRadius: 8,
+                              background: "white",
+                              border: "1px solid rgba(18, 38, 71, 0.08)",
+                              fontSize: 13,
+                              color: "var(--text-primary)",
+                            }}
+                          >
+                            {tier.daysBeforeServiceStart}+ days before departure — {tier.refundPercent}% refund
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -3417,7 +3619,7 @@ function DiagnosticsCard({ token }) {
                       ) : (
                         <CheckCircle2 size={16} aria-hidden />
                       )}
-                      {submitting ? "Submitting…" : "Submit answers"}
+                      {submitting ? "Analyzing your curriculum needs" : "Submit answers"}
                     </button>
                     <button
                       type="button"

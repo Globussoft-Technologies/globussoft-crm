@@ -49,6 +49,11 @@ const tmcLeadQuality = require("../lib/tmcLeadQuality");
 const tmcPrompts = require("../services/tmcDiagnosticPrompts");
 const tmcReportGuard = require("../lib/tmcReportGuard");
 const travelRag = require("../lib/travelRag");
+const diagnosticRecommendationSettings = require("../lib/diagnosticRecommendationSettings");
+const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
+const diagnosticNotificationSettings = require("../lib/diagnosticNotificationSettings");
+const diagnosticNotifications = require("../lib/diagnosticNotifications");
+const whatsappWebClient = require("../services/whatsappWebClient");
 const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
 const {
   requireTravelTenant,
@@ -411,6 +416,190 @@ router.delete(
   },
 );
 
+// GET/PUT /api/travel/diagnostics/recommendation-settings?subBrand=tmc
+//
+// Admin-configurable "how many recommendations to show" cap (2026-08-27) —
+// consumed internally by buildCurriculumFitForDiagnostic, curriculumRag,
+// and travelRag at submit time (see backend/lib/diagnosticRecommendationSettings.js
+// for the zero-migration TenantSetting-backed storage).
+router.get(
+  "/diagnostics/recommendation-settings",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "read"),
+  async (req, res) => {
+    try {
+      const subBrand = String(req.query.subBrand || "tmc");
+      assertValidSubBrand(subBrand);
+      const topK = await diagnosticRecommendationSettings.getRecommendationTopK({
+        tenantId: req.travelTenant.id,
+        subBrand,
+      });
+      res.json({
+        topK,
+        min: diagnosticRecommendationSettings.MIN_TOP_K,
+        max: diagnosticRecommendationSettings.MAX_TOP_K,
+        default: diagnosticRecommendationSettings.DEFAULT_TOP_K,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] get recommendation settings error:", e.message);
+      res.status(500).json({ error: "Failed to get recommendation settings" });
+    }
+  },
+);
+
+router.put(
+  "/diagnostics/recommendation-settings",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const subBrand = String(req.body?.subBrand || "tmc");
+      assertValidSubBrand(subBrand);
+      const topK = await diagnosticRecommendationSettings.setRecommendationTopK({
+        tenantId: req.travelTenant.id,
+        subBrand,
+        topK: req.body?.topK,
+      });
+      res.json({ topK });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] set recommendation settings error:", e.message);
+      res.status(500).json({ error: "Failed to save recommendation settings" });
+    }
+  },
+);
+
+// GET/PUT/POST /api/travel/diagnostics/notification-settings[/test] — 2026-08-28
+//
+// Admin-configurable "who gets told, and how" when a new diagnostic is
+// submitted (db / email / WhatsApp, any combination per person). See
+// backend/lib/diagnosticNotificationSettings.js for the zero-migration
+// TenantSetting-backed storage and backend/lib/diagnosticNotifications.js
+// for the actual send-fan-out consumed at submit time by every
+// TravelDiagnostic-creation route.
+router.get(
+  "/diagnostics/notification-settings",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "read"),
+  async (req, res) => {
+    try {
+      const subBrand = String(req.query.subBrand || "tmc");
+      assertValidSubBrand(subBrand);
+      const tenantId = req.travelTenant.id;
+      const stored = await diagnosticNotificationSettings.getNotificationRecipients({ tenantId, subBrand });
+
+      const users = stored.length
+        ? await prisma.user.findMany({
+            where: { id: { in: stored.map((r) => r.userId) }, tenantId },
+            select: { id: true, name: true, email: true, phone: true },
+          })
+        : [];
+      const userById = new Map(users.map((u) => [u.id, u]));
+      // Drop config entries referencing a user who no longer exists/left the
+      // tenant, rather than surfacing a broken row the admin can't identify.
+      const recipients = stored
+        .filter((r) => userById.has(r.userId))
+        .map((r) => {
+          const u = userById.get(r.userId);
+          return {
+            userId: r.userId,
+            name: u.name || u.email || `User #${r.userId}`,
+            email: u.email || null,
+            hasPhone: Boolean(u.phone),
+            channels: r.channels,
+          };
+        });
+
+      res.json({
+        recipients,
+        channelAvailability: {
+          db: true,
+          email: Boolean(process.env.SENDGRID_API_KEY),
+          whatsapp: whatsappWebClient.isConnected(tenantId),
+        },
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] get notification settings error:", e.message);
+      res.status(500).json({ error: "Failed to get notification settings" });
+    }
+  },
+);
+
+router.put(
+  "/diagnostics/notification-settings",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const subBrand = String(req.body?.subBrand || "tmc");
+      assertValidSubBrand(subBrand);
+      const tenantId = req.travelTenant.id;
+      const rawRecipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+
+      // Reject (not silently drop) a userId that doesn't belong to this
+      // tenant — a foreign/typo'd id should surface as a mistake, not
+      // vanish into an empty saved list.
+      const requestedIds = [...new Set(
+        rawRecipients.map((r) => Number(r?.userId)).filter((id) => Number.isFinite(id) && id > 0),
+      )];
+      if (requestedIds.length) {
+        const found = await prisma.user.findMany({
+          where: { id: { in: requestedIds }, tenantId },
+          select: { id: true },
+        });
+        const foundIds = new Set(found.map((u) => u.id));
+        const missing = requestedIds.filter((id) => !foundIds.has(id));
+        if (missing.length) {
+          return res.status(400).json({
+            error: `Unknown user id(s): ${missing.join(", ")}`,
+            code: "UNKNOWN_USER_ID",
+          });
+        }
+      }
+
+      const saved = await diagnosticNotificationSettings.setNotificationRecipients({
+        tenantId,
+        subBrand,
+        recipients: rawRecipients,
+      });
+      res.json({ recipients: saved });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] set notification settings error:", e.message);
+      res.status(500).json({ error: "Failed to save notification settings" });
+    }
+  },
+);
+
+router.post(
+  "/diagnostics/notification-settings/test",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const subBrand = String(req.body?.subBrand || "tmc");
+      assertValidSubBrand(subBrand);
+      const result = await diagnosticNotifications.sendTestNotification({
+        tenantId: req.travelTenant.id,
+        subBrand,
+        userId: req.user.userId,
+      });
+      res.json(result);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] test notification error:", e.message);
+      res.status(500).json({ error: "Failed to send test notification" });
+    }
+  },
+);
+
 //  PRD 4.2  Phase-1 "Request change" ticket (view-only scoring)
 //
 // POST /api/travel/diagnostics/banks/:id/request-change
@@ -597,7 +786,7 @@ async function buildCurriculumFit(tenantId, { curriculum, grade, subject }) {
       reasons: d.reasons.slice(0, 4),
     }))
     .sort((a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0))
-    .slice(0, 5);
+    .slice(0, 10);
 
   return {
     curriculum: cur,
@@ -724,6 +913,29 @@ router.post(
             : null,
         },
       });
+
+      // Notify whoever the admin configured in the Notifications tab
+      // (2026-08-28) — falls back to every ADMIN/MANAGER, in-app only, when
+      // nothing's configured yet.
+      try {
+        const submitter = diag.contactId
+          ? await prisma.contact.findUnique({
+              where: { id: diag.contactId },
+              select: { name: true, email: true },
+            }).catch(() => null)
+          : null;
+        await diagnosticNotifications.notifyDiagnosticSubmitted({
+          tenantId: req.travelTenant.id,
+          subBrand: bank.subBrand,
+          diagnosticId: diag.id,
+          contactLabel: submitter?.name || submitter?.email || `Diagnostic #${diag.id}`,
+          score: result.score,
+          classificationLabel: result.classificationLabel,
+          recommendedTier: result.recommendedTier,
+        });
+      } catch (notifyErr) {
+        console.warn("[travel-diag] notification failed (non-fatal):", notifyErr.message);
+      }
 
       // RAG knowledge-base recommendations: best-effort for any travel sub-brand
     // that has indexed PDFs. Runs only when Qdrant + OpenAI embeddings are
@@ -2005,7 +2217,14 @@ router.get(
             select: { id: true, name: true, email: true, phone: true },
           })
         : null;
-      res.json({ ...diag, contact });
+      // Chosen itinerary interests the school checked off on the public
+      // report page after submitting (2026-08-27) — null when they never
+      // submitted any (most rows, and every pre-existing diagnostic).
+      const chosenInterests = await diagnosticChosenInterests.getChosenInterests({
+        tenantId: req.travelTenant.id,
+        diagnosticId: id,
+      });
+      res.json({ ...diag, contact, chosenInterests });
     } catch (e) {
       console.error("[travel-diag] get diagnostic error:", e.message);
       res.status(500).json({ error: "Failed to get diagnostic" });
@@ -2689,6 +2908,23 @@ router.post("/diagnostics/public/submit", async (req, res) => {
       },
     });
 
+    // Notify whoever the admin configured in the Notifications tab
+    // (2026-08-28) — falls back to every ADMIN/MANAGER, in-app only, when
+    // nothing's configured yet.
+    try {
+      await diagnosticNotifications.notifyDiagnosticSubmitted({
+        tenantId: tenant.id,
+        subBrand: bank.subBrand,
+        diagnosticId: diag.id,
+        contactLabel: String(name).trim() || `Diagnostic #${diag.id}`,
+        score: result.score,
+        classificationLabel: result.classificationLabel,
+        recommendedTier: result.recommendedTier,
+      });
+    } catch (notifyErr) {
+      console.warn("[travel-diag-public] notification failed (non-fatal):", notifyErr.message);
+    }
+
     // PDF generation best-effort  Phase 2 will email/WhatsApp the report
     // to the lead once Wati BSP creds (Q9) land.
     const reportPdfUrl = await generateDiagnosticPdfBestEffort(
@@ -3219,6 +3455,24 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         ),
       },
     });
+
+    // Notify whoever the admin configured in the Notifications tab
+    // (2026-08-28) — falls back to every ADMIN/MANAGER, in-app only, when
+    // nothing's configured yet. TMC uses engine-specific columns instead of
+    // the generic score/classification pair, so the message leans on
+    // icpTier/leadQuality instead.
+    try {
+      await diagnosticNotifications.notifyDiagnosticSubmitted({
+        tenantId: tenant.id,
+        subBrand: "tmc",
+        diagnosticId: diag.id,
+        contactLabel: String(contact.contact_name || "").trim() || email || `Diagnostic #${diag.id}`,
+        classificationLabel: engineOutput.icpTier || engineOutput.state || null,
+        recommendedTier: leadQualityResult.leadQuality || null,
+      });
+    } catch (notifyErr) {
+      console.warn("[travel-diag-tmc] notification failed (non-fatal):", notifyErr.message);
+    }
 
     const reportSlug = buildReportSlug(diag.id);
     res.status(201).json({

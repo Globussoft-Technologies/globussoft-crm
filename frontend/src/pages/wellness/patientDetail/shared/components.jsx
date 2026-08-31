@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, FileText, Download, Eye } from 'lucide-react';
 import { getAuthToken } from '../../../../utils/api';
 import { useNotify } from '../../../../utils/notify';
@@ -35,6 +36,22 @@ export function RxDetailModal({ rx, patient, onClose }) {
   const notify = useNotify();
   const [downloading, setDownloading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+
+  useEffect(() => {
+    const body = document.body;
+    const html = document.documentElement;
+
+    const originalBodyOverflow = body.style.overflow;
+    const originalHtmlOverflow = html.style.overflow;
+
+    body.style.overflow = 'hidden';
+    html.style.overflow = 'hidden';
+
+    return () => {
+      body.style.overflow = originalBodyOverflow;
+      html.style.overflow = originalHtmlOverflow;
+    };
+  }, []);
   let drugs = [];
   try { drugs = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs; } catch { drugs = []; }
   if (!Array.isArray(drugs)) drugs = [];
@@ -100,19 +117,25 @@ export function RxDetailModal({ rx, patient, onClose }) {
     fontSize: '0.85rem',
   };
 
-  return (
+  return createPortal(
     <div
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+        position: 'fixed', inset: 0, width: '100vw',
+        height: '100vh', background: 'rgba(0,0,0,0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, overflow: 'hidden',
+        overscrollBehavior: 'none',
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         className="glass"
         style={{
-          width: '95%', maxWidth: 1080, maxHeight: '90vh', overflow: 'auto',
+          width: '95%',
+          maxWidth: 1080,
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          overflowX: 'hidden',
           padding: '1.5rem',
         }}
       >
@@ -159,46 +182,46 @@ export function RxDetailModal({ rx, patient, onClose }) {
 
         <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '1rem 0 0.4rem' }}>Prescriptions</h3>
         <div style={{ marginBottom: '1rem' }}>
-        <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 720 }}>
-            <thead>
-              <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
-                <th style={th}>No.</th>
-                <th style={th}>Drug Name</th>
-                <th style={th}>Strength</th>
-                <th style={th}>Preparation</th>
-                <th style={th}>Route</th>
-                <th style={th}>Dosage</th>
-                <th style={th}>Direction</th>
-                <th style={th}>Frequency</th>
-                <th style={th}>Instructions</th>
-                <th style={th}>Start Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {drugs.length === 0 ? (
-                <tr><td colSpan={10} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>(no medications listed)</td></tr>
-              ) : drugs.map((d, i) => {
-                const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join('') || d.strength || '—';
-                const startDate = d.startDate ? new Date(d.startDate).toLocaleDateString('en-IN') : '—';
-                return (
-                  <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
-                    <td style={td}>{i + 1}</td>
-                    <td style={{ ...td, fontWeight: 600 }}>{d.name || d.drug || '—'}</td>
-                    <td style={td}>{strength}</td>
-                    <td style={td}>{d.preparation || d.dosageForm || '—'}</td>
-                    <td style={td}>{d.route || '—'}</td>
-                    <td style={td}>{d.dosage || '—'}</td>
-                    <td style={td}>{d.direction || '—'}</td>
-                    <td style={td}>{d.frequency || '—'}</td>
-                    <td style={td}>{d.instructions || '—'}</td>
-                    <td style={td}>{startDate}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </TopScrollSync>
+          <TopScrollSync>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 720 }}>
+              <thead>
+                <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                  <th style={th}>No.</th>
+                  <th style={th}>Drug Name</th>
+                  <th style={th}>Strength</th>
+                  <th style={th}>Preparation</th>
+                  <th style={th}>Route</th>
+                  <th style={th}>Dosage</th>
+                  <th style={th}>Direction</th>
+                  <th style={th}>Frequency</th>
+                  <th style={th}>Instructions</th>
+                  <th style={th}>Start Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {drugs.length === 0 ? (
+                  <tr><td colSpan={10} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>(no medications listed)</td></tr>
+                ) : drugs.map((d, i) => {
+                  const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join('') || d.strength || '—';
+                  const startDate = d.startDate ? new Date(d.startDate).toLocaleDateString('en-IN') : '—';
+                  return (
+                    <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
+                      <td style={td}>{i + 1}</td>
+                      <td style={{ ...td, fontWeight: 600 }}>{d.name || d.drug || '—'}</td>
+                      <td style={td}>{strength}</td>
+                      <td style={td}>{d.preparation || d.dosageForm || '—'}</td>
+                      <td style={td}>{d.route || '—'}</td>
+                      <td style={td}>{d.dosage || '—'}</td>
+                      <td style={td}>{d.direction || '—'}</td>
+                      <td style={td}>{d.frequency || '—'}</td>
+                      <td style={td}>{d.instructions || '—'}</td>
+                      <td style={td}>{startDate}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TopScrollSync>
         </div>
 
         <div style={headerRowStyle}><strong>Notes:</strong> {parsed.notes || '—'}</div>
@@ -241,6 +264,7 @@ export function RxDetailModal({ rx, patient, onClose }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

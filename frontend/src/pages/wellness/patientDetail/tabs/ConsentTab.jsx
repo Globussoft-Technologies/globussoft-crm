@@ -4,6 +4,7 @@ import { fetchApi, getAuthToken } from '../../../../utils/api';
 import { useNotify } from '../../../../utils/notify';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../../components/wellness/DateRangeFilter';
 import { labelStyle, inputStyle } from '../shared/helpers';
+import SearchableSingleSelect from '../../services/SearchableSingleSelect';
 
 // ── Consent tab with signature canvas ─────────────────────────────
 export default function ConsentTab({ patient, services, onSaved }) {
@@ -11,8 +12,6 @@ export default function ConsentTab({ patient, services, onSaved }) {
   const canvasRef = useRef(null);
   const [templateName, setTemplateName] = useState('hair-transplant');
   const [serviceId, setServiceId] = useState('');
-  const [serviceSearch, setServiceSearch] = useState('');
-  const [serviceOpen, setServiceOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
   const [templates, setTemplates] = useState([]);
@@ -29,13 +28,6 @@ export default function ConsentTab({ patient, services, onSaved }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const selectedTemplate = templates.find((t) => t.key === templateName) || null;
-  const filteredServices = services.filter((service) =>
-    service.name?.toLowerCase().includes(serviceSearch.toLowerCase())
-  );
-
-  const selectedService = services.find(
-    (service) => String(service.id) === String(serviceId)
-  );
   const [hasStrokes, setHasStrokes] = useState(false);
 
   const [downloadingId, setDownloadingId] = useState(null);
@@ -244,191 +236,15 @@ export default function ConsentTab({ patient, services, onSaved }) {
             )}
           </select>
         </div>
-        <div style={{ position: 'relative' }}>
+        <div>
           <label style={labelStyle}>Service (optional)</label>
-
-          <div
-            style={{
-              position: 'relative',
-              width: '100%',
-            }}
-          >
-            {/* Search + Select Input */}
-            <input
-              type="text"
-              value={
-                serviceOpen
-                  ? serviceSearch
-                  : selectedService?.name || ''
-              }
-              placeholder="Search service..."
-              onFocus={() => {
-                setServiceOpen(true);
-                setServiceSearch('');
-              }}
-              onChange={(e) => {
-                setServiceSearch(e.target.value);
-                setServiceOpen(true);
-              }}
-              style={{
-                ...inputStyle,
-
-                width: '100%',
-                padding: '0.55rem 0.75rem',
-
-                background: 'var(--input-bg)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '8px',
-                color: 'var(--text-primary)',
-
-                fontSize: '0.9rem',
-                outline: 'none',
-
-                boxSizing: 'border-box',
-                paddingRight: '2.5rem',
-              }}
-            />
-
-            {/* Dropdown Arrow */}
-            <span
-              onClick={() => setServiceOpen((prev) => !prev)}
-              style={{
-                position: 'absolute',
-                right: '0.8rem',
-                top: '50%',
-                transform: 'translateY(-50%)',
-
-                cursor: 'pointer',
-                color: 'var(--text-primary)',
-                fontSize: '0.8rem',
-
-                zIndex: 2,
-              }}
-            >
-              ▼
-            </span>
-
-            {/* Dropdown */}
-            {serviceOpen && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 'calc(100% + 4px)',
-                  left: 0,
-                  right: 0,
-
-                  zIndex: 1000,
-
-                  width: '100%',
-                  boxSizing: 'border-box',
-
-                  maxHeight: '220px',
-                  overflowY: 'auto',
-
-                  /* SAME COLORS */
-                  background: 'var(--input-bg)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '8px',
-                  color: 'var(--text-primary)',
-
-                  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.18)',
-                }}
-              >
-                {/* None option */}
-                <div
-                  onClick={() => {
-                    setServiceId('');
-                    setServiceSearch('');
-                    setServiceOpen(false);
-                  }}
-                  style={{
-                    width: '100%',
-                    padding: '0.55rem 0.75rem',
-
-                    background: 'var(--input-bg)',
-                    color: 'var(--text-primary)',
-
-                    borderBottom:
-                      '1px solid var(--border-color)',
-
-                    fontSize: '0.9rem',
-                    cursor: 'pointer',
-
-                    boxSizing: 'border-box',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background =
-                      'var(--accent-bg)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background =
-                      'var(--input-bg)';
-                  }}
-                >
-                  — none —
-                </div>
-
-                {/* Services */}
-                {filteredServices.length > 0 ? (
-                  filteredServices.map((service) => (
-                    <div
-                      key={service.id}
-                      onClick={() => {
-                        setServiceId(String(service.id));
-                        setServiceSearch('');
-                        setServiceOpen(false);
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '0.55rem 0.75rem',
-
-                        background: 'var(--input-bg)',
-                        color: 'var(--text-primary)',
-
-                        borderBottom:
-                          '1px solid var(--border-color)',
-
-                        fontSize: '0.9rem',
-                        cursor: 'pointer',
-
-                        boxSizing: 'border-box',
-
-                        transition:
-                          'background 0.15s ease',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background =
-                          'var(--accent-bg)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background =
-                          'var(--input-bg)';
-                      }}
-                    >
-                      {service.name}
-                    </div>
-                  ))
-                ) : (
-                  <div
-                    style={{
-                      width: '100%',
-                      padding: '0.55rem 0.75rem',
-
-                      background: 'var(--input-bg)',
-                      color: 'var(--text-secondary)',
-
-                      fontSize: '0.85rem',
-                      textAlign: 'center',
-
-                      boxSizing: 'border-box',
-                    }}
-                  >
-                    No services found
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <SearchableSingleSelect
+            value={serviceId}
+            onChange={setServiceId}
+            options={(services || []).map((s) => ({ value: String(s.id), label: s.name }))}
+            placeholder="Search service..."
+            aria-label="Service"
+          />
         </div>
       </div>
 

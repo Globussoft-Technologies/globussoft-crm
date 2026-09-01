@@ -27,6 +27,8 @@
 
 'use strict';
 
+const { resolveWanderluxThemePreset, mergeWanderluxThemeOverrides } = require('./themePresets');
+
 // Per-sub-brand theme palettes. The LLM doesn't emit a theme today; we
 // pick one based on subBrand + destination family so each tour ships with
 // a distinct visual identity. The reference's sample-config.json shows
@@ -78,8 +80,16 @@ function slugify(s) {
     .slice(0, 50);
 }
 
-function pickThemeFor(subBrand) {
-  return SUB_BRAND_THEMES[subBrand] || SUB_BRAND_THEMES.travelstall;
+function pickThemeFor(subBrand, options = {}) {
+  const resolved = resolveWanderluxThemePreset({
+    themeId: options.themeId,
+    destination: options.destination,
+    subBrand,
+  });
+  const baseTheme = (resolved && resolved.theme)
+    ? resolved.theme
+    : SUB_BRAND_THEMES[subBrand] || SUB_BRAND_THEMES.travelstall;
+  return mergeWanderluxThemeOverrides(baseTheme, options.themeOverrides);
 }
 
 /**
@@ -281,8 +291,9 @@ function isStudentAudience(audience) {
  * Returns { steps, submitLabel, successTitle, successBody } — all
  * universal copy that adapts per audience. Destination-agnostic.
  */
-function buildRegisterFlow(audience) {
+function buildRegisterFlow(audience, tripType = 'international') {
   const isStudent = isStudentAudience(audience);
+  const isDomestic = String(tripType).toLowerCase() === 'domestic';
 
   // Universal Passport step — same shape for every audience. The
   // question wording shifts subtly (child vs traveller) but the field
@@ -327,7 +338,7 @@ function buildRegisterFlow(audience) {
             { name: 'phone', label: 'Phone', type: 'tel', required: true, placeholder: '+91 XXXXX XXXXX' },
           ],
         },
-        passportStep,
+        ...(isDomestic ? [] : [passportStep]),
       ],
       submitLabel: 'Reserve Orientation Seat',
       successTitle: "Thanks — You're on the List!",
@@ -344,7 +355,7 @@ function buildRegisterFlow(audience) {
           { name: 'phone', label: 'Phone', type: 'tel', required: true, placeholder: 'Mobile number' },
         ],
       },
-      passportStep,
+      ...(isDomestic ? [] : [passportStep]),
     ],
     submitLabel: 'Submit Registration',
     successTitle: "Thanks — You're on the List!",
@@ -448,7 +459,18 @@ function mapBlocksToWanderluxConfig(blocks, input) {
   const faqItems = Array.isArray(faq.faqs) ? faq.faqs : [];
   const faqCategories = Array.isArray(faq.categories) ? faq.categories : [];
 
-  const theme = pickThemeFor(subBrand);
+  const theme = {
+    ...pickThemeFor(subBrand, {
+      themeId: inp.themeId,
+      destination,
+      themeOverrides: inp.themeOverrides,
+    }),
+    id: resolveWanderluxThemePreset({
+      themeId: inp.themeId,
+      destination,
+      subBrand,
+    }).id,
+  };
   const cityCount = cityCards.length;
   const kicker = cityCount > 0
     ? `${String(days).padStart(2, '0')} Days. ${String(cityCount).padStart(2, '0')} ${cityCount === 1 ? 'City' : 'Cities'}.`
@@ -657,6 +679,17 @@ function mapBlocksToWanderluxConfig(blocks, input) {
       title: pricing.title || 'Transparent Pricing',
       subtitle: pricing.subtitle || 'A simple multi-instalment plan. No hidden costs.',
       featuredIndex: 0,
+      payment: {
+        enabled: false,
+        defaultMode: 'installment',
+        allowCompletePayment: true,
+        currency: 'INR',
+        stepTitle: 'Secure payment',
+        intro: 'Choose how you would like to pay for this registration.',
+        installmentLabel: 'Installment-wise payment',
+        completeLabel: 'Complete payment',
+        buttonLabel: 'Pay & continue',
+      },
       installments: pricingTiers.map((t) => ({
         tag: t.label || '',
         title: t.label || '',
@@ -675,7 +708,7 @@ function mapBlocksToWanderluxConfig(blocks, input) {
       // get a 3-step form (student info → parent info → passport status);
       // every other audience gets the single Traveller step. See
       // buildRegisterFlow for the keyword list.
-      const flow = buildRegisterFlow(audience);
+      const flow = buildRegisterFlow(audience, input.tripType);
       return {
       eyebrow: 'Reserve Your Seat',
       title: `Register — ${destination} ${tripYear}`,
@@ -686,6 +719,7 @@ function mapBlocksToWanderluxConfig(blocks, input) {
       // redirect to the trip microsite for phone OTP verification instead
       // of falling back to the generic lead-capture path.
       mode: 'registration-draft',
+      tripType: String(input.tripType || 'international').toLowerCase() === 'domestic' ? 'domestic' : 'international',
       // capacity: 50 (was 0) — the reference's "Registration Closed" gate
       // fires when `registered >= capacity`. With capacity=0 + registered=0
       // every fresh draft rendered as already-full despite the countdown

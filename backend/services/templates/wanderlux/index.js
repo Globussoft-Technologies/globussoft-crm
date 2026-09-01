@@ -92,11 +92,17 @@ function render(landingPage, options = {}) {
   // draft / archived render.
   if (config && landingPage && landingPage.slug && !options.preview && landingPage.status === 'PUBLISHED') {
     const submitUrl = `/p/${encodeURIComponent(landingPage.slug)}/submit`;
+    const paymentOrderUrl = `/p/${encodeURIComponent(landingPage.slug)}/payment-order`;
     if (config.register && typeof config.register === 'object') {
       config.register.endpoint = submitUrl;
+      config.register.paymentOrderEndpoint = paymentOrderUrl;
     }
     if (config.brochure && typeof config.brochure === 'object') {
       config.brochure.endpoint = submitUrl;
+    }
+    if (config.investment && typeof config.investment === 'object' && config.investment.payment && typeof config.investment.payment === 'object') {
+      config.investment.payment.orderEndpoint = paymentOrderUrl;
+      config.investment.payment.submitEndpoint = submitUrl;
     }
   }
   // Pass the preview flag through to the runtime so the toast can tell

@@ -896,24 +896,26 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   });
 
   // Mount-GET resolver that returns one existing TMC bank (id 42, v3).
-  function makeExistingBankFetch(postHandler) {
+  function makeExistingBankFetch(postHandler, bankPatch = {}) {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url.includes('/diagnostic-banks?')) {
+        const bank = {
+          id: 42,
+          version: 3,
+          subBrand: 'tmc',
+          templateName: 'Apple',
+          isActive: true,
+          questionsJson: JSON.stringify({
+            questions: [{ id: 'q1', text: 'T?', type: 'single-choice', options: [{ value: 'a', label: 'A', weight: 1 }] }],
+          }),
+          scoringRulesJson: JSON.stringify({
+            method: 'weighted-sum',
+            bands: [{ minScore: 0, maxScore: 9, classification: 'level_1', label: 'L1', recommendedTier: 'entry' }],
+          }),
+          ...bankPatch,
+        };
         return Promise.resolve({
-          banks: [{
-            id: 42,
-            version: 3,
-            subBrand: 'tmc',
-            templateName: 'Apple',
-            isActive: true,
-            questionsJson: JSON.stringify({
-              questions: [{ id: 'q1', text: 'T?', type: 'single-choice', options: [{ value: 'a', label: 'A', weight: 1 }] }],
-            }),
-            scoringRulesJson: JSON.stringify({
-              method: 'weighted-sum',
-              bands: [{ minScore: 0, maxScore: 9, classification: 'level_1', label: 'L1', recommendedTier: 'entry' }],
-            }),
-          }],
+          banks: [bank],
         });
       }
       if (postHandler) return postHandler(url, opts);
@@ -921,6 +923,40 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     });
   }
 
+
+  it('Save and use normalizes legacy TMC sentinel scoring method without showing the weighted-sum error', async () => {
+    makeExistingBankFetch(
+      (url, opts) => {
+        if (url === '/api/travel/diagnostic-banks' && opts?.method === 'POST') {
+          return Promise.resolve({ id: 43, version: 4, subBrand: 'tmc' });
+        }
+        return Promise.resolve(null);
+      },
+      {
+        scoringRulesJson: JSON.stringify({
+          method: 'tmc-deterministic-engine',
+          bands: [{ minScore: 0, maxScore: 9, classification: 'level_1', label: 'L1', recommendedTier: 'entry' }],
+        }),
+      },
+    );
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText(/Question shown on form/i), {
+      target: { value: 'Updated question?' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save and use template/i }));
+
+    await waitFor(() => {
+      const createCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/diagnostic-banks' && o?.method === 'POST',
+      );
+      expect(createCall).toBeTruthy();
+      expect(JSON.parse(createCall[1].body).scoringRulesJson).toMatch(/"method": "weighted-sum"/);
+    });
+    expect(notifyObj.error).not.toHaveBeenCalledWith(
+      expect.stringMatching(/scoringRulesJson\.method must be "weighted-sum"/),
+    );
+  });
 
   it('Delete template button renders for an existing bank and uses the in-CRM confirm modal', async () => {
     makeExistingBankFetch();

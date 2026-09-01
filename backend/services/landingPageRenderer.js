@@ -1155,10 +1155,6 @@ function renderComponent(component, slug) {
               // Query string. Fallback when no redirect is present: show the
               // thank-you panel.
               var redirect=resp.body && resp.body.redirect;
-              if(redirect && redirect.type==='microsite' && redirect.url){
-                window.location.href=redirect.url;
-                return;
-              }
               form.querySelectorAll('input, button').forEach(function(el){el.style.display='none';});
               var thanksEl=document.getElementById('${blockId}_thanks');
               if(thanksEl){

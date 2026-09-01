@@ -16,7 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 
-// Stub the lazy-imported fallback so we don't load the full TripsLanding page.
+// Stub the fallback page so we don't load the full TripsLanding page.
 vi.mock('../pages/public/TripsLanding', () => ({
   default: () => <div data-testid="trips-fallback">FALLBACK TripsLanding</div>,
 }));
@@ -95,6 +95,16 @@ describe('<TripsResolver />', () => {
       headers: { Accept: 'application/json' },
     });
     expect(screen.queryByTestId('trips-fallback')).not.toBeInTheDocument();
+  });
+
+  it('shows the fallback immediately while the featured page request is pending', () => {
+    global.fetch.mockReturnValueOnce(new Promise(() => {}));
+
+    renderResolver();
+
+    expect(screen.getByTestId('trips-fallback')).toBeInTheDocument();
+    expect(screen.getByTestId('location-probe')).toHaveAttribute('data-path', '/trips');
+    expect(screen.queryByTestId('landing-page-renderer')).not.toBeInTheDocument();
   });
 
   it('falls back to the hardcoded TripsLanding on 404 NO_FEATURED_PAGE', async () => {

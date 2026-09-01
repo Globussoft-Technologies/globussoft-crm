@@ -44,6 +44,8 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { isUploadedS3Url, formatUploadFilename } from '../utils/uploadDisplay';
 import UploadedAssetChip from '../components/UploadedAssetChip';
+import ThemePaletteEditor, { THEME_COLOR_FIELDS, createThemeDraft } from '../components/landing-pages/ThemePaletteEditor';
+import { listWanderluxThemePresets, resolveWanderluxThemePreset } from '../utils/wanderluxThemePresets';
 
 const sectionStyle = {
   marginBottom: '1.2rem',
@@ -86,6 +88,78 @@ const subItemStyle = {
   marginBottom: '0.55rem',
   background: 'var(--bg-color)',
 };
+
+function themeSignature(theme) {
+  const draft = createThemeDraft(theme);
+  return THEME_COLOR_FIELDS.map((field) => draft[field.key]).join('|');
+}
+
+function findThemeChoice(theme, choices) {
+  const signature = themeSignature(theme);
+  return (choices || []).find((choice) => themeSignature(choice.theme) === signature) || null;
+}
+
+function ThemeChoiceCard({ choice, selected, onClick, disabled }) {
+  const theme = createThemeDraft(choice.theme);
+  const swatches = [theme.brandColor, theme.accentColor, theme.softBg, theme.lightBg].filter(Boolean);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={selected}
+      style={{
+        border: `1px solid ${selected ? 'rgba(184, 137, 59, 0.92)' : 'var(--border-color)'}`,
+        borderRadius: 12,
+        background: selected ? 'rgba(184, 137, 59, 0.08)' : 'rgba(255,255,255,0.6)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        padding: '0.7rem',
+        textAlign: 'left',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.55rem',
+        boxShadow: selected ? '0 0 0 1px rgba(184, 137, 59, 0.24), 0 12px 24px rgba(15, 23, 42, 0.08)' : 'none',
+        transition: 'all 0.18s ease',
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          height: '52px',
+          borderRadius: 10,
+          background: `linear-gradient(135deg, ${theme.brandColor || '#123B63'}, ${theme.accentColor || '#D9A441'})`,
+          border: `1px solid ${theme.borderColor || 'rgba(255,255,255,0.08)'}`,
+        }}
+      />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+        <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>{choice.label}</div>
+        {selected && (
+          <span style={{ fontSize: '0.62rem', color: '#b8893b', background: 'rgba(184,137,59,0.1)', padding: '0.14rem 0.35rem', borderRadius: 999, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 700 }}>
+            Selected
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+        {choice.description}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${swatches.length || 1}, minmax(0, 1fr))`, gap: '0.25rem' }}>
+        {swatches.map((swatch) => (
+          <span
+            key={swatch}
+            aria-hidden="true"
+            style={{
+              height: '10px',
+              borderRadius: 999,
+              background: swatch,
+              border: '1px solid rgba(15, 23, 42, 0.06)',
+            }}
+          />
+        ))}
+      </div>
+    </button>
+  );
+}
 
 function TextField({ label, value, onChange, placeholder }) {
   return (
@@ -347,7 +421,7 @@ function Section({ id, title, openByDefault, children, open, setOpen }) {
   return (
     <div style={sectionStyle}>
       <div style={sectionTitleStyle}>
-        <span>{title}</span>
+        <h3 style={{ margin: 0, fontSize: 'inherit', fontWeight: 'inherit' }}>{title}</h3>
         <button
           type="button"
           onClick={() => setOpen({ ...open, [id]: !isOpen })}
@@ -1446,6 +1520,7 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
     investment: false, register: false, brochure: false, faqs: false,
     finalCta: false, footer: false, raw: false,
   });
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [syncingInvestment, setSyncingInvestment] = useState(false);
 
   // Helper: deep-set into a nested path. Build a new object each change so
@@ -1488,12 +1563,19 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
     }
   };
 
+  const subBrand = String(cfg.brand && cfg.brand.subBrand ? cfg.brand.subBrand : 'tmc').toLowerCase();
+  const seedTheme = cfg.theme && typeof cfg.theme === 'object'
+    ? cfg.theme
+    : resolveWanderluxThemePreset({ subBrand }).theme;
+  const themeChoices = listWanderluxThemePresets(subBrand);
+  const currentThemeChoice = findThemeChoice(seedTheme, themeChoices);
+
   return (
     <div style={{ padding: '1rem 1.4rem', background: 'var(--subtle-bg)', overflowY: 'auto', height: '100%' }}>
       <div style={{ marginBottom: '1rem' }}>
-        <h2 style={{ fontSize: '1.05rem', margin: '0 0 0.2rem' }}>Wanderlux editor</h2>
+        <h2 style={{ fontSize: '1.05rem', margin: '0 0 0.2rem' }}>Confirmed trip editor</h2>
         <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
-          Editing a <code style={{ background: 'var(--surface-color)', padding: '0 0.3rem', borderRadius: 3 }}>wanderlux-v1</code> page. Every field has an Upload button for media. Click Save (top-right) when done, then Preview.
+          Editing a <code style={{ background: 'var(--surface-color)', padding: '0 0.3rem', borderRadius: 3 }}>confirmed-trip</code> page. Every field has an Upload button for media. Click Save (top-right) when done, then Preview.
         </p>
       </div>
 
@@ -1507,6 +1589,89 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
         <TextField label="Brand name" value={cfg.brand && cfg.brand.name} onChange={(v) => setPath(['brand', 'name'], v)} placeholder="WANDERLUX" />
         <TextField label="Sub-brand" value={cfg.brand && cfg.brand.subBrand} onChange={(v) => setPath(['brand', 'subBrand'], v)} placeholder="TravelStall / TMC / RFU / VisaSure" />
         <TextField label="Brand mark (small glyph)" value={cfg.brand && cfg.brand.mark} onChange={(v) => setPath(['brand', 'mark'], v)} placeholder="✦  (optional)" />
+      </Section>
+
+      {/* ── THEME ── */}
+      <Section id="theme" title="Theme palette" openByDefault open={open} setOpen={setOpen}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.55rem' }}>
+          <div style={{ minWidth: 0 }}>
+            <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
+              Adjust the page colors directly here. Save the page when you’re done and the public render will keep the same palette.
+            </p>
+            <div style={{ marginTop: '0.35rem', fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+              Current template:{' '}
+              <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>
+                {currentThemeChoice ? currentThemeChoice.label : 'Custom palette'}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowTemplatePicker((current) => !current)}
+            aria-expanded={showTemplatePicker}
+            aria-controls="theme-template-picker"
+            style={{
+              border: '1px solid rgba(184, 137, 59, 0.32)',
+              background: showTemplatePicker ? 'rgba(184, 137, 59, 0.08)' : 'transparent',
+              color: '#b8893b',
+              borderRadius: 999,
+              padding: '0.42rem 0.75rem',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
+          >
+            Change template
+          </button>
+        </div>
+        {showTemplatePicker && (
+          <div
+            id="theme-template-picker"
+            style={{
+              border: '1px solid var(--border-color)',
+              borderRadius: 12,
+              padding: '0.85rem',
+              background: 'rgba(184, 137, 59, 0.04)',
+              marginBottom: '0.8rem',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.65rem', flexWrap: 'wrap', marginBottom: '0.65rem' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Choose a template
+                </div>
+                <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.45, marginTop: '0.2rem' }}>
+                  Pick a starting palette, then fine-tune the colors below if needed.
+                </div>
+              </div>
+              <span style={{ fontSize: '0.7rem', color: '#b8893b', background: 'rgba(184,137,59,0.1)', padding: '0.18rem 0.45rem', borderRadius: 999, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 700 }}>
+                {currentThemeChoice ? currentThemeChoice.label : 'Custom palette'}
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 170px), 1fr))', gap: '0.6rem' }}>
+              {themeChoices.map((choice) => (
+                <ThemeChoiceCard
+                  key={choice.id}
+                  choice={choice}
+                  selected={currentThemeChoice?.id === choice.id}
+                  onClick={() => setPath(['theme'], createThemeDraft(choice.theme))}
+                />
+              ))}
+            </div>
+            <div style={{ marginTop: '0.7rem', fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+              The selected palette is saved with the draft, and the builder opens with the same colors.
+            </div>
+          </div>
+        )}
+        <ThemePaletteEditor
+          title="Confirmed-trip colors"
+          description="Tweak the travel page palette without changing the content structure."
+          theme={seedTheme}
+          onChange={(nextTheme) => setPath(['theme'], nextTheme)}
+          note="These colors are persisted in the page JSON and are used by the confirmed-trip renderer."
+        />
       </Section>
 
       {/* ── HERO ── */}
@@ -1717,6 +1882,11 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
 
       {/* ── INVESTMENT (PRICING) ── */}
       <Section id="investment" title="Investment (pricing)" open={open} setOpen={setOpen}>
+        <CheckboxField
+          label="Enable payment collection"
+          value={cfg.investment && cfg.investment.payment && cfg.investment.payment.enabled}
+          onChange={(v) => setPath(['investment', 'payment'], { ...(cfg.investment && cfg.investment.payment ? cfg.investment.payment : {}), enabled: v })}
+        />
         {page && page.tripId && (
           <div style={{
             padding: '1rem',
@@ -1783,6 +1953,55 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
         <TextField label="Inclusions title" value={cfg.investment && cfg.investment.inclusionsTitle} onChange={(v) => setPath(['investment', 'inclusionsTitle'], v)} placeholder="Indicative Inclusions" />
         <TextField label="Inclusions list (comma separated)" value={(cfg.investment && Array.isArray(cfg.investment.inclusions) ? cfg.investment.inclusions.join(', ') : '')} onChange={(v) => setPath(['investment', 'inclusions'], v.split(',').map((s) => s.trim()).filter(Boolean))} placeholder="Airfare, Accommodation, …" />
         <TextArea label="Note" value={cfg.investment && cfg.investment.note} onChange={(v) => setPath(['investment', 'note'], v)} rows={2} />
+        {cfg.investment && cfg.investment.payment && cfg.investment.payment.enabled && (
+          <div style={{
+            marginTop: '0.85rem',
+            padding: '0.95rem',
+            border: '1px solid var(--border-color)',
+            borderRadius: 8,
+            background: 'rgba(255,255,255,0.52)',
+            display: 'grid',
+            gap: '0.8rem',
+          }}>
+            <TextField
+              label="Payment step title"
+              value={cfg.investment.payment.stepTitle}
+              onChange={(v) => setPath(['investment', 'payment', 'stepTitle'], v)}
+              placeholder="Secure payment"
+            />
+            <TextArea
+              label="Payment intro"
+              value={cfg.investment.payment.intro}
+              onChange={(v) => setPath(['investment', 'payment', 'intro'], v)}
+              rows={2}
+              placeholder="Choose how you would like to pay for this registration."
+            />
+            <TextField
+              label="Payment button label"
+              value={cfg.investment.payment.buttonLabel}
+              onChange={(v) => setPath(['investment', 'payment', 'buttonLabel'], v)}
+              placeholder="Pay & continue"
+            />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
+              <div>
+                <label style={labelStyle}>Default payment option</label>
+                <select
+                  style={inputStyle}
+                  value={cfg.investment.payment.defaultMode || 'installment'}
+                  onChange={(e) => setPath(['investment', 'payment', 'defaultMode'], e.target.value)}
+                >
+                  <option value="installment">Installment-wise payment</option>
+                  <option value="complete">Complete payment</option>
+                </select>
+              </div>
+              <CheckboxField
+                label="Allow complete payment"
+                value={cfg.investment.payment.allowCompletePayment !== false}
+                onChange={(v) => setPath(['investment', 'payment', 'allowCompletePayment'], v)}
+              />
+            </div>
+          </div>
+        )}
       </Section>
 
       {/* ── REGISTER ── */}

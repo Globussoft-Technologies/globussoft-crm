@@ -450,6 +450,37 @@ describe('<Trips /> — row rendering: status / link / dates / participants / pr
     const row2 = screen.getByText('TMC-GOA-2026-DPS-G8').closest('tr');
     expect(within(row2).getByText('School #5002')).toBeInTheDocument();
   });
+
+  it('renders the API-provided order so the newest trip stays at the top', async () => {
+    const newestTrip = makeTrip({
+      id: 999,
+      tripCode: 'TMC-NEW-2026-DELHI-G9',
+      destination: 'Delhi',
+      schoolContactId: 5004,
+      departDate: '2026-11-15T00:00:00.000Z',
+      returnDate: '2026-11-22T00:00:00.000Z',
+      pricePerStudent: 91000,
+      status: 'confirmed',
+      _count: { participants: 0, documentRequirements: 0 },
+      createdAt: '2026-08-28T10:00:00.000Z',
+    });
+    installFetchMock({
+      list: {
+        trips: [newestTrip, ...TRIPS_DEFAULT],
+        total: TRIPS_DEFAULT.length + 1,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    renderPage();
+
+    const firstTripLink = await screen.findByRole('link', { name: 'TMC-NEW-2026-DELHI-G9' });
+    expect(firstTripLink).toHaveAttribute('href', '/travel/trips/999');
+    expect(screen.getAllByRole('link', { name: /TMC-/i })[0]).toHaveAttribute(
+      'href',
+      '/travel/trips/999',
+    );
+  });
 });
 
 describe('<Trips /> — new-trip drawer + create POST', () => {

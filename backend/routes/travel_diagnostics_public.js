@@ -355,7 +355,7 @@ router.post(
       }
       assertValidSubBrand(subBrand);
 
-      const { answers, name, email, phone } = req.body || {};
+      const { answers, name, email, phone, catalogueInterest, interestOnly } = req.body || {};
 
       const tenant = await resolveTravelTenantBySlug(tenantSlug);
       if (!tenant) {
@@ -381,6 +381,70 @@ router.post(
         return res
           .status(404)
           .json({ error: "No active question bank", code: "BANK_NOT_FOUND" });
+      }
+
+      if (interestOnly) {
+        const safeInterest = catalogueInterest && typeof catalogueInterest === "object"
+          ? {
+              name: sanitizeText(String(catalogueInterest.name || "").trim()),
+              email: sanitizeText(String(catalogueInterest.email || "").trim()),
+              phone: sanitizeText(String(catalogueInterest.phone || "").trim()),
+              dates: sanitizeText(String(catalogueInterest.dates || "").trim()),
+              grades: sanitizeText(String(catalogueInterest.grades || "").trim()),
+              students: sanitizeText(String(catalogueInterest.students || "").trim()),
+              files: Array.isArray(catalogueInterest.files) ? catalogueInterest.files.map((file) => ({
+                id: sanitizeText(String(file?.id || file)),
+                name: sanitizeText(String(file?.name || file?.fileName || file)),
+                driveViewLink: sanitizeText(String(file?.driveViewLink || "")),
+              })) : [],
+            }
+          : null;
+        if (!safeInterest) return res.status(400).json({ error: "Catalogue interest details required", code: "INTEREST_REQUIRED" });
+        const cleanName = safeInterest.name;
+        const cleanEmail = safeInterest.email;
+        const cleanPhone = safeInterest.phone;
+        let contactId = null;
+        try {
+          const duplicate = await findDuplicateContactFull({
+            email: cleanEmail || null,
+            phone: cleanPhone || null,
+            tenantId: tenant.id,
+          });
+          contactId = duplicate?.contact?.id || null;
+        } catch (e) {
+          console.warn("[diag-public-form] catalogue contact dedup failed:", e.message);
+        }
+        if (!contactId) {
+          const contact = await prisma.contact.create({
+            data: {
+              tenantId: tenant.id,
+              name: cleanName,
+              email: cleanEmail,
+              phone: cleanPhone,
+              subBrand,
+              status: "Lead",
+              source: "Public catalogue interest",
+            },
+          });
+          contactId = contact.id;
+        }
+        const diag = await prisma.travelDiagnostic.create({
+          data: {
+            tenantId: tenant.id,
+            subBrand,
+            contactId,
+            questionBankId: bank.id,
+            questionsJson: JSON.stringify({ bankId: bank.id, bankVersion: bank.version }),
+            answersJson: JSON.stringify({ catalogueInterest: safeInterest }),
+            score: 0,
+            classification: "catalogue_interest",
+            classificationLabel: "Catalogue interest",
+            recommendedTier: "pending",
+            source: "public_catalogue_interest",
+            reportSlugToken: crypto.randomBytes(8).toString("hex"),
+          },
+        });
+        return res.status(201).json({ diagnosticId: diag.id, message: "Your catalogue interest has been submitted." });
       }
 
       // Validate identity fields against form config.
@@ -507,6 +571,22 @@ router.post(
         }
       }
 
+      const safeCatalogueInterest = catalogueInterest && typeof catalogueInterest === "object"
+        ? {
+            name: sanitizeText(String(catalogueInterest.name || "").trim()),
+            email: sanitizeText(String(catalogueInterest.email || "").trim()),
+            phone: sanitizeText(String(catalogueInterest.phone || "").trim()),
+            dates: sanitizeText(String(catalogueInterest.dates || "").trim()),
+            grades: sanitizeText(String(catalogueInterest.grades || "").trim()),
+            students: sanitizeText(String(catalogueInterest.students || "").trim()),
+            files: Array.isArray(catalogueInterest.files) ? catalogueInterest.files.map((id) => sanitizeText(String(id))) : [],
+          }
+        : null;
+
+      const storedAnswers = safeCatalogueInterest
+        ? { ...safeAnswers, catalogueInterest: safeCatalogueInterest }
+        : safeAnswers;
+
       const snapshot = JSON.stringify({
         bankId: bank.id,
         bankVersion: bank.version,
@@ -524,7 +604,7 @@ router.post(
           contactId,
           questionBankId: bank.id,
           questionsJson: snapshot,
-          answersJson: JSON.stringify(safeAnswers),
+          answersJson: JSON.stringify(storedAnswers),
           score: result.score,
           classification: result.classification,
           classificationLabel: result.classificationLabel,

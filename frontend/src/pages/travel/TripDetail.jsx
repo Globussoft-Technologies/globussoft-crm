@@ -45,14 +45,13 @@ const TABS = [
   // experience — the tab now surfaces BOTH the LandingPage (marketing
   // + registration draft collection) AND the Microsite (secure
   // operational portal). Tab key stays "microsite" for URL back-compat.
-  { key: "microsite", label: "Public Experience", icon: Globe },
 ];
 
 function buildLandingPagesReturnState(trip, tripState = {}) {
   return {
     returnTo: { label: "TMC Trips", path: `/travel/trips/${trip.id}?tab=overview` },
-    currentLabel: "Public experience",
-    currentPath: `/travel/trips/${trip.id}?tab=microsite`,
+    currentLabel: "Overview",
+    currentPath: `/travel/trips/${trip.id}?tab=overview`,
     backTo: tripState.backTo || "/travel/trips",
     backLabel: tripState.backLabel || "Trips",
     tripContext: {
@@ -102,7 +101,8 @@ export default function TripDetail() {
   const location = useLocation();
   const notify = useNotify();
   const requestedTab = location.state?.tab || new URLSearchParams(location.search).get("tab") || "overview";
-  const [tab, setTab] = useState(() => requestedTab);
+  const normalizedTab = requestedTab === "microsite" ? "overview" : requestedTab;
+  const [tab, setTab] = useState(() => normalizedTab);
   const [savedListUrl] = useState(getTripsListUrl);
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -128,8 +128,8 @@ export default function TripDetail() {
   }, [id]);
   useEffect(load, [load]);
   useEffect(() => {
-    setTab(requestedTab);
-  }, [requestedTab]);
+    setTab(normalizedTab);
+  }, [normalizedTab]);
 
 
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
@@ -184,11 +184,10 @@ export default function TripDetail() {
         })}
       </div>
 
-      {tab === "overview" && <OverviewTab trip={trip} onJump={setTab} />}
+      {tab === "overview" && <OverviewTab trip={trip} onJump={setTab} notify={notify} />}
       {tab === "participants" && <ParticipantsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "rooming" && <RoomingTab trip={trip} notify={notify} />}
       {tab === "payment" && <PaymentTab trip={trip} notify={notify} />}
-      {tab === "microsite" && <MicrositeTab trip={trip} onChange={load} notify={notify} />}
     </div>
   );
 }
@@ -200,7 +199,7 @@ export default function TripDetail() {
 // rollups) so the overview shows live trip health rather than 9 static
 // labels. Cards are clickable — clicking jumps to the relevant tab.
 
-function OverviewTab({ trip, onJump }) {
+function OverviewTab({ trip, onJump, notify }) {
   const [ops, setOps] = useState(null);
 
   // silent:true — ops-dashboard is an enhancement, not a requirement.
@@ -334,24 +333,7 @@ function OverviewTab({ trip, onJump }) {
       {/* Public Experience band — landing page + microsite live under
           one tab per decision #10; the Overview band keeps the existing
           status pill (driven by microsite presence) for back-compat. */}
-      <SummaryBand
-        icon={Globe}
-        title="Public Experience"
-        onClick={() => onJump?.("microsite")}
-        status={trip.microsite ? "Published" : "Not published"}
-        statusTone={trip.microsite ? "good" : "muted"}
-      >
-        {trip.microsite ? (
-          <div style={{ fontSize: 13, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
-            <Sparkles size={14} aria-hidden style={{ color: "var(--primary-color)" }} />
-            Public itinerary live at <code style={{ fontSize: 12, color: "var(--text-primary)" }}>{trip.microsite.subdomain || trip.microsite.publicUuid}</code>
-          </div>
-        ) : (
-          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-            Publish a public registration page that parents can use to sign their children up for this trip.
-          </div>
-        )}
-      </SummaryBand>
+      <LandingPageCard trip={trip} notify={notify} />
     </div>
   );
 }
@@ -2700,21 +2682,6 @@ async function generateItineraryHtml(trip, notify) {
 // existing MicrositeTab content (no UX changes); the landing-page
 // card is new and lets operators edit / preview / publish / copy URL
 // from one place.
-function MicrositeTab({ trip, onChange, notify }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <LandingPageCard trip={trip} notify={notify} />
-      <MicrositeCard trip={trip} onChange={onChange} notify={notify} />
-    </div>
-  );
-}
-
-function MicrositeCard({ trip, onChange, notify }) {
-  const ms = trip.microsite;
-  if (ms) return <MicrositeEditor trip={trip} ms={ms} onChange={onChange} notify={notify} />;
-  return <MicrositeCreate trip={trip} onChange={onChange} notify={notify} />;
-}
-
 // LandingPageCard — read-only summary + jump-out to the existing
 // Landing Pages module. Per operator feedback we do NOT create,
 // edit, AI-generate, or publish landing pages from this trip-detail
@@ -2752,9 +2719,19 @@ function LandingPageCard({ trip, notify }) {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div data-testid="landing-page-card">
-      <h3 style={{ margin: "0 0 12px", fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
+    <div
+      data-testid="landing-page-card"
+      style={!loading && !page ? {
+        border: "1px solid rgba(205, 117, 37, 0.55)",
+        borderRadius: 12,
+        padding: 14,
+        background: "linear-gradient(135deg, rgba(205,117,37,0.10), rgba(205,117,37,0.02))",
+        boxShadow: "0 8px 24px rgba(205, 117, 37, 0.10)",
+      } : undefined}
+    >
+      <h3 style={{ margin: "0 0 12px", fontSize: 15, display: "flex", alignItems: "center", gap: 8, color: !loading && !page ? "#B86620" : "inherit" }}>
         <Globe size={16} aria-hidden /> Landing page
+        {!loading && !page && <span style={{ marginLeft: "auto", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em" }}>Action needed</span>}
       </h3>
       {loading ? (
         <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>Loading…</div>
@@ -2773,12 +2750,11 @@ function LandingPageCard({ trip, notify }) {
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>
-              No landing page linked yet
+              No landing page created yet
             </div>
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-              Generate, edit, and publish landing pages in the Landing Pages module.
-              Then use the &ldquo;Link to TMC trip&rdquo; picker on the page&apos;s editor
-              to point it at <strong>{trip.tripCode}</strong>.
+              Create a landing page for participant registration, then link it to <strong>{trip.tripCode}</strong>.
+              Generate, edit, and publish everything from the Landing Pages module.
             </div>
           </div>
           <Link

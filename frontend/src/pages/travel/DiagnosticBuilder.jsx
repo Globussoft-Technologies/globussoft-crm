@@ -25,7 +25,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle, Check, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
-  Download, FileJson, Info, Lightbulb, Pencil, Plus, Save, Send, Settings, Trash2, Upload, X,
+  Download, FileJson, Info, Lightbulb, Pencil, Plus, Save, Settings, Trash2, Upload, X,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -250,6 +250,7 @@ export default function DiagnosticBuilder() {
     const errors = [];
     let q;
     let r;
+    let normalizedRJson = rJson;
     try {
       q = JSON.parse(qJson);
       if (!q || typeof q !== 'object' || !Array.isArray(q.questions) || q.questions.length === 0) {
@@ -262,13 +263,13 @@ export default function DiagnosticBuilder() {
       r = JSON.parse(rJson);
       if (!r || typeof r !== 'object' || !Array.isArray(r.bands) || r.bands.length === 0) {
         errors.push('scoringRulesJson must contain a non-empty "bands" array');
-      } else if (!r.method || r.method !== 'weighted-sum') {
-        errors.push('scoringRulesJson.method must be "weighted-sum" (Phase 1 only supports weighted-sum)');
+      } else if (r.method !== 'weighted-sum') {
+        normalizedRJson = JSON.stringify({ ...r, method: 'weighted-sum' }, null, 2);
       }
     } catch (e) {
       errors.push(`scoringRulesJson is not valid JSON: ${e.message}`);
     }
-    return { ok: errors.length === 0, errors };
+    return { ok: errors.length === 0, errors, normalizedRJson };
   };
 
   const onSaveAndUse = async () => {
@@ -276,6 +277,9 @@ export default function DiagnosticBuilder() {
     if (!result.ok) {
       notify.error(result.errors[0] || 'Fix validation errors before saving');
       return;
+    }
+    if (result.normalizedRJson !== rJson) {
+      setRJson(result.normalizedRJson);
     }
     const cleanTemplateName = String(templateName || '').trim();
     if (!cleanTemplateName) {
@@ -300,7 +304,7 @@ export default function DiagnosticBuilder() {
           subBrand,
           templateName: cleanTemplateName,
           questionsJson: qJson,
-          scoringRulesJson: rJson,
+          scoringRulesJson: result.normalizedRJson,
         }),
       });
       notify.success(
@@ -1179,11 +1183,11 @@ function uniqueKey(base, used) {
 function ScoringVisualEditor({ json, onChange, onSwitchToJson }) {
   const parsed = tryParse(json);
 
-  // Normalize missing `method` upfront so validation never fails on an
-  // unedited-but-otherwise-valid scoring JSON loaded from an existing bank.
+  // Normalize legacy/sentinel methods upfront because this editor saves
+  // through the generic weighted-sum diagnostic-bank endpoint.
   useEffect(() => {
-    if (parsed && Array.isArray(parsed.bands) && !parsed.method) {
-      onChange(JSON.stringify({ method: 'weighted-sum', ...parsed }, null, 2));
+    if (parsed && Array.isArray(parsed.bands) && parsed.method !== 'weighted-sum') {
+      onChange(JSON.stringify({ ...parsed, method: 'weighted-sum' }, null, 2));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1201,7 +1205,7 @@ function ScoringVisualEditor({ json, onChange, onSwitchToJson }) {
   }
 
   const bands = parsed.bands;
-  const method = parsed.method || 'weighted-sum';
+  const method = 'weighted-sum';
 
   const writeBands = (next) =>
     onChange(JSON.stringify({ ...parsed, method, bands: next }, null, 2));

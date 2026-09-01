@@ -827,7 +827,7 @@ describe('GET /api/travel/passport/.../view-url', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.url).toBe('https://signed.example.com/passport-ocr/portal-a.jpg');
-    expect(s3Service.getSignedUrl).toHaveBeenCalledWith('passport-ocr/portal-a.jpg', 300);
+    expect(s3Service.getSignedUrl).toHaveBeenCalledWith('passport-ocr/portal-a.jpg', 300, { provider: 'aws' });
   });
 
   test('USER role gets 403 RBAC_DENIED', async () => {
@@ -949,6 +949,6 @@ describe('DELETE /customer-travellers/:id/passport-extraction', () => {
       .delete('/api/travel/passport/customer-travellers/7/passport-extraction')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(200);
-    expect(s3Service.deleteFile).toHaveBeenCalledWith('passport-ocr/OLD.png');
+    expect(s3Service.deleteFile).toHaveBeenCalledWith('passport-ocr/OLD.png', { provider: 'aws' });
   });
 });

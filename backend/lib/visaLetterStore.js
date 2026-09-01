@@ -35,7 +35,7 @@ async function storeLetterPdf(buffer, opts = {}) {
       { contentDisposition: `inline; filename="${fileName}"` },
     );
     const key = s3Service.extractKeyFromUrl(url) || String(url || "").replace(/^undefined\//, "");
-    return { storage: "s3", url, key };
+    return { storage: s3Service.isOciUrl(url) ? "ocs" : "s3", url, key };
   }
 
   const dir = path.join(uploadDir, prefix);
@@ -53,8 +53,8 @@ async function storeLetterPdf(buffer, opts = {}) {
 async function readLetterBuffer(descriptor) {
   if (!descriptor || !descriptor.key) return null;
   try {
-    if (descriptor.storage === "s3") {
-      const { stream } = await s3Service.getObjectStream(descriptor.key);
+    if (descriptor.storage === "s3" || descriptor.storage === "ocs") {
+      const { stream } = await s3Service.getObjectStream(descriptor.key, { provider: descriptor.storage === "s3" ? "aws" : "oci" });
       if (!stream) return null;
       const chunks = [];
       for await (const chunk of stream) chunks.push(chunk);
@@ -72,8 +72,8 @@ async function readLetterBuffer(descriptor) {
 async function removeLetter(descriptor) {
   if (!descriptor || !descriptor.key) return;
   try {
-    if (descriptor.storage === "s3") {
-      await s3Service.deleteFile(descriptor.key);
+    if (descriptor.storage === "s3" || descriptor.storage === "ocs") {
+      await s3Service.deleteFile(descriptor.key, { provider: descriptor.storage === "s3" ? "aws" : "oci" });
       return;
     }
     const parts = String(descriptor.key).split(/[\\/]+/).map((p) => path.basename(p)).filter(Boolean);

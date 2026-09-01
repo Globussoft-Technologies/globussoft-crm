@@ -52,7 +52,7 @@ describe("passportFileStore.resolveViewUrl", () => {
       { storage: "s3", imageKey: "passport-ocr/x.png", imageUrl: "https://b/passport-ocr/x.png" },
       120,
     );
-    expect(s3Service.getSignedUrl).toHaveBeenCalledWith("passport-ocr/x.png", 120);
+    expect(s3Service.getSignedUrl).toHaveBeenCalledWith("passport-ocr/x.png", 120, { provider: "aws" });
     expect(url).toContain("signed.example");
   });
 

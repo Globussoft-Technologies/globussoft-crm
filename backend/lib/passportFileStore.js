@@ -33,7 +33,7 @@ async function storeScan(buffer, mimeType) {
   const name = `${crypto.randomUUID()}${ext}`;
   if (s3Service.BUCKET_NAME) {
     const url = await s3Service.uploadFile(buffer, name, mimeType, "passport-ocr");
-    return { storage: "s3", url, key: s3Service.extractKeyFromUrl(url), imageFilename: null };
+    return { storage: s3Service.isOciUrl(url) ? "ocs" : "s3", url, key: s3Service.extractKeyFromUrl(url), imageFilename: null };
   }
   ensureDir();
   fs.writeFileSync(path.join(uploadDir, name), buffer);
@@ -44,8 +44,8 @@ async function storeScan(buffer, mimeType) {
 async function removeScan(descriptor) {
   if (!descriptor || !descriptor.key) return;
   try {
-    if (descriptor.storage === "s3") {
-      await s3Service.deleteFile(descriptor.key);
+    if (descriptor.storage === "s3" || descriptor.storage === "ocs") {
+      await s3Service.deleteFile(descriptor.key, { provider: descriptor.storage === "s3" ? "aws" : "oci" });
     } else {
       // path.basename strips directory components so a poisoned key cannot
       // make us unlink outside uploadDir.
@@ -96,7 +96,7 @@ function verifyDiskToken(name, token) {
 function inferStorage(item) {
   if (item && item.storage) return item.storage;
   const url = (item && (item.imageUrl || item.url)) || "";
-  if (s3Service.extractKeyFromUrl(url)) return "s3";
+  if (s3Service.extractKeyFromUrl(url)) return s3Service.isOciUrl(url) ? "ocs" : "s3";
   return "disk";
 }
 
@@ -106,10 +106,10 @@ function inferStorage(item) {
 // requester.
 async function resolveViewUrl(item, ttlSec = DEFAULT_VIEW_TTL_SEC) {
   if (!item) return null;
-  if (inferStorage(item) === "s3") {
+  if (["s3", "ocs"].includes(inferStorage(item))) {
     const key = item.imageKey || s3Service.extractKeyFromUrl(item.imageUrl || item.url || "");
     if (!key) return null;
-    return s3Service.getSignedUrl(key, ttlSec);
+    return s3Service.getSignedUrl(key, ttlSec, { provider: inferStorage(item) === "s3" ? "aws" : "oci" });
   }
   const name = path.basename(item.imageFilename || item.imageUrl || item.url || "");
   return name ? signDiskUrl(name, ttlSec) : null;
@@ -120,7 +120,7 @@ async function resolveViewUrl(item, ttlSec = DEFAULT_VIEW_TTL_SEC) {
 // shape ({ imageFilename }).
 function descriptorFromEnvelope(env) {
   if (!env) return null;
-  if (env.storage === "s3" && env.imageKey) return { storage: "s3", key: env.imageKey };
+  if (["s3", "ocs"].includes(env.storage) && env.imageKey) return { storage: env.storage, key: env.imageKey };
   if (env.imageFilename) return { storage: "disk", key: env.imageFilename };
   return null;
 }

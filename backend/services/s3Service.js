@@ -1,9 +1,10 @@
 /**
  * AWS S3 Service — Image & File Upload Management
  *
- * Handles uploading files to AWS S3 bucket.
- * All image uploads across the CRM (contacts, leads, products, prescriptions, etc.)
- * should use this service.
+ * Storage compatibility service. New uploads use OCI Object Storage when OCI_*
+ * credentials are configured; AWS S3 remains supported only for legacy objects
+ * and deployments that have not yet supplied OCI credentials. Keeping this
+ * module's public API stable avoids changing route contracts throughout CRM.
  *
  * Exported functions:
  *   uploadFile(fileBody, fileName, mimeType, subfolder)
@@ -25,6 +26,7 @@ const {
 const {
   getSignedUrl: presignerGetSignedUrl,
 } = require("@aws-sdk/s3-request-presigner");
+const ociService = require('./ociObjectStorageService');
 
 const s3Client = new S3Client({
   region: process.env.AWS_REGION || "us-east-1",
@@ -34,11 +36,17 @@ const s3Client = new S3Client({
   },
 });
 
-const BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME;
-const S3_BASE_URL = process.env.AWS_S3_URL;
+const AWS_BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME;
+const AWS_S3_BASE_URL = process.env.AWS_S3_URL;
+// These exported names are retained for all current callers.  With OCI
+// configured they describe the active object store, not AWS.
+const BUCKET_NAME = ociService.isConfigured() ? ociService.BUCKET_NAME : AWS_BUCKET_NAME;
+const S3_BASE_URL = ociService.isConfigured()
+  ? ociService.buildObjectUrl('').replace(/\/$/, '')
+  : AWS_S3_BASE_URL;
 
 if (!BUCKET_NAME) {
-  console.warn("⚠️  AWS_S3_BUCKET_NAME not configured. S3 uploads will fail.");
+  console.warn("⚠️  Object storage is not configured. Uploads will fail.");
 }
 
 /**
@@ -60,6 +68,9 @@ async function uploadFile(
   subfolder = "uploads",
   opts = {},
 ) {
+  if (ociService.isConfigured()) {
+    return ociService.uploadFile(fileBody, fileName, mimeType, subfolder, opts);
+  }
   if (!BUCKET_NAME) {
     throw new Error(
       "S3 bucket not configured. Set AWS_S3_BUCKET_NAME env var.",
@@ -130,7 +141,8 @@ async function uploadImage(
  * @param {string} fileKey - S3 file key (without bucket URL)
  * @returns {Promise<void>}
  */
-async function deleteFile(fileKey) {
+async function deleteFile(fileKey, opts = {}) {
+  if (ociService.isConfigured() && opts.provider !== 'aws') return ociService.deleteFile(fileKey);
   if (!BUCKET_NAME) {
     throw new Error("S3 bucket not configured.");
   }
@@ -154,7 +166,8 @@ async function deleteFile(fileKey) {
  * @param {number} expiresIn - Expiration in seconds (default: 3600 = 1 hour)
  * @returns {Promise<string>} - Signed URL
  */
-async function getSignedUrl(fileKey, expiresIn = 3600) {
+async function getSignedUrl(fileKey, expiresIn = 3600, opts = {}) {
+  if (ociService.isConfigured() && opts.provider !== 'aws') return ociService.getSignedUrl(fileKey, expiresIn);
   if (!BUCKET_NAME) {
     throw new Error("S3 bucket not configured.");
   }
@@ -179,7 +192,8 @@ async function getSignedUrl(fileKey, expiresIn = 3600) {
  * @param {string} fileKey - S3 file key
  * @returns {Promise<{ stream: import('stream').Readable, contentType?: string, contentLength?: number, contentDisposition?: string, lastModified?: Date }>}
  */
-async function getObjectStream(fileKey) {
+async function getObjectStream(fileKey, opts = {}) {
+  if (ociService.isConfigured() && opts.provider !== 'aws') return ociService.getObjectStream(fileKey);
   if (!BUCKET_NAME) {
     throw new Error("S3 bucket not configured.");
   }
@@ -210,10 +224,13 @@ async function getObjectStream(fileKey) {
  * @returns {string} - S3 key
  */
 function extractKeyFromUrl(s3Url) {
-  if (!s3Url || !S3_BASE_URL) return null;
+  if (!s3Url) return null;
+  const ociKey = ociService.extractKeyFromUrl(s3Url);
+  if (ociKey) return ociKey;
+  if (!AWS_S3_BASE_URL) return null;
 
   // Normalize URLs to handle trailing slashes
-  const normalizedBaseUrl = S3_BASE_URL.replace(/\/$/, '');
+  const normalizedBaseUrl = AWS_S3_BASE_URL.replace(/\/$/, '');
   const normalizedUrl = s3Url.replace(/\/$/, '');
 
   if (normalizedUrl.startsWith(normalizedBaseUrl + '/')) {
@@ -232,4 +249,8 @@ module.exports = {
   s3Client,
   BUCKET_NAME,
   S3_BASE_URL,
+  AWS_BUCKET_NAME,
+  AWS_S3_BASE_URL,
+  isConfigured: () => Boolean(BUCKET_NAME),
+  isOciUrl: ociService.isOciUrl,
 };

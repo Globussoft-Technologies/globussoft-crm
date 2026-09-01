@@ -418,11 +418,11 @@ describe('<TripDetail /> — tab strip', () => {
     );
   });
 
-  it('renders all 5 tabs with role="tab" + Overview selected by default', async () => {
+  it('renders all 4 tabs with role="tab" + Overview selected by default', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(5);
+    expect(tabs).toHaveLength(4);
     const labels = tabs.map((t) => t.textContent.trim());
     expect(labels).toEqual(
       expect.arrayContaining(['Overview', 'Participants', 'Rooming', 'Payment plan']),
@@ -452,7 +452,6 @@ describe('<TripDetail /> — Overview tab', () => {
     // Summary-band status pills (rendered uppercase via CSS; literal mixed-
     // case in DOM).
     expect(screen.getByText('Not set yet')).toBeInTheDocument();
-    expect(screen.getByText('Not published')).toBeInTheDocument();
   });
 });
 

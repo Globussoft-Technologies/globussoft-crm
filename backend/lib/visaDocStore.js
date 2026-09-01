@@ -43,7 +43,7 @@ async function storeDoc(buffer, mimeType) {
   const name = `${crypto.randomUUID()}${ext}`;
   if (s3Service.BUCKET_NAME) {
     const url = await s3Service.uploadFile(buffer, name, mimeType, "visa-docs");
-    return { storage: "s3", url, key: s3Service.extractKeyFromUrl(url) };
+    return { storage: s3Service.isOciUrl(url) ? "ocs" : "s3", url, key: s3Service.extractKeyFromUrl(url) };
   }
   ensureDir();
   fs.writeFileSync(path.join(uploadDir, name), buffer);
@@ -54,8 +54,8 @@ async function storeDoc(buffer, mimeType) {
 async function removeDoc(descriptor) {
   if (!descriptor || !descriptor.key) return;
   try {
-    if (descriptor.storage === "s3") {
-      await s3Service.deleteFile(descriptor.key);
+    if (descriptor.storage === "s3" || descriptor.storage === "ocs") {
+      await s3Service.deleteFile(descriptor.key, { provider: descriptor.storage === "s3" ? "aws" : "oci" });
     } else {
       // path.basename strips directory components so a poisoned key
       // (e.g. "../../etc/x") can never make us unlink outside uploadDir.
@@ -105,7 +105,9 @@ function verifyDiskToken(name, token) {
 // attachmentStorage was never stamped (infer from the URL shape).
 function inferStorage(item) {
   if (item && item.attachmentStorage) return item.attachmentStorage;
-  return /^https?:\/\//i.test((item && item.attachmentUrl) || "") ? "s3" : "disk";
+  const url = (item && item.attachmentUrl) || "";
+  if (!/^https?:\/\//i.test(url)) return "disk";
+  return s3Service.isOciUrl(url) ? "ocs" : "s3";
 }
 
 // Resolve a checklist item to a short-lived, openable URL — a signed S3 URL for
@@ -113,10 +115,10 @@ function inferStorage(item) {
 // when the item has no stored file. Call ONLY after authorizing the requester.
 async function resolveViewUrl(item, ttlSec = DEFAULT_VIEW_TTL_SEC) {
   if (!item || !item.attachmentUrl) return null;
-  if (inferStorage(item) === "s3") {
+  if (["s3", "ocs"].includes(inferStorage(item))) {
     const key = item.attachmentKey || s3Service.extractKeyFromUrl(item.attachmentUrl);
     if (!key) return null;
-    return s3Service.getSignedUrl(key, ttlSec);
+    return s3Service.getSignedUrl(key, ttlSec, { provider: inferStorage(item) === "s3" ? "aws" : "oci" });
   }
   const name = path.basename(item.attachmentKey || item.attachmentUrl || "");
   return name ? signDiskUrl(name, ttlSec) : null;
@@ -128,8 +130,8 @@ async function resolveViewUrl(item, ttlSec = DEFAULT_VIEW_TTL_SEC) {
 async function readDocBuffer(descriptor) {
   if (!descriptor || !descriptor.key) return null;
   try {
-    if (descriptor.storage === "s3") {
-      const { stream } = await s3Service.getObjectStream(descriptor.key);
+    if (descriptor.storage === "s3" || descriptor.storage === "ocs") {
+      const { stream } = await s3Service.getObjectStream(descriptor.key, { provider: descriptor.storage === "s3" ? "aws" : "oci" });
       if (!stream) return null;
       const chunks = [];
       for await (const chunk of stream) chunks.push(chunk);

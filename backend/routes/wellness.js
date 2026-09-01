@@ -4193,7 +4193,7 @@ router.delete("/visits/:id/photos", phiWriteGate, async (req, res) => {
     const next = existing.filter((u) => u !== url);
 
     // Delete from S3 if it's an S3 URL
-    if (url && url.includes(process.env.AWS_S3_URL || "s3")) {
+    if (url && extractKeyFromUrl(url)) {
       try {
         const fileKey = extractKeyFromUrl(url);
         if (fileKey) {

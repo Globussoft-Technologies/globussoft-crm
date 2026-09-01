@@ -29,11 +29,9 @@ function isS3Url(url) {
   if (!url || typeof url !== 'string') return false;
   // Native OCI URL produced by ociService.
   if (ociService.isOciUrl(url)) return true;
-  // Legacy S3 URL.
-  if (!s3Service.S3_BASE_URL) return false;
-  const normalizedBaseUrl = s3Service.S3_BASE_URL.replace(/\/$/, '');
-  const normalizedUrl = url.replace(/\/$/, '');
-  return normalizedUrl.startsWith(normalizedBaseUrl + '/') || normalizedUrl === normalizedBaseUrl;
+  // Legacy S3 URL. The shared compatibility service retains the old AWS base
+  // even while OCI is active for new writes.
+  return Boolean(s3Service.extractKeyFromUrl(url));
 }
 
 function tenantPrefix(tenantId, category) {

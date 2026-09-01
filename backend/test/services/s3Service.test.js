@@ -27,6 +27,14 @@ process.env.AWS_S3_URL = 'https://test-bucket.s3.us-east-1.amazonaws.com';
 process.env.AWS_REGION = 'us-east-1';
 process.env.AWS_ACCESS_KEY_ID = 'AKIATEST';
 process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+// This suite verifies the legacy-compatibility path. OCI selection has its
+// own service tests and must not inherit developer-machine OCI credentials.
+process.env.OCI_ACCESS_KEY_ID = '';
+process.env.OCI_SECRET_ACCESS_KEY = '';
+process.env.OCI_REGION = '';
+process.env.OCI_BUCKET_NAME = '';
+process.env.OCI_NAMESPACE = '';
+process.env.OCI_ENDPOINT_URL = '';
 
 const clientS3 = requireCjs('@aws-sdk/client-s3');
 const presigner = requireCjs('@aws-sdk/s3-request-presigner');

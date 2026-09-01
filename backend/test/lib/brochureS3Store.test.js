@@ -16,6 +16,11 @@ const require = createRequire(import.meta.url);
 // we need to mock via the mutable CJS exports object.
 process.env.AWS_S3_BUCKET_NAME = 'globuscrm-dev-storage';
 process.env.AWS_S3_URL = 'https://globuscrm-dev-storage.s3.ap-south-1.amazonaws.com';
+process.env.OCI_ACCESS_KEY_ID = '';
+process.env.OCI_SECRET_ACCESS_KEY = '';
+process.env.OCI_REGION = '';
+process.env.OCI_BUCKET_NAME = '';
+process.env.OCI_NAMESPACE = '';
 
 const s3Service = require('../../services/s3Service.js');
 const brochureS3Store = await import('../../lib/brochureS3Store.js');

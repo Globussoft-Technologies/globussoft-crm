@@ -75,7 +75,7 @@ try { s3Service = require("../services/s3Service"); } catch { /* optional */ }
 
 async function persistOutboundMedia({ tenantId, buffer, filename, mimeType }) {
   const safeName = `${crypto.randomUUID()}-${String(filename || "file").replace(/[^\w.-]/g, "_")}`;
-  if (s3Service && process.env.AWS_S3_BUCKET_NAME) {
+  if (s3Service && s3Service.BUCKET_NAME) {
     try { return await s3Service.uploadFile(buffer, safeName, mimeType, `whatsapp/${tenantId}/wa-web`); }
     catch (e) { console.error(`[whatsapp-web] outbound media S3 failed (local fallback): ${e.message}`); }
   }

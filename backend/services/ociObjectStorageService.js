@@ -19,6 +19,7 @@ const {
   DeleteObjectCommand,
   GetObjectCommand,
 } = require('@aws-sdk/client-s3');
+const { getSignedUrl: presignerGetSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 const ACCESS_KEY_ID = (process.env.OCI_ACCESS_KEY_ID || '').trim();
 const SECRET_ACCESS_KEY = (process.env.OCI_SECRET_ACCESS_KEY || '').trim();
@@ -157,6 +158,20 @@ async function getObjectStream(fileKey) {
   }
 }
 
+async function getSignedUrl(fileKey, expiresIn = 3600) {
+  if (!isConfigured()) throw new Error('OCI Object Storage is not configured');
+  try {
+    return await presignerGetSignedUrl(
+      getClient(),
+      new GetObjectCommand({ Bucket: BUCKET_NAME, Key: fileKey }),
+      { expiresIn },
+    );
+  } catch (error) {
+    console.error('OCI signed URL error:', error.message);
+    throw new Error(`Failed to generate signed URL from OCI: ${error.message}`);
+  }
+}
+
 module.exports = {
   isConfigured,
   getEndpoint,
@@ -167,6 +182,7 @@ module.exports = {
   uploadImage,
   deleteFile,
   getObjectStream,
+  getSignedUrl,
   BUCKET_NAME,
   NAMESPACE,
   REGION,

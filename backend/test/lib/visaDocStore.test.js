@@ -58,7 +58,7 @@ describe("visaDocStore.resolveViewUrl", () => {
       { attachmentStorage: "s3", attachmentKey: "visa-docs/x.png", attachmentUrl: "https://b/visa-docs/x.png" },
       120,
     );
-    expect(s3Service.getSignedUrl).toHaveBeenCalledWith("visa-docs/x.png", 120);
+    expect(s3Service.getSignedUrl).toHaveBeenCalledWith("visa-docs/x.png", 120, { provider: "aws" });
     expect(url).toContain("signed.example");
   });
 
@@ -105,7 +105,7 @@ describe("visaDocStore.readDocBuffer", () => {
 
     const result = await store.readDocBuffer({ storage: "s3", key: "visa-docs/test.pdf" });
 
-    expect(s3Service.getObjectStream).toHaveBeenCalledWith("visa-docs/test.pdf");
+    expect(s3Service.getObjectStream).toHaveBeenCalledWith("visa-docs/test.pdf", { provider: "aws" });
     expect(Buffer.isBuffer(result)).toBe(true);
     expect(result.toString()).toBe("hello world");
   });

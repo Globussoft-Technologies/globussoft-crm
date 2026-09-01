@@ -926,8 +926,8 @@ router.post(
       if (!result.ok) {
         // Best-effort: delete the orphaned S3 object since Meta rejected the send
         try {
-          const key = s3Url.replace(`${process.env.AWS_S3_URL || ""}/`, "");
-          await s3Service.deleteFile(key);
+          const key = s3Service.extractKeyFromUrl(s3Url);
+          if (key) await s3Service.deleteFile(key);
         } catch {
           /* swallow */
         }
@@ -1199,12 +1199,10 @@ router.delete("/messages/:id", verifyToken, async (req, res) => {
     } else if (msg.mediaUrl.startsWith("meta:")) {
       s3Reason = "meta_placeholder_not_yet_downloaded";
     } else {
-      const bucket = process.env.AWS_S3_BUCKET_NAME || "";
-      const envBase = process.env.AWS_S3_URL || "";
-      let key = null;
-      if (envBase && msg.mediaUrl.startsWith(envBase)) {
-        key = msg.mediaUrl.replace(`${envBase}/`, "");
-      } else if (bucket && msg.mediaUrl.includes(`/${bucket}.s3.`)) {
+      const bucket = s3Service.BUCKET_NAME || "";
+      const envBase = s3Service.S3_BASE_URL || "";
+      let key = s3Service.extractKeyFromUrl(msg.mediaUrl);
+      if (!key && bucket && msg.mediaUrl.includes(`/${bucket}.s3.`)) {
         // virtual-hosted: extract path after the host
         try {
           const u = new URL(msg.mediaUrl);
@@ -1212,7 +1210,7 @@ router.delete("/messages/:id", verifyToken, async (req, res) => {
         } catch {
           /* invalid url */
         }
-      } else if (bucket && msg.mediaUrl.includes(`/${bucket}/`)) {
+      } else if (!key && bucket && msg.mediaUrl.includes(`/${bucket}/`)) {
         // path-style: https://s3.region.amazonaws.com/<bucket>/<key>
         try {
           const u = new URL(msg.mediaUrl);

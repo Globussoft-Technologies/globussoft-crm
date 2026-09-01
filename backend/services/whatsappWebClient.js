@@ -1437,7 +1437,7 @@ async function persistInboundMedia(tenantId, msg) {
     const baseName = media.filename || `wa-${Date.now()}.${ext}`;
     let s3 = null;
     try { s3 = require("./s3Service"); } catch { /* optional */ }
-    if (s3 && process.env.AWS_S3_BUCKET_NAME) {
+    if (s3 && s3.BUCKET_NAME) {
       try {
         return { url: await s3.uploadFile(buffer, baseName, mime, `whatsapp/${tenantId}/wa-web`), mime, kind: mime.split("/")[0] };
       } catch (e) {

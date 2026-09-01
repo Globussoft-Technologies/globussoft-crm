@@ -307,7 +307,7 @@ export default function Drugs() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-    const bodyRows = drugs.map((d, index) => (
+  const bodyRows = drugs.map((d, index) => (
     <div
       key={d.id}
       style={{
@@ -387,6 +387,9 @@ export default function Drugs() {
           gap: '0.9rem',
           padding: '1.25rem',
           borderRadius: 18,
+          // background: 'transparent',
+           border: 'none',
+           boxShadow: 'none',
         }}
       >
         <PageHeader
@@ -429,7 +432,7 @@ export default function Drugs() {
               gap: '0.5rem',
               padding: '0 0.75rem',
               background: 'var(--bg-elev, rgba(255,255,255,0.04))',
-              border: '1px solid var(--border-soft, rgba(255,255,255,0.12))',
+              border: '1px solid rgba(68, 62, 62, 0.35)',
               borderRadius: 8,
             }}
           >
@@ -524,7 +527,7 @@ export default function Drugs() {
               style={{
                 gridColumn: '1 / -1',
                 padding: '0.6rem',
-                background: 'var(--primary-color, var(--accent-color))',
+                background: 'rgb(39, 43, 39)',
                 color: '#fff',
                 border: 'none',
                 borderRadius: 6,
@@ -553,6 +556,11 @@ export default function Drugs() {
               paddingRight: '0.2rem',
               display: 'flex',
               flexDirection: 'column',
+              background: 'var(--bg-elev, rgba(255, 255, 255, 0.035))',
+              border: '1px solid rgba(128, 128, 128, 0.22)',
+              borderRadius: '12px',
+              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.06)',
+              overflowX: 'hidden',
             }}
           >
             <div

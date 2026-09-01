@@ -11,6 +11,7 @@ import { formatDate } from '../../../../utils/date';
 // and surfaced here so staff can copy it and share it with the patient.
 export default function LogVisitTab({ patient, services, doctors: _doctors, onSaved }) {
   const notify = useNotify();
+  const [amountError, setAmountError] = useState('');
   const [selectedVisitId, setSelectedVisitId] = useState(null);
   const [notes, setNotes] = useState('');
   const [consumptionRules, setConsumptionRules] = useState([]);
@@ -586,18 +587,43 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
             <input
               type="number"
               min="0"
+              defaultValue=""
+
               step="1"
-              value={amountCharged}
+              // value={amountCharged}
               onChange={(e) => {
-                setAmountCharged(e.target.value);
+                const value = e.target.value;
+                const maxAmount = Number(selectedService?.basePrice || 0);
+
+
+                if (value !== '' && Number(value) > maxAmount) {
+      setAmountError(`Amount cannot be more than ₹${maxAmount}`);
+                } else {
+      setAmountError('');
+                  setAmountCharged(value);
+                }
+
+                //  setAmountCharged(value);
                 setAppliedCoupon(null);
                 setPreviewBreakdown(null);
-                setCouponError('');
+                 setCouponError('');
                 setBillingBreakdown(null);
               }}
               placeholder="Enter total treatment bill..."
               style={{ width: '100%', padding: '0.55rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' }}
             />
+            {amountError && (
+  <div
+    style={{
+      fontSize: '0.75rem',
+      color: '#ef4444',
+      marginTop: '0.3rem'
+    }}
+  >
+    {amountError}
+  </div>
+)}
+
             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
               Edit the final bill (add medicines, extra services, etc.). Defaults to the service price.
             </div>

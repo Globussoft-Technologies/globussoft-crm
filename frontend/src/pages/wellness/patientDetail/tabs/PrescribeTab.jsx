@@ -16,7 +16,27 @@ const INITIAL_RX = {
   // no stated validity, which is NOT the same as expired.
   validityDays: '',
   instructions: '',
+  // Structured clinical narrative. These are real Prescription columns.
+  // They were previously recoverable only by a clinician knowing to type
+  // "Diagnosis: ..." as a line inside the free-text Instructions box — a
+  // parser built for Zylu-imported records — so on every prescription
+  // written here they rendered as an em dash with no way to fill them.
+  chiefComplaint: '',
+  diagnosis: '',
+  investigations: '',
+  advice: '',
 };
+
+// Clinical narrative fields, in the order a clinician works through them.
+// `key` is the Prescription column name, the request-body key and the
+// parseRxInstructions output key, so the form, the API, the preview modal and
+// the PDF all agree without a mapping table in between.
+const CLINICAL_FIELDS = [
+  { key: 'chiefComplaint', label: 'Chief complaint', placeholder: 'What the patient came in with' },
+  { key: 'diagnosis', label: 'Diagnosis', placeholder: 'Clinical impression' },
+  { key: 'investigations', label: 'Investigations', placeholder: 'Tests ordered or reviewed' },
+  { key: 'advice', label: 'Advice / referrals', placeholder: 'Lifestyle advice, follow-up, onward referral' },
+];
 
 // Pull the leading numeric value out of a free-text default like "1 capsule" or
 // "5 days" so we can pre-fill the numeric dosage / frequency / duration fields.
@@ -215,7 +235,7 @@ export default function PrescribeTab({ patient, onSaved }) {
   const notify = useNotify();
   const initial = { ...INITIAL_RX, visitId: patient.visits[0]?.id || '' };
   const [draft, setDraft, isDirty, clearDraft] = useFormAutosave(`rx-${patient.id}`, initial);
-  const { visitId, drugs, validityDays, instructions } = draft;
+  const { visitId, drugs, validityDays, instructions, chiefComplaint, diagnosis, investigations, advice } = draft;
   const [saving, setSaving] = useState(false);
   const [openRx, setOpenRx] = useState(null);
   const [showAllPastRx, setShowAllPastRx] = useState(false);
@@ -227,6 +247,7 @@ export default function PrescribeTab({ patient, onSaved }) {
 
   const setVisitId = (v) => setDraft((s) => ({ ...s, visitId: v }));
   const setInstructions = (v) => setDraft((s) => ({ ...s, instructions: v }));
+  const setClinical = (key, v) => setDraft((s) => ({ ...s, [key]: v }));
   const setValidityDays = (v) => setDraft((s) => ({ ...s, validityDays: v }));
   const setDrug = (i, k, v) => {
     setDraft((s) => {
@@ -289,6 +310,10 @@ export default function PrescribeTab({ patient, onSaved }) {
           // validity") rather than coercing an empty string to 0.
           ...(validityDays ? { validityDays: Number(validityDays) } : {}),
           instructions,
+          chiefComplaint,
+          diagnosis,
+          investigations,
+          advice,
         }),
       });
       clearDraft();
@@ -471,9 +496,41 @@ export default function PrescribeTab({ patient, onSaved }) {
           </div>
         </div>
 
+        {/* Clinical narrative. Each maps 1:1 to a Prescription column and to a
+            row on the preview + PDF; a blank one is omitted from both rather
+            than printed as an em dash. Laid out in the same auto-fit grid the
+            rest of this form uses, so it reflows on a narrow viewport instead
+            of forcing a horizontal scroll. */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
+            gap: '0.75rem',
+            marginBottom: '1rem',
+          }}
+        >
+          {CLINICAL_FIELDS.map(({ key, label, placeholder }) => (
+            <div key={key}>
+              <label style={labelStyle} htmlFor={`rx-${key}`}>{label}</label>
+              <textarea
+                id={`rx-${key}`}
+                value={draft[key]}
+                onChange={(e) => setClinical(key, e.target.value)}
+                rows={2}
+                placeholder={placeholder}
+                style={{ ...inputStyle, resize: 'vertical' }}
+              />
+            </div>
+          ))}
+        </div>
+
         <div style={{ marginBottom: '1rem' }}>
           <label style={labelStyle}>Instructions</label>
           <textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+            Free-text notes for the patient. Clinical detail belongs in the
+            fields above.
+          </div>
         </div>
 
         <button

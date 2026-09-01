@@ -24,6 +24,10 @@ const {
   alreadyHeldBlockReason,
   validatePreferredRequestDate,
   validateAcceptSlot,
+  parseServiceSessions,
+  totalSessionsFrom,
+  splitUpdateBlockReason,
+  visitsFrom,
 } = requireCJS('../../routes/wellness_packages');
 
 describe('parseServiceIds', () => {
@@ -410,5 +414,288 @@ describe('validateAcceptSlot', () => {
 
   test('no slot at all is not an error here', () => {
     expect(validateAcceptSlot(null, now)).toBeNull();
+  });
+});
+
+// ── Per-service session counts ──────────────────────────────────────
+
+describe('parseServiceSessions', () => {
+  test('accepts the map shape', () => {
+    expect(parseServiceSessions({ 10: 3, 11: 2 })).toEqual({ 10: 3, 11: 2 });
+  });
+
+  test('accepts the array shape the builder holds in state', () => {
+    expect(parseServiceSessions([
+      { serviceId: 10, sessions: 3 },
+      { serviceId: 11, sessions: 2 },
+    ])).toEqual({ 10: 3, 11: 2 });
+  });
+
+  test('accepts the JSON string that comes back off the row', () => {
+    expect(parseServiceSessions('{"10":3,"11":2}')).toEqual({ 10: 3, 11: 2 });
+  });
+
+  test('null for anything unusable, so a corrupt value cannot price at zero', () => {
+    expect(parseServiceSessions(null)).toBeNull();
+    expect(parseServiceSessions('')).toBeNull();
+    expect(parseServiceSessions('not json')).toBeNull();
+    expect(parseServiceSessions({})).toBeNull();
+    // A zero or negative run is dropped, not stored.
+    expect(parseServiceSessions({ 10: 0 })).toBeNull();
+    expect(parseServiceSessions({ 10: -2 })).toBeNull();
+    expect(parseServiceSessions({ 10: 2.5 })).toBeNull();
+  });
+
+  test('keeps the usable entries when only some are junk', () => {
+    expect(parseServiceSessions({ 10: 3, 11: 0 })).toEqual({ 10: 3 });
+  });
+});
+
+describe('totalSessionsFrom', () => {
+  test('a split totals its parts — 3 + 2 is 5 sessions', () => {
+    expect(totalSessionsFrom({ 10: 3, 11: 2 }, [10, 11], 6)).toBe(5);
+  });
+
+  test('no split reads the old way: every service runs `sessions` times', () => {
+    // Two services x 6 was always 12 sittings; the flat number just never
+    // said so out loud.
+    expect(totalSessionsFrom(null, [10, 11], 6)).toBe(12);
+    expect(totalSessionsFrom(null, [10], 6)).toBe(6);
+  });
+});
+
+describe('normalizePackageBody — per-service sessions', () => {
+  const base = { name: 'Glow', serviceIds: [10, 11], sessions: 6, discountPercent: 10 };
+
+  test('a split becomes the source of truth for the session total', () => {
+    const { error, data } = normalizePackageBody({ ...base, serviceSessions: { 10: 3, 11: 2 } });
+    expect(error).toBeUndefined();
+    expect(data.serviceSessions).toEqual({ 10: 3, 11: 2 });
+    // `sessions` is recomputed as the VISIT count, because that is what the
+    // treatment plan counts down. Combined (the default) delivers both services
+    // in a visit, so 3 + 2 is three visits — two with both, one with the
+    // leftover. The five runs are still what the price is built from.
+    expect(data.sessions).toBe(3);
+  });
+
+  test('a package without a split is untouched', () => {
+    const { data } = normalizePackageBody(base);
+    expect(data.serviceSessions).toBeUndefined();
+    expect(data.sessions).toBe(6);
+  });
+
+  test('an explicit null clears the split back to the flat shape', () => {
+    const { data } = normalizePackageBody({ ...base, serviceSessions: null });
+    expect(data.serviceSessions).toBeNull();
+    expect(data.sessions).toBe(6);
+  });
+
+  test('the split must cover exactly the bundled services', () => {
+    // Half-priced packages are worse than a rejected save.
+    expect(normalizePackageBody({ ...base, serviceSessions: { 10: 3 } }).error.body.code)
+      .toBe('SERVICE_SESSIONS_MISMATCH');
+    expect(normalizePackageBody({ ...base, serviceSessions: { 10: 3, 11: 2, 99: 1 } }).error.body.code)
+      .toBe('SERVICE_SESSIONS_MISMATCH');
+  });
+
+  test('the refusal names which service is missing', () => {
+    const blocked = normalizePackageBody({ ...base, serviceSessions: { 10: 3 } });
+    expect(blocked.error.body.missing).toEqual([11]);
+  });
+
+  test('a single service cannot exceed the session cap', () => {
+    expect(normalizePackageBody({ ...base, serviceSessions: { 10: 61, 11: 2 } }).error.body.code)
+      .toBe('INVALID_SERVICE_SESSIONS');
+  });
+
+  test('an unusable split is refused rather than silently ignored', () => {
+    expect(normalizePackageBody({ ...base, serviceSessions: 'not json' }).error.body.code)
+      .toBe('INVALID_SERVICE_SESSIONS');
+  });
+});
+
+describe('splitUpdateBlockReason', () => {
+  const SPLIT = { 21: 3, 22: 2 };
+
+  test('a package without a split is never blocked', () => {
+    expect(
+      splitUpdateBlockReason({
+        perServiceSessions: null,
+        serviceIds: [21, 22],
+        sessionsChanged: true,
+        splitProvided: false,
+      }),
+    ).toBeNull();
+  });
+
+  test('refuses a bare sessions edit — there is no honest way to spread it', () => {
+    const blocked = splitUpdateBlockReason({
+      perServiceSessions: SPLIT,
+      serviceIds: [21, 22],
+      sessionsChanged: true,
+      splitProvided: false,
+    });
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.code).toBe('SESSIONS_SET_BY_SPLIT');
+  });
+
+  test('allows sessions to move when the new split comes with it', () => {
+    expect(
+      splitUpdateBlockReason({
+        perServiceSessions: { 21: 4, 22: 2 },
+        serviceIds: [21, 22],
+        sessionsChanged: true,
+        splitProvided: true,
+      }),
+    ).toBeNull();
+  });
+
+  test('refuses a service added without a count — it would price at zero', () => {
+    const blocked = splitUpdateBlockReason({
+      perServiceSessions: SPLIT,
+      serviceIds: [21, 22, 23],
+      sessionsChanged: false,
+      splitProvided: false,
+    });
+    expect(blocked.body.code).toBe('SERVICE_SESSIONS_MISMATCH');
+    expect(blocked.body.missing).toEqual([23]);
+  });
+
+  test('refuses a count left behind by a dropped service', () => {
+    const blocked = splitUpdateBlockReason({
+      perServiceSessions: SPLIT,
+      serviceIds: [21],
+      sessionsChanged: false,
+      splitProvided: false,
+    });
+    expect(blocked.body.code).toBe('SERVICE_SESSIONS_MISMATCH');
+    expect(blocked.body.extra).toEqual([22]);
+  });
+
+  test('numeric and string ids are the same id', () => {
+    expect(
+      splitUpdateBlockReason({
+        perServiceSessions: SPLIT,
+        serviceIds: ['21', '22'],
+        sessionsChanged: false,
+        splitProvided: false,
+      }),
+    ).toBeNull();
+  });
+
+  test('an untouched split with an unchanged bundle passes', () => {
+    expect(
+      splitUpdateBlockReason({
+        perServiceSessions: SPLIT,
+        serviceIds: [21, 22],
+        sessionsChanged: false,
+        splitProvided: false,
+      }),
+    ).toBeNull();
+  });
+});
+
+/**
+ * Service-sessions vs visits.
+ *
+ * Two services at 3 and 4 runs is 7 runs either way — that is what the price is
+ * built from. But the patient attends either 4 appointments (three with both
+ * services, one with the leftover) or 7 (one service each), and THAT is the
+ * number the treatment plan counts down. The clinic decides which.
+ */
+describe('visitsFrom — packing runs into visits', () => {
+  const SPLIT = { 10: 3, 11: 4 };
+
+  test('combined: three visits with both, one with the leftover', () => {
+    expect(visitsFrom(SPLIT, [10, 11], 6, 'combined')).toBe(4);
+  });
+
+  test('separate: one service per visit', () => {
+    expect(visitsFrom(SPLIT, [10, 11], 6, 'separate')).toBe(7);
+  });
+
+  test('the runs are 7 whichever way they are delivered', () => {
+    expect(totalSessionsFrom(SPLIT, [10, 11], 6)).toBe(7);
+  });
+
+  test('combined is the default, because that is what a package always meant', () => {
+    expect(visitsFrom(SPLIT, [10, 11], 6)).toBe(4);
+  });
+
+  test('an even split under combined is the legacy number exactly', () => {
+    // 6 sessions of a two-service bundle has always been 6 visits, not 12.
+    expect(visitsFrom({ 10: 6, 11: 6 }, [10, 11], 6, 'combined')).toBe(6);
+  });
+
+  test('no split at all keeps the stored count untouched', () => {
+    expect(visitsFrom(null, [10, 11], 6, 'combined')).toBe(6);
+    expect(visitsFrom(null, [10, 11], 6, 'separate')).toBe(6);
+  });
+
+  test('a single service is the same number both ways', () => {
+    expect(visitsFrom({ 10: 5 }, [10], 5, 'combined')).toBe(5);
+    expect(visitsFrom({ 10: 5 }, [10], 5, 'separate')).toBe(5);
+  });
+});
+
+describe('normalizePackageBody — session mode', () => {
+  const base = { serviceIds: [10, 11], serviceSessions: { 10: 3, 11: 4 }, sessions: 6 };
+
+  test('combined derives 4 visits from a 3 + 4 split', () => {
+    const { error, data } = normalizePackageBody({ ...base, name: 'P', sessionMode: 'combined' });
+    expect(error).toBeUndefined();
+    expect(data.sessionMode).toBe('combined');
+    expect(data.sessions).toBe(4);
+  });
+
+  test('separate derives 7 visits from the same split', () => {
+    const { data } = normalizePackageBody({ ...base, name: 'P', sessionMode: 'separate' });
+    expect(data.sessions).toBe(7);
+  });
+
+  test('defaults to combined when the mode is not given', () => {
+    const { data } = normalizePackageBody({ ...base, name: 'P' });
+    expect(data.sessions).toBe(4);
+  });
+
+  test('rejects a mode that is neither', () => {
+    const { error } = normalizePackageBody({ ...base, name: 'P', sessionMode: 'whenever' });
+    expect(error.status).toBe(400);
+    expect(error.body.code).toBe('INVALID_SESSION_MODE');
+  });
+
+  test('accepts the mode however it is cased', () => {
+    const { data } = normalizePackageBody({ ...base, name: 'P', sessionMode: 'SEPARATE' });
+    expect(data.sessionMode).toBe('separate');
+    expect(data.sessions).toBe(7);
+  });
+});
+
+describe('normalizePackageBody — the visit cap survives the split', () => {
+  test('one service per visit cannot sum past the package cap', () => {
+    // Each count is a legal 40, but "one per visit" makes 80 appointments and
+    // a treatment plan to match.
+    const { error } = normalizePackageBody({
+      name: 'Marathon',
+      serviceIds: [10, 11],
+      sessions: 6,
+      serviceSessions: { 10: 40, 11: 40 },
+      sessionMode: 'separate',
+    });
+    expect(error.status).toBe(400);
+    expect(error.body.code).toBe('TOO_MANY_SESSIONS');
+  });
+
+  test('the same runs pass when the services share a visit', () => {
+    // 40 visits, each delivering both services — comfortably under the cap.
+    const { error, data } = normalizePackageBody({
+      name: 'Marathon',
+      serviceIds: [10, 11],
+      sessions: 6,
+      serviceSessions: { 10: 40, 11: 40 },
+      sessionMode: 'combined',
+    });
+    expect(error).toBeUndefined();
+    expect(data.sessions).toBe(40);
   });
 });

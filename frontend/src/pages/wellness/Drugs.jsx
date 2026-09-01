@@ -86,6 +86,33 @@ const TABLE_HEADER_CELL_STYLE = {
 
 const DOSAGE_FORMS = ['tablet', 'capsule', 'syrup', 'injection', 'topical', 'drops', 'inhaler', 'other'];
 
+// Suggested strength units, offered through a <datalist> rather than a
+// <select>. A closed dropdown would block legitimate units nobody thought to
+// list (mEq, mmol, custom compounding units) and would silently blank the
+// field for any catalogue row that already holds one, so this guides input
+// without restricting it. The backend does the actual validation — it repairs
+// stray punctuation ("-gm" → "gm") and rejects a value with no digit in it,
+// which is what let strengthValue "-" / strengthUnit "-gm" into the catalogue
+// and print as "--gm" on every prescription surface.
+const STRENGTH_UNITS = ['mg', 'g', 'mcg', 'ml', 'l', '%', 'IU', 'mEq', 'mg/ml', 'mcg/ml', 'units'];
+
+/**
+ * Render a catalogue strength for display.
+ *
+ * Guards the rows that predate backend validation: a value with no digit in it
+ * ("-", "n/a") is not a strength, and a unit with no value is meaningless on
+ * its own, so both render as an em dash instead of the literal junk. Without
+ * this, the row that caused the tester's report kept printing "- -gm" here
+ * even after the write path was fixed.
+ */
+export function formatStrength(value, unit) {
+  const v = value == null ? '' : String(value).trim();
+  const u = unit == null ? '' : String(unit).trim();
+  if (!/[0-9]/.test(v)) return '—';
+  return u ? `${v} ${u}` : v;
+}
+
+
 const EMPTY_FORM = {
   name: '',
   genericName: '',
@@ -117,7 +144,15 @@ export default function Drugs() {
   const scrollContainerRef = useRef(null);
   const sentinelRef = useRef(null);
   const requestSeqRef = useRef(0);
+  // The pending auto-search timer, and the term the list is currently showing.
+  // `lastQueryRef` is what stops a debounce firing a second, identical request
+  // straight after Enter or the Search button already ran it.
+  const searchTimerRef = useRef(null);
+  const lastQueryRef = useRef('');
   const PAGE_SIZE = 8;
+  // Long enough that typing a word is one request, not one per letter; short
+  // enough that the list feels like it is keeping up.
+  const SEARCH_DEBOUNCE_MS = 350;
 
   const load = async ({ reset = false, nextPage = 1, query = search } = {}) => {
     const requestId = ++requestSeqRef.current;
@@ -247,7 +282,30 @@ export default function Drugs() {
     }
   };
 
-  const runSearch = () => load({ reset: true, nextPage: 1, query: search });
+  // Run the search now. Enter and the Search button call this to skip the
+  // wait; the debounce below calls it when typing stops.
+  const runSearch = (query = search) => {
+    clearTimeout(searchTimerRef.current);
+    lastQueryRef.current = query;
+    return load({ reset: true, nextPage: 1, query });
+  };
+
+  // Auto-search: typing runs the search on its own. Enter and the button stay
+  // as they were — they just skip the wait — so nothing that relied on them
+  // changes behaviour.
+  //
+  // The early return covers two cases at once: the initial mount (both are '',
+  // and the mount effect above has already loaded page 1) and the moment right
+  // after an explicit search (runSearch has set lastQueryRef to this term), so
+  // neither fires a duplicate request. Out-of-order responses were already
+  // handled by requestSeqRef, which matters more now that a request can be in
+  // flight for every pause in typing.
+  useEffect(() => {
+    if (search === lastQueryRef.current) return undefined;
+    searchTimerRef.current = setTimeout(() => runSearch(search), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(searchTimerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
     const bodyRows = drugs.map((d, index) => (
     <div
@@ -265,9 +323,7 @@ export default function Drugs() {
       <div style={TABLE_CELL_STYLE}>{d.name}</div>
       <div style={TABLE_CELL_STYLE}>{d.genericName || '—'}</div>
       <div style={TABLE_CELL_STYLE}>{d.dosageForm}</div>
-      <div style={TABLE_CELL_STYLE}>
-        {d.strengthValue ? `${d.strengthValue} ${d.strengthUnit || ''}`.trim() : '—'}
-      </div>
+      <div style={TABLE_CELL_STYLE}>{formatStrength(d.strengthValue, d.strengthUnit)}</div>
       <div style={TABLE_CELL_STYLE}>{d.defaultDosage || '—'}</div>
       <div style={TABLE_CELL_STYLE}><StockCell drug={d} /></div>
       <div style={TABLE_CELL_STYLE}>
@@ -384,7 +440,7 @@ export default function Drugs() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') runSearch();
+                if (e.key === 'Enter') runSearch(search);
               }}
               style={{
                 flex: 1,
@@ -395,7 +451,7 @@ export default function Drugs() {
             />
           </div>
           <button
-            onClick={runSearch}
+            onClick={() => runSearch(search)}
             style={{
               padding: '0 1.25rem',
               background: 'var(--primary-color, var(--accent-color))',
@@ -428,8 +484,27 @@ export default function Drugs() {
             <select value={form.dosageForm} onChange={(e) => setForm({ ...form, dosageForm: e.target.value })}>
               {DOSAGE_FORMS.map((f) => <option key={f} value={f}>{f}</option>)}
             </select>
-            <input placeholder="Strength value (e.g. 500)" value={form.strengthValue} onChange={(e) => setForm({ ...form, strengthValue: e.target.value })} />
-            <input placeholder="Strength unit (mg, ml, %, IU...)" value={form.strengthUnit} onChange={(e) => setForm({ ...form, strengthUnit: e.target.value })} />
+            {/* Free text on purpose — combination drugs are written "5/10".
+                `pattern` gives the browser's own "must contain a number"
+                nudge before the request is made; the backend is still the
+                authority and returns INVALID_STRENGTH_VALUE either way. */}
+            <input
+              placeholder="Strength value (e.g. 500)"
+              title="Must contain a number — e.g. 500, 2.5, or 5/10 for a combination"
+              pattern="[^0-9]*[0-9][\s\S]*"
+              value={form.strengthValue}
+              onChange={(e) => setForm({ ...form, strengthValue: e.target.value })}
+            />
+            <input
+              placeholder="Strength unit (mg, ml, %, IU...)"
+              list="drug-strength-units"
+              title="A unit such as mg, ml, mcg, g, % or IU"
+              value={form.strengthUnit}
+              onChange={(e) => setForm({ ...form, strengthUnit: e.target.value })}
+            />
+            <datalist id="drug-strength-units">
+              {STRENGTH_UNITS.map((u) => <option key={u} value={u} />)}
+            </datalist>
             {/* Stock lives on the drug: the clinic dispenses from the same
                 shelf the doctor prescribes off, so there is no separate
                 inventory row to reconcile against. */}

@@ -69,8 +69,13 @@ export default function Appointments() {
 
     try {
       const qs = new URLSearchParams();
-      qs.set('from', `${from}T00:00:00${localTzOffset()}`);
-      qs.set('to', `${to}T23:59:59${localTzOffset()}`);
+      // An empty date box means "no bound", not "midnight on nothing".
+      // Sending it unconditionally produced `from=T00:00:00+05:30`, which the
+      // route fed straight to `new Date()` — an Invalid Date that Prisma threw
+      // on, so clearing the filter answered with a 500 instead of the
+      // unfiltered list.
+      if (from) qs.set('from', `${from}T00:00:00${localTzOffset()}`);
+      if (to) qs.set('to', `${to}T23:59:59${localTzOffset()}`);
       qs.set('paginate', 'true');
       qs.set('page', String(page));
       qs.set('limit', String(PAGE_SIZE));

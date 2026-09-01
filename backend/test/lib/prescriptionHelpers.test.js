@@ -252,3 +252,40 @@ describe("computeValidUntil", () => {
     expect(computeValidUntil("not a date", 30)).toBeNull();
   });
 });
+
+// ── Junk strength must never be welded onto the drug name ──────────
+//
+// The Drug catalogue accepted strengthValue "-" with strengthUnit "-gm"
+// before its write path was validated. buildDisplayName joined those blind
+// into "---gm" and appended it to the drug NAME, so the junk travelled with
+// the prescription onto the patient portal, the ledger and the PDF as part
+// of the name itself — where no downstream display guard could strip it.
+describe('buildDisplayName — junk strength', () => {
+  test('a strength value with no digit is not appended to the name', () => {
+    const [drug] = normalizePrescriptionDrugs({
+      drugs: [{ name: '360 Block Sunscreen', strengthValue: '-', strengthUnit: '-gm' }],
+    }).drugs;
+    expect(drug.name).toBe('360 Block Sunscreen');
+  });
+
+  test('the "----" case from the reported portal screenshot', () => {
+    const [drug] = normalizePrescriptionDrugs({
+      drugs: [{ name: 'Anti acne face wash', strengthValue: '--', strengthUnit: '--' }],
+    }).drugs;
+    expect(drug.name).toBe('Anti acne face wash');
+  });
+
+  test('a real strength is still appended', () => {
+    const [drug] = normalizePrescriptionDrugs({
+      drugs: [{ name: 'Amoxicillin', strengthValue: '500', strengthUnit: 'mg' }],
+    }).drugs;
+    expect(drug.name).toBe('Amoxicillin 500mg');
+  });
+
+  test('a strength already inside the name is not duplicated', () => {
+    const [drug] = normalizePrescriptionDrugs({
+      drugs: [{ name: 'Amoxicillin 500mg', strengthValue: '500', strengthUnit: 'mg' }],
+    }).drugs;
+    expect(drug.name).toBe('Amoxicillin 500mg');
+  });
+});

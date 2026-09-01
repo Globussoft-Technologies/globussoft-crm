@@ -29,6 +29,30 @@ vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 import RequestSessionModal from '../pages/wellness/services/RequestSessionModal';
 import SessionRequestsPanel from '../pages/wellness/services/SessionRequestsPanel';
 
+/**
+ * A `datetime-local` value that is still in the future when the suite runs.
+ *
+ * The accept form validates against the real clock, so any datetime written
+ * into the file becomes a failing test the moment it passes — which is exactly
+ * how this suite broke overnight once already.
+ */
+function futureDate(daysFromNow = 2) {
+  const d = new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** The same instant as an ISO string, for a fixture the server would send. */
+function futureIso(daysFromNow = 2) {
+  return new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function futureSlot(daysFromNow = 2) {
+  const d = new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T10:30`;
+}
+
 const OWNED_PACKAGE = {
   id: 3,
   name: 'Strict removal',
@@ -44,7 +68,9 @@ const OWNED_PACKAGE = {
 
 const PENDING_REQUEST = {
   id: 900,
-  visitDate: '2026-09-01T10:00:00.000Z',
+  // Derived: the accept form refuses a slot in the past, so a fixed date turns
+  // this whole queue red the moment it goes by.
+  visitDate: futureIso(3),
   reason: 'mornings work best',
   patient: { id: 5, name: 'Mohit das', phone: '+91-9000011111' },
   service: { id: 10, name: 'Abdomen - Stretch Marks' },
@@ -70,7 +96,8 @@ describe('<RequestSessionModal />', () => {
     const onClose = vi.fn();
     render(<RequestSessionModal pkg={OWNED_PACKAGE} onClose={onClose} onRequested={onRequested} />);
 
-    fireEvent.change(screen.getByTestId('session-preferred-date'), { target: { value: '2026-09-01' } });
+    const asked = futureDate(3);
+    fireEvent.change(screen.getByTestId('session-preferred-date'), { target: { value: asked } });
     await user.type(screen.getByTestId('session-note'), 'mornings work best');
     await user.click(screen.getByTestId('session-request-submit'));
 
@@ -79,7 +106,7 @@ describe('<RequestSessionModal />', () => {
     expect(url).toBe('/api/wellness/packages/plans/1436/request-session');
     expect(opts.method).toBe('POST');
     const body = JSON.parse(opts.body);
-    expect(body).toEqual({ preferredDate: '2026-09-01', note: 'mornings work best' });
+    expect(body).toEqual({ preferredDate: asked, note: 'mornings work best' });
     expect(body.doctorId).toBeUndefined();
 
     await waitFor(() => expect(onRequested).toHaveBeenCalled());
@@ -228,19 +255,22 @@ describe('<SessionRequestsPanel />', () => {
   });
 
   it('accepts with the chosen practitioner and slot', async () => {
+    // Derived, never written down: the panel refuses a slot in the past, so a
+    // hard-coded datetime silently turns this test red the day it goes by.
+    const slot = futureSlot(2);
     const user = userEvent.setup();
     renderWithQueue();
     await waitFor(() => expect(screen.getByTestId('session-request-900')).toBeInTheDocument());
 
     await user.click(within(screen.getByTestId('session-request-doctor-900')).getByRole('button'));
     await user.click(await screen.findByRole('option', { name: 'Dr Harsh' }));
-    fireEvent.change(screen.getByTestId('session-request-date-900'), { target: { value: '2026-09-01T10:30' } });
+    fireEvent.change(screen.getByTestId('session-request-date-900'), { target: { value: slot } });
     await user.click(screen.getByTestId('session-request-accept-900'));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(([url]) => url.endsWith('/session-requests/900/accept'));
       expect(call).toBeTruthy();
-      expect(JSON.parse(call[1].body)).toEqual({ doctorId: '12', visitDate: '2026-09-01T10:30' });
+      expect(JSON.parse(call[1].body)).toEqual({ doctorId: '12', visitDate: slot });
     });
   });
 

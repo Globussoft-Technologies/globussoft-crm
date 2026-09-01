@@ -28,10 +28,25 @@ export function RestoredBanner({ onDiscard }) {
   );
 }
 
-// Clinical-format Rx detail modal. Matches the Zylu-style prescription layout
-// (Patient demographics → Chief complaint / Diagnosis / Investigations / Advice
-// → Prescriptions table → Notes). Free-text Rx without zylu-style labels still
-// display fine — every unmatched section just shows "—".
+// Clinical-format Rx detail modal: patient demographics → chief complaint /
+// diagnosis / investigations / advice → prescriptions table → notes.
+//
+// The narrative sections are real Prescription columns, written by the
+// prescribing form. A Zylu-imported prescription carries them inside its
+// free-text `instructions` instead, so parseRxInstructions remains the
+// fallback reader for those rows. A section with nothing on either side is
+// omitted rather than printed as an em dash.
+
+// The clinical narrative rows, in the order a clinician reads them. `key` is
+// both the Prescription column name and the parseRxInstructions output key, so
+// one lookup covers a natively-written prescription and a Zylu-imported one.
+const CLINICAL_ROWS = [
+  { key: 'chiefComplaint', label: 'Chief Complaint' },
+  { key: 'diagnosis', label: 'Diagnosis' },
+  { key: 'investigations', label: 'Investigations' },
+  { key: 'advice', label: 'Advice/Referrals' },
+];
+
 export function RxDetailModal({ rx, patient, onClose }) {
   const notify = useNotify();
   const [downloading, setDownloading] = useState(false);
@@ -175,53 +190,82 @@ export function RxDetailModal({ rx, patient, onClose }) {
           </div>
         </div>
 
-        <div style={headerRowStyle}><strong>Chief Complaint:</strong> {parsed.chiefComplaint || '—'}</div>
-        <div style={headerRowStyle}><strong>Diagnosis:</strong> {parsed.diagnosis || '—'}</div>
-        <div style={headerRowStyle}><strong>Investigations:</strong> {parsed.investigations || '—'}</div>
-        <div style={{ ...headerRowStyle, whiteSpace: 'pre-wrap' }}><strong>Advice/Referrals:</strong> {parsed.advice || '—'}</div>
+        {/* Real columns first, legacy parser second. These four used to be
+            recovered ONLY by scanning `instructions` for "Diagnosis:"-style
+            prefixes — a reader built for Zylu-imported rows that nothing in
+            this CRM ever wrote, so they were permanently blank on anything
+            written here. They are columns now; the parser stays as the
+            fallback so migrated prescriptions keep showing their narrative.
+
+            Rows render only when they carry something. Four unfillable em
+            dashes on every prescription was the complaint that started this,
+            and the PDF has always gated the same block on `hasClinical`. */}
+        {CLINICAL_ROWS.map(({ key, label }) => {
+          const value = (rx[key] != null && String(rx[key]).trim()) || parsed[key];
+          if (!value) return null;
+          return (
+            <div key={key} style={{ ...headerRowStyle, whiteSpace: 'pre-wrap' }}>
+              <strong>{label}:</strong> {value}
+            </div>
+          );
+        })}
 
         <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '1rem 0 0.4rem' }}>Prescriptions</h3>
         <div style={{ marginBottom: '1rem' }}>
-          <TopScrollSync>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 720 }}>
-              <thead>
-                <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
-                  <th style={th}>No.</th>
-                  <th style={th}>Drug Name</th>
-                  <th style={th}>Strength</th>
-                  <th style={th}>Preparation</th>
-                  <th style={th}>Route</th>
-                  <th style={th}>Dosage</th>
-                  <th style={th}>Direction</th>
-                  <th style={th}>Frequency</th>
-                  <th style={th}>Instructions</th>
-                  <th style={th}>Start Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {drugs.length === 0 ? (
-                  <tr><td colSpan={10} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>(no medications listed)</td></tr>
-                ) : drugs.map((d, i) => {
-                  const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join('') || d.strength || '—';
-                  const startDate = d.startDate ? new Date(d.startDate).toLocaleDateString('en-IN') : '—';
-                  return (
-                    <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
-                      <td style={td}>{i + 1}</td>
-                      <td style={{ ...td, fontWeight: 600 }}>{d.name || d.drug || '—'}</td>
-                      <td style={td}>{strength}</td>
-                      <td style={td}>{d.preparation || d.dosageForm || '—'}</td>
-                      <td style={td}>{d.route || '—'}</td>
-                      <td style={td}>{d.dosage || '—'}</td>
-                      <td style={td}>{d.direction || '—'}</td>
-                      <td style={td}>{d.frequency || '—'}</td>
-                      <td style={td}>{d.instructions || '—'}</td>
-                      <td style={td}>{startDate}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </TopScrollSync>
+        <TopScrollSync>
+          {/* Columns mirror the prescribing form in PrescribeTab.jsx exactly.
+              They used to include Preparation / Route / Direction /
+              Instructions / Start Date — five fields nothing in the app has
+              ever written, so every prescription rendered five columns of
+              "—" — while Duration and Qty, which the form DOES capture, had
+              no column at all and were silently dropped from the preview.
+              If a per-drug field is added to the form, add its column here. */}
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 560 }}>
+            <thead>
+              <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <th style={th}>No.</th>
+                <th style={th}>Drug Name</th>
+                <th style={th}>Strength</th>
+                <th style={th}>Dosage</th>
+                <th style={th}>Frequency</th>
+                <th style={th}>Duration</th>
+                <th style={th}>Qty</th>
+              </tr>
+            </thead>
+            <tbody>
+              {drugs.length === 0 ? (
+                <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>(no medications listed)</td></tr>
+              ) : drugs.map((d, i) => {
+                // A prescription SNAPSHOTS the strength at issue time, so
+                // cleaning a bad catalogue row does not retro-fix scripts
+                // already written off it. Guard here too: a value with no
+                // digit ("-") is not a strength, and a unit on its own is
+                // meaningless — that pair is what printed as "--gm".
+                const rawStrengthValue = d.strengthValue == null ? '' : String(d.strengthValue).trim();
+                const rawStrengthUnit = d.strengthUnit == null ? '' : String(d.strengthUnit).trim();
+                const strength = /[0-9]/.test(rawStrengthValue)
+                  ? [rawStrengthValue, rawStrengthUnit].filter(Boolean).join('')
+                  : (/[0-9]/.test(String(d.strength || '')) ? String(d.strength) : '—');
+                // Duration is captured as a plain number of days; label the
+                // unit so "2" cannot be misread as a dose or a pack count.
+                const duration = d.duration ? `${d.duration} day${Number(d.duration) === 1 ? '' : 's'}` : '—';
+                return (
+                  <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
+                    <td style={td}>{i + 1}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{d.name || d.drug || '—'}</td>
+                    <td style={td}>{strength}</td>
+                    <td style={td}>{d.dosage || '—'}</td>
+                    <td style={td}>{d.frequency || '—'}</td>
+                    <td style={td}>{duration}</td>
+                    {/* Blank qty dispenses 1 — see the Qty input's title in
+                        PrescribeTab — so show that rather than an em dash. */}
+                    <td style={td}>{d.qty || 1}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </TopScrollSync>
         </div>
 
         <div style={headerRowStyle}><strong>Notes:</strong> {parsed.notes || '—'}</div>

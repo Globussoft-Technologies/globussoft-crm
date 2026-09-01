@@ -322,6 +322,46 @@ function renderNotesWithBoldLabels(doc, raw, x, width) {
   }
 }
 
+/**
+ * Format a prescribed drug's strength for display.
+ *
+ * A prescription SNAPSHOTS the catalogue strength at issue time, so repairing
+ * a bad Drug row does not retro-fix scripts already written off it. The
+ * catalogue accepted strengthValue "-" with strengthUnit "-gm" before the
+ * write path was validated, and a plain join printed that as "--gm" on the
+ * PDF, the preview and the ledger.
+ *
+ * A value with no digit in it is not a strength, and a unit with no value is
+ * meaningless on its own — both yield "".
+ */
+function formatDrugStrength(d) {
+  const value = d?.strengthValue == null ? "" : String(d.strengthValue).trim();
+  const unit = d?.strengthUnit == null ? "" : String(d.strengthUnit).trim();
+  if (/[0-9]/.test(value)) return [value, unit].filter(Boolean).join("");
+  const legacy = d?.strength == null ? "" : String(d.strength).trim();
+  return /[0-9]/.test(legacy) ? legacy : "";
+}
+
+/**
+ * Merge a prescription's real clinical columns over the values recovered from
+ * its free-text `instructions`.
+ *
+ * Chief Complaint / Diagnosis / Investigations / Advice are Prescription
+ * columns as of the prescription_clinical_fields migration. parseRxInstructions
+ * stays as the fallback reader for Zylu-imported rows, whose narrative lives
+ * inline in `instructions` and whose columns are NULL. Column wins when set,
+ * so a clinician's typed value is never overridden by a stray prefix that
+ * happened to appear in their free text.
+ */
+function withClinicalFields(parsed, prescription) {
+  const merged = { ...parsed };
+  for (const key of ["chiefComplaint", "diagnosis", "investigations", "advice"]) {
+    const column = prescription?.[key];
+    if (column != null && String(column).trim()) merged[key] = String(column).trim();
+  }
+  return merged;
+}
+
 function parseDrugs(drugs) {
   if (!drugs) return [];
   if (Array.isArray(drugs)) return drugs;
@@ -823,7 +863,7 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
   const bufPromise = streamToBuffer(doc);
 
-  const parsed = parseRxInstructions(prescription?.instructions);
+  const parsed = withClinicalFields(parseRxInstructions(prescription?.instructions), prescription);
   const status = parsed.status || "Issued";
   const drugs = parseDrugs(prescription?.drugs);
 
@@ -888,13 +928,32 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
     rightX: pageRight,
   });
 
-  // ── Document meta info-strip (PATIENT / PATIENT ID / ISSUED / Rx #) ─
+  // ── Document meta info-strip (PATIENT / ID / ISSUED / VALID / Rx #) ─
+  // `validUntil` is the stored column; older rows carry only `validityDays`,
+  // so derive from the issue date in that case rather than showing nothing.
+  const rxValidUntil = prescription?.validUntil
+    ? new Date(prescription.validUntil)
+    : (prescription?.validityDays && prescription?.createdAt
+      ? new Date(new Date(prescription.createdAt).getTime()
+        + Number(prescription.validityDays) * 24 * 60 * 60 * 1000)
+      : null);
+  const rxValidUntilText = rxValidUntil && !Number.isNaN(rxValidUntil.getTime())
+    ? formatDate(rxValidUntil)
+    : "—";
+
   const infoStripY = drawInfoStrip(
     doc,
     [
       { label: "Patient", value: patient?.name || "—" },
       { label: "Patient ID", value: patient?.id != null ? String(patient.id) : "—" },
       { label: "Issued", value: formatDate(prescription?.createdAt) },
+      // Validity was captured on the prescription (validUntil / validityDays)
+      // and shown in the on-screen preview, but never reached the PDF — so the
+      // printed artefact a patient or pharmacist actually holds gave no expiry
+      // at all. drawInfoStrip divides the width by pairs.length and ellipsises
+      // each value, so adding a column re-flows the strip rather than
+      // overflowing it.
+      { label: "Valid until", value: rxValidUntilText },
       { label: "Document", value: prescription?.id != null ? `Rx #${prescription.id}` : "Prescription" },
     ],
     { x: leftX, y: 100, w: usableW },
@@ -976,13 +1035,34 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   doc.y += 8;
 
   doc.x = leftX;
-  const cols = [
-    { label: "#",          x: leftX,        w: 36 },
-    { label: "Medication", x: leftX + 36,  w: 175 },
-    { label: "Dosage",     x: leftX + 211, w: 95 },
-    { label: "Frequency",  x: leftX + 306, w: 120 },
-    { label: "Duration",   x: leftX + 426, w: usableW - 426 },
-  ];
+  // Widths are declared once and the x-offsets derived, so the columns cannot
+  // drift out of alignment the way six hand-written `leftX + n` constants
+  // would. The LAST column absorbs whatever remains of usableW, which keeps
+  // the header bar, the zebra stripes and the outline rect exactly flush
+  // regardless of page size.
+  //
+  // Qty is new: the prescribing form has always captured it (and it drives
+  // stock movement), but the printed Rx omitted it entirely — so a pharmacist
+  // could not tell how many units to dispense.
+  // Widths are MEASURED, not guessed. Each header is drawn at 8.5pt
+  // Helvetica-Bold with characterSpacing 1.1 into (w - 16), so the minimum a
+  // column can be is its header width + 16:
+  //   #  21.8 · MEDICATION 80.1 · DOSAGE 59.0
+  //   FREQUENCY 79.2 · DURATION 68.9 · QTY 36.8   (345.7 of usableW 495)
+  // A first cut gave Duration 62 and the header rendered as "DURATIO N" —
+  // wrapped inside its own cell. Every width below clears its header with
+  // ≥9pt to spare, and Medication additionally clears a 113pt drug name.
+  const COL_LABELS = ["#", "Medication", "Dosage", "Frequency", "Duration", "Qty"];
+  const COL_WIDTHS = [30, 155, 73, 90, 82];
+  const cols = [];
+  {
+    let cx = leftX;
+    COL_LABELS.forEach((label, i) => {
+      const w = i < COL_WIDTHS.length ? COL_WIDTHS[i] : usableW - (cx - leftX);
+      cols.push({ label, x: cx, w });
+      cx += w;
+    });
+  }
 
   let tableTop = doc.y;
   if (tableTop + 30 > contentBottom) { doc.addPage(); tableTop = CONTENT_TOP; }
@@ -1008,13 +1088,18 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   } else {
     for (let i = 0; i < drugs.length; i++) {
       const d = drugs[i];
-      const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join("") || d.strength || "";
+      const strength = formatDrugStrength(d);
       const dosageText = [d.dosage, strength].filter(Boolean).join(" ").trim() || "—";
       const subParts = [d.preparation || d.dosageForm, d.route].filter(Boolean);
       const subText = subParts.join(" · ");
       const medName = d.name || d.drug || "—";
       const freq = d.frequency || "—";
-      const duration = d.duration || "—";
+      // Label the unit — a bare "2" in a Duration column reads ambiguously
+      // next to a "2" dosage.
+      const duration = d.duration ? `${d.duration} day${Number(d.duration) === 1 ? "" : "s"}` : "—";
+      // Blank qty dispenses 1 (see the Qty input's title in PrescribeTab),
+      // so print that rather than an em dash the pharmacist has to guess at.
+      const qty = d.qty ? String(d.qty) : "1";
 
       // Row height — taller when there's a Form · Route subline; shorter
       // and tighter when the medication is single-line. Keeps long-list
@@ -1082,6 +1167,11 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
       doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
         .text(duration, cols[4].x + 8, rowY + rowH / 2 - 6, {
           width: cols[4].w - 16, ellipsis: true, lineBreak: false,
+        });
+      // QTY
+      doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+        .text(qty, cols[5].x + 8, rowY + rowH / 2 - 6, {
+          width: cols[5].w - 16, ellipsis: true, lineBreak: false,
         });
       doc.moveTo(leftX, rowY + rowH).lineTo(pageRight, rowY + rowH)
         .lineWidth(0.3).strokeColor(BRAND.borderSoft).stroke();
@@ -1945,7 +2035,7 @@ async function renderPatientSummaryPdf({
     );
     for (let i = 0; i < prescriptions.length; i++) {
       const p = prescriptions[i];
-      const parsed = parseRxInstructions(p.instructions);
+      const parsed = withClinicalFields(parseRxInstructions(p.instructions), p);
       const status = parsed.status || "Issued";
       const drugs = parseDrugs(p.drugs);
       const doctor = p.doctor || null;
@@ -2065,7 +2155,7 @@ async function renderPatientSummaryPdf({
       } else {
         for (let di = 0; di < drugs.length; di++) {
           const d = drugs[di];
-          const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join("") || d.strength || "";
+          const strength = formatDrugStrength(d);
           // DOSAGE: combine free-text dosage + strength on one line.
           const dosageText = [d.dosage, strength].filter(Boolean).join(" ").trim() || "—";
           // MEDICATION subline: Form · Route (e.g. "Topical · scalp").

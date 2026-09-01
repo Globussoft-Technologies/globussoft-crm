@@ -858,3 +858,132 @@ describe('POST /api/billing/public/confirm-payment — tmc-instalment reconcilia
     // The absence of a throw is the assertion.
   });
 });
+
+
+// ─── GET / — ?from / ?to / ?dateField date-range filter ────────────
+//
+// The ledger filter is SERVER-side by design. `statusFilter` on the Invoices
+// page slices an already-downloaded array, which is fine for 5 statuses but
+// not for dates: the demo tenant already carries 979 invoices and the list
+// endpoint is unbounded, so a client-side date filter would keep downloading
+// the whole table in order to hide most of it.
+//
+// These pin the four things that are easy to get subtly wrong:
+//   1. A bare YYYY-MM-DD `to` must cover the WHOLE of that local day.
+//   2. `dateField` must be whitelisted — it is used as a Prisma `where` key.
+//   3. Bad input must 400, not silently return an unfiltered (or empty) list.
+//   4. No params ⇒ no date key at all, so every existing caller is untouched.
+
+describe('GET /api/billing — ?from/?to/?dateField date-range filter', () => {
+  test('no date params → where carries no date key (back-compat)', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing');
+    expect(res.status).toBe(200);
+    const { where } = prisma.invoice.findMany.mock.calls[0][0];
+    expect(where.issuedDate).toBeUndefined();
+    expect(where.dueDate).toBeUndefined();
+    expect(where.paidAt).toBeUndefined();
+    expect(where.tenantId).toBe(1);
+  });
+
+  test('?from → gte on issuedDate at LOCAL midnight (the default column)', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?from=2026-08-01');
+    expect(res.status).toBe(200);
+    const { where } = prisma.invoice.findMany.mock.calls[0][0];
+    expect(where.issuedDate.gte).toEqual(new Date(2026, 7, 1));
+    expect(where.issuedDate.lt).toBeUndefined();
+    expect(where.issuedDate.lte).toBeUndefined();
+  });
+
+  test('?to as a bare date covers the whole day (exclusive next-midnight bound)', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?to=2026-08-28');
+    expect(res.status).toBe(200);
+    const { where } = prisma.invoice.findMany.mock.calls[0][0];
+    // An invoice issued at 14:00 on the 28th must be INCLUDED. A naive
+    // `lte: 2026-08-28T00:00` would drop it, which is the bug this pins.
+    expect(where.issuedDate.lt).toEqual(new Date(2026, 7, 29));
+    expect(where.issuedDate.lte).toBeUndefined();
+  });
+
+  test('an explicit ISO timestamp is honoured exactly (inclusive lte)', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?to=2026-08-28T10:30:00.000Z');
+    expect(res.status).toBe(200);
+    const { where } = prisma.invoice.findMany.mock.calls[0][0];
+    expect(where.issuedDate.lte).toEqual(new Date('2026-08-28T10:30:00.000Z'));
+    expect(where.issuedDate.lt).toBeUndefined();
+  });
+
+  test('?dateField=dueDate moves the range onto the due-date column', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?from=2026-08-01&to=2026-08-31&dateField=dueDate');
+    expect(res.status).toBe(200);
+    const { where } = prisma.invoice.findMany.mock.calls[0][0];
+    expect(where.dueDate.gte).toEqual(new Date(2026, 7, 1));
+    expect(where.dueDate.lt).toEqual(new Date(2026, 8, 1));
+    expect(where.issuedDate).toBeUndefined();
+  });
+
+  test('?dateField=paidAt is accepted (backs a "paid in period" view)', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?from=2026-08-01&dateField=paidAt');
+    expect(res.status).toBe(200);
+    const { where } = prisma.invoice.findMany.mock.calls[0][0];
+    expect(where.paidAt.gte).toEqual(new Date(2026, 7, 1));
+  });
+
+  test('an unknown dateField is rejected, not passed through to Prisma', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?from=2026-08-01&dateField=tenantId');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_DATE_FIELD');
+    // The security point: an arbitrary column name must never reach the query.
+    expect(prisma.invoice.findMany).not.toHaveBeenCalled();
+  });
+
+  test('an unparseable date is a 400, not a silently unfiltered ledger', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?from=not-a-date');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_DATE_RANGE');
+    expect(prisma.invoice.findMany).not.toHaveBeenCalled();
+  });
+
+  test('a rolled-over calendar date (31 Feb) is rejected rather than repaired', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?from=2026-02-31');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_DATE_RANGE');
+  });
+
+  test('an inverted range explains itself instead of returning zero rows', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?from=2026-08-28&to=2026-08-01');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_DATE_RANGE');
+    expect(res.body.error).toMatch(/on or before/i);
+  });
+
+  test('date range composes with ?subBrand rather than clobbering it', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?subBrand=voyagr&from=2026-08-01');
+    expect(res.status).toBe(200);
+    const { where } = prisma.invoice.findMany.mock.calls[0][0];
+    // Both survive: the subBrand OR is a sibling of the date range, so the
+    // travel per-brand ledger keeps working with a date filter applied.
+    expect(where.OR).toHaveLength(2);
+    expect(where.issuedDate.gte).toEqual(new Date(2026, 7, 1));
+  });
+
+  test('date range composes with ?fields=summary', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/billing?fields=summary&from=2026-08-01');
+    expect(res.status).toBe(200);
+    const args = prisma.invoice.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.include).toBeUndefined();
+    expect(args.where.issuedDate.gte).toEqual(new Date(2026, 7, 1));
+  });
+});

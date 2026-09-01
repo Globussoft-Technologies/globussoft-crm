@@ -196,6 +196,222 @@ describe('renderPrescriptionPdf', () => {
     expect(txt.toUpperCase()).toContain('FREQUENCY');
   });
 
+  // ── Qty + validity (tester-filed: neither reached the printed Rx) ──
+  //
+  // The prescribing form has always captured a per-drug Qty (it drives stock
+  // movement) and a prescription-level validity, and the on-screen preview
+  // showed the validity — but the PDF, which is the artefact a patient or
+  // pharmacist actually holds, printed neither. A pharmacist could not tell
+  // how many units to dispense or whether the script had expired.
+
+  test('medications table prints a QTY column with the per-drug quantity', async () => {
+    const buf = await renderPrescriptionPdf(
+      {
+        id: 503,
+        createdAt: '2026-08-28T10:00:00Z',
+        drugs: [
+          { name: '360 Block Sunscreen', dosage: 2, frequency: 2, duration: 2, qty: 3 },
+          { name: 'Biotin', dosage: 1, frequency: 1, duration: 30, qty: 1000 },
+        ],
+      },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt.toUpperCase()).toContain('QTY');
+    expect(txt).toContain('360 Block Sunscreen');
+    // The reported symptom: the quantity VALUE never reached the page. 1000
+    // is chosen because it is the widest qty the form allows (max=1000), so
+    // it also proves the column is wide enough for a real worst case.
+    expect(txt).toContain('1000');
+    // Every other header must survive the re-layout. These are not padding:
+    // a first cut sized Duration at 62pt and its own header wrapped inside
+    // the cell, so the extracted text read "DURATIO N" and this assertion
+    // is what caught it.
+    expect(txt.toUpperCase()).toContain('DOSAGE');
+    expect(txt.toUpperCase()).toContain('FREQUENCY');
+    expect(txt.toUpperCase()).toContain('DURATION');
+    expect(txt.toUpperCase()).toContain('MEDICATION');
+  });
+
+  test('a blank qty prints 1 rather than a dash — blank dispenses one unit', async () => {
+    const buf = await renderPrescriptionPdf(
+      { drugs: [{ name: 'Biotin 5mg', dosage: 1, frequency: 1, duration: 5, qty: '' }] },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Biotin 5mg');
+    expect(txt.toUpperCase()).toContain('QTY');
+  });
+
+  test('duration is printed with its unit so it cannot be read as a dose', async () => {
+    const buf = await renderPrescriptionPdf(
+      { drugs: [{ name: 'Finasteride 1mg', dosage: 2, frequency: 2, duration: 2, qty: 1 }] },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('2 days');
+  });
+
+  test('a snapshotted junk strength renders as nothing, not "--gm"', async () => {
+    // The catalogue accepted strengthValue "-" / strengthUnit "-gm" before the
+    // write path was validated, and a prescription SNAPSHOTS strength at issue
+    // time — so cleaning the Drug row cannot retro-fix scripts already written
+    // off it. The renderer has to be defensive on its own.
+    const buf = await renderPrescriptionPdf(
+      {
+        drugs: [
+          { name: '360 Block Sunscreen', strengthValue: '-', strengthUnit: '-gm', dosage: 2, frequency: 2, duration: 2, qty: 1 },
+        ],
+      },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('360 Block Sunscreen');
+    expect(txt).not.toContain('--gm');
+    expect(txt).not.toContain('-gm');
+  });
+
+  test('a well-formed strength still prints alongside the dosage', async () => {
+    const buf = await renderPrescriptionPdf(
+      {
+        drugs: [
+          { name: 'Amoxicillin', strengthValue: '500', strengthUnit: 'mg', dosage: 1, frequency: 3, duration: 5, qty: 15 },
+        ],
+      },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('500mg');
+  });
+
+  // ── Clinical narrative: real columns, legacy parser as fallback ────
+  //
+  // Chief Complaint / Diagnosis / Investigations / Advice used to be
+  // recovered ONLY by scanning `instructions` for "Diagnosis:"-style line
+  // prefixes — a reader for Zylu-imported rows that nothing in this CRM ever
+  // wrote to. They are Prescription columns now; the parser has to keep
+  // working for migrated rows whose columns are NULL.
+
+  test('renders the clinical narrative from the real columns', async () => {
+    const buf = await renderPrescriptionPdf(
+      {
+        drugs: [],
+        chiefComplaint: 'Itchy scalp for three weeks',
+        diagnosis: 'Seborrheic dermatitis',
+        investigations: 'KOH mount negative',
+        advice: 'Review in four weeks',
+      },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Itchy scalp for three weeks');
+    expect(txt).toContain('Seborrheic dermatitis');
+    expect(txt).toContain('KOH mount negative');
+    expect(txt).toContain('Review in four weeks');
+  });
+
+  test('still parses a Zylu-imported narrative out of instructions', async () => {
+    // Columns null — the only source is the prefixed free text.
+    const buf = await renderPrescriptionPdf(
+      {
+        drugs: [],
+        instructions: [
+          '[ZYLU-#4412]',
+          'Chief Complaint: Hair fall',
+          'Diagnosis: Androgenetic alopecia',
+        ].join('\n'),
+      },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Hair fall');
+    expect(txt).toContain('Androgenetic alopecia');
+  });
+
+  test('a real column wins over a prefix that appears in the free text', async () => {
+    const buf = await renderPrescriptionPdf(
+      {
+        drugs: [],
+        diagnosis: 'Contact dermatitis',
+        instructions: 'Diagnosis: stale value from an import',
+      },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Contact dermatitis');
+    expect(txt).not.toContain('stale value from an import');
+  });
+
+  test('omits the clinical block entirely when there is nothing to say', async () => {
+    const buf = await renderPrescriptionPdf(
+      { drugs: [{ name: 'Biotin', dosage: 1, frequency: 1, duration: 5, qty: 5 }] },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    // No empty "Chief Complaint —" rows on a prescription that has none.
+    expect(txt.toUpperCase()).not.toContain('CHIEF COMPLAINT');
+    expect(txt).toContain('Biotin');
+  });
+
+  test('info strip carries VALID UNTIL from prescription.validUntil', async () => {
+    const buf = await renderPrescriptionPdf(
+      {
+        id: 503,
+        createdAt: '2026-08-28T10:00:00Z',
+        validityDays: 2,
+        validUntil: '2026-08-30T10:00:00Z',
+        drugs: [],
+      },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt.toUpperCase()).toContain('VALID UNTIL');
+    expect(txt).toContain('30 Aug 2026');
+    // The pre-existing strip columns must still be there — adding a fifth
+    // pair re-flows drawInfoStrip rather than displacing anything.
+    expect(txt.toUpperCase()).toContain('PATIENT ID');
+    expect(txt.toUpperCase()).toContain('ISSUED');
+    expect(txt).toContain('Rx #503');
+  });
+
+  test('validity falls back to createdAt + validityDays on rows with no validUntil', async () => {
+    const buf = await renderPrescriptionPdf(
+      {
+        id: 77,
+        createdAt: '2026-08-28T10:00:00Z',
+        validityDays: 3,
+        validUntil: null,
+        drugs: [],
+      },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt.toUpperCase()).toContain('VALID UNTIL');
+    expect(txt).toContain('31 Aug 2026');
+  });
+
+  test('a prescription with no validity renders the strip without crashing', async () => {
+    const buf = await renderPrescriptionPdf(
+      { id: 9, createdAt: '2026-08-28T10:00:00Z', drugs: [] },
+      patientFixture(),
+      clinicFixture(),
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    const txt = extractPdfText(buf);
+    expect(txt.toUpperCase()).toContain('VALID UNTIL');
+  });
+
   test('header uses ASCII Tel:/Email: labels — no broken ☎/✉ glyphs', async () => {
     // PDFKit's WinAnsi Helvetica can't render ☎/✉; they came out as "&"/"'".
     const buf = await renderPrescriptionPdf(

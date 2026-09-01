@@ -78,6 +78,18 @@ function looksLikeXss(str) {
   return /<|>|javascript:|on\w+\s*=/i.test(str);
 }
 
+// The tab strip, as data.
+//
+// SMS and Push are hidden for now. Their tab bodies, loaders and API calls are
+// left untouched below — hiding is a strip-level decision, so restoring either
+// one is deleting its `hidden` flag, not rebuilding a feature.
+const MARKETING_TABS = [
+  { key: 'campaigns', label: 'Email Campaigns', color: 'var(--primary-color)' },
+  { key: 'sms', label: 'SMS Campaigns', color: '#10b981', hidden: true },
+  { key: 'push', label: 'Push Campaigns', color: '#8b5cf6', hidden: true },
+  { key: 'forms', label: 'Embedded Forms', color: 'var(--primary-color)' },
+];
+
 export default function Marketing() {
   const notify = useNotify();
   const [activeTab, setActiveTab] = useState('campaigns'); // 'campaigns', 'sms', 'push', 'forms'
@@ -525,10 +537,15 @@ ${fields.map(f => {
               maxWidth: '100%',
             }}
           >
-            <button onClick={() => setActiveTab('campaigns')} style={tabButtonStyle(activeTab === 'campaigns', 'var(--primary-color)')}>Email Campaigns</button>
-            <button onClick={() => setActiveTab('sms')} style={tabButtonStyle(activeTab === 'sms', '#10b981')}>SMS Campaigns</button>
-            <button onClick={() => setActiveTab('push')} style={tabButtonStyle(activeTab === 'push', '#8b5cf6')}>Push Campaigns</button>
-            <button onClick={() => setActiveTab('forms')} style={tabButtonStyle(activeTab === 'forms', 'var(--primary-color)')}>Embedded Forms</button>
+            {MARKETING_TABS.filter((tab) => !tab.hidden).map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                style={tabButtonStyle(activeTab === tab.key, tab.color)}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
           {/* Right-edge fade scroll cue — purely decorative, pointer-events:none */}
           <div
@@ -895,7 +912,10 @@ ${fields.map(f => {
               <h4 style={{ fontSize: '1rem', fontWeight: '600' }}>Fields</h4>
               {fields.map((field, idx) => (
                 <div key={field.id} style={{ background: 'var(--subtle-bg-2)', padding: '0.85rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  {/* wrap: the builder sits in a half-width column, so on a
+                      narrow viewport this row would otherwise overflow its
+                      card rather than reflowing. */}
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                     <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--subtle-bg-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', flexShrink: 0 }}>{idx + 1}</div>
                     <input
                       type="text"
@@ -905,11 +925,17 @@ ${fields.map(f => {
                       style={{ margin: 0, flex: 1 }}
                       placeholder="Label"
                     />
+                    {/* 140px could not fit "Full Name (text)" plus the dropdown
+                        arrow, and with no flexShrink the flex row squeezed it
+                        further — the selected option rendered clipped as
+                        "Full Name (te". Size it to the longest option and stop
+                        flex from shrinking it; the label input (flex:1) is the
+                        one that should absorb a narrow row. */}
                     <select
                       className="input-field"
                       value={field.name}
                       onChange={e => updateField(idx, { name: e.target.value })}
-                      style={{ margin: 0, width: '140px' }}
+                      style={{ margin: 0, minWidth: '165px', flexShrink: 0 }}
                     >
                       <option value="full_name">Full Name (text)</option>
                       <option value="email">Email</option>
@@ -919,7 +945,7 @@ ${fields.map(f => {
                     <button
                       type="button"
                       onClick={() => removeField(field.id)}
-                      style={{ background: 'transparent', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', fontWeight: 'bold' }}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', fontWeight: 'bold', flexShrink: 0 }}
                       aria-label={`Remove field ${field.label}`}
                     >
                       Remove
@@ -998,7 +1024,13 @@ ${fields.map(f => {
             </p>
 
             <div style={{ flex: 1, background: 'var(--input-bg)', borderRadius: '8px', padding: '1rem', overflow: 'auto', position: 'relative' }}>
-              <pre style={{ margin: 0, color: '#e2e8f0', fontSize: '0.875rem', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+              {/* Colour MUST come from the theme token. This was hardcoded to
+                  #e2e8f0 — a near-white slate — while the wrapper above uses
+                  the theme-aware --input-bg. In dark mode that reads fine, but
+                  light mode sets --input-bg to rgba(255,255,255,0.8), so the
+                  snippet rendered near-white on near-white and was effectively
+                  unreadable. */}
+              <pre style={{ margin: 0, color: 'var(--text-primary)', fontSize: '0.875rem', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                 <code>{embedCode}</code>
               </pre>
             </div>

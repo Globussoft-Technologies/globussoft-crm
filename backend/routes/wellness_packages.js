@@ -175,6 +175,129 @@ function toServiceId(value) {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+/**
+ * Per-service session counts, as a plain {serviceId: count} object.
+ *
+ * Accepts either shape the client might send — a map keyed by id, or the
+ * array of {serviceId, sessions} the builder finds easier to hold in state —
+ * and normalises both to the map that gets stored. Anything unusable (a
+ * non-positive count, an unparseable id) is dropped rather than stored, so a
+ * corrupt value cannot silently price a package at zero.
+ *
+ * Returns null when there is nothing usable, which is the signal to fall back
+ * to the flat "every service runs `sessions` times" reading.
+ */
+function parseServiceSessions(raw) {
+  if (raw === null || raw === undefined || raw === "") return null;
+
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  const entries = Array.isArray(value)
+    ? value.map((row) => [row?.serviceId, row?.sessions])
+    : value && typeof value === "object"
+      ? Object.entries(value)
+      : [];
+
+  const out = {};
+  for (const [rawId, rawCount] of entries) {
+    const id = toServiceId(rawId);
+    const count = Number(rawCount);
+    if (id === null || !Number.isInteger(count) || count < 1) continue;
+    out[id] = count;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Why an update to a package that prices per service must be refused.
+ *
+ * Two ways the stored split can drift, both of which cost real money:
+ *
+ *  - A bare `sessions` edit. The split owns `sessions` — it is their sum — so
+ *    letting one through leaves the column saying 10 while the split still adds
+ *    to 8, and there is no honest way to spread 10 over a 1 + 7 split.
+ *  - A service added or dropped without a matching split. The uncovered ones
+ *    price at zero, so the bundle quietly includes a free treatment.
+ *    normalizePackageBody only checks coverage when both arrive together; this
+ *    catches `serviceIds` changing on its own.
+ *
+ * Returns null when the update is safe.
+ */
+function splitUpdateBlockReason({ perServiceSessions, serviceIds, sessionsChanged, splitProvided }) {
+  if (!perServiceSessions) return null;
+
+  if (sessionsChanged && !splitProvided) {
+    return {
+      status: 400,
+      body: {
+        error:
+          "This package sets sessions per service. Send serviceSessions to change them, or serviceSessions: null to go back to a flat count.",
+        code: "SESSIONS_SET_BY_SPLIT",
+      },
+    };
+  }
+
+  const ids = (serviceIds || []).map(String);
+  const counted = Object.keys(perServiceSessions);
+  const missing = (serviceIds || []).filter((sid) => !counted.includes(String(sid)));
+  const extra = counted.filter((sid) => !ids.includes(sid));
+  if (missing.length || extra.length) {
+    return {
+      status: 400,
+      body: {
+        error: "serviceSessions must cover exactly the services in the package",
+        code: "SERVICE_SESSIONS_MISMATCH",
+        missing,
+        extra: extra.map(Number),
+      },
+    };
+  }
+  return null;
+}
+
+const SESSION_MODES = ["combined", "separate"];
+
+/**
+ * Service-sessions: how many treatment runs the package contains in total.
+ *
+ * Two services at 3 and 4 runs is 7 runs however they are delivered — this is
+ * the number the price is built from.
+ */
+function totalSessionsFrom(serviceSessions, serviceIds, fallbackSessions) {
+  if (!serviceSessions) return fallbackSessions * (serviceIds?.length || 1);
+  return Object.values(serviceSessions).reduce((sum, n) => sum + n, 0);
+}
+
+/**
+ * Visits: how many appointments the patient actually attends.
+ *
+ * This is the number that matters operationally — `ServicePackage.sessions`
+ * becomes `TreatmentPlan.totalSessions`, and every completed visit knocks one
+ * off it. The same 7 runs are either:
+ *
+ *   - "combined": each visit delivers every service that still has a run left,
+ *     so 3 + 4 takes 4 visits — three with both services, one with the
+ *     leftover. This is what a package has always meant (6 sessions of a
+ *     two-service bundle was 6 visits, not 12), so it is the default and what
+ *     a package with no split reads as.
+ *   - "separate": one service per visit, so 3 + 4 takes 7.
+ */
+function visitsFrom(serviceSessions, serviceIds, fallbackSessions, sessionMode = "combined") {
+  if (!serviceSessions) return fallbackSessions;
+  const counts = Object.values(serviceSessions);
+  if (!counts.length) return fallbackSessions;
+  return sessionMode === "separate"
+    ? counts.reduce((sum, n) => sum + n, 0)
+    : Math.max(...counts);
+}
+
 /** Parse the stored JSON id array, tolerating legacy/corrupt values. */
 function parseServiceIds(raw) {
   try {
@@ -234,6 +357,97 @@ function normalizePackageBody(body, { partial = false } = {}) {
       };
     }
     out.sessions = Math.round(sessions);
+  }
+
+  if (body.sessionMode !== undefined) {
+    const mode = String(body.sessionMode || "").trim().toLowerCase();
+    if (!SESSION_MODES.includes(mode)) {
+      return {
+        error: {
+          status: 400,
+          body: {
+            error: `sessionMode must be one of: ${SESSION_MODES.join(", ")}`,
+            code: "INVALID_SESSION_MODE",
+          },
+        },
+      };
+    }
+    out.sessionMode = mode;
+  }
+
+  // Per-service counts. When present they are the source of truth: `sessions`
+  // is recomputed as their total, so the stored column keeps meaning "how many
+  // sittings did the patient buy" for everything downstream (the treatment
+  // plan, the session counter, the card).
+  if (body.serviceSessions !== undefined) {
+    if (body.serviceSessions === null || body.serviceSessions === "") {
+      out.serviceSessions = null;
+    } else {
+      const parsed = parseServiceSessions(body.serviceSessions);
+      if (!parsed) {
+        return {
+          error: {
+            status: 400,
+            body: {
+              error: "serviceSessions must map each service to a whole number of sessions, 1 or more",
+              code: "INVALID_SERVICE_SESSIONS",
+            },
+          },
+        };
+      }
+      const counts = Object.values(parsed);
+      if (counts.some((n) => n > MAX_SESSIONS)) {
+        return {
+          error: {
+            status: 400,
+            body: {
+              error: `A service cannot run more than ${MAX_SESSIONS} sessions`,
+              code: "INVALID_SERVICE_SESSIONS",
+            },
+          },
+        };
+      }
+      // Every count must belong to a service actually in the bundle, and every
+      // bundled service must have one — a package that prices only half its
+      // services is worse than a rejected save.
+      if (out.serviceIds) {
+        const bundle = new Set(out.serviceIds.map(String));
+        const counted = new Set(Object.keys(parsed));
+        const missing = out.serviceIds.filter((id) => !counted.has(String(id)));
+        const extra = Object.keys(parsed).filter((id) => !bundle.has(id));
+        if (missing.length || extra.length) {
+          return {
+            error: {
+              status: 400,
+              body: {
+                error: "serviceSessions must cover exactly the services in the package",
+                code: "SERVICE_SESSIONS_MISMATCH",
+                missing,
+                extra: extra.map(Number),
+              },
+            },
+          };
+        }
+      }
+      out.serviceSessions = parsed;
+      // `sessions` is the visit count, not the run count: it becomes
+      // TreatmentPlan.totalSessions, and one completed visit knocks off one.
+      out.sessions = visitsFrom(parsed, out.serviceIds, out.sessions, out.sessionMode || "combined");
+      // Each run is capped at MAX_SESSIONS, but "one service per visit" sums
+      // them, so 25 services could otherwise derive a 1,500-visit package and
+      // a treatment plan to match. The cap is on the package, not the field.
+      if (out.sessions > MAX_SESSIONS) {
+        return {
+          error: {
+            status: 400,
+            body: {
+              error: `That comes to ${out.sessions} visits — a package can carry at most ${MAX_SESSIONS}. Lower the sessions, or deliver the services together in a visit.`,
+              code: "TOO_MANY_SESSIONS",
+            },
+          },
+        };
+      }
+    }
   }
 
   if (body.discountPercent !== undefined || !partial) {
@@ -305,7 +519,7 @@ function normalizePackageBody(body, { partial = false } = {}) {
  * snapshot of what was agreed. Tenant-scoped so a package can never be priced
  * off another tenant's service.
  */
-async function priceFromServices(tenantId, serviceIds, sessions, discountPercent) {
+async function priceFromServices(tenantId, serviceIds, sessions, discountPercent, perServiceSessions = null) {
   const services = await prisma.service.findMany({
     where: { tenantId, id: { in: serviceIds } },
     select: { id: true, basePrice: true },
@@ -326,8 +540,14 @@ async function priceFromServices(tenantId, serviceIds, sessions, discountPercent
     };
   }
 
-  const perSession = services.reduce((sum, s) => sum + (s.basePrice || 0), 0);
-  const grossPrice = perSession * sessions;
+  // Per-service counts price each treatment on its own run; without them a
+  // package is still the flat "whole bundle, N times" it always was.
+  const grossPrice = perServiceSessions
+    ? services.reduce(
+        (sum, s) => sum + (s.basePrice || 0) * (perServiceSessions[s.id] || 0),
+        0,
+      )
+    : services.reduce((sum, s) => sum + (s.basePrice || 0), 0) * sessions;
   const price = Math.round(grossPrice - (grossPrice * discountPercent) / 100);
   return { grossPrice, price };
 }
@@ -404,6 +624,18 @@ async function decorate(tenantId, rows) {
     return {
       ...row,
       serviceIds: ids,
+      // Parsed for the client; null keeps its "every service runs `sessions`
+      // times" meaning rather than pretending to be an empty split.
+      serviceSessions: parseServiceSessions(row.serviceSessions),
+      sessionMode: row.sessionMode || "combined",
+      // Visits (`sessions`) is what the plan counts down; this is the number of
+      // treatment runs those visits deliver, which is what the price is built
+      // from. They differ whenever services are combined in a visit.
+      serviceSessionTotal: totalSessionsFrom(
+        parseServiceSessions(row.serviceSessions),
+        ids,
+        row.sessions,
+      ),
       services: resolved,
       // Surfaced so staff can see a package has drifted from the catalog
       // without the stored price silently changing underneath them.
@@ -512,6 +744,7 @@ router.post("/packages", adminGate, async (req, res) => {
       data.serviceIds,
       data.sessions,
       data.discountPercent,
+      data.serviceSessions || null,
     );
     if (priced.error) return res.status(priced.error.status).json(priced.error.body);
 
@@ -520,6 +753,8 @@ router.post("/packages", adminGate, async (req, res) => {
         name: data.name,
         description: data.description ?? null,
         serviceIds: JSON.stringify(data.serviceIds),
+        serviceSessions: data.serviceSessions ? JSON.stringify(data.serviceSessions) : null,
+        sessionMode: data.sessionMode || "combined",
         sessions: data.sessions,
         discountPercent: data.discountPercent,
         grossPrice: priced.grossPrice,
@@ -571,20 +806,58 @@ router.put("/packages/:id", adminGate, async (req, res) => {
     const repriceNeeded =
       data.serviceIds !== undefined ||
       data.sessions !== undefined ||
+      data.serviceSessions !== undefined ||
+      // Changing the packing does not move the price — the runs are the same —
+      // but it does change how many visits they take, so `sessions` must be
+      // re-derived.
+      data.sessionMode !== undefined ||
       data.discountPercent !== undefined;
 
     if (repriceNeeded) {
       const serviceIds = data.serviceIds ?? parseServiceIds(existing.serviceIds);
       const sessions = data.sessions ?? existing.sessions;
       const discountPercent = data.discountPercent ?? existing.discountPercent;
+      // `undefined` = not being changed, so fall back to what is stored.
+      // An explicit `null` = the caller is clearing the split, which drops the
+      // package back to the flat "every service runs `sessions` times".
+      const perServiceSessions = data.serviceSessions !== undefined
+        ? data.serviceSessions
+        : parseServiceSessions(existing.serviceSessions);
 
-      const priced = await priceFromServices(req.user.tenantId, serviceIds, sessions, discountPercent);
+      const splitError = splitUpdateBlockReason({
+        perServiceSessions,
+        serviceIds,
+        sessionsChanged: data.sessions !== undefined,
+        splitProvided: data.serviceSessions !== undefined,
+      });
+      if (splitError) return res.status(splitError.status).json(splitError.body);
+      if (perServiceSessions) {
+        // Keep the stored total honest no matter which field triggered the
+        // reprice: the split owns `sessions`, and it is their sum.
+        patch.sessions = visitsFrom(
+          perServiceSessions,
+          serviceIds,
+          sessions,
+          data.sessionMode ?? existing.sessionMode ?? "combined",
+        );
+      }
+
+      const priced = await priceFromServices(
+        req.user.tenantId,
+        serviceIds,
+        sessions,
+        discountPercent,
+        perServiceSessions,
+      );
       if (priced.error) return res.status(priced.error.status).json(priced.error.body);
 
       patch.grossPrice = priced.grossPrice;
       patch.price = priced.price;
     }
     if (data.serviceIds !== undefined) patch.serviceIds = JSON.stringify(data.serviceIds);
+    if (data.serviceSessions !== undefined) {
+      patch.serviceSessions = data.serviceSessions ? JSON.stringify(data.serviceSessions) : null;
+    }
 
     const updated = await prisma.servicePackage.update({ where: { id }, data: patch });
 
@@ -1268,6 +1541,10 @@ router.post("/packages/session-requests/:visitId/decline", schedulingGate, async
 
 module.exports = router;
 module.exports.parseServiceIds = parseServiceIds;
+module.exports.parseServiceSessions = parseServiceSessions;
+module.exports.totalSessionsFrom = totalSessionsFrom;
+module.exports.visitsFrom = visitsFrom;
+module.exports.splitUpdateBlockReason = splitUpdateBlockReason;
 module.exports.normalizePackageBody = normalizePackageBody;
 // Exported for unit tests: the two functions that decide whether a package can
 // be sold and what it costs, without booting prisma or the gateway.

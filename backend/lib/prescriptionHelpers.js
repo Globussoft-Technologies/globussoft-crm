@@ -53,9 +53,15 @@ function extractInteger(value) {
 
 function buildDisplayName(drug) {
   const baseName = drug.name || drug.drugName || "";
-  const strength = [drug.strengthValue, drug.strengthUnit]
-    .filter((v) => v !== null && v !== undefined && String(v).trim() !== "")
-    .join("");
+  // A strength VALUE with no digit in it is not a strength. The Drug
+  // catalogue accepted strengthValue "-" with strengthUnit "-gm" before its
+  // write path was validated, and joining those blind produced "---gm", which
+  // this function then welded onto the drug name — so the junk followed the
+  // prescription onto the patient portal, the ledger and the PDF as part of
+  // the name itself, where no downstream guard could strip it.
+  const value = drug.strengthValue == null ? "" : String(drug.strengthValue).trim();
+  const unit = drug.strengthUnit == null ? "" : String(drug.strengthUnit).trim();
+  const strength = /[0-9]/.test(value) ? [value, unit].filter(Boolean).join("") : "";
   if (!strength) return baseName;
 
   // Avoid duplicating the strength if it is already part of the stored name.

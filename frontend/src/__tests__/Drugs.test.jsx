@@ -20,7 +20,8 @@
  *   4. Empty-state copy "No drugs match." renders when GET resolves to [].
  *   5. Drug row renders name + generic + dosageForm + strength (value + unit
  *      joined) + defaultDosage + Active/Inactive status.
- *   6. Search input + Enter-keydown triggers GET with `?q=<term>` URL.
+ *   6. Search: typing alone triggers GET with `?q=<term>`, coalesced; Enter
+ *      and the button run it immediately.
  *   7. Clicking "New drug" opens the form (name placeholder visible); CTA
  *      label flips to "Cancel"; clicking again resets + re-shows "New drug".
  *   8. Submitting Create POSTs /api/wellness/drugs with body shape
@@ -80,10 +81,10 @@
  *     is fetchApi-internal (it toasts the server message inside the helper).
  *     Omitted error-branch case — silent-degrade behaviour is identical to
  *     empty-state (case 4).
- *   - Search behaviour: SUT line 110 fires `load(search)` ONLY on Enter
- *     keydown OR clicking the Search button; onChange just updates local
- *     state. Pinned via Enter keydown (case 6); the URL gets `?q=<encoded>`
- *     appended (SUT line 35).
+ *   - Search behaviour: typing runs the search on its own, debounced, so a
+ *     word costs one request rather than one per letter. Enter and the Search
+ *     button still work — they just skip the wait — and neither fires a
+ *     duplicate for a term the debounce already ran.
  *   - Backend endpoint confirmed at /api/wellness/drugs per SUT lines 35, 67,
  *     70, 82.
  *
@@ -367,6 +368,125 @@ describe('<Drugs /> — search re-fetch', () => {
       );
       expect(searchCall).toBeTruthy();
     });
+  });
+
+  it('typing alone searches — no Enter, no button click', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Crocin 500')).toBeInTheDocument());
+
+    fireEvent.change(
+      screen.getByPlaceholderText(/Search by name or generic name/i),
+      { target: { value: 'post' } },
+    );
+
+    await waitFor(
+      () => {
+        expect(
+          fetchApiMock.mock.calls.some(
+            ([u]) => u === '/api/wellness/drugs?page=1&limit=8&q=post',
+          ),
+        ).toBe(true);
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  it('coalesces a burst of keystrokes into one request', async () => {
+    // The point of the debounce: "post" is one query, not p → po → pos → post.
+    installFetchMock();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Crocin 500')).toBeInTheDocument());
+    const input = screen.getByPlaceholderText(/Search by name or generic name/i);
+
+    for (const value of ['p', 'po', 'pos', 'post']) {
+      fireEvent.change(input, { target: { value } });
+    }
+
+    await waitFor(
+      () => {
+        expect(
+          fetchApiMock.mock.calls.some(
+            ([u]) => u === '/api/wellness/drugs?page=1&limit=8&q=post',
+          ),
+        ).toBe(true);
+      },
+      { timeout: 2000 },
+    );
+
+    const queried = fetchApiMock.mock.calls
+      .map(([u]) => u)
+      .filter((u) => typeof u === 'string' && u.includes('&q='));
+    expect(queried).toEqual(['/api/wellness/drugs?page=1&limit=8&q=post']);
+  });
+
+  it('Enter does not then fire a second identical request when the debounce lands', async () => {
+    // Enter cancels the pending timer and marks the term as already run, so
+    // the impatient path costs one request, not two.
+    installFetchMock();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Crocin 500')).toBeInTheDocument());
+    const input = screen.getByPlaceholderText(/Search by name or generic name/i);
+
+    fireEvent.change(input, { target: { value: 'crocin' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await new Promise((r) => setTimeout(r, 900));
+    const queried = fetchApiMock.mock.calls
+      .map(([u]) => u)
+      .filter((u) => typeof u === 'string' && u.includes('q=crocin'));
+    expect(queried).toHaveLength(1);
+  });
+
+  it('clearing the box reloads the unfiltered list', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Crocin 500')).toBeInTheDocument());
+    const input = screen.getByPlaceholderText(/Search by name or generic name/i);
+
+    fireEvent.change(input, { target: { value: 'post' } });
+    await waitFor(
+      () => {
+        expect(
+          fetchApiMock.mock.calls.some(([u]) => u.includes('&q=post')),
+        ).toBe(true);
+      },
+      { timeout: 2000 },
+    );
+
+    fetchApiMock.mockClear();
+    fireEvent.change(input, { target: { value: '' } });
+
+    await waitFor(
+      () => {
+        // No q= at all — the full list, not a search for the empty string.
+        expect(
+          fetchApiMock.mock.calls.some(
+            ([u]) => u === '/api/wellness/drugs?page=1&limit=8',
+          ),
+        ).toBe(true);
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  it('does not fire a queued search after the page unmounts', async () => {
+    // A pending timer that outlives the component would set state on an
+    // unmounted tree and log a React warning.
+    installFetchMock();
+    const { unmount } = renderPage();
+    await waitFor(() => expect(screen.getByText('Crocin 500')).toBeInTheDocument());
+
+    fireEvent.change(
+      screen.getByPlaceholderText(/Search by name or generic name/i),
+      { target: { value: 'abandoned' } },
+    );
+    unmount();
+
+    await new Promise((r) => setTimeout(r, 900));
+    expect(
+      fetchApiMock.mock.calls.some(([u]) => typeof u === 'string' && u.includes('abandoned')),
+    ).toBe(false);
   });
 });
 

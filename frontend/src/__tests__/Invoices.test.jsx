@@ -779,3 +779,122 @@ describe('<Invoices /> — page surface', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: /Close payment dialog/i })).toBeNull());
   });
 });
+
+describe('<Invoices /> — server-side date filter', () => {
+  /** Same as defaultFetchMock but tolerant of a query string on /api/billing. */
+  function rangeAwareMock(url, opts) {
+    if (String(url).startsWith('/api/billing') && (!opts || !opts.method || opts.method === 'GET')) {
+      return Promise.resolve(sampleInvoices);
+    }
+    return defaultFetchMock(url, opts);
+  }
+
+  /** The most recent GET to the ledger endpoint. */
+  function lastLedgerCall() {
+    const calls = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => String(url).startsWith('/api/billing') && (!opts || !opts.method || opts.method === 'GET'),
+    );
+    return calls.length ? String(calls[calls.length - 1][0]) : null;
+  }
+
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifyInfo.mockReset();
+    notifySuccess.mockReset();
+    notifyConfirm.mockReset();
+    notifyConfirm.mockResolvedValue(true);
+    fetchApiMock.mockImplementation(rangeAwareMock);
+  });
+
+  it('sends no date params by default, so the ledger URL is unchanged', async () => {
+    renderInvoices();
+    await waitFor(() => expect(lastLedgerCall()).toBe('/api/billing'));
+    // The whole point of defaulting to "All time": every existing caller and
+    // test keeps hitting the bare endpoint.
+    expect(lastLedgerCall()).not.toContain('from=');
+    expect(lastLedgerCall()).not.toContain('dateField=');
+  });
+
+  it('re-fetches from the backend with ?from and ?dateField when a preset is picked', async () => {
+    renderInvoices();
+    await waitFor(() => expect(lastLedgerCall()).toBe('/api/billing'));
+
+    fireEvent.change(screen.getByLabelText(/filter invoices by date range/i), {
+      target: { value: '30' },
+    });
+
+    // The assertion that matters for "make sure it is from the backend": the
+    // page issues a NEW request rather than slicing the array it already has.
+    await waitFor(() => expect(lastLedgerCall()).toContain('from='));
+    const url = lastLedgerCall();
+    expect(url).toContain('dateField=issuedDate');
+    expect(url).toMatch(/from=\d{4}-\d{2}-\d{2}/);
+    // A relative preset has no upper bound — "last 30 days" runs to now.
+    expect(url).not.toContain('to=');
+  });
+
+  it('switching the date column re-queries on that column', async () => {
+    renderInvoices();
+    await waitFor(() => expect(lastLedgerCall()).toBe('/api/billing'));
+
+    fireEvent.change(screen.getByLabelText(/filter invoices by date range/i), {
+      target: { value: '7' },
+    });
+    await waitFor(() => expect(lastLedgerCall()).toContain('dateField=issuedDate'));
+
+    fireEvent.change(screen.getByLabelText(/choose which invoice date to filter on/i), {
+      target: { value: 'dueDate' },
+    });
+    await waitFor(() => expect(lastLedgerCall()).toContain('dateField=dueDate'));
+  });
+
+  it('custom range exposes both date inputs and sends from + to', async () => {
+    renderInvoices();
+    await waitFor(() => expect(lastLedgerCall()).toBe('/api/billing'));
+
+    fireEvent.change(screen.getByLabelText(/filter invoices by date range/i), {
+      target: { value: 'CUSTOM' },
+    });
+    fireEvent.change(screen.getByLabelText(/^from date$/i), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText(/^to date$/i), { target: { value: '2026-08-28' } });
+
+    await waitFor(() => expect(lastLedgerCall()).toContain('to=2026-08-28'));
+    expect(lastLedgerCall()).toContain('from=2026-08-01');
+    expect(lastLedgerCall()).toContain('dateField=issuedDate');
+  });
+
+  it('leaves color-scheme to the stylesheet so the picker icon survives both themes', async () => {
+    renderInvoices();
+    await waitFor(() => expect(lastLedgerCall()).toBe('/api/billing'));
+
+    fireEvent.change(screen.getByLabelText(/filter invoices by date range/i), {
+      target: { value: 'CUSTOM' },
+    });
+
+    // index.css drives `color-scheme` off [data-theme] for every date input so
+    // the browser's native calendar button renders dark-on-light in light mode
+    // and light-on-dark in dark mode. An INLINE color-scheme outranks that
+    // stylesheet rule — pinning "dark" painted a light icon onto light mode's
+    // light input and the button vanished. Nothing here may set it inline.
+    for (const label of [/^from date$/i, /^to date$/i]) {
+      const input = screen.getByLabelText(label);
+      expect(input.style.colorScheme).toBe('');
+      expect(input.getAttribute('style') || '').not.toMatch(/color-scheme/i);
+    }
+  });
+
+  it('the count chip stops claiming a tenant-wide total once a range is active', async () => {
+    renderInvoices();
+    await waitFor(() => expect(screen.getByText(/total invoices/i)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/filter invoices by date range/i), {
+      target: { value: '30' },
+    });
+
+    // Every KPI chip is derived from the now-filtered array, so a label
+    // reading "total invoices" would misreport the ledger.
+    await waitFor(() => expect(screen.getByText(/invoices in range/i)).toBeInTheDocument());
+    expect(screen.queryByText(/total invoices/i)).toBeNull();
+  });
+});

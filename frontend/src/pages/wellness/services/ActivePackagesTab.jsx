@@ -103,6 +103,42 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
     return rest;
   });
 
+  // The split is drafted the same way, but keyed by service: a PUT per
+  // keystroke would re-price on the way to a number nobody finished typing.
+  const [splits, setSplits] = useState({});
+  const splitFor = (pkg) => splits[pkg.id] || { ...(pkg.serviceSessions || {}) };
+  const setSplit = (pkg, serviceId, value) =>
+    setSplits((d) => ({ ...d, [pkg.id]: { ...splitFor(pkg), [serviceId]: value } }));
+
+  /**
+   * Save one service's count.
+   *
+   * Sent as the whole map, never as a bare `sessions`: the API rejects that on
+   * a split package, and the map is what re-derives the total. Every service in
+   * the bundle must carry a count or the uncovered ones would price at zero.
+   */
+  const commitSplit = async (pkg, serviceId, raw) => {
+    const current = Number(pkg.serviceSessions?.[serviceId] ?? 0);
+    const n = Number(raw);
+    if (raw === '' || !Number.isInteger(n) || n < 1 || n > MAX_SESSIONS) {
+      notify.error(`Sessions must be a whole number between 1 and ${MAX_SESSIONS}`);
+      setSplit(pkg, serviceId, String(current));
+      return;
+    }
+    if (n === current) return;
+
+    const serviceSessions = {};
+    for (const svc of pkg.services) {
+      serviceSessions[svc.id] = svc.id === serviceId ? n : Number(pkg.serviceSessions?.[svc.id] ?? 0);
+    }
+    const total = Object.values(serviceSessions).reduce((sum, v) => sum + v, 0);
+    await patch(pkg, { serviceSessions }, `"${pkg.name}" now ${total} sessions`);
+    setSplits((d) => {
+      const { [pkg.id]: _drop, ...rest } = d;
+      return rest;
+    });
+  };
+
   /**
    * Save a typed number, or put the old one back.
    *
@@ -274,6 +310,7 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
                   }}
                 >
                   {s.name}
+                  {pkg.serviceSessions?.[s.id] ? ` × ${pkg.serviceSessions[s.id]}` : ''}
                 </span>
               ))}
             </div>
@@ -297,7 +334,18 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
             )}
 
             <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-              <span>{pkg.sessions} sessions</span>
+              {/* `sessions` is the number of VISITS the patient books, which
+                  is what the counter counts down. With services sharing a
+                  sitting that is fewer than the treatment runs they cover, so
+                  both numbers are printed — 4 visits is not 7 runs. */}
+              <span>
+                {pkg.sessions} {pkg.sessions === 1 ? 'visit' : 'visits'}
+                {pkg.serviceSessions && pkg.services.length > 1
+                  ? ` · ${pkg.services.map((s) => pkg.serviceSessions[s.id] ?? 0).join(' + ')} = ${
+                      pkg.serviceSessionTotal ?? pkg.sessions
+                    } sessions`
+                  : ''}
+              </span>
               {pkg.discountPercent > 0 && <span>{pkg.discountPercent}% off</span>}
               {pkg.taxPercent > 0 && <span>+{pkg.taxPercent}% tax</span>}
             </div>
@@ -490,6 +538,47 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
                   borderTop: '1px solid var(--border-color)',
                 }}
               >
+                {/* A package that prices per service has no single "sessions"
+                    to edit — the API refuses a bare one, because there is no
+                    honest way to spread 10 over a 1 + 7 split. So edit the
+                    split itself, which is what sets the total. */}
+                {pkg.serviceSessions ? (
+                  <div style={{ ...termFieldStyle, gridColumn: '1 / -1' }}>
+                    Sessions per service
+                    <span style={{ fontWeight: 400, color: 'var(--text-secondary)' }}>
+                      {' '}
+                      — {pkg.sessionMode === 'separate'
+                        ? 'one service per visit'
+                        : 'services share a visit'}
+                    </span>
+                    <div
+                      data-testid={`package-split-${pkg.id}`}
+                      style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.2rem' }}
+                    >
+                      {pkg.services.map((svc) => (
+                        <label
+                          key={svc.id}
+                          style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem' }}
+                        >
+                          <span style={{ color: 'var(--text-secondary)' }}>{svc.name}</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={MAX_SESSIONS}
+                            step={1}
+                            value={splitFor(pkg)[svc.id] ?? ''}
+                            disabled={busy}
+                            data-testid={`package-split-${pkg.id}-${svc.id}`}
+                            onChange={(e) => setSplit(pkg, svc.id, e.target.value)}
+                            onBlur={(e) => commitSplit(pkg, svc.id, e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                            style={{ ...termInputStyle, width: '3.2rem' }}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
                 <label style={termFieldStyle}>
                   Sessions
                   <input
@@ -508,6 +597,7 @@ export default function ActivePackagesTab({ packages, loading, onChanged, readOn
                     style={termInputStyle}
                   />
                 </label>
+                )}
 
                 <label style={termFieldStyle}>
                   Discount %

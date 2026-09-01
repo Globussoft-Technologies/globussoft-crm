@@ -142,6 +142,81 @@ router.get("/:id", readGate, async (req, res) => {
 
 const ALLOWED_DOSAGE_FORMS = new Set(["tablet", "capsule", "syrup", "injection", "topical", "drops", "inhaler", "other"]);
 
+// ── Strength normalisation ──────────────────────────────────────────
+//
+// `strengthValue` is deliberately a String (combination drugs are written
+// "5/10") and `strengthUnit` was free text, and NEITHER was validated on any
+// write path. A catalogue row therefore got saved with strengthValue "-" and
+// strengthUnit "-gm", and since every prescription surface renders strength as
+// `[value, unit].join("")`, that drug printed as "--gm" on the preview, the
+// PDF and the ledger.
+//
+// The rules are deliberately repair-first rather than reject-first, because a
+// closed unit enum would reject legitimate entries nobody listed ("mEq",
+// "mg/ml", "gm") and break catalogues that already hold them:
+//
+//   • Strip stray leading/trailing punctuation — "-gm" becomes "gm", "500-"
+//     becomes "500". A typo gets fixed rather than bounced.
+//   • A value must contain at least one DIGIT. "-", "--" and "n/a" are not
+//     strengths, and that is the specific input that caused this bug.
+//   • A unit must contain at least one LETTER or "%". "-" alone is not a unit.
+//   • A unit with no value is dropped. "gm" on its own tells a pharmacist
+//     nothing and is what the broken row degrades to once repaired.
+
+const STRENGTH_MAX_LEN = 32;
+
+function cleanStrengthToken(raw) {
+  if (raw == null) return "";
+  // Trim, then peel non-alphanumeric characters off both ends. The inner
+  // separators of "5/10", "2.5" and "mg/ml" are preserved.
+  return String(raw)
+    .trim()
+    .replace(/^[^0-9A-Za-z%]+/, "")
+    .replace(/[^0-9A-Za-z%]+$/, "");
+}
+
+/**
+ * Normalise a {strengthValue, strengthUnit} pair.
+ * @returns {{ok: true, value: string|null, unit: string|null}}
+ *        | {ok: false, error: string, code: string}
+ */
+function normaliseStrength(rawValue, rawUnit) {
+  const hadValue = rawValue != null && String(rawValue).trim() !== "";
+  const hadUnit = rawUnit != null && String(rawUnit).trim() !== "";
+
+  let value = hadValue ? cleanStrengthToken(rawValue) : "";
+  let unit = hadUnit ? cleanStrengthToken(rawUnit) : "";
+
+  if (hadValue && !/[0-9]/.test(value)) {
+    return {
+      ok: false,
+      error: 'strengthValue must contain a number (e.g. "500", "2.5", "5/10")',
+      code: "INVALID_STRENGTH_VALUE",
+    };
+  }
+  if (hadUnit && !/[A-Za-z%]/.test(unit)) {
+    return {
+      ok: false,
+      error: 'strengthUnit must be a unit such as mg, ml, mcg, g, % or IU',
+      code: "INVALID_STRENGTH_UNIT",
+    };
+  }
+  if (value.length > STRENGTH_MAX_LEN || unit.length > STRENGTH_MAX_LEN) {
+    return {
+      ok: false,
+      error: `strength value and unit must each be ${STRENGTH_MAX_LEN} characters or fewer`,
+      code: "STRENGTH_TOO_LONG",
+    };
+  }
+
+  // A unit without a number is noise on a prescription, so it is dropped
+  // rather than printed on its own.
+  if (!value) unit = "";
+
+  return { ok: true, value: value || null, unit: unit || null };
+}
+
+
 router.post("/", writeGate, async (req, res) => {
   try {
     const {
@@ -159,13 +234,17 @@ router.post("/", writeGate, async (req, res) => {
         code: "INVALID_DOSAGE_FORM",
       });
     }
+    const strength = normaliseStrength(strengthValue, strengthUnit);
+    if (!strength.ok) {
+      return res.status(400).json({ error: strength.error, code: strength.code });
+    }
     const drug = await prisma.drug.create({
       data: {
         name: name.trim(),
         genericName: genericName ? String(genericName).trim() : null,
         dosageForm: dosageForm || "tablet",
-        strengthValue: strengthValue ? String(strengthValue).trim() : null,
-        strengthUnit: strengthUnit ? String(strengthUnit).trim() : null,
+        strengthValue: strength.value,
+        strengthUnit: strength.unit,
         defaultDosage: defaultDosage ? String(defaultDosage).trim() : null,
         defaultFrequency: defaultFrequency ? String(defaultFrequency).trim() : null,
         defaultDuration: defaultDuration ? String(defaultDuration).trim() : null,
@@ -227,12 +306,16 @@ router.post("/quick-add", prescriberGate, async (req, res) => {
     });
     if (existing) return res.json({ ...existing, created: false });
 
+    const quickStrength = normaliseStrength(req.body?.strengthValue, req.body?.strengthUnit);
+    if (!quickStrength.ok) {
+      return res.status(400).json({ error: quickStrength.error, code: quickStrength.code });
+    }
     const drug = await prisma.drug.create({
       data: {
         name: rawName,
         dosageForm,
-        strengthValue: req.body?.strengthValue ? String(req.body.strengthValue).trim() : null,
-        strengthUnit: req.body?.strengthUnit ? String(req.body.strengthUnit).trim() : null,
+        strengthValue: quickStrength.value,
+        strengthUnit: quickStrength.unit,
         quantity: 0,
         lowStockThreshold: 0,
         isActive: true,
@@ -307,6 +390,22 @@ router.put("/:id", writeGate, async (req, res) => {
     if (typeof data.name === "string") data.name = data.name.trim();
     if (typeof data.genericName === "string") data.genericName = data.genericName.trim() || null;
 
+    // Strength is normalised as a PAIR, because dropping a unit depends on
+    // whether a value survives. When the caller sends only one half, the other
+    // is read from the stored row so an edit to the unit alone is still
+    // validated against the value it will sit next to.
+    if (data.strengthValue !== undefined || data.strengthUnit !== undefined) {
+      const nextStrength = normaliseStrength(
+        data.strengthValue !== undefined ? data.strengthValue : existing.strengthValue,
+        data.strengthUnit !== undefined ? data.strengthUnit : existing.strengthUnit,
+      );
+      if (!nextStrength.ok) {
+        return res.status(400).json({ error: nextStrength.error, code: nextStrength.code });
+      }
+      data.strengthValue = nextStrength.value;
+      data.strengthUnit = nextStrength.unit;
+    }
+
     const updated = await prisma.drug.update({ where: { id }, data });
     const changes = diffFields(existing, updated, Object.keys(data));
     if (Object.keys(changes).length > 0) {
@@ -336,3 +435,5 @@ router.delete("/:id", writeGate, async (req, res) => {
 });
 
 module.exports = router;
+// Exported for unit tests — the repair rules are the contract, not the route.
+module.exports.normaliseStrength = normaliseStrength;

@@ -5,7 +5,8 @@
  * the #932 Campaign → Sequence linkage UI). This file pins the wider
  * Marketing-page chrome:
  *   - Page header ("Marketing") + description copy.
- *   - 4-tab strip (Email Campaigns / SMS Campaigns / Push Campaigns /
+ *   - tab strip (Email Campaigns / Embedded Forms; SMS + Push are hidden —
+ *     see MARKETING_TABS in the SUT) (was: Email / SMS / Push /
  *     Embedded Forms) renders + the Email tab is the default.
  *   - Email tab: empty-state copy when /api/marketing/campaigns?channel=EMAIL
  *     returns []; campaign cards render with name + status + Stat tiles
@@ -150,15 +151,17 @@ describe('<Marketing /> — broad page surface', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders all 4 tab buttons (Email / SMS / Push / Forms)', async () => {
+  it('renders the visible tabs (Email / Forms) and hides SMS + Push', async () => {
     wireFetch();
     renderMarketing();
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Email Campaigns/i })).toBeInTheDocument();
     });
-    expect(screen.getByRole('button', { name: /SMS Campaigns/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Push Campaigns/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Embedded Forms/i })).toBeInTheDocument();
+    // Hidden via MARKETING_TABS. The tab bodies still exist in the SUT, so this
+    // is what proves they are actually unreachable rather than just unstyled.
+    expect(screen.queryByRole('button', { name: /SMS Campaigns/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Push Campaigns/i })).not.toBeInTheDocument();
   });
 
   it('Email Campaigns tab is the default — Create Campaign button is visible', async () => {
@@ -266,7 +269,11 @@ describe('<Marketing /> — broad page surface', () => {
     expect(screen.getByDisplayValue('Draft')).toBeInTheDocument();
   });
 
-  it('clicking the SMS tab fires GET /api/marketing/campaigns?channel=SMS + renders the Send SMS Blast composer', async () => {
+  // Parked while SMS + Push are hidden from the tab strip (MARKETING_TABS in
+  // the SUT). The tab bodies are untouched, so un-hiding a tab is all these
+  // need to run again — deleting them would lose the coverage for a feature
+  // that is only hidden, not removed.
+  it.skip('clicking the SMS tab fires GET /api/marketing/campaigns?channel=SMS + renders the Send SMS Blast composer', async () => {
     wireFetch();
     renderMarketing();
     await waitFor(() => {
@@ -291,7 +298,7 @@ describe('<Marketing /> — broad page surface', () => {
     expect(screen.getByRole('button', { name: /Send SMS/i })).toBeInTheDocument();
   });
 
-  it('clicking the Push tab renders the "Open Push Templates & Settings" deep-link to /channels?tab=push', async () => {
+  it.skip('clicking the Push tab renders the "Open Push Templates & Settings" deep-link to /channels?tab=push', async () => {
     wireFetch();
     renderMarketing();
     await waitFor(() => {
@@ -330,6 +337,50 @@ describe('<Marketing /> — broad page surface', () => {
     expect(screen.getByRole('heading', { name: /Embed Snippet/i })).toBeInTheDocument();
     // Default field starts with Full Name + the Add Form Field CTA exists.
     expect(screen.getByRole('button', { name: /Add Form Field/i })).toBeInTheDocument();
+  });
+
+  it('Forms tab: the embed snippet takes its colour from the theme, not a hardcoded hex', async () => {
+    wireFetch();
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Embedded Forms/i })).toBeInTheDocument();
+    });
+    wireFetch({ forms: [] });
+    fireEvent.click(screen.getByRole('button', { name: /Embedded Forms/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Embed Snippet/i })).toBeInTheDocument();
+    });
+
+    // The snippet sits on `--input-bg`, which is dark in dark mode and
+    // rgba(255,255,255,0.8) in light mode. Pinning the text to a near-white
+    // hex (#e2e8f0) therefore rendered near-white on near-white and the
+    // snippet was unreadable in light mode. It must track the theme token.
+    const pre = document.querySelector('pre');
+    expect(pre).toBeTruthy();
+    expect(pre.style.color).toContain('--text-primary');
+    expect(pre.style.color).not.toMatch(/#|rgb/i);
+  });
+
+  it('Forms tab: the field-type select is wide enough for its longest option', async () => {
+    wireFetch();
+    renderMarketing();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Embedded Forms/i })).toBeInTheDocument();
+    });
+    wireFetch({ forms: [] });
+    fireEvent.click(screen.getByRole('button', { name: /Embedded Forms/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Form Field/i })).toBeInTheDocument();
+    });
+
+    const select = document.querySelector('select');
+    expect(select).toBeTruthy();
+    // A fixed 140px width with no flexShrink guard let the flex row clip
+    // "Full Name (text)" down to "Full Name (te". The label input (flex:1) is
+    // what should give way on a narrow row, never the select.
+    expect(select.style.flexShrink).toBe('0');
+    expect(select.style.width).toBe('');
+    expect(parseInt(select.style.minWidth, 10)).toBeGreaterThanOrEqual(160);
   });
 
   it('Forms tab: clicking "Add Form Field" appends a new field row', async () => {
@@ -550,7 +601,10 @@ describe('<Marketing /> — broad page surface', () => {
     expect(notifyObj.success).toHaveBeenCalledWith('Campaign dispatched');
   });
 
-  it('SMS tab: Send SMS Blast posts to /api/sms/send-bulk with parsed recipient array', async () => {
+  // Parked with the SMS + Push tabs themselves — these drive the tab bodies,
+  // which are unreachable while MARKETING_TABS hides their buttons. Un-hide a
+  // tab and these run again unchanged.
+  it.skip('SMS tab: Send SMS Blast posts to /api/sms/send-bulk with parsed recipient array', async () => {
     // Pins the #516 single-shot /send-bulk contract — recipient field accepts
     // comma- or whitespace-separated phones, parsed client-side into an
     // array before the POST.
@@ -598,7 +652,7 @@ describe('<Marketing /> — broad page surface', () => {
     expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/SMS sent: 2 OK/));
   });
 
-  it('SMS tab: empty recipient OR body short-circuits with notify.error (no POST)', async () => {
+  it.skip('SMS tab: empty recipient OR body short-circuits with notify.error (no POST)', async () => {
     // Pins the local guard inside handleSendSmsBlast — both fields are
     // required before a POST goes out.
     wireFetch();
@@ -618,7 +672,7 @@ describe('<Marketing /> — broad page surface', () => {
     expect(sendBtn).toBeDisabled();
   });
 
-  it('SMS tab: recent campaigns history renders rows when /api/marketing/campaigns?channel=SMS has data', async () => {
+  it.skip('SMS tab: recent campaigns history renders rows when /api/marketing/campaigns?channel=SMS has data', async () => {
     // Pins the right-column "Recent SMS Campaigns" populated state — was
     // empty-state in the existing test; this is the non-empty path.
     wireFetch({
@@ -1059,7 +1113,7 @@ describe('<Marketing /> — broad page surface', () => {
     expect(within(dialog).getByDisplayValue('Hi')).toBeInTheDocument();
   });
 
-  it('Push tab → switching back to Email tab re-renders campaign cards (state preserved)', async () => {
+  it.skip('Push tab → switching back to Email tab re-renders campaign cards (state preserved)', async () => {
     // Pins the activeTab navigation — Push has no GET so we just verify the
     // tab switch round-trip restores the campaign cards from state.
     wireFetch();

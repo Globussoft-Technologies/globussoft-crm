@@ -353,7 +353,13 @@ const pdfButtonStyle = {
   alignItems: 'center',
   gap: '0.3rem',
   padding: '0.4rem 0.8rem',
-  background: 'var(--primary-color, var(--accent-color))',
+  // --accent-color, NOT --primary-color. Same trap the Request-renewal button
+  // documents above, hit from the other side: in the wellness theme
+  // --primary-color is charcoal in BOTH modes, so using it as a BACKGROUND
+  // painted a charcoal button onto the near-black prescription card and the
+  // control effectively disappeared. --accent-color is the blue that carries
+  // white text at contrast in both themes.
+  background: 'var(--accent-color, #3b82f6)',
   border: 'none',
   borderRadius: 6,
   color: '#fff',

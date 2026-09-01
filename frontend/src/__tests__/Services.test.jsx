@@ -958,8 +958,370 @@ describe('<Services /> — PackageBuilder multi-service selection', () => {
     await user.click(checkboxes[1]);
 
     await waitFor(() =>
-      expect(screen.getByText(/Alpha Peel \+ Beta Laser × 6 sessions/i)).toBeInTheDocument(),
+      // The pitch now names each service with its own run, because a package
+      // can be 3 of one and 2 of another rather than a flat multiple.
+      expect(screen.getByText(/Alpha Peel × 6 \+ Beta Laser × 6 \(12 sessions\)/i)).toBeInTheDocument(),
     );
+  });
+
+  it('prices each service on its own run — 3 of one, 2 of the other', async () => {
+    // The point of the split: 5 sessions that are 3 of one treatment and 2 of
+    // another cost 3xA + 2xB, not a flat multiple of the bundle.
+    const user = userEvent.setup();
+    await openPackages();
+
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    await user.click(checkboxes[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+    fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '2' } });
+
+    // 1000x3 + 2000x2 = 7,000 gross; 15% = 1,050; net 5,950.
+    await waitFor(() => expect(screen.getByText(/7,000/)).toBeInTheDocument());
+    expect(screen.getByText(/1,050/)).toBeInTheDocument();
+    expect(screen.getAllByText(/5,950/).length).toBeGreaterThanOrEqual(1);
+    // Five sittings in total, and no single "per session" price to quote.
+    expect(screen.getByText(/Total sessions/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Per session/i)).not.toBeInTheDocument();
+  });
+
+  it('itemises the split with each service run', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+
+    // Exact strings: the pitch line below also contains "Alpha Peel × 3".
+    await waitFor(() => expect(screen.getByText('Alpha Peel × 3')).toBeInTheDocument());
+    expect(screen.getByText('Beta Laser × 6')).toBeInTheDocument();
+    // 1000x3 = 3,000 and 2000x6 = 12,000, priced per service.
+    expect(screen.getByText(/^₹3,000$/)).toBeInTheDocument();
+    expect(screen.getByText(/^₹12,000$/)).toBeInTheDocument();
+  });
+
+  it('the slider still sets every service at once', async () => {
+    // It is the common case, and it is what the single number always meant.
+    const user = userEvent.setup();
+    await openPackages();
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '2' } });
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-21')).toHaveValue(2));
+
+    const sliders = document.querySelectorAll('input[type="range"]');
+    fireEvent.change(sliders[0], { target: { value: '4' } });
+
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-21')).toHaveValue(4));
+    expect(screen.getByTestId('package-service-sessions-22')).toHaveValue(4);
+  });
+
+  it('labels the slider with the slider value, not the total', async () => {
+    // The bug this pins: the label read "Sessions: 16" directly above a thumb
+    // sitting on 8. The label belongs to the slider; the totals get their own
+    // line underneath, where they cannot be misread as the slider's value.
+    const user = userEvent.setup();
+    await openPackages();
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '1' } });
+    fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '7' } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('8'),
+    );
+    // The slider still reads its own value, and says what it does to a split.
+    expect(screen.getByTestId('package-sessions-each')).toHaveTextContent('6');
+    expect(screen.getByText(/Set every service to/i)).toBeInTheDocument();
+    // Both counts, spelled out together.
+    expect(screen.getByTestId('package-sessions-summary')).toHaveTextContent(
+      /1 \+ 7 = 8 sessions across 2 services, booked as 7 visits/,
+    );
+  });
+
+  it('says it plainly when a single service is selected', async () => {
+    await openPackages();
+    // One service: slider, sessions and visits are all 6, so no arithmetic is
+    // spelled out and the label stays "Sessions".
+    expect(screen.getByTestId('package-sessions-each')).toHaveTextContent('6');
+    expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('6');
+    expect(screen.getByTestId('package-visit-count')).toHaveTextContent('6');
+    expect(screen.queryByText(/across .* services/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Set every service to/i)).not.toBeInTheDocument();
+  });
+
+  describe('the hints on the counts', () => {
+    it('explains what dragging the slider does to a split', async () => {
+      const user = userEvent.setup();
+      await openPackages();
+      await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+      await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+      await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+      // Hidden until asked for — it is an explanation, not a warning.
+      expect(screen.queryByTestId('package-sessions-hint-bubble')).not.toBeInTheDocument();
+
+      await user.hover(screen.getByTestId('package-sessions-hint'));
+
+      const bubble = await screen.findByTestId('package-sessions-hint-bubble');
+      expect(bubble).toHaveTextContent(/overwrites a split/i);
+      expect(bubble).toHaveTextContent(/type into the box on its chip/i);
+    });
+
+    it('explains sessions against visits when they differ', async () => {
+      const user = userEvent.setup();
+      await openPackages();
+      await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+      await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+      await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+      fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+      fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '4' } });
+      await waitFor(() => expect(screen.getByTestId('package-visit-count')).toHaveTextContent('4'));
+
+      await user.hover(screen.getByTestId('package-totals-hint'));
+
+      const bubble = await screen.findByTestId('package-totals-hint-bubble');
+      expect(bubble).toHaveTextContent(/7 treatment runs is what the price is built from/i);
+      expect(bubble).toHaveTextContent(/4 appointments/i);
+    });
+
+    it('the hint opens on a tap as well as a hover', async () => {
+      // Hover does not exist on a tablet, which is what the front desk uses.
+      // A tap fires mouseover first, so the click must OPEN rather than
+      // toggle — a toggle would open and close in the same gesture and the
+      // tablet would show nothing at all.
+      const user = userEvent.setup();
+      await openPackages();
+
+      await user.click(screen.getByTestId('package-sessions-hint'));
+      expect(await screen.findByTestId('package-sessions-hint-bubble')).toBeInTheDocument();
+
+      await user.click(screen.getByTestId('package-sessions-hint'));
+      expect(screen.getByTestId('package-sessions-hint-bubble')).toBeInTheDocument();
+    });
+
+    it('the hint closes on Escape and on leaving it', async () => {
+      const user = userEvent.setup();
+      await openPackages();
+
+      await user.hover(screen.getByTestId('package-sessions-hint'));
+      expect(await screen.findByTestId('package-sessions-hint-bubble')).toBeInTheDocument();
+
+      await user.unhover(screen.getByTestId('package-sessions-hint'));
+      await waitFor(() =>
+        expect(screen.queryByTestId('package-sessions-hint-bubble')).not.toBeInTheDocument(),
+      );
+
+      screen.getByTestId('package-sessions-hint').focus();
+      expect(await screen.findByTestId('package-sessions-hint-bubble')).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+      await waitFor(() =>
+        expect(screen.queryByTestId('package-sessions-hint-bubble')).not.toBeInTheDocument(),
+      );
+    });
+
+    it('the hint button never submits the form', async () => {
+      const user = userEvent.setup();
+      await openPackages();
+
+      await user.click(screen.getByTestId('package-sessions-hint'));
+
+      const posts = fetchApi.mock.calls.filter(([, opts]) => opts?.method === 'POST');
+      expect(posts).toHaveLength(0);
+    });
+  });
+
+  /**
+   * 3 runs of one service and 4 of the other is 7 runs however they are
+   * delivered — but the patient attends either 4 appointments (three with both
+   * services, one with the leftover) or 7 (one service each). The clinic
+   * chooses, and the choice is what the session counter counts down.
+   */
+  describe('delivering the runs — together or one per visit', () => {
+    const pickBoth = async (user) => {
+      await openPackages();
+      await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+      await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+      await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+      fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+      fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '4' } });
+      await waitFor(() => expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('7'));
+    };
+
+    it('defaults to sharing a visit — 3 + 4 is four appointments', async () => {
+      const user = userEvent.setup();
+      await pickBoth(user);
+
+      expect(screen.getByTestId('package-session-mode-combined')).toBeChecked();
+      expect(screen.getByTestId('package-visits')).toHaveTextContent('4');
+      // The runs are still seven; only the packing changed.
+      expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('7');
+    });
+
+    it('one service per visit makes the same runs seven appointments', async () => {
+      const user = userEvent.setup();
+      await pickBoth(user);
+
+      await user.click(screen.getByTestId('package-session-mode-separate'));
+
+      await waitFor(() => expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('7'));
+      // Runs and visits agree, so the extra row drops away rather than
+      // printing 7 twice.
+      expect(screen.queryByTestId('package-visits')).not.toBeInTheDocument();
+    });
+
+    it('the price does not move with the packing — only the visit count', async () => {
+      const user = userEvent.setup();
+      await pickBoth(user);
+
+      // 1000x3 + 2000x4 = 11,000 gross; 15% off = 9,350.
+      expect(screen.getByText(/11,000/)).toBeInTheDocument();
+      const before = screen.getAllByText(/9,350/).length;
+
+      await user.click(screen.getByTestId('package-session-mode-separate'));
+
+      await waitFor(() => expect(screen.getByTestId('package-session-mode-separate')).toBeChecked());
+      expect(screen.getByText(/11,000/)).toBeInTheDocument();
+      expect(screen.getAllByText(/9,350/).length).toBe(before);
+    });
+
+    it('sends the chosen packing with the package', async () => {
+      const user = userEvent.setup();
+      await pickBoth(user);
+      await user.click(screen.getByTestId('package-session-mode-separate'));
+      await user.type(screen.getByTestId('package-name-input'), 'Split Bundle');
+      await user.click(screen.getByTestId('package-save'));
+
+      await waitFor(() => {
+        const post = fetchApi.mock.calls.find(
+          ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+        );
+        expect(post).toBeTruthy();
+        const body = JSON.parse(post[1].body);
+        expect(body.sessionMode).toBe('separate');
+        expect(body.serviceSessions).toEqual({ 21: 3, 22: 4 });
+      });
+    });
+
+    it('offers no packing choice for a single service — there is nothing to combine', async () => {
+      await openPackages();
+      expect(screen.queryByTestId('package-session-mode')).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * The count box has to be typeable. Clamping on every keystroke meant
+   * clearing it to type "5" read as 0, clamped back to 1, and you ended up
+   * with 15 — there was no way to reach 5 at all.
+   */
+  describe('typing a session count', () => {
+    const openWithBox = async () => {
+      await openPackages();
+      return screen.getByTestId('package-service-sessions-21');
+    };
+
+    it('clearing the box does not snap it back to 1', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+      expect(box).toHaveValue(null);
+    });
+
+    it('clear then type 5 gives 5, not 15', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.change(box, { target: { value: '5' } });
+
+      expect(box).toHaveValue(5);
+      await waitFor(() =>
+        expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('5'),
+      );
+    });
+
+    it('prices live while a valid number is being typed', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.change(box, { target: { value: '3' } });
+
+      // 1000 x 3 = 3,000 gross.
+      await waitFor(() => expect(screen.getByText(/3,000/)).toBeInTheDocument());
+    });
+
+    it('an emptied box falls back to its last real value on blur', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '4' } });
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.blur(box);
+
+      expect(box).toHaveValue(4);
+    });
+
+    it('clamps an out-of-range number on blur rather than mid-keystroke', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '0' } });
+      // Still shown as typed — clamping here is what broke the field.
+      expect(box).toHaveValue(0);
+
+      fireEvent.blur(box);
+      expect(box).toHaveValue(1);
+    });
+
+    it('caps at 60 on blur', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '999' } });
+      fireEvent.blur(box);
+
+      expect(box).toHaveValue(60);
+    });
+
+    it('the slider follows the number that was typed', async () => {
+      // The bug this pins: the header read "SESSIONS: 3" while the only
+      // service on the package said 1.
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.change(box, { target: { value: '5' } });
+
+      await waitFor(() => expect(screen.getByTestId('package-sessions-each')).toHaveTextContent('5'));
+      expect(document.querySelectorAll('input[type="range"]')[0]).toHaveValue('5');
+    });
+
+    it('dragging the slider clears a half-typed box', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+
+      fireEvent.change(document.querySelectorAll('input[type="range"]')[0], { target: { value: '9' } });
+
+      await waitFor(() => expect(screen.getByTestId('package-service-sessions-21')).toHaveValue(9));
+    });
+  });
+
+  it('sends the split with the saved package', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+    fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '2' } });
+    await user.type(screen.getByTestId('package-name-input'), 'Split Bundle');
+    await user.click(screen.getByTestId('package-save'));
+
+    await waitFor(() => {
+      const post = fetchApi.mock.calls.find(
+        ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body).serviceSessions).toEqual({ 21: 3, 22: 2 });
+    });
   });
 
   it('a bundled service can be removed from its chip', async () => {

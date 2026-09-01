@@ -250,6 +250,116 @@ router.get(
 
 // Fetch all ledgers for current tenant
 // GET /api/billing?fields=summary
+// ────────────────────────────────────────────────────────────────
+// Invoice-ledger date filtering (?from / ?to / ?dateField)
+//
+// The ledger renders both an ISSUED and a DUE DATE column, so a date filter
+// that could only reach one of them would be half a feature: "invoices raised
+// in March" and "invoices falling due in March" are different questions and
+// finance asks both. `dateField` picks the column; `from`/`to` bound it.
+//
+// Filtering happens in SQL, not in the browser. The ledger is unbounded (the
+// demo tenant is already at 979 invoices) and the page previously pulled the
+// whole table down and filtered status client-side — doing the same for dates
+// would keep growing the payload as tenants age.
+// ────────────────────────────────────────────────────────────────
+
+// Whitelist, not a passthrough. `dateField` is used as a Prisma `where` KEY,
+// so accepting an arbitrary string would let any caller filter (and, via
+// error messages, probe) columns the ledger never meant to expose.
+const INVOICE_DATE_FIELDS = new Set(["issuedDate", "dueDate", "paidAt"]);
+
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Parse one end of the range.
+ *
+ * A bare `YYYY-MM-DD` is read in the SERVER's local timezone, not UTC.
+ * `new Date("2026-08-28")` is UTC midnight, which in IST is 05:30 on the 28th —
+ * so a naive `lte` would silently drop the morning's invoices. Date-only upper
+ * bounds therefore roll forward to the next local midnight and pair with `lt`,
+ * which makes `to=2026-08-28` cover the whole of the 28th as a user expects.
+ *
+ * A full ISO timestamp is honoured exactly as given (inclusive `lte`), so a
+ * caller that wants precision keeps it.
+ *
+ * @returns {{date: Date, exclusive: boolean}|null} null when unparseable.
+ */
+function parseLedgerDateBound(raw, { endOfDay = false } = {}) {
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+
+  if (DATE_ONLY_RE.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    // Validate the calendar date BEFORE applying the end-of-day offset.
+    // Doing it after cannot distinguish a legitimate roll into the next month
+    // (2026-08-31 + 1 day) from a bogus input the constructor silently
+    // repaired (2026-02-31 → 2026-03-03), so 31 February would be accepted as
+    // a March range the caller never asked for.
+    const base = new Date(year, month - 1, day);
+    if (
+      Number.isNaN(base.getTime())
+      || base.getFullYear() !== year
+      || base.getMonth() !== month - 1
+      || base.getDate() !== day
+    ) {
+      return null;
+    }
+    if (endOfDay) base.setDate(base.getDate() + 1);
+    return { date: base, exclusive: endOfDay };
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return { date, exclusive: false };
+}
+
+/**
+ * Build the Prisma `where` fragment for ?from/?to/?dateField.
+ * @returns {{ok: true, where: object}|{ok: false, error: string, code: string}}
+ */
+function buildLedgerDateWhere(query) {
+  const { from, to } = query;
+  const rawField = query.dateField ? String(query.dateField) : "issuedDate";
+
+  if (!INVOICE_DATE_FIELDS.has(rawField)) {
+    return {
+      ok: false,
+      error: `dateField must be one of: ${[...INVOICE_DATE_FIELDS].join(", ")}`,
+      code: "INVALID_DATE_FIELD",
+    };
+  }
+  if (!from && !to) return { ok: true, where: {} };
+
+  const range = {};
+  if (from) {
+    const parsed = parseLedgerDateBound(from);
+    if (!parsed) {
+      return { ok: false, error: "from must be a valid date (YYYY-MM-DD or ISO)", code: "INVALID_DATE_RANGE" };
+    }
+    range.gte = parsed.date;
+  }
+  if (to) {
+    const parsed = parseLedgerDateBound(to, { endOfDay: true });
+    if (!parsed) {
+      return { ok: false, error: "to must be a valid date (YYYY-MM-DD or ISO)", code: "INVALID_DATE_RANGE" };
+    }
+    range[parsed.exclusive ? "lt" : "lte"] = parsed.date;
+  }
+
+  // An inverted range returns zero rows, which reads as "no invoices" rather
+  // than "you typed the dates backwards". Say so instead.
+  const upper = range.lt ?? range.lte;
+  if (range.gte && upper && range.gte > upper) {
+    return { ok: false, error: "from must be on or before to", code: "INVALID_DATE_RANGE" };
+  }
+
+  // paidAt is nullable — an unpaid invoice has no paid date and must not
+  // surface in a paid-date-bounded query. Prisma excludes NULLs from
+  // gte/lt comparisons already; this is belt-and-braces for readability.
+  return { ok: true, where: { [rawField]: range } };
+}
+
 router.get("/", verifyToken, async (req, res) => {
   try {
     // #920 slice 31: ?fields=summary slim-shape opt-in. Mirrors slices 1-30.
@@ -282,6 +392,13 @@ router.get("/", verifyToken, async (req, res) => {
         { subBrand: null, contact: { is: { subBrand: sb } } },
       ];
     }
+    // Date-range filter. Sits alongside the subBrand OR as a sibling AND
+    // condition, so the two compose rather than one clobbering the other.
+    const dateWhere = buildLedgerDateWhere(req.query);
+    if (!dateWhere.ok) {
+      return res.status(400).json({ error: dateWhere.error, code: dateWhere.code });
+    }
+    Object.assign(findManyArgs.where, dateWhere.where);
     if (isSummary) {
       findManyArgs.select = {
         id: true,

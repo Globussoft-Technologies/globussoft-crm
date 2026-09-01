@@ -3070,9 +3070,20 @@ router.get("/visits", phiReadGate, async (req, res) => {
       where.treatmentPlanId = { not: null };
     }
     if (from || to) {
+      // A malformed bound is ignored, not fatal. `new Date("T00:00:00+05:30")`
+      // is an Invalid Date, and handing that to Prisma throws — so one bad
+      // query param used to 500 the whole list rather than simply not
+      // constraining it. Treat an unparseable bound as "no bound".
+      const parsedFrom = from ? new Date(from) : null;
+      const parsedTo = to ? new Date(to) : null;
+      const validFrom = parsedFrom && !Number.isNaN(parsedFrom.getTime()) ? parsedFrom : null;
+      const validTo = parsedTo && !Number.isNaN(parsedTo.getTime()) ? parsedTo : null;
       where.visitDate = {};
-      if (from) where.visitDate.gte = new Date(from);
-      if (to) where.visitDate.lte = new Date(to);
+      if (validFrom) where.visitDate.gte = validFrom;
+      if (validTo) where.visitDate.lte = validTo;
+      // Both bounds unusable → drop the filter entirely rather than leave an
+      // empty object on the where clause.
+      if (!validFrom && !validTo) delete where.visitDate;
     }
     const term = String(q || "").trim();
     if (term) {
@@ -4514,6 +4525,46 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
 // #207/#216: only doctors (or admin owner override) may write prescriptions.
 // Managers operate the clinic but don't prescribe; telecallers/helpers/professionals
 // have no clinical mandate.
+// ── Structured clinical narrative ──────────────────────────────────
+// Chief Complaint / Diagnosis / Investigations / Advice are real columns as
+// of the prescription_clinical_fields migration. They used to be recovered by
+// scanning the free-text `instructions` for "Diagnosis:"-style line prefixes —
+// a reader built for Zylu-imported rows that nothing in this CRM ever wrote
+// to, so on a natively-written prescription all four were permanently blank.
+//
+// Each is optional. An empty or whitespace-only value stores NULL rather than
+// "", so "not recorded" stays distinguishable from "recorded as blank" — the
+// read path falls back to the legacy parser only on NULL.
+const RX_CLINICAL_FIELDS = ["chiefComplaint", "diagnosis", "investigations", "advice"];
+const RX_CLINICAL_MAX_LEN = 5000;
+
+/**
+ * Pull the clinical narrative fields off a request body.
+ * @returns {{ok: true, data: object} | {ok: false, error: string, code: string}}
+ */
+function readClinicalFields(body, { partial = false } = {}) {
+  const data = {};
+  for (const field of RX_CLINICAL_FIELDS) {
+    const raw = body?.[field];
+    // An absent key is never written. On update that means "leave the stored
+    // value alone"; on create the column simply defaults to NULL. Either way
+    // a caller that has never heard of these fields is unaffected, which is
+    // what keeps every existing prescription client working unchanged.
+    if (raw === undefined) continue;
+    if (raw === null) { data[field] = null; continue; }
+    const text = String(raw).trim();
+    if (text.length > RX_CLINICAL_MAX_LEN) {
+      return {
+        ok: false,
+        error: `${field} must be ${RX_CLINICAL_MAX_LEN} characters or fewer`,
+        code: "CLINICAL_FIELD_TOO_LONG",
+      };
+    }
+    data[field] = text || null;
+  }
+  return { ok: true, data };
+}
+
 router.post("/prescriptions", requireClinicalRole, async (req, res) => {
   try {
     const { visitId, patientId, doctorId, drugs, instructions } = req.body;
@@ -4546,6 +4597,10 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
     // Anchor the lapse date to issue time. `createdAt` defaults to now() in
     // the DB, so pass the same instant explicitly and keep the two consistent
     // rather than letting them drift by the width of the insert.
+    const clinical = readClinicalFields(req.body);
+    if (!clinical.ok) {
+      return res.status(400).json({ error: clinical.error, code: clinical.code });
+    }
     const issuedAt = new Date();
     const rx = await prisma.prescription.create({
       data: {
@@ -4554,6 +4609,7 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
         doctorId: doctorId ? parseInt(doctorId) : req.user.userId,
         drugs: JSON.stringify(namedDrugs),
         instructions,
+        ...clinical.data,
         validityDays,
         validUntil: computeValidUntil(issuedAt, validityDays),
         createdAt: issuedAt,
@@ -4601,7 +4657,26 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
 
     res.status(201).json({ ...normalizePrescriptionDrugs(rx), stock });
   } catch (e) {
-    console.error("[wellness] create prescription error:", e.message);
+    // Log the Prisma error code and the stack, not just the message. This
+    // handler previously logged `e.message` alone and returned a bare 500, so
+    // the only way to find out what actually went wrong was to attach a
+    // debugger — a schema/client mismatch (a running process holding a Prisma
+    // client generated before a migration) surfaced as an unexplained
+    // "Something went wrong on our end".
+    console.error(
+      `[wellness] create prescription error: ${e.code ? `[${e.code}] ` : ""}${e.message}`,
+      e.stack,
+    );
+    // A stale Prisma client rejects a column it has never been generated for.
+    // Say so explicitly: the fix is a restart, not a code change, and nothing
+    // else in the response makes that guessable.
+    if (/Unknown arg(ument)?/i.test(String(e.message))) {
+      return res.status(500).json({
+        error:
+          "The server is running an out-of-date database client. Restart the backend to pick up the latest schema.",
+        code: "PRISMA_CLIENT_STALE",
+      });
+    }
     res.status(500).json({ error: "Failed to create prescription" });
   }
 });
@@ -4643,6 +4718,13 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
     }
     if (req.body.instructions !== undefined)
       data.instructions = req.body.instructions;
+    {
+      const clinicalPatch = readClinicalFields(req.body, { partial: true });
+      if (!clinicalPatch.ok) {
+        return res.status(400).json({ error: clinicalPatch.error, code: clinicalPatch.code });
+      }
+      Object.assign(data, clinicalPatch.data);
+    }
     if (req.body.validityDays !== undefined) {
       let validityDays;
       try {

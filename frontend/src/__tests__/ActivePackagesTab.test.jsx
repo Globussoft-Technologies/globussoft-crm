@@ -69,7 +69,8 @@ describe('<ActivePackagesTab />', () => {
     expect(screen.getByText('Glow Bundle')).toBeInTheDocument();
     expect(screen.getByText('Alpha Peel')).toBeInTheDocument();
     expect(screen.getByText('Beta Laser')).toBeInTheDocument();
-    expect(screen.getByText(/6 sessions/)).toBeInTheDocument();
+    // A package with no split reads exactly as it always did: 6 visits.
+    expect(screen.getByText(/6 visits/)).toBeInTheDocument();
     expect(screen.getByText(/15% off/)).toBeInTheDocument();
     expect(screen.getByText(/15,300/)).toBeInTheDocument();
     // Gross shown struck through so the saving is visible.
@@ -661,5 +662,106 @@ describe('<ActivePackagesTab />', () => {
   it('shows a loading state', () => {
     render(<ActivePackagesTab packages={[]} loading />);
     expect(screen.getByText(/Loading packages/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * A package can price each service on its own run — 3 of one treatment and 2
+ * of another — so the card has to show which is which, and `sessions` is the
+ * combined total rather than a per-service count.
+ */
+describe('<ActivePackagesTab /> — sessions split per service', () => {
+  const SPLIT = {
+    ...DRAFT,
+    id: 4,
+    name: 'Split Bundle',
+    serviceSessions: { 10: 3, 11: 2 },
+    serviceSessionTotal: 5,
+    sessionMode: 'combined',
+    // Services share a sitting, so five runs take three visits.
+    sessions: 3,
+    grossPrice: 7000,
+    price: 5950,
+  };
+
+  it('names each service with its own run', () => {
+    render(<ActivePackagesTab packages={[SPLIT]} loading={false} />);
+
+    expect(screen.getByText(/Alpha Peel × 3/)).toBeInTheDocument();
+    expect(screen.getByText(/Beta Laser × 2/)).toBeInTheDocument();
+  });
+
+  it('separates the visits booked from the runs they cover', () => {
+    render(<ActivePackagesTab packages={[SPLIT]} loading={false} />);
+
+    // Both services share a sitting, so three appointments deliver five runs.
+    // Printing only one of those numbers misleads whoever books them.
+    expect(screen.getByText(/3 visits/)).toBeInTheDocument();
+    expect(screen.getByText(/3 \+ 2 = 5 sessions/)).toBeInTheDocument();
+  });
+
+  it('one service per visit makes the visits equal the runs', () => {
+    render(
+      <ActivePackagesTab
+        packages={[{ ...SPLIT, sessionMode: 'separate', sessions: 5 }]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getByText(/5 visits/)).toBeInTheDocument();
+    expect(screen.getByText(/one service per visit/i)).toBeInTheDocument();
+  });
+
+  it('leaves the plain session count alone on a package without a split', () => {
+    render(<ActivePackagesTab packages={[DRAFT]} loading={false} />);
+
+    expect(screen.getByText(/6 visits/)).toBeInTheDocument();
+    expect(screen.getByText('Alpha Peel')).toBeInTheDocument();
+    expect(screen.getByTestId('package-sessions-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('package-split-1')).not.toBeInTheDocument();
+  });
+
+  it('edits the split instead of offering a single sessions box', () => {
+    render(<ActivePackagesTab packages={[SPLIT]} loading={false} />);
+
+    // The API refuses a bare `sessions` on a split package, so the card must
+    // not offer one.
+    expect(screen.queryByTestId('package-sessions-4')).not.toBeInTheDocument();
+    expect(screen.getByTestId('package-split-4-10')).toHaveValue(3);
+    expect(screen.getByTestId('package-split-4-11')).toHaveValue(2);
+  });
+
+  it('saves the whole map, so no service is left priced at zero', async () => {
+    const onChanged = vi.fn();
+    fetchApiMock.mockResolvedValue({ ...SPLIT, serviceSessions: { 10: 4, 11: 2 }, sessions: 6 });
+    render(<ActivePackagesTab packages={[SPLIT]} loading={false} onChanged={onChanged} />);
+
+    const input = screen.getByTestId('package-split-4-10');
+    fireEvent.change(input, { target: { value: '4' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(([, opts]) => opts?.method === 'PUT');
+      expect(put).toBeTruthy();
+      expect(put[0]).toContain('/api/wellness/packages/4');
+      const body = JSON.parse(put[1].body);
+      // Every bundled service carries a count, and `sessions` is never sent —
+      // the server derives it from the map.
+      expect(body.serviceSessions).toEqual({ 10: 4, 11: 2 });
+      expect(body.sessions).toBeUndefined();
+    });
+  });
+
+  it('rejects a bad count without touching the server', async () => {
+    render(<ActivePackagesTab packages={[SPLIT]} loading={false} />);
+
+    const input = screen.getByTestId('package-split-4-10');
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(notifyObj.error).toHaveBeenCalled());
+    expect(fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'PUT')).toHaveLength(0);
+    // The old value is put back rather than left as the rejected one.
+    expect(screen.getByTestId('package-split-4-10')).toHaveValue(3);
   });
 });

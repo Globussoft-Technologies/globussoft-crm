@@ -4424,6 +4424,25 @@ model Prescription {
   instructions String? @db.Text
   pdfUrl       String?
 
+  // ── Structured clinical narrative ──────────────────────────────────
+  // These four were previously PARSED out of `instructions` by scanning it
+  // for "Chief Complaint:" / "Diagnosis:" / "Investigations:" / "Advice:"
+  // line prefixes (lib parseRxInstructions). That existed to read
+  // prescriptions migrated from Zylu, whose free-text notes carried those
+  // sections — but nothing in this CRM ever WROTE them, so for every
+  // natively-written prescription all four rendered as an em dash and there
+  // was no way to fill them short of a clinician knowing to type the magic
+  // prefix into a plain textarea.
+  //
+  // Real nullable columns instead. The read path still falls back to the
+  // parser when a column is null, so Zylu-imported rows keep displaying the
+  // narrative they were migrated with — the parser is now a legacy reader,
+  // not the storage format.
+  chiefComplaint String? @db.Text
+  diagnosis      String? @db.Text
+  investigations String? @db.Text
+  advice         String? @db.Text
+
   // S62 — slim-shape PRD additions per S42 carry-over.
   //   status       : lifecycle marker. Conventional values:
   //                  'draft'     — composed, not yet issued
@@ -10424,6 +10443,20 @@ model ServicePackage {
 
   /// JSON array of Service ids, e.g. "[10,11]". Snapshot, not a relation.
   serviceIds String @db.Text
+  /// Per-service session counts, as JSON keyed by service id: {"10":3,"11":2}.
+  /// A package is no longer "the whole bundle, N times" — each service carries
+  /// its own count, so 5 sessions can be 3 of one treatment and 2 of another,
+  /// and the price follows the split rather than a flat multiple.
+  ///
+  /// NULL means the pre-split shape: every service runs `sessions` times.
+  /// Existing rows keep that reading, so nothing needs backfilling.
+  serviceSessions String? @db.Text
+  /// How the per-service runs are packed into visits the patient attends.
+  /// "combined" = one visit delivers every service that still has a run left,
+  /// so 3 + 4 is 4 visits. "separate" = one service per visit, so 3 + 4 is 7.
+  /// `sessions` is the resulting visit count, because that is what the
+  /// treatment plan counts down.
+  sessionMode String @default("combined")
   /// How many times the WHOLE bundle repeats.
   sessions        Int   @default(6)
   discountPercent Int   @default(0)

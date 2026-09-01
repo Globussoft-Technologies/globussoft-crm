@@ -13,6 +13,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -282,9 +283,11 @@ describe('<Invoices /> — page surface', () => {
       return defaultFetchMock(url, opts);
     });
 
-    // Select the contact via the labeled Contact select (aria-label="Contact").
+    // Select the contact via the labeled Contact combobox (now SearchableSingleSelect).
+    const user = userEvent.setup();
     const contactSelect = screen.getByLabelText(/^Contact$/i);
-    fireEvent.change(contactSelect, { target: { value: '1' } });
+    await user.click(contactSelect);
+    await user.click(await screen.findByRole('option', { name: /Acme Corp \(billing@acme.test\)/i }));
 
     // Amount input — placeholder is "0.00".
     const amountInput = screen.getByPlaceholderText('0.00');
@@ -352,7 +355,9 @@ describe('<Invoices /> — page surface', () => {
       return defaultFetchMock(url, opts);
     });
 
-    fireEvent.change(screen.getByLabelText(/^Contact$/i), { target: { value: '1' } });
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/^Contact$/i));
+    await user.click(await screen.findByRole('option', { name: /Acme Corp \(billing@acme.test\)/i }));
     fireEvent.change(screen.getByLabelText(/Associated deal/i), { target: { value: '1' } });
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '250.00' } });
     fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-08-15' } });
@@ -380,7 +385,9 @@ describe('<Invoices /> — page surface', () => {
       return defaultFetchMock(url, opts);
     });
 
-    fireEvent.change(screen.getByLabelText(/^Contact$/i), { target: { value: '1' } });
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/^Contact$/i));
+    await user.click(await screen.findByRole('option', { name: /Acme Corp \(billing@acme.test\)/i }));
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '10.00' } });
     fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-07-01' } });
     fireEvent.click(screen.getByRole('button', { name: /Issue Invoice/i }));

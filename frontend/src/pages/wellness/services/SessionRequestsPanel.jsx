@@ -5,6 +5,7 @@ import { useNotify } from '../../../utils/notify';
 import { formatDate } from '../../../utils/date';
 import SingleSelectDropdown from './SingleSelectDropdown';
 import { nowDateTimeInput, isPastDateTimeInput } from './shared';
+import SearchableSingleSelect from './SearchableSingleSelect';
 
 /**
  * Stored timestamp → the `YYYY-MM-DDTHH:mm` a datetime-local input wants, in
@@ -147,12 +148,14 @@ export default function SessionRequestsPanel({ doctors = [], onHandled }) {
 
               <div style={{ display: 'grid', gap: '0.4rem', marginTop: '0.25rem' }}>
                 <div data-testid={`session-request-doctor-${req.id}`}>
-                  <SingleSelectDropdown
-                    value={draft.doctorId}
-                    onChange={(v) => setDraft(req, { doctorId: v })}
-                    options={[{ value: '', label: 'Assign a practitioner…' }, ...doctorOptions]}
-                  />
-                </div>
+  <SearchableSingleSelect
+    value={draft.doctorId}
+    onChange={(v) => setDraft(req, { doctorId: v })}
+    options={doctorOptions}
+    placeholder="Assign a practitioner…"
+    aria-label="Practitioner"
+  />
+</div>
                 <input
                   type="datetime-local"
                   min={nowDateTimeInput()}

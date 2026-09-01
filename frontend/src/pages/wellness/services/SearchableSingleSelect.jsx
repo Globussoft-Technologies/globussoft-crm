@@ -82,9 +82,14 @@ export default function SearchableSingleSelect({
     setActiveIndex(-1);
     setIsOpen(true);
   };
+  const handleSelect = (option) => {
+  onChange(option.value);
+  setSearch('');
+  setActiveIndex(-1);
+  setIsOpen(false);
+};
 
-  const inputValue = isOpen ? search : selectedOption?.label || '';
-
+const inputValue = search || selectedOption?.label || '';
   return (
     <div style={{ position: 'relative', width: '100%', zIndex: isOpen ? 9999 : 'auto' }}>
       <input
@@ -144,12 +149,9 @@ export default function SearchableSingleSelect({
           }
           if (e.key === 'Enter') {
             e.preventDefault();
-            if (isOpen && activeIndex >= 0 && activeIndex < visibleOptions.length) {
-              onChange(visibleOptions[activeIndex].value);
-              setSearch('');
-              setIsOpen(false);
-              setActiveIndex(-1);
-            } else if (!isOpen) {
+           if (isOpen && activeIndex >= 0 && activeIndex < visibleOptions.length) {
+  handleSelect(visibleOptions[activeIndex]);
+} else if (!isOpen) {
               setActiveIndex(0);
               setIsOpen(true);
             }
@@ -261,12 +263,9 @@ export default function SearchableSingleSelect({
                       id={`${baseId}-opt-${idx}`}
                       role="option"
                       aria-selected={isSelected}
-                      onClick={() => {
-                        onChange(opt.value);
-                        setSearch('');
-                        setIsOpen(false);
-                        inputRef.current?.focus();
-                      }}
+                     onClick={() => {
+  handleSelect(opt);
+}}
                       onMouseEnter={() => setActiveIndex(idx)}
                       style={{
                         padding: '0.65rem 1rem',

@@ -14,7 +14,6 @@ import {
   Filter,
   CalendarRange,
 } from "lucide-react";
-import Select from "react-select";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";

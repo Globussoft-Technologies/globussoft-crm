@@ -249,6 +249,18 @@ describe('composeLayout', () => {
 });
 
 describe('wanderlux render() integration', () => {
+  test('registration template keeps documents on tab three and payment on tab four', () => {
+    expect(TEMPLATE_HTML).toContain('Step 4: Payment');
+    expect(TEMPLATE_HTML).toContain('Please upload all four required documents.');
+    expect(TEMPLATE_HTML).toContain('Choose document');
+    expect(TEMPLATE_HTML).toContain('Preview');
+    expect(TEMPLATE_HTML).toContain('Remove');
+    expect(TEMPLATE_HTML).toContain("title.includes('documents and payment')");
+    expect(TEMPLATE_HTML).toContain('restoreRegistrationDraft()');
+    expect(TEMPLATE_HTML).toContain('landing-registration-draft:');
+    expect(TEMPLATE_HTML).toContain('sessionStorage.setItem');
+  });
+
   test('a page with no _layout renders the un-rewritten template (default sections present)', () => {
     const out = wanderlux.render({ content: JSON.stringify({ brand: { name: 'Demo' } }) });
     expect(out).toContain('===================== HERO');

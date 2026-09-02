@@ -194,6 +194,8 @@ export function getLandingPageSharePath(landingPage) {
   }
 
   if (isTravelLandingPage(landingPage) && landingPage?.isFeatured) {
+    const content = typeof landingPage.content === 'string' ? landingPage.content : JSON.stringify(landingPage.content || '');
+    if (!landingPage?.tripId && ( /pre-trip marketing page/i.test(String(landingPage.title || '')) || content.includes('marketing-heading') || content.includes('Before the trip is confirmed'))) return '/explore';
     return '/trips';
   }
 

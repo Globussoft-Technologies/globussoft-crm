@@ -171,6 +171,8 @@ const FlyerView = lazy(() => import("./pages/public/FlyerView"));
 // falls back to the hardcoded TripsLanding (Japan). No auth, renders
 // outside the AuthContext shell.
 const TripsResolver = lazy(() => import("./pages/public/TripsResolver"));
+const ExplorePage = lazy(() => import("./pages/public/ExplorePage"));
+const ExplorePageBuilder = lazy(() => import("./pages/ExplorePageBuilder"));
 // Public travel share page  /trips/:id-or-slug. SPA route so direct
 // share links render the public landing page without bouncing through /p.
 const TripsShareResolver = lazy(() => import("./pages/public/TripsShareResolver"));
@@ -1554,6 +1556,7 @@ export default function App() {
                       served by the backend/Nginx proxy so the public page
                       matches production HTML. The SPA resolver is only a
                       fallback for client-side navigation or local tests. */}
+                    <Route path="/explore" element={<ExplorePage />} />
                     <Route path="/trips" element={<TripsResolver />} />
                     <Route path="/trips/:tripRef" element={<TripsShareResolver />} />
                     <Route
@@ -2490,6 +2493,10 @@ export default function App() {
                             <LandingPageBuilder />
                           </TravelOnly>
                         }
+                      />
+                      <Route
+                        path="landing-pages/explore-builder/:id"
+                        element={<TravelOnly><ExplorePageBuilder /></TravelOnly>}
                       />
                       <Route path="objects" element={<CustomObjects />} />
                       <Route

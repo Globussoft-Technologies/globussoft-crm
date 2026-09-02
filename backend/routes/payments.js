@@ -18,6 +18,7 @@ const {
   NOT_CONFIGURED_MESSAGE,
 } = require("../lib/tenantPaymentGateway");
 const { fulfillSubscriptionOrder } = require("../lib/subscriptionFulfillment");
+const { applyLandingPagePaymentToTrip } = require("../lib/landingPagePayments");
 
 const router = express.Router();
 
@@ -842,6 +843,21 @@ router.post(
             });
             await markInvoicePaid(payment.invoiceId, payment.tenantId);
             emitPaymentCollected(updated);
+
+            const paymentMeta = (() => {
+              try { return JSON.parse(payment.metadata || "{}"); } catch (_err) { return {}; }
+            })();
+            if (paymentMeta.kind === "landing-page-registration" && paymentMeta.draftToken) {
+              const draft = await prisma.pendingTripRegistration.findUnique({ where: { draftToken: paymentMeta.draftToken } });
+              if (draft && draft.status === "DRAFT") {
+                await prisma.pendingTripRegistration.update({
+                  where: { id: draft.id },
+                  data: {
+                    reviewNotes: `Payment received via Razorpay (${payment.amount} ${payment.currency}). Ready for admin review.`,
+                  },
+                });
+              }
+            }
           }
         }
       } else if (eventName === "refund.processed" || eventName === "refund.created") {

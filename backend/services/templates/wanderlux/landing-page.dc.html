@@ -452,7 +452,7 @@
 
           <!-- Thank-you -->
           <sc-if value="{{ regSubmitted }}">
-          <div style="text-align:center;padding:20px 0">
+          <div style="text-align:center;padding:8px 0">
             <div style="width:64px;height:64px;border-radius:50%;background:color-mix(in srgb,var(--c-brand) 12%,transparent);color:var(--c-brand);display:flex;align-items:center;justify-content:center;font-size:30px;margin:0 auto 20px">✓</div>
             <h3 style="font-family:var(--c-serif);font-weight:700;font-size:23px;margin:0 0 10px;color:var(--c-text)">{{ register.successTitle }}</h3>
             <p style="font-size:15px;line-height:1.6;color:var(--c-text2);margin:0;max-width:380px;margin-left:auto;margin-right:auto">{{ register.successBody }}</p>
@@ -461,7 +461,7 @@
 
           <!-- Closed (full / past deadline) -->
           <sc-if value="{{ regShowClosed }}">
-          <div style="text-align:center;padding:20px 0">
+          <div style="text-align:center;padding:8px 0">
             <div style="width:64px;height:64px;border-radius:50%;background:var(--c-light);color:var(--c-text2);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 20px">⏳</div>
             <h3 style="font-family:var(--c-serif);font-weight:700;font-size:22px;margin:0 0 10px;color:var(--c-text)">Registration Closed</h3>
             <p style="font-size:15px;line-height:1.6;color:var(--c-text2);margin:0">{{ regClosedMessage }}</p>
@@ -498,16 +498,79 @@
                 </div>
               </sc-for>
 
+              <sc-if value="{{ regIsDocuments }}">
+              <div style="display:flex;flex-direction:column;gap:14px;padding:18px;border:1px solid var(--c-border);border-radius:10px;background:var(--c-light)">
+                <p style="margin:0;color:var(--c-text2);font-size:13px">Upload all four documents to continue to payment.</p>
+                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+                  <sc-for list="{{ regDocumentFields }}" as="doc">
+                    <div style="border:1px solid var(--c-border);border-radius:9px;padding:13px;background:var(--c-panel);min-width:0">
+                      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:10px"><label style="font-size:13px;font-weight:700;color:var(--c-text)">{{ doc.label }} *</label><sc-if value="{{ doc.hasFile }}"><span style="color:#16803c;font-size:18px" aria-label="Uploaded">&#10003;</span></sc-if></div>
+                      <label style="display:flex;flex-direction:column;gap:7px;align-items:center;justify-content:center;min-height:70px;border:1px dashed {{ doc.hasFile ? '#72bd83' : 'var(--c-border)' }};border-radius:7px;padding:10px;text-align:center;cursor:pointer;color:var(--c-text2);font-size:12px"><sc-if value="{{ doc.hasFile }}"><strong style="display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)">{{ doc.fileName }}</strong><span>{{ doc.fileMeta }}</span></sc-if><sc-if value="{{ doc.hasFile }}"><span style="color:var(--c-brand);font-weight:600">Replace document</span></sc-if><sc-if value="{{ doc.showChoose }}"><span style="color:var(--c-brand);font-weight:600">Choose document</span></sc-if><input type="file" accept="image/jpeg,image/png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange="{{ doc.onInput }}" aria-label="{{ doc.label }}" style="display:none"></label><sc-if value="{{ doc.hasFile }}"><div style="display:flex;gap:8px;margin-top:8px"><button type="button" onClick="{{ doc.onPreview }}" style="flex:1;border:1px solid var(--c-border);background:transparent;color:var(--c-brand);border-radius:6px;padding:7px;font-size:12px;cursor:pointer">Preview</button><button type="button" onClick="{{ doc.onRemove }}" aria-label="Remove {{ doc.label }}" style="border:1px solid var(--c-border);background:transparent;color:var(--c-text2);border-radius:6px;padding:7px 10px;font-size:12px;cursor:pointer">Remove</button></div></sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="padding:12px 14px;border-radius:8px;background:color-mix(in srgb,var(--c-accent) 8%,var(--c-light));color:var(--c-text2);font-size:12px">Your documents are encrypted and stored securely for TMC admin review.</div>
+              </div>
+              </sc-if>
+
               <!-- Honeypot: hidden from humans, catches bots -->
               <input type="text" tabindex="-1" autocomplete="off" onChange="{{ hpSetter }}" class="lpg-hide" aria-hidden="true">
 
               <sc-if value="{{ regError }}"><p role="alert" style="font-size:13px;color:var(--c-brand);margin:0">{{ regError }}</p></sc-if>
 
+              <sc-if value="{{ regPaymentEnabled }}">
+              <div style="display:flex;flex-direction:column;gap:14px;padding:18px;border:1px solid var(--c-border);border-radius:10px;background:var(--c-light)">
+                <div>
+                  <p style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;color:var(--c-accent);font-weight:700;margin:0 0 6px">{{ regPaymentStepTitle }}</p>
+                  <p style="font-size:14px;line-height:1.65;color:var(--c-text2);margin:0">{{ regPaymentIntro }}</p>
+                </div>
+
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+                  <button type="button" onClick="{{ regChoosePaymentInstallment }}" aria-pressed="{{ regPaymentIsInstallment }}" style="width:100%;text-align:left;border:1px solid {{ regPaymentInstallmentBorder }};background:{{ regPaymentInstallmentBackground }};color:var(--c-text);padding:14px 16px;border-radius:8px;font-family:var(--c-sans);cursor:pointer" style-hover="border-color:var(--c-brand)">
+                    <span style="display:block;font-size:13px;font-weight:700;letter-spacing:0.04em">{{ regPaymentInstallmentLabel }}</span>
+                    <span style="display:block;font-size:12px;color:var(--c-text2);margin-top:4px">Choose one instalment at a time</span>
+                  </button>
+                  <sc-if value="{{ regPaymentShowCompleteOption }}">
+                  <button type="button" onClick="{{ regChoosePaymentComplete }}" aria-pressed="{{ regPaymentIsComplete }}" style="width:100%;text-align:left;border:1px solid {{ regPaymentCompleteBorder }};background:{{ regPaymentCompleteBackground }};color:var(--c-text);padding:14px 16px;border-radius:8px;font-family:var(--c-sans);cursor:pointer" style-hover="border-color:var(--c-brand)">
+                    <span style="display:block;font-size:13px;font-weight:700;letter-spacing:0.04em">{{ regPaymentCompleteLabel }}</span>
+                    <span style="display:block;font-size:12px;color:var(--c-text2);margin-top:4px">Pay all remaining instalments now</span>
+                  </button>
+                  </sc-if>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:10px;background:var(--c-panel);border:1px solid var(--c-border);border-radius:8px;padding:14px 16px">
+                  <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start">
+                    <div style="min-width:0;flex:1">
+                      <div style="font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:var(--c-text2);font-weight:700">{{ regPaymentSummaryLabel }}</div>
+                      <div style="font-family:var(--c-serif);font-size:22px;line-height:1.2;color:var(--c-text);font-weight:700;margin-top:5px">{{ regPaymentSummaryAmountLabel }}</div>
+                    </div>
+                    <div style="min-width:0;text-align:right">
+                      <div style="font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:var(--c-text2);font-weight:700">Selected</div>
+                      <div style="font-size:13px;line-height:1.45;color:var(--c-text);margin-top:5px">{{ regPaymentSelectedSummary }}</div>
+                    </div>
+                  </div>
+
+                  <sc-if value="{{ regPaymentShowInstallmentSelect }}">
+                  <div>
+                    <label style="display:block;font-size:12px;font-weight:600;color:var(--c-text);margin-bottom:8px">Choose instalment</label>
+                    <select onChange="{{ regChoosePaymentInstallmentIndex }}" value="{{ regPaymentInstallmentIndex }}" aria-label="Choose payment instalment" style="width:100%;padding:13px 14px;border:1px solid var(--c-border);border-radius:6px;font-size:15px;font-family:var(--c-sans);color:var(--c-text);background:var(--c-light)" style-focus="border-color:var(--c-brand);outline:none">
+                      <sc-for list="{{ regPaymentInstallmentOptions }}" as="opt">
+                        <option value="{{ opt.index }}">{{ opt.label }} — {{ opt.amountLabel }}</option>
+                      </sc-for>
+                    </select>
+                  </div>
+                  </sc-if>
+
+                  <p style="font-size:12px;color:var(--c-text2);margin:0">Payment opens securely in Razorpay after you continue.</p>
+                </div>
+              </div>
+              </sc-if>
+
               <div style="display:flex;gap:12px;margin-top:8px">
                 <sc-if value="{{ regShowBack }}">
                   <button type="button" onClick="{{ regPrev }}" style="flex:0 0 auto;background:transparent;color:var(--c-text2);border:1px solid var(--c-border);padding:15px 20px;border-radius:4px;font-size:13px;letter-spacing:0.08em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer" style-hover="border-color:var(--c-text2)">Back</button>
                 </sc-if>
-                <button type="button" onClick="{{ regPrimary }}" style="flex:1;background:var(--c-brand);color:#fff;border:none;padding:15px;border-radius:4px;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer" style-hover="background:var(--c-dark)">{{ regPrimaryLabel }}</button>
+                <button type="button" onClick="{{ regPrimary }}" disabled="{{ regPaymentLoading }}" style="flex:1;background:var(--c-brand);color:#fff;border:none;padding:15px;border-radius:4px;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer;opacity:{{ regPrimaryButtonOpacity }}" style-hover="background:var(--c-dark)">{{ regPrimaryButtonLabel }}</button>
               </div>
               <p style="font-size:12px;color:var(--c-text2);text-align:center;margin:4px 0 0">🔒 Your data is secure. No card details are collected here.</p>
             </div>
@@ -981,7 +1044,8 @@ var DEFAULT_CONFIG = {
 class Component extends DCLogic {
   state = {
     now: Date.now(), openFaq:0, faqCat:'all', faqQuery:'',
-    regStep:0, regValues:{}, regError:'', regSubmitted:false, regSending:false,
+    regStep:0, regValues:{}, regFiles:{}, regDraftToken:'', regDocumentsUploaded:false, regError:'', regSubmitted:false, regSending:false,
+    regPaymentMode:'installment', regPaymentInstallmentIndex:0, regPaymentLoading:false, regPaymentError:'',
     brValues:{}, brError:'', brSubmitted:false, brSending:false,
     toast: null,
     /* Preview banner can be dismissed by the operator. Persists for
@@ -995,6 +1059,7 @@ class Component extends DCLogic {
   }
 
   componentDidMount(){
+    this.restoreRegistrationDraft();
     this._t = setInterval(() => this.setState({ now: Date.now() }), 1000);
     /* Force-start any autoplay <video> on the page. React's `muted` prop is
        set via the JS property (mustUseProperty) but the matching HTML
@@ -1007,6 +1072,37 @@ class Component extends DCLogic {
     this._startAutoplay();
   }
   componentWillUnmount(){ clearInterval(this._t); }
+
+  registrationDraftKey(){
+    return 'landing-registration-draft:' + (window.location.pathname || 'page');
+  }
+
+  saveRegistrationDraft(patch){
+    try{
+      const current = Object.assign({
+        regStep:0, regValues:{}, regDraftToken:'', regDocumentsUploaded:false,
+        regPaymentMode:'installment', regPaymentInstallmentIndex:0
+      }, patch || {});
+      window.sessionStorage.setItem(this.registrationDraftKey(), JSON.stringify(current));
+    }catch(_err){ /* storage may be disabled; the in-memory flow still works */ }
+  }
+
+  restoreRegistrationDraft(){
+    try{
+      const raw = window.sessionStorage.getItem(this.registrationDraftKey());
+      if(!raw) return;
+      const saved = JSON.parse(raw);
+      if(!saved || typeof saved !== 'object') return;
+      this.setState({
+        regStep: Number.isFinite(Number(saved.regStep)) ? Number(saved.regStep) : 0,
+        regValues: saved.regValues && typeof saved.regValues === 'object' ? saved.regValues : {},
+        regDraftToken: saved.regDraftToken || '',
+        regDocumentsUploaded: saved.regDocumentsUploaded === true,
+        regPaymentMode: saved.regPaymentMode === 'complete' ? 'complete' : 'installment',
+        regPaymentInstallmentIndex: Number(saved.regPaymentInstallmentIndex) || 0
+      });
+    }catch(_err){ /* ignore malformed or unavailable browser storage */ }
+  }
 
   _startAutoplay(){
     const tryPlay = () => {
@@ -1026,9 +1122,46 @@ class Component extends DCLogic {
     setTimeout(tryPlay, 0);
   }
 
+  loadRazorpaySdk(){
+    if(typeof window !== 'undefined' && window.Razorpay) return Promise.resolve(true);
+    if(this._rzpLoadPromise) return this._rzpLoadPromise;
+    this._rzpLoadPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+      if(existing){
+        if(window.Razorpay) return resolve(true);
+        existing.addEventListener('load', () => resolve(true), { once: true });
+        existing.addEventListener('error', () => {
+          this._rzpLoadPromise = null;
+          reject(new Error('Could not load Razorpay SDK'));
+        }, { once: true });
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.async = true;
+      script.onload = () => resolve(true);
+      script.onerror = () => {
+        this._rzpLoadPromise = null;
+        reject(new Error('Could not load Razorpay SDK'));
+      };
+      document.body.appendChild(script);
+    });
+    return this._rzpLoadPromise;
+  }
+
+  formatMoney(amount, currency){
+    const value = Number(amount);
+    if(!Number.isFinite(value)) return '';
+    try{
+      return new Intl.NumberFormat('en-IN', { style: 'currency', currency: currency || 'INR', maximumFractionDigits: 2 }).format(value);
+    }catch(_err){
+      return '₹' + value.toFixed(2);
+    }
+  }
+
   /* generic input/select setter for a given state bag + field name */
   setField(bag, name){
-    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = {}; patch[bag] = next; return patch; }); };
+    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = {}; patch[bag] = next; if(bag === 'regValues') this.saveRegistrationDraft({ regValues: next, regStep: st.regStep, regDraftToken: st.regDraftToken, regDocumentsUploaded: st.regDocumentsUploaded, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return patch; }); };
   }
 
   showToast(message, tone){
@@ -1059,6 +1192,9 @@ class Component extends DCLogic {
       fields: vals,
       submittedAt: new Date().toISOString()
     };
+    if(opts.payment){
+      payload.payment = opts.payment;
+    }
     if(!opts.endpoint){
       /* Preview / draft mode — the renderer didn't wire an endpoint
          because the page isn't published yet. Surface a toast so the
@@ -1080,10 +1216,6 @@ class Component extends DCLogic {
            fall back to the toast + done-state (existing lead-capture
            behaviour). */
         const redirect = body && body.redirect;
-        if(redirect && redirect.type === 'microsite' && redirect.url){
-          window.location.href = redirect.url;
-          return;
-        }
         const p = {}; p[opts.doneKey] = true; p[opts.sendingKey] = false; this.setState(p);
         const msg = (redirect && redirect.type === 'thanks' && body && body.message)
           ? body.message
@@ -1249,8 +1381,51 @@ class Component extends DCLogic {
     out.inclusions = inv.inclusions || [];
     out.showInclusions = !!(inv.inclusions && inv.inclusions.length);
 
-    /* ----- registration ----- */
     const reg = cfg.register || {};
+    const parseMoney = (value) => {
+      if (value == null || value === '') return null;
+      if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+      const cleaned = String(value).replace(/[₹,\s]/g, '').replace(/[^0-9.-]/g, '');
+      if (!cleaned) return null;
+      const parsed = Number(cleaned);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const paymentCfg = inv.payment || {};
+    const paymentInstallments = (inv.installments || []).map((ins, i) => {
+      const amountMajor = parseMoney(ins.amount);
+      if (!(amountMajor > 0)) return null;
+      return {
+        index: i,
+        label: ins.tag || ins.title || ('Instalment ' + (i + 1)),
+        title: ins.title || ins.tag || ('Instalment ' + (i + 1)),
+        sub: ins.sub || '',
+        date: ins.date || '',
+        amountMajor,
+        amountLabel: typeof ins.amount === 'string' && ins.amount.trim()
+          ? ins.amount.trim()
+          : this.formatMoney(amountMajor, paymentCfg.currency || 'INR'),
+      };
+    }).filter(Boolean);
+    const paymentEnabled = !!(paymentCfg.enabled && paymentInstallments.length > 0);
+    const paymentMode = (this.state.regPaymentMode || paymentCfg.defaultMode || 'installment').toLowerCase() === 'complete'
+      ? 'complete'
+      : 'installment';
+    const paymentInstallmentIndex = Number.isFinite(Number(this.state.regPaymentInstallmentIndex))
+      ? Number(this.state.regPaymentInstallmentIndex)
+      : 0;
+    const selectedPaymentInstallment = paymentInstallments.find((row) => row.index === paymentInstallmentIndex) || paymentInstallments[0] || null;
+    const paymentAmountMajor = paymentMode === 'complete'
+      ? paymentInstallments.reduce((sum, row) => sum + Number(row.amountMajor || 0), 0)
+      : Number(selectedPaymentInstallment && selectedPaymentInstallment.amountMajor ? selectedPaymentInstallment.amountMajor : 0);
+    const paymentOrderEndpoint = safeHref((paymentCfg && paymentCfg.orderEndpoint) || reg.paymentOrderEndpoint || '');
+    const paymentSubmitEndpoint = safeHref(reg.endpoint || '');
+    const paymentButtonLabel = paymentCfg.buttonLabel || 'Pay & continue';
+    const paymentStepTitle = paymentCfg.stepTitle || 'Secure payment';
+    const paymentIntro = paymentCfg.intro || 'Choose how you would like to pay for this registration.';
+    const paymentCompleteLabel = paymentCfg.completeLabel || 'Complete payment';
+    const paymentInstallmentLabel = paymentCfg.installmentLabel || 'Installment-wise payment';
+
+    /* ----- registration ----- */
     out.showRegister = !!(reg.steps && reg.steps.length);
     out.register = {
       eyebrow:reg.eyebrow, title:reg.title, intro:reg.intro, covers:reg.covers || [],
@@ -1274,7 +1449,20 @@ class Component extends DCLogic {
     out.regClosedMessage = regClosedMessage;
     out.regSeatsLabel = (seatsRemaining != null && seatsRemaining > 0 && seatsRemaining <= 10) ? ('Only ' + seatsRemaining + ' seats remaining') : '';
 
-    const rsteps = reg.steps || [];
+    // Older saved pages may contain the former combined documents/payment
+    // step. Keep the saved registration fields intact, but normalize that
+    // legacy step away so documents stay on the passport tab and payment gets
+    // its own final tab.
+    const baseSteps = (reg.steps || []).filter((step) => {
+      const title = String(step && step.title || '').toLowerCase();
+      return !title.includes('documents and payment') && !title.includes('documents & payment');
+    });
+    const isDomesticTrip = String(reg.tripType || '').toLowerCase() === 'domestic';
+    const passportValue = String(this.state.regValues.passport_status || '').toLowerCase();
+    const passportValid = isDomesticTrip || passportValue === 'valid passport' || passportValue === 'yes, passport is valid for 6+ months';
+    const rsteps = passportValid && baseSteps.length
+      ? baseSteps.concat([{ title:'Step 4: Payment', fields:[] }])
+      : baseSteps;
     out.regMultiStep = rsteps.length > 1;
     const stepIdx = Math.min(this.state.regStep, Math.max(0, rsteps.length - 1));
     const curStep = rsteps[stepIdx] || { title:'', fields:[] };
@@ -1285,21 +1473,121 @@ class Component extends DCLogic {
       reqMark: f.required ? ' *' : '', isSelect: f.type === 'select', isInput: f.type !== 'select',
       options: f.options || [], value: this.state.regValues[f.name] || '', onInput: this.setField('regValues', f.name)
     }));
+    out.regIsDocuments = passportValid && stepIdx === baseSteps.length - 1;
+    if (out.regIsDocuments) out.regStepTitle = 'Step 3: Documents';
+    out.regDocumentFields = [
+      ...(isDomesticTrip ? [] : [{ name:'passport', label:'Passport' }]),
+      { name:'aadhaar', label:'Aadhaar card' }, { name:'parentConsent', label:'Parent consent form' }, { name:'medicalConsent', label:'Medical consent form' }
+    ];
+    out.regDocumentFields = out.regDocumentFields.map((doc) => ({ ...doc, hasFile:!!(this.state.regFiles && this.state.regFiles[doc.name]), showChoose:!(this.state.regFiles && this.state.regFiles[doc.name]), fileName:this.state.regFiles && this.state.regFiles[doc.name] ? this.state.regFiles[doc.name].name : '', fileMeta:this.state.regFiles && this.state.regFiles[doc.name] ? ((this.state.regFiles[doc.name].size / 1024 / 1024).toFixed(1) + ' MB · ' + (this.state.regFiles[doc.name].type || 'Document')) : '', onInput:(e) => this.setState(st => ({ regFiles:{ ...(st.regFiles || {}), [doc.name]:e.target.files && e.target.files[0] } })), onRemove:() => this.setState(st => { const next={...(st.regFiles || {})}; delete next[doc.name]; return { regFiles:next, regDocumentsUploaded:false }; }), onPreview:() => { const file=this.state.regFiles && this.state.regFiles[doc.name]; if(file) window.open(URL.createObjectURL(file), '_blank', 'noopener'); } }));
     out.regShowBack = stepIdx > 0;
     out.regIsLast = stepIdx >= rsteps.length - 1;
-    out.regPrimaryLabel = out.regIsLast ? (reg.submitLabel || 'Submit') : 'Next';
+    out.regPaymentEnabled = !!(paymentEnabled && out.regShowForm && out.regIsLast && passportValid && this.state.regDocumentsUploaded);
+    out.regPaymentAllowComplete = paymentCfg.allowCompletePayment !== false;
+    out.regPaymentMode = paymentMode;
+    out.regPaymentIsInstallment = paymentMode === 'installment';
+    out.regPaymentIsComplete = paymentMode === 'complete';
+    out.regPaymentInstallmentIndex = paymentInstallmentIndex;
+    out.regPaymentInstallmentOptions = paymentInstallments;
+    out.regPaymentAmountLabel = this.formatMoney(paymentAmountMajor, paymentCfg.currency || 'INR');
+    out.regPaymentStepTitle = paymentStepTitle;
+    out.regPaymentIntro = paymentIntro;
+    out.regPaymentButtonLabel = out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit');
+    out.regPaymentInstallmentLabel = paymentInstallmentLabel;
+    out.regPaymentCompleteLabel = paymentCompleteLabel;
+    out.regPaymentOrderEndpoint = paymentOrderEndpoint;
+    out.regPaymentSubmitEndpoint = paymentSubmitEndpoint;
+    out.regPaymentSelectedLabel = selectedPaymentInstallment ? selectedPaymentInstallment.label : '';
+    out.regPaymentSelectedAmountLabel = selectedPaymentInstallment ? selectedPaymentInstallment.amountLabel : '';
+    out.regPaymentSummaryLabel = paymentMode === 'complete' ? paymentCompleteLabel : paymentInstallmentLabel;
+    out.regPaymentSummaryAmountLabel = paymentMode === 'complete'
+      ? out.regPaymentAmountLabel
+      : (selectedPaymentInstallment ? selectedPaymentInstallment.amountLabel : out.regPaymentAmountLabel);
+    out.regPaymentLoading = this.state.regPaymentLoading;
+    out.regPaymentError = this.state.regPaymentError;
+    out.regPaymentShowInstallmentSelect = out.regPaymentEnabled && paymentMode === 'installment' && paymentInstallments.length > 1;
+    out.regPaymentShowCompleteOption = out.regPaymentEnabled && out.regPaymentAllowComplete;
+    out.regPaymentInstallmentBorder = paymentMode === 'installment' ? 'var(--c-brand)' : 'var(--c-border)';
+    out.regPaymentInstallmentBackground = paymentMode === 'installment' ? 'color-mix(in srgb,var(--c-brand) 8%,var(--c-light))' : 'var(--c-panel)';
+    out.regPaymentCompleteBorder = paymentMode === 'complete' ? 'var(--c-brand)' : 'var(--c-border)';
+    out.regPaymentCompleteBackground = paymentMode === 'complete' ? 'color-mix(in srgb,var(--c-brand) 8%,var(--c-light))' : 'var(--c-panel)';
+    out.regPaymentSelectedSummary = paymentMode === 'complete' ? 'All instalments' : (selectedPaymentInstallment ? selectedPaymentInstallment.label : '');
+    out.regPrimaryLabel = out.regIsLast ? (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit')) : 'Next';
+    out.regPrimaryButtonLabel = this.state.regPaymentLoading ? 'Opening Razorpay...' : out.regPrimaryLabel;
+    out.regPrimaryButtonOpacity = this.state.regPaymentLoading ? 0.78 : 1;
     out.regError = this.state.regError;
     out.hpSetter = this.setField('regValues', '_hp');
-    out.regPrev = () => this.setState(st => ({ regStep: Math.max(0, st.regStep - 1), regError:'' }));
+    out.regPrev = () => this.setState(st => { const regStep = Math.max(0, st.regStep - 1); this.saveRegistrationDraft({ regStep, regValues: st.regValues, regDraftToken: st.regDraftToken, regDocumentsUploaded: st.regDocumentsUploaded, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return { regStep, regError:'' }; });
+    out.regChoosePaymentInstallment = () => { this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode:'installment', regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex }); this.setState({ regPaymentMode: 'installment', regPaymentError: '' }); };
+    out.regChoosePaymentComplete = () => { this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode:'complete', regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex }); this.setState({ regPaymentMode: 'complete', regPaymentError: '' }); };
+    out.regChoosePaymentInstallmentIndex = (e) => { const regPaymentInstallmentIndex = Number(e.target.value) || 0; this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode: this.state.regPaymentMode, regPaymentInstallmentIndex }); this.setState({ regPaymentInstallmentIndex, regPaymentError: '' }); };
     out.regPrimary = (() => {
       const steps = rsteps, idx = stepIdx, endpoint = reg.endpoint, c = cfg;
       return () => {
-        if(this.state.regSending) return;
+        if(this.state.regSending || this.state.regPaymentLoading) return;
         const fields = (steps[idx] && steps[idx].fields) || [];
         for(const f of fields){ const err = validateField(f, this.state.regValues[f.name]); if(err){ this.setState({ regError: err }); return; } }
         this.setState({ regError:'' });
+        if(idx === baseSteps.length - 1 && passportValid && !this.state.regDocumentsUploaded){
+          const files = this.state.regFiles || {};
+          const requiredDocuments = isDomesticTrip ? ['aadhaar','parentConsent','medicalConsent'] : ['passport','aadhaar','parentConsent','medicalConsent'];
+          if(requiredDocuments.some((name) => !files[name])){ this.setState({ regError: isDomesticTrip ? 'Please upload all three required documents.' : 'Please upload all four required documents.' }); return; }
+          this.setState({ regError:'', regPaymentLoading:true });
+          const fd = new FormData();
+          fd.append('fields', JSON.stringify(this.state.regValues || {}));
+          Object.keys(files).forEach((name) => { if(files[name]) fd.append(name, files[name]); });
+          fetch((paymentOrderEndpoint || endpoint || '').replace(/\/payment-order$/, '/registration-documents'), { method:'POST', body:fd })
+            .then((r) => r.json().then((body) => ({ ok:r.ok, body })))
+            .then((result) => { if(!result.ok) throw new Error(result.body.error || 'Document upload failed.'); const regDraftToken = result.body.draftToken || ''; this.saveRegistrationDraft({ regStep: idx + 1, regValues: this.state.regValues, regDraftToken, regDocumentsUploaded:true, regPaymentMode: this.state.regPaymentMode, regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex }); this.setState({ regStep:idx + 1, regDraftToken, regDocumentsUploaded:true, regPaymentLoading:false }); })
+            .catch((err) => this.setState({ regPaymentLoading:false, regError:err.message || 'Document upload failed.' }));
+          return;
+        }
         if(idx < steps.length - 1){ this.setState(st => ({ regStep: st.regStep + 1 })); return; }
-        this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, doneKey:'regSubmitted', sendingKey:'regSending' });
+        if(!out.regPaymentEnabled){
+          this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, doneKey:'regSubmitted', sendingKey:'regSending' });
+          return;
+        }
+        if(!paymentOrderEndpoint || paymentOrderEndpoint === '#'){
+          this.setState({ regPaymentError: 'Payment is not available in preview mode.' });
+          this.showToast('Payment is not available in preview mode.', 'warning');
+          return;
+        }
+        this.setState({ regPaymentError: '', regPaymentLoading: true });
+        const currentPaymentMode = (this.state.regPaymentMode || paymentCfg.defaultMode || 'installment').toLowerCase() === 'complete'
+          ? 'complete'
+          : 'installment';
+        const currentInstallmentIndex = Number.isFinite(Number(this.state.regPaymentInstallmentIndex))
+          ? Number(this.state.regPaymentInstallmentIndex)
+          : 0;
+        const paymentPayload = {
+          mode: currentPaymentMode,
+          installmentIndex: currentInstallmentIndex,
+          fields: this.state.regValues,
+          name: this.state.regValues.name || this.state.regValues.fullName || this.state.regValues.student_name || this.state.regValues.parent_name || '',
+          email: this.state.regValues.email || this.state.regValues.parent_email || '',
+          phone: this.state.regValues.phone || this.state.regValues.parent_phone || '',
+          draftToken: this.state.regDraftToken || '',
+        };
+        this.saveRegistrationDraft({ regStep: idx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode: currentPaymentMode, regPaymentInstallmentIndex: currentInstallmentIndex });
+        fetch(paymentOrderEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(paymentPayload) })
+          .then(r => { if(!r.ok) throw new Error('bad status'); return r.json().catch(() => ({})); })
+          .then(async (order) => {
+            if(!order || !order.paymentUrl) throw new Error((order && order.error) || 'Could not start payment.');
+            this.setState({ regPaymentLoading: false });
+            window.location.href = order.paymentUrl;
+            return;
+          })
+          .catch((err) => {
+            if(err && err.message === '__cancelled__'){
+              this.setState({ regPaymentLoading: false });
+              return;
+            }
+            this.setState({ regPaymentLoading: false, regPaymentError: (err && err.message) || 'Could not start payment.' });
+            this.showToast((err && err.message) || 'Could not start payment.', 'error');
+          })
+          .finally(() => {
+            this.setState({ regPaymentLoading: false });
+          });
       };
     })();
 

@@ -1037,6 +1037,7 @@ app.use("/api", (req, res, next) => {
     "/terms-and-conditions",
     "/legal",
     "/landing-pages/public",
+    "/explore",
     "/landing-sites/public",
     "/landing-pages/wanderlux-static",
     "/brochure-assets",
@@ -1519,6 +1520,7 @@ app.use(
   travelPersonalisedDestinationsRoutes,
 );
 app.use("/api/travel-tmc-catalogue", require("./routes/travel_tmc_catalogue"));
+app.use("/api/explore", require("./routes/explore_public"));
 app.use(
   "/api/travel/engine-weights",
   require("./routes/travel_engine_weights"),

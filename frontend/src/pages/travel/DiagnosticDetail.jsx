@@ -597,6 +597,8 @@ export default function DiagnosticDetail() {
 
   const questions = parseQuestionList(diag?.questionsJson);
   const answers = parseAnswers(diag?.answersJson);
+  const isCatalogueInterest = diag?.source === "public_catalogue_interest";
+  const catalogueInterest = answers.catalogueInterest || {};
   const envelope = parseTalkingPointsEnvelope(diag?.talkingPointsJson);
   const subBrandLabel = SUB_BRAND_LABEL[diag?.subBrand] || diag?.subBrand || "";
   const classKey = (comparison?.classification || "unknown").toLowerCase();
@@ -659,7 +661,7 @@ export default function DiagnosticDetail() {
       )}
 
       {/*  Section 1: answers + classification  */}
-      <section style={card}>
+      <section style={isCatalogueInterest ? { display: "none" } : card}>
         <h2 style={cardTitle}>
           <ClipboardCheck size={18} aria-hidden /> Answers &amp; classification
         </h2>
@@ -819,6 +821,47 @@ export default function DiagnosticDetail() {
         )}
       </section>
 
+      {isCatalogueInterest && (
+        <section style={card}>
+          <h2 style={cardTitle}>Catalogue interest details</h2>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
+            {[
+              ["Name", catalogueInterest.name],
+              ["Email", catalogueInterest.email],
+              ["Phone", catalogueInterest.phone],
+              ["Dates", catalogueInterest.dates ? new Date(`${catalogueInterest.dates}T00:00:00`).toLocaleDateString() : ""],
+              ["Grades", catalogueInterest.grades],
+              ["Tentative no. of students", catalogueInterest.students],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <span style={kvLabel}>{label}</span>
+                <div style={{ marginTop: 5, fontWeight: 600 }}>{value || "—"}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {isCatalogueInterest && catalogueInterest.files?.length > 0 && (
+        <section style={card}>
+          <h2 style={cardTitle}>
+            <Heart size={18} aria-hidden /> Selected catalogue PDFs
+          </h2>
+          <div style={{ display: "grid", gap: 8 }}>
+            {catalogueInterest.files.map((file, idx) => (
+              <div key={file.id || idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "8px 12px", borderRadius: 8, background: "var(--subtle-bg-3)" }}>
+                <span style={{ fontWeight: 500 }}>{file.name || `Catalogue PDF ${idx + 1}`}</span>
+                {file.driveViewLink && (
+                  <a href={file.driveViewLink} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary-color)", fontSize: 13, fontWeight: 600, textDecoration: "none" }}>
+                    View PDF &rarr;
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Chosen itinerary interests (2026-08-27) — trips the school checked
           off on the public report page after submitting. Reads chosenInterests
           straight off the diagnostic response (see GET /diagnostics/:id in
@@ -861,8 +904,9 @@ export default function DiagnosticDetail() {
         </section>
       )}
 
+
       {/*  TMC human_pick recorder + engine output (PRD T11 / DD-5.7)  */}
-      {diag.subBrand === "tmc" && (
+      {!isCatalogueInterest && diag.subBrand === "tmc" && (
         <HumanPickSection
           diag={diag}
           catalogue={catalogue}
@@ -878,7 +922,7 @@ export default function DiagnosticDetail() {
       )}
 
       {/*  Section 2: talking-points brief  */}
-      <section style={{ ...card, marginTop: 16 }}>
+      {!isCatalogueInterest && <section style={{ ...card, marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <h2 style={{ ...cardTitle, margin: 0 }}>
             <Sparkles size={18} aria-hidden /> Advisor talking-points brief
@@ -1044,10 +1088,10 @@ export default function DiagnosticDetail() {
             </div>
           </div>
         )}
-      </section>
+      </section>}
 
       {/*  Section 3: form-vs-call comparison  */}
-      <section style={{ ...card, marginTop: 16 }}>
+      {!isCatalogueInterest && <section style={{ ...card, marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <h2 style={{ ...cardTitle, margin: 0 }}>
             <Send size={18} aria-hidden /> Form-vs-call comparison
@@ -1162,7 +1206,7 @@ export default function DiagnosticDetail() {
             )}
           </div>
         )}
-      </section>
+      </section>}
     </div>
   );
 }

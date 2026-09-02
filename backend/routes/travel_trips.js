@@ -188,7 +188,9 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where,
-      orderBy: { departDate: "asc" },
+      // New trips should surface first by default, so sort by creation
+      // time newest-first and break ties on the autoincrement id.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take,
       skip,
     };

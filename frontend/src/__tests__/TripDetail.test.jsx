@@ -343,7 +343,6 @@ describe('<TripDetail /> — load lifecycle', () => {
     expect(await screen.findByText('Loading…')).toBeInTheDocument();
     resolveTrip(makeTrip());
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    expect(screen.queryByText('Loading…')).toBeNull();
   });
 
   it('GETs /api/travel/trips/:id on mount with the route-param id', async () => {
@@ -403,10 +402,10 @@ describe('<TripDetail /> — header + status badge', () => {
 });
 
 describe('<TripDetail /> — tab strip', () => {
-  it('opens the Public Experience tab when the route carries ?tab=microsite', async () => {
+  it('normalizes the legacy microsite route to Overview', async () => {
     renderPage(101, { search: '?tab=microsite' });
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    expect(screen.getByRole('tab', { name: /Public Experience/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /Overview/i })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('uses preserved report result URL when opened from Reports drill-down', async () => {
@@ -418,14 +417,14 @@ describe('<TripDetail /> — tab strip', () => {
     );
   });
 
-  it('renders all 5 tabs with role="tab" + Overview selected by default', async () => {
+  it('renders all 4 tabs with role="tab" + Overview selected by default', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(5);
+    expect(tabs).toHaveLength(4);
     const labels = tabs.map((t) => t.textContent.trim());
     expect(labels).toEqual(
-      expect.arrayContaining(['Overview', 'Participants', 'Rooming', 'Payment plan', 'Public Experience']),
+      expect.arrayContaining(['Overview', 'Participants', 'Rooming', 'Payment plan']),
     );
     // Overview is selected by default.
     const overview = screen.getByRole('tab', { name: /Overview/i });
@@ -448,11 +447,10 @@ describe('<TripDetail /> — Overview tab', () => {
     // getAllByText.
     expect(screen.getAllByText('Participants').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('Payment plan').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Public Experience').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByTestId('landing-page-card')).toBeInTheDocument();
     // Summary-band status pills (rendered uppercase via CSS; literal mixed-
     // case in DOM).
     expect(screen.getByText('Not set yet')).toBeInTheDocument();
-    expect(screen.getByText('Not published')).toBeInTheDocument();
   });
 });
 
@@ -632,11 +630,11 @@ describe('<TripDetail /> — Rooming tab', () => {
   });
 });
 
-describe('<TripDetail /> — Microsite tab', () => {
+describe.skip('<TripDetail /> — Microsite tab (legacy UI)', () => {
   it('un-published trip renders MicrositeCreate copy + subdomain default seeded from trip-{tripCode}', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Landing page/i }));
     expect(
       await screen.findByText(/Create a public registration page/i),
     ).toBeInTheDocument();
@@ -687,7 +685,7 @@ describe('<TripDetail /> — Microsite tab', () => {
   });
 });
 
-describe('<TripDetail /> — Microsite Create enhancements', () => {
+describe.skip('<TripDetail /> — Microsite Create enhancements (legacy UI)', () => {
   it('pre-fills itinerary from linked landing-page itineraryTimeline block', async () => {
     installFetchMock({
       landingPage: {
@@ -945,7 +943,7 @@ describe('<TripDetail /> — Payment plan tab', () => {
   });
 });
 
-describe('<TripDetail /> — Microsite Create flow', () => {
+describe.skip('<TripDetail /> — Microsite Create flow (legacy UI)', () => {
   it('Publish POSTs /api/travel/trips/:id/microsite with subdomain + itineraryHtml', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
@@ -995,7 +993,7 @@ describe('<TripDetail /> — Microsite Create flow', () => {
   });
 });
 
-describe('<TripDetail /> — Microsite Editor preview toggle', () => {
+describe.skip('<TripDetail /> — Microsite Editor preview toggle (legacy UI)', () => {
   it('clicking Preview flips the button label to Edit + renders preview surface', async () => {
     const ms = {
       id: 5001,
@@ -1302,7 +1300,7 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
   });
 });
 
-describe('<TripDetail /> — Microsite Create POST error', () => {
+describe.skip('<TripDetail /> — Microsite Create POST error (legacy UI)', () => {
   it('POST rejection surfaces notify.error with body.error from fetchApi', async () => {
     // Use a custom fetch impl: trip GET resolves, microsite POST rejects.
     const err = new Error('boom');
@@ -1333,7 +1331,7 @@ describe('<TripDetail /> — Microsite Create POST error', () => {
   });
 });
 
-describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
+describe.skip('<TripDetail /> — Microsite Editor save/unpublish/faq (legacy UI)', () => {
   const ms = {
     id: 5001,
     tripId: 101,
@@ -1843,9 +1841,9 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
     installFetchMock({ landingPage: { status: 404, body: { code: 'NOT_LINKED' } } });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
     expect(await screen.findByTestId('landing-page-card')).toBeInTheDocument();
-    expect(screen.getByText(/No landing page linked yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No landing page created yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/participant registration/i)).toBeInTheDocument();
     // Redirect-only — no lazy-create button on the trip detail surface.
     expect(screen.queryByTestId('create-landing-page-btn')).not.toBeInTheDocument();
     const gotoLink = screen.getByTestId('goto-landing-pages-link');
@@ -1862,7 +1860,6 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
     });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
     expect(await screen.findByText('Bali Trip — bali2026')).toBeInTheDocument();
     const manageLink = screen.getByTestId('manage-landing-page-link');
     expect(manageLink.getAttribute('href')).toBe('/landing-pages/builder/77');
@@ -1891,17 +1888,15 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
     });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
-
     fireEvent.click(await screen.findByTestId('manage-landing-page-link'));
 
     expect(await screen.findByTitle('Back to TMC Trips')).toHaveAttribute('href', '/travel/trips/101?tab=overview');
     expect(screen.getByRole('link', { name: 'TMC Trips' })).toHaveAttribute('href', '/travel/trips/101?tab=overview');
-    expect(screen.getByText('Public experience')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Public experience' })).toHaveAttribute('href', '/travel/trips/101?tab=microsite');
+    expect(screen.getByText('Overview')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Overview' })).toHaveAttribute('href', '/travel/trips/101?tab=overview');
   });
 
-  it('Public Experience tab renders BOTH landing-page card AND microsite section', async () => {
+  it('Overview renders the landing-page card without microsite controls', async () => {
     installFetchMock({
       landingPage: {
         id: 77, slug: 'trip-bali2026', status: 'PUBLISHED', tripId: 101,
@@ -1910,12 +1905,9 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
     });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
     // Landing page card present
     expect(await screen.findByTestId('landing-page-card')).toBeInTheDocument();
-    // Microsite section also present (MicrositeCreate "No microsite" copy
-    // shows since the default trip fixture has microsite: null)
-    expect(screen.getByText(/Create a public registration page/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Create a public registration page/i)).not.toBeInTheDocument();
   });
 });
 

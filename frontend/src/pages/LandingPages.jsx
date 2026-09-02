@@ -3,6 +3,8 @@ import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Star, Sparkles, AlertCir
 import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
 import { getLandingPageSharePath, getLandingPageShareUrl, isTravelLandingPage } from '../utils/landingPageUtils';
+import { listWanderluxThemePresets, resolveWanderluxThemePreset } from '../utils/wanderluxThemePresets';
+import ThemePaletteEditor, { createThemeDraft } from '../components/landing-pages/ThemePaletteEditor';
 import { useNotify } from '../utils/notify';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
@@ -104,14 +106,156 @@ function friendlyAiError(rawError) {
 }
 
 function createGenFormDefaults(tripContext = null, overrides = {}) {
+  const defaultTheme = resolveWanderluxThemePreset({
+    destination: tripContext?.destination || '',
+    subBrand: tripContext?.subBrand || 'tmc',
+  });
   return {
     destination: tripContext?.destination || '',
     durationDays: tripContext?.durationDays || 7,
     audience: tripContext?.audience || '',
     subBrand: tripContext?.subBrand || 'tmc',
+    themeId: defaultTheme.id,
     style: 'premium',
     ...overrides,
   };
+}
+
+function createBlockId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildMarketingPageContent(tripContext = null) {
+  const destinationLabel = tripContext?.destination || 'your next trip';
+
+  return [
+    {
+      id: createBlockId('marketing-heading'),
+      type: 'heading',
+      props: {
+        text: 'Before the trip is confirmed',
+        level: 'h1',
+        align: 'center',
+        color: '#1e293b',
+      },
+    },
+    {
+      id: createBlockId('marketing-copy'),
+      type: 'text',
+      props: {
+        text: `Use this page to show a glimpse of ${destinationLabel}, highlight ongoing and completed trips, and point visitors to the diagnostic form and catalogue PDFs.`,
+        align: 'center',
+        color: '#64748b',
+        fontSize: '1.02rem',
+      },
+    },
+    {
+      id: createBlockId('marketing-highlights'),
+      type: 'highlightsGrid',
+      props: {
+        title: 'Trip overview',
+        subtitle: 'Give travellers a quick snapshot before they decide.',
+        items: [
+          {
+            icon: '1',
+            title: 'Latest ongoing trips',
+            body: 'Share the departures that are currently open for booking.',
+          },
+          {
+            icon: '2',
+            title: 'Completed trips',
+            body: 'Show recent journeys and build trust with social proof.',
+          },
+          {
+            icon: '3',
+            title: 'Ready for diagnostics',
+            body: 'Invite visitors to qualify themselves before the trip is confirmed.',
+          },
+        ],
+      },
+    },
+    {
+      id: createBlockId('marketing-widgets'),
+      type: 'columns',
+      props: {
+        gap: '1.5rem',
+        columns: [
+          {
+            components: [
+              {
+                id: createBlockId('marketing-diagnostic-title'),
+                type: 'heading',
+                props: {
+                  text: 'Diagnostic form',
+                  level: 'h2',
+                  align: 'left',
+                  color: '#1f2f2c',
+                },
+              },
+              {
+                id: createBlockId('marketing-diagnostic-copy'),
+                type: 'text',
+                props: {
+                  text: 'Send visitors to the public diagnostic form so your team can qualify interest before the trip is confirmed.',
+                  align: 'left',
+                  color: '#5f6c67',
+                  fontSize: '0.96rem',
+                },
+              },
+              {
+                id: createBlockId('marketing-diagnostic-cta'),
+                type: 'button',
+                props: {
+                  text: 'Open diagnostic form',
+                  url: '/p/tmc/readiness',
+                  bgColor: '#b8893b',
+                  color: '#ffffff',
+                  align: 'left',
+                  size: 'medium',
+                },
+              },
+            ],
+          },
+          {
+            components: [
+              {
+                id: createBlockId('marketing-catalogue'),
+                type: 'brochureDownload',
+                props: {
+                  title: 'TMC catalogue PDFs',
+                  subtitle: 'Attach brochures and downloadable PDFs here so visitors can browse the latest material.',
+                  ctaText: 'Open catalogue PDFs',
+                  fileUrl: null,
+                  formFields: [
+                    { label: 'Full name', name: 'name', type: 'text', required: true },
+                    { label: 'Email', name: 'email', type: 'email', required: true },
+                    { label: 'Phone', name: 'phone', type: 'tel', required: false },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      id: createBlockId('marketing-footer'),
+      type: 'text',
+      props: {
+        text: 'Use the confirmed-trip page for locked departures and the marketing page for pre-trip discovery.',
+        align: 'center',
+        color: '#64748b',
+        fontSize: '0.93rem',
+      },
+    },
+  ];
+}
+
+function isExploreMarketingPage(page) {
+  if (!page || page.tripId) return false;
+  if (/pre-trip marketing page/i.test(String(page.title || ''))) return true;
+  const content = typeof page.content === 'string' ? page.content : JSON.stringify(page.content || '');
+  return content.includes('marketing-heading') || content.includes('Before the trip is confirmed');
 }
 
 export default function LandingPages() {
@@ -122,13 +266,6 @@ export default function LandingPages() {
   const pageReturnState = location.state?.returnTo ? location.state : null;
   const tripLandingPageContext = pageReturnState?.tripContext || null;
   const [pages, setPages] = useState([]);
-  const [templates, setTemplates] = useState([]);
-  // Phase D1 — premium template catalogue (educational-trip-v1 etc.).
-  // Surfaced in the "Choose a Template" picker alongside the legacy
-  // block-based templates. Entries with status="ready" create through
-  // the template renderer; status="stub" entries delegate to
-  // educational-trip-v1 today (D3 will fork them).
-  const [premiumTemplates, setPremiumTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   // PR-B — AI Generate modal state.
@@ -137,14 +274,16 @@ export default function LandingPages() {
     destination: '',
     durationDays: 7,
     audience: '',
+    tripType: 'international',
     subBrand: 'tmc',
-    // Phase D1 bridge — premium routes the LLM-generated blocks
-    // through the educational-trip-v1 template mapper so the page
-    // renders at the premium-microsite parity (~98%). Legacy keeps
-    // the existing PR-B block-based behaviour for operators who want
-    // per-section composition freedom.
+    themeId: resolveWanderluxThemePreset({ subBrand: 'tmc' }).id,
+    // AI flow only. Confirmed-trip drafts always open the AI generator
+    // path first; the builder is where the operator edits the page.
     style: 'premium',
   });
+  const [themeSelectionManual, setThemeSelectionManual] = useState(false);
+  const [customColorsEnabled, setCustomColorsEnabled] = useState(false);
+  const [customTheme, setCustomTheme] = useState(() => createThemeDraft(resolveWanderluxThemePreset({ subBrand: 'tmc' }).theme));
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
   const navigate = useNavigate();
@@ -155,17 +294,89 @@ export default function LandingPages() {
   const [featuringId, setFeaturingId] = useState(null);
   const cardSurfaceStyle = getLandingPageCardStyle(isDarkTheme);
   const metricTileStyle = getLandingPageMetricTileStyle(isDarkTheme);
+  const themeChoices = useMemo(() => listWanderluxThemePresets(genForm.subBrand), [genForm.subBrand]);
+  const activeThemeChoice = useMemo(() => resolveWanderluxThemePreset({
+    themeId: genForm.themeId,
+    destination: genForm.destination,
+    subBrand: genForm.subBrand,
+  }), [genForm.themeId, genForm.destination, genForm.subBrand]);
+  const suggestedTheme = useMemo(() => resolveWanderluxThemePreset({
+    destination: genForm.destination,
+    subBrand: genForm.subBrand,
+  }), [genForm.destination, genForm.subBrand]);
   useEffect(() => {
     if (tripLandingPageContext) {
-      setGenForm(createGenFormDefaults(tripLandingPageContext));
+      const nextForm = createGenFormDefaults(tripLandingPageContext);
+      setGenForm(nextForm);
+      setThemeSelectionManual(false);
+      setCustomColorsEnabled(false);
+      setCustomTheme(createThemeDraft(resolveWanderluxThemePreset({
+        themeId: nextForm.themeId,
+        destination: nextForm.destination,
+        subBrand: nextForm.subBrand,
+      }).theme));
     }
   }, [tripLandingPageContext]);
   const openGenerateModal = () => {
-    if (tripLandingPageContext) {
-      setGenForm(createGenFormDefaults(tripLandingPageContext));
-    }
+    const nextForm = tripLandingPageContext ? createGenFormDefaults(tripLandingPageContext) : createGenFormDefaults();
+    setGenForm(nextForm);
+    setThemeSelectionManual(false);
+    const baseTheme = resolveWanderluxThemePreset({
+      themeId: nextForm.themeId,
+      destination: nextForm.destination,
+      subBrand: nextForm.subBrand,
+    });
+    setCustomColorsEnabled(false);
+    setCustomTheme(createThemeDraft(baseTheme.theme));
     setGenError(null);
     setShowGenerateModal(true);
+  };
+  const openGenerateModalFromConfirmedTrip = () => {
+    setShowTemplatePicker(false);
+    openGenerateModal();
+  };
+  const updateGenField = (field, value) => {
+    setGenForm((current) => {
+      const next = { ...current, [field]: value };
+      if ((field === 'destination' || field === 'subBrand') && !themeSelectionManual) {
+        const suggested = resolveWanderluxThemePreset({
+          destination: field === 'destination' ? value : next.destination,
+          subBrand: field === 'subBrand' ? value : next.subBrand,
+        });
+        next.themeId = suggested.id;
+        if (!customColorsEnabled) {
+          setCustomTheme(createThemeDraft(suggested.theme));
+        }
+      }
+      return next;
+    });
+  };
+  const handleThemeChoice = (themeId) => {
+    const selected = resolveWanderluxThemePreset({
+      themeId,
+      destination: genForm.destination,
+      subBrand: genForm.subBrand,
+    });
+    setThemeSelectionManual(selected.id !== suggestedTheme.id || customColorsEnabled);
+    setGenForm((current) => ({ ...current, themeId: selected.id }));
+    if (!customColorsEnabled) {
+      setCustomTheme(createThemeDraft(selected.theme));
+    }
+  };
+  const handleCustomColorsToggle = (enabled) => {
+    const nextEnabled = Boolean(enabled);
+    setCustomColorsEnabled(nextEnabled);
+    if (nextEnabled) {
+      const currentTheme = resolveWanderluxThemePreset({
+        themeId: genForm.themeId,
+        destination: genForm.destination,
+        subBrand: genForm.subBrand,
+      });
+      setCustomTheme(createThemeDraft(currentTheme.theme));
+      setThemeSelectionManual(true);
+    } else {
+      setThemeSelectionManual(genForm.themeId !== suggestedTheme.id);
+    }
   };
   const summaryAndVisiblePages = useMemo(() => {
     const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
@@ -200,7 +411,9 @@ export default function LandingPages() {
       visiblePages: filtered,
     };
   }, [dateFilter, pages, searchQuery, statusFilter]);
-  const { counts, visiblePages } = summaryAndVisiblePages;
+  const { counts, visiblePages: filteredPages } = summaryAndVisiblePages;
+  const visiblePages = filteredPages;
+  const explorePage = pages.find((page) => isExploreMarketingPage(page) && page.status !== 'ARCHIVED');
   const builderNavigationState = pageReturnState || undefined;
   const statusFilterOptions = [
     { value: 'ALL', label: 'All', count: counts.total },
@@ -215,76 +428,43 @@ export default function LandingPages() {
 
   useEffect(() => {
     loadPages();
-    fetchApi('/api/landing-pages/templates/list').then(data => setTemplates(data || [])).catch(() => {});
-    // Phase D1 — premium template catalogue (educational-trip-v1 etc.).
-    fetchApi('/api/landing-pages/template-catalogue')
-      .then(data => setPremiumTemplates(Array.isArray(data?.templates) ? data.templates : []))
-      .catch(() => setPremiumTemplates([]));
   }, []);
 
-  // Map a premium template's `family` to a sensible default audience +
-  // sub-brand so the destination-input modal arrives pre-configured for the
-  // operator. The user fills destination + duration; the rest is inferred.
-  const familyToAudience = {
-    educational: 'School students (Grades 6-12)',
-    religious: 'Pilgrims and families',
-    family: 'Families and leisure travellers',
-    luxury: 'Premium and boutique travellers',
-  };
-  const familyToSubBrand = {
-    educational: 'tmc',
-    religious: 'rfu',
-    family: 'travelstall',
-    luxury: 'travelstall',
-  };
+  const handleCreate = async (pageKind) => {
+    const isMarketingPage = pageKind === 'marketing';
+    const destination = tripLandingPageContext?.destination || '';
+    const title = isMarketingPage
+      ? (destination ? `${destination} Pre-Trip Marketing Page` : 'Pre-Trip Marketing Page')
+      : (destination ? `${destination} Confirmed Trip Landing Page` : 'Confirmed Trip Landing Page');
 
-  const handleCreate = async (templateType) => {
-    // Premium templates ALWAYS route through AI generation (2026-06-23).
-    // Pre-2026-06-23 the picker seeded a static [REVIEW] stub via
-    // premium.defaultContent; that left every slot showing literal
-    // "[REVIEW] …" strings and the operator had to manually replace
-    // every line. The new flow opens the destination-input modal with
-    // the template's family + audience pre-filled, then runs the
-    // /generate-from-destination LLM path so the operator lands on a
-    // populated draft.
-    const premium = premiumTemplates.find(t => t.id === templateType);
-    if (premium) {
-      const family = (premium.family || '').toLowerCase();
-      setGenForm(createGenFormDefaults(tripLandingPageContext, {
-        audience: tripLandingPageContext?.audience || familyToAudience[family] || 'Travellers',
-        subBrand: tripLandingPageContext?.subBrand || familyToSubBrand[family] || 'travelstall',
-        style: 'premium',
-      }));
-      setGenError(null);
-      setShowTemplatePicker(false);
-      setShowGenerateModal(true);
-      return;
+    const payload = {
+      title,
+      templateType: 'travel_destination',
+    };
+
+    if (destination) {
+      payload.destination = destination;
     }
+
+    if (tripLandingPageContext?.subBrand) {
+      payload.subBrand = tripLandingPageContext.subBrand;
+    }
+
+    if (isMarketingPage) {
+      payload.content = JSON.stringify(buildMarketingPageContent(tripLandingPageContext));
+    }
+
     try {
-      const tmpl = templates.find(t => t.id === templateType);
-      // #377: Blank template was rendering an empty canvas with no editable
-      // region, leaving users with no way to add sections. Seed a single
-      // empty heading + text placeholder so the editor surfaces a section
-      // the user can immediately edit or replace.
-      const blankSeed = [
-        { id: `seed-${Date.now()}`, type: 'heading', props: { text: 'Your Headline Here', level: 'h1', align: 'center', color: '#1e293b' } },
-        { id: `seed-${Date.now() + 1}`, type: 'text', props: { text: 'Click any block to edit, or pick a component from the left panel to add more.', align: 'center', color: '#64748b', fontSize: '1rem' } },
-      ];
-      const seedContent = tmpl ? JSON.stringify(tmpl.content) : JSON.stringify(blankSeed);
       const page = await fetchApi('/api/landing-pages', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: tmpl?.name || 'Untitled Page', templateType, content: seedContent }),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
         silent: true,
       });
       setShowTemplatePicker(false);
       if (builderNavigationState) navigate(`/landing-pages/builder/${page.id}`, { state: builderNavigationState });
       else navigate(`/landing-pages/builder/${page.id}`);
     } catch (err) {
-      // 409 with existingId → server says a Draft with this title already
-      // exists. Offer to open it instead of dead-ending in a generic error.
-      // (Pre-fix: the auto-toast showed the server msg AND the catch
-      // showed "Failed to create page" → two stacked error toasts with no
-      // recovery affordance — the screenshot the user reported.)
       if (err?.status === 409 && err?.data?.existingId) {
         const ok = await notify.confirm(
           `${err.message}\n\nOpen the existing draft?`,
@@ -393,7 +573,10 @@ export default function LandingPages() {
           destination: dest,
           durationDays: days,
           audience: aud,
+          tripType: genForm.tripType,
           subBrand: sb,
+          themeId: genForm.themeId || suggestedTheme.id,
+          themeOverrides: customColorsEnabled ? customTheme : null,
           autoCreate: true,
           style: genForm.style || 'premium',
         }),
@@ -417,7 +600,6 @@ export default function LandingPages() {
         notify.success('AI draft created. Review every section before publishing.');
       }
       setShowGenerateModal(false);
-      setGenForm(createGenFormDefaults(tripLandingPageContext));
       if (builderNavigationState) navigate(`/landing-pages/builder/${res.page.id}?ai=1`, { state: builderNavigationState });
       else navigate(`/landing-pages/builder/${res.page.id}?ai=1`);
     } catch (err) {
@@ -498,31 +680,31 @@ export default function LandingPages() {
           <PanelTop size={24} style={{ color: 'var(--accent-color)' }} />
           <div>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Landing Pages</h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Build no-code landing pages to capture leads</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Manage pre-trip marketing and confirmed-trip landing pages</p>
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.6rem' }}>
-          {/* PR-B — AI generator. Operator picks destination + duration +
-              audience + sub-brand; backend generates a DRAFT block array
-              and we navigate straight to the builder. Pricing,
-              testimonials, images stay manual. */}
-          <button
-            onClick={openGenerateModal}
-            title="Generate a destination landing-page draft with AI"
-            style={{
-              display: 'flex', alignItems: 'center', gap: '0.4rem',
-              padding: '0.55rem 1rem', borderRadius: 8,
-              border: '1px solid #b8893b', background: 'rgba(184,137,59,0.08)',
-              color: '#b8893b', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
-            }}
-          >
-            <Sparkles size={16} /> Generate Destination Page
-          </button>
           <button className="btn-primary" onClick={() => setShowTemplatePicker(true)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={18} /> Create Page
           </button>
         </div>
       </header>
+
+      <section aria-labelledby="explore-page-bar-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', padding: '0.85rem 1rem', marginBottom: '1.25rem', border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--card-bg, rgba(255,255,255,0.45))' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
+            <strong id="explore-page-bar-title">Explore marketing page</strong>
+            <span style={{ padding: '0.18rem 0.55rem', borderRadius: 999, fontSize: '0.7rem', fontWeight: 700, background: explorePage?.status === 'PUBLISHED' ? 'rgba(16,185,129,0.12)' : 'rgba(99,102,241,0.12)', color: explorePage?.status === 'PUBLISHED' ? '#059669' : '#6366f1' }}>{explorePage?.status || 'NOT CREATED'}</span>
+          </div>
+          <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>One editable page for pre-trip discovery. Published content is live at <strong>/explore</strong>.</p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+          {explorePage ? <button type="button" onClick={() => navigator.clipboard.writeText(`${window.location.origin}/explore`).then(() => { setCopiedId(explorePage.id); setTimeout(() => setCopiedId(null), 2000); })} style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem' }}><Copy size={13} /> {copiedId === explorePage.id ? 'Copied!' : 'Copy URL'}</button> : null}
+          <a href="/explore" target="_blank" rel="noreferrer" style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', textDecoration: 'none' }}><ExternalLink size={13} /> Open live</a>
+          {explorePage ? <Link to={`/landing-pages/explore-builder/${explorePage.id}`} className="btn-primary" style={{ padding: '0.5rem 0.8rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}><FileEdit size={13} /> Edit</Link> : <button type="button" onClick={() => handleCreate('marketing')} className="btn-primary" style={{ padding: '0.5rem 0.8rem', fontSize: '0.78rem' }}>Create Explore Page</button>}
+        </div>
+      </section>
+
 
       {pages.length > 0 && (
         <>
@@ -605,7 +787,7 @@ export default function LandingPages() {
         <div className="card" style={{ ...cardSurfaceStyle, padding: '4rem', textAlign: 'center' }}>
           <PanelTop size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
           <h3 style={{ marginBottom: '0.5rem' }}>No landing pages yet</h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Create your first landing page from a template to start capturing leads.</p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Create your first page type to start promoting trips before confirmation or publishing the confirmed trip experience.</p>
           <button className="btn-primary" onClick={() => setShowTemplatePicker(true)}><Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Create Page</button>
         </div>
       ) : (
@@ -772,7 +954,7 @@ export default function LandingPages() {
           style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.5))', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }}
           onClick={(e) => { if (e.target === e.currentTarget && !generating) setShowGenerateModal(false); }}
         >
-          <div className="card" style={{ ...cardSurfaceStyle, padding: '1.75rem', width: 'min(540px, 92vw)', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="card" style={{ ...cardSurfaceStyle, padding: '1.75rem', width: 'min(1020px, 96vw)', maxHeight: '90vh', overflowY: 'auto' }}>
             <h3 id="generate-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, marginBottom: '0.4rem', fontSize: '1.2rem' }}>
               <Sparkles size={20} style={{ color: '#b8893b' }} /> Generate Destination Landing Page
             </h3>
@@ -791,117 +973,212 @@ export default function LandingPages() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '1rem' }}>
-              <div>
-                <label htmlFor="gen-destination" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Destination *</label>
-                <input
-                  id="gen-destination"
-                  type="text"
-                  value={genForm.destination}
-                  onChange={(e) => setGenForm((f) => ({ ...f, destination: e.target.value }))}
-                  placeholder="e.g. Umrah, Bali, Japan, Switzerland"
-                  maxLength={80}
-                  disabled={generating}
-                  className="input-field"
-                  style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
-                />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1rem' }}>
+              <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '0.85rem 0.95rem', background: 'rgba(255,255,255,0.38)' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.85rem' }}>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label htmlFor="gen-destination" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Destination *</label>
+                    <input
+                      id="gen-destination"
+                      type="text"
+                      value={genForm.destination}
+                      onChange={(e) => updateGenField('destination', e.target.value)}
+                      placeholder="e.g. Umrah, Bali, Japan, Switzerland"
+                      maxLength={80}
+                      disabled={generating}
+                      className="input-field"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="gen-trip-type" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Trip type *</label>
+                    <select id="gen-trip-type" value={genForm.tripType} onChange={(e) => updateGenField('tripType', e.target.value)} disabled={generating} className="input-field" style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}>
+                      <option value="international">International trip</option>
+                      <option value="domestic">Domestic trip</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="gen-duration" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Duration (days) *</label>
+                    <input
+                      id="gen-duration"
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={genForm.durationDays}
+                      onChange={(e) => updateGenField('durationDays', e.target.value)}
+                      disabled={generating}
+                      className="input-field"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="gen-subbrand" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Sub-brand</label>
+                    <select
+                      id="gen-subbrand"
+                      value={genForm.subBrand}
+                      onChange={(e) => updateGenField('subBrand', e.target.value)}
+                      disabled={generating}
+                      className="input-field"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
+                      >
+                        <option value="tmc">TMC (school trips)</option>
+                        <option value="rfu">RFU (Umrah)</option>
+                        <option value="travelstall">Travel Stall (family / holidays)</option>
+                        <option value="visasure">Visa Sure</option>
+                      </select>
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label htmlFor="gen-audience" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Audience *</label>
+                    <input
+                      id="gen-audience"
+                      type="text"
+                      value={genForm.audience}
+                      onChange={(e) => updateGenField('audience', e.target.value)}
+                      placeholder='e.g. "Pilgrims", "Honeymooners", "School students Grades 6-12"'
+                      maxLength={200}
+                      disabled={generating}
+                      className="input-field"
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
+                    />
+                  </div>
+                </div>
               </div>
-              <div>
-                <label htmlFor="gen-duration" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Duration (days) *</label>
-                <input
-                  id="gen-duration"
-                  type="number"
-                  min={1}
-                  max={60}
-                  value={genForm.durationDays}
-                  onChange={(e) => setGenForm((f) => ({ ...f, durationDays: e.target.value }))}
-                  disabled={generating}
-                  className="input-field"
-                  style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
-                />
-              </div>
-              <div>
-                <label htmlFor="gen-audience" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Audience *</label>
-                <input
-                  id="gen-audience"
-                  type="text"
-                  value={genForm.audience}
-                  onChange={(e) => setGenForm((f) => ({ ...f, audience: e.target.value }))}
-                  placeholder='e.g. "Pilgrims", "Honeymooners", "School students Grades 6-12"'
-                  maxLength={200}
-                  disabled={generating}
-                  className="input-field"
-                  style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
-                />
-              </div>
-              <div>
-                <label htmlFor="gen-subbrand" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Sub-brand</label>
-                <select
-                  id="gen-subbrand"
-                  value={genForm.subBrand}
-                  onChange={(e) => setGenForm((f) => ({ ...f, subBrand: e.target.value }))}
-                  disabled={generating}
-                  className="input-field"
-                  style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
-                >
-                  <option value="tmc">TMC (school trips)</option>
-                  <option value="rfu">RFU (Umrah)</option>
-                  <option value="travelstall">Travel Stall (family / holidays)</option>
-                  <option value="visasure">Visa Sure</option>
-                </select>
+
+              <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '0.85rem 0.95rem', background: 'rgba(184, 137, 59, 0.04)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.72rem', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700, color: '#b8893b', marginBottom: '0.45rem' }}>
+                  <Sparkles size={13} style={{ color: '#b8893b' }} />
+                  AI-generated template
+                </div>
+                <div style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45, marginBottom: '0.75rem' }}>
+                  AI fills hero copy, highlights, safety, inclusions, itinerary, and FAQs. Pick a palette below, or switch on custom colors to tailor the look yourself.
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.65rem', flexWrap: 'wrap', marginBottom: '0.7rem' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.08rem' }}>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Suggested palette: {suggestedTheme.label}
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+                      The recommendation follows the destination until you choose a different palette.
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '0.7rem', color: '#b8893b', background: 'rgba(184,137,59,0.1)', padding: '0.18rem 0.45rem', borderRadius: 999, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 700 }}>
+                    {themeSelectionManual || customColorsEnabled ? 'Chosen by you' : 'AI suggestion'}
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 150px), 1fr))', gap: '0.6rem' }}>
+                  {themeChoices.map((choice) => {
+                    const selected = genForm.themeId === choice.id;
+                    const theme = choice.theme || {};
+                    const swatches = [theme.brandColor, theme.accentColor, theme.softBg, theme.lightBg].filter(Boolean);
+                    const borderColor = selected ? 'rgba(184,137,59,0.9)' : 'var(--border-color)';
+                    return (
+                      <button
+                        key={choice.id}
+                        type="button"
+                        onClick={() => handleThemeChoice(choice.id)}
+                        disabled={generating}
+                        aria-pressed={selected}
+                        style={{
+                          border: `1px solid ${borderColor}`,
+                          borderRadius: 12,
+                          background: selected ? 'rgba(184, 137, 59, 0.08)' : 'rgba(255,255,255,0.6)',
+                          cursor: generating ? 'wait' : 'pointer',
+                          padding: '0.7rem',
+                          textAlign: 'left',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.55rem',
+                          boxShadow: selected ? '0 0 0 1px rgba(184, 137, 59, 0.24), 0 12px 24px rgba(15, 23, 42, 0.08)' : 'none',
+                          transition: 'all 0.18s ease',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (generating) return;
+                          e.currentTarget.style.transform = 'translateY(-1px)';
+                          if (!selected) e.currentTarget.style.borderColor = 'rgba(184, 137, 59, 0.35)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0)';
+                          e.currentTarget.style.borderColor = borderColor;
+                        }}
+                      >
+                        <div style={{ height: '52px', borderRadius: 10, background: `linear-gradient(135deg, ${theme.brandColor || '#123B63'}, ${theme.accentColor || '#D9A441'})`, border: `1px solid ${theme.borderColor || 'rgba(255,255,255,0.08)'}` }} />
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                          <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>{choice.label}</div>
+                          {choice.id === suggestedTheme.id && (
+                            <span style={{ fontSize: '0.62rem', color: '#b8893b', background: 'rgba(184,137,59,0.1)', padding: '0.14rem 0.35rem', borderRadius: 999, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 700 }}>
+                              AI suggestion
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                          {choice.description}
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${swatches.length || 1}, minmax(0, 1fr))`, gap: '0.25rem' }}>
+                          {swatches.map((swatch) => (
+                            <span
+                              key={swatch}
+                              aria-hidden="true"
+                              style={{
+                                height: '10px',
+                                borderRadius: 999,
+                                background: swatch,
+                                border: '1px solid rgba(15, 23, 42, 0.06)',
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: 'block', fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.7rem', lineHeight: 1.45 }}>
+                  The selected palette is saved with the draft so the builder opens in the same theme.
+                </div>
+
+                <div style={{ marginTop: '0.9rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.85rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.5rem', fontSize: '0.84rem', color: 'var(--text-primary)', fontWeight: 600, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={customColorsEnabled}
+                    onChange={(e) => handleCustomColorsToggle(e.target.checked)}
+                    disabled={generating}
+                  />
+                  Use custom colors
+                </label>
+                {customColorsEnabled ? (
+                  <ThemePaletteEditor
+                    title="Custom colors"
+                    description="Fine-tune the selected palette before we generate the draft."
+                    note="These colors are saved with the draft and the builder opens with the same look."
+                    baseThemeLabel={activeThemeChoice.label}
+                    theme={customTheme}
+                    onChange={(nextTheme) => {
+                      setCustomColorsEnabled(true);
+                      setThemeSelectionManual(true);
+                      setCustomTheme(createThemeDraft(nextTheme));
+                    }}
+                    onReset={() => {
+                      const baseTheme = resolveWanderluxThemePreset({
+                        themeId: genForm.themeId,
+                        destination: genForm.destination,
+                        subBrand: genForm.subBrand,
+                      });
+                      setCustomTheme(createThemeDraft(baseTheme.theme));
+                    }}
+                    resetLabel="Reset colors"
+                    disabled={!customColorsEnabled || generating}
+                  />
+                ) : (
+                  <div style={{ border: '1px dashed var(--border-color)', borderRadius: 8, padding: '0.7rem 0.85rem', background: 'rgba(255,255,255,0.45)', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    Turn this on if you want to tweak the AI palette by hand. The selected theme stays as the default until you edit it.
+                  </div>
+                )}
               </div>
             </div>
-
-            {/* Phase D1 — Style picker. Premium routes the LLM output
-                through the educational-trip-v1 bridge so the page
-                opens in template-editor mode at premium parity (~98%).
-                Legacy keeps the existing block-based behaviour (~85%
-                parity) for operators who want per-section composition. */}
-            <fieldset style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '0.7rem 0.9rem', margin: '0.5rem 0 1rem' }}>
-              <legend style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', padding: '0 0.4rem', fontWeight: 600 }}>Style</legend>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', padding: '0.35rem 0', cursor: generating ? 'not-allowed' : 'pointer' }}>
-                <input
-                  type="radio"
-                  name="genStyle"
-                  value="premium"
-                  checked={genForm.style === 'premium'}
-                  onChange={() => setGenForm((f) => ({ ...f, style: 'premium' }))}
-                  disabled={generating}
-                  style={{ marginTop: 3 }}
-                />
-                <span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.88rem', fontWeight: 600 }}>
-                    <Sparkles size={13} style={{ color: '#b8893b' }} /> Premium template <span style={{ fontSize: '0.7rem', color: '#b8893b', background: 'rgba(184,137,59,0.1)', padding: '0.1rem 0.4rem', borderRadius: 3, marginLeft: '0.25rem', letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 700 }}>Recommended</span>
-                  </span>
-                  <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.2rem', lineHeight: 1.45 }}>
-                    AI fills hero copy, benefit cards, cultural flip cards, safety features, inclusions, and FAQ
-                    into the <code style={{ background: 'var(--subtle-bg)', padding: '0 0.25rem', borderRadius: 3 }}>educational-trip-v1</code> template.
-                    Premium microsite layout with kanji watermarks, photo marquee, dark safety section.
-                  </span>
-                </span>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', padding: '0.35rem 0', cursor: generating ? 'not-allowed' : 'pointer' }}>
-                <input
-                  type="radio"
-                  name="genStyle"
-                  value="legacy"
-                  checked={genForm.style === 'legacy'}
-                  onChange={() => setGenForm((f) => ({ ...f, style: 'legacy' }))}
-                  disabled={generating}
-                  style={{ marginTop: 3 }}
-                />
-                <span>
-                  <span style={{ fontSize: '0.88rem', fontWeight: 600 }}>
-                    Block-based (legacy)
-                  </span>
-                  <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.2rem', lineHeight: 1.45 }}>
-                    AI emits the 9-block array (<code style={{ background: 'var(--subtle-bg)', padding: '0 0.25rem', borderRadius: 3 }}>travel_destination</code>). Builder opens
-                    with the Components palette for per-section freedom. Pick this if you want to add or
-                    reorder sections manually.
-                  </span>
-                </span>
-              </label>
-            </fieldset>
+            </div>
 
             {genError && (
               <div role="alert" style={{ background: 'rgba(239,68,68,0.08)', color: '#ef4444', padding: '0.55rem 0.75rem', borderRadius: 6, marginBottom: '0.9rem', fontSize: '0.82rem', display: 'flex', gap: '0.4rem', alignItems: 'flex-start' }}>
@@ -931,81 +1208,77 @@ export default function LandingPages() {
         </div>
       )}
 
-      {/* Template Picker Modal */}
+      {/* Create Page Modal */}
       {showTemplatePicker && (
-        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-          <div className="card" style={{ ...cardSurfaceStyle, padding: '2rem', width: '780px', maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto' }}>
-            <h3 style={{ fontWeight: 'bold', marginBottom: '0.4rem', fontSize: '1.25rem' }}>Choose a Template</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
-              Premium travel templates ship a curated layout — you only edit content slots.
-              Block templates give per-section composition freedom.
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-page-modal-title"
+          style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '1rem' }}
+          onClick={(e) => { if (e.target === e.currentTarget && !generating) setShowTemplatePicker(false); }}
+        >
+          <div className="card" style={{ ...cardSurfaceStyle, padding: '2rem', width: '840px', maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto' }}>
+            <h3 id="create-page-modal-title" style={{ fontWeight: 'bold', marginBottom: '0.4rem', fontSize: '1.25rem' }}>Choose a page type</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+              Pick a pre-trip marketing page to showcase live trips, diagnostics, and PDFs, or create a confirmed-trip page for a locked departure.
             </p>
 
-            {/* Phase D1 — premium travel templates */}
-            {premiumTemplates.length > 0 && (
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.65rem' }}>
-                  <Sparkles size={14} style={{ color: '#b8893b' }} />
-                  <h4 style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
-                    Premium Travel Templates
-                  </h4>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1rem' }}>
+              <button
+                type="button"
+                onClick={() => handleCreate('marketing')}
+                className="card"
+                style={{ padding: '1.2rem', cursor: 'pointer', border: '1px solid rgba(59, 130, 246, 0.18)', background: 'linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(15, 23, 42, 0.02))', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: '0.9rem', transition: 'all 0.2s' }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.45)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.18)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+                aria-label="Create marketing page"
+              >
+                <div style={{ width: '100%', height: '88px', borderRadius: '14px', background: 'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(13,148,136,0.16))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Globe size={30} style={{ color: 'var(--accent-color)' }} />
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
-                  {premiumTemplates.map(t => {
-                    const isStub = t.status === 'stub';
-                    return (
-                      <div
-                        key={t.id}
-                        onClick={() => handleCreate(t.id)}
-                        className="card"
-                        style={{
-                          padding: '1.1rem',
-                          cursor: 'pointer',
-                          border: '2px solid transparent',
-                          background: 'linear-gradient(135deg, rgba(184,137,59,0.08), rgba(192,57,43,0.04))',
-                          transition: 'all 0.2s',
-                          position: 'relative',
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.borderColor = '#b8893b'}
-                        onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}
-                      >
-                        <div style={{ width: '100%', height: '70px', background: 'linear-gradient(135deg, #b8893b, #c0392b)', borderRadius: '6px', marginBottom: '0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                          <PanelTop size={28} style={{ color: '#fff', opacity: 0.85 }} />
-                          {isStub && (
-                            <span style={{ position: 'absolute', top: '0.35rem', right: '0.35rem', fontSize: '0.55rem', letterSpacing: '0.1em', textTransform: 'uppercase', background: 'rgba(0,0,0,0.4)', color: '#fff', padding: '0.15rem 0.4rem', borderRadius: 3, fontWeight: 700 }}>
-                              Coming soon
-                            </span>
-                          )}
-                        </div>
-                        <h4 style={{ fontWeight: 600, marginBottom: '0.25rem', fontSize: '0.95rem' }}>{t.title}</h4>
-                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', margin: 0, lineHeight: 1.45 }}>{t.description}</p>
-                      </div>
-                    );
-                  })}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                  <h4 style={{ fontWeight: 700, margin: 0, fontSize: '1rem' }}>Marketing Page</h4>
+                  <span style={{ fontSize: '0.68rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#2563eb', background: 'rgba(37, 99, 235, 0.12)', padding: '0.18rem 0.45rem', borderRadius: 999, fontWeight: 700 }}>Before trip confirmed</span>
                 </div>
-              </>
-            )}
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0, lineHeight: 1.5 }}>
+                  Overview of ongoing and completed trips, plus quick access to the diagnostic form and TMC catalogue PDFs.
+                </p>
+              </button>
 
-            {/* Legacy block-based templates */}
-            <h4 style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.65rem' }}>
-              Block Templates
-            </h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-              {templates.map(t => (
-                <div key={t.id} onClick={() => handleCreate(t.id)} className="card" style={{ padding: '1.25rem', cursor: 'pointer', border: '2px solid transparent', transition: 'all 0.2s' }} onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent-color)'} onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}>
-                  <div style={{ width: '100%', height: '80px', background: 'var(--subtle-bg)', borderRadius: '6px', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <PanelTop size={32} style={{ color: 'var(--text-secondary)', opacity: 0.3 }} />
+              <div
+                className="card"
+                style={{ padding: '1.2rem', border: '1px solid rgba(184, 137, 59, 0.2)', background: 'linear-gradient(180deg, rgba(184,137,59,0.12), rgba(15, 23, 42, 0.02))', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: '0.9rem', transition: 'all 0.2s' }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(184, 137, 59, 0.48)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(184, 137, 59, 0.2)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+              >
+                <button
+                  type="button"
+                  onClick={openGenerateModalFromConfirmedTrip}
+                  style={{ width: '100%', border: 'none', background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer', color: 'inherit', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}
+                  aria-label="Open confirmed trip AI flow"
+                >
+                  <div style={{ width: '100%', height: '88px', borderRadius: '14px', background: 'linear-gradient(135deg, rgba(184,137,59,0.2), rgba(192,57,43,0.14))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Sparkles size={30} style={{ color: '#b8893b' }} />
                   </div>
-                  <h4 style={{ fontWeight: '600', marginBottom: '0.25rem' }}>{t.name}</h4>
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{t.description}</p>
-                </div>
-              ))}
-              <div onClick={() => handleCreate('blank')} className="card" style={{ padding: '1.25rem', cursor: 'pointer', border: '2px dashed var(--border-color)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '150px' }}>
-                <Plus size={32} style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }} />
-                <h4 style={{ fontWeight: '600' }}>Blank Page</h4>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Start from scratch</p>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                    <h4 style={{ fontWeight: 700, margin: 0, fontSize: '1rem' }}>Confirmed Trip Landing Page</h4>
+                    <span style={{ fontSize: '0.68rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: '#b8893b', background: 'rgba(184, 137, 59, 0.12)', padding: '0.18rem 0.45rem', borderRadius: 999, fontWeight: 700 }}>Trip linked</span>
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0, lineHeight: 1.5 }}>
+                    Open the AI draft flow for a confirmed trip.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={openGenerateModalFromConfirmedTrip}
+                  aria-label="Open AI-generated template"
+                  style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.46rem 0.72rem', borderRadius: 999, border: '1px solid rgba(184, 137, 59, 0.32)', background: 'rgba(184, 137, 59, 0.08)', color: '#b8893b', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.02em', cursor: 'pointer' }}
+                >
+                  <Sparkles size={13} /> AI-generated template
+                </button>
               </div>
             </div>
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
               <button onClick={() => setShowTemplatePicker(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>Cancel</button>
             </div>

@@ -1,27 +1,18 @@
 /**
- * PublicTripMicrosite.test.jsx — vitest + RTL coverage for the public
+ * PublicTripMicrosite.test.jsx - vitest + RTL coverage for the public
  * parent/teacher trip microsite (frontend/src/pages/travel/PublicTripMicrosite.jsx).
  *
  * The page loads public trip info and, when the visitor arrives from the
- * landing-page registration with a ?draftToken, lets them (a) confirm their
- * registration via phone OTP and (b) upload their own Passport, Aadhaar and
- * Parent consent letter documents with a parent-consent checkbox.
- *
- * IMPORTANT privacy invariant: this is a PUBLIC page, so it must NOT show any
- * other traveller's data. The old per-participant Aadhaar-verification section
- * (which listed every traveller's name + last-4) was removed — these tests pin
- * that it stays gone.
+ * landing-page registration with a ?draftToken, lets them upload their own
+ * Passport, Aadhaar and Parent consent letter documents with a
+ * parent-consent checkbox.
  *
  * Pinned invariants:
- *   1. mount loads public info → renders destination; NO participant list /
- *      Aadhaar section is rendered.
- *   2. 404 → "Trip page not found"; 410 GONE → "expired".
- *   3. no draftToken → no upload button; a hint tells the visitor to open
- *      their registration link.
- *   4. with draftToken → an "Upload documents" button opens a modal that
- *      requires Passport + Aadhaar + Parent consent letter + consent checkbox
- *      and POSTs multipart to /documents.
- *   5. Phase 7 RegistrationConfirmPanel behaviour is unchanged.
+ *   1. mount loads public info -> renders destination; no participant list / Aadhaar section is rendered.
+ *   2. 404 -> "Trip page not found"; 410 GONE -> "expired".
+ *   3. no draftToken -> no upload button; a hint tells the visitor to open their registration link.
+ *   4. with draftToken -> an "Upload documents" button opens a modal that requires Passport + Aadhaar + Parent consent letter + consent checkbox and POSTs multipart to /documents.
+ *   5. the phone-OTP registration panel does not render on this page, even when a draftToken is present.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -30,7 +21,7 @@ import PublicTripMicrosite from "../pages/travel/PublicTripMicrosite";
 
 const BASE = "/api/travel/microsites/public/uuid-x";
 
-let infoResponse; // { status, body }
+let infoResponse;
 
 function jsonResponse(status, body) {
   return Promise.resolve({
@@ -40,9 +31,6 @@ function jsonResponse(status, body) {
   });
 }
 
-// Base mock — the page only fetches the public info endpoint when there's no
-// draftToken. A stray call to anything else resolves 404 so the test surfaces
-// an unexpected request rather than hanging.
 function installMock() {
   global.fetch = vi.fn((url, opts = {}) => {
     const method = opts.method || "GET";
@@ -76,8 +64,6 @@ beforeEach(() => {
         returnDate: "2026-09-10",
       },
       itineraryHtml: "<p>Itinerary details</p>",
-      // G095 — public response carries an additive `brandKit` block.
-      // Default null = portal falls back to the legacy navy/gold chrome.
       brandKit: null,
     },
   };
@@ -89,22 +75,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("<PublicTripMicrosite /> — load states", () => {
-  it("renders the trip destination and does NOT render any participant / Aadhaar section", async () => {
+describe("<PublicTripMicrosite /> - load states", () => {
+  it("renders the trip destination and does not render any participant / Aadhaar section", async () => {
     renderPage();
     expect(
       await screen.findByTestId("microsite-destination-title"),
     ).toHaveTextContent("Goa Ed Tour");
-    // Privacy: the public participant list + Aadhaar verification section is gone.
     expect(
       screen.queryByTestId("microsite-aadhaar-section"),
     ).not.toBeInTheDocument();
     expect(screen.queryByText(/Verify Aadhaar/i)).not.toBeInTheDocument();
-    // The page never fetches the (PII-leaking) participants endpoint.
     expect(
-      global.fetch.mock.calls.some(([u]) =>
-        String(u).endsWith("/participants"),
-      ),
+      global.fetch.mock.calls.some(([u]) => String(u).endsWith("/participants")),
     ).toBe(false);
   });
 
@@ -124,7 +106,7 @@ describe("<PublicTripMicrosite /> — load states", () => {
   });
 });
 
-describe("<PublicTripMicrosite /> — G095 brand-kit consumer", () => {
+describe("<PublicTripMicrosite /> - brand-kit consumer", () => {
   it("renders brand logo + tagline in the header when brandKit is populated", async () => {
     infoResponse = {
       status: 200,
@@ -165,7 +147,7 @@ describe("<PublicTripMicrosite /> — G095 brand-kit consumer", () => {
           missionStatement: "Designing educational tours since 2015.",
           supportEmail: "hello@example.com",
           supportPhone: "+91-22-1234-5678",
-          footerText: "© 2026 Test Brand",
+          footerText: "Copyright 2026 Test Brand",
         },
       },
     };
@@ -178,7 +160,7 @@ describe("<PublicTripMicrosite /> — G095 brand-kit consumer", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("hello@example.com")).toBeInTheDocument();
     expect(screen.getByText("+91-22-1234-5678")).toBeInTheDocument();
-    expect(screen.getByText("© 2026 Test Brand")).toBeInTheDocument();
+    expect(screen.getByText("Copyright 2026 Test Brand")).toBeInTheDocument();
     expect(
       screen.getByText("hello@example.com").closest("a")?.getAttribute("href"),
     ).toBe("mailto:hello@example.com");
@@ -187,7 +169,7 @@ describe("<PublicTripMicrosite /> — G095 brand-kit consumer", () => {
     ).toBe("tel:+91-22-1234-5678");
   });
 
-  it("falls back to default Plane icon + no brand-footer when brandKit is null", async () => {
+  it("falls back to the default Plane icon and no brand footer when brandKit is null", async () => {
     renderPage();
     await screen.findByTestId("microsite-destination-title");
     expect(screen.queryByAltText(/Brand logo/i)).not.toBeInTheDocument();
@@ -197,11 +179,7 @@ describe("<PublicTripMicrosite /> — G095 brand-kit consumer", () => {
   });
 });
 
-// ─── Document upload (draftToken-scoped) ─────────────────────────────
-
-describe("<PublicTripMicrosite /> — document upload", () => {
-  // The upload button + modal only appear for a registrant identified by a
-  // draftToken. We override window.location for the duration of each test.
+describe("<PublicTripMicrosite /> - document upload", () => {
   async function withLocation(search, body) {
     const orig = Object.getOwnPropertyDescriptor(window, "location");
     Object.defineProperty(window, "location", {
@@ -228,12 +206,11 @@ describe("<PublicTripMicrosite /> — document upload", () => {
     draftSummary = {
       id: 7001,
       status: "DRAFT",
-      otpVerified: false,
       studentFirstName: "Aarav",
       parentFirstName: "Rohan",
-      parentPhoneMasked: "••••••3210",
+      parentPhoneMasked: "masked-3210",
       parentPhoneLast4: "3210",
-      parentEmailMasked: "ro••••@example.com",
+      parentEmailMasked: "masked@example.com",
       hasPassport: true,
       hasPassportDoc: false,
       hasAadhaarDoc: false,
@@ -251,18 +228,15 @@ describe("<PublicTripMicrosite /> — document upload", () => {
   } = {}) {
     global.fetch = vi.fn((url, opts = {}) => {
       const method = opts.method || "GET";
-      if (url === BASE && method === "GET")
+      if (url === BASE && method === "GET") {
         return jsonResponse(infoResponse.status, infoResponse.body);
-      if (url.startsWith(`${BASE}/draft-summary?token=`) && method === "GET")
+      }
+      if (url.startsWith(`${BASE}/draft-summary?token=`) && method === "GET") {
         return jsonResponse(200, draftSummary);
-      if (url === `${BASE}/documents` && method === "POST")
+      }
+      if (url === `${BASE}/documents` && method === "POST") {
         return uploadResponse;
-      // request-otp / verify-otp fire from the RegistrationConfirmPanel that
-      // also renders under a draftToken; stub them so they never 404-noise.
-      if (url === `${BASE}/request-otp` && method === "POST")
-        return jsonResponse(201, { sent: true });
-      if (url === `${BASE}/verify-otp` && method === "POST")
-        return jsonResponse(200, { verified: true });
+      }
       return jsonResponse(404, { error: "unexpected", code: "X" });
     });
   }
@@ -294,6 +268,26 @@ describe("<PublicTripMicrosite /> — document upload", () => {
     });
   });
 
+  it("does not render the phone-OTP registration panel even when a draftToken is present", async () => {
+    installDocMock();
+    await withDraftToken("abc123", async () => {
+      renderPage();
+      await screen.findByTestId("microsite-upload-docs-btn");
+      expect(
+        screen.queryByTestId("registration-confirm-panel"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("registration-request-otp-btn"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("registration-code-input"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Confirm your registration/i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   it("blocks submit until consent is ticked, both ID files are chosen, and consent letter is uploaded", async () => {
     installDocMock();
     await withDraftToken("abc123", async () => {
@@ -301,7 +295,6 @@ describe("<PublicTripMicrosite /> — document upload", () => {
       fireEvent.click(await screen.findByTestId("microsite-upload-docs-btn"));
       await screen.findByTestId("microsite-doc-modal");
 
-      // No consent, no files → consent error, no POST.
       fireEvent.click(screen.getByTestId("microsite-doc-submit"));
       expect(
         await screen.findByTestId("microsite-doc-error"),
@@ -310,7 +303,6 @@ describe("<PublicTripMicrosite /> — document upload", () => {
         global.fetch.mock.calls.some(([u]) => u === `${BASE}/documents`),
       ).toBe(false);
 
-      // Consent but still no ID files → missing Passport/Aadhaar error.
       fireEvent.click(screen.getByRole("checkbox"));
       fireEvent.click(screen.getByTestId("microsite-doc-submit"));
       expect(
@@ -320,7 +312,6 @@ describe("<PublicTripMicrosite /> — document upload", () => {
         global.fetch.mock.calls.some(([u]) => u === `${BASE}/documents`),
       ).toBe(false);
 
-      // ID files present but no consent letter → consent letter error.
       fireEvent.change(screen.getByTestId("microsite-doc-passport"), {
         target: { files: [makeFile("passport.pdf", "application/pdf")] },
       });
@@ -337,7 +328,7 @@ describe("<PublicTripMicrosite /> — document upload", () => {
     });
   });
 
-  it("happy path: pick both files + consent → POSTs multipart and shows the done state", async () => {
+  it("happy path: pick both files + consent -> POSTs multipart and shows the done state", async () => {
     installDocMock();
     await withDraftToken("abc123", async () => {
       renderPage();
@@ -364,7 +355,6 @@ describe("<PublicTripMicrosite /> — document upload", () => {
         ([u, o]) => u === `${BASE}/documents` && o?.method === "POST",
       );
       expect(post).toBeTruthy();
-      // Body is a FormData carrying the token, consent flag, both ID files and the consent letter.
       const fd = post[1].body;
       expect(fd).toBeInstanceOf(FormData);
       expect(fd.get("draftToken")).toBe("abc123");
@@ -378,7 +368,7 @@ describe("<PublicTripMicrosite /> — document upload", () => {
   it("happy path with portal bridge: redirects to customer register after upload", async () => {
     installDocMock();
     await withLocation(
-      `?draftToken=abc123&portalRedirect=${encodeURIComponent("/customer/register?tenantSlug=travel-stall&name=Rohan%20Iyer&email=rohan%40example.com&next=%2Ftravel%2Fportal")}`,
+      `?draftToken=abc123&portalRedirect=${encodeURIComponent("/customer/register?tenantSlug=travel-stall&name=Rohan%20Iyer&email=rohan@example.com&next=%2Ftravel%2Fportal")}`,
       async () => {
         renderPage();
         fireEvent.click(await screen.findByTestId("microsite-upload-docs-btn"));
@@ -396,7 +386,9 @@ describe("<PublicTripMicrosite /> — document upload", () => {
         fireEvent.click(screen.getByRole("checkbox"));
         fireEvent.click(screen.getByTestId("microsite-doc-submit"));
 
-        expect(await screen.findByTestId("microsite-doc-modal-done")).toBeInTheDocument();
+        expect(
+          await screen.findByTestId("microsite-doc-modal-done"),
+        ).toBeInTheDocument();
         expect(window.location.assign).toHaveBeenCalled();
         const redirectTarget = window.location.assign.mock.calls[0][0];
         expect(redirectTarget).toContain("/customer/register?tenantSlug=travel-stall");
@@ -445,12 +437,11 @@ describe("<PublicTripMicrosite /> — document upload", () => {
       draftSummary: {
         id: 7001,
         status: "OTP_VERIFIED",
-        otpVerified: true,
         studentFirstName: "Aarav",
         parentFirstName: "Rohan",
-        parentPhoneMasked: "••••••3210",
+        parentPhoneMasked: "masked-3210",
         parentPhoneLast4: "3210",
-        parentEmailMasked: "ro••••@example.com",
+        parentEmailMasked: "masked@example.com",
         hasPassport: true,
         hasPassportDoc: true,
         hasAadhaarDoc: true,
@@ -464,7 +455,6 @@ describe("<PublicTripMicrosite /> — document upload", () => {
       expect(btn).toHaveTextContent(/Update documents/i);
       fireEvent.click(btn);
       await screen.findByTestId("microsite-doc-modal");
-      // All already uploaded → replacing just the passport + re-consenting works.
       fireEvent.change(screen.getByTestId("microsite-doc-passport"), {
         target: { files: [makeFile("newpass.pdf", "application/pdf")] },
       });
@@ -477,364 +467,8 @@ describe("<PublicTripMicrosite /> — document upload", () => {
         ([u, o]) => u === `${BASE}/documents` && o?.method === "POST",
       );
       expect(post[1].body.get("passport")).toBeInstanceOf(File);
-      expect(post[1].body.get("aadhaar")).toBeNull(); // not re-sent
-      expect(post[1].body.get("consentLetter")).toBeNull(); // not re-sent
-    });
-  });
-});
-
-// ─── Phase 7 — RegistrationConfirmPanel (hybrid registration flow) ──
-
-describe("<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel", () => {
-  async function withDraftToken(token, body) {
-    const orig = Object.getOwnPropertyDescriptor(window, "location");
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: {
-        search: `?draftToken=${token}`,
-        origin: "http://localhost",
-        href: "http://localhost",
-      },
-    });
-    try {
-      return await body();
-    } finally {
-      if (orig) Object.defineProperty(window, "location", orig);
-    }
-  }
-
-  function installMockWithOtp({
-    requestOtpResponse = jsonResponse(201, {
-      sent: true,
-      expiresAt: new Date(Date.now() + 600_000).toISOString(),
-    }),
-    verifyOtpResponse = jsonResponse(200, {
-      verified: true,
-      accessToken: "jwt.access.token",
-      expiresIn: "30m",
-      draftBound: { id: 7001, status: "OTP_VERIFIED", alreadyVerified: false },
-    }),
-    draftSummaryResponse = jsonResponse(200, {
-      id: 7001,
-      status: "DRAFT",
-      otpVerified: false,
-      studentFirstName: "Aarav",
-      parentFirstName: "Rohan",
-      parentEmailMasked: "ro••••@example.com",
-      parentPhoneMasked: "••••••3210",
-      parentPhoneLast4: "3210",
-      hasPassport: true,
-      hasPassportDoc: false,
-      hasAadhaarDoc: false,
-      hasConsentLetterDoc: false,
-      consentGiven: false,
-    }),
-  } = {}) {
-    global.fetch = vi.fn((url, opts = {}) => {
-      const method = opts.method || "GET";
-      if (url === BASE && method === "GET") {
-        return jsonResponse(infoResponse.status, infoResponse.body);
-      }
-      // draft-summary fires on panel mount AND from the page-level doc-status
-      // fetch when a ?draftToken is present.
-      if (url.startsWith(`${BASE}/draft-summary?token=`) && method === "GET") {
-        return draftSummaryResponse;
-      }
-      if (url === `${BASE}/request-otp` && method === "POST") {
-        return requestOtpResponse;
-      }
-      if (url === `${BASE}/verify-otp` && method === "POST") {
-        return verifyOtpResponse;
-      }
-      return jsonResponse(404, { error: "unexpected", code: "X" });
-    });
-  }
-
-  it("renders the panel + greeting + masked phone when ?draftToken is in the URL", async () => {
-    installMockWithOtp();
-    await withDraftToken("abc123", async () => {
-      renderPage();
-      expect(
-        await screen.findByTestId("registration-confirm-panel"),
-      ).toBeInTheDocument();
-      expect(await screen.findByText(/Hi Rohan/)).toBeInTheDocument();
-      expect(screen.getByText("••••••3210")).toBeInTheDocument();
-      expect(
-        screen.getByTestId("registration-request-otp-btn"),
-      ).toBeInTheDocument();
-      expect(
-        screen.queryByTestId("registration-phone-input"),
-      ).not.toBeInTheDocument();
-    });
-  });
-
-  it("does NOT render the panel when ?draftToken is absent", async () => {
-    installMock();
-    renderPage();
-    await screen.findByTestId("microsite-destination-title");
-    expect(
-      screen.queryByTestId("registration-confirm-panel"),
-    ).not.toBeInTheDocument();
-  });
-
-  it('happy path: send code → enter code → verify → "awaiting review" + receipt panel', async () => {
-    installMockWithOtp();
-    await withDraftToken("abc123", async () => {
-      renderPage();
-      const sendBtn = await screen.findByTestId("registration-request-otp-btn");
-      fireEvent.click(sendBtn);
-
-      const codeInput = await screen.findByTestId("registration-code-input");
-      fireEvent.change(codeInput, { target: { value: "1234" } });
-      fireEvent.click(screen.getByTestId("registration-verify-otp-btn"));
-
-      expect(
-        await screen.findByTestId("registration-confirmed"),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText(/registration is being reviewed/i),
-      ).toBeInTheDocument();
-      expect(screen.getByText(/What we received/i)).toBeInTheDocument();
-
-      const reqCall = global.fetch.mock.calls.find(
-        ([u]) => u === `${BASE}/request-otp`,
-      );
-      expect(JSON.parse(reqCall[1].body)).toEqual({
-        purpose: "registration",
-        draftToken: "abc123",
-        channel: "phone",
-      });
-
-      const verifyCall = global.fetch.mock.calls.find(
-        ([u]) => u === `${BASE}/verify-otp`,
-      );
-      expect(JSON.parse(verifyCall[1].body)).toEqual({
-        purpose: "registration",
-        code: "1234",
-        draftToken: "abc123",
-        channel: "phone",
-      });
-    });
-  });
-
-  it("does NOT show the email channel toggle even when the draft has an email — phone OTP only", async () => {
-    // Email OTP is disabled; the channel picker is hidden regardless of whether
-    // the draft carries an email address. Channel is always fixed to "phone".
-    installMockWithOtp();
-    await withDraftToken("abc123", async () => {
-      renderPage();
-      await screen.findByTestId("registration-request-otp-btn");
-      expect(
-        screen.queryByTestId("registration-channel-email"),
-      ).not.toBeInTheDocument();
-      expect(
-        screen.queryByTestId("registration-channel-phone"),
-      ).not.toBeInTheDocument();
-
-      // Destination shown is always the masked phone, never email.
-      expect(
-        screen.getByTestId("registration-destination-masked"),
-      ).toHaveTextContent("••••••3210");
-
-      // Phone OTP flow still works end-to-end with channel: "phone".
-      fireEvent.click(screen.getByTestId("registration-request-otp-btn"));
-      fireEvent.change(await screen.findByTestId("registration-code-input"), {
-        target: { value: "1234" },
-      });
-      fireEvent.click(screen.getByTestId("registration-verify-otp-btn"));
-      expect(
-        await screen.findByTestId("registration-confirmed"),
-      ).toBeInTheDocument();
-
-      const reqCall = global.fetch.mock.calls.find(
-        ([u]) => u === `${BASE}/request-otp`,
-      );
-      expect(JSON.parse(reqCall[1].body)).toEqual({
-        purpose: "registration",
-        draftToken: "abc123",
-        channel: "phone",
-      });
-      const verifyCall = global.fetch.mock.calls.find(
-        ([u]) => u === `${BASE}/verify-otp`,
-      );
-      expect(JSON.parse(verifyCall[1].body)).toEqual({
-        purpose: "registration",
-        code: "1234",
-        draftToken: "abc123",
-        channel: "phone",
-      });
-    });
-  });
-
-  it("shows a code-expiry countdown once the code is sent", async () => {
-    installMockWithOtp();
-    await withDraftToken("abc123", async () => {
-      renderPage();
-      fireEvent.click(
-        await screen.findByTestId("registration-request-otp-btn"),
-      );
-      await screen.findByTestId("registration-code-input");
-      const expiry = screen.getByTestId("registration-otp-expiry");
-      expect(expiry).toHaveTextContent(/Code expires in/i);
-      // request-otp mock returns expiresAt ~10 min out → mm:ss in the 09/10 range.
-      expect(expiry).toHaveTextContent(/\d{2}:\d{2}/);
-    });
-  });
-
-  it("hides the channel toggle when the draft has no email (phone-only)", async () => {
-    installMockWithOtp({
-      draftSummaryResponse: jsonResponse(200, {
-        id: 7001,
-        status: "DRAFT",
-        otpVerified: false,
-        studentFirstName: "Aarav",
-        parentFirstName: "Rohan",
-        parentPhoneMasked: "••••••3210",
-        parentPhoneLast4: "3210",
-        parentEmailMasked: "",
-        hasPassport: true,
-        hasPassportDoc: false,
-        hasAadhaarDoc: false,
-        hasConsentLetterDoc: false,
-        consentGiven: false,
-      }),
-    });
-    await withDraftToken("abc123", async () => {
-      renderPage();
-      await screen.findByTestId("registration-request-otp-btn");
-      expect(
-        screen.queryByTestId("registration-channel-email"),
-      ).not.toBeInTheDocument();
-      expect(
-        screen.queryByTestId("registration-channel-phone"),
-      ).not.toBeInTheDocument();
-    });
-  });
-
-  it("already-verified draft (otpVerified=true on summary) jumps straight to verified state", async () => {
-    installMockWithOtp({
-      draftSummaryResponse: jsonResponse(200, {
-        id: 7001,
-        status: "OTP_VERIFIED",
-        otpVerified: true,
-        studentFirstName: "Aarav",
-        parentFirstName: "Rohan",
-        parentPhoneMasked: "••••••3210",
-        parentPhoneLast4: "3210",
-        parentEmailMasked: "ro••••@example.com",
-        hasPassport: true,
-        hasPassportDoc: false,
-        hasAadhaarDoc: false,
-        hasConsentLetterDoc: false,
-        consentGiven: false,
-      }),
-    });
-    await withDraftToken("already-verified", async () => {
-      renderPage();
-      expect(
-        await screen.findByTestId("registration-confirmed"),
-      ).toBeInTheDocument();
-      expect(
-        screen.queryByTestId("registration-request-otp-btn"),
-      ).not.toBeInTheDocument();
-      expect(
-        screen.queryByTestId("registration-code-input"),
-      ).not.toBeInTheDocument();
-    });
-  });
-
-  it("OTP_INVALID on verify is retryable — panel stays on verify-form with error", async () => {
-    installMockWithOtp({
-      verifyOtpResponse: jsonResponse(400, {
-        error: "wrong code",
-        code: "OTP_INVALID",
-      }),
-    });
-    await withDraftToken("abc123", async () => {
-      renderPage();
-      fireEvent.click(
-        await screen.findByTestId("registration-request-otp-btn"),
-      );
-      fireEvent.change(await screen.findByTestId("registration-code-input"), {
-        target: { value: "9999" },
-      });
-      fireEvent.click(screen.getByTestId("registration-verify-otp-btn"));
-
-      const err = await screen.findByTestId("registration-otp-error");
-      expect(err.textContent).toMatch(/code doesn't match/i);
-      expect(screen.getByTestId("registration-code-input")).toBeInTheDocument();
-      expect(
-        screen.queryByTestId("registration-confirmed"),
-      ).not.toBeInTheDocument();
-    });
-  });
-
-  it("DRAFT_NOT_FOUND on draft-summary fetch is TERMINAL — shows error, no OTP form", async () => {
-    installMockWithOtp({
-      draftSummaryResponse: jsonResponse(404, {
-        error: "draft not found",
-        code: "DRAFT_NOT_FOUND",
-      }),
-    });
-    await withDraftToken("ghost", async () => {
-      renderPage();
-      const err = await screen.findByTestId("registration-error");
-      expect(err.textContent).toMatch(/could not find your registration/i);
-      expect(
-        screen.queryByTestId("registration-request-otp-btn"),
-      ).not.toBeInTheDocument();
-      expect(
-        screen.queryByTestId("registration-code-input"),
-      ).not.toBeInTheDocument();
-    });
-  });
-
-  it("DRAFT_WRONG_TRIP on draft-summary is TERMINAL — shows trip-mismatch copy", async () => {
-    installMockWithOtp({
-      draftSummaryResponse: jsonResponse(403, {
-        error: "wrong trip",
-        code: "DRAFT_WRONG_TRIP",
-      }),
-    });
-    await withDraftToken("othertrip", async () => {
-      renderPage();
-      const err = await screen.findByTestId("registration-error");
-      expect(err.textContent).toMatch(/different trip/i);
-    });
-  });
-
-  it("DRAFT_EXPIRED on draft-summary is TERMINAL — asks user to re-submit form", async () => {
-    installMockWithOtp({
-      draftSummaryResponse: jsonResponse(400, {
-        error: "expired",
-        code: "DRAFT_EXPIRED",
-      }),
-    });
-    await withDraftToken("expired", async () => {
-      renderPage();
-      const err = await screen.findByTestId("registration-error");
-      expect(err.textContent).toMatch(/expired/i);
-      expect(err.textContent).toMatch(/re-submit/i);
-    });
-  });
-
-  it("OTP_COOLDOWN on request-otp surfaces the wait-a-minute copy", async () => {
-    installMockWithOtp({
-      requestOtpResponse: jsonResponse(429, {
-        error: "cooldown",
-        code: "OTP_COOLDOWN",
-      }),
-    });
-    await withDraftToken("abc123", async () => {
-      renderPage();
-      fireEvent.click(
-        await screen.findByTestId("registration-request-otp-btn"),
-      );
-      const err = await screen.findByTestId("registration-otp-error");
-      expect(err.textContent).toMatch(/wait a minute/i);
-      expect(
-        screen.getByTestId("registration-request-otp-btn"),
-      ).toBeInTheDocument();
+      expect(post[1].body.get("aadhaar")).toBeNull();
+      expect(post[1].body.get("consentLetter")).toBeNull();
     });
   });
 });

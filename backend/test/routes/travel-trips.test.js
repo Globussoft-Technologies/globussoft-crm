@@ -269,7 +269,7 @@ afterEach(() => {
 // -----------------------------------------------------------------------------
 
 describe('GET /api/travel/trips', () => {
-  test('returns trip list scoped to tenant with limit/offset envelope', async () => {
+  test('returns trip list scoped to tenant with newest-first default ordering', async () => {
     prisma.tmcTrip.findMany.mockResolvedValue([
       { id: 1, tripCode: 'bali2026', destination: 'Bali', tenantId: 1 },
     ]);
@@ -287,7 +287,7 @@ describe('GET /api/travel/trips', () => {
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { tenantId: 1 },
-        orderBy: { departDate: 'asc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: 50,
         skip: 0,
       }),

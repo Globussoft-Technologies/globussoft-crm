@@ -16,6 +16,8 @@
  *      block on the canvas (jump-to-block UX).
  *   7. A publish that succeeds shows the success toast and flips state
  *      to PUBLISHED.
+ *   8. The confirmed-trip editor exposes a toggleable six-template chooser
+ *      and applies the selected palette to the theme inputs.
  *
  * Standing rule reminders:
  *   - Stable mock object for useNotify (the SUT consumes notify.confirm
@@ -112,6 +114,87 @@ describe('<LandingPageBuilder /> — travel additions', () => {
     const headers = screen.getAllByRole('heading', { level: 4 });
     const labels = headers.map((h) => h.textContent);
     expect(labels).toEqual(expect.arrayContaining(['Components', 'Travel Destination']));
+  });
+
+  it('renders the confirmed-trip editor label without the old template name', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages/99' && method === 'GET') {
+        return Promise.resolve({
+          ...TRAVEL_PAGE,
+          templateType: 'wanderlux-v1',
+          content: JSON.stringify({}),
+        });
+      }
+      if (url === '/api/lead-routing' && method === 'GET') return Promise.resolve([]);
+      return defaultFetch(url, opts);
+    });
+
+    renderBuilder();
+    await waitFor(() => expect(screen.queryByText(/^Loading\.\.\./)).not.toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: /Confirmed trip editor/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Wanderlux editor/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the theme palette editor for confirmed-trip pages', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages/99' && method === 'GET') {
+        return Promise.resolve({
+          ...TRAVEL_PAGE,
+          templateType: 'wanderlux-v1',
+          content: JSON.stringify({}),
+        });
+      }
+      if (url === '/api/lead-routing' && method === 'GET') return Promise.resolve([]);
+      return defaultFetch(url, opts);
+    });
+
+    renderBuilder();
+    await waitFor(() => expect(screen.queryByText(/^Loading\.\.\./)).not.toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: /Theme palette/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Brand color hex value/i)).toBeInTheDocument();
+  });
+
+  it('toggles the confirmed-trip template chooser and applies a selected template', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages/99' && method === 'GET') {
+        return Promise.resolve({
+          ...TRAVEL_PAGE,
+          templateType: 'wanderlux-v1',
+          content: JSON.stringify({}),
+        });
+      }
+      if (url === '/api/lead-routing' && method === 'GET') return Promise.resolve([]);
+      return defaultFetch(url, opts);
+    });
+
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.queryByText(/^Loading\.\.\./)).not.toBeInTheDocument());
+
+    expect(screen.getByLabelText(/Brand color hex value/i)).toHaveValue('#0F1B3D');
+
+    const toggle = screen.getByRole('button', { name: /Change template/i });
+    await user.click(toggle);
+
+    for (const label of [
+      'Keep current palette',
+      'Sakura Indigo',
+      'Coastal Sand',
+      'Desert Gold',
+      'Heritage Rose',
+      'Alpine Azure',
+    ]) {
+      expect(screen.getByRole('button', { name: new RegExp(label, 'i') })).toBeInTheDocument();
+    }
+
+    await user.click(screen.getByRole('button', { name: /Sakura Indigo/i }));
+    await waitFor(() => expect(screen.getByLabelText(/Brand color hex value/i)).toHaveValue('#15224B'));
+
+    await user.click(toggle);
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Sakura Indigo/i })).not.toBeInTheDocument());
   });
 
   it('lists all 8 travel block buttons in the palette', async () => {

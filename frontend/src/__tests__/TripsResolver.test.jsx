@@ -97,12 +97,12 @@ describe('<TripsResolver />', () => {
     expect(screen.queryByTestId('trips-fallback')).not.toBeInTheDocument();
   });
 
-  it('shows the fallback immediately while the featured page request is pending', () => {
+  it('keeps the route empty while the featured page request is pending', () => {
     global.fetch.mockReturnValueOnce(new Promise(() => {}));
 
     renderResolver();
 
-    expect(screen.getByTestId('trips-fallback')).toBeInTheDocument();
+    expect(screen.queryByTestId('trips-fallback')).not.toBeInTheDocument();
     expect(screen.getByTestId('location-probe')).toHaveAttribute('data-path', '/trips');
     expect(screen.queryByTestId('landing-page-renderer')).not.toBeInTheDocument();
   });

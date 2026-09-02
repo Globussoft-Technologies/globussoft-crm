@@ -11,7 +11,7 @@ const SRC = resolve(here, '..');
 function mockExplorePayload(payload = {}) {
   vi.stubGlobal('fetch', vi.fn((url, options) => {
     const path = String(url);
-    if (path === '/api/explore') {
+    if (path.startsWith('/api/explore')) {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({
@@ -136,7 +136,10 @@ describe('ExplorePage public shell', () => {
     expect(screen.queryByRole('link', { name: 'Experiences' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'About' })).not.toBeInTheDocument();
 
-    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/explore'));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/api\/explore\?ts=\d+$/),
+      { cache: 'no-store' },
+    ));
   });
 
   it('renders the enhanced hero actions without the removed search bar', () => {
@@ -165,7 +168,10 @@ describe('ExplorePage public shell', () => {
 
     render(<ExplorePage />);
 
-    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/explore'));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/api\/explore\?ts=\d+$/),
+      { cache: 'no-store' },
+    ));
     fireEvent.click(screen.getByRole('button', { name: /Take the Diagnostic/i }));
 
     expect(await screen.findByText(/Student travel fit finder/i)).toBeInTheDocument();

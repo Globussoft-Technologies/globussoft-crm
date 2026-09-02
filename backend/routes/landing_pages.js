@@ -2611,6 +2611,11 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
 
     } = req.body || {};
 
+    const normalizedTripType = String(tripType || "international").trim().toLowerCase();
+    if (!["domestic", "international"].includes(normalizedTripType)) {
+      return res.status(400).json({ error: "tripType must be domestic or international", code: "INVALID_TRIP_TYPE" });
+    }
+
 
 
     // -- Input validation (mirrors the legacy generate endpoint) --
@@ -2691,8 +2696,6 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
           tripType: normalizedTripType,
 
           travelMonth: travelMonth || null,
-
-          tripType: tripType || null,
 
           subBrand: subBrand || null,
 

@@ -52,7 +52,9 @@ export default function Appointments() {
   const [to, setTo] = useState(oneWeekFromToday);
   const [doctorId, setDoctorId] = useState('');
   const [status, setStatus] = useState('');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(
+    () => sessionStorage.getItem('appointments-search') || ''
+  );
   const [page, setPage] = useState(1);
   const [reloadTick, setReloadTick] = useState(0);
 
@@ -300,7 +302,9 @@ export default function Appointments() {
               className="input-field"
               value={search}
               onChange={(e) => {
-                setSearch(e.target.value);
+                const value = e.target.value;
+                setSearch(value);
+                sessionStorage.setItem('appointments-search', value);
                 setPage(1);
               }}
               placeholder="Patient or service..."
@@ -377,17 +381,17 @@ export default function Appointments() {
                     <div style={{ fontWeight: 600 }}>
                       {v.visitDate
                         ? new Date(v.visitDate).toLocaleDateString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                          })
+                          month: 'short',
+                          day: 'numeric',
+                        })
                         : '-'}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                       {v.visitDate
                         ? new Date(v.visitDate).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
                         : ''}
                     </div>
                   </Td>

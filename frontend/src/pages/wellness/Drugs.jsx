@@ -387,9 +387,9 @@ export default function Drugs() {
           gap: '0.9rem',
           padding: '1.25rem',
           borderRadius: 18,
-          // background: 'transparent',
-           border: 'none',
-           boxShadow: 'none',
+          background: 'transparent',
+          border: 'none',
+          boxShadow: 'none',
         }}
       >
         <PageHeader
@@ -471,71 +471,113 @@ export default function Drugs() {
         </div>
 
         {showAdd && (
-          <form
-            onSubmit={submit}
+          <div
             style={{
+              width: '100%',
               background: 'var(--bg-elev)',
+              border: '1px solid var(--border-color, rgba(120, 110, 90, 0.2))',
+              borderRadius: '12px',
               padding: '1rem',
-              borderRadius: 8,
-              display: 'grid',
-              gap: '0.75rem',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
+              boxSizing: 'border-box',
+              boxShadow: 'none',
             }}
           >
-            <input required placeholder="Brand / trade name (e.g. Crocin)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            <input placeholder="Generic name (e.g. Acetaminophen)" value={form.genericName} onChange={(e) => setForm({ ...form, genericName: e.target.value })} />
-            <select value={form.dosageForm} onChange={(e) => setForm({ ...form, dosageForm: e.target.value })}>
-              {DOSAGE_FORMS.map((f) => <option key={f} value={f}>{f}</option>)}
-            </select>
-            {/* Free text on purpose — combination drugs are written "5/10".
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '0.9rem',
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: '1rem',
+                    fontWeight: 600,
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  {editingId ? 'Edit drug' : 'Add new drug'}
+                </div>
+
+                <div
+                  style={{
+                    marginTop: '0.1rem',
+                    fontSize: '0.8rem',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+
+                </div>
+              </div>
+            </div>
+            <form
+              onSubmit={submit}
+              style={{
+                background: 'var(--bg-elev)',
+                padding: '1rem',
+                borderRadius: 8,
+                display: 'grid',
+                gap: '0.75rem',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
+              }}
+            >
+              <input required placeholder="Brand / trade name (e.g. Crocin)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <input placeholder="Generic name (e.g. Acetaminophen)" value={form.genericName} onChange={(e) => setForm({ ...form, genericName: e.target.value })} />
+              <select value={form.dosageForm} onChange={(e) => setForm({ ...form, dosageForm: e.target.value })}>
+                {DOSAGE_FORMS.map((f) => <option key={f} value={f}>{f}</option>)}
+              </select>
+              {/* Free text on purpose — combination drugs are written "5/10".
                 `pattern` gives the browser's own "must contain a number"
                 nudge before the request is made; the backend is still the
                 authority and returns INVALID_STRENGTH_VALUE either way. */}
-            <input
-              placeholder="Strength value (e.g. 500)"
-              title="Must contain a number — e.g. 500, 2.5, or 5/10 for a combination"
-              pattern="[^0-9]*[0-9][\s\S]*"
-              value={form.strengthValue}
-              onChange={(e) => setForm({ ...form, strengthValue: e.target.value })}
-            />
-            <input
-              placeholder="Strength unit (mg, ml, %, IU...)"
-              list="drug-strength-units"
-              title="A unit such as mg, ml, mcg, g, % or IU"
-              value={form.strengthUnit}
-              onChange={(e) => setForm({ ...form, strengthUnit: e.target.value })}
-            />
-            <datalist id="drug-strength-units">
-              {STRENGTH_UNITS.map((u) => <option key={u} value={u} />)}
-            </datalist>
-            {/* Stock lives on the drug: the clinic dispenses from the same
+              <input
+                placeholder="Strength value (e.g. 500)"
+                title="Must contain a number — e.g. 500, 2.5, or 5/10 for a combination"
+                pattern="[^0-9]*[0-9][\s\S]*"
+                value={form.strengthValue}
+                onChange={(e) => setForm({ ...form, strengthValue: e.target.value })}
+              />
+              <input
+                placeholder="Strength unit (mg, ml, %, IU...)"
+                list="drug-strength-units"
+                title="A unit such as mg, ml, mcg, g, % or IU"
+                value={form.strengthUnit}
+                onChange={(e) => setForm({ ...form, strengthUnit: e.target.value })}
+              />
+              <datalist id="drug-strength-units">
+                {STRENGTH_UNITS.map((u) => <option key={u} value={u} />)}
+              </datalist>
+              {/* Stock lives on the drug: the clinic dispenses from the same
                 shelf the doctor prescribes off, so there is no separate
                 inventory row to reconcile against. */}
-            <input type="number" min="0" placeholder="Quantity in stock (e.g. 40)" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
-            <input type="number" min="0" placeholder="Low-stock threshold (0 = no alert)" value={form.lowStockThreshold} onChange={(e) => setForm({ ...form, lowStockThreshold: e.target.value })} />
-            <input placeholder="Default dosage (e.g. 1 tablet)" value={form.defaultDosage} onChange={(e) => setForm({ ...form, defaultDosage: e.target.value })} />
-            <input placeholder="Default frequency (e.g. twice daily)" value={form.defaultFrequency} onChange={(e) => setForm({ ...form, defaultFrequency: e.target.value })} />
-            <input placeholder="Default duration (e.g. 5 days)" value={form.defaultDuration} onChange={(e) => setForm({ ...form, defaultDuration: e.target.value })} />
-            <textarea placeholder="Admin notes (contraindications, schedule, etc.)" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={{ gridColumn: '1 / -1', minHeight: 60 }} />
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
-              Active
-            </label>
-            <button
-              type="submit"
-              disabled={saving}
-              style={{
-                gridColumn: '1 / -1',
-                padding: '0.6rem',
-                background: 'rgb(39, 43, 39)',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 6,
-              }}
-            >
-              {saving ? 'Saving...' : editingId ? 'Save changes' : 'Add drug'}
-            </button>
-          </form>
+              <input type="number" min="0" placeholder="Quantity in stock (e.g. 40)" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
+              <input type="number" min="0" placeholder="Low-stock threshold (0 = no alert)" value={form.lowStockThreshold} onChange={(e) => setForm({ ...form, lowStockThreshold: e.target.value })} />
+              <input placeholder="Default dosage (e.g. 1 tablet)" value={form.defaultDosage} onChange={(e) => setForm({ ...form, defaultDosage: e.target.value })} />
+              <input placeholder="Default frequency (e.g. twice daily)" value={form.defaultFrequency} onChange={(e) => setForm({ ...form, defaultFrequency: e.target.value })} />
+              <input placeholder="Default duration (e.g. 5 days)" value={form.defaultDuration} onChange={(e) => setForm({ ...form, defaultDuration: e.target.value })} />
+              <textarea placeholder="Admin notes (contraindications, schedule, etc.)" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={{ gridColumn: '1 / -1', minHeight: 60 }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+                Active
+              </label>
+              <button
+                type="submit"
+                disabled={saving}
+                style={{
+                  gridColumn: '1 / -1',
+                  padding: '0.6rem',
+                  background: 'rgb(39, 43, 39)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                }}
+              >
+                {saving ? 'Saving...' : editingId ? 'Save changes' : 'Add drug'}
+              </button>
+            </form>
+          </div>
         )}
 
         {loading ? (

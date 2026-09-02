@@ -2611,10 +2611,10 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
 
     } = req.body || {};
 
+    // ponytail: TEE accepts free-form tripType vocabulary (luxury, family,
+    // educational, honeymoon, …) — no whitelist here; only the legacy
+    // /generate-from-destination endpoint restricts to domestic/international.
     const normalizedTripType = String(tripType || "international").trim().toLowerCase();
-    if (!["domestic", "international"].includes(normalizedTripType)) {
-      return res.status(400).json({ error: "tripType must be domestic or international", code: "INVALID_TRIP_TYPE" });
-    }
 
 
 

@@ -105,8 +105,8 @@ test.beforeAll(async ({ request }) => {
     tripCode: `${RUN_TAG.toLowerCase()}_trip`,
     schoolContactId,
     destination: `${RUN_TAG} Bali Ed Tour`,
-    departDate: "2026-09-01",
-    returnDate: "2026-09-10",
+    departDate: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
+    returnDate: new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10),
   });
   if (tRes.ok()) {
     tripId = (await tRes.json()).id;

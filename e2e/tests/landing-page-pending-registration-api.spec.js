@@ -11,8 +11,9 @@
  *      DRAFT page; the page is then PUBLISHED via the existing
  *      landing-pages route so /p/<slug>/submit can accept submissions.
  *   3. POST /p/<slug>/submit with mode=registration-draft
- *      creates a PendingTripRegistration AND returns a microsite
- *      redirect URL containing only the opaque draftToken (NO PII).
+ *      creates a PendingTripRegistration and returns a thanks redirect
+ *      (PR #1396 removed the microsite redirect — the draft flows
+ *      through the CRM approval queue instead).
  *   4. POST /api/travel/microsites/public/:uuid/request-otp issues an
  *      OTP for purpose=registration.
  *   5. POST .../verify-otp WITH draftToken atomically marks the draft
@@ -53,7 +54,7 @@ let tripId = null;
 let micrositeUuid = null;
 let landingPageId = null;
 let landingPageSlug = null;
-let draftToken = null;
+
 let pendingRegistrationId = null;
 const createdContactIds = [];
 
@@ -188,7 +189,7 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(r.ok()).toBeTruthy();
   });
 
-  test('4) Phase 3 — POST /p/<slug>/submit creates PendingTripRegistration + returns microsite redirect with opaque token', async ({ request }) => {
+  test('4) Phase 3 — POST /p/<slug>/submit creates PendingTripRegistration + returns thanks redirect', async ({ request }) => {
     test.skip(!landingPageSlug || !micrositeUuid, 'no landing page slug or microsite available');
     const submitRes = await postPublic(request, `/p/${landingPageSlug}/submit`, {
       student: {
@@ -211,19 +212,11 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(body.ok).toBe(true);
     expect(body.draftId).toBeTruthy();
     pendingRegistrationId = body.draftId;
+    // PR #1396 removed the microsite redirect — submit always returns a
+    // thanks page; no redirect URL means no PII can leak through it.
     expect(body.redirect).toBeTruthy();
-    expect(body.redirect.type).toBe('microsite');
-    // URL contains only the opaque draftToken — no PII
-    expect(body.redirect.url).toMatch(new RegExp(`^/p/tripmicrosite/${micrositeUuid}\\?draftToken=[0-9a-f]{64}(?:&.*)?$`));
-    expect(body.redirect.url).not.toContain('Student');
-    expect(body.redirect.url).not.toContain('Parent');
-    expect(body.redirect.url).not.toContain('parent@e2e.test');
-    expect(body.redirect.url).not.toContain('919876543210');
-    expect(body.redirect.url).not.toContain('M1234567');
-    // Extract draftToken from URL for subsequent steps
-    const urlMatch = body.redirect.url.match(/draftToken=([0-9a-f]{64})/);
-    expect(urlMatch).toBeTruthy();
-    draftToken = urlMatch[1];
+    expect(body.redirect.type).toBe('thanks');
+    expect(body.redirect.url).toBeUndefined();
   });
 
   test('5) Phase 5 — admin GET /trips/:id/registrations sees the DRAFT row', async ({ request }) => {

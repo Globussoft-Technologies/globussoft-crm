@@ -215,15 +215,15 @@ export default function CsvImportExportToolbar({
       </div>
 
       {showImport && (
-      <ImportModal
-        entity={entity}
-        label={displayLabel}
-        formats={formats}
-        forceSync={forceSync}
-        templateUrl={templateUrl}
-        metaUrl={metaUrl}
-        importUrl={importUrl}
-        importAsyncUrl={importAsyncUrl}
+        <ImportModal
+          entity={entity}
+          label={displayLabel}
+          formats={formats}
+          forceSync={forceSync}
+          templateUrl={templateUrl}
+          metaUrl={metaUrl}
+          importUrl={importUrl}
+          importAsyncUrl={importAsyncUrl}
           jobUrl={jobUrl}
           onClose={() => setShowImport(false)}
           onImported={(result) => {
@@ -361,6 +361,16 @@ function ImportModal({
         body: fd,
       });
       const body = await res.json().catch(() => ({}));
+      const normalizedBody = {
+        ...body,
+        errors: (body.errors || []).map((error) => ({
+          ...error,
+          row: error.row ?? error.rowNumber ?? '',
+          column: error.column ?? '',
+          value: error.value ?? '',
+          message: error.message ?? error.reason ?? 'Invalid row',
+        })),
+      };
       if (!res.ok && res.status !== 202) {
         notify.error(body.error || `Import failed (${res.status})`);
         setSubmitting(false);
@@ -370,14 +380,18 @@ function ImportModal({
         setJobId(body.jobId);
         notify.info("Large file queued - you'll be emailed when it finishes.");
       } else {
-        setResult(body);
-        if (body.inserted || body.updated) {
+        setResult(normalizedBody);
+
+        if (normalizedBody.inserted || normalizedBody.updated) {
           notify.success(
-            `Imported: ${body.inserted} new, ${body.updated} updated${body.errors.length ? `, ${body.errors.length} errors` : ""}`,
+            `Imported: ${normalizedBody.inserted} new, ${normalizedBody.updated} updated${normalizedBody.errors.length
+              ? `, ${normalizedBody.errors.length} errors`
+              : ""
+            }`,
           );
-          onImported(body);
-        } else if (body.errors.length) {
-          notify.error(`Import had ${body.errors.length} row error(s).`);
+          onImported(normalizedBody);
+        } else if (normalizedBody.errors.length) {
+          notify.error(`Import had ${normalizedBody.errors.length} row error(s).`);
         }
       }
     } catch (e) {

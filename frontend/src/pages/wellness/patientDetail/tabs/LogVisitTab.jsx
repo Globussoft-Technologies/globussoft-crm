@@ -325,13 +325,16 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
               <div style={actionRowStyle}>
                 <button
                   type="button"
-                  disabled
-                  aria-disabled="true"
-                  aria-label="Copy payment link"
-                  title="Copy payment link"
-                  style={actionButtonStyle('muted', true)}
+                  onClick={() => copyToClipboard(linkUrl, visit.id)}
+                  aria-label={copiedId === visit.id ? 'Copied payment link' : 'Copy payment link'}
+                  title={copiedId === visit.id ? 'Copied' : 'Copy payment link'}
+                  style={actionButtonStyle(copiedId === visit.id ? 'active' : 'muted')}
                 >
-                  <Copy size={15} aria-hidden style={iconStyle(true)} />
+                  {copiedId === visit.id ? (
+                    <Check size={15} aria-hidden style={iconStyle(false)} />
+                  ) : (
+                    <Copy size={15} aria-hidden style={iconStyle(false)} />
+                  )}
                 </button>
               </div>
             </div>
@@ -597,32 +600,32 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
 
 
                 if (value !== '' && Number(value) > maxAmount) {
-      setAmountError(`Amount cannot be more than ₹${maxAmount}`);
+                  setAmountError(`Amount cannot be more than ₹${maxAmount}`);
                 } else {
-      setAmountError('');
+                  setAmountError('');
                   setAmountCharged(value);
                 }
 
                 //  setAmountCharged(value);
                 setAppliedCoupon(null);
                 setPreviewBreakdown(null);
-                 setCouponError('');
+                setCouponError('');
                 setBillingBreakdown(null);
               }}
               placeholder="Enter total treatment bill..."
               style={{ width: '100%', padding: '0.55rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' }}
             />
             {amountError && (
-  <div
-    style={{
-      fontSize: '0.75rem',
-      color: '#ef4444',
-      marginTop: '0.3rem'
-    }}
-  >
-    {amountError}
-  </div>
-)}
+              <div
+                style={{
+                  fontSize: '0.75rem',
+                  color: '#ef4444',
+                  marginTop: '0.3rem'
+                }}
+              >
+                {amountError}
+              </div>
+            )}
 
             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
               Edit the final bill (add medicines, extra services, etc.). Defaults to the service price.

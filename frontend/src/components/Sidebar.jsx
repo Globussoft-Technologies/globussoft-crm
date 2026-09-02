@@ -175,7 +175,7 @@ const TRAVEL_LAST_LIST_URL_KEYS = {
 
 const Sidebar = ({
   mobileOpen = false,
-  onMobileClose = () => {},
+  onMobileClose = () => { },
   isMobileViewport = false,
 }) => {
   const { user, tenant } = useContext(AuthContext);
@@ -405,8 +405,8 @@ const Sidebar = ({
     // correctness. (v3.7.16: socket events are now debounced to reduce
     // re-renders from rapid bulk imports).
     const socket = io("/", { reconnection: false, timeout: 5000 });
-    socket.on("connect_error", () => {});
-    socket.on("error", () => {});
+    socket.on("connect_error", () => { });
+    socket.on("error", () => { });
     socket.on("marketplace_lead_imported", () =>
       debouncedSetCounts(() =>
         setCounts((c) => ({ ...c, leads: c.leads + 1 })),
@@ -637,61 +637,61 @@ const Sidebar = ({
     const resolvedTo =
       to === "/travel/itineraries"
         ? (() => {
+          try {
+            return window.sessionStorage.getItem(ITINERARIES_LAST_LIST_URL_KEY) || to;
+          } catch {
+            return to;
+          }
+        })()
+        : to === "/travel/diagnostics"
+          ? (() => {
             try {
-              return window.sessionStorage.getItem(ITINERARIES_LAST_LIST_URL_KEY) || to;
+              return window.sessionStorage.getItem(DIAGNOSTICS_LAST_LIST_URL_KEY) || to;
             } catch {
               return to;
             }
           })()
-        : to === "/travel/diagnostics"
-          ? (() => {
-              try {
-                return window.sessionStorage.getItem(DIAGNOSTICS_LAST_LIST_URL_KEY) || to;
-              } catch {
-                return to;
-              }
-            })()
-        : to === "/travel/trips"
-          ? (() => {
+          : to === "/travel/trips"
+            ? (() => {
               try {
                 return window.sessionStorage.getItem(TRIPS_LAST_LIST_URL_KEY) || to;
               } catch {
                 return to;
               }
             })()
-        : to === "/travel/web-checkins"
-          ? (() => {
-              try {
-                return window.sessionStorage.getItem(WEBCHECKINS_LAST_LIST_URL_KEY) || to;
-              } catch {
-                return to;
-              }
-            })()
-        : to === "/travel/cost-master"
-          ? (() => {
-              try {
-                return window.sessionStorage.getItem(COST_MASTER_LAST_LIST_URL_KEY) || to;
-              } catch {
-                return to;
-              }
-            })()
-        : to === "/travel/sightseeing"
-          ? (() => {
-              try { return window.sessionStorage.getItem(SIGHTSEEING_LAST_LIST_URL_KEY) || to; } catch { return to; }
-            })()
-        : to === "/travel/itinerary-templates"
-          ? (() => {
-              try { return window.sessionStorage.getItem(ITINERARY_TEMPLATES_LAST_LIST_URL_KEY) || to; } catch { return to; }
-            })()
-        : to === "/travel/pricing-rules"
-          ? (() => {
-              try { return window.sessionStorage.getItem(MARKUP_RULES_LAST_LIST_URL_KEY) || to; } catch { return to; }
-            })()
-        : TRAVEL_LAST_LIST_URL_KEYS[to]
-          ? (() => {
-              try { return window.sessionStorage.getItem(TRAVEL_LAST_LIST_URL_KEYS[to]) || to; } catch { return to; }
-            })()
-          : to;
+            : to === "/travel/web-checkins"
+              ? (() => {
+                try {
+                  return window.sessionStorage.getItem(WEBCHECKINS_LAST_LIST_URL_KEY) || to;
+                } catch {
+                  return to;
+                }
+              })()
+              : to === "/travel/cost-master"
+                ? (() => {
+                  try {
+                    return window.sessionStorage.getItem(COST_MASTER_LAST_LIST_URL_KEY) || to;
+                  } catch {
+                    return to;
+                  }
+                })()
+                : to === "/travel/sightseeing"
+                  ? (() => {
+                    try { return window.sessionStorage.getItem(SIGHTSEEING_LAST_LIST_URL_KEY) || to; } catch { return to; }
+                  })()
+                  : to === "/travel/itinerary-templates"
+                    ? (() => {
+                      try { return window.sessionStorage.getItem(ITINERARY_TEMPLATES_LAST_LIST_URL_KEY) || to; } catch { return to; }
+                    })()
+                    : to === "/travel/pricing-rules"
+                      ? (() => {
+                        try { return window.sessionStorage.getItem(MARKUP_RULES_LAST_LIST_URL_KEY) || to; } catch { return to; }
+                      })()
+                      : TRAVEL_LAST_LIST_URL_KEYS[to]
+                        ? (() => {
+                          try { return window.sessionStorage.getItem(TRAVEL_LAST_LIST_URL_KEYS[to]) || to; } catch { return to; }
+                        })()
+                        : to;
     const activeTarget = to;
     return (
       <NavLink
@@ -1002,16 +1002,16 @@ const Sidebar = ({
         onClick={onMobileClose}
         aria-hidden="true"
       />
-    <aside
-      ref={asideRef}
-      id="app-sidebar"
-      role={asideRole}
-      aria-modal={asideAriaModal}
-      aria-label="Main navigation"
-      data-search-highlight-scope="global-search"
-      className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}`}
-      style={{
-        width: "250px",
+      <aside
+        ref={asideRef}
+        id="app-sidebar"
+        role={asideRole}
+        aria-modal={asideAriaModal}
+        aria-label="Main navigation"
+        data-search-highlight-scope="global-search"
+        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}`}
+        style={{
+          width: "250px",
           height: "100vh",
           padding: "1rem 1.25rem",
           display: "flex",
@@ -1090,47 +1090,47 @@ const Sidebar = ({
         >
           {isWellness
             ? renderWellnessNav({
+              Link,
+              AdsGptLink,
+              CallifiedLink,
+              isAdmin,
+              isManager,
+              isCustomerTier,
+              hasPermission,
+              permissionsReady,
+              sectionLabelStyle,
+              isMobileViewport,
+              openWellnessGroup,
+              onOpenWellnessGroup: setOpenWellnessGroup,
+              counts,
+              accessiblePages,
+            })
+            : isTravel
+              ? renderTravelNav({
                 Link,
+                Section,
+                isAdmin,
+                isManager,
+                counts,
+                subBrandAccess,
+                activeSubBrand,
+              })
+              : renderGenericNav({
+                Link,
+                ExtLink,
                 AdsGptLink,
                 CallifiedLink,
                 isAdmin,
                 isManager,
-                isCustomerTier,
                 hasPermission,
                 permissionsReady,
-                sectionLabelStyle,
-                isMobileViewport,
-                openWellnessGroup,
-                onOpenWellnessGroup: setOpenWellnessGroup,
                 counts,
-                accessiblePages,
-              })
-            : isTravel
-              ? renderTravelNav({
-                  Link,
-                  Section,
-                  isAdmin,
-                  isManager,
-                  counts,
-                  subBrandAccess,
-                  activeSubBrand,
-                })
-              : renderGenericNav({
-                  Link,
-                  ExtLink,
-                  AdsGptLink,
-                  CallifiedLink,
-                  isAdmin,
-                  isManager,
-                  hasPermission,
-                  permissionsReady,
-                  counts,
-                  user,
-                  // Only isMobileViewport is needed: the generic nav's one
-                  // collapsible group (GenericLeadsNavGroup) owns its open state
-                  // locally, so hovering it no longer re-renders the whole nav.
-                  isMobileViewport,
-                })}
+                user,
+                // Only isMobileViewport is needed: the generic nav's one
+                // collapsible group (GenericLeadsNavGroup) owns its open state
+                // locally, so hovering it no longer re-renders the whole nav.
+                isMobileViewport,
+              })}
         </nav>
       </aside>
     </>
@@ -1363,7 +1363,7 @@ function WellnessNavGroup({
   moduleColor,
   isMobileViewport = false,
   activeGroup = null,
-  onActivate = () => {},
+  onActivate = () => { },
 }) {
   const isOpen = activeGroup === label;
   const [isPinned, setIsPinned] = useState(false);
@@ -1486,6 +1486,7 @@ function WellnessNavGroup({
         borderRadius: 12,
         border: "1px solid var(--border-color)",
         background: "var(--surface-color, #16181d)",
+        backgroundColor: "rgb(from var(--surface-color, #16181d) r g b / 1)",
         boxShadow: "0 14px 34px rgba(0, 0, 0, 0.28)",
         zIndex: 1200,
       }}
@@ -1586,7 +1587,7 @@ function renderWellnessNav({
   sectionLabelStyle,
   isMobileViewport = false,
   openWellnessGroup = null,
-  onOpenWellnessGroup = () => {},
+  onOpenWellnessGroup = () => { },
   counts = {},
   accessiblePages = [],
 }) {
@@ -2003,7 +2004,7 @@ function renderTravelSubBrandHeader({
   sectionLabelStyle,
   subBrandAccess = null,
   activeSubBrand = null,
-  onSubBrandChange = () => {},
+  onSubBrandChange = () => { },
 }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   const ALL_SUB_BRANDS = [

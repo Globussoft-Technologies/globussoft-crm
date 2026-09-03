@@ -20,6 +20,7 @@ import {
   MessageSquareText,
   RefreshCw,
   Search,
+  Settings,
   Star,
   X,
 } from "lucide-react";
@@ -128,6 +129,10 @@ export default function Reviews() {
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
   const [pageSizeMenuOpen, setPageSizeMenuOpen] = useState(false);
+  const [redirectSettingsOpen, setRedirectSettingsOpen] = useState(false);
+  const [redirectUrl, setRedirectUrl] = useState("");
+  const [redirectSettingsLoading, setRedirectSettingsLoading] = useState(false);
+  const [redirectSettingsSaving, setRedirectSettingsSaving] = useState(false);
 
   const search = searchParams.get("search") || "";
   const requestedSubBrand = searchParams.get("subBrand");
@@ -219,31 +224,69 @@ export default function Reviews() {
     updateParams({ search: "", subBrand: activeSubBrand || "", minRating: "", rating: "", sort: "", page: "", pageSize: "" });
   };
 
+  const openRedirectSettings = async () => {
+    setRedirectSettingsOpen(true);
+    setRedirectSettingsLoading(true);
+    try {
+      const setting = await fetchApi("/api/tenant-settings/travel.externalReviewUrl");
+      setRedirectUrl(setting?.value || "");
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Failed to load review settings");
+    } finally {
+      setRedirectSettingsLoading(false);
+    }
+  };
+
+  const saveRedirectSettings = async (e) => {
+    e.preventDefault();
+    setRedirectSettingsSaving(true);
+    const value = redirectUrl.trim();
+    try {
+      if (value) {
+        await fetchApi("/api/tenant-settings/travel.externalReviewUrl", {
+          method: "PUT",
+          body: JSON.stringify({ value }),
+        });
+      } else {
+        try {
+          await fetchApi("/api/tenant-settings/travel.externalReviewUrl", { method: "DELETE" });
+        } catch (settingErr) {
+          if (settingErr?.status !== 404) throw settingErr;
+        }
+      }
+      setRedirectUrl(value);
+      setRedirectSettingsOpen(false);
+      notify.success("Review redirect URL updated");
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to update review redirect URL");
+    } finally {
+      setRedirectSettingsSaving(false);
+    }
+  };
+
   return (
     <div style={{ padding: 24, maxWidth: 1000, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
           <MessageSquareText size={26} aria-hidden /> Customer Reviews
         </h1>
-        <button
-          type="button"
-          onClick={load}
-          disabled={loading}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "8px 14px",
-            borderRadius: 8,
-            border: "1px solid var(--border-light,#d1d5db)",
-            background: "transparent",
-            cursor: loading ? "not-allowed" : "pointer",
-            fontWeight: 600,
-            opacity: loading ? 0.6 : 1,
-          }}
-        >
-          <RefreshCw size={15} aria-hidden /> Refresh
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            type="button"
+            onClick={openRedirectSettings}
+            style={secondaryButtonStyle}
+          >
+            <Settings size={15} aria-hidden /> Review settings
+          </button>
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading}
+            style={{ ...secondaryButtonStyle, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1 }}
+          >
+            <RefreshCw size={15} aria-hidden /> Refresh
+          </button>
+        </div>
       </div>
       <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
         Post-trip feedback from your customers.{" "}
@@ -463,9 +506,112 @@ export default function Reviews() {
           onPageSizeChange={setPageSizeAndReset}
         />
       )}
+
+      {redirectSettingsOpen && (
+        <div
+          className="review-settings-backdrop"
+          role="presentation"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setRedirectSettingsOpen(false); }}
+          style={modalBackdropStyle}
+        >
+          <form className="review-settings-modal" role="dialog" aria-modal="true" aria-labelledby="review-settings-title" onSubmit={saveRedirectSettings} style={modalStyle}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+              <div>
+                <h2 id="review-settings-title" style={{ margin: 0, fontSize: 20 }}>Review settings</h2>
+                <p style={{ color: "var(--text-secondary)", margin: "6px 0 18px", fontSize: 13 }}>
+                  Choose where eligible positive reviews should be redirected after submission.
+                </p>
+              </div>
+              <button type="button" onClick={() => setRedirectSettingsOpen(false)} aria-label="Close review settings" style={closeButtonStyle}>
+                <X size={18} aria-hidden />
+              </button>
+            </div>
+            <label htmlFor="review-redirect-url" style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              Redirect URL
+            </label>
+            <input
+              id="review-redirect-url"
+              type="url"
+              value={redirectUrl}
+              onChange={(e) => setRedirectUrl(e.target.value)}
+              placeholder="https://search.google.com/local/writereview?placeid=..."
+              disabled={redirectSettingsLoading || redirectSettingsSaving}
+              style={modalInputStyle}
+            />
+            <p style={{ color: "var(--text-secondary)", fontSize: 12, margin: "7px 0 20px" }}>
+              Leave blank to keep the current in-app thank-you flow.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={() => setRedirectSettingsOpen(false)} disabled={redirectSettingsSaving} style={secondaryButtonStyle}>Cancel</button>
+              <button type="submit" disabled={redirectSettingsLoading || redirectSettingsSaving} style={primaryButtonStyle}>
+                {redirectSettingsLoading ? "Loading…" : redirectSettingsSaving ? "Saving…" : "Save settings"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
+
+const secondaryButtonStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: "1px solid var(--border-light,#d1d5db)",
+  background: "var(--surface-color, #fff)",
+  color: "var(--text-primary)",
+  cursor: "pointer",
+  fontWeight: 600,
+};
+
+const primaryButtonStyle = {
+  ...secondaryButtonStyle,
+  border: "none",
+  background: PRIMARY,
+  color: "#fff",
+};
+
+const closeButtonStyle = {
+  border: "none",
+  background: "transparent",
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+  padding: 4,
+};
+
+const modalBackdropStyle = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 100,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 20,
+};
+
+const modalStyle = {
+  width: "min(100%, 520px)",
+  boxSizing: "border-box",
+  padding: 22,
+  borderRadius: 12,
+  background: "var(--surface-color, #fff)",
+  color: "var(--text-primary)",
+  boxShadow: "0 18px 50px rgba(0, 0, 0, 0.24)",
+};
+
+const modalInputStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "10px 12px",
+  borderRadius: 7,
+  border: "1px solid var(--border-color, #d1d5db)",
+  background: "var(--bg-color, #fff)",
+  color: "var(--text-primary)",
+  fontSize: 14,
+};
 
 function ReviewsPager({
   total,

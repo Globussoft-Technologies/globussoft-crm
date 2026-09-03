@@ -500,7 +500,7 @@
 
               <sc-if value="{{ regIsDocuments }}">
               <div style="display:flex;flex-direction:column;gap:14px;padding:18px;border:1px solid var(--c-border);border-radius:10px;background:var(--c-light)">
-                <p style="margin:0;color:var(--c-text2);font-size:13px">Upload all four documents to continue to payment.</p>
+                <p style="margin:0;color:var(--c-text2);font-size:13px">Upload {{ regRequiredDocumentCount }} required documents to continue to payment.</p>
                 <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
                   <sc-for list="{{ regDocumentFields }}" as="doc">
                     <div style="border:1px solid var(--c-border);border-radius:9px;padding:13px;background:var(--c-panel);min-width:0">
@@ -1045,7 +1045,7 @@ class Component extends DCLogic {
   state = {
     now: Date.now(), openFaq:0, faqCat:'all', faqQuery:'',
     regStep:0, regValues:{}, regFiles:{}, regDraftToken:'', regDocumentsUploaded:false, regError:'', regSubmitted:false, regSending:false,
-    regPaymentMode:'installment', regPaymentInstallmentIndex:0, regPaymentLoading:false, regPaymentError:'',
+    regPaymentMode:'installment', regPaymentInstallmentIndex:0, regPaymentLoading:false, regPaymentError:'', regPaymentCompleted:false, regPaymentLinkId:'',
     brValues:{}, brError:'', brSubmitted:false, brSending:false,
     toast: null,
     /* Preview banner can be dismissed by the operator. Persists for
@@ -1060,6 +1060,59 @@ class Component extends DCLogic {
 
   componentDidMount(){
     this.restoreRegistrationDraft();
+    try {
+      setTimeout(() => {
+        let draftToken = this.state.regDraftToken;
+        if (!draftToken) {
+          const saved = JSON.parse(this.registrationDraftStorageKeys().map((key) => window.localStorage.getItem(key)).find(Boolean) || '{}');
+          draftToken = saved.regDraftToken || '';
+        }
+        let pageSlug = '';
+        try {
+          const injected = (this.props && this.props.config) || window.__PAGE_CONFIG || {};
+          pageSlug = injected.meta && injected.meta.slug ? String(injected.meta.slug).trim() : '';
+        } catch(_err) { /* use the pathname fallback below */ }
+        const slug = encodeURIComponent(pageSlug || window.location.pathname.split('/').filter(Boolean).pop() || '');
+        if (draftToken && slug) fetch('/p/' + slug + '/payment-status?draftToken=' + encodeURIComponent(draftToken))
+          .then((response) => response.ok ? response.json() : null)
+          .then((status) => {
+            if (!status) return;
+            const next = {};
+            if (status.fields && typeof status.fields === 'object') next.regValues = Object.assign({}, this.state.regValues, status.fields);
+            if (status.documentsUploaded) { next.regDocumentsUploaded = true; next.regStep = Math.max(this.state.regStep, 3); }
+            if (status.paid) { next.regPaymentCompleted = true; next.regPaymentError = ''; }
+            if (Object.keys(next).length) this.setState(next);
+          })
+          .catch(() => {});
+      }, 0);
+    } catch(_err) { /* ignore resume lookup failures */ }
+    // Hosted payment links may return in a fresh tab/window. Restore the
+    // payment handoff from the URL so the participant can finish registration.
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const paymentStatus = String(params.get('razorpay_payment_link_status') || '').toLowerCase();
+      if (params.get('payment') === 'success' || paymentStatus === 'paid' || paymentStatus === 'partially_paid') {
+        this.setState({
+          regPaymentCompleted: true,
+          regPaymentLoading: false,
+          regPaymentError: '',
+          // A hosted payment link is created only after documents are
+          // uploaded, so the callback can deterministically resume at the
+          // payment step even before the server draft lookup completes.
+          regStep: Math.max(Number(params.get('regStep')) || 0, 3),
+          regDocumentsUploaded: true,
+          regDraftToken: params.get('draftToken') || this.state.regDraftToken || '',
+          regPaymentLinkId: params.get('razorpay_payment_link_id') || params.get('paymentLinkId') || '',
+        });
+        // The callback reloads the full landing page. Return the participant
+        // to the registration surface after the template has rendered instead
+        // of leaving the browser at the document top.
+        setTimeout(() => {
+          const section = document.getElementById('register');
+          if (section) section.scrollIntoView({ block: 'start', behavior: 'auto' });
+        }, 0);
+      }
+    } catch(_err) { /* ignore malformed callback URLs */ }
     this._t = setInterval(() => this.setState({ now: Date.now() }), 1000);
     /* Force-start any autoplay <video> on the page. React's `muted` prop is
        set via the JS property (mustUseProperty) but the matching HTML
@@ -1074,7 +1127,21 @@ class Component extends DCLogic {
   componentWillUnmount(){ clearInterval(this._t); }
 
   registrationDraftKey(){
-    return 'landing-registration-draft:' + (window.location.pathname || 'page');
+    // Payment callbacks can return to /p/:slug after starting at /trips.
+    // The slug is stable across both URLs, unlike window.location.pathname.
+    let slug = '';
+    try {
+      const injected = (this.props && this.props.config) || window.__PAGE_CONFIG || {};
+      slug = injected.meta && injected.meta.slug ? String(injected.meta.slug).trim() : '';
+    } catch(_err) { /* use the pathname fallback below */ }
+    return 'landing-registration-draft:' + (slug || window.location.pathname || 'page');
+  }
+
+  registrationDraftStorageKeys(){
+    const keys = [this.registrationDraftKey()];
+    const legacy = 'landing-registration-draft:' + (window.location.pathname || 'page');
+    if(!keys.includes(legacy)) keys.push(legacy);
+    return keys;
   }
 
   saveRegistrationDraft(patch){
@@ -1083,13 +1150,13 @@ class Component extends DCLogic {
         regStep:0, regValues:{}, regDraftToken:'', regDocumentsUploaded:false,
         regPaymentMode:'installment', regPaymentInstallmentIndex:0
       }, patch || {});
-      window.sessionStorage.setItem(this.registrationDraftKey(), JSON.stringify(current));
+        window.localStorage.setItem(this.registrationDraftKey(), JSON.stringify(current));
     }catch(_err){ /* storage may be disabled; the in-memory flow still works */ }
   }
 
   restoreRegistrationDraft(){
     try{
-      const raw = window.sessionStorage.getItem(this.registrationDraftKey());
+      const raw = this.registrationDraftStorageKeys().map((key) => window.localStorage.getItem(key) || window.sessionStorage.getItem(key)).find(Boolean);
       if(!raw) return;
       const saved = JSON.parse(raw);
       if(!saved || typeof saved !== 'object') return;
@@ -1100,6 +1167,7 @@ class Component extends DCLogic {
         regDocumentsUploaded: saved.regDocumentsUploaded === true,
         regPaymentMode: saved.regPaymentMode === 'complete' ? 'complete' : 'installment',
         regPaymentInstallmentIndex: Number(saved.regPaymentInstallmentIndex) || 0
+        ,regPaymentCompleted: saved.regPaymentCompleted === true
       });
     }catch(_err){ /* ignore malformed or unavailable browser storage */ }
   }
@@ -1190,10 +1258,19 @@ class Component extends DCLogic {
       // match the correct form block when a page hosts more than one.
       audience: meta.audience || '',
       fields: vals,
-      submittedAt: new Date().toISOString()
+      submittedAt: new Date().toISOString(),
+      draftToken: this.state.regDraftToken || ''
     };
     if(opts.payment){
-      payload.payment = opts.payment;
+      let callbackPaymentLinkId = '';
+      try {
+        const callbackParams = new URLSearchParams(window.location.search || '');
+        callbackPaymentLinkId = callbackParams.get('razorpay_payment_link_id') || callbackParams.get('paymentLinkId') || '';
+      } catch(_err) { /* ignore malformed callback URLs */ }
+      payload.payment = Object.assign({}, opts.payment, {
+        paymentLinkId: opts.payment.paymentLinkId || callbackPaymentLinkId,
+        paymentLinkStatus: new URLSearchParams(window.location.search || '').get('razorpay_payment_link_status') || ''
+      });
     }
     if(!opts.endpoint){
       /* Preview / draft mode — the renderer didn't wire an endpoint
@@ -1216,6 +1293,10 @@ class Component extends DCLogic {
            fall back to the toast + done-state (existing lead-capture
            behaviour). */
         const redirect = body && body.redirect;
+        if(redirect && redirect.type === 'customer-registration' && redirect.url){
+          window.location.assign(redirect.url);
+          return;
+        }
         const p = {}; p[opts.doneKey] = true; p[opts.sendingKey] = false; this.setState(p);
         const msg = (redirect && redirect.type === 'thanks' && body && body.message)
           ? body.message
@@ -1240,6 +1321,14 @@ class Component extends DCLogic {
     const cfg = deepMerge(DEFAULT_CONFIG, injected);
     const t = cfg.theme || {};
     const out = {};
+    let hostedPaymentReturn = false;
+    let hostedPaymentLinkId = '';
+    try {
+      const callbackParams = new URLSearchParams(window.location.search || '');
+      const callbackStatus = String(callbackParams.get('razorpay_payment_link_status') || '').toLowerCase();
+      hostedPaymentReturn = callbackParams.get('payment') === 'success' || callbackStatus === 'paid' || callbackStatus === 'partially_paid';
+      hostedPaymentLinkId = callbackParams.get('razorpay_payment_link_id') || callbackParams.get('paymentLinkId') || '';
+    } catch(_err) { /* ignore malformed callback URLs */ }
 
     /* ----- theme (projected onto CSS vars at the root) ----- */
     out.brandColor=t.brandColor; out.accentColor=t.accentColor; out.darkColor=t.darkColor;
@@ -1457,7 +1546,7 @@ class Component extends DCLogic {
       const title = String(step && step.title || '').toLowerCase();
       return !title.includes('documents and payment') && !title.includes('documents & payment');
     });
-    const isDomesticTrip = String(reg.tripType || '').toLowerCase() === 'domestic';
+    const isDomesticTrip = String(reg.tripType || (cfg.meta && cfg.meta.tripType) || '').toLowerCase() === 'domestic';
     const passportValue = String(this.state.regValues.passport_status || '').toLowerCase();
     const passportValid = isDomesticTrip || passportValue === 'valid passport' || passportValue === 'yes, passport is valid for 6+ months';
     const rsteps = passportValid && baseSteps.length
@@ -1479,6 +1568,7 @@ class Component extends DCLogic {
       ...(isDomesticTrip ? [] : [{ name:'passport', label:'Passport' }]),
       { name:'aadhaar', label:'Aadhaar card' }, { name:'parentConsent', label:'Parent consent form' }, { name:'medicalConsent', label:'Medical consent form' }
     ];
+    out.regRequiredDocumentCount = out.regDocumentFields.length;
     out.regDocumentFields = out.regDocumentFields.map((doc) => ({ ...doc, hasFile:!!(this.state.regFiles && this.state.regFiles[doc.name]), showChoose:!(this.state.regFiles && this.state.regFiles[doc.name]), fileName:this.state.regFiles && this.state.regFiles[doc.name] ? this.state.regFiles[doc.name].name : '', fileMeta:this.state.regFiles && this.state.regFiles[doc.name] ? ((this.state.regFiles[doc.name].size / 1024 / 1024).toFixed(1) + ' MB · ' + (this.state.regFiles[doc.name].type || 'Document')) : '', onInput:(e) => this.setState(st => ({ regFiles:{ ...(st.regFiles || {}), [doc.name]:e.target.files && e.target.files[0] } })), onRemove:() => this.setState(st => { const next={...(st.regFiles || {})}; delete next[doc.name]; return { regFiles:next, regDocumentsUploaded:false }; }), onPreview:() => { const file=this.state.regFiles && this.state.regFiles[doc.name]; if(file) window.open(URL.createObjectURL(file), '_blank', 'noopener'); } }));
     out.regShowBack = stepIdx > 0;
     out.regIsLast = stepIdx >= rsteps.length - 1;
@@ -1492,7 +1582,9 @@ class Component extends DCLogic {
     out.regPaymentAmountLabel = this.formatMoney(paymentAmountMajor, paymentCfg.currency || 'INR');
     out.regPaymentStepTitle = paymentStepTitle;
     out.regPaymentIntro = paymentIntro;
-    out.regPaymentButtonLabel = out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit');
+    out.regPaymentCompleted = this.state.regPaymentCompleted || hostedPaymentReturn;
+    out.regPaymentLinkId = this.state.regPaymentLinkId || hostedPaymentLinkId;
+    out.regPaymentButtonLabel = out.regPaymentCompleted ? (reg.submitLabel || 'Register') : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'));
     out.regPaymentInstallmentLabel = paymentInstallmentLabel;
     out.regPaymentCompleteLabel = paymentCompleteLabel;
     out.regPaymentOrderEndpoint = paymentOrderEndpoint;
@@ -1512,7 +1604,7 @@ class Component extends DCLogic {
     out.regPaymentCompleteBorder = paymentMode === 'complete' ? 'var(--c-brand)' : 'var(--c-border)';
     out.regPaymentCompleteBackground = paymentMode === 'complete' ? 'color-mix(in srgb,var(--c-brand) 8%,var(--c-light))' : 'var(--c-panel)';
     out.regPaymentSelectedSummary = paymentMode === 'complete' ? 'All instalments' : (selectedPaymentInstallment ? selectedPaymentInstallment.label : '');
-    out.regPrimaryLabel = out.regIsLast ? (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit')) : 'Next';
+    out.regPrimaryLabel = out.regIsLast ? (out.regPaymentCompleted ? (reg.submitLabel || 'Register') : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'))) : 'Next';
     out.regPrimaryButtonLabel = this.state.regPaymentLoading ? 'Opening Razorpay...' : out.regPrimaryLabel;
     out.regPrimaryButtonOpacity = this.state.regPaymentLoading ? 0.78 : 1;
     out.regError = this.state.regError;
@@ -1543,6 +1635,10 @@ class Component extends DCLogic {
           return;
         }
         if(idx < steps.length - 1){ this.setState(st => ({ regStep: st.regStep + 1 })); return; }
+        if(out.regPaymentCompleted){
+          this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, payment:{ hostedPaymentLink:true, paymentLinkId:out.regPaymentLinkId }, doneKey:'regSubmitted', sendingKey:'regSending' });
+          return;
+        }
         if(!out.regPaymentEnabled){
           this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, doneKey:'regSubmitted', sendingKey:'regSending' });
           return;
@@ -1567,6 +1663,7 @@ class Component extends DCLogic {
           email: this.state.regValues.email || this.state.regValues.parent_email || '',
           phone: this.state.regValues.phone || this.state.regValues.parent_phone || '',
           draftToken: this.state.regDraftToken || '',
+          regStep: idx,
         };
         this.saveRegistrationDraft({ regStep: idx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode: currentPaymentMode, regPaymentInstallmentIndex: currentInstallmentIndex });
         fetch(paymentOrderEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(paymentPayload) })

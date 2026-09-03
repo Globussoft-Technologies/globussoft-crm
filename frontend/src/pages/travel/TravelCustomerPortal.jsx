@@ -76,6 +76,9 @@ const PORTAL_CONTACT_KEY = "portalContact";
 // staff app's `theme` key — the portal is a public Contact-token surface that
 // manages its own theme (see the theme effect in TravelCustomerPortal).
 const PORTAL_THEME_KEY = "portalTheme";
+// Retain the legacy sections in the source for reference without triggering
+// no-constant-binary-expression on an inline `false &&` JSX guard.
+const SHOW_LEGACY_PORTAL_SECTIONS = false;
 
 function readStoredAuth() {
   try {
@@ -899,9 +902,6 @@ function Dashboard({
             />
           )}
 
-          {view === "documents" && (
-            <TravellersCard token={token} onLogout={onLogout} />
-          )}
 
           {view === "diagnostic" && <DiagnosticsCard token={token} />}
 
@@ -1849,7 +1849,6 @@ const NAV_ITEMS = [
   { key: "overview", label: "Dashboard", icon: LayoutDashboard },
   { key: "bookings", label: "My Bookings", icon: Plane },
   { key: "visa", label: "My Visa", icon: Stamp },
-  { key: "documents", label: "Travel Documents", icon: FileUp },
   { key: "diagnostic", label: "Travel Diagnostic", icon: ClipboardCheck },
 ];
 
@@ -2068,13 +2067,6 @@ function Overview({ contact, itineraries, loading, verified, onOpen }) {
           value={loading ? "…" : String(itineraries.length)}
           hint={loading ? "Loading…" : `${accepted} confirmed`}
           onClick={() => onOpen("bookings")}
-        />
-        <OverviewCard
-          icon={FileUp}
-          label="Travel Documents"
-          value="Open"
-          hint="Add travellers + upload their passports"
-          onClick={() => onOpen("documents")}
         />
         <OverviewCard
           icon={ClipboardCheck}
@@ -3869,17 +3861,6 @@ function ItinerariesCard({ itineraries, loading, onSelect }) {
                       }}
                     >
                       <strong>{itin.destination || "(no destination)"}</strong>
-                      <span
-                        style={{
-                          fontSize: 12,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          background: "rgba(18, 38, 71, 0.08)",
-                          textTransform: "capitalize",
-                        }}
-                      >
-                        {prettyStatus(itin.status)}
-                      </span>
                     </div>
                     <div
                       style={{
@@ -4053,6 +4034,21 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
       ? Number(itinerary.advancePaidAmount)
       : 0;
   const balance = Math.max(0, total - paid);
+  const installments = Array.isArray(itinerary.instalments)
+    ? itinerary.instalments
+    : Array.isArray(itinerary.installments)
+      ? itinerary.installments
+      : [];
+  const paymentTotal = installments.length
+    ? installments.reduce((sum, row) => sum + Number(row.amount || 0), 0)
+    : total;
+  const paymentPaid = installments.length
+    ? installments.reduce((sum, row) => sum + Number(row.paidAmount || 0), 0)
+    : paid;
+  const paymentPending = Math.max(0, paymentTotal - paymentPaid);
+  const tripNights = itinerary.startDate && itinerary.endDate
+    ? Math.max(0, Math.round((new Date(itinerary.endDate) - new Date(itinerary.startDate)) / 86400000))
+    : null;
   const status = itinerary.status;
   const canDecide = DECIDABLE_BOOKING_STATUSES.includes(status);
   const isAccepted = ["accepted", "advance_paid", "fully_paid"].includes(
@@ -4184,7 +4180,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
         <ChevronLeft size={16} aria-hidden /> Back to bookings
       </button>
 
-      <section style={cardStyle} aria-labelledby="booking-detail-heading">
+      <section style={{ ...cardStyle, background: "linear-gradient(110deg, var(--surface-color, #fff) 0%, rgba(228, 243, 185, 0.5) 100%)", overflow: "hidden" }} aria-labelledby="booking-detail-heading">
         <div
           style={{
             display: "flex",
@@ -4194,28 +4190,18 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
             flexWrap: "wrap",
           }}
         >
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ width: 58, height: 58, borderRadius: "50%", display: "grid", placeItems: "center", background: "var(--accent-color, #C8EF24)", color: "var(--primary-color, #122647)", boxShadow: "0 8px 20px rgba(18, 38, 71, 0.14)" }}><Plane size={28} aria-hidden /></div>
           <h2
             id="booking-detail-heading"
             style={{ display: "flex", alignItems: "center", gap: 8, margin: 0 }}
           >
-            <Plane size={20} aria-hidden />{" "}
             {itinerary.destination || "Your trip"}
           </h2>
-          <span
-            style={{
-              fontSize: 12,
-              padding: "3px 10px",
-              borderRadius: 999,
-              background: "rgba(18, 38, 71, 0.08)",
-              textTransform: "capitalize",
-              fontWeight: 600,
-            }}
-          >
-            {String(itinerary.status || "").replace(/_/g, " ")}
-          </span>
+          </div>
         </div>
         <div
-          style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 6 }}
+          style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 14, marginLeft: 72 }}
         >
           {itinerary.startDate
             ? new Date(itinerary.startDate).toLocaleDateString()
@@ -4234,7 +4220,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
         status !== "expired" &&
         cancellationStatus !== "cancelled" &&
         cancellationStatus !== "refunded" && (
-          <section style={cardStyle} aria-labelledby="dates-edit-heading">
+          <section style={{ ...cardStyle, display: "none" }} aria-labelledby="dates-edit-heading">
             <h3
               id="dates-edit-heading"
               style={{
@@ -5018,7 +5004,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
         </section>
       )}
 
-      <section style={cardStyle} aria-labelledby="booking-items-heading">
+      {SHOW_LEGACY_PORTAL_SECTIONS && <section style={cardStyle} aria-labelledby="booking-items-heading">
         <h3 id="booking-items-heading" style={{ margin: 0, fontSize: 16 }}>
           Your trip includes
         </h3>
@@ -5090,7 +5076,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
             })}
           </ul>
         )}
-      </section>
+      </section>}
 
       <section style={cardStyle} aria-labelledby="booking-cost-heading">
         <h3 id="booking-cost-heading" style={{ margin: 0, fontSize: 16 }}>
@@ -5147,11 +5133,45 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
             </>
           )}
         </dl>
+        <div style={{ marginTop: 18 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 140px), 1fr))", gap: 10, marginBottom: 18 }}>
+            {[["Total amount", paymentTotal, "var(--text-primary)"], ["Paid", paymentPaid, "var(--success-color, #2F7A4D)"], ["Pending", paymentPending, "var(--danger-color, #A8323F)"]].map(([label, amount, color]) => (
+              <div key={label} style={{ padding: "12px 14px", borderRadius: 10, backgroundColor: "rgba(18, 38, 71, 0.045)" }}><div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 5 }}>{label}</div><strong style={{ color, fontSize: 16 }}>{fmtMoney(amount, itinerary.currency)}</strong></div>
+            ))}
+          </div>
+          {installments.map((row) => {
+            const amount = Number(row.amount || 0);
+            const rowPaid = Number(row.paidAmount || 0);
+            const isPaid = row.status === "paid" || rowPaid >= amount;
+            const paymentUrl = row.paymentLinkUrl || (itinerary.tripId
+              ? `${window.location.origin}/pay/trip/${itinerary.tripId}/installment/${row.instalmentIndex + 1}`
+              : null);
+            return <div key={row.id || row.instalmentIndex} style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) 170px 190px 120px", alignItems: "center", gap: 18, padding: "16px 18px", marginTop: 10, border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))", borderLeft: `3px solid ${isPaid ? "var(--success-color, #2F7A4D)" : "var(--accent-color, #C8EF24)"}`, borderRadius: 10, backgroundColor: isPaid ? "rgba(47, 122, 77, 0.06)" : "rgba(255,255,255,0.55)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}><span style={{ width: 34, height: 34, borderRadius: "50%", display: "grid", placeItems: "center", backgroundColor: isPaid ? "rgba(47, 122, 77, 0.12)" : "rgba(200, 239, 36, 0.25)", color: isPaid ? "var(--success-color, #2F7A4D)" : "var(--primary-color, #122647)", fontWeight: 800, fontSize: 13 }}>{isPaid ? "✓" : String(row.instalmentIndex + 1).padStart(2, "0")}</span><div><strong style={{ display: "block", marginBottom: 4 }}>Installment {row.instalmentIndex + 1}</strong><span style={{ fontSize: 12, fontWeight: 700, color: isPaid ? "var(--success-color, #2F7A4D)" : "var(--primary-color, #122647)" }}>{isPaid ? "Paid" : "Upcoming"}</span></div></div>
+              <div><span style={{ display: "block", fontSize: 11, color: "var(--text-secondary)" }}>Amount</span><strong>{fmtMoney(amount, itinerary.currency)}</strong><span style={{ display: "block", marginTop: 3, fontSize: 11, color: "var(--text-secondary)" }}>Paid {fmtMoney(rowPaid, itinerary.currency)}</span></div>
+              <div><span style={{ display: "block", fontSize: 11, color: "var(--text-secondary)" }}>{isPaid ? "Paid on" : "Due before trip"}</span><strong style={{ fontWeight: 500 }}>{row.dueDate ? new Date(row.dueDate).toLocaleDateString() : "Date to be confirmed"}</strong></div>
+              {!isPaid && paymentUrl ? <a href={paymentUrl} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 104, padding: "9px 14px", border: "1px solid var(--accent-color, #C8EF24)", borderRadius: 7, backgroundColor: "var(--accent-color, #C8EF24)", color: "var(--primary-color, #122647)", fontSize: 12, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>Pay now <span aria-hidden="true">›</span></a> : <span />}
+            </div>;
+          })}
+        </div>
       </section>
 
       {/* Per-person estimate calculator — customer types a headcount and sees
           the per-person price multiplied out (overall + per item). */}
-      {perPerson > 0 && (
+      <section style={cardStyle} aria-labelledby="payment-summary-heading" hidden>
+        <h3 id="payment-summary-heading" style={{ margin: 0, fontSize: 16 }}>Payment summary</h3>
+        <p>Total amount: <strong>{fmtMoney(paymentTotal, itinerary.currency)}</strong></p>
+        <p>Paid: <strong>{fmtMoney(paymentPaid, itinerary.currency)}</strong></p>
+        <p>Pending: <strong>{fmtMoney(paymentPending, itinerary.currency)}</strong></p>
+        {installments.map((row) => {
+          const amount = Number(row.amount || 0);
+          const paidAmount = Number(row.paidAmount || 0);
+          const isPaid = row.status === "paid" || paidAmount >= amount;
+          return <div key={row.id || row.instalmentIndex}><strong>Installment {row.instalmentIndex + 1}: {isPaid ? "Paid" : "Pending"}</strong><div>{fmtMoney(amount, itinerary.currency)} {row.dueDate && `· Due ${new Date(row.dueDate).toLocaleDateString()}`}</div>{!isPaid && row.paymentLinkUrl && <a href={row.paymentLinkUrl} target="_blank" rel="noreferrer">Pay installment</a>}</div>;
+        })}
+      </section>
+
+      {SHOW_LEGACY_PORTAL_SECTIONS && perPerson > 0 && (
         <section style={cardStyle} aria-labelledby="estimate-heading">
           <h3 id="estimate-heading" style={{ margin: 0, fontSize: 16 }}>
             Estimate for your group

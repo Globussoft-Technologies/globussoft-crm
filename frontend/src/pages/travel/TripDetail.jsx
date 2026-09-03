@@ -61,6 +61,7 @@ function buildLandingPagesReturnState(trip, tripState = {}) {
       durationDays: tripDurationDays(trip),
       audience: "School students",
       subBrand: "tmc",
+      tripType: trip.tripType || "international",
     },
   };
 }
@@ -567,24 +568,23 @@ const APP_STATUS_STYLES = {
   waitlisted: { label: "WAITLISTED",     bg: "rgba(38,88,85,0.16)",   color: "#265855" },
 };
 
-function StatusPill({ status }) {
-  const s = APP_STATUS_STYLES[status] || APP_STATUS_STYLES.pending;
+function StatusPill() {
   return (
     <span style={{
-      background: s.bg, color: s.color,
+      background: "rgba(47,122,77,0.14)", color: "#2F7A4D",
       padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600,
       letterSpacing: 0.4, whiteSpace: "nowrap",
-    }}>{s.label}</span>
+    }}>REGISTERED</span>
   );
 }
 
 function ParticipantsTab({ trip, onChange, notify }) {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ fullName: "", parentName: "", parentPhone: "" });
+  const [decidingId, setDecidingId] = useState(null);
   // Tracks which participant row currently has an approve / reject call in
   // flight so we can disable BOTH buttons on that row (avoid double-click
   // races) without disabling everyone else's controls.
-  const [decidingId, setDecidingId] = useState(null);
   // Phase 8 — pending registrations (PendingTripRegistration rows
   // surfaced alongside participants per decision #7). Fetched on
   // mount + after every approve/reject so the unified list stays
@@ -803,12 +803,10 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
   };
 
-  // Phase 8 — filter pending registrations to those still in the
-  // review queue. CONVERTED drafts have already become participants;
-  // they show up in trip.participants and shouldn't double-render here.
-  // REJECTED drafts are kept visible so operators can see what got
-  // declined (separately styled in the list).
-  const reviewableRegs = pendingRegs.filter((r) => r.status !== "CONVERTED");
+  // Registrations are the source of the uploaded document records. Keep
+  // completed registrations in this single participant surface so conversion
+  // into TripParticipant does not make the documents disappear.
+  const reviewableRegs = pendingRegs;
 
   return (
     <div>
@@ -965,19 +963,15 @@ function ParticipantsTab({ trip, onChange, notify }) {
           The list shares the same listShell + row styles as
           participants so they read as one continuous review surface. */}
       {reviewableRegs.length > 0 && (
-        <div style={{ ...listShell, marginBottom: 12 }} data-testid="pending-registrations-list">
-          <div style={{ padding: "8px 12px", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4, borderBottom: "1px solid var(--border-color)" }}>
-            Pending registrations
+        <div style={{ background: "var(--surface-color, #fff)", borderRadius: 14, border: "1px solid var(--border-color)", overflow: "hidden", marginBottom: 18, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)" }} data-testid="pending-registrations-list">
+          <div style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", background: "rgba(241,245,249,0.55)" }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Registered participants</div>
+              <div style={{ marginTop: 3, fontSize: 12, color: "var(--text-secondary)" }}>Registration is automatic. Uploaded documents are available below.</div>
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#2F7A4D", background: "rgba(47,122,77,0.12)", padding: "6px 10px", borderRadius: 999 }}>{reviewableRegs.length} total</span>
           </div>
           {reviewableRegs.map((r) => {
-            const busy = decidingRegId === r.id;
-            const isOtpVerified = r.status === "OTP_VERIFIED";
-            const isRejected = r.status === "REJECTED";
-            const pillStyle = isRejected
-              ? { bg: "rgba(168,50,63,0.14)", color: "#A8323F", label: "REJECTED" }
-              : isOtpVerified
-                ? { bg: "rgba(154,111,46,0.18)", color: "#9A6F2E", label: "AWAITING REVIEW" }
-                : { bg: "rgba(100,116,139,0.18)", color: "#64748b", label: "AWAITING VERIFICATION" };
             // Parse uploaded document status from extrasJson — booleans only, no raw keys
             let regDocs = {};
             if (r.extrasJson) {
@@ -985,27 +979,29 @@ function ParticipantsTab({ trip, onChange, notify }) {
             }
             const hasPassport = !!regDocs.passport;
             const hasAadhaar = !!regDocs.aadhaar;
-            const hasConsentLetter = !!regDocs.consentLetter;
+            const hasParentConsent = !!(regDocs.parentConsent || regDocs.consentLetter);
+            const hasMedicalConsent = !!regDocs.medicalConsent;
+            const requiresPassport = String(trip.tripType || "international").toLowerCase() === "international";
             const docBtnBase = {
               display: "inline-flex", alignItems: "center", gap: 3,
-              fontSize: 11, fontWeight: 500, border: "none",
-              borderRadius: 3, padding: "2px 7px", cursor: "pointer",
+              fontSize: 12, fontWeight: 600, border: "1px solid transparent",
+              borderRadius: 6, padding: "6px 9px", cursor: "pointer",
             };
             const docUploaded = { ...docBtnBase, background: "rgba(47,122,77,0.12)", color: "#2F7A4D" };
             const docMissing = { ...docBtnBase, background: "rgba(100,116,139,0.10)", color: "var(--text-secondary)", cursor: "default" };
             return (
-            <div key={`reg:${r.id}`} style={{ ...row, opacity: isRejected ? 0.6 : 1 }} data-testid={`pending-reg-row-${r.id}`}>
+            <div key={`reg:${r.id}`} style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 18, borderBottom: "1px solid var(--border-color)" }} data-testid={`pending-reg-row-${r.id}`}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{r.studentName}</strong>
                     <span
                       style={{
-                        background: pillStyle.bg, color: pillStyle.color,
+                        background: "rgba(47,122,77,0.14)", color: "#2F7A4D",
                         fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
                         padding: "2px 8px", borderRadius: 999, textTransform: "uppercase",
                       }}
                     >
-                      {pillStyle.label}
+                      Registered
                     </span>
                   </div>
                   <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
@@ -1019,7 +1015,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   </div>
                   {/* Document upload status — clicking "View" opens a 5-min signed URL */}
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
-                    {hasPassport ? (
+                    {requiresPassport && (hasPassport ? (
                       <button
                         type="button"
                         style={docUploaded}
@@ -1027,13 +1023,13 @@ function ParticipantsTab({ trip, onChange, notify }) {
                         title="View uploaded passport scan"
                         data-testid={`view-passport-${r.id}`}
                       >
-                        <FileText size={11} aria-hidden /> Passport ✓ View
+                        <FileText size={11} aria-hidden /> Passport - View
                       </button>
                     ) : (
                       <span style={docMissing} data-testid={`passport-missing-${r.id}`}>
                         <FileText size={11} aria-hidden /> Passport not uploaded
                       </span>
-                    )}
+                    ))}
                     {hasAadhaar ? (
                       <button
                         type="button"
@@ -1042,26 +1038,35 @@ function ParticipantsTab({ trip, onChange, notify }) {
                         title="View uploaded Aadhaar scan"
                         data-testid={`view-aadhaar-${r.id}`}
                       >
-                        <FileText size={11} aria-hidden /> Aadhaar ✓ View
+                        <FileText size={11} aria-hidden /> Aadhaar - View
                       </button>
                     ) : (
                       <span style={docMissing} data-testid={`aadhaar-missing-${r.id}`}>
                         <FileText size={11} aria-hidden /> Aadhaar not uploaded
                       </span>
                     )}
-                    {hasConsentLetter ? (
+                    {hasParentConsent ? (
                       <button
                         type="button"
                         style={docUploaded}
-                        onClick={() => viewRegistrationDoc(r.id, "consentLetter")}
+                        onClick={() => viewRegistrationDoc(r.id, regDocs.parentConsent ? "parentConsent" : "consentLetter")}
                         title="View uploaded parent consent letter"
-                        data-testid={`view-consent-letter-${r.id}`}
+                        data-testid={`view-parent-consent-${r.id}`}
                       >
-                        <FileText size={11} aria-hidden /> Consent letter ✓ View
+                        <FileText size={11} aria-hidden /> Parent consent letter - View
                       </button>
                     ) : (
-                      <span style={docMissing} data-testid={`consent-letter-missing-${r.id}`}>
-                        <FileText size={11} aria-hidden /> Consent letter not uploaded
+                      <span style={docMissing} data-testid={`parent-consent-missing-${r.id}`}>
+                        <FileText size={11} aria-hidden /> Parent consent letter not uploaded
+                      </span>
+                    )}
+                    {hasMedicalConsent ? (
+                      <button type="button" style={docUploaded} onClick={() => viewRegistrationDoc(r.id, "medicalConsent")} title="View uploaded medical consent" data-testid={`view-medical-consent-${r.id}`}>
+                        <FileText size={11} aria-hidden /> Medical consent - View
+                      </button>
+                    ) : (
+                      <span style={docMissing} data-testid={`medical-consent-missing-${r.id}`}>
+                        <FileText size={11} aria-hidden /> Medical consent not uploaded
                       </span>
                     )}
                   </div>
@@ -1071,43 +1076,8 @@ function ParticipantsTab({ trip, onChange, notify }) {
                     </div>
                   )}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
-                  {/* Approve is available for every registration that is
-                      not already final. CONVERTED rows are filtered out
-                      above; REJECTED rows stay visible so they can be
-                      re-approved. The OTP gate was relaxed on the backend
-                      because production tenants collect consent outside
-                      the microsite OTP flow. */}
-                  <button
-                    type="button"
-                    onClick={() => decideRegistration(r.id, "approve")}
-                    disabled={busy}
-                    data-testid={`approve-registration-${r.id}`}
-                    style={{
-                      ...secondaryBtn, padding: "5px 10px", fontSize: 12,
-                      color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)",
-                      opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
-                    }}
-                    aria-label={`Approve registration for ${r.studentName}`}
-                  >
-                    <CheckCircle2 size={13} aria-hidden /> Approve
-                  </button>
-                  {!isRejected && (
-                    <button
-                      type="button"
-                      onClick={() => decideRegistration(r.id, "reject")}
-                      disabled={busy}
-                      data-testid={`reject-registration-${r.id}`}
-                      style={{
-                        ...secondaryBtn, padding: "5px 10px", fontSize: 12,
-                        color: "#A8323F", borderColor: "rgba(168,50,63,0.4)",
-                        opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
-                      }}
-                      aria-label={`Reject registration for ${r.studentName}`}
-                    >
-                      <AlertCircle size={13} aria-hidden /> Reject
-                    </button>
-                  )}
+                <div style={{ fontSize: 11, color: "var(--text-secondary)", flexShrink: 0 }}>
+                  Registered automatically
                 </div>
               </div>
             );
@@ -1115,7 +1085,10 @@ function ParticipantsTab({ trip, onChange, notify }) {
         </div>
       )}
 
-      <div style={listShell}>
+      {Boolean(window.__SHOW_LEGACY_PARTICIPANT_LIST__) && <div style={{ ...listShell, borderRadius: 14, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border-color)", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
+          Participant list
+        </div>
         {(trip.participants || []).length === 0 ? (
           <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
             <Users size={28} aria-hidden style={{ opacity: 0.4 }} />
@@ -1129,17 +1102,17 @@ function ParticipantsTab({ trip, onChange, notify }) {
             // Default to "pending" so legacy rows (pre-applicationStatus
             // column) read as pending review rather than as an unknown
             // status. The schema default already covers new rows.
-            const status = p.applicationStatus || "pending";
-            const isPending = status === "pending";
-            const isApproved = status === "approved";
-            const isRejected = status === "rejected";
+            const isPending = false;
+            const isApproved = false;
+            const isRejected = false;
             const busy = decidingId === p.id;
+            const isApprovalUiEnabled = Boolean(window.__ENABLE_LEGACY_APPROVAL_UI__);
             return (
               <div key={p.id} style={row}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{p.fullName}</strong>
-                    <StatusPill status={status} />
+                    <StatusPill />
                   </div>
                   {(p.parentName || p.parentPhone) && (
                     <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
@@ -1162,7 +1135,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                       Pending → both. Approved → "Reject" so a wrongly-approved
                       row can be reversed. Rejected → "Approve" so a re-review
                       is one click away. */}
-                  {(isPending || isRejected) && (
+                  {isApprovalUiEnabled && (isPending || isRejected) && (
                     <button
                       type="button"
                       onClick={() => decide(p.id, "approve")}
@@ -1177,7 +1150,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
                       <CheckCircle2 size={13} aria-hidden /> Approve
                     </button>
                   )}
-                  {(isPending || isApproved) && (
+                  {isApprovalUiEnabled && (isPending || isApproved) && (
                     <button
                       type="button"
                       onClick={() => decide(p.id, "reject")}
@@ -1201,7 +1174,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
             );
           })
         )}
-      </div>
+      </div>}
     </div>
   );
 }

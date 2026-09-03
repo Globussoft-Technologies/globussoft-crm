@@ -90,18 +90,13 @@ const TRIP_PAGE_STATE = {
   },
 };
 
-async function openCreateChooser(user, initialEntries = ['/landing-pages']) {
+async function openGenerateModal(user, initialEntries = ['/landing-pages']) {
   renderPage(initialEntries);
   await waitFor(() => {
     expect(screen.getAllByRole('button', { name: /Create Page/i }).length).toBeGreaterThan(0);
   });
   await user.click(screen.getAllByRole('button', { name: /Create Page/i })[0]);
-  expect(await screen.findByText(/Choose a page type/i)).toBeInTheDocument();
-}
-
-async function openGenerateModalFromChooser(user, initialEntries = ['/landing-pages']) {
-  await openCreateChooser(user, initialEntries);
-  await user.click(screen.getByRole('button', { name: /Open confirmed trip AI flow/i }));
+  expect(await screen.findByRole('dialog', { name: /Generate Destination Landing Page/i })).toBeInTheDocument();
 }
 
 describe('<LandingPages /> — Generate modal', () => {
@@ -116,15 +111,15 @@ describe('<LandingPages /> — Generate modal', () => {
     confirmMock.mockResolvedValue(true);
   });
 
-  it('opens the generator modal from the Create Page chooser', async () => {
+  it('opens the generator modal from the Create Page button', async () => {
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('prefills the generate modal from the trip context and keeps audience editable', async () => {
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user, [{
+    await openGenerateModal(user, [{
       pathname: '/landing-pages',
       state: TRIP_PAGE_STATE,
     }]);
@@ -141,7 +136,7 @@ describe('<LandingPages /> — Generate modal', () => {
 
   it('opens the modal with all 4 inputs + the "AI never generates" warning', async () => {
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByLabelText(/^Destination/)).toBeInTheDocument();
@@ -163,7 +158,7 @@ describe('<LandingPages /> — Generate modal', () => {
 
   it('blocks Generate when destination is empty', async () => {
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
     // Fill audience but skip destination.
     await user.type(screen.getByLabelText(/Audience/i), 'Honeymooners');
     await user.click(screen.getByRole('button', { name: /Generate Draft/i }));
@@ -177,7 +172,7 @@ describe('<LandingPages /> — Generate modal', () => {
 
   it('blocks Generate when audience is empty', async () => {
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
     await user.type(screen.getByLabelText(/^Destination/), 'Bali');
     await user.click(screen.getByRole('button', { name: /Generate Draft/i }));
 
@@ -204,7 +199,7 @@ describe('<LandingPages /> — Generate modal', () => {
     });
 
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
 
     await user.type(screen.getByLabelText(/^Destination/), 'Bali');
     const dur = screen.getByLabelText(/Duration/i);
@@ -228,7 +223,7 @@ describe('<LandingPages /> — Generate modal', () => {
       if (url === '/api/landing-pages/generate-from-destination') return Promise.resolve({ page: { id: 42 }, generation: {} });
       return Promise.resolve(null);
     });
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
     await user.type(screen.getByLabelText('Destination *'), 'Goa');
     await user.type(screen.getByLabelText('Audience *'), 'Families');
     await user.selectOptions(screen.getByLabelText('Trip type *'), 'domestic');
@@ -251,7 +246,7 @@ describe('<LandingPages /> — Generate modal', () => {
     });
 
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
 
     await user.type(screen.getByLabelText(/^Destination/), 'Bali');
     await user.type(screen.getByLabelText(/Audience/i), 'Honeymooners');
@@ -294,7 +289,7 @@ describe('<LandingPages /> — Generate modal', () => {
     });
 
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
 
     await user.type(screen.getByLabelText(/^Destination/), 'Umrah');
     await user.type(screen.getByLabelText(/Audience/i), 'Pilgrims');
@@ -317,7 +312,7 @@ describe('<LandingPages /> — Generate modal', () => {
     });
 
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
     await user.type(screen.getByLabelText(/^Destination/), 'Bali');
     await user.type(screen.getByLabelText(/Audience/i), 'Honeymooners');
     await user.click(screen.getByRole('button', { name: /Generate Draft/i }));
@@ -341,7 +336,7 @@ describe('<LandingPages /> — Generate modal', () => {
     });
 
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
     await user.type(screen.getByLabelText(/^Destination/), 'Bali');
     await user.type(screen.getByLabelText(/Audience/i), 'Honeymooners');
     await user.click(screen.getByRole('button', { name: /Generate Draft/i }));
@@ -352,7 +347,7 @@ describe('<LandingPages /> — Generate modal', () => {
 
   it('Cancel closes the modal without firing any request', async () => {
     const user = userEvent.setup();
-    await openGenerateModalFromChooser(user);
+    await openGenerateModal(user);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^Cancel$/i }));

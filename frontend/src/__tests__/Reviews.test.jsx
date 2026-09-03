@@ -3,8 +3,8 @@
  * Customer Reviews list page (frontend/src/pages/travel/Reviews.jsx).
  *
  * Scope: pins the review-browser surface invariants: filter bar controls,
- * client-side search/sub-brand/rating filtering, sorting, pagination and
- * full timestamp rendering.
+ * client-side search/sub-brand/rating filtering, sorting, pagination, review
+ * redirect settings and full timestamp rendering.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
@@ -95,7 +95,56 @@ describe("<Reviews /> — page chrome", () => {
     expect(screen.getByLabelText(/Filter by minimum rating/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Sort reviews/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Refresh/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Review settings/i })).toBeInTheDocument();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/travel/reviews"));
+  });
+});
+
+describe("<Reviews /> — review redirect settings", () => {
+  it("opens the in-page settings dialog and loads the existing redirect URL", async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === "/api/travel/reviews") return Promise.resolve({ reviews: DEFAULT_REVIEWS });
+      if (url === "/api/tenant-settings/travel.externalReviewUrl") return Promise.resolve({ value: "https://example.com/review" });
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /Review settings/i }));
+    expect(await screen.findByRole("dialog", { name: /Review settings/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Redirect URL")).toHaveValue("https://example.com/review"));
+  });
+
+  it("saves the redirect URL through the existing tenant setting endpoint", async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /Review settings/i }));
+    const input = await screen.findByLabelText("Redirect URL");
+    fireEvent.change(input, { target: { value: "https://example.com/google-review" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save settings/i }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      "/api/tenant-settings/travel.externalReviewUrl",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ value: "https://example.com/google-review" }),
+      }),
+    ));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("clears the setting when the URL is saved blank", async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === "/api/travel/reviews") return Promise.resolve({ reviews: DEFAULT_REVIEWS });
+      if (url === "/api/tenant-settings/travel.externalReviewUrl") return Promise.resolve({ value: "https://example.com/review" });
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /Review settings/i }));
+    const input = await screen.findByLabelText("Redirect URL");
+    await waitFor(() => expect(input).toHaveValue("https://example.com/review"));
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save settings/i }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      "/api/tenant-settings/travel.externalReviewUrl",
+      expect.objectContaining({ method: "DELETE" }),
+    ));
   });
 });
 

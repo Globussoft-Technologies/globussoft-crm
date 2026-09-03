@@ -30,10 +30,15 @@ router.get("/", async (_req, res) => {
           OR: [
             { title: { contains: "Explore" } },
             { title: { contains: "Pre-Trip Marketing" } },
+            { title: { contains: "Before the trip is confirmed" } },
+            { content: { contains: "marketing-heading" } },
+            // Explore is the single no-trip marketing page. Keep this
+            // fallback for older records whose title/content was customized.
+            { tripId: null },
           ],
         },
         orderBy: { updatedAt: "desc" },
-        select: { content: true },
+        select: { id: true, content: true },
       }),
     ]);
     const trips = tripRows.map((trip) => {
@@ -66,7 +71,7 @@ router.get("/", async (_req, res) => {
         exploreConfig = null;
       }
     }
-    return res.json({ trips, catalogue, files: filesWithImages, tenantSlug: tenant.slug, exploreConfig });
+    return res.json({ trips, catalogue, files: filesWithImages, tenantSlug: tenant.slug, explorePageId: explorePage?.id || null, exploreConfig });
   } catch (error) {
     console.error("[ExplorePublic] failed to load marketing data:", error);
     return res.status(500).json({ error: "Explore data is temporarily unavailable", code: "EXPLORE_DATA_UNAVAILABLE" });

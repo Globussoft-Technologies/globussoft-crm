@@ -92,6 +92,7 @@ async function notifyDiagnosticSubmitted({
         entityType: "TravelDiagnostic",
         entityId: diagnosticId,
         channels: ["db", "socket"],
+        ignorePreferences: true,
       });
       return;
     }
@@ -118,6 +119,7 @@ async function notifyDiagnosticSubmitted({
             entityType: "TravelDiagnostic",
             entityId: diagnosticId,
             channels: ["db", "socket"],
+            ignorePreferences: true,
           });
         } catch (e) {
           console.warn(`[diagnosticNotifications] db notify failed for user ${r.userId} (non-fatal):`, e.message);

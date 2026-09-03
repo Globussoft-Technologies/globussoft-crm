@@ -203,7 +203,9 @@ async function customerRegistrationEmailExists(email, tenantId) {
         tenantId,
         deletedAt: null,
       },
-      select: { id: true },
+      // A landing-page submission is stored as a Lead before profile setup.
+      // A lead without portal credentials is not an existing customer.
+      select: { id: true, status: true, portalPasswordHash: true },
     }),
     prisma.patient.findFirst({
       where: {
@@ -215,7 +217,10 @@ async function customerRegistrationEmailExists(email, tenantId) {
     }),
   ]);
 
-  return userCount > 0 || !!contact || !!patient;
+  const existingContactIdentity = contact && (
+    contact.status !== "Lead" || !!contact.portalPasswordHash
+  );
+  return userCount > 0 || !!existingContactIdentity || !!patient;
 }
 
 router.post("/check-email", async (req, res) => {

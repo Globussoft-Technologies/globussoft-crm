@@ -114,6 +114,7 @@ function createGenFormDefaults(tripContext = null, overrides = {}) {
     destination: tripContext?.destination || '',
     durationDays: tripContext?.durationDays || 7,
     audience: tripContext?.audience || '',
+    tripType: tripContext?.tripType || 'international',
     subBrand: tripContext?.subBrand || 'tmc',
     themeId: defaultTheme.id,
     style: 'premium',
@@ -253,7 +254,14 @@ function buildMarketingPageContent(tripContext = null) {
 
 function isExploreMarketingPage(page) {
   if (!page || page.tripId) return false;
-  if (/pre-trip marketing page/i.test(String(page.title || ''))) return true;
+  // The explore page is a singleton. Newer records identify it by their
+  // canonical slug/template, while older records used the title/content
+  // markers below. Keep all shapes recognised so its manage actions remain
+  // available without introducing an explore-specific create action.
+  const slug = String(page.slug || '').trim().toLowerCase();
+  if (slug === 'explore' || slug.endsWith('/explore') || slug.endsWith('-explore')) return true;
+  if (String(page.templateType || '').toLowerCase() === 'explore') return true;
+  if (/\bexplore\b|pre-trip marketing page|before the trip is confirmed/i.test(String(page.title || ''))) return true;
   const content = typeof page.content === 'string' ? page.content : JSON.stringify(page.content || '');
   return content.includes('marketing-heading') || content.includes('Before the trip is confirmed');
 }
@@ -266,6 +274,7 @@ export default function LandingPages() {
   const pageReturnState = location.state?.returnTo ? location.state : null;
   const tripLandingPageContext = pageReturnState?.tripContext || null;
   const [pages, setPages] = useState([]);
+  const [explorePageId, setExplorePageId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   // PR-B — AI Generate modal state.
@@ -315,6 +324,8 @@ export default function LandingPages() {
         destination: nextForm.destination,
         subBrand: nextForm.subBrand,
       }).theme));
+      setGenError(null);
+      setShowGenerateModal(true);
     }
   }, [tripLandingPageContext]);
   const openGenerateModal = () => {
@@ -413,7 +424,9 @@ export default function LandingPages() {
   }, [dateFilter, pages, searchQuery, statusFilter]);
   const { counts, visiblePages: filteredPages } = summaryAndVisiblePages;
   const visiblePages = filteredPages;
-  const explorePage = pages.find((page) => isExploreMarketingPage(page) && page.status !== 'ARCHIVED');
+  const explorePage = pages.find((page) => isExploreMarketingPage(page) && page.status !== 'ARCHIVED')
+    || pages.find((page) => !page.tripId && page.templateType === 'wanderlux-v1' && page.status !== 'ARCHIVED');
+  const resolvedExplorePageId = explorePage?.id || explorePageId;
   const builderNavigationState = pageReturnState || undefined;
   const statusFilterOptions = [
     { value: 'ALL', label: 'All', count: counts.total },
@@ -423,7 +436,15 @@ export default function LandingPages() {
 
   const loadPages = () => {
     setLoading(true);
-    fetchApi('/api/landing-pages').then(data => { setPages(Array.isArray(data) ? data : []); setLoading(false); }).catch(() => setLoading(false));
+    fetchApi('/api/landing-pages')
+      .then((data) => {
+        setPages(Array.isArray(data) ? data : []);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+    fetchApi('/api/explore')
+      .then((exploreData) => setExplorePageId(exploreData?.explorePageId || null))
+      .catch(() => setExplorePageId(null));
   };
 
   useEffect(() => {
@@ -684,7 +705,7 @@ export default function LandingPages() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.6rem' }}>
-          <button className="btn-primary" onClick={() => setShowTemplatePicker(true)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <button className="btn-primary" onClick={openGenerateModal} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={18} /> Create Page
           </button>
         </div>
@@ -694,14 +715,13 @@ export default function LandingPages() {
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
             <strong id="explore-page-bar-title">Explore marketing page</strong>
-            <span style={{ padding: '0.18rem 0.55rem', borderRadius: 999, fontSize: '0.7rem', fontWeight: 700, background: explorePage?.status === 'PUBLISHED' ? 'rgba(16,185,129,0.12)' : 'rgba(99,102,241,0.12)', color: explorePage?.status === 'PUBLISHED' ? '#059669' : '#6366f1' }}>{explorePage?.status || 'NOT CREATED'}</span>
           </div>
           <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>One editable page for pre-trip discovery. Published content is live at <strong>/explore</strong>.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-          {explorePage ? <button type="button" onClick={() => navigator.clipboard.writeText(`${window.location.origin}/explore`).then(() => { setCopiedId(explorePage.id); setTimeout(() => setCopiedId(null), 2000); })} style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem' }}><Copy size={13} /> {copiedId === explorePage.id ? 'Copied!' : 'Copy URL'}</button> : null}
+          <button type="button" onClick={() => navigator.clipboard.writeText(`${window.location.origin}/explore`).then(() => { setCopiedId('explore'); setTimeout(() => setCopiedId(null), 2000); })} style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem' }}><Copy size={13} /> {copiedId === 'explore' ? 'Copied!' : 'Copy URL'}</button>
           <a href="/explore" target="_blank" rel="noreferrer" style={{ padding: '0.5rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', textDecoration: 'none' }}><ExternalLink size={13} /> Open live</a>
-          {explorePage ? <Link to={`/landing-pages/explore-builder/${explorePage.id}`} className="btn-primary" style={{ padding: '0.5rem 0.8rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}><FileEdit size={13} /> Edit</Link> : <button type="button" onClick={() => handleCreate('marketing')} className="btn-primary" style={{ padding: '0.5rem 0.8rem', fontSize: '0.78rem' }}>Create Explore Page</button>}
+          {resolvedExplorePageId && <Link to={`/landing-pages/explore-builder/${resolvedExplorePageId}`} className="btn-primary" style={{ padding: '0.5rem 0.8rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}><FileEdit size={13} /> Edit</Link>}
         </div>
       </section>
 
@@ -787,8 +807,8 @@ export default function LandingPages() {
         <div className="card" style={{ ...cardSurfaceStyle, padding: '4rem', textAlign: 'center' }}>
           <PanelTop size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
           <h3 style={{ marginBottom: '0.5rem' }}>No landing pages yet</h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Create your first page type to start promoting trips before confirmation or publishing the confirmed trip experience.</p>
-          <button className="btn-primary" onClick={() => setShowTemplatePicker(true)}><Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Create Page</button>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Create a confirmed-trip landing page to start publishing the trip experience.</p>
+          <button className="btn-primary" onClick={openGenerateModal}><Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Create Page</button>
         </div>
       ) : (
         <>
@@ -925,6 +945,18 @@ export default function LandingPages() {
                       </button>
                       <a
                         href={getLandingPageShareUrl(page)}
+                        onClick={() => {
+                          // Open live starts a new visitor session. Do not
+                          // carry an abandoned or completed draft into it.
+                          try {
+                            Object.keys(window.localStorage)
+                              .filter((key) => key.startsWith('landing-registration-draft:'))
+                              .forEach((key) => window.localStorage.removeItem(key));
+                            Object.keys(window.sessionStorage)
+                              .filter((key) => key.startsWith('landing-registration-draft:'))
+                              .forEach((key) => window.sessionStorage.removeItem(key));
+                          } catch (_err) { /* storage may be unavailable */ }
+                        }}
                         target="_blank"
                         rel="noreferrer"
                         title="Open public page in new tab"
@@ -995,6 +1027,7 @@ export default function LandingPages() {
                     <select id="gen-trip-type" value={genForm.tripType} onChange={(e) => updateGenField('tripType', e.target.value)} disabled={generating} className="input-field" style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}>
                       <option value="international">International trip</option>
                       <option value="domestic">Domestic trip</option>
+                      <option value="day_trip">Day trip</option>
                     </select>
                   </div>
                   <div>
@@ -1228,7 +1261,7 @@ export default function LandingPages() {
                 type="button"
                 onClick={() => handleCreate('marketing')}
                 className="card"
-                style={{ padding: '1.2rem', cursor: 'pointer', border: '1px solid rgba(59, 130, 246, 0.18)', background: 'linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(15, 23, 42, 0.02))', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: '0.9rem', transition: 'all 0.2s' }}
+                style={{ display: 'none' }}
                 onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.45)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.18)'; e.currentTarget.style.transform = 'translateY(0)'; }}
                 aria-label="Create marketing page"

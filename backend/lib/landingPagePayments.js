@@ -175,6 +175,12 @@ async function applyLandingPagePaymentToTrip({
     throw makeError("Payment amount must be greater than zero", 400, "INVALID_AMOUNT");
   }
 
+  // Gateway metadata commonly serializes the selected index as a string.
+  const selectedIndex = installmentIndex == null ? null : Number(installmentIndex);
+  if (mode !== "complete" && !Number.isInteger(selectedIndex)) {
+    throw makeError("A valid payment instalment is required", 400, "INVALID_INSTALMENT_INDEX");
+  }
+
   await materializeTripInstalmentsFromPlan({
     db,
     tripId: numericTripId,
@@ -202,10 +208,23 @@ async function applyLandingPagePaymentToTrip({
 
   const targetRows = mode === "complete"
     ? rows.filter((row) => byPaise(row).due > 0)
-    : rows.filter((row) => row.instalmentIndex === installmentIndex);
+    : rows.filter((row) => row.instalmentIndex === selectedIndex);
 
   if (!targetRows.length) {
     throw makeError("No matching instalment found for the payment choice", 409, "INSTALMENT_NOT_FOUND");
+  }
+
+  // Razorpay webhooks and the browser callback can both deliver the same
+  // payment. Treat an already-paid target as an idempotent replay.
+  if (targetRows.every((row) => byPaise(row).due <= 0)) {
+    return {
+      tripId: numericTripId,
+      participantId: numericParticipantId,
+      paidMajor: 0,
+      allocations: targetRows.map((row) => ({ id: row.id, instalmentIndex: row.instalmentIndex, amountMajor: Number(row.amount || 0), paidMajor: Number(row.paidAmount || 0), appliedMajor: 0, status: row.status })),
+      mode,
+      installmentIndex,
+    };
   }
 
   let remainingPaise = Math.round(paymentMajor * 100);

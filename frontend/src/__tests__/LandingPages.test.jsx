@@ -217,7 +217,7 @@ describe('<LandingPages /> — index page surface', () => {
     renderPage();
     expect(await screen.findByText(/No landing pages yet/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/Create your first page type to start promoting trips/i),
+      screen.getByText(/Create a confirmed-trip landing page to start publishing the trip experience/i),
     ).toBeInTheDocument();
     // Header CTA + empty-state CTA = at least 2 "Create Page" buttons.
     expect(
@@ -395,6 +395,37 @@ describe('<LandingPages /> — index page surface', () => {
     });
   });
 
+  it('restores Copy URL and Edit for the existing explore page without an explore create option', async () => {
+    const explorePage = {
+      id: 99,
+      title: 'Explore destinations',
+      slug: 'explore',
+      templateType: 'travel_destination',
+      status: 'PUBLISHED',
+      visits: 12,
+      submissions: 2,
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/landing-pages' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([explorePage]);
+      }
+      if (url === '/api/explore') return Promise.resolve({ explorePageId: 99 });
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Explore destinations')).toBeInTheDocument());
+
+    const exploreBar = screen.getByText('Explore marketing page').closest('section');
+    expect(exploreBar).toBeTruthy();
+    expect(exploreBar.querySelector('a[href="/landing-pages/explore-builder/99"]')).toBeTruthy();
+    const copyButton = exploreBar.querySelector('button');
+    expect(copyButton).toHaveTextContent(/Copy URL/i);
+    fireEvent.click(copyButton);
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith(`${window.location.origin}/explore`));
+    expect(exploreBar).not.toHaveTextContent(/Create/i);
+  });
+
   it('clicking Unpublish fires POST /api/landing-pages/:id/unpublish', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
@@ -463,58 +494,22 @@ describe('<LandingPages /> — index page surface', () => {
     });
   });
 
-  it('clicking the header Create Page button opens the page-type chooser with Marketing Page and Confirmed Trip Landing Page', async () => {
+  it('clicking the header Create Page button opens the generator dialog', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     // Click the FIRST Create Page button (the header one — only one renders
     // when pages exist, so getByRole works for the populated case).
     fireEvent.click(screen.getByRole('button', { name: /Create Page/i }));
-    // Modal heading.
-    expect(await screen.findByText(/Choose a page type/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Marketing Page/i })).toBeInTheDocument();
-    expect(screen.getByText(/Confirmed Trip Landing Page/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Open confirmed trip AI flow/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Direct create/i })).not.toBeInTheDocument();
-    expect(screen.queryByText(/Block Templates/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Blank Page/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Choose a Template/i)).not.toBeInTheDocument();
-    // Cancel button is rendered.
+    expect(await screen.findByRole('dialog', { name: /Generate Destination Landing Page/i })).toBeInTheDocument();
+    expect(screen.getByText(/AI never generates/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
   });
 
-  it('clicking Marketing Page POSTs /api/landing-pages with marketing seed content + navigates to the builder', async () => {
-    fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/landing-pages' && opts?.method === 'POST') {
-        return Promise.resolve({ id: 42, title: 'Pre-Trip Marketing Page', status: 'DRAFT' });
-      }
-      return defaultFetchMock(url, opts);
-    });
+  it('clicking Create Page opens the current confirmed-trip generator flow', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Create Page/i }));
-    await screen.findByText(/Choose a page type/i);
-    fireEvent.click(screen.getByRole('button', { name: /Marketing Page/i }));
-
-    await waitFor(() => {
-      const postCall = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/landing-pages' && o?.method === 'POST',
-      );
-      expect(postCall).toBeTruthy();
-      const body = JSON.parse(postCall[1].body);
-      expect(body.templateType).toBe('travel_destination');
-      expect(body.title).toBe('Pre-Trip Marketing Page');
-      const parsedContent = JSON.parse(body.content);
-      expect(Array.isArray(parsedContent)).toBe(true);
-      expect(parsedContent.some((block) => block.type === 'highlightsGrid')).toBe(true);
-      const columnsBlock = parsedContent.find((block) => block.type === 'columns');
-      const columnComponents = columnsBlock?.props?.columns?.flatMap((column) => column.components || []) || [];
-      expect(columnComponents.some((comp) => comp.type === 'button' && comp.props?.url === '/p/tmc/readiness')).toBe(true);
-      expect(columnComponents.some((comp) => comp.type === 'brochureDownload')).toBe(true);
-    });
-    // Post-create navigation goes to the builder for the returned id.
-    await waitFor(() => {
-      expect(navigateMock.mock.calls.some(([path]) => path === '/landing-pages/builder/42')).toBe(true);
-    });
+    expect(await screen.findByRole('dialog', { name: /Generate Destination Landing Page/i })).toBeInTheDocument();
   });
 
   it('clicking the confirmed-trip tile opens the generator modal with trip-prefilled fields', async () => {
@@ -524,10 +519,7 @@ describe('<LandingPages /> — index page surface', () => {
     }]);
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Create Page/i }));
-    await screen.findByText(/Choose a page type/i);
-    fireEvent.click(screen.getByRole('button', { name: /Open confirmed trip AI flow/i }));
-
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: /Generate Destination Landing Page/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/^Destination/)).toHaveValue('Andaman');
     expect(screen.getByLabelText(/Duration/i)).toHaveValue(7);
     expect(screen.getByLabelText(/Audience/i)).toHaveValue('School students');
@@ -541,10 +533,7 @@ describe('<LandingPages /> — index page surface', () => {
     }]);
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Create Page/i }));
-    await screen.findByText(/Choose a page type/i);
-    fireEvent.click(screen.getByRole('button', { name: /AI-generated template/i }));
-
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: /Generate Destination Landing Page/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/^Destination/)).toHaveValue('Andaman');
     expect(screen.getByLabelText(/Duration/i)).toHaveValue(7);
     expect(screen.getByLabelText(/Audience/i)).toHaveValue('School students');

@@ -122,4 +122,41 @@ describe("landingPagePayments", () => {
     });
     expect(result.allocations.map((item) => item.appliedMajor)).toEqual([2500, 2500]);
   });
+
+  test("treats a repeated hosted-payment callback as idempotent", async () => {
+    const db = {
+      tripInstalmentPayment: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 21, instalmentIndex: 0, amount: 5000, paidAmount: 5000, status: "paid" },
+        ]),
+        update: vi.fn(),
+      },
+    };
+    const result = await applyLandingPagePaymentToTrip({
+      db, tripId: 7, participantId: 42, amountMajor: 5000,
+      mode: "installment", installmentIndex: 0,
+    });
+    expect(db.tripInstalmentPayment.update).not.toHaveBeenCalled();
+    expect(result.allocations[0]).toMatchObject({ paidMajor: 5000, appliedMajor: 0, status: "paid" });
+  });
+
+  test("matches an installment index serialized by gateway metadata", async () => {
+    const rows = [
+      { id: 31, instalmentIndex: 0, amount: 5000, paidAmount: 0, status: "pending" },
+      { id: 32, instalmentIndex: 1, amount: 5000, paidAmount: 0, status: "pending" },
+    ];
+    const db = {
+      tripInstalmentPayment: {
+        findMany: vi.fn().mockResolvedValue(rows),
+        update: vi.fn().mockImplementation(async ({ where, data }) => ({ ...rows.find((row) => row.id === where.id), ...data })),
+      },
+    };
+
+    await applyLandingPagePaymentToTrip({
+      db, tripId: 7, participantId: 42, amountMajor: 5000,
+      mode: "installment", installmentIndex: "1",
+    });
+
+    expect(db.tripInstalmentPayment.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 32 } }));
+  });
 });

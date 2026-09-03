@@ -11,9 +11,10 @@
  *      DRAFT page; the page is then PUBLISHED via the existing
  *      landing-pages route so /p/<slug>/submit can accept submissions.
  *   3. POST /p/<slug>/submit with mode=registration-draft
- *      creates a PendingTripRegistration and returns a thanks redirect
- *      (PR #1396 removed the microsite redirect — the draft flows
- *      through the CRM approval queue instead).
+ *      creates a PendingTripRegistration and returns a customer-portal
+ *      redirect (PR #1399: `/customer/register?...next=/travel/portal`
+ *      so the parent can continue into the portal; the draft also flows
+ *      through the CRM approval queue).
  *   4. POST /api/travel/microsites/public/:uuid/request-otp issues an
  *      OTP for purpose=registration.
  *   5. POST .../verify-otp WITH draftToken atomically marks the draft
@@ -189,7 +190,7 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(r.ok()).toBeTruthy();
   });
 
-  test('4) Phase 3 — POST /p/<slug>/submit creates PendingTripRegistration + returns thanks redirect', async ({ request }) => {
+  test('4) Phase 3 — POST /p/<slug>/submit creates PendingTripRegistration + returns customer-portal redirect', async ({ request }) => {
     test.skip(!landingPageSlug || !micrositeUuid, 'no landing page slug or microsite available');
     const submitRes = await postPublic(request, `/p/${landingPageSlug}/submit`, {
       student: {
@@ -212,11 +213,11 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(body.ok).toBe(true);
     expect(body.draftId).toBeTruthy();
     pendingRegistrationId = body.draftId;
-    // PR #1396 removed the microsite redirect — submit always returns a
-    // thanks page; no redirect URL means no PII can leak through it.
+    // PR #1399: trip-linked submits redirect to the customer portal
+    // registration page so the parent can continue into /travel/portal.
     expect(body.redirect).toBeTruthy();
-    expect(body.redirect.type).toBe('thanks');
-    expect(body.redirect.url).toBeUndefined();
+    expect(body.redirect.type).toBe('customer-registration');
+    expect(body.redirect.url).toMatch(/^\/customer\/register\?/);
   });
 
   test('5) Phase 5 — admin GET /trips/:id/registrations sees the DRAFT row', async ({ request }) => {

@@ -4,6 +4,8 @@ import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDateMedium } from '../utils/date';
 import { useNotify } from '../utils/notify';
+import { Link } from "react-router-dom";
+
 import { PieChart as PieChartIcon, Upload, Filter, Calendar, Table, BarChart3, Clock, Mail } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
@@ -88,7 +90,7 @@ export default function Reports() {
         setData([]);
         setLoading(false);
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- dateParams is derived from the listed state deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dateParams is derived from the listed state deps
   }, [metric, groupBy, startDate, endDate]);
 
   useEffect(() => {
@@ -98,12 +100,12 @@ export default function Reports() {
         .then(res => { setDetailData(Array.isArray(res) ? res : []); setDetailLoading(false); })
         .catch(() => { setDetailData([]); setDetailLoading(false); });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- dateParams is derived from the listed state deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dateParams is derived from the listed state deps
   }, [viewMode, detailType, startDate, endDate]);
 
   // Schedules
   useEffect(() => {
-    fetchApi('/api/report-schedules').then(data => setSchedules(data)).catch(() => {});
+    fetchApi('/api/report-schedules').then(data => setSchedules(data)).catch(() => { });
   }, []);
 
   // #127: pragmatic email check — same regex used server-side in report_schedules.js
@@ -132,13 +134,13 @@ export default function Reports() {
       return;
     }
     setNewSchedule({ name: '', reportType: 'deals', frequency: 'weekly', recipients: '', format: 'PDF' });
-    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => {});
+    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => { });
     setShowScheduleModal(false);
   };
 
   const handleToggleSchedule = async (id) => {
     await fetchApi(`/api/report-schedules/${id}/toggle`, { method: 'PUT' });
-    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => {});
+    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => { });
   };
 
   const handleDeleteSchedule = async (id) => {
@@ -147,7 +149,7 @@ export default function Reports() {
     const name = sched?.name || `schedule #${id}`;
     if (!await notify.confirm(`Delete scheduled email report "${name}"?\n\nThis cancels future deliveries to its recipients. The action cannot be undone.`)) return;
     await fetchApi(`/api/report-schedules/${id}`, { method: 'DELETE' });
-    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => {});
+    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => { });
   };
 
   const totalValue = data.reduce((sum, item) => sum + (item.value || 0), 0);
@@ -180,6 +182,30 @@ export default function Reports() {
 
   return (
     <div className="reports-page" style={{ padding: '2rem', minHeight: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          marginBottom: '1rem',
+        }}
+      >
+        <Link
+          to="/dashboard"
+          className="btn-secondary"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            textDecoration: 'none',
+            padding: '0.5rem 1rem',
+            fontSize: '0.85rem',
+          }}
+        >
+          ←  Back  to Dashboard
+        </Link>
+      </div>
+
+
       <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Reports & Analytics</h1>
@@ -580,6 +606,6 @@ function StatusBadge({ status }) {
   const s = (status || '').toLowerCase();
   const variant = ['paid', 'completed', 'customer', 'active', 'approved', 'reimbursed'].some(x => s.includes(x)) ? 'success'
     : ['overdue', 'rejected', 'churned', 'lost', 'urgent'].some(x => s.includes(x)) ? 'danger'
-    : ['pending', 'lead', 'draft', 'open'].some(x => s.includes(x)) ? 'warning' : 'info';
+      : ['pending', 'lead', 'draft', 'open'].some(x => s.includes(x)) ? 'warning' : 'info';
   return <span className={`report-pill report-pill--${variant}`}>{status}</span>;
 }

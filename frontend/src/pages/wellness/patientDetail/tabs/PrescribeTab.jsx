@@ -85,45 +85,101 @@ function DrugStockTag({ drug }) {
 function DrugAutocomplete({ value, onChange, onPick, onQuickAdd }) {
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const debounceRef = useRef(null);
   const abortRef = useRef(null);
   const blurTimerRef = useRef(null);
 
-  const search = (q) => {
+  const search = (q, pageNumber = 1, append = false) => {
     if (abortRef.current) abortRef.current.abort();
+
     const ac = new AbortController();
     abortRef.current = ac;
+
     const trimmed = (q || '').trim();
-    // `fields=summary` is the slim typeahead shape — it now carries quantity +
-    // lowStockThreshold and drops the admin-only notes blob.
-    const base = `/api/wellness/drugs?isActive=true&limit=20&fields=summary`;
-    const url = trimmed ? `${base}&q=${encodeURIComponent(trimmed)}` : base;
+
+    const base =
+      `/api/wellness/drugs?isActive=true&limit=20&page=${pageNumber}&fields=summary`;
+
+    const url = trimmed
+      ? `${base}&q=${encodeURIComponent(trimmed)}`
+      : base;
+
+    if (append) {
+      setLoadingMore(true);
+    }
+
     fetchApi(url, { signal: ac.signal, silent: true })
       .then((data) => {
         if (ac.signal.aborted) return;
-        // Passing `limit` puts the route into its PAGINATED shape, so the
-        // response is `{ items, page, total, hasMore }` — not a bare array.
-        // Reading it as an array silently discarded every result, which is why
-        // searching the catalogue appeared to match nothing at all. Accept
-        // both shapes so neither the paginated nor the plain response breaks.
-        const rows = Array.isArray(data) ? data : (data?.items ?? []);
-        setResults(Array.isArray(rows) ? rows : []);
+
+        const rows = Array.isArray(data)
+          ? data
+          : (data?.items ?? []);
+
+        if (append) {
+          setResults((prev) => [...prev, ...rows]);
+        } else {
+          setResults(rows);
+        }
+
+        setPage(data?.page || pageNumber);
+        setHasMore(Boolean(data?.hasMore));
       })
-      .catch(() => { /* typeahead is best-effort; ignore failures */ });
+      .catch(() => {
+        // typeahead is best effort
+      })
+      .finally(() => {
+        setLoadingMore(false);
+      });
   };
 
   const handleChange = (e) => {
     const next = e.target.value;
+
     onChange(next);
     setOpen(true);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => search(next), 200);
+
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    debounceRef.current = setTimeout(() => {
+      setPage(1);
+      setHasMore(false);
+      setResults([]);
+
+      search(next, 1, false);
+    }, 200);
   };
 
   const handleFocus = () => {
-    if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null; }
+    if (blurTimerRef.current) {
+      clearTimeout(blurTimerRef.current);
+      blurTimerRef.current = null;
+    }
+
     setOpen(true);
-    search(value || '');
+    setPage(1);
+    search(value || '', 1, false);
+  };
+
+  const handleScroll = (e) => {
+    const el = e.currentTarget;
+
+    const isNearBottom =
+      el.scrollTop + el.clientHeight >=
+      el.scrollHeight - 40;
+
+    if (
+      isNearBottom &&
+      hasMore &&
+      !loadingMore
+    ) {
+      search(value || '', page + 1, true);
+    }
   };
 
   const handleBlur = () => {
@@ -144,6 +200,7 @@ function DrugAutocomplete({ value, onChange, onPick, onQuickAdd }) {
       {open && (results.length > 0 || (value || '').trim().length >= 2) && (
         <ul
           role="listbox"
+          onScroll={handleScroll}
           style={{
             position: 'absolute',
             top: '100%',
@@ -206,24 +263,24 @@ function DrugAutocomplete({ value, onChange, onPick, onQuickAdd }) {
           {!results.some(
             (d) => d.name.toLowerCase() === (value || '').trim().toLowerCase(),
           ) && (value || '').trim().length >= 2 && (
-            <li
-              role="option"
-              onMouseDown={(e) => { e.preventDefault(); onQuickAdd((value || '').trim()); setOpen(false); }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-bg)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              style={{
-                padding: '0.45rem 0.6rem',
-                borderRadius: 6,
-                cursor: 'pointer',
-                fontSize: '0.85rem',
-                color: 'var(--accent-color)',
-                borderTop: results.length > 0 ? '1px solid var(--border-color)' : 'none',
-                marginTop: results.length > 0 ? 4 : 0,
-              }}
-            >
-              + Add &ldquo;{(value || '').trim()}&rdquo; to the drug catalogue
-            </li>
-          )}
+              <li
+                role="option"
+                onMouseDown={(e) => { e.preventDefault(); onQuickAdd((value || '').trim()); setOpen(false); }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-bg)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                style={{
+                  padding: '0.45rem 0.6rem',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  color: 'var(--accent-color)',
+                  borderTop: results.length > 0 ? '1px solid var(--border-color)' : 'none',
+                  marginTop: results.length > 0 ? 4 : 0,
+                }}
+              >
+                + Add &ldquo;{(value || '').trim()}&rdquo; to the drug catalogue
+              </li>
+            )}
         </ul>
       )}
     </div>
@@ -362,7 +419,7 @@ export default function PrescribeTab({ patient, onSaved }) {
               const summary = drugList.length === 0
                 ? '(no medications)'
                 : drugList.slice(0, 3).map((d) => d.name).filter(Boolean).join(', ')
-                  + (drugList.length > 3 ? ` + ${drugList.length - 3} more` : '');
+                + (drugList.length > 3 ? ` + ${drugList.length - 3} more` : '');
               return (
                 <button
                   key={rx.id}

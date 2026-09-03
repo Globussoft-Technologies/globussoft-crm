@@ -63,7 +63,7 @@ export default function CalendarGrid() {
   // that still calls both setters in lockstep, and is a no-op.
   const initialDateStr = focusDateParam || todayLocalDate();
   const [from, setFrom] = useState(initialDateStr);
-  const setTo = () => {}; // legacy noop — see comment above
+  const setTo = () => { }; // legacy noop — see comment above
   // The day-grid renders ONE day at a time. `date` is the rendered day.
   const [date, setDate] = useState(() => parseLocalDate(initialDateStr));
   const focusedRef = useRef(null);
@@ -150,8 +150,8 @@ export default function CalendarGrid() {
       const patientsArr = Array.isArray(pts)
         ? pts
         : Array.isArray(pts?.patients) ? pts.patients
-        : Array.isArray(pts?.data) ? pts.data
-        : [];
+          : Array.isArray(pts?.data) ? pts.data
+            : [];
       setPatients(patientsArr);
       setWaitlist(Array.isArray(wl) ? wl : Array.isArray(wl?.items) ? wl.items : []);
       setResources(Array.isArray(rs) ? rs : []);
@@ -417,7 +417,7 @@ export default function CalendarGrid() {
         setTo(dStr);
         setDate(new Date(v.visitDate));
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => { cancelled = true; };
   }, [focusId, focusDateParam]);
 
@@ -449,6 +449,14 @@ export default function CalendarGrid() {
     return r?.label?.toLowerCase() || selectedRoleKey;
   }, [selectedRoleKey, roleTypes]);
 
+  const isPastSlot = (selectedDate, hour) => {
+    const now = new Date();
+
+    const slotDate = new Date(selectedDate);
+    slotDate.setHours(hour, 0, 0, 0);
+
+    return slotDate < now;
+  };
   // Single-day picker — the Calendar is a day-view-by-practitioner layout,
   // so the FROM/TO dual-date picker was confusing (users read it as a
   // range filter and expected a multi-day grid). Collapsed into ONE Day
@@ -507,8 +515,14 @@ export default function CalendarGrid() {
           focusId={focusId}
           focusedRef={focusedRef}
           canAssignDoctor={canAssignDoctor}
-          onEmptyCellClick={(columnId, hour) => setNewVisit({ columnId, hour })}
-          onAssignClick={(visit) => setAssignTarget(visit)}
+          onEmptyCellClick={(columnId, hour) => {
+            if (isPastSlot(date, hour)) {
+              notify.error('You cannot book an appointment in a past time slot.');
+              return;
+            }
+
+            setNewVisit({ columnId, hour });
+          }} onAssignClick={(visit) => setAssignTarget(visit)}
         />
       )}
 

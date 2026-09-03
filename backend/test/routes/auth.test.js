@@ -451,10 +451,10 @@ describe('POST /api/auth/register', () => {
 // ── POST /api/auth/customer/register ─────────────────────────────────
 
 describe('POST /api/auth/customer/register', () => {
-  test('existing contact email in the selected tenant → 409 before OTP or create', async () => {
+  test('existing non-lead contact email in the selected tenant → 409 before OTP or create', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'wellness' });
     prisma.user.count.mockResolvedValue(0);
-    prisma.contact.findFirst.mockResolvedValue({ id: 77 });
+    prisma.contact.findFirst.mockResolvedValue({ id: 77, status: 'Customer', portalPasswordHash: null });
     prisma.patient.findFirst.mockResolvedValue(null);
 
     const res = await request(makeApp())
@@ -491,6 +491,34 @@ describe('POST /api/auth/customer/register', () => {
         }),
       }),
     );
+  });
+
+  test('lead contact without portal credentials → creates customer profile and preserves the lead', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'wellness', name: 'Wellness', slug: 'wellness' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue({ id: 77, status: 'Lead', portalPasswordHash: null });
+    prisma.patient.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({
+      id: 101,
+      email: 'lead@example.com',
+      name: 'Lead Person',
+      tenantId: 45,
+      userType: 'CUSTOMER',
+      role: 'CUSTOMER',
+      sessionVersion: 0,
+      tenant: { id: 45, name: 'Wellness', slug: 'wellness', vertical: 'wellness' },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/customer/register')
+      .send({ email: 'lead@example.com', password: 'Secret123', name: 'Lead Person', registrationTenantId: 45 });
+
+    expect(res.status).toBe(201);
+    expect(prisma.user.create).toHaveBeenCalled();
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ email: 'lead@example.com', tenantId: 45 }),
+    }));
+    expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 });
 

@@ -473,13 +473,125 @@ async function requireTravelPortalTenant(req, res, next) {
 // GET /api/portal/travel/itineraries — accepted itineraries for this contact
 router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
   try {
-    const itineraries = await prisma.itinerary.findMany({
-      where: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
-      orderBy: { startDate: "desc" },
-      include: {
-        items: { orderBy: { position: "asc" } },
-      },
+    // Customer bookings are sourced exclusively from TMC trips. The generic
+    // Itinerary model has a different pricing/payment lifecycle and caused
+    // the portal total to diverge from the admin installment ledger.
+    const itineraries = [];
+    // Landing-page TMC registrations are stored as participants/pending
+    // registrations, not advisor itineraries. Include those booked trips in
+    // the portal so a newly-created customer can see the trip immediately.
+    const portalContact = await prisma.contact.findFirst({ where: { id: req.portal.contactId, tenantId: req.portal.tenantId }, select: { email: true } });
+    const [participants, pending] = await Promise.all([
+      prisma.tripParticipant.findMany({
+        where: { trip: { tenantId: req.portal.tenantId } },
+        include: { trip: { include: { paymentPlan: true } } },
+      }),
+      prisma.pendingTripRegistration.findMany({
+        where: { tenantId: req.portal.tenantId, status: { not: "REJECTED" } },
+        include: { trip: { include: { paymentPlan: true } }, convertedToParticipant: true },
+      }),
+    ]);
+    const contactEmail = String(portalContact?.email || "").trim().toLowerCase();
+    const ownedParticipants = participants.filter((row) => String(row.parentEmail || "").trim().toLowerCase() === contactEmail);
+    const ownedPending = pending.filter((row) => String(row.parentEmail || "").trim().toLowerCase() === contactEmail);
+    const pendingTripIds = ownedPending.map((row) => row.tripId);
+    const pendingParticipants = pendingTripIds.length
+      ? await prisma.tripParticipant.findMany({
+          where: { tripId: { in: pendingTripIds }, trip: { tenantId: req.portal.tenantId } },
+          orderBy: { id: "asc" },
+          select: { id: true, tripId: true },
+        })
+      : [];
+    const participantByTrip = new Map();
+    pendingParticipants.forEach((row) => {
+      if (!participantByTrip.has(row.tripId)) participantByTrip.set(row.tripId, row.id);
     });
+    const ownedTripIds = [...new Set([
+      ...ownedParticipants.map((row) => row.tripId),
+      ...ownedPending.map((row) => row.tripId),
+    ])];
+    const participantIds = [
+      ...ownedParticipants.map((row) => row.id),
+      ...ownedPending.map((row) => row.convertedToParticipantId).filter(Boolean),
+      ...pendingParticipants.map((row) => row.id),
+    ];
+    const instalments = participantIds.length
+      ? await prisma.tripInstalmentPayment.findMany({
+          // Participant IDs were loaded above through tenant-scoped trips, so
+          // this model does not need a nonexistent direct trip relation here.
+          where: { tripId: { in: ownedTripIds } },
+          orderBy: [{ participantId: "asc" }, { instalmentIndex: "asc" }],
+          select: {
+            id: true, tripId: true, participantId: true, instalmentIndex: true,
+            dueDate: true, amount: true, paidAmount: true, paidAt: true,
+            status: true, paymentLinkUrl: true,
+          },
+        })
+      : [];
+    const instalmentsByParticipant = new Map();
+    instalments.forEach((row) => {
+      const rows = instalmentsByParticipant.get(row.participantId) || [];
+      rows.push(row);
+      instalmentsByParticipant.set(row.participantId, rows);
+    });
+    const instalmentsByTrip = new Map();
+    instalments.forEach((row) => {
+      const rows = instalmentsByTrip.get(row.tripId) || [];
+      rows.push(row);
+      instalmentsByTrip.set(row.tripId, rows);
+    });
+    const planRows = (trip) => {
+      try {
+        const rows = JSON.parse(trip?.paymentPlan?.instalmentsJson || "[]");
+        return Array.isArray(rows) ? rows.map((row, index) => ({
+          id: `plan-${trip.id}-${index}`,
+          instalmentIndex: index,
+          amount: row.amount,
+          paidAmount: 0,
+          status: "pending",
+          dueDate: row.dueDate,
+          paymentLinkUrl: null,
+        })) : [];
+      } catch (_err) { return []; }
+    };
+    const paidTotal = (rows) => rows.reduce((sum, row) => {
+      // Older webhook records could mark a fully paid row without persisting
+      // paidAmount. The paid status is authoritative for the portal total.
+      const paid = Number(row.paidAmount || 0);
+      return sum + (String(row.status).toLowerCase() === "paid" && paid <= 0 ? Number(row.amount || 0) : paid);
+    }, 0);
+    const portalInstalments = (rows) => rows.map((row) => ({
+      ...row,
+      paidAmount: String(row.status).toLowerCase() === "paid" && Number(row.paidAmount || 0) <= 0
+        ? Number(row.amount || 0)
+        : row.paidAmount,
+    }));
+    const registeredTripIds = new Set(ownedParticipants.map((row) => row.tripId));
+    const registeredBookings = [...ownedParticipants.map((row) => ({
+      id: `registration-participant-${row.id}`,
+      destination: row.trip.destination,
+      startDate: row.trip.departDate,
+      endDate: row.trip.returnDate,
+      status: "confirmed",
+      currency: "INR",
+      totalAmount: row.trip.pricePerStudent || planRows(row.trip).reduce((sum, item) => sum + Number(item.amount || 0), 0),
+      advancePaidAmount: paidTotal(instalmentsByParticipant.get(row.id) || []),
+      instalments: portalInstalments(instalmentsByParticipant.get(row.id) || instalmentsByTrip.get(row.tripId) || planRows(row.trip)),
+      registrationBacked: true,
+      tripId: row.tripId,
+    })), ...ownedPending.filter((row) => !registeredTripIds.has(row.tripId)).map((row) => ({
+      id: `registration-pending-${row.id}`,
+      destination: row.trip.destination,
+      startDate: row.trip.departDate,
+      endDate: row.trip.returnDate,
+      status: "awaiting_review",
+      currency: "INR",
+      totalAmount: row.trip.pricePerStudent || planRows(row.trip).reduce((sum, item) => sum + Number(item.amount || 0), 0),
+      advancePaidAmount: paidTotal(instalmentsByParticipant.get(row.convertedToParticipantId) || []),
+      instalments: portalInstalments(instalmentsByParticipant.get(row.convertedToParticipantId) || instalmentsByTrip.get(row.tripId) || planRows(row.trip)),
+      registrationBacked: true,
+      tripId: row.tripId,
+    }))];
     // Attach a web-check-in "due" flag per trip: any pending WebCheckin row
     // whose flight departs within the next 36h. Drives the portal's
     // "Have you checked in? Yes/No" banner (2026-06-16). The Yes action flips
@@ -521,7 +633,10 @@ router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, 
       if (ended && committed && i.subBrand !== "visasure") return "available";
       return "none";
     };
-    res.json(itineraries.map((i) => ({ ...i, webCheckinDue: Boolean(dueByItin[i.id]), reviewState: reviewState(i) })));
+    res.json([
+      ...itineraries.map((i) => ({ ...i, webCheckinDue: Boolean(dueByItin[i.id]), reviewState: reviewState(i) })),
+      ...registeredBookings,
+    ]);
   } catch (err) {
     console.error("[Portal][travel/itineraries]", err);
     res.status(500).json({ error: "Failed to fetch itineraries" });

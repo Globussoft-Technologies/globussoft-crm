@@ -395,6 +395,37 @@ describe('<LandingPages /> — index page surface', () => {
     });
   });
 
+  it('restores Copy URL and Edit for the existing explore page without an explore create option', async () => {
+    const explorePage = {
+      id: 99,
+      title: 'Explore destinations',
+      slug: 'explore',
+      templateType: 'travel_destination',
+      status: 'PUBLISHED',
+      visits: 12,
+      submissions: 2,
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/landing-pages' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([explorePage]);
+      }
+      if (url === '/api/explore') return Promise.resolve({ explorePageId: 99 });
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Explore destinations')).toBeInTheDocument());
+
+    const exploreBar = screen.getByText('Explore marketing page').closest('section');
+    expect(exploreBar).toBeTruthy();
+    expect(exploreBar.querySelector('a[href="/landing-pages/explore-builder/99"]')).toBeTruthy();
+    const copyButton = exploreBar.querySelector('button');
+    expect(copyButton).toHaveTextContent(/Copy URL/i);
+    fireEvent.click(copyButton);
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith(`${window.location.origin}/explore`));
+    expect(exploreBar).not.toHaveTextContent(/Create/i);
+  });
+
   it('clicking Unpublish fires POST /api/landing-pages/:id/unpublish', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());

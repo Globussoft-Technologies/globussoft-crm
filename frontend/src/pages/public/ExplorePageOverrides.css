@@ -319,10 +319,75 @@
 .explore-modal form input, .explore-modal form select { border: 1px solid #d8def0; border-radius: 8px; padding: 10px; font: 14px 'DM Sans'; }
 .explore-interest-confirmation { margin-top: 6px; padding: 16px 18px; border: 1px solid #dce4f4; border-radius: 14px; background: linear-gradient(135deg, #f7f8ff, #f3fbf8); color: #33415f; font: 600 14px/1.5 'DM Sans', sans-serif; }
 
+.explore-modal > form:has(.explore-interest-success-mark) {
+  max-width: 680px;
+  padding: 40px 38px 38px;
+  border: 1px solid #e3e8f3;
+  box-shadow: 0 30px 90px rgba(15, 23, 42, 0.2), 0 8px 24px rgba(37, 99, 235, 0.08);
+}
+
+.explore-interest-success-mark {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  margin-bottom: 22px;
+  border: 1px solid #bcebdc;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #ecfdf5, #dff8f0);
+  color: #059669;
+  box-shadow: 0 12px 24px rgba(5, 150, 105, 0.12);
+}
+
+.explore-modal > form:has(.explore-interest-success-mark) > small {
+  color: #059669;
+  font: 800 11px/1 'DM Sans', sans-serif;
+  letter-spacing: 0.12em;
+}
+
+.explore-modal > form:has(.explore-interest-success-mark) h2 {
+  margin: 14px 0 10px;
+  color: #11182c;
+  font: 600 36px/1.12 'Playfair Display', serif;
+}
+
+.explore-modal > form:has(.explore-interest-success-mark) > p {
+  max-width: 560px;
+  margin: 0;
+  color: #697895;
+  font: 500 15px/1.65 'DM Sans', sans-serif;
+}
+
+.explore-modal > form .explore-interest-confirmation {
+  display: grid;
+  gap: 7px;
+  margin-top: 28px;
+  padding: 18px 20px;
+  border: 1px solid #d9e5f2;
+  border-left: 3px solid #4f46e5;
+  border-radius: 14px;
+  background: linear-gradient(120deg, #f7f8ff, #f4fbf9);
+  color: #33415f;
+  font: 500 14px/1.55 'DM Sans', sans-serif;
+}
+
+.explore-interest-confirmation strong {
+  color: #1b2540;
+  font: 800 12px/1.2 'DM Sans', sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.explore-interest-confirmation span {
+  color: #687694;
+}
+
 @media (max-width: 800px) {
   .explore-header, .explore-hero, .explore-featured, .explore-statistics, .explore-trips, .explore-diagnostic, .explore-catalogues, .explore-cta, .explore-footer { width: calc(100% - 30px); }
   .explore-hero { height: auto; }
   .explore-featured { gap: 20px; }
+  .explore-modal > form:has(.explore-interest-success-mark) { padding: 30px 24px 26px; }
+  .explore-modal > form:has(.explore-interest-success-mark) h2 { font-size: 30px; }
   .explore-cards { grid-template-columns: repeat(3, minmax(180px, 1fr)); overflow-x: auto; }
   .explore-trip-list { grid-template-columns: 1fr; }
 }
@@ -916,7 +981,8 @@ button.explore-hero-card {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  color: #5965ef;
+  background: #5965ef;
+  color: #fff;
   transition: transform .25s ease, background .25s ease, color .25s ease, box-shadow .25s ease;
 }
 
@@ -1134,7 +1200,7 @@ button.explore-hero-card {
   border: 1px solid #d8e0f1;
   background: linear-gradient(180deg, #ffffff 0%, #f8faff 100%);
   color: #34415f;
-  font: 900 10px/1 'DM Sans', sans-serif;
+  font: 900 12px/1 'DM Sans', sans-serif;
   cursor: pointer;
   letter-spacing: 0.01em;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 10px 22px rgba(32, 46, 86, 0.06);
@@ -1167,7 +1233,7 @@ button.explore-hero-card {
 }
 
 .catalogue-select input {
-  display: grid;
+  display: none;
   place-content: center;
   appearance: none;
   flex: 0 0 auto;
@@ -1178,6 +1244,10 @@ button.explore-hero-card {
   border-radius: 7px;
   background: #fff;
   transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.catalogue-select input:checked {
+  display: grid;
 }
 
 .catalogue-select input::before {
@@ -1368,7 +1438,7 @@ button.explore-hero-card {
 .explore-site .explore-header nav, .explore-site .explore-hero-copy > p:not(.explore-eyebrow), .explore-site .explore-catalogues > p, .explore-site .explore-trip-card p, .explore-site .catalogue-row span { color: var(--muted) !important; }
 .explore-site .explore-logo strong, .explore-site .explore-trip-card h3, .explore-site .catalogue-row strong, .explore-site .catalogue-row article strong { color: var(--ink) !important; }
 .explore-site .explore-header nav .is-active, .explore-site .explore-header nav a:hover, .explore-site .explore-section-heading a, .explore-site .catalogue-row article span, .explore-site .catalogue-row article button { color: var(--blue) !important; }
-.explore-site .explore-logo > span, .explore-site .explore-card-arrow { background: var(--blue) !important; }
+.explore-site .explore-logo > span, .explore-site .explore-card-arrow { background: var(--blue) !important; color: #fff !important; }
 .explore-site .explore-hero-card, .explore-site .explore-trip-card, .explore-site .catalogue-row article, .explore-site .explore-search, .explore-site .explore-statistics, .explore-site .explore-footer, .explore-site .explore-result-block { border-color: var(--explore-border) !important; }
 .explore-site .explore-search, .explore-site .catalogue-row article, .explore-site .explore-trip-card, .explore-site .explore-result-block { background: var(--explore-panel) !important; }
 .explore-site .explore-diagnostic-submit, .explore-site .explore-interest-button, .explore-site .explore-primary { background-image: none !important; }

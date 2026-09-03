@@ -75,7 +75,7 @@ const EMPTY_FORM = {
   schoolName: "",
   departDate: "",
   returnDate: "",
-  pricePerStudent: "",
+  tripType: "international",
   status: "confirmed",
 };
 
@@ -106,7 +106,7 @@ function tripSortValue(trip, key) {
   if (key === "dates") return new Date(trip.departDate || 0).getTime();
   if (key === "school") return String(trip.schoolName || "").toLowerCase();
   if (key === "participants") return Number(trip._count?.participants || 0);
-  if (key === "perStudent") return Number(trip.pricePerStudent || 0);
+  if (key === "perStudent") return Number(trip.perStudentAmount || 0);
   if (key === "status") return String(trip.status || "").toLowerCase();
   return "";
 }
@@ -234,9 +234,8 @@ export default function Trips() {
         departDate: form.departDate,
         returnDate: form.returnDate,
         status: form.status,
+        tripType: form.tripType,
       };
-      if (form.pricePerStudent)
-        body.pricePerStudent = Number(form.pricePerStudent);
       await fetchApi("/api/travel/trips", {
         method: "POST",
         body: JSON.stringify(body),
@@ -586,6 +585,7 @@ export default function Trips() {
                   <col style={{ width: 240 }} />
                   <col style={{ width: 250 }} />
                   <col style={{ width: 150 }} />
+                  <col style={{ width: 145 }} />
                   <col style={{ width: 160 }} />
                   <col style={{ width: 120 }} />
                   <col style={{ width: 80 }} />
@@ -600,6 +600,7 @@ export default function Trips() {
                     <th style={th}>{sortButton("school", "School")}</th>
                     <th style={th}>{sortButton("participants", "Participants")}</th>
                     <th style={th}>{sortButton("perStudent", "Per-student")}</th>
+                    <th style={th}>Trip type</th>
                     <th style={th}>{sortButton("status", "Status")}</th>
                     <th
                       style={{ ...th, width: 60, textAlign: "right" }}
@@ -681,7 +682,12 @@ export default function Trips() {
                           </span>
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
-                          {fmtMoney(t.pricePerStudent)}
+                          {fmtMoney(t.perStudentAmount)}
+                        </td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          <span style={{ background: "rgba(79,70,229,0.10)", color: "var(--primary-color, #4f46e5)", padding: "4px 9px", borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                            {String(t.tripType || "international").replace("_", " ")}
+                          </span>
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
                           <span
@@ -865,18 +871,12 @@ export default function Trips() {
                 </label>
               </div>
               <label style={fieldLabel}>
-                Per-student price (optional)
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={form.pricePerStudent}
-                  onChange={(e) =>
-                    setForm({ ...form, pricePerStudent: e.target.value })
-                  }
-                  style={inputStyle}
-                  placeholder="0"
-                />
+                Trip type
+                <select value={form.tripType} onChange={(e) => setForm({ ...form, tripType: e.target.value })} style={inputStyle}>
+                  <option value="international">International</option>
+                  <option value="domestic">Domestic</option>
+                  <option value="day_trip">Day trip</option>
+                </select>
               </label>
               <label style={fieldLabel}>
                 Status

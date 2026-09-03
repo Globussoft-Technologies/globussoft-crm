@@ -251,14 +251,35 @@ describe('composeLayout', () => {
 describe('wanderlux render() integration', () => {
   test('registration template keeps documents on tab three and payment on tab four', () => {
     expect(TEMPLATE_HTML).toContain('Step 4: Payment');
+    expect(TEMPLATE_HTML).toContain('Please upload all three required documents.');
     expect(TEMPLATE_HTML).toContain('Please upload all four required documents.');
+    expect(TEMPLATE_HTML).toContain('Upload {{ regRequiredDocumentCount }} required documents to continue to payment.');
     expect(TEMPLATE_HTML).toContain('Choose document');
     expect(TEMPLATE_HTML).toContain('Preview');
     expect(TEMPLATE_HTML).toContain('Remove');
     expect(TEMPLATE_HTML).toContain("title.includes('documents and payment')");
     expect(TEMPLATE_HTML).toContain('restoreRegistrationDraft()');
     expect(TEMPLATE_HTML).toContain('landing-registration-draft:');
-    expect(TEMPLATE_HTML).toContain('sessionStorage.setItem');
+    expect(TEMPLATE_HTML).toContain('registrationDraftStorageKeys()');
+    expect(TEMPLATE_HTML).toContain("injected.meta && injected.meta.slug");
+    expect(TEMPLATE_HTML).toContain("window.localStorage.setItem(this.registrationDraftKey()");
+    expect(TEMPLATE_HTML).toContain("params.get('payment') === 'success'");
+    expect(TEMPLATE_HTML).toContain("razorpay_payment_link_status");
+    expect(TEMPLATE_HTML).toContain("document.getElementById('register')");
+    expect(TEMPLATE_HTML).toContain("scrollIntoView({ block: 'start', behavior: 'auto' })");
+    expect(TEMPLATE_HTML).toContain('hostedPaymentReturn = callbackParams.get');
+    expect(TEMPLATE_HTML).toContain('paymentLinkId:out.regPaymentLinkId');
+    expect(TEMPLATE_HTML).toContain('callbackPaymentLinkId');
+    expect(TEMPLATE_HTML).toContain('paymentLinkStatus: new URLSearchParams');
+    expect(TEMPLATE_HTML).toContain('/payment-status?draftToken=');
+    expect(TEMPLATE_HTML).toContain('documentsUploaded');
+    expect(TEMPLATE_HTML).toContain('next.regDocumentsUploaded = true');
+    expect(TEMPLATE_HTML).toContain('regStep: Math.max(Number(params.get(\'regStep\')) || 0, 3)');
+    expect(TEMPLATE_HTML).toContain("(reg.submitLabel || 'Register')");
+    expect(TEMPLATE_HTML).toContain('razorpay_payment_link_id');
+    expect(TEMPLATE_HTML).toContain('hostedPaymentLink:true');
+    expect(TEMPLATE_HTML).toContain("redirect.type === 'customer-registration'");
+    expect(TEMPLATE_HTML).toContain('window.sessionStorage.getItem(key)');
   });
 
   test('a page with no _layout renders the un-rewritten template (default sections present)', () => {

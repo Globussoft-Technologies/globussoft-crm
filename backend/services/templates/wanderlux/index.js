@@ -111,6 +111,7 @@ function render(landingPage, options = {}) {
     config.meta = Object.assign({}, config.meta || {}, {
       isPreview: !!options.preview,
       isPublished: !!(landingPage && landingPage.status === 'PUBLISHED'),
+      tripType: String(landingPage && landingPage.tripType || config.meta?.tripType || '').toLowerCase(),
     });
   }
 

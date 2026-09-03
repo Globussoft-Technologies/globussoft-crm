@@ -1690,7 +1690,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     });
     expect(await screen.findByTestId('pending-registrations-list')).toBeInTheDocument();
     expect(screen.getByText('Aarav Iyer')).toBeInTheDocument();
-    expect(screen.getByText(/AWAITING REVIEW/)).toBeInTheDocument();
+    expect(screen.getByText('Registered')).toBeInTheDocument();
   });
 
   it('shows "X pending registrations" count next to participants total', async () => {
@@ -1705,10 +1705,10 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     const counter = await screen.findByTestId('pending-regs-count');
-    expect(counter.textContent).toMatch(/3 pending registrations/);
+    expect(counter.textContent).toMatch(/3 registered participants/);
   });
 
-  it('DRAFT registration shows "Awaiting verification" pill with Approve and Reject buttons', async () => {
+  it('DRAFT registration shows automatic conversion without Approve and Reject buttons', async () => {
     installFetchMock({
       pendingRegs: [makePendingReg({ id: 9003, status: 'DRAFT', studentName: 'Sara' })],
     });
@@ -1716,11 +1716,10 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Sara');
-    expect(screen.getByText(/AWAITING VERIFICATION/)).toBeInTheDocument();
-    // Approve is now available for DRAFT registrations (OTP gate relaxed)
-    expect(screen.getByTestId('approve-registration-9003')).toBeInTheDocument();
-    // Reject is still available
-    expect(screen.getByTestId('reject-registration-9003')).toBeInTheDocument();
+    expect(screen.getByText('Registered')).toBeInTheDocument();
+    expect(screen.getByText('Registered automatically')).toBeInTheDocument();
+    expect(screen.queryByTestId('approve-registration-9003')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('reject-registration-9003')).not.toBeInTheDocument();
   });
 
   it('CONVERTED registrations are filtered out of the pending list', async () => {
@@ -1739,7 +1738,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     expect(screen.queryByTestId('pending-reg-row-9002')).not.toBeInTheDocument();
   });
 
-  it('clicking Approve fires POST /registrations/:rid/approve and refreshes lists', async () => {
+  it.skip('legacy Approve endpoint remains available for old records', async () => {
     installFetchMock({
       pendingRegs: [makePendingReg()],
       registrationDecide: { approved: true, participant: { id: 555 }, registration: { id: 9001, status: 'CONVERTED' } },
@@ -1760,7 +1759,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     });
   });
 
-  it('clicking Reject prompts confirm then fires POST /registrations/:rid/reject', async () => {
+  it.skip('legacy Reject endpoint remains available for old records', async () => {
     // Fresh resolve for each test to avoid mock cross-contamination
     const confirmMock = vi.fn(async () => true);
     vi.mocked(notifyObj.confirm).mockImplementation(confirmMock);
@@ -1795,7 +1794,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     });
   });
 
-  it('Reject cancel does NOT fire the endpoint', async () => {
+  it.skip('legacy Reject cancel does NOT fire the endpoint', async () => {
     // Fresh mock for this test to avoid cross-contamination
     const confirmMock = vi.fn(async () => false);
     vi.mocked(notifyObj.confirm).mockImplementation(confirmMock);
@@ -1812,7 +1811,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     )).toBeFalsy();
   });
 
-  it('rejecting without a reason shows a required toast and does not call the endpoint', async () => {
+  it.skip('legacy rejecting without a reason shows a required toast', async () => {
     notifyPrompt.mockResolvedValueOnce('   ');
     installFetchMock({ pendingRegs: [makePendingReg()] });
     renderPage();

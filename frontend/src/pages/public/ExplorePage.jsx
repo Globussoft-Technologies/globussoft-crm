@@ -567,15 +567,23 @@ export default function ExplorePage() {
             >
               <X size={20} />
             </button>
-            <small>CATALOGUE INTEREST</small>
+            {interestSubmitted && (
+              <div className="explore-interest-success-mark" aria-hidden="true">
+                <CheckCircle2 size={24} strokeWidth={2.25} />
+              </div>
+            )}
+            <small>{interestSubmitted ? "REQUEST RECEIVED" : "CATALOGUE INTEREST"}</small>
             <h2>{interestSubmitted ? "Thank you for your interest" : "Tell us about your journey"}</h2>
             <p>
               {interestSubmitted
-                ? "We have received your travel requirements. Our team will review them and connect with you shortly."
+                ? "Your travel requirements are safely with our team. We will review your preferences and be in touch shortly."
                 : "Share a few details and our travel team will help plan your selected trips."}
             </p>
             {interestSubmitted ? (
-              <div className="explore-interest-confirmation" role="status">Our team will be in touch with you shortly.</div>
+              <div className="explore-interest-confirmation" role="status">
+                <strong>What happens next</strong>
+                <span>A member of our travel team will review your request and contact you with the next steps.</span>
+              </div>
             ) : (
               <>
             <label>

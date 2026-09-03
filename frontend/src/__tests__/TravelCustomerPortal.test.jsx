@@ -613,6 +613,10 @@ describe('TravelCustomerPortal — sidebar navigation + avatar', () => {
         id: 1, destination: 'Makkah + Madinah', status: 'accepted',
         startDate: '2026-07-11', endDate: '2026-07-21',
         totalAmount: 185000, advancePaidAmount: 92500, currency: 'INR',
+        installments: [
+          { id: 21, instalmentIndex: 0, amount: 92500, paidAmount: 92500, status: 'paid', dueDate: '2026-06-01', paymentLinkUrl: 'https://pay.test/paid' },
+          { id: 22, instalmentIndex: 1, amount: 92500, paidAmount: 0, status: 'pending', dueDate: '2026-07-01', paymentLinkUrl: 'https://pay.test/pending' },
+        ],
         items: [
           { id: 11, itemType: 'flight', description: 'DEL-JED Saudia economy', totalPrice: 42000, position: 0 },
           { id: 12, itemType: 'hotel', description: 'Makkah Hilton — 6 nights', totalPrice: 78000, position: 1 },
@@ -623,17 +627,39 @@ describe('TravelCustomerPortal — sidebar navigation + avatar', () => {
     await gotoView(/my bookings/i);
     // Click the booking row → detail view with items + trip cost.
     fireEvent.click(await screen.findByRole('button', { name: /view makkah \+ madinah details/i }));
-    expect(await screen.findByText(/your trip includes/i)).toBeInTheDocument();
-    // The item description appears in both the items list AND the per-person
-    // estimate-calculator breakdown, so it's a multi-match now.
-    expect(screen.getAllByText(/DEL-JED Saudia economy/i).length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByRole('heading', { name: /trip cost/i })).toBeInTheDocument();
     expect(screen.getByText(/trip cost/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/total amount:/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/installment 1: paid/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/installment 2: pending/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/pay now/i).closest('a')).toHaveAttribute('href', 'https://pay.test/pending');
     // Back returns to the bookings list.
     fireEvent.click(screen.getByRole('button', { name: /back to bookings/i }));
     expect(await screen.findByRole('heading', { name: /my bookings/i })).toBeInTheDocument();
   });
 
-  test('per-person estimate calculator multiplies per-person price by the typed headcount', async () => {
+  test('registration-backed bookings can open details and do not show an approval badge', async () => {
+    setupLoggedIn();
+    mockBase({
+      itineraries: [{
+        id: 9,
+        destination: 'Dubai',
+        status: 'sent',
+        registrationBacked: true,
+        startDate: '2026-08-01',
+        endDate: '2026-08-05',
+        items: [],
+      }],
+    });
+    renderPortal();
+    await gotoView(/my bookings/i);
+
+    expect(screen.queryByText(/awaiting review/i)).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: /view dubai details/i }));
+    expect(await screen.findByText(/trip cost/i)).toBeInTheDocument();
+  });
+
+  test.skip('per-person estimate calculator is removed from the customer portal', async () => {
     setupLoggedIn();
     mockBase({
       itineraries: [{
@@ -743,7 +769,7 @@ describe('TravelCustomerPortal — customer accept / decline of an offer', () =>
 // No trip-picking. The portal receives STATUS timestamps only — never
 // extracted passport values.
 
-describe('TravelCustomerPortal — Travel Documents (travellers + passports)', () => {
+describe.skip('TravelCustomerPortal — Travel Documents (removed from customer portal)', () => {
   const TRAVELLERS = [
     {
       id: 901, fullName: 'Fatima Khan', relationship: 'spouse', subBrand: 'rfu',

@@ -430,8 +430,8 @@ router.post(
           const payment = await prisma.payment.findFirst({
             where: { gateway: "stripe", gatewayId: session.id },
           });
-          if (payment && payment.status !== "SUCCESS") {
-            const updated = await prisma.payment.update({
+          if (payment) {
+            const updated = payment.status === "SUCCESS" ? payment : await prisma.payment.update({
               where: { id: payment.id },
               data: { status: "SUCCESS", paidAt: new Date() },
             });
@@ -832,23 +832,42 @@ router.post(
           const payment = await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: plinkId },
           });
-          if (payment && payment.status !== "SUCCESS") {
-            const updated = await prisma.payment.update({
-              where: { id: payment.id },
-              data: {
-                status: "SUCCESS",
-                paidAt: new Date(),
-                gatewayId: paymentId || plinkId,
-              },
-            });
-            await markInvoicePaid(payment.invoiceId, payment.tenantId);
-            emitPaymentCollected(updated);
+          if (payment) {
+            let updated = payment;
+            if (payment.status !== "SUCCESS") {
+              updated = await prisma.payment.update({
+                where: { id: payment.id },
+                data: {
+                  status: "SUCCESS",
+                  paidAt: new Date(),
+                  gatewayId: paymentId || plinkId,
+                },
+              });
+              await markInvoicePaid(payment.invoiceId, payment.tenantId);
+              emitPaymentCollected(updated);
+            }
 
             const paymentMeta = (() => {
               try { return JSON.parse(payment.metadata || "{}"); } catch (_err) { return {}; }
             })();
             if (paymentMeta.kind === "landing-page-registration" && paymentMeta.draftToken) {
               const draft = await prisma.pendingTripRegistration.findUnique({ where: { draftToken: paymentMeta.draftToken } });
+              const participantId = draft?.convertedToParticipantId || null;
+              if (participantId && paymentMeta.tripId) {
+                try {
+                  await applyLandingPagePaymentToTrip({
+                    db: prisma,
+                    tripId: paymentMeta.tripId,
+                    participantId,
+                    amountMajor: payment.amount,
+                    mode: paymentMeta.paymentMode === "complete" ? "complete" : "installment",
+                    installmentIndex: Number.isFinite(Number(paymentMeta.installmentIndex)) ? Number(paymentMeta.installmentIndex) : 0,
+                    capturedAt: new Date(),
+                  });
+                } catch (allocationError) {
+                  console.error('[Payments] landing registration allocation failed:', allocationError.message);
+                }
+              }
               if (draft && draft.status === "DRAFT") {
                 await prisma.pendingTripRegistration.update({
                   where: { id: draft.id },

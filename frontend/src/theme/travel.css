@@ -1330,3 +1330,40 @@ html[data-theme="dark"][data-vertical="travel"],
   border-color: var(--border-color) !important;
   color: var(--text-primary) !important;
 }
+
+/* Review settings modal: keep the light-mode page bright while preserving the
+ * stronger scrim and travel-dark surfaces in dark mode. */
+[data-vertical="travel"] .review-settings-backdrop {
+  background: rgba(15, 23, 42, 0.18);
+}
+
+[data-vertical="travel"] .review-settings-modal {
+  background: #FFFFFF !important;
+  color: #1F1B14 !important;
+  border: 1px solid rgba(18, 38, 71, 0.12);
+}
+
+[data-vertical="travel"] .review-settings-modal input {
+  background: #FFFFFF !important;
+  color: #1F1B14 !important;
+  border-color: rgba(18, 38, 71, 0.18) !important;
+}
+
+[data-theme="dark"][data-vertical="travel"] .review-settings-backdrop,
+[data-theme="dark"] [data-vertical="travel"] .review-settings-backdrop {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+[data-theme="dark"][data-vertical="travel"] .review-settings-modal,
+[data-theme="dark"] [data-vertical="travel"] .review-settings-modal {
+  background: var(--surface-color) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+[data-theme="dark"][data-vertical="travel"] .review-settings-modal input,
+[data-theme="dark"] [data-vertical="travel"] .review-settings-modal input {
+  background: var(--bg-color) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}

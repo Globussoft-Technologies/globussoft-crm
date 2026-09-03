@@ -201,7 +201,10 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
       // counts).
       findManyArgs.select = listProjection("TmcTrip", false);
     } else {
-      findManyArgs.include = { _count: { select: { participants: true, documentRequirements: true } } };
+      findManyArgs.include = {
+        _count: { select: { participants: true, documentRequirements: true } },
+        paymentPlan: { select: { instalmentsJson: true } },
+      };
     }
     const [trips, total] = await Promise.all([
       prisma.tmcTrip.findMany(findManyArgs),
@@ -223,10 +226,22 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
       schoolNameById = new Map(contacts.map((contact) => [contact.id, contact.name]));
     }
 
-    const decoratedTrips = trips.map((trip) => ({
-      ...trip,
-      schoolName: schoolNameById.get(Number(trip.schoolContactId)) || null,
-    }));
+    const decoratedTrips = trips.map((trip) => {
+      let perStudentAmount = 0;
+      try {
+        const installments = JSON.parse(trip.paymentPlan?.instalmentsJson || "[]");
+        if (Array.isArray(installments)) {
+          perStudentAmount = installments.reduce((sum, installment) => sum + (Number(installment.amount) || 0), 0);
+        }
+      } catch (_err) {
+        perStudentAmount = 0;
+      }
+      return {
+        ...trip,
+        perStudentAmount,
+        schoolName: schoolNameById.get(Number(trip.schoolContactId)) || null,
+      };
+    });
 
     res.json({ trips: decoratedTrips, total, limit: take, offset: skip });
   } catch (e) {
@@ -240,7 +255,7 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
   try {
     const {
       tripCode, schoolContactId, schoolName, destination, departDate, returnDate,
-      legalEntity, pricePerStudent, status, micrositeUrl, driveFolderId,
+      legalEntity, pricePerStudent, status, micrositeUrl, driveFolderId, tripType,
     } = req.body || {};
 
     // Either schoolContactId (existing FK — back-compat for any caller that
@@ -299,6 +314,10 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
     if (status && !VALID_TRIP_STATUSES.includes(status)) {
       return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
     }
+    const normalizedTripType = String(tripType || "international").trim().toLowerCase();
+    if (!["domestic", "international", "day_trip"].includes(normalizedTripType)) {
+      return res.status(400).json({ error: "tripType must be domestic, international, or day_trip", code: "INVALID_TRIP_TYPE" });
+    }
     const depart = new Date(departDate);
     const ret = new Date(returnDate);
     if (!Number.isFinite(depart.getTime()) || !Number.isFinite(ret.getTime())) {
@@ -348,6 +367,7 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
         tripCode: String(tripCode),
         schoolContactId: sid,
         destination: String(destination),
+        tripType: normalizedTripType,
         departDate: depart,
         returnDate: ret,
         legalEntity: legalEntity || "tmc_nexus",
@@ -1285,7 +1305,7 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
     const data = {};
     const {
       destination, departDate, returnDate, legalEntity,
-      pricePerStudent, status, micrositeUrl, driveFolderId,
+      pricePerStudent, status, micrositeUrl, driveFolderId, tripType,
     } = req.body || {};
 
     if (destination !== undefined) data.destination = String(destination);
@@ -1301,6 +1321,13 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
     }
     if (legalEntity !== undefined) data.legalEntity = String(legalEntity);
     if (pricePerStudent !== undefined) data.pricePerStudent = pricePerStudent != null ? Number(pricePerStudent) : null;
+    if (tripType !== undefined) {
+      const normalizedTripType = String(tripType).trim().toLowerCase();
+      if (!["domestic", "international", "day_trip"].includes(normalizedTripType)) {
+        return res.status(400).json({ error: "tripType must be domestic, international, or day_trip", code: "INVALID_TRIP_TYPE" });
+      }
+      data.tripType = normalizedTripType;
+    }
     if (status !== undefined) {
       if (!VALID_TRIP_STATUSES.includes(status)) {
         return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
@@ -2109,8 +2136,8 @@ router.get(
     try {
       const { draft } = await loadPendingRegistration(req);
       const { docType } = req.params;
-      if (!["passport", "aadhaar", "consentLetter"].includes(docType)) {
-        return res.status(400).json({ error: "docType must be passport, aadhaar or consentLetter", code: "INVALID_DOC_TYPE" });
+      if (!["passport", "aadhaar", "parentConsent", "medicalConsent", "consentLetter"].includes(docType)) {
+        return res.status(400).json({ error: "Invalid registration document type", code: "INVALID_DOC_TYPE" });
       }
       let extras = {};
       if (draft.extrasJson) {

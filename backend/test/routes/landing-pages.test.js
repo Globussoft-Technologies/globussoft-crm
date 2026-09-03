@@ -1778,7 +1778,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     register: { mode: 'registration-draft', steps: [{ id: 'student' }] },
   });
 
-  test('happy path: trip-linked Wanderlux page creates PendingTripRegistration without microsite redirect', async () => {
+  test('happy path: trip-linked Wanderlux page creates a portal-registration redirect', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1',
@@ -1809,11 +1809,11 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     expect(res.body).toMatchObject({
       ok: true,
       draftId: 7001,
-      redirect: { type: 'thanks' },
+      redirect: { type: 'customer-registration', url: expect.stringContaining('/customer/register') },
     });
     expect(res.body.message).toContain('registration has been received');
     expect(prisma.tripMicrosite.findUnique).not.toHaveBeenCalled();
-    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+    expect(prisma.tenant.findUnique).toHaveBeenCalled();
 
     // PendingTripRegistration row was created with the right shape
     expect(prisma.pendingTripRegistration.create).toHaveBeenCalledWith({

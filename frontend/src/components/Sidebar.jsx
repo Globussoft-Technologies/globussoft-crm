@@ -135,6 +135,8 @@ import {
   // RAG Knowledge Base for travel brochures — admin connects Google Drive
   // and syncs PDFs so TMC diagnostics can recommend trips with AI.
   Brain,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -230,6 +232,10 @@ const Sidebar = ({
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
   const [openWellnessGroup, setOpenWellnessGroup] = useState(null);
+  // Travel groups stay expanded by default to keep the full navigation
+  // discoverable, while allowing each product area to be collapsed in place.
+  const [openTravelSections, setOpenTravelSections] = useState({});
+  const [isTravelCollapsed, setIsTravelCollapsed] = useState(false);
   const location = useLocation();
 
   // T2.1: ref to the <aside> so the focus-trap effect below can locate
@@ -693,6 +699,7 @@ const Sidebar = ({
                         })()
                         : to;
     const activeTarget = to;
+    const isTravelDirectLink = isTravel && (activeTarget === "/travel" || activeTarget === "/settings");
     return (
       <NavLink
         to={resolvedTo}
@@ -703,11 +710,16 @@ const Sidebar = ({
           );
           const isSegmentMatch = end ? false : segmentMatches(location.pathname, activeTarget);
           const active = isActive || isPathMatch || isSegmentMatch;
-          return `nav-link ${active ? "active" : ""}`;
+           const travelDashboardClass = isTravel && activeTarget === "/travel" ? " travel-dashboard-link" : "";
+           const travelSettingsClass = isTravel && activeTarget === "/settings" ? " travel-settings-link" : "";
+           return `nav-link${travelDashboardClass}${travelSettingsClass} ${active ? "active" : ""}`;
         }}
         style={navStyle}
       >
-        <Icon size={20} /> <span style={{ flex: 1 }}>{label}</span>
+        {isTravelDirectLink ? (
+          <span className="travel-nav-section-icon travel-nav-direct-icon"><Icon size={18} /></span>
+        ) : <Icon size={20} />}
+        <span className={isTravel ? "travel-nav-label" : undefined} style={{ flex: 1 }}>{label}</span>
         {Number.isFinite(count) && count > 0 && (
           <span style={badgeStyle} aria-label={`${count} items`}>
             {count > 99 ? "99+" : count}
@@ -756,11 +768,12 @@ const Sidebar = ({
     return true;
   };
   const sectionImplRef = useRef(null);
-  sectionImplRef.current = ({ label, children }) => {
+  sectionImplRef.current = ({ label, children, paths = [], collapsible = false }) => {
     const labelStyle = sectionLabelStyle || sectionLabel;
-    const hasVisibleChild = Children.toArray(children).some((child) => {
+    const hasVisibleChild = (nodes) => Children.toArray(nodes).some((child) => {
       if (child === null || child === undefined || child === false) return false;
       if (!isValidElement(child)) return Boolean(child);
+      if (child.type === Fragment) return hasVisibleChild(child.props.children);
       // Link is the memoized identity created above; child.type === Link
       // matches when the JSX site wrote `<Link ... />`. Anything else
       // (raw <div>, nested fragments, custom components) is assumed
@@ -768,12 +781,41 @@ const Sidebar = ({
       if (child.type === Link) return wouldLinkRender(child.props);
       return true;
     });
-    if (!hasVisibleChild) return null;
+    if (!hasVisibleChild(children)) return null;
+    if (!collapsible) {
+      return (
+        <>
+          <div style={labelStyle}>{label}</div>
+          {children}
+        </>
+      );
+    }
+    const isActive = paths.some(
+      (path) => location.pathname === path || location.pathname.startsWith(`${path}/`),
+    );
+    // Keep the menu compact by default. The group containing the current
+    // route opens automatically so the active page remains discoverable.
+    const isOpen = openTravelSections[label] ?? isActive;
+    const SectionIcon = TRAVEL_SECTION_ICONS[label] || LayoutDashboard;
+    const sectionId = `travel-nav-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
     return (
-      <>
-        <div style={labelStyle}>{label}</div>
-        {children}
-      </>
+      <div className={`travel-nav-section travel-nav-section--${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>
+        <button
+          type="button"
+          className={`travel-nav-section-trigger${isActive ? ' is-active' : ''}`}
+          aria-expanded={isOpen}
+          aria-controls={sectionId}
+          onClick={() => setOpenTravelSections((current) => ({
+            ...current,
+            [label]: !(current[label] ?? isActive),
+          }))}
+        >
+          <span className="travel-nav-section-icon"><SectionIcon size={20} aria-hidden="true" /></span>
+          <span className="travel-nav-section-label">{label}</span>
+          <ChevronDown size={14} aria-hidden="true" className={isOpen ? '' : 'is-collapsed'} />
+        </button>
+        {isOpen && <div id={sectionId} className="travel-nav-section-items">{children}</div>}
+      </div>
     );
   };
   const Section = useMemo(
@@ -1009,9 +1051,9 @@ const Sidebar = ({
         aria-modal={asideAriaModal}
         aria-label="Main navigation"
         data-search-highlight-scope="global-search"
-        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}`}
+        className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}${isTravel && isTravelCollapsed ? " travel-sidebar-collapsed" : ""}`}
         style={{
-          width: "250px",
+          width: isTravel ? (isTravelCollapsed ? "64px" : "240px") : "250px",
           height: "100vh",
           padding: "1rem 1.25rem",
           display: "flex",
@@ -1022,8 +1064,9 @@ const Sidebar = ({
           borderBottom: "none",
         }}
       >
-        <div
-          style={{
+          <div
+            className="travel-sidebar-header"
+            style={{
             marginBottom: "1rem",
             display: "flex",
             alignItems: "center",
@@ -1032,6 +1075,7 @@ const Sidebar = ({
           }}
         >
           <img
+            className="travel-sidebar-logo"
             src={logoUrl || "/globussoft-logo.png"}
             alt={brand}
             onError={(e) => {
@@ -1040,8 +1084,8 @@ const Sidebar = ({
               }
             }}
             style={{
-              width: 44,
-              height: 44,
+              width: 38,
+              height: 38,
               borderRadius: 6,
               // object-fit:cover + object-position:left anchors a wide
               // "icon + wordmark" source by its left edge so only the
@@ -1054,6 +1098,7 @@ const Sidebar = ({
             }}
           />
           <h1
+            className="travel-sidebar-brand-name"
             style={{
               fontSize: "0.97rem",
               fontWeight: "bold",
@@ -1064,6 +1109,17 @@ const Sidebar = ({
           >
             {brand}
           </h1>
+          {isTravel && (
+            <button
+              type="button"
+              className="travel-sidebar-collapse"
+              aria-label={isTravelCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={isTravelCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={() => setIsTravelCollapsed((value) => !value)}
+            >
+              {isTravelCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+            </button>
+          )}
         </div>
 
         {isTravel &&
@@ -2028,10 +2084,11 @@ function renderTravelSubBrandHeader({
       ? visibleSubBrands[0]
       : null;
   return (
-    <div style={{ flexShrink: 0 }}>
-      <div style={labelStyle}>Travel</div>
+    <div className="travel-sidebar-subbrand-header" style={{ flexShrink: 0 }}>
+      <div className="travel-sidebar-vertical-label" style={labelStyle}>Travel</div>
       {soleBrand && (
         <div
+          className="travel-sidebar-subbrand-row"
           style={{
             padding: "4px 12px 8px",
             display: "flex",
@@ -2069,6 +2126,7 @@ function renderTravelSubBrandHeader({
       )}
       {showSwitcher && (
         <div
+          className="travel-sidebar-subbrand-row"
           style={{
             padding: "4px 12px 8px",
             display: "flex",
@@ -2098,7 +2156,112 @@ function renderTravelSubBrandHeader({
   );
 }
 
+const TRAVEL_SECTION_ICONS = {
+  "Travel Management": Luggage,
+  Sales: TrendingUp,
+  Operations: Settings,
+  "Visa Sure": Stamp,
+  Marketing: Megaphone,
+  Communication: MessageSquare,
+  Finance: Coins,
+  Administration: UsersRound,
+  Platform: Database,
+};
+
 function renderTravelNav({
+  Link,
+  Section,
+  counts = {},
+  subBrandAccess = null,
+  activeSubBrand = null,
+}) {
+  const canAccessBrand = (brand) => subBrandAccess === null || subBrandAccess.includes(brand);
+  const inBrand = (brand) => canAccessBrand(brand) && (activeSubBrand === null || activeSubBrand === brand);
+  const group = (label, paths, children) => <Section label={label} paths={paths} collapsible>{children}</Section>;
+
+  return (
+    <>
+      <Link to="/travel" end icon={Compass} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
+
+      {group("Travel Management", ["/travel/diagnostics", "/travel/trip-knowledge", "/travel/curriculum-mappings", "/travel/tmc/catalogue", "/travel/itinerary-templates", "/travel/itineraries", "/travel/trips", "/travel/sightseeing", "/travel/religious-packets"], <>
+        <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" requiredPermission={{ module: "diagnostics", action: "read" }} />
+        <Link to="/travel/trip-knowledge" icon={Brain} label="Travel Knowledge" requiredPermission={{ module: "diagnostics", action: "write" }} />
+        {inBrand("tmc") && <Link to="/travel/curriculum-mappings" icon={GraduationCap} label="Curriculum Mappings" requiredPermission={{ module: "curriculum", action: "read" }} />}
+        {inBrand("tmc") && <Link to="/travel/tmc/catalogue" icon={Package} label="TMC Catalogue" requiredPermission={{ module: "tmc_catalogue", action: "read" }} />}
+        <Link to="/travel/itinerary-templates" icon={LayoutTemplate} label="Itinerary Templates" requiredPermission={{ module: "itinerary_templates", action: "read" }} />
+        <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" requiredPermission={{ module: "itineraries", action: "read" }} />
+        {inBrand("tmc") && <Link to="/travel/trips" icon={Luggage} label="TMC Trips" requiredPermission={{ module: "trips", action: "read" }} />}
+        {activeSubBrand !== "tmc" && <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" requiredPermission={{ module: "sightseeing", action: "read" }} />}
+        {inBrand("rfu") && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" requiredPermission={{ module: "religious_packets", action: "read" }} />}
+      </>)}
+
+      {group("Sales", ["/leads", "/travel/pipeline", "/contacts", "/travel/quotes-admin", "/travel/flights/quote", "/travel/quotes/builder", "/travel/quote-templates"], <>
+        <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
+        <Link to="/travel/pipeline" icon={Plane} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+        <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
+        <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />
+        <Link to="/travel/flights/quote" icon={Plane} label="Flight Quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />
+        <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" requiredPermission={{ module: "quotes", action: "write" }} />
+        <Link to="/travel/quote-templates" icon={FileStack} label="Quote Templates" requiredPermission={{ module: "quote_templates", action: "read" }} />
+      </>)}
+
+      {group("Operations", ["/travel/passport-verification", "/travel/suppliers-admin", "/travel/suppliers", "/travel/commission-profiles", "/travel/cancellation-policies", "/travel/web-checkins"], <>
+        <Link to="/travel/passport-verification" icon={BadgeCheck} label="Passport" requiredPermission={{ module: "passport", action: "manage" }} />
+        <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" requiredPermission={{ module: "suppliers", action: "read" }} />
+        {activeSubBrand !== "tmc" && <Link to="/travel/suppliers" icon={Key} label="Supplier Credentials" requiredPermission={{ module: "suppliers", action: "manage" }} />}
+        <Link to="/travel/commission-profiles" icon={Award} label="Commission Profiles" requiredPermission={{ module: "commission_profiles", action: "read" }} />
+        <Link to="/travel/cancellation-policies" icon={Ban} label="Cancellation Policies" requiredPermission={{ module: "cancellation_policies", action: "read" }} />
+        {activeSubBrand !== "tmc" && <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" requiredPermission={{ module: "web_checkins", action: "read" }} />}
+      </>)}
+
+      {inBrand("visasure") && group("Visa Sure", ["/travel/visa/applications", "/travel/visa/checklists", "/travel/visa/embassy-rules"], <>
+        <Link to="/travel/visa/applications" icon={BadgeCheck} label="Applications" requiredPermission={{ module: "visa", action: "read" }} />
+        <Link to="/travel/visa/checklists" icon={ClipboardList} label="Checklists" requiredPermission={{ module: "visa", action: "read" }} />
+        <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" requiredPermission={{ module: "visa", action: "manage" }} />
+      </>)}
+
+      {group("Marketing", ["/travel/brochures", "/landing-pages", "/admin/brand-kits"], <>
+        <Link to="/travel/brochures" icon={Sparkles} label="Brochure Engine" requiredPermission={{ module: "marketing", action: "read" }} />
+        <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" requiredPermission={{ module: "marketing", action: "read" }} />
+        <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" requiredPermission={{ module: "settings", action: "manage" }} />
+      </>)}
+
+      {group("Communication", ["/inbox", "/tasks", "/calendar-sync", "/gmail", "/travel/reviews", "/travel/school-terms"], <>
+        <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
+        <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
+        <Link to="/calendar-sync" icon={Calendar} label="Calendar" requiredPermission={{ module: "integrations", action: "read" }} />
+        {activeSubBrand !== "tmc" && <Link to="/gmail" icon={Mail} label="Gmail" />}
+        <Link to="/travel/reviews" icon={MessageSquare} label="Reviews" requiredPermission={{ module: "reports", action: "read" }} />
+        {inBrand("tmc") && <Link to="/travel/school-terms" icon={Calendar} label="School Term Calendar" requiredPermission={{ module: "school_terms", action: "read" }} />}
+      </>)}
+
+      {group("Finance", ["/travel/invoices-admin", "/travel/tally", "/travel/milestones", "/travel/payables", "/payments", "/expenses", "/travel/cost-master", "/travel/pricing-rules"], <>
+        <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
+        <Link to="/travel/tally" icon={Calculator} label="Tally" requiredPermission={{ module: "invoices", action: "export" }} />
+        <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} />
+        <Link to="/travel/payables" icon={CreditCard} label="Payables" requiredPermission={{ module: "payables", action: "read" }} />
+        <Link to="/payments" icon={IndianRupee} label="Payments Received" requiredPermission={{ module: "payments", action: "read" }} />
+        <Link to="/expenses" icon={WalletIcon} label="Expense Management" requiredPermission={{ module: "expenses", action: "read" }} />
+        <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" requiredPermission={{ module: "cost_master", action: "read" }} />
+        <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" requiredPermission={{ module: "pricing", action: "manage" }} />
+      </>)}
+
+      {group("Administration", ["/staff", "/settings/roles", "/audit-log"], <>
+        <Link to="/staff" icon={UsersRound} label="Staff" requiredPermission={{ module: "staff", action: "read" }} />
+        <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
+        <Link to="/audit-log" icon={ScrollText} label="Audit Log" requiredPermission={{ module: "audit", action: "read" }} />
+      </>)}
+
+      {group("Platform", ["/developer", "/privacy"], <>
+        <Link to="/developer" icon={Code} label="Developer" requiredPermission={{ module: "developer", action: "read" }} />
+        <Link to="/privacy" icon={Shield} label="Privacy" requiredPermission={{ module: "settings", action: "manage" }} />
+      </>)}
+      <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
+    </>
+  );
+}
+
+function renderTravelNavLegacy({
   Link,
   Section,
   isAdmin = false,

@@ -320,12 +320,17 @@ beforeEach(() => {
   // Stub window.confirm for the remove-participant path (used only in the
   // remove case; harmless elsewhere).
   vi.stubGlobal('confirm', vi.fn(() => true));
+  // The legacy participant assertions below cover the participant controls
+  // that remain behind this rollout flag while the unified registration list
+  // is enabled separately by the page.
+  window.__SHOW_LEGACY_PARTICIPANT_LIST__ = true;
   installFetchMock();
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.unstubAllGlobals();
+  delete window.__SHOW_LEGACY_PARTICIPANT_LIST__;
   vi.restoreAllMocks();
 });
 
@@ -1705,7 +1710,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     const counter = await screen.findByTestId('pending-regs-count');
-    expect(counter.textContent).toMatch(/3 registered participants/);
+    expect(counter.textContent).toMatch(/3 pending registrations/);
   });
 
   it('DRAFT registration shows automatic conversion without Approve and Reject buttons', async () => {
@@ -1722,7 +1727,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     expect(screen.queryByTestId('reject-registration-9003')).not.toBeInTheDocument();
   });
 
-  it('CONVERTED registrations are filtered out of the pending list', async () => {
+  it('CONVERTED registrations remain visible in the unified registration list', async () => {
     installFetchMock({
       pendingRegs: [
         makePendingReg({ id: 9001, status: 'OTP_VERIFIED', studentName: 'StillPending' }),
@@ -1733,9 +1738,8 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('StillPending');
-    // CONVERTED row must NOT appear in pending list (it shows up as a real participant instead)
-    expect(screen.queryByText('AlreadyConverted')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('pending-reg-row-9002')).not.toBeInTheDocument();
+    expect(screen.getByText('AlreadyConverted')).toBeInTheDocument();
+    expect(screen.getByTestId('pending-reg-row-9002')).toBeInTheDocument();
   });
 
   it.skip('legacy Approve endpoint remains available for old records', async () => {
@@ -1937,7 +1941,7 @@ describe('<TripDetail /> — pending registration document view buttons', () => 
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(await screen.findByTestId('view-passport-99')).toBeInTheDocument();
     expect(screen.getByTestId('aadhaar-missing-99')).toBeInTheDocument();
-    expect(screen.getByTestId('consent-letter-missing-99')).toBeInTheDocument();
+    expect(screen.getByTestId('parent-consent-missing-99')).toBeInTheDocument();
   });
 
   it('renders all three "not uploaded" placeholders when extrasJson is null', async () => {
@@ -1948,7 +1952,7 @@ describe('<TripDetail /> — pending registration document view buttons', () => 
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(await screen.findByTestId('passport-missing-100')).toBeInTheDocument();
     expect(screen.getByTestId('aadhaar-missing-100')).toBeInTheDocument();
-    expect(screen.getByTestId('consent-letter-missing-100')).toBeInTheDocument();
+    expect(screen.getByTestId('parent-consent-missing-100')).toBeInTheDocument();
   });
 
   it('renders "View" consent letter button when consent letter uploaded', async () => {
@@ -1969,7 +1973,7 @@ describe('<TripDetail /> — pending registration document view buttons', () => 
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(await screen.findByTestId('view-passport-101')).toBeInTheDocument();
     expect(screen.getByTestId('view-aadhaar-101')).toBeInTheDocument();
-    expect(screen.getByTestId('view-consent-letter-101')).toBeInTheDocument();
+    expect(screen.getByTestId('view-parent-consent-101')).toBeInTheDocument();
   });
 
   it('clicking passport View calls the view-url API and opens the signed URL', async () => {

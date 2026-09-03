@@ -138,7 +138,8 @@ function makeTrip(overrides = {}) {
     schoolContactId: 5001,
     departDate: '2026-12-01T00:00:00.000Z',
     returnDate: '2026-12-08T00:00:00.000Z',
-    pricePerStudent: 125000,
+    perStudentAmount: 125000,
+    currency: 'INR',
     status: 'confirmed',
     _count: { participants: 24, documentRequirements: 3 },
     legalEntity: 'tmc_nexus',
@@ -156,7 +157,7 @@ const TRIPS_DEFAULT = [
     destination: 'Andaman',
     schoolContactId: 5001,
     status: 'confirmed',
-    pricePerStudent: 125000,
+    perStudentAmount: 125000,
     _count: { participants: 24, documentRequirements: 3 },
   }),
   makeTrip({
@@ -165,7 +166,7 @@ const TRIPS_DEFAULT = [
     destination: 'Goa',
     schoolContactId: 5002,
     status: 'in-trip',
-    pricePerStudent: 85000,
+    perStudentAmount: 85000,
     _count: { participants: 18, documentRequirements: 2 },
   }),
   makeTrip({
@@ -174,7 +175,7 @@ const TRIPS_DEFAULT = [
     destination: 'Shimla',
     schoolContactId: 5003,
     status: 'completed',
-    pricePerStudent: null,
+    perStudentAmount: null,
     _count: { participants: 12, documentRequirements: 0 },
   }),
 ];
@@ -193,7 +194,7 @@ function makeTrips(count, startId = 201) {
           : i % 4 === 2
             ? 'completed'
             : 'cancelled',
-      pricePerStudent: 50000 + i * 1000,
+      perStudentAmount: 50000 + i * 1000,
       _count: { participants: 10 + i, documentRequirements: i % 3 },
     }),
   );
@@ -348,7 +349,7 @@ describe('<Trips /> — load + render lifecycle', () => {
     expect(topScroll.style.overflowX).toBe('scroll');
     expect(topScroll.style.overflowY).toBe('hidden');
     expect(bottomScroll.style.overflowX).toBe('scroll');
-    expect(table.querySelectorAll('col').length).toBe(10);
+    expect(table.querySelectorAll('col').length).toBe(11);
   });
 
   it('renders empty-state copy when trips=[]', async () => {
@@ -459,7 +460,7 @@ describe('<Trips /> — row rendering: status / link / dates / participants / pr
       schoolContactId: 5004,
       departDate: '2026-11-15T00:00:00.000Z',
       returnDate: '2026-11-22T00:00:00.000Z',
-      pricePerStudent: 91000,
+      perStudentAmount: 91000,
       status: 'confirmed',
       _count: { participants: 0, documentRequirements: 0 },
       createdAt: '2026-08-28T10:00:00.000Z',
@@ -552,10 +553,6 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
     const dateInputs = document.querySelectorAll('input[type="date"]');
     fireEvent.change(dateInputs[0], { target: { value: '2026-12-01' } });
     fireEvent.change(dateInputs[1], { target: { value: '2026-12-08' } });
-    // Per-student price (optional)
-    const numberInput = document.querySelector('input[type="number"]');
-    fireEvent.change(numberInput, { target: { value: '95000' } });
-
     fetchApiMock.mockClear();
     installFetchMock();
     // Click the submit button "Create Trip"
@@ -574,8 +571,8 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
       expect(body.schoolContactId).toBeUndefined();
       expect(body.departDate).toBe('2026-12-01');
       expect(body.returnDate).toBe('2026-12-08');
-      // pricePerStudent coerced to Number.
-      expect(body.pricePerStudent).toBe(95000);
+      // Per-student pricing is configured after trip creation.
+      expect(body.pricePerStudent).toBeUndefined();
       // Default status is "confirmed" (form default per EMPTY_FORM).
       expect(body.status).toBe('confirmed');
     });

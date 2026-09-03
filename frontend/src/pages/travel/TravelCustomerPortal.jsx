@@ -76,6 +76,9 @@ const PORTAL_CONTACT_KEY = "portalContact";
 // staff app's `theme` key — the portal is a public Contact-token surface that
 // manages its own theme (see the theme effect in TravelCustomerPortal).
 const PORTAL_THEME_KEY = "portalTheme";
+// Retain the legacy sections in the source for reference without triggering
+// no-constant-binary-expression on an inline `false &&` JSX guard.
+const SHOW_LEGACY_PORTAL_SECTIONS = false;
 
 function readStoredAuth() {
   try {
@@ -5001,7 +5004,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
         </section>
       )}
 
-      {false && <section style={cardStyle} aria-labelledby="booking-items-heading">
+      {SHOW_LEGACY_PORTAL_SECTIONS && <section style={cardStyle} aria-labelledby="booking-items-heading">
         <h3 id="booking-items-heading" style={{ margin: 0, fontSize: 16 }}>
           Your trip includes
         </h3>
@@ -5168,7 +5171,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
         })}
       </section>
 
-      {false && perPerson > 0 && (
+      {SHOW_LEGACY_PORTAL_SECTIONS && perPerson > 0 && (
         <section style={cardStyle} aria-labelledby="estimate-heading">
           <h3 id="estimate-heading" style={{ margin: 0, fontSize: 16 }}>
             Estimate for your group

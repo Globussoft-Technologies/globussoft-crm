@@ -130,6 +130,20 @@ describe('POST /itineraries/:id/cover-image', () => {
     expect(s3Service.uploadFile).not.toHaveBeenCalled();
   });
 
+  test('rejects spoofed image MIME when bytes are not an image', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/itineraries/42/cover-image')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from('<script>alert(1)</script>'), {
+        filename: 'cover.jpg', contentType: 'image/jpeg',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_IMAGE_CONTENT');
+    expect(prisma.itinerary.update).not.toHaveBeenCalled();
+    expect(s3Service.uploadFile).not.toHaveBeenCalled();
+  });
+
   test('400s when no file is attached', async () => {
     const res = await request(makeApp())
       .post('/api/travel/itineraries/42/cover-image')

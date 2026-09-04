@@ -41,6 +41,34 @@ const path = require('path');
 const LOCAL_UPLOAD_ROOT = path.join(__dirname, '..', 'uploads');
 const LOCAL_URL_PREFIX = '/api/uploads/';
 
+const SAFE_LOCAL_EXTENSIONS = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  // SVG is active content when served inline from the CRM origin. Keep the
+  // bytes downloadable, but never give the local fallback an .svg suffix.
+  'image/svg+xml': '.bin',
+  'application/pdf': '.pdf',
+  'application/msword': '.doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'text/csv': '.csv',
+};
+
+function resolveLocalPath(key) {
+  if (typeof key !== 'string' || !key || key.includes('\0')) return null;
+  // Treat backslashes as separators too so this remains safe on Windows and
+  // a Windows-shaped key cannot become dangerous after deployment moves.
+  const portableKey = key.replace(/\\/g, '/');
+  if (path.posix.isAbsolute(portableKey)) return null;
+  const resolved = path.resolve(LOCAL_UPLOAD_ROOT, portableKey);
+  const relative = path.relative(LOCAL_UPLOAD_ROOT, resolved);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  return resolved;
+}
+
 function isLocalUrl(url) {
   return typeof url === 'string' && url.startsWith(LOCAL_URL_PREFIX);
 }
@@ -48,7 +76,9 @@ function isLocalUrl(url) {
 // The local-disk counterpart of extractKeyFromUrl(), kept separate so the
 // cloud-vs-disk distinction stays explicit at every call site.
 function localKeyFromUrl(url) {
-  return isLocalUrl(url) ? url.slice(LOCAL_URL_PREFIX.length) : null;
+  if (!isLocalUrl(url)) return null;
+  const key = url.slice(LOCAL_URL_PREFIX.length);
+  return resolveLocalPath(key) ? key : null;
 }
 
 const s3Client = new S3Client({
@@ -96,10 +126,15 @@ async function uploadFile(
   }
 
   const timestamp = Date.now();
-  const sanitizedName = fileName
+  let sanitizedName = fileName
     .toLowerCase()
     .replace(/[^a-z0-9.-]/g, "_")
     .substring(0, 50);
+  if (!BUCKET_NAME) {
+    const safeExt = SAFE_LOCAL_EXTENSIONS[mimeType] || '.bin';
+    const stem = path.basename(sanitizedName, path.extname(sanitizedName)).slice(0, 50 - safeExt.length) || 'file';
+    sanitizedName = `${stem}${safeExt}`;
+  }
   // Ensure subfolder path includes all segments (e.g., "brochures/123" not just "brochures")
   const fileKey = `${subfolder}/${timestamp}-${sanitizedName}`;
 
@@ -109,7 +144,8 @@ async function uploadFile(
     // same /api/uploads convention other routes already use, so every
     // downstream consumer (fetch-back, delete, trust checks) can keep
     // treating "the URL on the row" as the single source of truth.
-    const localPath = path.join(LOCAL_UPLOAD_ROOT, fileKey);
+    const localPath = resolveLocalPath(fileKey);
+    if (!localPath) throw new Error('Invalid local upload path.');
     await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
     await fs.promises.writeFile(localPath, fileBody);
     return `${LOCAL_URL_PREFIX}${fileKey}`;
@@ -178,7 +214,10 @@ async function deleteFile(fileKey, opts = {}) {
     // (already deleted, or never local to begin with) is a no-op, not an
     // error — deleteFile callers already treat "gone" as success.
     try {
-      await fs.promises.unlink(path.join(LOCAL_UPLOAD_ROOT, fileKey));
+      const localKey = isLocalUrl(fileKey) ? localKeyFromUrl(fileKey) : fileKey;
+      const localPath = resolveLocalPath(localKey);
+      if (!localPath) throw new Error('Invalid local file path.');
+      await fs.promises.unlink(localPath);
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
@@ -293,10 +332,12 @@ function extractKeyFromUrl(s3Url) {
  * @returns {Promise<Buffer|null>}
  */
 async function readLocalFile(url) {
-  if (!isLocalUrl(url)) return null;
-  const key = url.slice(LOCAL_URL_PREFIX.length);
+  const key = localKeyFromUrl(url);
+  if (!key) return null;
+  const localPath = resolveLocalPath(key);
+  if (!localPath) return null;
   try {
-    return await fs.promises.readFile(path.join(LOCAL_UPLOAD_ROOT, key));
+    return await fs.promises.readFile(localPath);
   } catch {
     return null;
   }
@@ -311,6 +352,7 @@ module.exports = {
   extractKeyFromUrl,
   isLocalUrl,
   localKeyFromUrl,
+  resolveLocalPath,
   readLocalFile,
   s3Client,
   BUCKET_NAME,

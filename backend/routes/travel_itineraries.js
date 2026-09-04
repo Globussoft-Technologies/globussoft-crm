@@ -322,6 +322,16 @@ const coverImageUpload = multer({
     else cb(new Error("Only JPEG, PNG, WebP or GIF images are allowed"));
   },
 });
+
+function coverImageBytesMatchMime(file) {
+  const b = file?.buffer;
+  if (!Buffer.isBuffer(b)) return false;
+  if (file.mimetype === "image/jpeg") return b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (file.mimetype === "image/png") return b.length >= 8 && b.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"));
+  if (file.mimetype === "image/gif") return b.length >= 6 && /^GIF8[79]a$/.test(b.toString("ascii", 0, 6));
+  if (file.mimetype === "image/webp") return b.length >= 12 && b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WEBP";
+  return false;
+}
 // Full module handle too — generateTravelInvoicePdf powers the customer's
 // payment receipt (public on-demand render). Referenced via the module so the
 // CJS self-mock seam works in tests.
@@ -5685,6 +5695,9 @@ router.post(
       const itin = await loadItineraryWithGuard(req);
       if (!req.file) {
         return res.status(400).json({ error: "file is required (multipart field 'file')", code: "FILE_REQUIRED" });
+      }
+      if (!coverImageBytesMatchMime(req.file)) {
+        return res.status(400).json({ error: "File contents do not match the declared image type", code: "INVALID_IMAGE_CONTENT" });
       }
       const url = await s3Service.uploadFile(
         req.file.buffer,

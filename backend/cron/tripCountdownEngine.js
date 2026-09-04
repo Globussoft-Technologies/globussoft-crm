@@ -89,42 +89,41 @@ async function runTripCountdownTick(now = new Date()) {
 
     // Idempotent claim — unique([itineraryId, dayTag]) means a re-tick the
     // same day collides + we skip (at-most-once email per day-bucket).
-   const existingClaim = await prisma.tripCountdownNudge.findUnique({
-  where: {
-    itineraryId_dayTag: {
-      itineraryId: itin.id,
-      dayTag: tag,
-    },
-  },
-  select: { id: true },
-});
+    const existingClaim = await prisma.tripCountdownNudge.findUnique({
+      where: {
+        itineraryId_dayTag: {
+          itineraryId: itin.id,
+          dayTag: tag,
+        },
+      },
+      select: { id: true },
+    });
 
-if (existingClaim) {
-  summary.skipped += 1;
-  continue;
-}
+    if (existingClaim) {
+      summary.skipped += 1;
+      continue;
+    }
 
-let claim;
+    let claim;
+    try {
+      claim = await prisma.tripCountdownNudge.create({
+        data: {
+          tenantId: itin.tenantId,
+          itineraryId: itin.id,
+          dayTag: tag,
+          channel: "email",
+          status: "sending",
+        },
+      });
+    } catch (error) {
+      // Another scheduler tick claimed it between findUnique() and create().
+      if (error?.code === "P2002") {
+        summary.skipped += 1;
+        continue;
+      }
 
-try {
-  claim = await prisma.tripCountdownNudge.create({
-    data: {
-      tenantId: itin.tenantId,
-      itineraryId: itin.id,
-      dayTag: tag,
-      channel: "email",
-      status: "sending",
-    },
-  });
-} catch (error) {
-  // Another scheduler tick claimed it between findUnique() and create().
-  if (error?.code === "P2002") {
-    summary.skipped += 1;
-    continue;
-  }
-
-  throw error;
-}
+      throw error;
+    }
     summary.fired += 1;
     let nudge;
     try {

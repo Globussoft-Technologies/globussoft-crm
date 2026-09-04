@@ -288,7 +288,7 @@ const NotificationBell = () => {
             maxHeight: 460,
             overflowY: "auto",
             overflowX: "hidden",
-            background: "var(--surface-color)",
+            background: "var(--modal-bg)",
             border: "1px solid var(--border-color)",
             borderRadius: 12,
             boxShadow: "0 8px 32px rgba(0,0,0,0.25)",

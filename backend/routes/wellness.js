@@ -1934,12 +1934,30 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
           },
         },
         prescriptions: {
-          orderBy: { createdAt: "desc" },
-          // #278: include doctor so the Rx detail modal can show "prescribed by".
-          include: {
-            doctor: { select: { id: true, name: true, email: true } },
-          },
-        },
+  orderBy: { createdAt: "desc" },
+  select: {
+    id: true,
+    drugs: true,
+    instructions: true,
+    chiefComplaint: true,
+    diagnosis: true,
+    investigations: true,
+    advice: true,
+    pdfUrl: true,
+    status: true,
+    dispensedAt: true,
+    validityDays: true,
+    validUntil: true,
+    visitId: true,
+    patientId: true,
+    doctorId: true,
+    tenantId: true,
+    createdAt: true,
+    doctor: {
+      select: { id: true, name: true, email: true },
+    },
+  },
+},
         consents: {
           orderBy: { signedAt: "desc" },
           select: {
@@ -4478,10 +4496,27 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
       orderBy: { createdAt: "desc" },
     };
     if (wantFullShape) {
-      rxFindArgs.include = {
-        patient: { select: { id: true, name: true, phone: true } },
-        doctor: { select: { id: true, name: true } },
-      };
+     rxFindArgs.select = {
+  id: true,
+  drugs: true,
+  instructions: true,
+  chiefComplaint: true,
+  diagnosis: true,
+  investigations: true,
+  advice: true,
+  pdfUrl: true,
+  status: true,
+  dispensedAt: true,
+  validityDays: true,
+  validUntil: true,
+  visitId: true,
+  patientId: true,
+  doctorId: true,
+  tenantId: true,
+  createdAt: true,
+  patient: { select: { id: true, name: true, phone: true } },
+  doctor: { select: { id: true, name: true } },
+};
     } else {
       rxFindArgs.select = listProjection("Prescription", false);
     }
@@ -12718,20 +12753,38 @@ router.get(
         return res.json({ patient: null, prescriptions: [] });
       }
       const prescriptions = await prisma.prescription.findMany({
-        where: { patientId: patient.id, tenantId: req.user.tenantId },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-        include: {
-          visit: {
-            select: {
-              id: true,
-              visitDate: true,
-              service: { select: { name: true } },
-            },
-          },
-          doctor: { select: { id: true, name: true } },
-        },
-      });
+  where: { patientId: patient.id, tenantId: req.user.tenantId },
+  orderBy: { createdAt: "desc" },
+  take: 50,
+  select: {
+    id: true,
+    drugs: true,
+    instructions: true,
+    chiefComplaint: true,
+    diagnosis: true,
+    investigations: true,
+    advice: true,
+    pdfUrl: true,
+    status: true,
+    dispensedAt: true,
+    validityDays: true,
+    validUntil: true,
+    visitId: true,
+    patientId: true,
+    doctorId: true,
+    tenantId: true,
+    createdAt: true,
+
+    visit: {
+      select: {
+        id: true,
+        visitDate: true,
+        service: { select: { name: true } },
+      },
+    },
+    doctor: { select: { id: true, name: true } },
+  },
+});
       // PRD 11: staff self-access of own Rx list is still a PHI read 
       // log it. ONE row per request; actorType stays 'user' so the staff-
       // side audit viewer can distinguish self-view from clinician pulls.
@@ -13741,21 +13794,39 @@ router.get(
   requirePortalPermission("my_prescriptions", "read"),
   async (req, res) => {
     try {
-      const prescriptions = await prisma.prescription.findMany({
-        where: { patientId: req.patient.id },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-        include: {
-          visit: {
-            select: {
-              id: true,
-              visitDate: true,
-              service: { select: { name: true } },
-            },
-          },
-          doctor: { select: { id: true, name: true } },
-        },
-      });
+     const prescriptions = await prisma.prescription.findMany({
+  where: { patientId: req.patient.id },
+  orderBy: { createdAt: "desc" },
+  take: 50,
+  select: {
+    id: true,
+    drugs: true,
+    instructions: true,
+    chiefComplaint: true,
+    diagnosis: true,
+    investigations: true,
+    advice: true,
+    pdfUrl: true,
+    status: true,
+    dispensedAt: true,
+    validityDays: true,
+    validUntil: true,
+    visitId: true,
+    patientId: true,
+    doctorId: true,
+    tenantId: true,
+    createdAt: true,
+
+    visit: {
+      select: {
+        id: true,
+        visitDate: true,
+        service: { select: { name: true } },
+      },
+    },
+    doctor: { select: { id: true, name: true } },
+  },
+});
       // PRD 11: patient-portal list read of own Rx. ONE row per request.
       try {
         const tenantId = prescriptions.length
@@ -18995,4 +19066,3 @@ router.delete("/qr-events/:id/qrs/:qrId", verifyToken, async (req, res) => {
 });
 
 module.exports = router;
-

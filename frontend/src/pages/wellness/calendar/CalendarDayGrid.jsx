@@ -38,7 +38,7 @@ export default function CalendarDayGrid({
         boxSizing: 'border-box',
       }}
     >
-      <TopScrollSync forceScrollbar scrollWidth={gridMinWidth}>
+      <TopScrollSync forceScrollbar scrollWidth={gridMinWidth} >
         <div
           className="calendar-scroll"
           style={{
@@ -46,6 +46,7 @@ export default function CalendarDayGrid({
             minWidth: '100%',
             boxSizing: 'border-box',
             overflowY: 'auto',
+            overflowX: 'hidden',
             scrollbarWidth: 'thin',
             scrollbarColor: 'rgba(255,255,255,0.3) transparent',
           }}

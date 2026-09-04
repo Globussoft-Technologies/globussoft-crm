@@ -1,0 +1,5 @@
+ALTER TABLE `SignatureRequest`
+  ADD COLUMN `documentName` VARCHAR(191) NULL,
+  ADD COLUMN `patientId` INTEGER NULL,
+  ADD COLUMN `visitId` INTEGER NULL,
+  ADD COLUMN `serviceIds` TEXT NULL;

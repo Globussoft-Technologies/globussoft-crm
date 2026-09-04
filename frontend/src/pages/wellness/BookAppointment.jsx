@@ -207,7 +207,7 @@ export default function BookAppointment() {
         await Promise.all([
           fetchApi(
             "/api/wellness/doctors/availability?date=" +
-              formData.appointmentDate,
+            formData.appointmentDate,
           ).catch(() => []),
           fetchApi("/api/wellness/services").catch(() => []),
           fetchApi("/api/wellness/appointments/my").catch(() => []),
@@ -233,6 +233,18 @@ export default function BookAppointment() {
   };
 
   const handleDateChange = async (date) => {
+    // Real-time today validation
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const selectedDate = new Date(date);
+    selectedDate.setHours(0, 0, 0, 0);
+
+    // Prevent selecting a past date
+    if (selectedDate < today) {
+      notify.error("Please select a future date and time for your appointment");
+      return;
+    }
     setFormData({ ...formData, appointmentDate: date, appointmentTime: "" });
     try {
       const doctorsData = await fetchApi(
@@ -345,10 +357,10 @@ export default function BookAppointment() {
       : null;
   const paymentBreakdown = serviceBase
     ? (() => {
-        const tax = Math.round(serviceBase * 0.18 * 100) / 100;
-        const total = Math.round((serviceBase + tax + 49) * 100) / 100;
-        return { base: serviceBase, tax, fee: 49, total };
-      })()
+      const tax = Math.round(serviceBase * 0.18 * 100) / 100;
+      const total = Math.round((serviceBase + tax + 49) * 100) / 100;
+      return { base: serviceBase, tax, fee: 49, total };
+    })()
     : null;
 
   const resetFormAfterSuccess = () => {
@@ -462,8 +474,8 @@ export default function BookAppointment() {
           } catch (err) {
             notify.error(
               err.message ||
-                "Payment captured but confirmation failed. Keep the payment id: " +
-                  resp.razorpay_payment_id,
+              "Payment captured but confirmation failed. Keep the payment id: " +
+              resp.razorpay_payment_id,
             );
           } finally {
             setSubmitting(false);

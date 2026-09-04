@@ -378,7 +378,15 @@ export default function Reports() {
             ))}
           </div>
 
-          <div className="reports-page__table-shell card">
+          <div className="reports-page__table-shell card"
+            style={{
+              maxHeight: '400px',
+              overflowY: 'auto',
+              overflowX: 'auto',
+              position: 'relative',
+              isolation: 'isolate',
+            }}
+          >
             {detailLoading ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading data...</div>
             ) : detailData.length === 0 ? (
@@ -388,23 +396,408 @@ export default function Reports() {
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                     {detailType === 'deals' && <>
-                      <th style={thStyle}>Title</th><th style={numericThStyle}>Amount</th><th style={thStyle}>Stage</th><th style={thStyle}>Owner</th><th style={thStyle}>Contact</th><th style={numericThStyle}>Created</th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Title
+                      </th>
+
+                      <th
+                        style={{
+                          ...numericThStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Amount
+                      </th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Stage
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Owner
+                      </th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Contact
+                      </th>
+
+                      <th
+                        style={{
+                          ...numericThStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Created
+                      </th>
                     </>}
                     {detailType === 'contacts' && <>
                       {/* #593: "AI Score" column → "Lead Score" — score is rules-based (leadScoringEngine.js). */}
-                      <th style={thStyle}>Name</th><th style={thStyle}>Email</th><th style={thStyle}>Company</th><th style={thStyle}>Status</th><th style={thStyle}>Source</th><th style={thStyle}>Assigned To</th><th style={numericThStyle}>Lead Score</th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Name
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Email
+                      </th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Company
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Status
+                      </th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Source
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Assigned To
+                      </th>
+
+
+                      <th
+                        style={{
+                          ...numericThStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Lead Score
+                      </th>
+
                     </>}
                     {detailType === 'tasks' && <>
-                      <th style={thStyle}>Title</th><th style={thStyle}>Status</th><th style={thStyle}>Priority</th><th style={thStyle}>Assignee</th><th style={numericThStyle}>Due Date</th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Title
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Status
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Priority
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Assignee
+                      </th>
+
+                      <th
+                        style={{
+                          ...numericThStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Due Date
+                      </th>
+
+
                     </>}
                     {detailType === 'calls' && <>
-                      <th style={thStyle}>Contact</th><th style={numericThStyle}>Duration</th><th style={thStyle}>Direction</th><th style={thStyle}>Agent</th><th style={numericThStyle}>Date</th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Contact
+                      </th>
+
+                      <th
+                        style={{
+                          ...numericThStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Duration
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Direction
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Agent
+                      </th>
+
+                      <th
+                        style={{
+                          ...numericThStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Date
+                      </th>
+
                     </>}
                     {detailType === 'invoices' && <>
-                      <th style={thStyle}>Invoice #</th><th style={numericThStyle}>Amount</th><th style={thStyle}>Status</th><th style={thStyle}>Contact</th><th style={numericThStyle}>Due Date</th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Invoice #
+                      </th>
+
+                      <th
+                        style={{
+                          ...numericThStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Amount
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Status
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Contact
+                      </th>
+
+                      <th
+                        style={{
+                          ...numericThStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Due Date
+                      </th>
                     </>}
                     {detailType === 'expenses' && <>
-                      <th style={thStyle}>Title</th><th style={numericThStyle}>Amount</th><th style={thStyle}>Category</th><th style={thStyle}>Status</th><th style={thStyle}>Submitted By</th>
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Title
+                      </th>
+
+                      <th
+                        style={{
+                          ...numericThStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Amount
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Category
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Status
+                      </th>
+
+                      <th
+                        style={{
+                          ...thStyle,
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 10,
+                          backgroundColor: 'var(--modal-bg)',
+                        }}
+                      >
+                        Submitted By
+                      </th>
                     </>}
                   </tr>
                 </thead>
@@ -471,28 +864,167 @@ export default function Reports() {
           <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Mail size={18} color="var(--accent-color)" /> Scheduled Email Reports
           </h3>
-          <div className="reports-page__table-shell card">
-            <table className="stable-table reports-page__schedule-table" style={{ borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-              <thead>
+          <div className="reports-page__table-shell card" style={{
+            maxHeight: '400px',
+            overflowY: 'auto',
+            overflowX: 'auto',
+            position: 'relative',
+            isolation: 'isolate',
+          }}>
+            <table className="stable-table reports-page__schedule-table" style={{
+              borderCollapse: 'separate',
+              borderSpacing: 0,
+              textAlign: 'left',
+              tableLayout: 'fixed',
+              fontSize: '0.85rem',
+              width: '100%',
+              minWidth: '1100px',
+            }}>
+              <colgroup>
+                <col style={{ width: '180px' }} />
+                <col style={{ width: '150px' }} />
+                <col style={{ width: '130px' }} />
+                <col style={{ width: '100px' }} />
+                <col style={{ width: '240px' }} />
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '110px' }} />
+                <col style={{ width: '130px' }} />
+              </colgroup>
+
+              <thead style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 20,
+              }}>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
-                  <th style={thStyle}>Name</th>
-                  <th style={thStyle}>Type</th>
-                  <th style={thStyle}>Frequency</th>
-                  <th style={thStyle}>Format</th>
-                  <th style={thStyle}>Recipients</th>
-                  <th style={numericThStyle}>Last Run</th>
-                  <th style={thStyle}>Status</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Actions</th>
+                  <th
+                    style={{
+                      ...thStyle,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 21,
+                      background: 'var(--modal-bg)',
+                      boxShadow: '0 1px 0 var(--border-color)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Name
+                  </th>
+
+                  <th
+                    style={{
+                      ...thStyle,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 21,
+                      background: 'var(--modal-bg)',
+                      boxShadow: '0 1px 0 var(--border-color)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Type
+                  </th>
+
+                  <th
+                    style={{
+                      ...thStyle,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 21,
+                      background: 'var(--modal-bg)',
+                      boxShadow: '0 1px 0 var(--border-color)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Frequency
+                  </th>
+
+                  <th
+                    style={{
+                      ...thStyle,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 21,
+                      background: 'var(--modal-bg)',
+                      boxShadow: '0 1px 0 var(--border-color)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Format
+                  </th>
+
+                  <th
+                    style={{
+                      ...thStyle,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 21,
+                      background: 'var(--modal-bg)',
+                      boxShadow: '0 1px 0 var(--border-color)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Recipients
+                  </th>
+
+                  <th
+                    style={{
+                      ...numericThStyle,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 21,
+                      background: 'var(--modal-bg)',
+                      boxShadow: '0 1px 0 var(--border-color)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Last Run
+                  </th>
+
+                  <th
+                    style={{
+                      ...thStyle,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 21,
+                      background: 'var(--modal-bg)',
+                      boxShadow: '0 1px 0 var(--border-color)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Status
+                  </th>
+
+                  <th
+                    style={{
+                      ...thStyle,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 21,
+                      background: 'var(--modal-bg)',
+                      boxShadow: '0 1px 0 var(--border-color)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Actions
+                  </th>
                 </tr>
               </thead>
+
+
               <tbody>
                 {schedules.map(s => (
                   <tr key={s.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
-                    <td style={{ ...tdStyle, fontWeight: '500' }}>{s.name}</td>
+                    <td style={{ ...tdStyle }}>{s.name}</td>
                     <td style={tdStyle}>{s.reportType}</td>
                     <td style={tdStyle}>{s.frequency}</td>
                     <td style={tdStyle}>{s.format}</td>
-                    <td style={tdStyle}>{(() => { try { return JSON.parse(s.recipients).join(', '); } catch { return s.recipients; } })()}</td>
+                    <td style={{
+                      ...tdStyle,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}>{(() => { try { return JSON.parse(s.recipients).join(', '); } catch { return s.recipients; } })()}</td>
                     <td style={numericTdStyle}>{s.lastRunAt ? fmtDate(s.lastRunAt) : 'Never'}</td>
                     <td style={tdStyle}>
                       <span
@@ -518,6 +1050,7 @@ export default function Reports() {
                   </tr>
                 ))}
               </tbody>
+
             </table>
           </div>
         </div>

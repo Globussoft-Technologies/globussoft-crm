@@ -3645,6 +3645,10 @@ model SignatureRequest {
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())
   expiresAt    DateTime?
+  documentName String?
+  patientId    Int?
+  visitId      Int?
+  serviceIds   String?   @db.Text
 }
 
 // ── Document Templates ───────────────────────────────────────────

@@ -281,6 +281,7 @@ router.get("/sign/:token", async (req, res) => {
       status: reqRow.status,
       expiresAt: reqRow.expiresAt,
       signedAt: reqRow.signedAt,
+      ...(reqRow.documentName ? { documentName: reqRow.documentName } : {}),
     });
   } catch (err) {
     console.error("[Signatures] sign GET error:", err);
@@ -381,7 +382,7 @@ router.get("/sign/:token/pdf", async (req, res) => {
       }
     } else {
       doc.fontSize(11).font("Helvetica").fillColor("#333333")
-        .text(`Please review and sign this ${reqRow.documentType}.`, 50, y, { width: 495 });
+        .text(`Please review and sign this ${reqRow.documentName || reqRow.documentType}.`, 50, y, { width: 495 });
       if (linked?.title) {
         y += 24;
         doc.fontSize(13).font("Helvetica-Bold").fillColor("#000000").text(linked.title, 50, y);
@@ -599,7 +600,10 @@ router.get("/", async (req, res) => {
 // POST /api/signatures — create + email signing link
 router.post("/", async (req, res) => {
   try {
-    const { documentType, documentId, signerName, signerEmail } = req.body || {};
+    const {
+      documentType, documentId, signerName, signerEmail,
+      documentName, targetPatientId, visitId, serviceIds,
+    } = req.body || {};
     let { expiresInDays } = req.body || {};
 
     if (!documentType || !documentId || !signerName || !signerEmail) {
@@ -607,6 +611,38 @@ router.post("/", async (req, res) => {
     }
     if (!["Contract", "Estimate", "Quote", "Custom"].includes(documentType)) {
       return res.status(400).json({ error: "Invalid documentType" });
+    }
+
+    let patientContext = {};
+    if (documentType === "Custom" && targetPatientId != null) {
+      const patientId = parseInt(targetPatientId);
+      const linkedVisitId = parseInt(visitId);
+      if (!Number.isInteger(patientId) || !Number.isInteger(linkedVisitId)) {
+        return res.status(400).json({ error: "targetPatientId and visitId must be valid integers" });
+      }
+      const visit = await prisma.visit.findFirst({
+        where: { id: linkedVisitId, patientId, tenantId: req.user.tenantId },
+        select: { id: true },
+      });
+      if (!visit) return res.status(404).json({ error: "Patient visit not found" });
+
+      const normalizedServiceIds = Array.isArray(serviceIds)
+        ? [...new Set(serviceIds.map(Number).filter(Number.isInteger))]
+        : [];
+      if (normalizedServiceIds.length) {
+        const serviceCount = await prisma.service.count({
+          where: { id: { in: normalizedServiceIds }, tenantId: req.user.tenantId },
+        });
+        if (serviceCount !== normalizedServiceIds.length) {
+          return res.status(400).json({ error: "One or more services are invalid" });
+        }
+      }
+      patientContext = {
+        documentName: String(documentName || "Patient document").trim().slice(0, 191),
+        patientId,
+        visitId: linkedVisitId,
+        serviceIds: JSON.stringify(normalizedServiceIds),
+      };
     }
 
     expiresInDays = parseInt(expiresInDays);
@@ -625,6 +661,7 @@ router.post("/", async (req, res) => {
         status: "PENDING",
         expiresAt,
         tenantId: req.user.tenantId,
+        ...patientContext,
       },
     });
 

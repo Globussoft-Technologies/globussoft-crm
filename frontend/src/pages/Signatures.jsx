@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import { FileSignature, Plus, Send, Eye, X, Check, ChevronDown } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
 import TopScrollSync from '../components/TopScrollSync';
+import { AuthContext } from '../App';
 
 const STATUS_STYLES = {
   PENDING: { bg: 'rgba(245,158,11,0.12)', color: '#f59e0b', border: 'rgba(245,158,11,0.3)' },
@@ -47,6 +48,8 @@ const ENDPOINT_FOR_TYPE = {
 
 export default function Signatures() {
   const notify = useNotify();
+  const { tenant } = useContext(AuthContext);
+  const isWellness = tenant?.vertical === 'wellness';
   const [requests, setRequests] = useState([]);
   const [docOptions, setDocOptions] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -54,7 +57,7 @@ export default function Signatures() {
   const [viewing, setViewing] = useState(null);
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [signatureType, setSignatureType] = useState('Patient');
+  const [signatureType, setSignatureType] = useState(isWellness ? 'Patient' : 'Estimate');
 const [patients, setPatients] = useState([]);
 const [selectedPatient, setSelectedPatient] = useState(null);
 const [patientVisits, setPatientVisits] = useState([]);
@@ -88,9 +91,11 @@ useEffect(() => {
     }
   };
 
-  fetchPatients();
-  fetchServicesCatalog();
-}, []);
+  if (isWellness) {
+    fetchPatients();
+    fetchServicesCatalog();
+  }
+}, [isWellness]);
   useEffect(() => { loadRequests(); }, []);
   useEffect(() => { loadDocOptions(form.documentType); }, [form.documentType]);
 
@@ -182,7 +187,7 @@ useEffect(() => {
             signerName: form.signerName,
             signerEmail: form.signerEmail,
             expiresInDays: parseInt(form.expiresInDays) || 7,
-            patientId: parseInt(form.patientId),
+            targetPatientId: parseInt(form.patientId),
             visitId: parseInt(form.visitId),
             serviceIds: form.services.map((s) => parseInt(s)).filter(Number.isFinite),
             documentName: form.documentName,
@@ -414,7 +419,7 @@ useEffect(() => {
               borderRadius: '8px',
             }}
           >
-            {['Patient', 'Estimate'].map((type) => (
+            {(isWellness ? ['Patient', 'Estimate'] : ['Estimate']).map((type) => (
               <button
                 key={type}
                 type="button"
@@ -539,7 +544,6 @@ useEffect(() => {
           />
         </Field>
 
-        
         <button
           type="submit"
           className="btn-primary"

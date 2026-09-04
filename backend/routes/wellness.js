@@ -1939,6 +1939,10 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
     id: true,
     drugs: true,
     instructions: true,
+    chiefComplaint: true,
+    diagnosis: true,
+    investigations: true,
+    advice: true,
     pdfUrl: true,
     status: true,
     dispensedAt: true,
@@ -4496,6 +4500,10 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
   id: true,
   drugs: true,
   instructions: true,
+  chiefComplaint: true,
+  diagnosis: true,
+  investigations: true,
+  advice: true,
   pdfUrl: true,
   status: true,
   dispensedAt: true,
@@ -12752,6 +12760,10 @@ router.get(
     id: true,
     drugs: true,
     instructions: true,
+    chiefComplaint: true,
+    diagnosis: true,
+    investigations: true,
+    advice: true,
     pdfUrl: true,
     status: true,
     dispensedAt: true,
@@ -13790,6 +13802,10 @@ router.get(
     id: true,
     drugs: true,
     instructions: true,
+    chiefComplaint: true,
+    diagnosis: true,
+    investigations: true,
+    advice: true,
     pdfUrl: true,
     status: true,
     dispensedAt: true,
@@ -19050,4 +19066,3 @@ router.delete("/qr-events/:id/qrs/:qrId", verifyToken, async (req, res) => {
 });
 
 module.exports = router;
-

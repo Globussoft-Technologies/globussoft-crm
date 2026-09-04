@@ -75,6 +75,7 @@ vi.mock('../utils/date', () => ({
 }));
 
 import Signatures from '../pages/Signatures';
+import { AuthContext } from '../App';
 
 const sampleRequests = [
   {
@@ -141,10 +142,12 @@ function defaultFetchMock(url, opts) {
   return Promise.resolve(null);
 }
 
-function renderSignatures() {
+function renderSignatures(vertical = 'generic') {
   return render(
     <MemoryRouter>
-      <Signatures />
+      <AuthContext.Provider value={{ tenant: { vertical } }}>
+        <Signatures />
+      </AuthContext.Provider>
     </MemoryRouter>,
   );
 }
@@ -453,7 +456,7 @@ describe('<Signatures /> — page surface', () => {
   ];
 
   async function openPatientTab() {
-    renderSignatures();
+    renderSignatures('wellness');
     // Empty list → empty-state renders once the GET settles.
     await screen.findByText(/No signature requests yet\./i);
     fireEvent.click(screen.getByRole('button', { name: /Request Signature/i }));
@@ -545,7 +548,7 @@ describe('<Signatures /> — page surface', () => {
       expect(typeof body.documentId).toBe('number');
       expect(body.signerName).toBe('Asha Nair');
       expect(body.signerEmail).toBe('asha@example.com');
-      expect(body.patientId).toBe(7);
+      expect(body.targetPatientId).toBe(7);
       expect(body.visitId).toBe(99);
       // Visit's service auto-selected (nothing was picked manually).
       expect(body.serviceIds).toEqual([11]);

@@ -220,7 +220,7 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(body.redirect.url).toMatch(/^\/customer\/register\?/);
   });
 
-  test('5) Phase 5 — admin GET /trips/:id/registrations sees the DRAFT row', async ({ request }) => {
+  test('5) Phase 5 — admin GET /trips/:id/registrations sees the CONVERTED row (streamlined flow)', async ({ request }) => {
     test.skip(!pendingRegistrationId, 'no pending registration available');
     const r = await get(request, travelAdminToken, `/api/travel/trips/${tripId}/registrations`);
     expect(r.ok()).toBeTruthy();
@@ -228,27 +228,23 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(Array.isArray(rows)).toBe(true);
     const row = rows.find((x) => x.id === pendingRegistrationId);
     expect(row).toBeTruthy();
-    expect(row.status).toBe('DRAFT');
-    expect(row.otpVerified).toBe(false);
+    // PR #1399 streamlines registration: a trip-linked submit converts the
+    // draft immediately (participant + instalments materialised on submit).
+    expect(row.status).toBe('CONVERTED');
     expect(row.studentName).toContain('Student');
     // draftToken MUST NOT leak via admin list — it's a server secret
     expect(row.draftToken).toBeUndefined();
   });
 
-  test('6) Phase 5 — admin can approve a DRAFT (relaxed gate)', async ({ request }) => {
+  test('6) Phase 5 — approving an already-CONVERTED registration is rejected (terminal state)', async ({ request }) => {
     test.skip(!pendingRegistrationId, 'no pending registration available');
+    // The submit already converted the draft (PR #1399), so the first approve
+    // hits the terminal-state guard.
     const r = await post(request, travelAdminToken, `/api/travel/trips/${tripId}/registrations/${pendingRegistrationId}/approve`, {});
-    expect(r.status()).toBe(200);
+    expect(r.status()).toBe(409);
     const body = await r.json();
-    expect(body.approved).toBe(true);
-    expect(body.registration.status).toBe('CONVERTED');
-    expect(body.participant).toBeTruthy();
-    // Once converted, the draft is terminal and cannot be re-approved.
-    const re = await post(request, travelAdminToken, `/api/travel/trips/${tripId}/registrations/${pendingRegistrationId}/approve`, {});
-    expect(re.status()).toBe(409);
-    const rebody = await re.json();
-    expect(rebody.code).toBe('INVALID_STATE');
-    expect(rebody.currentStatus).toBe('CONVERTED');
+    expect(body.code).toBe('INVALID_STATE');
+    expect(body.currentStatus).toBe('CONVERTED');
   });
 
   test('7) Phase 4 — verify-otp with bogus draftToken returns 404 DRAFT_NOT_FOUND (decision #9)', async ({ request }) => {

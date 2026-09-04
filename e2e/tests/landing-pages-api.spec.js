@@ -197,8 +197,10 @@ test.describe('Landing pages API — GET /', () => {
     expect(typeof row.submissions).toBe('number');
     expect(typeof row.createdAt).toBe('string');
     expect(typeof row.updatedAt).toBe('string');
-    // The list view does NOT include `content` (select clause omits it).
-    expect(row.content).toBeUndefined();
+    // PR #1399: the list select now includes `content` + `tripId` so
+    // trip-linked rows carry their registration context without a second
+    // fetch. `content` is the raw stored column value.
+    expect(row.content).toBeDefined();
   });
 
   test('list scoped to caller tenant — wellness rows do not leak to generic', async ({ request }) => {

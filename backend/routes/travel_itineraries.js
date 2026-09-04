@@ -54,19 +54,79 @@
 const express = require("express");
 const crypto = require("crypto");
 const axios = require("axios");
+const { PDFDocument: PdfLibDocument } = require("pdf-lib");
 const router = express.Router();
 const s3Service = require("../services/s3Service");
+const aiPdfTemplateAnalysis = require("../lib/aiPdfTemplateAnalysis");
+
+const legacyTemplateDesignCache = new Map();
+
+async function enrichLegacyTemplateStyle(styleSpec, templateBuffer, tenantId) {
+  if (Number(styleSpec?.version) >= 4 || !Buffer.isBuffer(templateBuffer)) return styleSpec;
+  const cacheKey = `${crypto.createHash("sha256").update(templateBuffer).digest("hex")}:v4`;
+  if (!legacyTemplateDesignCache.has(cacheKey)) {
+    const analysisPromise = (async () => {
+      const pdf = await PdfLibDocument.load(templateBuffer);
+      const structure = await aiPdfTemplateAnalysis.proposeTemplateStructureWithAi({
+        tenantId,
+        pdfBuffer: templateBuffer,
+        pageCount: pdf.getPageCount(),
+      });
+      if (!structure?.design) return styleSpec;
+      const sourcePages = pdf.getPages();
+      const previousPages = Array.isArray(styleSpec?.pages) ? styleSpec.pages : [];
+      const pages = structure.pages.map((page) => {
+        const previous = previousPages.find((entry) => Number(entry.index) === page.index);
+        const size = sourcePages[page.index - 1]?.getSize();
+        const relative = page.relativeContentBox;
+        const contentBox = relative && size ? {
+          x: relative.x * size.width,
+          y: size.height - ((relative.y + relative.height) * size.height),
+          width: relative.width * size.width,
+          height: relative.height * size.height,
+        } : previous?.contentBox || null;
+        return { ...previous, index: page.index, role: page.role, contentBox };
+      });
+      return {
+        ...(styleSpec || {}),
+        version: 4,
+        accentColor: structure.accentColor || styleSpec?.accentColor || null,
+        design: structure.design,
+        requiredFields: structure.requiredFields || [],
+        pages,
+      };
+    })().catch((err) => {
+      console.warn("[travel-itin] legacy template design analysis skipped:", err.message);
+      return styleSpec;
+    });
+    legacyTemplateDesignCache.set(cacheKey, analysisPromise);
+    if (legacyTemplateDesignCache.size > 50) {
+      legacyTemplateDesignCache.delete(legacyTemplateDesignCache.keys().next().value);
+    }
+  }
+  return legacyTemplateDesignCache.get(cacheKey);
+}
 
 // G115 — Fetch a PDF template buffer from its S3 URL. Best-effort: on any
 // failure (network, 404, oversized) we return null and the render falls back
 // to the standard PDFKit path so the download still works.
 async function fetchPdfTemplateBuffer(url, opts = {}) {
   if (!url || typeof url !== "string") return null;
-  // Only fetch URLs that belong to the configured S3 bucket — the template
-  // table should only ever hold S3 URLs, but this prevents SSRF if a row is
-  // somehow poisoned.
-  if (!s3Service.extractKeyFromUrl(url)) return null;
+  // Only fetch URLs that belong to the configured S3 bucket (or the local-
+  // disk fallback used when no cloud storage is configured — see
+  // services/s3Service.js's uploadFile) — the template table should only
+  // ever hold URLs uploadFile() itself produced, but this prevents SSRF if
+  // a row is somehow poisoned.
   const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : 15 * 1024 * 1024;
+  // Local-disk fallback FIRST — read straight off disk, no HTTP round-trip
+  // needed since it's the same process that wrote it. Must precede the
+  // cloud-key guard below, which by design does not recognise local paths.
+  if (s3Service.isLocalUrl(url)) {
+    const buf = await s3Service.readLocalFile(url);
+    if (!buf || buf.length === 0 || buf.length > maxBytes) return null;
+    return buf;
+  }
+  if (!s3Service.extractKeyFromUrl(url)) return null;
   try {
     const resp = await axios.get(url, {
       responseType: "arraybuffer",
@@ -151,17 +211,88 @@ async function resolveItineraryPdfTemplate(full, tenantId) {
 // day bands, and the inclusions/terms blocks — so it is worth trying first.
 // Any failure (corrupt upload, unreadable page tree) falls back to the
 // standard generic renderer rather than denying the download.
+
+// ── Per-itinerary cover photo ─────────────────────────────────────────
+//
+// The hero on a generated PDF is otherwise the destination's Wikipedia lead
+// image, which is deterministic: every Goa trip gets the same photograph. An
+// operator selling two different Goa packages has no way to tell them apart,
+// so they can upload their own cover and it wins.
+//
+// The URL lives in Itinerary.templateDataJson alongside the other
+// template-specific values — no schema change, and it travels with the same
+// save the rest of the template details already use.
+const COVER_IMAGE_KEY = "coverImageUrl";
+
+function readTemplateDataObject(raw) {
+  if (!raw) return {};
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_e) {
+    return {};
+  }
+}
+
+// Only images WE stored are ever fetched. Accepting an arbitrary URL here
+// would turn "set a cover photo" into a server-side request forgery against
+// whatever the CRM host can reach.
+async function fetchCoverImageBuffer(url) {
+  if (typeof url !== "string" || !url) return null;
+  const MAX_BYTES = 8 * 1024 * 1024;
+  if (s3Service.isLocalUrl(url)) {
+    const buf = await s3Service.readLocalFile(url);
+    return buf && buf.length && buf.length <= MAX_BYTES ? buf : null;
+  }
+  const base = s3Service.S3_BASE_URL;
+  if (!base || !url.startsWith(base)) return null;
+  try {
+    const resp = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: 10000,
+      maxContentLength: MAX_BYTES,
+      validateStatus: (code) => code >= 200 && code < 300,
+    });
+    const buf = Buffer.from(resp.data);
+    return buf.length ? buf : null;
+  } catch (err) {
+    console.warn("[travel-itin] cover image fetch failed:", err.message);
+    return null;
+  }
+}
+
+// The operator's own cover wins; otherwise whatever the caller already
+// resolved; otherwise the destination lookup. Resolved here rather than at
+// each call site so every render path — download, share, add-to-catalogue —
+// honours the override identically.
+async function resolveItineraryHeroBuffer(full, providedHero) {
+  const url = readTemplateDataObject(full && full.templateDataJson)[COVER_IMAGE_KEY];
+  if (url) {
+    const own = await fetchCoverImageBuffer(url);
+    if (own) return own;
+    console.warn("[travel-itin] cover image unreadable, falling back:", url);
+  }
+  if (providedHero) return providedHero;
+  try {
+    return await fetchDestinationImageBuffer(full && full.destination);
+  } catch (_e) {
+    return null;
+  }
+}
+
 async function renderItineraryPdfBuffer(full, contact, { heroBuffer, viewerWatermark, tenantId }) {
   const { pdfTemplateBuffer, pdfTemplateSourceBuffer, pdfTemplateRegions, pdfStyleSpec } =
     await resolveItineraryPdfTemplate(full, tenantId);
+  const hero = await resolveItineraryHeroBuffer(full, heroBuffer);
 
   if (pdfTemplateSourceBuffer) {
     try {
+      const effectiveStyleSpec = await enrichLegacyTemplateStyle(pdfStyleSpec, pdfTemplateSourceBuffer, tenantId);
       return await itineraryTemplatePdf.renderItineraryOnTemplate(full, contact, {
         templateBuffer: pdfTemplateSourceBuffer,
-        styleSpec: pdfStyleSpec,
+        styleSpec: effectiveStyleSpec,
         regions: pdfTemplateRegions,
-        heroBuffer,
+        heroBuffer: hero,
       });
     } catch (tplErr) {
       console.warn("[travel-itin] template render failed, falling back:", tplErr.message);
@@ -169,7 +300,7 @@ async function renderItineraryPdfBuffer(full, contact, { heroBuffer, viewerWater
   }
 
   return renderTravelItineraryPdf(full, contact, {
-    heroBuffer,
+    heroBuffer: hero,
     pdfTemplateBuffer,
     regions: pdfTemplateRegions,
     viewerWatermark,
@@ -178,7 +309,29 @@ async function renderItineraryPdfBuffer(full, contact, { heroBuffer, viewerWater
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
+const multer = require("multer");
 const { renderTravelItineraryPdf } = require("../services/pdfRenderer");
+
+// Cover photos only: memory storage, image mime types, 8 MB. Kept local to
+// this router so it cannot widen any other upload surface.
+const coverImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|png|webp|gif)$/.test(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPEG, PNG, WebP or GIF images are allowed"));
+  },
+});
+
+function coverImageBytesMatchMime(file) {
+  const b = file?.buffer;
+  if (!Buffer.isBuffer(b)) return false;
+  if (file.mimetype === "image/jpeg") return b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (file.mimetype === "image/png") return b.length >= 8 && b.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"));
+  if (file.mimetype === "image/gif") return b.length >= 6 && /^GIF8[79]a$/.test(b.toString("ascii", 0, 6));
+  if (file.mimetype === "image/webp") return b.length >= 12 && b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WEBP";
+  return false;
+}
 // Full module handle too — generateTravelInvoicePdf powers the customer's
 // payment receipt (public on-demand render). Referenced via the module so the
 // CJS self-mock seam works in tests.
@@ -2445,11 +2598,26 @@ router.patch("/itineraries/:id", verifyToken, requireTravelTenant, async (req, r
       pricingJson, totalAmount, currency, pdfUrl, shareToken, pax,
       shareExpiresAt, clonedFromTemplateId, pdfTemplateId,
       title, introText, inclusions, exclusions, otherDetails, termsText,
-      cancellationPolicyId, staticPageText, moneyEnabled,
+      cancellationPolicyId, staticPageText, templateData, moneyEnabled,
     } = req.body || {};
 
     if (staticPageText !== undefined) {
       data.staticPageText = staticPageText ? String(staticPageText) : null;
+    }
+
+    if (templateData !== undefined) {
+      if (templateData === null || templateData === "") {
+        data.templateDataJson = null;
+      } else if (!templateData || typeof templateData !== "object" || Array.isArray(templateData)) {
+        return res.status(400).json({ error: "templateData must be an object or null", code: "INVALID_TEMPLATE_DATA" });
+      } else {
+        const cleaned = {};
+        for (const [key, value] of Object.entries(templateData).slice(0, 30)) {
+          const safeKey = String(key).replace(/[^a-zA-Z0-9_]/g, "").slice(0, 60);
+          if (safeKey) cleaned[safeKey] = String(value ?? "").trim().slice(0, 5000);
+        }
+        data.templateDataJson = Object.keys(cleaned).length ? JSON.stringify(cleaned) : null;
+      }
     }
 
     if (moneyEnabled !== undefined) {
@@ -5501,6 +5669,127 @@ router.get("/itineraries/:id/static-page-preview", verifyToken, requireTravelTen
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-itin] static-page-preview error:", e.message);
     res.status(500).json({ error: "Failed to load template preview" });
+  }
+});
+
+// Template-specific field contract for the selected PDF style. Older
+// templates are analyzed lazily through the same cached AI path as rendering.
+
+// POST /api/travel/itineraries/:id/cover-image
+// Upload a cover photo for THIS itinerary. Replaces the destination lookup as
+// the hero on every generated PDF. Stored on templateDataJson so it saves
+// alongside the other template-specific values.
+router.post(
+  "/itineraries/:id/cover-image",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("itineraries", "write"),
+  (req, res, next) => {
+    coverImageUpload.single("file")(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || "Invalid file upload" });
+      return next();
+    });
+  },
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      if (!req.file) {
+        return res.status(400).json({ error: "file is required (multipart field 'file')", code: "FILE_REQUIRED" });
+      }
+      if (!coverImageBytesMatchMime(req.file)) {
+        return res.status(400).json({ error: "File contents do not match the declared image type", code: "INVALID_IMAGE_CONTENT" });
+      }
+      const url = await s3Service.uploadFile(
+        req.file.buffer,
+        req.file.originalname || "cover.jpg",
+        req.file.mimetype,
+        "travel-itinerary-covers",
+      );
+
+      const current = await prisma.itinerary.findFirst({
+        where: { id: itin.id, tenantId: req.travelTenant.id },
+        select: { templateDataJson: true },
+      });
+      const data = readTemplateDataObject(current && current.templateDataJson);
+      data[COVER_IMAGE_KEY] = url;
+      await prisma.itinerary.update({
+        where: { id: itin.id },
+        data: { templateDataJson: JSON.stringify(data) },
+      });
+
+      res.status(201).json({ success: true, coverImageUrl: url });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] cover image upload error:", e.message);
+      res.status(500).json({ error: "Failed to upload the cover image" });
+    }
+  },
+);
+
+// DELETE /api/travel/itineraries/:id/cover-image — back to the destination photo.
+router.delete(
+  "/itineraries/:id/cover-image",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("itineraries", "write"),
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const current = await prisma.itinerary.findFirst({
+        where: { id: itin.id, tenantId: req.travelTenant.id },
+        select: { templateDataJson: true },
+      });
+      const data = readTemplateDataObject(current && current.templateDataJson);
+      if (!data[COVER_IMAGE_KEY]) return res.json({ success: true, cleared: false });
+      delete data[COVER_IMAGE_KEY];
+      await prisma.itinerary.update({
+        where: { id: itin.id },
+        data: { templateDataJson: JSON.stringify(data) },
+      });
+      res.json({ success: true, cleared: true });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] cover image delete error:", e.message);
+      res.status(500).json({ error: "Failed to remove the cover image" });
+    }
+  },
+);
+
+router.get("/itineraries/:id/template-schema", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+    const full = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      select: { pdfTemplateId: true, clonedFromTemplateId: true, templateDataJson: true },
+    });
+    if (!full || (!full.pdfTemplateId && !full.clonedFromTemplateId)) {
+      return res.json({ hasTemplate: false, fields: [], values: {} });
+    }
+    const resolved = await resolveItineraryPdfTemplate(full, req.travelTenant.id);
+    if (!resolved.pdfTemplateSourceBuffer) {
+      return res.json({ hasTemplate: false, fields: [], values: {} });
+    }
+    const style = await enrichLegacyTemplateStyle(
+      resolved.pdfStyleSpec,
+      resolved.pdfTemplateSourceBuffer,
+      req.travelTenant.id,
+    );
+    let values = {};
+    try { values = full.templateDataJson ? JSON.parse(full.templateDataJson) : {}; } catch { values = {}; }
+    res.json({
+      hasTemplate: true,
+      // Surfaced separately from `fields` because it is not a template-detected
+      // slot — it is offered for every PDF template, since every one of them
+      // has a hero the destination lookup would otherwise fill.
+      coverImageUrl: values[COVER_IMAGE_KEY] || null,
+      fields: Array.isArray(style?.requiredFields) ? style.requiredFields : [],
+      values: values && typeof values === "object" && !Array.isArray(values) ? values : {},
+      analysisVersion: style?.version || 1,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] template-schema error:", e.message);
+    res.status(500).json({ error: "Failed to load template fields", code: "TEMPLATE_SCHEMA_FAILED" });
   }
 });
 

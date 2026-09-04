@@ -2987,6 +2987,7 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   const accent = "#0B5345";
   const currency = itinerary.currency || "INR";
   const items = Array.isArray(itinerary.items) ? itinerary.items : [];
+  const showPricing = itinerary.moneyEnabled !== false;
   const skipHeader = opts.skipHeader === true;
   const skipFooter = opts.skipFooter === true;
 
@@ -3103,10 +3104,10 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     // so the overlay works when the template leaves a narrower blank area.
     const colW = {
       type: contentWidth * 0.12,
-      desc: contentWidth * 0.46,
-      markup: contentWidth * 0.12,
-      unit: contentWidth * 0.15,
-      total: contentWidth * 0.15,
+      desc: showPricing ? contentWidth * 0.46 : contentWidth * 0.88,
+      markup: showPricing ? contentWidth * 0.12 : 0,
+      unit: showPricing ? contentWidth * 0.15 : 0,
+      total: showPricing ? contentWidth * 0.15 : 0,
     };
     const colX = {
       type: leftX,
@@ -3119,9 +3120,11 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
     doc.text("Type", colX.type, tableTop, { width: colW.type });
     doc.text("Description", colX.desc, tableTop, { width: colW.desc });
-    doc.text("Markup", colX.markup, tableTop, { width: colW.markup, align: "right" });
-    doc.text("Unit cost", colX.unit, tableTop, { width: colW.unit, align: "right" });
-    doc.text("Total", colX.total, tableTop, { width: colW.total, align: "right" });
+    if (showPricing) {
+      doc.text("Markup", colX.markup, tableTop, { width: colW.markup, align: "right" });
+      doc.text("Unit cost", colX.unit, tableTop, { width: colW.unit, align: "right" });
+      doc.text("Total", colX.total, tableTop, { width: colW.total, align: "right" });
+    }
     doc.moveTo(leftX, tableTop + 14)
       .lineTo(rightX, tableTop + 14)
       .lineWidth(0.5).strokeColor(accent).stroke();
@@ -3134,9 +3137,9 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     for (const it of sorted) {
       const typeStr = String(it.itemType || "—");
       const descStr = String(it.description || "");
-      const markupStr = it.markup != null ? formatMoney(Number(it.markup), currency) : "—";
-      const unitStr = it.unitCost != null ? formatMoney(Number(it.unitCost), currency) : "—";
-      const totalStr = it.totalPrice != null ? formatMoney(Number(it.totalPrice), currency) : "—";
+      const markupStr = showPricing && it.markup != null ? formatMoney(Number(it.markup), currency) : "";
+      const unitStr = showPricing && it.unitCost != null ? formatMoney(Number(it.unitCost), currency) : "";
+      const totalStr = showPricing && it.totalPrice != null ? formatMoney(Number(it.totalPrice), currency) : "";
 
       // Measure wrapped text so rows grow to fit multi-line descriptions
       // and long item-type labels instead of colliding with the next row.
@@ -3155,16 +3158,18 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
       }
       doc.text(typeStr, colX.type, y, { width: colW.type });
       doc.text(descStr, colX.desc, y, { width: colW.desc });
-      doc.text(markupStr, colX.markup, y, { width: colW.markup, align: "right" });
-      doc.text(unitStr, colX.unit, y, { width: colW.unit, align: "right" });
-      doc.text(totalStr, colX.total, y, { width: colW.total, align: "right" });
+      if (showPricing) {
+        doc.text(markupStr, colX.markup, y, { width: colW.markup, align: "right" });
+        doc.text(unitStr, colX.unit, y, { width: colW.unit, align: "right" });
+        doc.text(totalStr, colX.total, y, { width: colW.total, align: "right" });
+      }
       y += rowH + rowGap;
     }
     doc.y = y + 6;
   }
 
   // Grand total band
-  if (itinerary.totalAmount != null) {
+  if (showPricing && itinerary.totalAmount != null) {
     doc.moveDown(0.8);
     const totalY = doc.y;
     doc.rect(leftX, totalY, contentWidth, 40).fillAndStroke("#f4f6f8", accent);
@@ -3190,7 +3195,7 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     doc.font("Helvetica").fontSize(8).fillColor("#777")
       .text(
         `${brandLabel} — Itinerary #${itinerary.id || "?"} v${itinerary.version || 1}. ` +
-          `Pricing subject to availability at the time of booking.`,
+          (showPricing ? "Pricing subject to availability at the time of booking." : "Planning itinerary — pricing not included."),
         leftX, footerY + 8, { width: contentWidth, align: "center" },
       );
     const brandFooterText = (opts && opts.branding && typeof opts.branding.footerText === "string")

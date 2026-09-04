@@ -377,20 +377,29 @@ export async function shrinkOverflowingPages(
   opts: PrintLayoutAuditOptions = {},
 ): Promise<string | null> {
   const overflowPageNums = new Set<number>();
+  const failedImageNums = new Set<number>();
   for (const issue of issues) {
     const m = issue.match(/^page_(\d+)_(?:clips_or_overflows|exceeds_a4)\b/);
     if (m) {
       overflowPageNums.add(parseInt(m[1]!, 10));
       continue;
     }
+    const imageMatch = issue.match(/^image_(\d+)_failed_to_load\b/);
+    if (imageMatch) {
+      failedImageNums.add(parseInt(imageMatch[1]!, 10));
+      continue;
+    }
     // Any issue that isn't overflow (or the purely cosmetic "sparse" note) needs
     // a real redesign — never salvage past a defect this fix can't address.
     if (!/^page_\d+_is_sparse\b/.test(issue)) return null;
+    // A sparse page needs a redesign; shrinking cannot create missing content.
+    return null;
   }
-  if (!overflowPageNums.size) return null;
+  if (!overflowPageNums.size && !failedImageNums.size) return null;
 
   const html = injectPrintHardening(sanitizeHtml(rawHtml));
   const pageNumsJson = JSON.stringify([...overflowPageNums]);
+  const failedImagesJson = JSON.stringify([...failedImageNums]);
   let browser: any;
   try {
     const mod = (await import('puppeteer')) as unknown as { default: any };
@@ -419,7 +428,22 @@ export async function shrinkOverflowingPages(
       /* best-effort */
     }
 
-    for (const zoom of [0.94, 0.9, 0.86, 0.82, 0.78, 0.72]) {
+    // Remove only images that the audit proved unusable. A broken remote
+    // photo should not force an otherwise sound AI composition through four
+    // paid redesign attempts; the surrounding editorial layout remains intact.
+    if (failedImageNums.size) {
+      await page.evaluate(
+        `(function(imageNums){
+          var images = Array.prototype.slice.call(document.images);
+          imageNums.slice().sort(function(a,b){ return b-a; }).forEach(function(n){
+            var img = images[n - 1];
+            if (img && img.parentNode) img.parentNode.removeChild(img);
+          });
+        })(${failedImagesJson})`,
+      );
+    }
+
+    for (const zoom of [0.94, 0.9, 0.86, 0.82, 0.78, 0.72, 0.66, 0.6, 0.54, 0.5]) {
       await page.evaluate(
         `(function(pageNums, zoom){
           ${LAYOUT_FIND_PAGES_JS}
@@ -446,7 +470,7 @@ export async function shrinkOverflowingPages(
       const recheck = (await page.evaluate(
         `${LAYOUT_PROBE_JS}(${JSON.stringify({ protectedLogoUrls: opts.protectedLogoUrls ?? [] })})`,
       )) as { issues: string[]; pageCount: number };
-      const blocking = recheck.issues.filter((i) => !/_is_sparse\b/.test(i));
+      const blocking = recheck.issues;
       if (!blocking.length) return await page.content();
     }
     return null;

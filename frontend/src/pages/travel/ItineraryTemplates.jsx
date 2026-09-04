@@ -35,7 +35,7 @@
 
 import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Archive, ArchiveRestore, Copy, Upload, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Download, X, ChevronDown, ChevronUp, ArrowUpDown } from 'lucide-react';
+import { Archive, ArchiveRestore, Code2, Copy, Upload, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Download, X, ChevronDown, ChevronUp, ArrowUpDown } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import CountBadge from '../../components/CountBadge';
@@ -237,14 +237,6 @@ export default function ItineraryTemplates() {
   // G115 — PDF underprint upload.
   const pdfInputRef = useRef(null);
   const [uploadingPdf, setUploadingPdf] = useState(false);
-  // AI-assisted region detection + operator confirmation (extends G115).
-  // regionConfirm holds the analyze-pdf response while the confirm dialog is
-  // open; confirmedRegions holds the operator's final choice as a JSON
-  // string, sent as pdfTemplateRegions on submit. Both null = fall back to
-  // the server's own heuristic recompute, exactly like today's behavior.
-  const [analyzingPdf, setAnalyzingPdf] = useState(false);
-  const [regionConfirm, setRegionConfirm] = useState(null);
-  const [confirmedRegions, setConfirmedRegions] = useState(null);
   // Per-page role review (cover/itinerary/details/static + accent colour).
   // Runs AFTER the region-confirm step closes (sequential, not parallel —
   // avoids juggling two loading states / two dialogs racing to appear).
@@ -286,11 +278,10 @@ export default function ItineraryTemplates() {
       fd.append('file', file);
       const data = await fetchApi('/api/travel/itinerary-templates/upload-pdf', { method: 'POST', body: fd });
       setForm((prev) => ({ ...prev, pdfTemplateUrl: data.url, pdfTemplateFileName: file.name }));
-      setConfirmedRegions(null);
       setConfirmedStructure(null);
       notify.success('PDF template uploaded');
-      setAnalyzingPdf(true);
-      let regionShown = false;
+      await runStructureAnalysis(data.url);
+      /*
       try {
         const analysis = await fetchApi('/api/travel/itinerary-templates/analyze-pdf', {
           method: 'POST',
@@ -308,9 +299,8 @@ export default function ItineraryTemplates() {
       // Page-role review runs sequentially AFTER the region step — if the
       // region dialog didn't open (its analysis failed), go straight to it
       // instead of never showing it at all.
-      if (!regionShown) {
-        await runStructureAnalysis(data.url);
-      }
+      if (!regionShown) await runStructureAnalysis(data.url);
+      */
     } catch (err) {
       notify.error(err?.body?.error || 'PDF upload failed');
     } finally {
@@ -320,7 +310,6 @@ export default function ItineraryTemplates() {
 
   const removePdfTemplate = () => {
     setForm((prev) => ({ ...prev, pdfTemplateUrl: '', pdfTemplateFileName: '' }));
-    setConfirmedRegions(null);
     setConfirmedStructure(null);
     if (pdfInputRef.current) pdfInputRef.current.value = '';
   };
@@ -330,6 +319,8 @@ export default function ItineraryTemplates() {
   // the operator commits to cloning. State holds the template currently
   // being previewed; null when the modal is closed.
   const [previewTemplate, setPreviewTemplate] = useState(null);
+  // Which PDF template has its HTML/CSS body editor open. Null = closed.
+  const [htmlEditorTemplate, setHtmlEditorTemplate] = useState(null);
   // Contact list + selected contact for the clone-to-customer step.
   const [contacts, setContacts] = useState([]);
   const [cloneContactId, setCloneContactId] = useState('');
@@ -405,8 +396,6 @@ export default function ItineraryTemplates() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setShowForm(false);
-    setRegionConfirm(null);
-    setConfirmedRegions(null);
     setStructureConfirm(null);
     setConfirmedStructure(null);
   };
@@ -480,7 +469,6 @@ export default function ItineraryTemplates() {
     // Operator-confirmed content region (AI-assisted or manually adjusted).
     // Merges over the server's own heuristic recompute — omit entirely to
     // keep today's exact heuristic-only behavior (the "Skip" path).
-    if (confirmedRegions) payload.pdfTemplateRegions = confirmedRegions;
     // Operator-confirmed page-role structure (cover/itinerary/details/static
     // per page + accent colour). Overrides the server's own auto-classified
     // spec entirely — omit to keep the auto-computed one (the "Skip" path).
@@ -726,14 +714,21 @@ export default function ItineraryTemplates() {
             <FileText size={28} aria-hidden /> Itinerary Template Library
             <CountBadge count={total} title={`${total.toLocaleString()} templates`} />
           </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-            Pre-loaded itinerary templates - destination, duration, base price, sub-brand
-            affinity, with preserved sightseeing, supplier cost, and pricing-rule context.
-            Operators clone these into new itineraries via the builder. Linked master
-            data lives in{' '}
-            <Link to="/travel/sightseeing" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Sightseeing Master</Link>,{' '}
-            <Link to="/travel/cost-master" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Cost Master</Link>, and{' '}
-            <Link to="/travel/pricing-rules" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Pricing Rules</Link>.
+          <p style={{ color: 'var(--text-secondary)', marginTop: 4, maxWidth: 1100, lineHeight: 1.55 }}>
+            {templateTab === 'pdf' ? (
+              <>Uploaded reference PDFs become reusable document designs. AI identifies the fixed branding,
+                cover, repeating itinerary layout, details pages, visual styling, and any extra fields the
+                design requires. Choose a design from an itinerary&apos;s Publish panel to generate that trip&apos;s
+                content in the same visual structure.</>
+            ) : (
+              <>Reusable trip plans preserve destination, duration, day-by-day items, pricing context, and
+                sub-brand settings. Clone one in the itinerary builder, then tailor it for the customer. Linked
+                data comes from{' '}
+                <Link to="/travel/sightseeing" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Sightseeing Master</Link>,{' '}
+                <Link to="/travel/cost-master" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Cost Master</Link>, and{' '}
+                <Link to="/travel/pricing-rules" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Pricing Rules</Link>.
+              </>
+            )}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -787,7 +782,11 @@ export default function ItineraryTemplates() {
           : "Brand PDF styles — an uploaded reference PDF only. Picked from inside an itinerary's Publish panel when generating its PDF; never applies content."}
       </p>
 
-      {/* Filters */}
+      {/* Filters — hidden while the Add/Edit form is open. Showing both at
+          once let an operator try to filter the (unrelated, still-visible)
+          list while actually mid-way through creating a new template, which
+          read as confusing clutter rather than two related controls. */}
+      {!showForm && (
       <div
         style={{
           display: 'grid',
@@ -902,6 +901,7 @@ export default function ItineraryTemplates() {
           <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
         </div>
       </div>
+      )}
 
       {/* Add / edit form */}
       {showForm && (
@@ -1072,7 +1072,7 @@ export default function ItineraryTemplates() {
                 </Field>
               </>
             )}
-            <Field label="Thumbnail">
+            {templateTab !== 'pdf' && <Field label="Thumbnail">
               <input
                 ref={thumbInputRef}
                 type="file"
@@ -1117,7 +1117,7 @@ export default function ItineraryTemplates() {
                   </button>
                 )}
               </div>
-            </Field>
+            </Field>}
 
             {/* G115 — PDF underprint template upload */}
             {templateTab === 'pdf' && (
@@ -1130,7 +1130,7 @@ export default function ItineraryTemplates() {
                 style={{ display: 'none' }}
                 aria-label="Upload reference PDF template"
               />
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', width: '100%', minWidth: 0 }}>
                 {form.pdfTemplateUrl ? (
                   <>
                     <span
@@ -1144,10 +1144,17 @@ export default function ItineraryTemplates() {
                         color: '#60a5fa',
                         fontSize: '0.8rem',
                         border: '1px solid rgba(59,130,246,0.25)',
+                        maxWidth: '100%',
+                        minWidth: 0,
                       }}
                     >
                       <FileText size={14} />
-                      {form.pdfTemplateFileName || 'PDF template'}
+                      <span
+                        title={form.pdfTemplateFileName || 'PDF template'}
+                        style={{ minWidth: 0, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
+                        {form.pdfTemplateFileName || 'PDF template'}
+                      </span>
                     </span>
                     <button
                       type="button"
@@ -1177,7 +1184,7 @@ export default function ItineraryTemplates() {
                   </button>
                 )}
               </div>
-              {(analyzingPdf || analyzingStructure) ? (
+              {analyzingStructure ? (
                 <div
                   role="status"
                   style={{
@@ -1189,12 +1196,10 @@ export default function ItineraryTemplates() {
                   <Spinner size="small" label="Analyzing PDF" />
                   <div>
                     <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                      {analyzingPdf ? 'Reading your PDF with AI…' : 'Sorting out each page\'s role…'}
+                      Reading the design and page structure with AI…
                     </div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                      {analyzingPdf
-                        ? 'Finding where your itinerary content should be placed on the page — usually takes a few seconds.'
-                        : 'Deciding which pages are the cover, the day-by-day schedule, costing/terms, and fixed contact pages.'}
+                      Detecting fixed branding, reusable page layouts, schedule styling, and template-specific fields.
                     </div>
                   </div>
                 </div>
@@ -1267,7 +1272,10 @@ export default function ItineraryTemplates() {
               maxHeight: 730,
             }}
           >
-            <table style={{ width: '100%', minWidth: ITINERARY_TABLE_WIDTH, borderCollapse: 'collapse' }}>
+            {templateTab === 'pdf' && (
+              <style>{`.itinerary-templates-pdf-table th:nth-child(2), .itinerary-templates-pdf-table td:nth-child(2), .itinerary-templates-pdf-table th:nth-child(3), .itinerary-templates-pdf-table td:nth-child(3), .itinerary-templates-pdf-table th:nth-child(4), .itinerary-templates-pdf-table td:nth-child(4), .itinerary-templates-pdf-table th:nth-child(6), .itinerary-templates-pdf-table td:nth-child(6), .itinerary-templates-pdf-table th:nth-child(7), .itinerary-templates-pdf-table td:nth-child(7), .itinerary-templates-pdf-table th:nth-child(8), .itinerary-templates-pdf-table td:nth-child(8), .itinerary-templates-pdf-table th:nth-child(9), .itinerary-templates-pdf-table td:nth-child(9), .itinerary-templates-pdf-table th:nth-child(10), .itinerary-templates-pdf-table td:nth-child(10), .itinerary-templates-pdf-table th:nth-child(11), .itinerary-templates-pdf-table td:nth-child(11) { display: none; }`}</style>
+            )}
+            <table className={templateTab === 'pdf' ? 'itinerary-templates-pdf-table' : undefined} style={{ width: '100%', minWidth: templateTab === 'pdf' ? 760 : ITINERARY_TABLE_WIDTH, borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
                 <th style={th}>{sortButton('name', 'Name')}</th>
@@ -1427,6 +1435,21 @@ export default function ItineraryTemplates() {
                       >
                         <Edit2 size={16} />
                       </button>
+                      {/* Only PDF-underprint templates have page bodies to
+                          author — a plain itinerary template has no content
+                          box to render HTML into. */}
+                      {item.isPdfTemplate ? (
+                        <button
+                          type="button"
+                          onClick={() => setHtmlEditorTemplate(item)}
+                          style={iconBtn}
+                          aria-label={`Edit HTML template for ${item.name}`}
+                          data-testid={`html-tpl-${item.id}`}
+                          title="Design the page bodies with HTML/CSS"
+                        >
+                          <Code2 size={16} />
+                        </button>
+                      ) : null}
                       {/* G048 — Archive / Restore button. When the row is
                           archived (item.archivedAt set), show Restore
                           instead so the operator can bring it back. */}
@@ -1494,20 +1517,6 @@ export default function ItineraryTemplates() {
           CTA inside the modal triggers the actual clone (POST /api/travel/
           itineraries with clonedFromTemplateId); the operator lands on the
           new itinerary's editor. */}
-      {regionConfirm && (
-        <PdfRegionConfirmModal
-          analysis={regionConfirm}
-          onConfirm={(regionsJson) => {
-            setConfirmedRegions(regionsJson);
-            setRegionConfirm(null);
-            runStructureAnalysis(form.pdfTemplateUrl);
-          }}
-          onSkip={() => {
-            setRegionConfirm(null);
-            runStructureAnalysis(form.pdfTemplateUrl);
-          }}
-        />
-      )}
       {structureConfirm && (
         <PdfStructureConfirmModal
           analysis={structureConfirm}
@@ -1516,6 +1525,12 @@ export default function ItineraryTemplates() {
             setStructureConfirm(null);
           }}
           onSkip={() => setStructureConfirm(null)}
+        />
+      )}
+      {htmlEditorTemplate && (
+        <HtmlTemplateModal
+          template={htmlEditorTemplate}
+          onClose={() => setHtmlEditorTemplate(null)}
         />
       )}
       {previewTemplate && (
@@ -1735,6 +1750,10 @@ function PdfRegionConfirmModal({ analysis, onConfirm, onSkip }) {
   );
 }
 
+// Legacy editor retained for previously saved region data. New uploads use
+// automatic per-page regions and never expose PDF coordinates to operators.
+void PdfRegionConfirmModal;
+
 const PAGE_ROLE_OPTIONS = [
   { value: 'cover', label: 'Cover — title, hero photo, intro blurb' },
   { value: 'itinerary', label: 'Itinerary — day-by-day schedule (grows/shrinks with trip length)' },
@@ -1768,8 +1787,18 @@ function PdfStructureConfirmModal({ analysis, onConfirm, onSkip }) {
   const setRole = (index, role) => setRoles((prev) => ({ ...prev, [index]: role }));
 
   const confirm = () => {
-    const pages = (analysis.pages || []).map((p) => ({ index: p.index, role: roles[p.index] || p.role }));
-    onConfirm(JSON.stringify({ accentColor, pages }));
+    const pages = (analysis.pages || []).map((p) => ({
+      index: p.index,
+      role: roles[p.index] || p.role,
+      contentBox: p.contentBox || null,
+    }));
+    onConfirm(JSON.stringify({
+      version: 4,
+      accentColor,
+      design: analysis.design || null,
+      requiredFields: analysis.requiredFields || [],
+      pages,
+    }));
   };
 
   const beyondPreviewCap = analysis.pageCount > (analysis.pages || []).length;
@@ -1792,9 +1821,9 @@ function PdfStructureConfirmModal({ analysis, onConfirm, onSkip }) {
         }}
       >
         <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em', color: 'var(--accent-color, #6366f1)', marginBottom: 4 }}>
-          STEP 2 OF 2
+          AUTOMATIC TEMPLATE BLUEPRINT
         </div>
-        <h2 style={{ margin: '0 0 6px', fontSize: 17 }}>What&apos;s on each page?</h2>
+        <h2 style={{ margin: '0 0 6px', fontSize: 17 }}>Review what AI understood</h2>
         <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
           For each page below, tell us what kind of content it holds — that&apos;s how the
           system knows what to replace with real trip data and what to leave exactly as
@@ -2325,7 +2354,7 @@ function TemplatePreviewModal({
 
 function Field({ label, children }) {
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, minWidth: 0, maxWidth: '100%' }}>
       <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{label}</span>
       {children}
     </label>
@@ -2420,6 +2449,269 @@ const statusBadgeArchived = {
   background: 'rgba(245, 158, 11, 0.16)',
   color: 'rgb(180, 83, 9)',
 };
+
+// Authoring surface for a PDF template's HTML/CSS page bodies.
+//
+// The enum "design" object could only describe a template in ~18 fixed
+// values, so anything outside that vocabulary — a real brand font, a two
+// column day spread — was unreachable, and when the detection guessed wrong
+// an operator had no way to correct it. This is that missing recourse: the
+// actual markup, editable, with an AI draft as the starting point and the
+// built-in renderer always one click away.
+function HtmlTemplateModal({ template, onClose }) {
+  const notify = useNotify();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [error, setError] = useState('');
+  const [bodyCss, setBodyCss] = useState('');
+  const [pages, setPages] = useState([]);
+  const [starter, setStarter] = useState(null);
+  const [activeIndex, setActiveIndex] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const data = await fetchApi(`/api/travel/itinerary-templates/${template.id}/html-template`);
+        if (cancelled) return;
+        setBodyCss(data.bodyCss || '');
+        setPages(data.pages || []);
+        setStarter(data.starter || null);
+        const firstFillable = (data.pages || []).find((p) => p.role && p.role !== 'static');
+        setActiveIndex(firstFillable ? firstFillable.index : (data.pages || [])[0]?.index ?? null);
+      } catch (e) {
+        if (!cancelled) setError(e.message || 'Could not load this template');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [template.id]);
+
+  const setPageHtml = (index, html) => {
+    setPages((prev) => prev.map((p) => (p.index === index ? { ...p, bodyHtml: html } : p)));
+  };
+
+  const active = pages.find((p) => p.index === activeIndex) || null;
+  const enabledCount = pages.filter((p) => (p.bodyHtml || '').trim()).length;
+
+  const draftWithAi = async () => {
+    setDrafting(true);
+    setError('');
+    try {
+      const data = await fetchApi(`/api/travel/itinerary-templates/${template.id}/propose-html-template`, {
+        method: 'POST',
+      });
+      setBodyCss(data.bodyCss || '');
+      // Only pages the model actually returned are replaced; anything it
+      // skipped (a static page, or one it could not read) keeps what it had.
+      const byIndex = new Map((data.pages || []).map((p) => [p.index, p.bodyHtml]));
+      setPages((prev) => prev.map((p) => (byIndex.has(p.index) ? { ...p, bodyHtml: byIndex.get(p.index) } : p)));
+      notify.success(`Drafted ${data.pages?.length || 0} page(s)${data.aiModel ? ` with ${data.aiModel}` : ''}`);
+    } catch (e) {
+      setError(e.message || 'Could not draft a template');
+    } finally {
+      setDrafting(false);
+    }
+  };
+
+  const insertStarter = () => {
+    if (!starter) return;
+    setBodyCss(starter.bodyCss || '');
+    const byIndex = new Map((starter.pages || []).map((p) => [p.index, p.bodyHtml]));
+    setPages((prev) => prev.map((p) => (byIndex.get(p.index) ? { ...p, bodyHtml: byIndex.get(p.index) } : p)));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      await fetchApi(`/api/travel/itinerary-templates/${template.id}/html-template`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bodyCss,
+          pages: pages.map((p) => ({ index: p.index, bodyHtml: p.bodyHtml || '' })),
+        }),
+      });
+      notify.success('HTML template saved');
+      onClose();
+    } catch (e) {
+      // The server rejects unparseable template syntax and names the page, so
+      // surface it verbatim rather than a generic failure.
+      setError(e.message || 'Could not save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revert = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      await fetchApi(`/api/travel/itinerary-templates/${template.id}/html-template`, { method: 'DELETE' });
+      notify.success('Reverted to the built-in renderer');
+      onClose();
+    } catch (e) {
+      setError(e.message || 'Could not revert');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const mono = {
+    width: '100%', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: '0.76rem', lineHeight: 1.5, padding: 10, borderRadius: 6,
+    border: '1px solid var(--border-color)', background: 'var(--bg-color)',
+    color: 'var(--text-color)', resize: 'vertical',
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-label={`HTML template for ${template.name}`}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        style={{
+          background: 'var(--surface-color)', borderRadius: 8, border: '1px solid var(--border-color)',
+          maxWidth: 900, width: '100%', maxHeight: '92vh', overflow: 'auto', padding: 20,
+          boxShadow: '0 12px 32px rgba(0,0,0,0.3)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em', color: 'var(--accent-color, #6366f1)' }}>
+              PAGE BODY DESIGN
+            </div>
+            <h2 style={{ margin: '4px 0 4px', fontSize: 17 }}>{template.name}</h2>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, maxWidth: 620 }}>
+              Your uploaded PDF still supplies every page&apos;s logo, header and footer — this only
+              controls what fills the content area. Leave a page empty to keep the built-in layout for it.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} style={iconBtn} aria-label="Close"><X size={18} /></button>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading…</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '14px 0' }}>
+              <button type="button" onClick={draftWithAi} disabled={drafting || saving} style={drafting ? disabledBtn : primaryBtn}>
+                {drafting ? 'Drafting…' : 'Draft with AI'}
+              </button>
+              {starter ? (
+                <button type="button" onClick={insertStarter} disabled={saving} style={secondaryBtn}>
+                  Insert starter
+                </button>
+              ) : null}
+              <span style={{ flex: 1 }} />
+              <button type="button" onClick={revert} disabled={saving || enabledCount === 0} style={enabledCount === 0 ? disabledBtn : secondaryBtn}>
+                Revert to built-in
+              </button>
+              <button type="button" onClick={save} disabled={saving} style={saving ? disabledBtn : primaryBtn}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+              {enabledCount > 0
+                ? `${enabledCount} of ${pages.length} pages will render from HTML.`
+                : 'No pages use HTML yet — this template still renders with the built-in layout.'}
+            </div>
+
+            {error ? (
+              <div
+                role="alert"
+                style={{
+                  padding: '0.6rem 0.8rem', borderRadius: 6, marginBottom: 12, fontSize: 12,
+                  background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)',
+                  color: 'var(--danger-color, #ef4444)',
+                }}
+              >
+                {error}
+              </div>
+            ) : null}
+
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+              Stylesheet (shared by every page)
+            </label>
+            <textarea
+              value={bodyCss}
+              onChange={(e) => setBodyCss(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              style={{ ...mono, marginBottom: 16 }}
+              placeholder="@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');"
+            />
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+              {pages.map((p) => (
+                <button
+                  key={p.index}
+                  type="button"
+                  onClick={() => setActiveIndex(p.index)}
+                  style={{
+                    ...secondaryBtn,
+                    padding: '0.35rem 0.6rem',
+                    fontSize: '0.76rem',
+                    borderColor: p.index === activeIndex ? 'var(--accent-color, #6366f1)' : 'var(--border-color)',
+                    color: p.index === activeIndex ? 'var(--accent-color, #6366f1)' : undefined,
+                  }}
+                >
+                  Page {p.index}
+                  <span style={{ opacity: 0.65, marginLeft: 4 }}>{p.role || '—'}</span>
+                  {(p.bodyHtml || '').trim() ? <span style={{ marginLeft: 4 }}>●</span> : null}
+                </button>
+              ))}
+            </div>
+
+            {active ? (
+              <>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                  Page {active.index} body — {active.role || 'unclassified'}
+                  {active.role === 'static' ? ' (usually left empty; static pages copy through untouched)' : ''}
+                </label>
+                <textarea
+                  value={active.bodyHtml || ''}
+                  onChange={(e) => setPageHtml(active.index, e.target.value)}
+                  rows={16}
+                  spellCheck={false}
+                  style={mono}
+                  placeholder="{{#each days}} … {{/each}}"
+                />
+                <details style={{ marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
+                  <summary style={{ cursor: 'pointer' }}>Available data and syntax</summary>
+                  <pre style={{ ...mono, marginTop: 8, whiteSpace: 'pre-wrap' }}>
+{`{{title}} {{introText}} {{accent}} {{hero}} {{hasHero}}
+{{#each days}}
+  {{label}} {{title}} {{route}} {{hasRoute}} {{learning}}
+  {{#each items}} {{time}} {{activity}} {{location}} {{/each}}
+{{/each}}
+{{#each inclusions}}{{this}}{{/each}}   also: exclusions, otherDetails, terms
+{{perPerson}} {{groupTotal}} {{hasPrice}}
+{{#each fields}}{{label}} {{value}}{{/each}}
+
+{{#if x}}…{{else}}…{{/if}}   {{#unless x}}…{{/unless}}`}
+                  </pre>
+                </details>
+              </>
+            ) : null}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const primaryBtn = {
   display: 'inline-flex',
   alignItems: 'center',

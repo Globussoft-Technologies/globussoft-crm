@@ -29,6 +29,8 @@ import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import MapPreview from "../../components/MapPreview";
 import LocationAutocomplete from "../../components/travel/LocationAutocomplete";
+import { geocode } from "../../lib/geocoder";
+import { buildItineraryGeocodeQuery } from "../../lib/travelLocationResolver";
 
 // The 12 server-validated itemTypes (backend VALID_ITEM_TYPES). Order here is
 // the order they appear in the type picker — most-used first.
@@ -145,6 +147,7 @@ const TABS = [
   { id: "plan", label: "Plan" },
   { id: "pricing", label: "Pricing" },
   { id: "details", label: "Details" },
+  { id: "template", label: "Template details" },
   { id: "context", label: "Context" },
 ];
 
@@ -674,8 +677,17 @@ export default function ItineraryWorkspace() {
         const day = suggestedDays[targetDay - 1];
         if (!day) return;
         (day.items || []).forEach((it) => {
+          const locationQuery = buildItineraryGeocodeQuery(it, itin.destination);
           creates.push(
-            fetchApi(`/api/travel/itineraries/${id}/items`, {
+            (async () => {
+              let coordinates = null;
+              if (Number.isFinite(Number(it.latitude)) && Number.isFinite(Number(it.longitude))) {
+                coordinates = { latitude: Number(it.latitude), longitude: Number(it.longitude) };
+              } else if (locationQuery) {
+                const resolved = await geocode(locationQuery).catch(() => null);
+                if (resolved) coordinates = { latitude: resolved.lat, longitude: resolved.lng };
+              }
+              return fetchApi(`/api/travel/itineraries/${id}/items`, {
               method: "POST",
               body: JSON.stringify({
                 itemType: it.itemType || "activity",
@@ -688,11 +700,12 @@ export default function ItineraryWorkspace() {
                 // on the trip is untimed.
                 startTime: it.startTime ?? null,
                 locationName: it.locationName ?? null,
-                latitude: it.latitude ?? null,
-                longitude: it.longitude ?? null,
+                latitude: coordinates?.latitude ?? null,
+                longitude: coordinates?.longitude ?? null,
                 draftedByAi: true,
               }),
-            }),
+              });
+            })(),
           );
         });
       });
@@ -832,7 +845,11 @@ export default function ItineraryWorkspace() {
         )}
 
         <div style={S.tabRow} role="tablist" aria-label="Itinerary sections">
-          {TABS.filter((t) => t.id !== "pricing" || itin.moneyEnabled).map((t) => (
+          {TABS.filter((t) => {
+            if (t.id === "pricing" && !itin.moneyEnabled) return false;
+            if (t.id === "template" && !itin.pdfTemplateId && !itin.clonedFromTemplateId) return false;
+            return true;
+          }).map((t) => (
             <button
               key={t.id}
               type="button"
@@ -967,7 +984,11 @@ export default function ItineraryWorkspace() {
               </div>
               <select
                 value={itin.pdfTemplateId || ""}
-                onChange={(e) => patchItinerary({ pdfTemplateId: e.target.value || null }, { quiet: true })}
+                onChange={async (e) => {
+                  const templateId = e.target.value || null;
+                  const saved = await patchItinerary({ pdfTemplateId: templateId }, { quiet: true });
+                  if (saved && templateId) setTab("template");
+                }}
                 style={S.select}
                 aria-label="PDF template"
               >
@@ -1013,6 +1034,10 @@ export default function ItineraryWorkspace() {
 
       {tab === "details" && (
         <DetailsTab itin={itin} onSave={patchItinerary} cancellationPolicies={cancellationPolicies} navigate={navigate} />
+      )}
+
+      {tab === "template" && (
+        <TemplateDetailsTab itin={itin} onSave={patchItinerary} notify={notify} />
       )}
 
       {tab === "context" && (
@@ -1718,6 +1743,197 @@ function DetailsTab({ itin, onSave, cancellationPolicies, navigate }) {
           <Check size={14} /> {saving ? "Saving…" : "Save details"}
         </button>
       </div>
+    </div>
+  );
+}
+
+function readTemplateData(raw) {
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
+}
+
+function automaticTemplateValue(field, itin) {
+  const values = {
+    title: itin.title || itin.destination || "",
+    destination: itin.destination || "",
+    startDate: itin.startDate ? String(itin.startDate).slice(0, 10) : "",
+    endDate: itin.endDate ? String(itin.endDate).slice(0, 10) : "",
+    pax: itin.pax || 1,
+    introText: itin.introText || "",
+    inclusions: parseBullets(itin.inclusionsJson).join("\n"),
+    exclusions: parseBullets(itin.exclusionsJson).join("\n"),
+    termsText: itin.termsText || "",
+  };
+  if (field.key === "duration" && itin.startDate && itin.endDate) {
+    const days = Math.max(1, Math.floor((new Date(itin.endDate) - new Date(itin.startDate)) / 86400000) + 1);
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  return values[field.key] ?? "Filled from the itinerary";
+}
+
+function TemplateDetailsTab({ itin, onSave, notify }) {
+  const [schema, setSchema] = useState(null);
+  const [values, setValues] = useState(() => readTemplateData(itin.templateDataJson));
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSchema(null);
+    fetchApi(`/api/travel/itineraries/${itin.id}/template-schema`, { silent: true })
+      .then((result) => {
+        if (cancelled) return;
+        setSchema(result || { fields: [] });
+        setValues(result?.values || readTemplateData(itin.templateDataJson));
+      })
+      .catch(() => { if (!cancelled) setSchema({ fields: [], error: true }); });
+    return () => { cancelled = true; };
+  }, [itin.id, itin.pdfTemplateId, itin.clonedFromTemplateId, itin.templateDataJson]);
+
+  // Cover photo. Offered for every PDF template, not just ones with detected
+  // fields: without it the hero is the destination's Wikipedia lead image, so
+  // every Goa trip ships with the identical photograph.
+  const [coverUrl, setCoverUrl] = useState(null);
+  const [coverBusy, setCoverBusy] = useState(false);
+  const coverInputRef = useRef(null);
+
+  useEffect(() => { setCoverUrl(schema?.coverImageUrl || null); }, [schema]);
+
+  const uploadCover = async (file) => {
+    if (!file) return;
+    setCoverBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const data = await fetchApi(`/api/travel/itineraries/${itin.id}/cover-image`, { method: "POST", body: fd });
+      setCoverUrl(data.coverImageUrl);
+      // Keep the local copy in step. "Save template details" posts `values`
+      // wholesale, so without this the next save would write back a snapshot
+      // taken before the upload and silently drop the cover again.
+      setValues((old) => ({ ...old, coverImageUrl: data.coverImageUrl }));
+      notify.success("Cover photo updated");
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Could not upload the cover photo");
+    } finally {
+      setCoverBusy(false);
+      if (coverInputRef.current) coverInputRef.current.value = "";
+    }
+  };
+
+  const removeCover = async () => {
+    setCoverBusy(true);
+    try {
+      await fetchApi(`/api/travel/itineraries/${itin.id}/cover-image`, { method: "DELETE" });
+      setCoverUrl(null);
+      setValues((old) => {
+        const next = { ...old };
+        delete next.coverImageUrl;
+        return next;
+      });
+      notify.success("Cover photo removed - the destination photo will be used");
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Could not remove the cover photo");
+    } finally {
+      setCoverBusy(false);
+    }
+  };
+
+  const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+  const customFields = fields.filter((field) => field.source !== "auto");
+  const automaticFields = fields.filter((field) => field.source === "auto");
+  const save = async () => {
+    setSaving(true);
+    await onSave({ templateData: values });
+    setSaving(false);
+  };
+
+  return (
+    <div style={S.tabBody}>
+      <p style={S.tabIntro}>
+        Your template has a few labelled slots that the itinerary itself cannot fill - things printed on the
+        brochure that live nowhere in the trip data. Everything else (title, dates, route, day plan, pricing)
+        is filled in automatically. Fill these in and they will be printed in the spot described under each one.
+      </p>
+      {!schema && <div style={S.contextCard}>Analyzing the selected template...</div>}
+      {schema?.hasTemplate && (
+        <div style={{ ...S.contextCard, marginBottom: 14 }}>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Cover photo</div>
+          <div style={{ ...S.muted, marginBottom: 10 }}>
+            {coverUrl
+              ? "Used as the hero image on the first page."
+              : "No cover set, so the first page uses a stock photo of the destination - the same one for every trip there. Upload your own to replace it."}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {coverUrl && (
+              <img
+                src={coverUrl}
+                alt="Cover"
+                style={{ width: 132, height: 84, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border-color)" }}
+              />
+            )}
+            <input
+              ref={coverInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              onChange={(e) => uploadCover(e.target.files?.[0])}
+              style={{ display: "none" }}
+            />
+            <button
+              type="button"
+              onClick={() => coverInputRef.current?.click()}
+              disabled={coverBusy}
+              style={{ ...S.btn, ...(coverBusy ? {} : S.btnPrimary) }}
+            >
+              {coverBusy ? "Working..." : coverUrl ? "Replace photo" : "Upload photo"}
+            </button>
+            {coverUrl && (
+              <button type="button" onClick={removeCover} disabled={coverBusy} style={S.btn}>
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {schema?.error && <div style={S.contextCard}>The template field analysis could not be loaded. You can still generate using the standard itinerary details.</div>}
+      {automaticFields.length > 0 && (
+        <div style={S.detailsGrid}>
+          {automaticFields.map((field) => (
+            <Fld key={field.key} label={`${field.label} - automatic`} grow>
+              <div style={S.staticReadonlyBox}>{automaticTemplateValue(field, itin)}</div>
+            </Fld>
+          ))}
+        </div>
+      )}
+      {customFields.length > 0 ? (
+        <div style={S.detailsGrid}>
+          {customFields.map((field) => (
+            <Fld key={field.key} label={`${field.label}${field.required ? " *" : " (optional)"}`} grow>
+              {field.type === "textarea" ? (
+                <textarea rows={5} value={values[field.key] || ""} onChange={(e) => setValues((old) => ({ ...old, [field.key]: e.target.value }))} style={{ ...S.input, resize: "vertical" }} />
+              ) : (
+                <input type={field.type === "number" || field.type === "date" ? field.type : "text"} value={values[field.key] || ""} onChange={(e) => setValues((old) => ({ ...old, [field.key]: e.target.value }))} style={S.input} />
+              )}
+              {/* Where it prints. Without this the operator sees a bare label
+                  like "Trip style" with no way to know what it means or where
+                  it will end up. */}
+              <div style={S.fieldHint}>
+                {field.hint || `Printed on page ${field.pageIndex || 1} of the template.`}
+                {field.hint && field.pageIndex ? ` (page ${field.pageIndex})` : ""}
+              </div>
+            </Fld>
+          ))}
+        </div>
+      ) : schema && !schema.error ? (
+        <div style={S.contextCard}>
+          This template has no extra slots to fill - every part of it can be built from the itinerary itself.
+        </div>
+      ) : null}
+      {schema && !schema.error && customFields.length > 0 && (
+        <button type="button" onClick={save} disabled={saving} style={{ ...S.btn, ...S.btnPrimary, marginTop: 14 }}>
+          <Check size={14} /> {saving ? "Saving..." : "Save template details"}
+        </button>
+      )}
     </div>
   );
 }

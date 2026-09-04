@@ -276,14 +276,14 @@ describe('<LandingPages /> — Generate modal', () => {
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Review every section/i));
   });
 
-  it('stub-mode response surfaces an info toast about placeholders', async () => {
+  it('missing AI configuration surfaces an error and does not navigate', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
       if (url === '/api/landing-pages/generate-from-destination' && method === 'POST') {
-        return Promise.resolve({
-          page: { id: 556, slug: 'umrah-10', status: 'DRAFT' },
-          generation: { source: 'stub', stub: true, verdict: 'fallback', model: 'gemini-2.5-flash', guardrailIssues: [] },
-        });
+        const err = new Error('AI provider is not configured. Configure an AI provider to generate this landing page.');
+        err.status = 503;
+        err.code = 'AI_NOT_CONFIGURED';
+        return Promise.reject(err);
       }
       return defaultFetchMock(url, opts);
     });
@@ -295,8 +295,8 @@ describe('<LandingPages /> — Generate modal', () => {
     await user.type(screen.getByLabelText(/Audience/i), 'Pilgrims');
     await user.click(screen.getByRole('button', { name: /Generate Draft/i }));
 
-    await waitFor(() => expect(navigateMock).toHaveBeenCalled());
-    expect(notifyInfo).toHaveBeenCalledWith(expect.stringMatching(/stub mode|REVIEW/i));
+    expect(await screen.findByText(/AI provider is not configured/i)).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it('429 LLM_BUDGET_EXCEEDED surfaces a clear modal error; modal stays open', async () => {

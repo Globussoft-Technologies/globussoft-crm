@@ -2011,6 +2011,10 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
     } catch (genErr) {
 
+      if (genErr.code === "AI_NOT_CONFIGURED") {
+        return res.status(503).json({ error: "AI provider is not configured. Configure an AI provider to generate this landing page.", code: "AI_NOT_CONFIGURED" });
+      }
+
       if (genErr.code === "LANDING_PAGE_GENERATE_BUDGET_EXCEEDED") {
 
         return res.status(429).json({
@@ -2029,6 +2033,10 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
       throw genErr;
 
+    }
+
+    if (result.stub) {
+      return res.status(503).json({ error: "AI provider is not configured. Configure an AI provider to generate this landing page.", code: "AI_NOT_CONFIGURED" });
     }
 
 

@@ -246,6 +246,26 @@ export default function DiagnosticBuilder() {
     }
   };
 
+  const downloadImportTemplate = async () => {
+    try {
+      const res = await fetch('/api/travel/diagnostic-banks/template.csv', {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) throw new Error(`Template download failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'travel-diagnostic-banks-template.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.error(e.message || 'Failed to download import template');
+    }
+  };
+
   const validate = () => {
     const errors = [];
     let q;
@@ -481,6 +501,9 @@ export default function DiagnosticBuilder() {
             title="Bulk-upload diagnostic banks (CSV or Excel). Columns: subBrand, version, questionsJson, scoringRulesJson, isActive."
           >
             <Download size={14} aria-hidden /> Import CSV/Excel
+          </button>
+          <button type="button" onClick={downloadImportTemplate} style={secondaryBtn} title="Download a ready-to-fill diagnostic bank CSV template">
+            <Download size={14} aria-hidden /> Download template
           </button>
           <input
             ref={fileRef}
@@ -778,13 +801,25 @@ function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
   };
 
   const addSuggestedQuestion = (suggestion) => {
+    const baseId = suggestion.question.id || 'question';
+    const usedIds = new Set(questions.map((question) => String(question.id || '').toLowerCase()));
+    let id = baseId;
+    let suffix = 2;
+    while (usedIds.has(String(id).toLowerCase())) id = `${baseId}_${suffix++}`;
+
     writeQuestions([
       ...questions,
       {
-        id: suggestion.question.id,
+        id,
         text: suggestion.question.text,
         type: suggestion.question.type,
-        options: suggestion.question.options.map((o) => ({ ...o })),
+        required: false,
+        options: (suggestion.question.options || []).map((o, index, options) => ({
+          ...o,
+          // Suggestions are immediately usable, while remaining fully
+          // editable in the same question card as manually added options.
+          weight: clampScoreImpact(o.weight || Math.round(((index + 1) / options.length) * 10)),
+        })),
       },
     ]);
   };
@@ -892,7 +927,7 @@ function SuggestedQuestionsPanel({ questions, onAdd, onClose }) {
       style={suggestModalBackdrop}
     >
       <div style={suggestModalCard} role="dialog" aria-modal="true" aria-labelledby="suggested-questions-title">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+        <div style={suggestModalHeader}>
           <h2
             id="suggested-questions-title"
             style={{ margin: 0, fontSize: 18, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}
@@ -903,14 +938,14 @@ function SuggestedQuestionsPanel({ questions, onAdd, onClose }) {
             <X size={16} aria-hidden />
           </button>
         </div>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 14px' }}>
-          Common TMC diagnostic questions that feed curriculum matching and the AI recommendation
-          engine. Add the ones relevant to your form.
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 14px', flexShrink: 0 }}>
+          Add ready-made questions that improve curriculum matching and trip recommendations.
+          Questions already in this form, including close rewordings, are hidden.
         </p>
         {visibleSuggestions.length === 0 ? (
           <p style={emptyHint}>All suggested questions have already been added.</p>
         ) : (
-          <div style={{ display: 'grid', gap: 10 }}>
+          <div style={suggestModalList}>
             {visibleSuggestions.map((suggestion) => (
               <div key={suggestion.question.id} style={suggestCard}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
@@ -987,6 +1022,14 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
   const removeOption = (i) =>
     onChange({ options: opts.filter((_, j) => j !== i) });
 
+  const autoFillScores = () => {
+    if (!opts.length) return;
+    onChange({ options: opts.map((option, optionIndex) => ({
+      ...option,
+      weight: Math.min(10, Math.max(0, Math.round(((optionIndex + 1) / opts.length) * 10))),
+    })) });
+  };
+
   return (
     <div style={subCard}>
       <div style={subCardHeader}>
@@ -1062,9 +1105,14 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
             <strong style={{ fontSize: 13 }}>Answer options ({opts.length})</strong>
             <div style={microHint}>Each option has customer text and a score impact used by the diagnostic result.</div>
           </div>
-          <button type="button" onClick={addOption} style={addBtnSmall}>
-            <Plus size={12} aria-hidden /> Add option
-          </button>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button type="button" onClick={autoFillScores} disabled={!opts.length} style={secondaryBtnSmall} title="Fill simple 0-10 score impacts based on option order">
+              <Lightbulb size={12} aria-hidden /> Auto-fill scores
+            </button>
+            <button type="button" onClick={addOption} style={addBtnSmall}>
+              <Plus size={12} aria-hidden /> Add option
+            </button>
+          </div>
         </div>
         {opts.length === 0 ? (
           <p style={{ ...emptyHint, fontSize: 12 }}>No options yet.</p>
@@ -2129,6 +2177,10 @@ const secondaryBtn = {
   background: 'var(--surface-color)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', cursor: 'pointer',
 };
+const secondaryBtnSmall = {
+  ...secondaryBtn,
+  padding: '6px 9px', fontSize: 12,
+};
 // Sticky (not fixed) footer bar — the app's scrollable region is `<main
 // className="app-main">` (see components/Layout.jsx), not the viewport, and
 // it sits beside the sidebar rather than under it. `position: sticky`
@@ -2551,12 +2603,20 @@ const suggestModalBackdrop = {
   position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.45)',
   backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  zIndex: 1000, padding: '1rem',
+  zIndex: 2147483000, padding: 'max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom))',
 };
 const suggestModalCard = {
   ...card,
-  width: '100%', maxWidth: 640, maxHeight: '85vh', overflowY: 'auto',
-  margin: 0,
+  width: 'min(680px, calc(100vw - 2rem))', maxHeight: 'min(760px, calc(100vh - 2rem))',
+  overflow: 'hidden', display: 'flex', flexDirection: 'column', margin: 0,
+};
+const suggestModalHeader = {
+  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  marginBottom: 6, flexShrink: 0,
+};
+const suggestModalList = {
+  display: 'grid', gap: 10, overflowY: 'auto', minHeight: 0,
+  padding: '2px 6px 4px 0', overscrollBehavior: 'contain',
 };
 const suggestCard = {
   ...subCard,

@@ -6973,6 +6973,9 @@ model Itinerary {
   // whether it applied to them or not. Nullable: leave unset and the
   // template's static page renders exactly as uploaded.
   staticPageText          String?         @db.Text
+  // Answers to custom fields discovered from the selected PDF template.
+  // Additive, nullable and travel-only; existing itinerary paths ignore it.
+  templateDataJson        String?         @db.LongText
   // Planning-only mode toggle. Default false: a new itinerary starts as pure
   // day-by-day planning with no pricing/cost/tally shown anywhere (Plan tab
   // item costs, day totals, the Pricing tab, and the PDF's costing section

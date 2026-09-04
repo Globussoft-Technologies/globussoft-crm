@@ -15,7 +15,6 @@ import {
   FolderOpen,
   LogOut,
   RefreshCw,
-  Save,
   Trash2,
   User,
   XCircle,
@@ -52,7 +51,9 @@ export default function KnowledgeBaseAdmin() {
   const [jobs, setJobs] = useState([]);
   const [files, setFiles] = useState([]);
   const [filesTotal, setFilesTotal] = useState(0);
-  const [filesLoadingMore, setFilesLoadingMore] = useState(false);
+  const [filesPage, setFilesPage] = useState(1);
+  const filesPageSize = 50;
+  const [filesLoadingPage, setFilesLoadingPage] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [activeJobId, setActiveJobId] = useState(null);
@@ -133,7 +134,7 @@ export default function KnowledgeBaseAdmin() {
         fetchApi('/api/travel/knowledge-base/config', { silent: true }).catch(() => ({ rootFolderId: '' })),
         fetchApi('/api/travel/knowledge-base/status', { silent: true }).catch(() => ({ stats: [], lastJob: null })),
         fetchApi('/api/travel/knowledge-base/jobs?limit=5', { silent: true }).catch(() => ({ jobs: [] })),
-        fetchApi('/api/travel/knowledge-base/files?limit=50&offset=0', { silent: true }).catch(() => ({ files: [], total: 0 })),
+        fetchApi(`/api/travel/knowledge-base/files?limit=${filesPageSize}&offset=0`, { silent: true }).catch(() => ({ files: [], total: 0 })),
         fetchApi('/api/travel/knowledge-base/oauth/status', { silent: true }).catch(() => ({ configured: false, connected: false, userInfo: null, rootFolderId: '' })),
       ]);
       setConfig(cfg || { rootFolderId: '', qdrantEnabled: false, embedEnabled: false, embedProvider: null, embedModel: null, vectorSize: null });
@@ -142,6 +143,7 @@ export default function KnowledgeBaseAdmin() {
       setJobs(jbs?.jobs || []);
       setFiles(fls?.files || []);
       setFilesTotal(fls?.total || 0);
+      setFilesPage(1);
       setOauth(oauthStatus || { configured: false, connected: false, userInfo: null, rootFolderId: '' });
     } catch (e) {
       notify.error(e.message || 'Failed to load knowledge base');
@@ -218,17 +220,18 @@ export default function KnowledgeBaseAdmin() {
     }
   };
 
-  const loadMoreFiles = async () => {
-    setFilesLoadingMore(true);
+  const loadFilesPage = async (page) => {
+    setFilesLoadingPage(true);
     try {
-      const nextOffset = files.length;
-      const res = await fetchApi(`/api/travel/knowledge-base/files?limit=50&offset=${nextOffset}`, { silent: true });
-      setFiles((prev) => [...prev, ...(res?.files || [])]);
+      const res = await fetchApi(`/api/travel/knowledge-base/files?limit=${filesPageSize}&offset=${(page - 1) * filesPageSize}`, { silent: true });
+      setFiles(res?.files || []);
       setFilesTotal(res?.total || filesTotal);
+      setFilesPage(page);
+      setSelectedFileIds(new Set());
     } catch (e) {
-      notify.error(e.message || 'Failed to load more files');
+      notify.error(e.message || 'Failed to load files');
     } finally {
-      setFilesLoadingMore(false);
+      setFilesLoadingPage(false);
     }
   };
 
@@ -270,25 +273,6 @@ export default function KnowledgeBaseAdmin() {
       notify.success('Brochure folder selected');
     } catch (e) {
       notify.error(e.message || 'Failed to save folder');
-    } finally {
-      setSavingConfig(false);
-    }
-  };
-
-  const saveConfig = async () => {
-    if (!isAdmin) return;
-    setSavingConfig(true);
-    try {
-      const res = await fetchApi('/api/travel/knowledge-base/config', {
-        method: 'POST',
-        body: JSON.stringify({ rootFolderId: folderInput }),
-      });
-      setConfig((prev) => ({ ...prev, ...res }));
-      setFolderInput(res.rootFolderId);
-      setOauth((prev) => ({ ...prev, rootFolderId: res.rootFolderId }));
-      notify.success('Brochure folder saved');
-    } catch (e) {
-      notify.error(e.message || 'Failed to save config');
     } finally {
       setSavingConfig(false);
     }
@@ -788,25 +772,8 @@ export default function KnowledgeBaseAdmin() {
                 )}
               </div>
 
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 12, ...muted, marginBottom: 6, fontWeight: 600 }}>Selected folder</label>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  <input
-                    type="text"
-                    className="input-field"
-                    value={folderInput}
-                    onChange={(e) => setFolderInput(e.target.value)}
-                    placeholder="Folder ID (optional)"
-                    disabled={!isAdmin || savingConfig}
-                    style={{ flex: 1, minWidth: 220 }}
-                  />
-                  {isAdmin && (
-                    <button className="btn-primary" onClick={saveConfig} disabled={savingConfig}>
-                      <Save size={16} style={{ marginRight: 6 }} />
-                      {savingConfig ? 'Saving…' : 'Save'}
-                    </button>
-                  )}
-                </div>
+              <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: 'var(--bg-color)', fontSize: 12, ...muted }}>
+                The selected folder is saved automatically when you choose <strong style={{ color: 'var(--text-primary)' }}>Use this folder</strong>.
               </div>
 
               {oauth.rootFolderId && (
@@ -1132,12 +1099,33 @@ export default function KnowledgeBaseAdmin() {
               </tbody>
             </table>
           </div>
-          {files.length < filesTotal && (
-            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-              <button className="btn-secondary" onClick={loadMoreFiles} disabled={filesLoadingMore} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                <RefreshCw size={14} style={{ animation: filesLoadingMore ? 'spin 1s linear infinite' : undefined }} />
-                {filesLoadingMore ? 'Loading…' : `Load more files (${files.length} of ${filesTotal})`}
-              </button>
+          {filesTotal > filesPageSize && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, ...muted }}>
+                Showing {(filesPage - 1) * filesPageSize + 1}-{Math.min(filesPage * filesPageSize, filesTotal)} of {filesTotal} files
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  className="btn-secondary"
+                  onClick={() => loadFilesPage(filesPage - 1)}
+                  disabled={filesPage === 1 || filesLoadingPage}
+                  style={{ padding: '7px 11px' }}
+                >
+                  Previous
+                </button>
+                <span style={{ minWidth: 82, textAlign: 'center', fontSize: 12, ...muted }}>
+                  Page {filesPage} of {Math.ceil(filesTotal / filesPageSize)}
+                </span>
+                <button
+                  className="btn-secondary"
+                  onClick={() => loadFilesPage(filesPage + 1)}
+                  disabled={filesPage >= Math.ceil(filesTotal / filesPageSize) || filesLoadingPage}
+                  style={{ padding: '7px 11px', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
+                  {filesLoadingPage && <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} />}
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -30,6 +30,19 @@ const LRU_CAP = 500;
 
 const cache = new Map();
 
+// Keep place-picker labels in the CRM's English UI language. Providers may
+// return a local-script name (such as Devanagari) in one of the fields that a
+// caller displays. This filters suggestions only; coordinates and reverse
+// geocoding are deliberately unaffected.
+export function isEnglishPlaceSuggestion(result) {
+  const label = [
+    result?.name, result?.display_name, result?.street, result?.city,
+    result?.district, result?.county, result?.state, result?.country,
+  ].filter(Boolean).join(" ");
+  const letters = label.match(/\p{Letter}/gu) || [];
+  return letters.every((letter) => /\p{Script=Latin}/u.test(letter));
+}
+
 function normalizeQuery(query) {
   return String(query || '').trim().toLowerCase();
 }
@@ -111,7 +124,7 @@ export async function geocodeSuggestions(query, { limit = 6 } = {}) {
     );
     if (Array.isArray(data?.results)) {
       results = data.results.filter(
-        (r) => Number.isFinite(r?.lat) && Number.isFinite(r?.lng) && r?.display_name,
+        (r) => Number.isFinite(r?.lat) && Number.isFinite(r?.lng) && r?.display_name && isEnglishPlaceSuggestion(r),
       );
     }
   } catch (err) {
@@ -201,7 +214,7 @@ export async function geocodeSuggest(query, limit = 6, opts = {}) {
     );
     if (Array.isArray(data?.results)) {
       results = data.results.filter(
-        (r) => Number.isFinite(r?.lat) && Number.isFinite(r?.lng),
+        (r) => Number.isFinite(r?.lat) && Number.isFinite(r?.lng) && isEnglishPlaceSuggestion(r),
       );
     }
   } catch (err) {

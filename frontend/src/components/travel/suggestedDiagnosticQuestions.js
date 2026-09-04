@@ -184,9 +184,25 @@ export function questionMatchesSuggestion(question, suggestion) {
 
   if (suggestedId && existingId && suggestedId === existingId) return true;
   if (!suggestedText || !existingText) return false;
-  return (
+  if (
     existingText === suggestedText ||
     existingText.includes(suggestedText) ||
     suggestedText.includes(existingText)
+  ) return true;
+
+  // Catch lightly reworded questions without hiding genuinely different
+  // questions. Stop words are ignored so "Which grade is this for?" and
+  // "What class is the trip for?" are treated as the same suggestion.
+  const stopWords = new Set(['a', 'an', 'and', 'are', 'for', 'is', 'of', 'the', 'this', 'to', 'what', 'which']);
+  const tokenize = (value) => new Set(
+    value
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((word) => word.length > 2 && !stopWords.has(word)),
   );
+  const suggestedWords = tokenize(suggestedText);
+  const existingWords = tokenize(existingText);
+  if (!suggestedWords.size || !existingWords.size) return false;
+  const overlap = [...suggestedWords].filter((word) => existingWords.has(word)).length;
+  return overlap / Math.min(suggestedWords.size, existingWords.size) >= 0.6;
 }

@@ -205,7 +205,12 @@ export const fetchApi = async (url, options = {}) => {
 
   let response;
   try {
-    response = await fetch(url, { ...fetchOpts, headers });
+    // Keep the HttpOnly auth cookie in sync with the bearer header. This is
+    // important for browser navigations (links, new tabs, iframes and media)
+    // because those requests cannot carry the Authorization header. Include
+    // credentials by default so this also works when the SPA/API use separate
+    // dev-server origins; callers can still explicitly override it.
+    response = await fetch(url, { credentials: 'include', ...fetchOpts, headers });
   } catch (networkErr) {
     // No response at all — DNS failure, offline, CORS, etc.
     const msg = 'Network error — check your connection and try again.';

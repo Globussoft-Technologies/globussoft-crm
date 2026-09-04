@@ -164,7 +164,7 @@ export function useNotify() {
 
 const TOAST_COLORS = {
   success: { bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.4)', text: '#10b981', icon: '✓' },
-  error: { bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.4)', text: '#ef4444', icon: '✕' },
+  error: { bg: 'var(--toast-error-bg, #451a1d)', border: 'var(--toast-error-border, #fb7185)', text: 'var(--toast-error-text, #ffe4e6)', iconColor: 'var(--toast-error-border, #fb7185)', icon: '✕' },
   info: { bg: 'rgba(59,130,246,0.12)', border: 'rgba(59,130,246,0.4)', text: '#3b82f6', icon: 'i' },
 };
 
@@ -195,7 +195,7 @@ function ToastStack({ toasts, onDismiss }) {
               pointerEvents: 'auto',
               background: c.bg,
               border: `1px solid ${c.border}`,
-              color: 'var(--text-primary, #1f2937)',
+              color: t.kind === 'error' ? c.text : 'var(--text-primary, #1f2937)',
               padding: '0.75rem 1rem',
               borderRadius: 10,
               boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
@@ -208,7 +208,7 @@ function ToastStack({ toasts, onDismiss }) {
               aria-hidden="true"
               style={{
                 width: 22, height: 22, borderRadius: '50%',
-                background: c.text, color: '#fff', fontSize: '0.75rem', fontWeight: 700,
+                background: c.iconColor || c.text, color: '#fff', fontSize: '0.75rem', fontWeight: 700,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 flexShrink: 0, marginTop: 1,
               }}

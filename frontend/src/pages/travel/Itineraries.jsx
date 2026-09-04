@@ -225,6 +225,7 @@ const EMPTY_FORM = {
 };
 
 const CURRENCIES = ["INR", "USD", "EUR"];
+const templatePickerEnabled = false;
 
 // Geocode cache: city name → { lat, lng } resolved via Nominatim (same OSM
 // data-source as our map tiles — no API key required, free to use).
@@ -264,6 +265,9 @@ function friendlyAiError(rawError) {
   if (!rawError)
     return "AI service is temporarily unavailable. Please try again.";
   const m = String(rawError).toLowerCase();
+  if (/not configured|keys? are not configured|api[_ -]?key/.test(m)) {
+    return "AI provider is not configured. Configure an AI provider to use itinerary suggestions.";
+  }
   if (
     /429|too many requests|exceeded.*quota|quota exceeded|rate limit/.test(m)
   ) {
@@ -272,10 +276,10 @@ function friendlyAiError(rawError) {
   if (
     /401|unauthorized|invalid.*api.*key|api key.*invalid|incorrect.*key/.test(m)
   ) {
-    return "AI service rejected the API key. Please check the key configuration in the backend .env file.";
+    return "AI provider configuration was rejected. Please check the AI provider settings.";
   }
   if (/403|forbidden|permission/.test(m)) {
-    return "AI service blocked the request. Your API key may not have access to this model.";
+    return "AI provider blocked the request. Please check the AI provider settings.";
   }
   if (/404|does not exist|unknown model|model.*not.*found/.test(m)) {
     return "AI model not available. Please contact support to update the model configuration.";
@@ -1713,7 +1717,7 @@ export default function Itineraries() {
                   that would ever set it to true never rendered either. The
                   whole "Start from a trip template" option was silently
                   unreachable from a fresh modal open. */}
-              <div
+              {templatePickerEnabled && (<div
                 style={{
                   borderRadius: 8,
                   border: "1px solid var(--border-color)",
@@ -1994,7 +1998,7 @@ export default function Itineraries() {
                     )}
                   </div>
                 )}
-              </div>
+              </div>)}
 
               <label style={fieldLabel}>
                 Contact

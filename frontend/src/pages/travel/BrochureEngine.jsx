@@ -704,9 +704,31 @@ function PlaceInput({ label, tip, required, value, onChange, placeholder, error,
 // silently steer the theme, and it's obvious at a glance whether it's active.
 function ToggleSection({ label, tip, enabled, onToggle, children }) {
   return (
-    <div style={{ marginBottom: 16 }}>
-      <label style={{ ...fieldLabel, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-        <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} />
+    <div style={{ marginBottom: 16, minWidth: 0 }}>
+      <label
+        style={{
+          display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+          minHeight: 42,
+          padding: '9px 12px',
+          border: '1px solid var(--border-color)',
+          borderRadius: 8,
+          background: 'var(--subtle-bg)',
+          color: 'var(--text-primary)',
+          fontSize: 14,
+          fontWeight: 500,
+          cursor: 'pointer',
+          boxSizing: 'border-box',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onToggle(e.target.checked)}
+          style={{ margin: 0, flexShrink: 0 }}
+        />
         <LabelWithInfo label={label} tip={tip} />
       </label>
       {enabled && <div style={{ marginTop: 8 }}>{children}</div>}
@@ -3502,7 +3524,16 @@ export default function BrochureEngine() {
                     options={[{ value: 'generate', label: 'Generate automatically' }, { value: 'show-first', label: 'Show palette first' }]}
                   />
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0 16px' }}>
+                <div
+                  data-testid="theme-colour-preferences"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
+                    columnGap: 16,
+                    rowGap: 12,
+                    marginTop: 4,
+                  }}
+                >
                   <ToggleSection
                     label="Preferred colours"
                     tip="Off: the AI picks colours from the destination automatically. On: the first colour here becomes the brochure's accent."

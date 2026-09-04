@@ -5972,13 +5972,20 @@ function guardDesignedHtml(
     throw new Error('Designed HTML contains a raw object-serialization artifact ("[object Object]") instead of real text');
   }
 
-  // Preserve only the semantically mandatory visuals. The creative model is
-  // deliberately free to curate the remaining photo library rather than
-  // forcing every asset into a crowded, repetitive layout.
+  // Make the supplied visual library available to the designer, but do not
+  // make placement a fatal contract. The creative model is deliberately free
+  // to curate the photos rather than forcing every asset into a crowded,
+  // repetitive layout.
   const visualTokens = ['HERO_PHOTO', 'ROUTE_MAP_IMAGE'].filter((token) => tokenMap[token]);
   for (const token of visualTokens) {
     const asImage = new RegExp(`<img\\b[^>]*\\bsrc=["']${token}["']`, 'i').test(html);
-    if (!asImage) throw new Error(`Designed HTML omitted required visual asset ${token}`);
+    // Asset placement is a creative choice. Some otherwise valid model
+    // responses omit a supplied photo/map token (especially smaller models),
+    // and treating that as fatal caused every retry to fall through to the
+    // bland deterministic template. Keep the layout and content validation
+    // strict, but allow the designer to choose a text-led composition when it
+    // can still produce a complete, printable document.
+    if (!asImage) console.warn(`[tmc-brochure] Designed HTML did not place optional visual asset ${token}; keeping the AI composition`);
   }
   for (const token of ['LOGO_TMC', 'LOGO_SCHOOL']) {
     if (!tokenMap[token]) continue;
@@ -6004,6 +6011,11 @@ function guardDesignedHtml(
     ? html.replace(/<head([^>]*)>/i, `<head$1>${forced}`)
     : html.replace(/<html([^>]*)>/i, `<html$1><head>${forced}</head>`);
 
+  // The co-branding sentence is useful in an interior footer, but it reads as
+  // an intrusive badge on a photographic cover. Remove the model's cover
+  // badge; the deterministic interior header/footer identity marks remain.
+  html = html.replace(/<[^>]*class=["'][^"']*cobrand[^"']*["'][^>]*>[\s\S]*?<\/[^>]+>/gi, '');
+
   const hasBothLogos =
     (!logos.tmcLogo || html.includes(logos.tmcLogo)) &&
     (!logos.schoolLogo || html.includes(logos.schoolLogo));
@@ -6011,7 +6023,7 @@ function guardDesignedHtml(
     // Safety net: the co-branding requirement can never silently vanish just
     // because the model's layout dropped a logo — append a guaranteed strip.
     const strip =
-      `<div style="position:fixed;top:6mm;left:0;right:0;display:flex;justify-content:center;align-items:center;gap:6mm;z-index:9999;background:rgba(255,255,255,.92);padding:3mm 6mm;border-radius:2mm;width:fit-content;margin:0 auto">` +
+      `<div class="forced-cobrand" style="position:fixed;top:7mm;right:8mm;display:flex;justify-content:center;align-items:center;gap:4mm;z-index:9999;background:rgba(255,255,255,.94);padding:2.5mm 4mm;border-radius:2mm;max-width:72mm;box-sizing:border-box">` +
       (logos.tmcLogo ? `<img src="${esc(logos.tmcLogo)}" alt="The Modern Classroom" style="height:14mm;object-fit:contain">` : '') +
       (logos.schoolLogo ? `<img src="${esc(logos.schoolLogo)}" alt="School" style="height:14mm;object-fit:contain">` : '') +
       `</div>`;

@@ -49,6 +49,10 @@ const SAFE_LOCAL_EXTENSIONS = {
   // SVG is active content when served inline from the CRM origin. Keep the
   // bytes downloadable, but never give the local fallback an .svg suffix.
   'image/svg+xml': '.bin',
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+  'video/quicktime': '.mov',
+  'video/ogg': '.ogv',
   'application/pdf': '.pdf',
   'application/msword': '.doc',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',

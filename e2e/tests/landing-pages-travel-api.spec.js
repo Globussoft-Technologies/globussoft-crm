@@ -129,6 +129,13 @@ test.describe('AI generator — POST /generate-from-destination', () => {
       destination: `${RUN_TAG}-preview-${Date.now()}`,
       durationDays: 5, audience: 'travellers', subBrand: 'travelstall',
     });
+    if (res.status() === 503) {
+      const unavailable = await res.json();
+      expect(unavailable.code).toBe('AI_NOT_CONFIGURED');
+      const afterList = await (await get(request, '/api/landing-pages')).json();
+      expect(Array.isArray(afterList) ? afterList.length : 0).toBe(beforeCount);
+      return;
+    }
     expect(res.status()).toBe(200);
     const body = await res.json();
     // Response shape — preview mode.
@@ -154,6 +161,10 @@ test.describe('AI generator — POST /generate-from-destination', () => {
       destination: dest, durationDays: 7, audience: 'photographers', subBrand: 'travelstall',
       autoCreate: true,
     });
+    if (res.status() === 503) {
+      expect((await res.json()).code).toBe('AI_NOT_CONFIGURED');
+      return;
+    }
     expect(res.status()).toBe(201);
     const body = await res.json();
     expect(body.page).toBeTruthy();
@@ -176,6 +187,10 @@ test.describe('AI generator — POST /generate-from-destination', () => {
       destination: dest, durationDays: 4, audience: 'travellers', subBrand: 'travelstall',
       autoCreate: true, style: 'legacy',
     });
+    if (res.status() === 503) {
+      expect((await res.json()).code).toBe('AI_NOT_CONFIGURED');
+      return;
+    }
     expect(res.status()).toBe(201);
     const body = await res.json();
     createdIds.add(body.page.id);
@@ -214,6 +229,11 @@ test.describe('AI generator — POST /generate-from-destination', () => {
       destination: dest, durationDays: 3, audience: 'travellers', subBrand: 'travelstall',
       autoCreate: true, style: 'legacy',
     });
+    if (created.status() === 503) {
+      expect((await created.json()).code).toBe('AI_NOT_CONFIGURED');
+      return;
+    }
+    expect(created.status()).toBe(201);
     const body = await created.json();
     createdIds.add(body.page.id);
     // Try to publish — should fail because the AI-generated draft is

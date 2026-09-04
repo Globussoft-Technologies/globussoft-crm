@@ -212,12 +212,12 @@ describe('<BookAppointment /> — filterPastSlots: time dropdown for today', () 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('<BookAppointment /> — submit-time past date+time guard', () => {
-  it('calls notify.error and does NOT call the booking API for a past date+time', async () => {
+describe('<BookAppointment /> — past date+time guard', () => {
+  it('rejects a past date immediately and does NOT call the booking API', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-07-07T14:00:00'));
     installDefaultMock();
-    const { container, getDateInput, getTimeSelect } = renderPage();
+    const { getDateInput, getTimeSelect } = renderPage();
 
     await screen.findByRole('heading', { name: /Book an Appointment/i });
 
@@ -227,32 +227,17 @@ describe('<BookAppointment /> — submit-time past date+time guard', () => {
       { target: { value: 'Routine checkup' } }
     );
 
-    // Change date to yesterday — fireEvent bypasses the `min` native constraint.
-    // For a non-today date filterPastSlots returns all slots so the select fills.
+    // Change date to yesterday — fireEvent bypasses the `min` native constraint,
+    // so the component's change-time guard must still reject it.
     fireEvent.change(getDateInput(), { target: { value: '2026-07-06' } });
-
-    await waitFor(() => {
-      const nonEmpty = Array.from(getTimeSelect().options).filter(o => o.value !== '');
-      expect(nonEmpty.length).toBeGreaterThan(0);
-    });
-
-    // Select any available slot — combined with yesterday's date it is past.
-    const firstSlot = Array.from(getTimeSelect().options).find(o => o.value !== '');
-    fireEvent.change(getTimeSelect(), { target: { value: firstSlot.value } });
-
-    // Wait for React to re-render and enable the submit button, then submit.
-    // Using fireEvent.submit on the form rather than clicking the button so we
-    // don't race with the re-render that enables the button.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Confirm Appointment/i })).not.toBeDisabled();
-    });
-    fireEvent.submit(container.querySelector('form'));
 
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith(
         'Please select a future date and time for your appointment'
       );
     });
+    expect(getDateInput()).toHaveValue('2026-07-07');
+    expect(getTimeSelect()).toHaveValue('');
 
     // The booking API must NOT have been called.
     const bookingCall = fetchApiMock.mock.calls.find(

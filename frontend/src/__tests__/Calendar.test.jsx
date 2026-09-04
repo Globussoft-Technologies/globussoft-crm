@@ -25,7 +25,7 @@
  *     modal; the spec pins the new surface.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -47,6 +47,20 @@ import Calendar, { hoursForVisits, isHolidayForColumn } from '../pages/wellness/
 
 const today = new Date();
 const isoDay = today.toISOString().slice(0, 10);
+
+// Empty-slot interaction specs must not depend on the wall clock of the CI
+// runner. Keep Date on the current calendar day but before the grid's first
+// 09:00 slot; timers remain real so RTL polling is unaffected.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  const startOfTestDay = new Date(today);
+  startOfTestDay.setHours(8, 0, 0, 0);
+  vi.setSystemTime(startOfTestDay);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const staff = [
   { id: 5, name: 'Dr. Anjali Mukherjee', wellnessRole: 'doctor' },

@@ -242,7 +242,7 @@ export default function BookAppointment() {
 
     // Prevent selecting a past date
     if (selectedDate < today) {
-      console.warn("Past dates are not allowed.");
+      notify.error("Please select a future date and time for your appointment");
       return;
     }
     setFormData({ ...formData, appointmentDate: date, appointmentTime: "" });

@@ -39,8 +39,8 @@
     },
     {
       "pattern": "index-*.js",
-      "maxKB": 285,
-      "comment": "Main SPA entry chunk. Critical-path; keep tight. Bumped 250→260 on 2026-07-23: PR #1251 added the open-source section + footer GitHub link to Landing.jsx, pushing the chunk 0.5 KB over the 250 KB cap. Bumped 260→270 on 2026-08-12: PR #1319 added the Omnibar global search component and sidebarSearch utility to the header, pushing the index chunk to 262.1 KB. Bumped 270→285 on 2026-08-21: concurrent uncommitted feature work (super-admin AI provider/managed-key management, multi-provider embeddings, travel diagnostic public-form + embed pages) pushed the chunk to 278.5 KB. Restoring headroom while that work lands and gets its own lazy-load review."
+      "maxKB": 290,
+      "comment": "Main SPA entry chunk. Critical-path; keep tight. Bumped 250→260 on 2026-07-23: PR #1251 added the open-source section + footer GitHub link to Landing.jsx, pushing the chunk 0.5 KB over the 250 KB cap. Bumped 260→270 on 2026-08-12: PR #1319 added the Omnibar global search component and sidebarSearch utility to the header, pushing the index chunk to 262.1 KB. Bumped 270→285 on 2026-08-21: concurrent uncommitted feature work (super-admin AI provider/managed-key management, multi-provider embeddings, travel diagnostic public-form + embed pages) pushed the chunk to 278.5 KB. Bumped 285→290 on 2026-09-04: PR #1401 added travel CRM sidebar collapsible sections and theme support (CSS in index.css), pushing the chunk to 285.4 KB. Restoring headroom while that work lands and gets its own lazy-load review."
     },
     {
       "pattern": "Dashboards-*.js",

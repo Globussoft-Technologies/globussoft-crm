@@ -76,6 +76,7 @@ prisma.tripParticipant = {
 };
 prisma.tripPaymentPlan = {
   findUnique: vi.fn(),
+  findMany: vi.fn(),
   upsert: vi.fn(),
   delete: vi.fn(),
 };
@@ -100,6 +101,7 @@ prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 prisma.payment = {
   findFirst: vi.fn(),
+  findMany: vi.fn().mockResolvedValue([]),
 };
 prisma.itinerary = {
   findFirst: vi.fn(),

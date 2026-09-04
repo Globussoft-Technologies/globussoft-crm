@@ -95,6 +95,12 @@ prisma.payment = prisma.payment || {};
 prisma.payment.findFirst = vi.fn();
 prisma.payment.create = vi.fn();
 prisma.payment.update = vi.fn();
+// PR #1399 — the submit path materialises trip instalments via
+// travelTripInstalments (allowMissingPlan: true). No payment plan exists in
+// these tests, so findUnique returns null and the call early-returns.
+prisma.tripPaymentPlan = prisma.tripPaymentPlan || {};
+prisma.tripPaymentPlan.findUnique = vi.fn().mockResolvedValue(null);
+prisma.tripPaymentPlan.findMany = vi.fn().mockResolvedValue([]);
 prisma.leadRoutingRule = prisma.leadRoutingRule || {};
 prisma.leadRoutingRule.findFirst = vi.fn().mockResolvedValue(null);
 prisma.user = prisma.user || {};
@@ -106,6 +112,8 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 // the lead-capture path leaves them untouched (assert with not.toHaveBeenCalled).
 prisma.pendingTripRegistration = prisma.pendingTripRegistration || {};
 prisma.pendingTripRegistration.create = vi.fn();
+// PR #1399 — payment-linked submits mark the draft converted/OTP-verified.
+prisma.pendingTripRegistration.update = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripParticipant = prisma.tripParticipant || {};
 prisma.tripParticipant.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
@@ -1862,7 +1870,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     );
   });
 
-  test('falls back to thank-you (no redirect) when trip has no published microsite', async () => {
+  test('redirects to customer portal (regardless of microsite) when trip has no published microsite', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1',
@@ -1884,13 +1892,13 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     expect(res.body).toMatchObject({
       ok: true,
       draftId: 7002,
-      redirect: { type: 'thanks' },
+      redirect: { type: 'customer-registration', url: expect.stringContaining('/customer/register') },
     });
     // Draft still created — the microsite-less state doesn't block onboarding
     expect(prisma.pendingTripRegistration.create).toHaveBeenCalled();
   });
 
-  test('falls back to thank-you when microsite is unpublished (publishedAt null)', async () => {
+  test('redirects to customer portal when microsite is unpublished (publishedAt null)', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1', tenantId: 1, tripId: 100,
@@ -1908,10 +1916,13 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
         parent: { name: 'Y', email: 'y@e.com', phone: '+911234567890' },
       });
     expect(res.status).toBe(201);
-    expect(res.body.redirect).toMatchObject({ type: 'thanks' });
+    expect(res.body.redirect).toMatchObject({
+      type: 'customer-registration',
+      url: expect.stringContaining('/customer/register'),
+    });
   });
 
-  test('falls back to thank-you when microsite has expired', async () => {
+  test('redirects to customer portal when microsite has expired', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1', tenantId: 1, tripId: 100,
@@ -1929,7 +1940,10 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
         parent: { name: 'Y', email: 'y@e.com', phone: '+911234567890' },
       });
     expect(res.status).toBe(201);
-    expect(res.body.redirect).toMatchObject({ type: 'thanks' });
+    expect(res.body.redirect).toMatchObject({
+      type: 'customer-registration',
+      url: expect.stringContaining('/customer/register'),
+    });
   });
 
   test('missing required fields returns 400 MISSING_FIELDS, no draft created', async () => {
@@ -2226,6 +2240,8 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     // generatedAt) so the list grid can render sub-brand chips + "AI
     // draft" badges, plus 2 featured fields (isFeatured / featuredAt) so
     // it can render the "★ Featured" badge + Feature / Unfeature button.
+    // PR #1399 adds content + tripId so trip-linked rows can carry their
+    // registration context without a second fetch.
     expect(arg.select).toEqual({
       id: true,
       title: true,
@@ -2234,6 +2250,8 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
       visits: true,
       submissions: true,
       templateType: true,
+      content: true,
+      tripId: true,
       createdAt: true,
       updatedAt: true,
       destination: true,

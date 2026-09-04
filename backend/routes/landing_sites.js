@@ -180,9 +180,19 @@ router.post('/generate', verifyToken, async (req, res) => {
       imageMode,
     }, { tenantId: req.user.tenantId });
 
-    if (result.stub) {
-      return res.status(503).json({ error: 'AI provider is not configured. Configure an AI provider to generate this landing site.', code: 'AI_NOT_CONFIGURED' });
+    // AI access blocked (no BYOK key + no funded subscription, or credits
+    // exhausted): fail loudly with a machine-readable code instead of
+    // persisting a silent stub draft — the UI shows a proper
+    // "AI is not configured" message and no orphan page is created.
+    if (result.aiBlockedCode) {
+      const statusMessage =
+        result.aiBlockedMessage ||
+        (result.aiBlockedCode === 'AI_CREDITS_EXHAUSTED'
+          ? 'AI credits for this workspace are exhausted.'
+          : 'AI is not configured for this workspace.');
+      return res.status(503).json({ error: statusMessage, code: result.aiBlockedCode });
     }
+
     if (!autoCreate) return res.json(result);
 
     const baseSlug = slugify(result.suggestedSlug || campaignName || `${normalizedSector}-landing-site`);
@@ -214,7 +224,7 @@ router.post('/generate', verifyToken, async (req, res) => {
 
     if (!created) return res.status(500).json({ error: 'Failed to allocate a unique slug after 5 attempts' });
     await snapshotSafe(prisma, created, VERSION_SOURCES.AI_GENERATION, req.user);
-    return res.status(201).json({ page: created, generation: { source: result.source, model: result.model, stub: result.stub, verdict: result.verdict, guardrailIssues: result.guardrailIssues, realModeError: result.realModeError, imagesFetched: result.imagesFetched || 0 } });
+    return res.status(201).json({ page: created, generation: { source: result.source, model: result.model, stub: result.stub, verdict: result.verdict, guardrailIssues: result.guardrailIssues, realModeError: result.realModeError, aiBlockedCode: result.aiBlockedCode || null, aiBlockedMessage: result.aiBlockedMessage || null, imagesFetched: result.imagesFetched || 0 } });
   } catch (err) {
     if (err.code === 'AI_NOT_CONFIGURED') {
       return res.status(503).json({ error: 'AI provider is not configured. Configure an AI provider to generate this landing site.', code: 'AI_NOT_CONFIGURED' });

@@ -367,6 +367,29 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(document.querySelector('a[href="/landing-sites"]')).toBeTruthy();
     });
 
+    it('Marketing section keeps only SMS / Email Blasts + Landing Sites', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          { category: 'Marketing', path: '/marketing', label: 'SMS / Email Blasts' },
+          { category: 'Marketing', path: '/landing-sites', label: 'Landing Sites' },
+          { category: 'Marketing', path: '/social', label: 'Social Media' },
+          { category: 'Marketing', path: '/ab-tests', label: 'A/B Tests' },
+          { category: 'Marketing', path: '/booking-pages', label: 'Booking Pages' },
+        ],
+      });
+      await screen.findByText('Landing Sites');
+      expect(screen.getByText('SMS / Email Blasts')).toBeTruthy();
+      // Hidden by request (routes stay mounted/deep-linkable).
+      expect(screen.queryByText('Social Media')).toBeNull();
+      expect(screen.queryByText('A/B Tests')).toBeNull();
+      expect(screen.queryByText('Booking Pages')).toBeNull();
+      expect(document.querySelector('a[href="/social"]')).toBeNull();
+      expect(document.querySelector('a[href="/ab-tests"]')).toBeNull();
+      expect(document.querySelector('a[href="/booking-pages"]')).toBeNull();
+    });
+
     it('shows wellness submodules only while their module is hovered', async () => {
       renderSidebar({
         vertical: 'wellness',

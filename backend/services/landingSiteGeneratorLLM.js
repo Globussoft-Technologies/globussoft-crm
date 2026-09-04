@@ -146,6 +146,13 @@ async function generateLandingSiteContent(input = {}, options = {}) {
   let source = 'stub';
   let stub = true;
   let realModeError = null;
+  // Machine-readable AI-access block (AI_NOT_CONFIGURED /
+  // AI_CREDITS_EXHAUSTED). aiGateway throws these as `friendly` errors when
+  // the tenant has no BYOK key and no funded subscription — previously they
+  // were swallowed here and the caller only saw a silent stub draft, so the
+  // UI could never tell "AI isn't set up" apart from a real draft.
+  let aiBlockedCode = null;
+  let aiBlockedMessage = null;
 
   // ONE call through aiGateway — it resolves BYOK (the tenant's single
   // fixed provider, if configured — a per-attempt "try Gemini then OpenAI
@@ -175,12 +182,12 @@ async function generateLandingSiteContent(input = {}, options = {}) {
     source = resp.provider || 'gemini';
     stub = false;
   } catch (err) {
-    if (err.code === 'AI_NOT_CONFIGURED') {
-      const blocked = new Error('AI provider is not configured. Configure an AI provider to generate this landing site.');
-      blocked.code = 'AI_NOT_CONFIGURED';
-      throw blocked;
+    if (err && err.friendly) {
+      aiBlockedCode = err.code || 'AI_NOT_CONFIGURED';
+      aiBlockedMessage = err.message || null;
+    } else {
+      realModeError = formatGeminiLimitMessage(err) || err.message || String(err);
     }
-    if (!err.friendly) realModeError = formatGeminiLimitMessage(err) || err.message || String(err);
   }
 
   let payload = null;
@@ -231,6 +238,8 @@ async function generateLandingSiteContent(input = {}, options = {}) {
     verdict: stub ? 'fallback' : 'passed',
     guardrailIssues: [],
     realModeError,
+    aiBlockedCode,
+    aiBlockedMessage,
     sectorKey,
   };
 }

@@ -42,6 +42,22 @@ function friendlyAiError(rawError) {
 
 }
 
+// Proper in-modal message when the Generate call is blocked on AI access
+// (no BYOK key + no funded subscription, or credits exhausted). Shown via
+// setGenError so it renders inside the Generate dialog — not a toast that
+// vanishes, and not a silent stub draft.
+function aiBlockedMessage(code) {
+
+  if (code === 'AI_CREDITS_EXHAUSTED') {
+
+    return 'AI credits for this workspace are exhausted. Top up the AI subscription or add your own provider key in Settings → AI, then try again.';
+
+  }
+
+  return 'AI is not configured for this workspace. Ask your administrator to add an AI provider key (or fund the CRM AI subscription) in Settings → AI, then try again.';
+
+}
+
 
 
 const SECTOR_OPTIONS = [
@@ -535,6 +551,11 @@ export default function LandingSites() {
 
         headers: { 'Content-Type': 'application/json' },
 
+        // Silent: AI-blocked failures (AI_NOT_CONFIGURED / credits) are
+        // shown as the in-modal genError message — the global 5xx popup
+        // toast would double-report the same failure.
+        silent: true,
+
         body: JSON.stringify({
 
           sectorKey,
@@ -569,6 +590,17 @@ export default function LandingSites() {
 
       if (!res?.page?.id) throw new Error('Generation succeeded but no page was returned.');
 
+      // AI access blocked but a page still came back (e.g. autoCreate
+      // callers on older backends): stop here with a proper message
+      // instead of navigating into a silent stub draft.
+      if (res.generation?.aiBlockedCode === 'AI_NOT_CONFIGURED' || res.generation?.aiBlockedCode === 'AI_CREDITS_EXHAUSTED') {
+
+        setGenError(aiBlockedMessage(res.generation.aiBlockedCode));
+
+        return;
+
+      }
+
       if (res.generation?.realModeError) {
 
         const friendly = friendlyAiError(res.generation.realModeError);
@@ -602,6 +634,10 @@ export default function LandingSites() {
       } else if (err?.status === 429 && err?.code === 'GEMINI_LIMIT_EXHAUSTED') {
 
         setGenError('Gemini limit has been exhausted. Please try again later.');
+
+      } else if (err?.code === 'AI_NOT_CONFIGURED' || err?.code === 'AI_CREDITS_EXHAUSTED') {
+
+        setGenError(aiBlockedMessage(err.code));
 
       } else {
 
@@ -1003,7 +1039,7 @@ export default function LandingSites() {
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Campaign name</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Campaign name <span style={{ color: '#ef4444' }}>*</span></span>
 
                 <input className="input-field" value={form.campaignName} onChange={(e) => setForm((s) => ({ ...s, campaignName: e.target.value }))} placeholder="Hair Treatment Consultation" />
 
@@ -1011,7 +1047,7 @@ export default function LandingSites() {
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Business name</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Business name <span style={{ color: '#ef4444' }}>*</span></span>
 
                 <input className="input-field" value={form.businessName} onChange={(e) => setForm((s) => ({ ...s, businessName: e.target.value }))} placeholder="Glow Hair Studio" />
 
@@ -1019,7 +1055,7 @@ export default function LandingSites() {
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Campaign goal</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Campaign goal <span style={{ color: '#ef4444' }}>*</span></span>
 
                 <input className="input-field" value={form.campaignGoal} onChange={(e) => setForm((s) => ({ ...s, campaignGoal: e.target.value }))} placeholder="collect enquiries" />
 
@@ -1027,7 +1063,7 @@ export default function LandingSites() {
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
 
-                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Audience</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Audience <span style={{ color: '#ef4444' }}>*</span></span>
 
                 <input className="input-field" value={form.audience} onChange={(e) => setForm((s) => ({ ...s, audience: e.target.value }))} placeholder="people exploring hair treatment options" />
 

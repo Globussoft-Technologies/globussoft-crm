@@ -1667,7 +1667,11 @@ function renderWellnessNav({
 
   // Group accessible pages by category for ordered rendering.
   const byCategory = {};
-  const hiddenSidebarPaths = new Set(["/wellness/whatsapp"]);
+  // Sidebar-only UX hide list — routes stay mounted (deep-linkable), only
+  // the nav entry is suppressed. Marketing keeps just SMS / Email Blasts
+  // + Landing Sites; Social Media, A/B Tests and Booking Pages are hidden
+  // by request.
+  const hiddenSidebarPaths = new Set(["/wellness/whatsapp", "/social", "/ab-tests", "/booking-pages"]);
   for (const page of accessiblePages) {
     if (!page || !page.category || !page.path) continue;
     if (hiddenSidebarPaths.has(page.path)) continue;

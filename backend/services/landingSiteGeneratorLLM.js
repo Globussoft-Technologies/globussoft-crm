@@ -175,9 +175,12 @@ async function generateLandingSiteContent(input = {}, options = {}) {
     source = resp.provider || 'gemini';
     stub = false;
   } catch (err) {
-    if (!err.friendly) {
-      realModeError = formatGeminiLimitMessage(err) || err.message || String(err);
+    if (err.code === 'AI_NOT_CONFIGURED') {
+      const blocked = new Error('AI provider is not configured. Configure an AI provider to generate this landing site.');
+      blocked.code = 'AI_NOT_CONFIGURED';
+      throw blocked;
     }
+    if (!err.friendly) realModeError = formatGeminiLimitMessage(err) || err.message || String(err);
   }
 
   let payload = null;

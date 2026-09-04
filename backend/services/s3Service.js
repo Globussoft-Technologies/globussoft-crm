@@ -27,6 +27,29 @@ const {
   getSignedUrl: presignerGetSignedUrl,
 } = require("@aws-sdk/s3-request-presigner");
 const ociService = require('./ociObjectStorageService');
+const fs = require('fs');
+const path = require('path');
+
+// Local-disk fallback root — used ONLY when neither OCI nor AWS S3 is
+// configured (typical local dev: no cloud creds in .env). Without this,
+// uploadFile() unconditionally threw "S3 bucket not configured", which is
+// what broke PDF template uploads (and anything else routed through this
+// module) for anyone developing locally with zero cloud creds — a real gap,
+// since local dev with no keys is meant to just work. Served back via the
+// existing `/api/uploads` static route (server.js) that several other
+// upload paths already rely on.
+const LOCAL_UPLOAD_ROOT = path.join(__dirname, '..', 'uploads');
+const LOCAL_URL_PREFIX = '/api/uploads/';
+
+function isLocalUrl(url) {
+  return typeof url === 'string' && url.startsWith(LOCAL_URL_PREFIX);
+}
+
+// The local-disk counterpart of extractKeyFromUrl(), kept separate so the
+// cloud-vs-disk distinction stays explicit at every call site.
+function localKeyFromUrl(url) {
+  return isLocalUrl(url) ? url.slice(LOCAL_URL_PREFIX.length) : null;
+}
 
 const s3Client = new S3Client({
   region: process.env.AWS_REGION || "us-east-1",
@@ -46,7 +69,7 @@ const S3_BASE_URL = ociService.isConfigured()
   : AWS_S3_BASE_URL;
 
 if (!BUCKET_NAME) {
-  console.warn("⚠️  Object storage is not configured. Uploads will fail.");
+  console.warn("⚠️  Object storage (OCI/S3) is not configured — uploads will be written to local disk under backend/uploads/ instead. Fine for local dev; set OCI_* or AWS_S3_* env vars for anything that needs to persist beyond this machine.");
 }
 
 /**
@@ -71,11 +94,6 @@ async function uploadFile(
   if (ociService.isConfigured()) {
     return ociService.uploadFile(fileBody, fileName, mimeType, subfolder, opts);
   }
-  if (!BUCKET_NAME) {
-    throw new Error(
-      "S3 bucket not configured. Set AWS_S3_BUCKET_NAME env var.",
-    );
-  }
 
   const timestamp = Date.now();
   const sanitizedName = fileName
@@ -84,6 +102,18 @@ async function uploadFile(
     .substring(0, 50);
   // Ensure subfolder path includes all segments (e.g., "brochures/123" not just "brochures")
   const fileKey = `${subfolder}/${timestamp}-${sanitizedName}`;
+
+  if (!BUCKET_NAME) {
+    // No cloud storage configured at all — write to local disk instead of
+    // failing the upload outright. Returns a server-relative URL under the
+    // same /api/uploads convention other routes already use, so every
+    // downstream consumer (fetch-back, delete, trust checks) can keep
+    // treating "the URL on the row" as the single source of truth.
+    const localPath = path.join(LOCAL_UPLOAD_ROOT, fileKey);
+    await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
+    await fs.promises.writeFile(localPath, fileBody);
+    return `${LOCAL_URL_PREFIX}${fileKey}`;
+  }
 
   const command = new PutObjectCommand({
     Bucket: BUCKET_NAME,
@@ -144,7 +174,15 @@ async function uploadImage(
 async function deleteFile(fileKey, opts = {}) {
   if (ociService.isConfigured() && opts.provider !== 'aws') return ociService.deleteFile(fileKey);
   if (!BUCKET_NAME) {
-    throw new Error("S3 bucket not configured.");
+    // Local-disk fallback — mirrors uploadFile's fallback. A missing file
+    // (already deleted, or never local to begin with) is a no-op, not an
+    // error — deleteFile callers already treat "gone" as success.
+    try {
+      await fs.promises.unlink(path.join(LOCAL_UPLOAD_ROOT, fileKey));
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    return;
   }
 
   const command = new DeleteObjectCommand({
@@ -225,6 +263,13 @@ async function getObjectStream(fileKey, opts = {}) {
  */
 function extractKeyFromUrl(s3Url) {
   if (!s3Url) return null;
+  // Deliberately does NOT claim local-disk URLs. Callers use this as a
+  // 'is this object in cloud storage?' test — passportFileStore.inferStorage()
+  // and visaDocStore both branch on it — so returning a key for an
+  // /api/uploads/ path made every locally-stored file look like S3 and sent
+  // those callers down the signed-URL path for a file that is on disk.
+  // Use isLocalUrl() explicitly for the local case; localKeyFromUrl() below
+  // is the local equivalent of this function.
   const ociKey = ociService.extractKeyFromUrl(s3Url);
   if (ociKey) return ociKey;
   if (!AWS_S3_BASE_URL) return null;
@@ -239,6 +284,24 @@ function extractKeyFromUrl(s3Url) {
   return null;
 }
 
+/**
+ * Read back a file that uploadFile() wrote to local disk (the no-cloud-creds
+ * fallback). Returns null for anything that isn't a local-fallback URL, or
+ * that can't be read — callers already treat null as "couldn't fetch this
+ * one, degrade gracefully" for the equivalent HTTP-fetch path.
+ * @param {string} url
+ * @returns {Promise<Buffer|null>}
+ */
+async function readLocalFile(url) {
+  if (!isLocalUrl(url)) return null;
+  const key = url.slice(LOCAL_URL_PREFIX.length);
+  try {
+    return await fs.promises.readFile(path.join(LOCAL_UPLOAD_ROOT, key));
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   uploadFile,
   uploadImage,
@@ -246,6 +309,9 @@ module.exports = {
   getSignedUrl,
   getObjectStream,
   extractKeyFromUrl,
+  isLocalUrl,
+  localKeyFromUrl,
+  readLocalFile,
   s3Client,
   BUCKET_NAME,
   S3_BASE_URL,

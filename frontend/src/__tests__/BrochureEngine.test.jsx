@@ -289,6 +289,19 @@ describe('BrochureEngine page (wizard)', () => {
     await waitFor(() => expect(screen.getAllByText(/Day \d+/).length).toBe(7));
   });
 
+  it('keeps theme colour toggles in aligned rows below the preceding fields', async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('step-4'));
+
+    const preferences = await screen.findByTestId('theme-colour-preferences');
+    const preferredColours = screen.getByRole('checkbox', { name: /Preferred colours/i });
+    const coloursToAvoid = screen.getByRole('checkbox', { name: /Colours to avoid/i });
+
+    expect(preferences).toHaveStyle({ marginTop: '4px', rowGap: '12px' });
+    expect(preferredColours.closest('label')).toHaveStyle({ flexDirection: 'row', alignItems: 'center' });
+    expect(coloursToAvoid.closest('label')).toHaveStyle({ flexDirection: 'row', alignItems: 'center' });
+  });
+
   it('imports itinerary data when Fill form is clicked', async () => {
     const itineraryFixture = {
       id: 42,

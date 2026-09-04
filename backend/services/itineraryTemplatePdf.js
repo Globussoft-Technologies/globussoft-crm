@@ -29,6 +29,8 @@ const { PDFDocument: PdfLibDocument, rgb, StandardFonts } = require("pdf-lib");
 const pdfjs = require("pdfjs-dist");
 const pdfRenderer = require("./pdfRenderer");
 const { heuristicTemplateStructure } = require("../lib/aiPdfTemplateAnalysis");
+const itineraryHtmlBody = require("./itineraryHtmlBody");
+const { detectChromeBands } = require("../lib/templateChromeBand");
 
 pdfjs.GlobalWorkerOptions.disableWorker = true;
 
@@ -97,6 +99,34 @@ function contrastInk(hex) {
   return lum > 0.62 ? INK : "#ffffff";
 }
 
+function renderDesign(raw) {
+  const design = raw && typeof raw === "object" ? raw : {};
+  const serif = design.typography === "serif";
+  return {
+    ...design,
+    regularFont: serif ? "Times-Roman" : "Helvetica",
+    boldFont: serif ? "Times-Bold" : "Helvetica-Bold",
+    italicFont: serif ? "Times-Italic" : "Helvetica-Oblique",
+    ink: normalizeHex(design.textColor, INK),
+    muted: normalizeHex(design.mutedColor, MUTED),
+    secondary: normalizeHex(design.secondaryColor, "#111111"),
+    density: ["compact", "comfortable", "airy"].includes(design.density) ? design.density : "comfortable",
+    tableStyle: ["grid", "minimal", "cards"].includes(design.tableStyle) ? design.tableStyle : "grid",
+    tableHeaderStyle: ["dark", "accent", "light"].includes(design.tableHeaderStyle) ? design.tableHeaderStyle : "light",
+    dayBandStyle: ["solid", "outline", "dark"].includes(design.dayBandStyle) ? design.dayBandStyle : "solid",
+    dayBandLayout: ["label-only", "split-title"].includes(design.dayBandLayout) ? design.dayBandLayout : "label-only",
+    showRouteStrip: design.showRouteStrip === true,
+    showLearningBox: design.showLearningBox === true,
+    timeColumnRatio: Math.max(0.15, Math.min(0.4, Number(design.timeColumnRatio) || 0.2)),
+    continuationStyle: design.continuationStyle === "table-only" ? "table-only" : "repeat-day",
+    borderRadius: Math.max(0, Math.min(16, Number(design.borderRadius) || 0)),
+  };
+}
+
+function styledHeading(text, design) {
+  return design.headingCase === "uppercase" ? String(text).toUpperCase() : String(text);
+}
+
 function formatMoney(value, currency = "INR") {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
@@ -128,6 +158,15 @@ function parseBullets(raw) {
     if (Array.isArray(parsed)) return parsed.map((s) => String(s)).filter(Boolean);
   } catch { /* fall through */ }
   return String(raw).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+}
+
+function parseTemplateData(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
 }
 
 // Mirrors the route's resolveItemSchedule(): startTime/endTime/locationName are
@@ -168,11 +207,22 @@ function groupItemsByDay(items) {
     byDay.get(key).push(it);
   }
   const numbered = [...byDay.keys()].filter((k) => k != null).sort((a, b) => a - b);
-  const groups = numbered.map((day) => ({
-    day,
-    label: `DAY ${toRoman(day)}`,
-    items: sortDay(byDay.get(day)),
-  }));
+  const groups = numbered.map((day) => {
+    const sorted = sortDay(byDay.get(day));
+    const details = sorted.map((item) => {
+      try { return typeof item.detailsJson === "string" ? JSON.parse(item.detailsJson) : (item.detailsJson || {}); }
+      catch { return {}; }
+    });
+    const locations = sorted.map((item) => readSchedule(item).locationName).filter(Boolean);
+    return {
+      day,
+      label: `DAY ${toRoman(day)}`,
+      title: details.find((value) => value.dayTitle)?.dayTitle || null,
+      route: details.find((value) => value.routeLabel)?.routeLabel || [...new Set(locations)].join(" -> "),
+      learning: details.find((value) => value.learningConnection)?.learningConnection || null,
+      items: sorted,
+    };
+  });
   if (byDay.has(null)) {
     groups.push({ day: null, label: "ADDITIONAL", items: sortDay(byDay.get(null)) });
   }
@@ -253,43 +303,66 @@ function newSectionDoc(box) {
 
 // A two-tone heading: accent-coloured lead words then the rest in ink, which is
 // the house style of most brochure templates ("**Tour Details** | Costing").
-function drawSplitHeading(doc, { lead, rest, x, width, y, accent, size = 17 }) {
-  doc.font("Helvetica-Bold").fontSize(size).fillColor(accent);
-  doc.text(lead, x, y, { width, continued: Boolean(rest) });
+function drawSplitHeading(doc, { lead, rest, x, width, y, accent, size = 17, design = {} }) {
+  const theme = renderDesign(design);
+  doc.font(theme.boldFont).fontSize(size).fillColor(accent);
+  doc.text(styledHeading(lead, theme), x, y, { width, continued: Boolean(rest) });
   if (rest) {
-    doc.fillColor(INK).text(rest, { width });
+    doc.fillColor(theme.ink).text(styledHeading(rest, theme), { width });
   }
   return doc.y;
 }
 
-function drawBulletList(doc, { title, items, x, width, y, accent, bottom, onPageBreak }) {
+function drawBulletList(doc, { title, items, x, width, y, accent, bottom, onPageBreak, design: rawDesign }) {
+  const design = renderDesign(rawDesign);
   let cursor = y;
   if (!items.length) return cursor;
 
-  doc.font("Helvetica-Bold").fontSize(11).fillColor(INK);
-  doc.text(title, x, cursor, { width });
+  doc.font(design.boldFont).fontSize(11).fillColor(design.ink);
+  doc.text(styledHeading(title, design), x, cursor, { width });
   cursor = doc.y + 4;
 
-  doc.font("Helvetica").fontSize(9.5).fillColor(INK);
+  doc.font(design.regularFont).fontSize(9.5).fillColor(design.ink);
   for (const entry of items) {
     const textWidth = width - 14;
     const h = doc.heightOfString(entry, { width: textWidth }) + 3;
     if (cursor + h > bottom) {
       cursor = onPageBreak();
-      doc.font("Helvetica").fontSize(9.5).fillColor(INK);
+      doc.font(design.regularFont).fontSize(9.5).fillColor(design.ink);
     }
     doc.circle(x + 3.5, cursor + 4.6, 1.7).fillColor(accent).fill();
-    doc.fillColor(INK).text(entry, x + 14, cursor, { width: textWidth });
+    doc.fillColor(design.ink).text(entry, x + 14, cursor, { width: textWidth });
     cursor = doc.y + 3;
   }
   return cursor + 6;
 }
 
+function drawTemplateFields(doc, { fields, x, width, y, bottom, design: rawDesign }) {
+  const design = renderDesign(rawDesign);
+  let cursor = y;
+  for (const field of fields || []) {
+    if (!field.value) continue;
+    doc.font(design.boldFont).fontSize(8).fillColor(design.muted);
+    const label = styledHeading(field.label, design);
+    const labelH = doc.heightOfString(label, { width });
+    doc.font(design.regularFont).fontSize(10).fillColor(design.ink);
+    const valueH = doc.heightOfString(field.value, { width, lineGap: 2 });
+    if (cursor + labelH + valueH + 12 > bottom) break;
+    doc.font(design.boldFont).fontSize(8).fillColor(design.muted).text(label, x, cursor, { width });
+    cursor = doc.y + 3;
+    doc.font(design.regularFont).fontSize(10).fillColor(design.ink).text(field.value, x, cursor, { width, lineGap: 2 });
+    cursor = doc.y + 10;
+  }
+  return cursor;
+}
+
 // ── section: cover ────────────────────────────────────────────────────
 
-async function renderCoverSection({ box, data, accent }) {
+async function renderCoverSection({ box, data, accent: _accent, design: rawDesign, pageIndex }) {
+  const design = renderDesign(rawDesign);
   const { doc } = newSectionDoc(box);
-  const padX = 18;
+  const edgeHero = design.heroTreatment === "edge-to-edge";
+  const padX = edgeHero ? 10 : 18;
   const x = padX;
   const width = box.width - padX * 2;
   // A larger bottom margin than the other sections use — the content box's
@@ -303,10 +376,12 @@ async function renderCoverSection({ box, data, accent }) {
   const bottom = box.height - 22;
   let y = 16;
 
-  doc.font("Helvetica-Bold").fontSize(22).fillColor(INK);
-  doc.text(data.title, x, y, { width, align: "center" });
-  y = doc.y + 16;
-  const afterTitleY = y;
+  const coverAlign = design.coverAlignment === "left" ? "left" : "center";
+  const drawTitle = () => {
+    doc.font(design.boldFont).fontSize(design.density === "airy" ? 25 : 22).fillColor(design.ink);
+    doc.text(styledHeading(data.title, design), x, y, { width, align: coverAlign });
+    y = doc.y + 16;
+  };
 
   const paragraphs = String(data.introText || "")
     .split(/\n\s*\n/)
@@ -321,15 +396,38 @@ async function renderCoverSection({ box, data, accent }) {
   const TEXT_GAP = 10;
   const TEXT_SIZE = 10.5;
   const measureTextHeight = (fs) => {
-    doc.font("Helvetica").fontSize(fs);
+    doc.font(design.regularFont).fontSize(fs);
     return paragraphs.reduce((h, p) => h + doc.heightOfString(p, { width, lineGap: 2.5 }) + TEXT_GAP, 0);
   };
   const estimatedTextH = paragraphs.length ? measureTextHeight(TEXT_SIZE) : (data.subtitle ? 20 : 0);
 
-  if (data.heroBuffer) {
+  // Template fields (a "TRIP STYLE" box and the like) are drawn UNDER the
+  // blurb, so their height has to come out of the hero's budget too. Without
+  // this the hero claimed everything the blurb did not need, drawTemplateFields
+  // then found no room left below and silently skipped every field — the
+  // operator filled one in, saved it, and it never appeared on the PDF.
+  const coverFields = data.templateFields.filter((field) => field.pageIndex === pageIndex && field.value);
+  const estimatedFieldsH = coverFields.reduce((h, field) => {
+    doc.font(design.boldFont).fontSize(8);
+    const labelH = doc.heightOfString(field.label, { width });
+    doc.font(design.regularFont).fontSize(10);
+    return h + labelH + doc.heightOfString(field.value, { width, lineGap: 2 }) + 13;
+  }, 0);
+
+  const drawHero = () => {
+    if (!data.heroBuffer || design.heroTreatment === "none") return;
     // Whatever's left after title + (estimated) text, capped so the image
     // never crowds out the page entirely even when there's no text at all.
-    const maxHeroH = Math.min(bottom - afterTitleY - estimatedTextH - 18, box.height * 0.62);
+    const titleReserve = design.heroPosition === "before-title" ? 52 : 0;
+    const maxHeroH = Math.min(
+      bottom - y - estimatedTextH - estimatedFieldsH - titleReserve - 18,
+      // The subtraction above already reserves whatever the title, blurb and
+      // template fields need, so this cap only binds when the trip has little
+      // cover copy — exactly the case that was leaving the bottom quarter of
+      // the page empty. 0.72 fills that without letting the photo swallow the
+      // page on a trip with no blurb at all.
+      box.height * 0.72,
+    );
     if (maxHeroH > 60) {
       try {
         const img = doc.openImage(data.heroBuffer);
@@ -342,12 +440,14 @@ async function renderCoverSection({ box, data, accent }) {
         // produced a small photo sitting above a lot of dead space. Filling
         // + cropping guarantees the image always occupies the full budgeted
         // height.
-        const coverScale = Math.max(width / img.width, maxHeroH / img.height);
+        const heroX = edgeHero ? 0 : x;
+        const heroW = edgeHero ? box.width : width;
+        const coverScale = Math.max(heroW / img.width, maxHeroH / img.height);
         const drawW = img.width * coverScale;
         const drawH = img.height * coverScale;
-        const drawX = x + (width - drawW) / 2;
+        const drawX = heroX + (heroW - drawW) / 2;
         doc.save();
-        doc.rect(x, y, width, maxHeroH).clip();
+        doc.rect(heroX, y, heroW, maxHeroH).clip();
         doc.image(data.heroBuffer, drawX, y - (drawH - maxHeroH) / 2, { width: drawW, height: drawH });
         doc.restore();
         y += maxHeroH + 18;
@@ -360,7 +460,11 @@ async function renderCoverSection({ box, data, accent }) {
         } catch { /* no hero at all — the blurb simply starts higher */ }
       }
     }
-  }
+  };
+
+  if (design.heroPosition === "before-title") drawHero();
+  drawTitle();
+  if (design.heroPosition !== "before-title") drawHero();
 
   // Shrink the body a step at a time until the whole blurb fits. Previously an
   // over-long blurb was silently truncated mid-way (the loop just `break`ed),
@@ -369,15 +473,20 @@ async function renderCoverSection({ box, data, accent }) {
     let size = TEXT_SIZE;
     while (size > 7.5 && y + measureTextHeight(size) > bottom) size -= 0.5;
 
-    doc.font("Helvetica").fontSize(size).fillColor(INK);
+    doc.font(design.regularFont).fontSize(size).fillColor(design.ink);
     for (const p of paragraphs) {
       doc.text(p, x, y, { width, align: "left", lineGap: 2.5 });
       y = doc.y + TEXT_GAP;
     }
   } else if (data.subtitle) {
-    doc.font("Helvetica").fontSize(11).fillColor(MUTED);
-    doc.text(data.subtitle, x, y, { width, align: "center" });
+    doc.font(design.regularFont).fontSize(11).fillColor(design.muted);
+    doc.text(data.subtitle, x, y, { width, align: coverAlign });
   }
+
+  drawTemplateFields(doc, {
+    fields: coverFields,
+    x, width, y: doc.y + 12, bottom, design,
+  });
 
   return streamToBuffer(doc);
 }
@@ -391,7 +500,8 @@ async function renderCoverSection({ box, data, accent }) {
 // before it, which looked worse than the crowding it was meant to fix.
 const DAY_GAP = 16;
 
-async function renderItinerarySection({ box, data, accent }) {
+async function renderItinerarySection({ box, data, accent, design: rawDesign }) {
+  const design = renderDesign(rawDesign);
   const { doc } = newSectionDoc(box);
   const padX = 14;
   const x = padX;
@@ -399,7 +509,7 @@ async function renderItinerarySection({ box, data, accent }) {
   const bottom = box.height - 12;
   const bandInk = contrastInk(accent);
 
-  const timeW = 68;
+  const timeW = Math.round(width * design.timeColumnRatio);
   const actW = width - timeW;
   const showTimeColumn = data.dayGroups.some((g) => g.items.some((it) => readSchedule(it).startTime));
 
@@ -407,7 +517,7 @@ async function renderItinerarySection({ box, data, accent }) {
 
   // Heading — "<Trip title> Itinerary", accent lead + ink tail.
   y = drawSplitHeading(doc, {
-    lead: data.title, rest: "  Itinerary", x, width, y, accent, size: 16,
+    lead: data.title, rest: "  Itinerary", x, width, y, accent, size: 16, design,
   }) + 10;
 
   const colX = showTimeColumn ? [x, x + timeW] : [x];
@@ -415,9 +525,13 @@ async function renderItinerarySection({ box, data, accent }) {
 
   const drawHeaderRow = (atY) => {
     const h = 22;
-    doc.rect(x, atY, width, h).fillAndStroke("#ffffff", HAIRLINE);
+    const headerFill = design.tableHeaderStyle === "dark"
+      ? design.secondary
+      : design.tableHeaderStyle === "accent" ? accent : "#ffffff";
+    const headerInk = design.tableHeaderStyle === "light" ? design.ink : contrastInk(headerFill);
+    doc.rect(x, atY, width, h).fillAndStroke(headerFill, design.tableStyle === "minimal" ? headerFill : HAIRLINE);
     doc.lineWidth(0.9).strokeColor(HAIRLINE);
-    doc.font("Helvetica-Bold").fontSize(9).fillColor(INK);
+    doc.font(design.boldFont).fontSize(9).fillColor(headerInk);
     if (showTimeColumn) {
       doc.text("TIME", colX[0], atY + 7, { width: colW[0], align: "center" });
       doc.moveTo(x + timeW, atY).lineTo(x + timeW, atY + h).stroke();
@@ -429,11 +543,29 @@ async function renderItinerarySection({ box, data, accent }) {
   };
 
   const BAND_H = 20;
-  const drawDayBand = (atY, label) => {
-    doc.rect(x, atY, width, BAND_H).fillAndStroke(accent, accent);
-    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(bandInk);
-    doc.text(label, x, atY + 6, { width, align: "center" });
+  const drawDayBand = (atY, label, title) => {
+    const fill = design.dayBandStyle === "dark" ? design.secondary : design.dayBandStyle === "outline" ? "#ffffff" : accent;
+    const ink = design.dayBandStyle === "outline" ? accent : contrastInk(fill);
+    const rect = design.borderRadius > 0 ? doc.roundedRect(x, atY, width, BAND_H, design.borderRadius) : doc.rect(x, atY, width, BAND_H);
+    rect.fillAndStroke(fill, accent);
+    doc.font(design.boldFont).fontSize(9.5).fillColor(ink || bandInk);
+    if (design.dayBandLayout === "split-title") {
+      const labelW = Math.max(82, width * 0.24);
+      doc.text(styledHeading(label, design), x + 8, atY + 6, { width: labelW - 12, align: "left" });
+      doc.text(styledHeading(title || "Daily Programme", design), x + labelW, atY + 6, { width: width - labelW - 8, align: "center" });
+    } else {
+      doc.text(styledHeading(label, design), x, atY + 6, { width, align: design.coverAlignment === "left" ? "left" : "center", indent: design.coverAlignment === "left" ? 10 : 0 });
+    }
     return atY + BAND_H;
+  };
+
+  const drawRouteStrip = (atY, route) => {
+    if (!design.showRouteStrip || !route) return atY;
+    const h = 18;
+    doc.rect(x, atY, width, h).fillAndStroke("#f3f4f6", "#d1d5db");
+    doc.font(design.boldFont).fontSize(7.5).fillColor(design.muted).text("ROUTE", x + 7, atY + 5, { continued: true });
+    doc.font(design.regularFont).fillColor(design.muted).text(`  ${route}`, { width: width - 48 });
+    return atY + h;
   };
 
   // Starting a new physical page always redraws the column header, and — when
@@ -444,7 +576,7 @@ async function renderItinerarySection({ box, data, accent }) {
   const startPage = (atY, continuingLabel) => {
     doc.addPage();
     let ny = drawHeaderRow(atY);
-    if (continuingLabel) ny = drawDayBand(ny, `${continuingLabel} (cont.)`);
+    if (continuingLabel && design.continuationStyle === "repeat-day") ny = drawDayBand(ny, `${continuingLabel} (cont.)`, null);
     return ny;
   };
 
@@ -460,7 +592,8 @@ async function renderItinerarySection({ box, data, accent }) {
     if (y + BAND_H + 30 > bottom) {
       y = startPage(6, null);
     }
-    y = drawDayBand(y, group.label);
+    y = drawDayBand(y, group.label, group.title);
+    y = drawRouteStrip(y, group.route);
 
     for (const item of group.items) {
       const sched = readSchedule(item);
@@ -468,27 +601,43 @@ async function renderItinerarySection({ box, data, accent }) {
         ? `${item.description} — ${sched.locationName}`
         : item.description;
 
-      doc.font("Helvetica").fontSize(9.5);
+      const rowFontSize = design.density === "compact" ? 9 : design.density === "airy" ? 10 : 9.5;
+      doc.font(design.regularFont).fontSize(rowFontSize);
       const textW = (showTimeColumn ? colW[1] : colW[0]) - 14;
       const textH = doc.heightOfString(activity, { width: textW });
-      const rowH = Math.max(24, textH + 13);
+      const rowPad = design.density === "compact" ? 9 : design.density === "airy" ? 18 : 13;
+      const rowH = Math.max(design.density === "compact" ? 21 : 24, textH + rowPad);
 
       if (y + rowH > bottom) {
         y = startPage(6, group.label);
       }
 
-      doc.rect(x, y, width, rowH).fillAndStroke("#ffffff", HAIRLINE);
+      const rowShape = design.borderRadius > 0 && design.tableStyle === "cards"
+        ? doc.roundedRect(x, y, width, rowH, design.borderRadius)
+        : doc.rect(x, y, width, rowH);
+      rowShape.fillAndStroke("#ffffff", design.tableStyle === "minimal" ? "#e5e7eb" : HAIRLINE);
       doc.lineWidth(0.9).strokeColor(HAIRLINE);
 
       if (showTimeColumn) {
-        doc.font("Helvetica").fontSize(9.5).fillColor(INK);
+        doc.font(design.regularFont).fontSize(rowFontSize).fillColor(design.ink);
         doc.text(sched.startTime || "", colX[0] + 4, y + 7, { width: colW[0] - 8, align: "center" });
         doc.moveTo(x + timeW, y).lineTo(x + timeW, y + rowH).stroke();
-        doc.fillColor(INK).text(activity, colX[1] + 7, y + 7, { width: textW });
+        doc.fillColor(design.ink).text(activity, colX[1] + 7, y + 7, { width: textW });
       } else {
-        doc.fillColor(INK).text(activity, colX[0] + 7, y + 7, { width: textW });
+        doc.fillColor(design.ink).text(activity, colX[0] + 7, y + 7, { width: textW });
       }
       y += rowH;
+    }
+
+    if (design.showLearningBox && group.learning) {
+      const learningText = String(group.learning);
+      doc.font(design.regularFont).fontSize(8);
+      const learningH = Math.max(28, doc.heightOfString(learningText, { width: width - 16 }) + 20);
+      if (y + learningH > bottom) y = startPage(6, group.label);
+      doc.rect(x, y, width, learningH).fillAndStroke("#eaf8fb", accent);
+      doc.font(design.boldFont).fontSize(7.5).fillColor(design.ink).text("LEARNING CONNECTION", x + 7, y + 5, { width: width - 14 });
+      doc.font(design.regularFont).fontSize(8).text(learningText, x + 7, doc.y + 1, { width: width - 14 });
+      y += learningH;
     }
 
     // Breathing room before the next day's band, so consecutive tables never
@@ -497,7 +646,7 @@ async function renderItinerarySection({ box, data, accent }) {
   }
 
   if (!data.dayGroups.length) {
-    doc.font("Helvetica-Oblique").fontSize(10).fillColor(MUTED);
+    doc.font(design.italicFont).fontSize(10).fillColor(design.muted);
     doc.text("Day-by-day plan to be confirmed.", x, y + 12, { width, align: "center" });
   }
 
@@ -536,7 +685,8 @@ async function renderCustomTextSection({ box, text, accent }) {
 
 // ── section: costing + inclusions + terms ─────────────────────────────
 
-async function renderDetailsSection({ box, data, accent }) {
+async function renderDetailsSection({ box, data, accent, design: rawDesign, pageIndex }) {
+  const design = renderDesign(rawDesign);
   const { doc } = newSectionDoc(box);
   const padX = 14;
   const x = padX;
@@ -552,18 +702,23 @@ async function renderDetailsSection({ box, data, accent }) {
   y = drawSplitHeading(doc, {
     lead: "Tour Details",
     rest: data.perPersonLabel ? "  |  Costing & Inclusions" : "  |  Inclusions",
-    x, width, y, accent, size: 16,
+    x, width, y, accent, size: 16, design,
   }) + 8;
+
+  y = drawTemplateFields(doc, {
+    fields: data.templateFields.filter((field) => field.pageIndex === pageIndex),
+    x, width, y, bottom, design,
+  });
 
   // Headline price line — per-person is what a school or family actually
   // compares, so it leads; the group total sits underneath as context.
   if (data.perPersonLabel) {
-    doc.font("Helvetica-Bold").fontSize(12).fillColor(accent);
+    doc.font(design.boldFont).fontSize(12).fillColor(accent);
     doc.text(data.perPersonLabel, x, y, { width, continued: true });
-    doc.fillColor(INK).font("Helvetica-Bold").text("  All-inclusive tour cost", { width });
+    doc.fillColor(design.ink).font(design.boldFont).text("  All-inclusive tour cost", { width });
     y = doc.y + 3;
     if (data.groupTotalLabel) {
-      doc.font("Helvetica").fontSize(9).fillColor(MUTED);
+      doc.font(design.regularFont).fontSize(9).fillColor(design.muted);
       doc.text(data.groupTotalLabel, x, y, { width });
       y = doc.y + 10;
     } else {
@@ -571,9 +726,9 @@ async function renderDetailsSection({ box, data, accent }) {
     }
   }
 
-  y = drawBulletList(doc, { title: "Inclusions", items: data.inclusions, x, width, y, accent, bottom, onPageBreak: nextPage });
-  y = drawBulletList(doc, { title: "Exclusions", items: data.exclusions, x, width, y, accent, bottom, onPageBreak: nextPage });
-  y = drawBulletList(doc, { title: "Other Details", items: data.otherDetails, x, width, y, accent, bottom, onPageBreak: nextPage });
+  y = drawBulletList(doc, { title: "Inclusions", items: data.inclusions, x, width, y, accent, bottom, onPageBreak: nextPage, design });
+  y = drawBulletList(doc, { title: "Exclusions", items: data.exclusions, x, width, y, accent, bottom, onPageBreak: nextPage, design });
+  y = drawBulletList(doc, { title: "Other Details", items: data.otherDetails, x, width, y, accent, bottom, onPageBreak: nextPage, design });
 
   if (data.termsText) {
     const lines = String(data.termsText).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -608,6 +763,90 @@ async function renderDetailsSection({ box, data, accent }) {
   }
 
   return streamToBuffer(doc);
+}
+
+// ── HTML-template body context ────────────────────────────────────────
+//
+// A template may carry real HTML/CSS for a page role instead of relying on
+// the enum-driven PDFKit sections below. This shapes the same `data` those
+// sections consume into a flat, documented context for interpolation. It is
+// the contract an AI drafts against and a human edits, so it favours
+// pre-computed booleans (hasHero, hasTime) over anything requiring logic in
+// the template — the template language deliberately has no expressions.
+
+function sniffImageMime(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12) return null;
+  if (buffer[0] === 0x89 && buffer[1] === 0x50) return "image/png";
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) return "image/jpeg";
+  if (buffer.slice(0, 3).toString("latin1") === "GIF") return "image/gif";
+  if (buffer.slice(0, 4).toString("latin1") === "RIFF" && buffer.slice(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  return null;
+}
+
+// The hero rides along as a data: URI. The render browser blocks every remote
+// fetch except webfonts, so an <img src="https://..."> in a template would
+// silently render empty — inlining is what makes the image work at all.
+function heroDataUri(buffer) {
+  const mime = sniffImageMime(buffer);
+  if (!mime) return null;
+  return `data:${mime};base64,${buffer.toString("base64")}`;
+}
+
+function buildHtmlContext({ data, accent, design, pageIndex }) {
+  const hero = heroDataUri(data.heroBuffer);
+  const days = (data.dayGroups || []).map((group, i) => {
+    const items = (group.items || []).map((item) => {
+      const sched = readSchedule(item);
+      return {
+        time: sched.startTime || "",
+        endTime: sched.endTime || "",
+        hasTime: Boolean(sched.startTime),
+        location: sched.locationName || "",
+        hasLocation: Boolean(sched.locationName),
+        activity: String(item.description || ""),
+      };
+    });
+    return {
+      label: group.label || "",
+      number: i + 1,
+      title: group.title || "",
+      hasTitle: Boolean(group.title),
+      route: group.route || "",
+      hasRoute: Boolean(group.route),
+      learning: group.learning || "",
+      hasLearning: Boolean(group.learning),
+      items,
+    };
+  });
+
+  // parseBullets already splits on newlines, trims and drops blanks —
+  // reusing it keeps terms handling identical to the PDFKit path.
+  const terms = parseBullets(data.termsText);
+
+  return {
+    accent,
+    title: data.title || "",
+    subtitle: data.subtitle || "",
+    hasSubtitle: Boolean(data.subtitle),
+    introText: data.introText || "",
+    hero: hero || "",
+    hasHero: Boolean(hero),
+    days,
+    hasDays: days.length > 0,
+    inclusions: data.inclusions || [],
+    exclusions: data.exclusions || [],
+    otherDetails: data.otherDetails || [],
+    terms,
+    perPerson: data.perPersonLabel || "",
+    groupTotal: data.groupTotalLabel || "",
+    hasPrice: Boolean(data.perPersonLabel),
+    fields: (data.templateFields || [])
+      .filter((f) => Number(f.pageIndex) === Number(pageIndex) && f.value)
+      .map((f) => ({ key: f.key, label: f.label, value: f.value })),
+    // The enum design is still passed through, so a template can opt into the
+    // detected palette (var(--accent) etc.) without hardcoding it.
+    design: design || {},
+  };
 }
 
 // ── style-spec normalisation ──────────────────────────────────────────
@@ -648,16 +887,43 @@ function resolveSpec({ styleSpec, regions, srcPageSizes }) {
   // upload time fixes both: the schedule lands on a real interior page, and
   // the trailing page (contact/boilerplate) stays untouched deliberately
   // instead of by accident.
-  const fallbackRoles = (!spec || !Array.isArray(spec.pages) || spec.pages.length === 0)
-    ? heuristicTemplateStructure(srcPageSizes.length).pages
-    : null;
+  // Heuristic roles are computed for EVERY page, always, and consulted
+  // per-page whenever the stored spec has nothing for that page.
+  //
+  // Previously this only ran when spec.pages was entirely empty, which missed
+  // the case that actually bites: a PARTIAL classification. A 6-page template
+  // whose analysis came back describing only pages 1-2 left pages 3-6 with
+  // role null, and a null-role page was copied through verbatim — so the
+  // uploaded template's own example trip (its sample days, its sample
+  // destination) was printed inside a real customer's itinerary. Filling the
+  // gap here means no page is ever unclassified.
+  const fallbackRoles = heuristicTemplateStructure(srcPageSizes.length).pages;
+
+  // True when an analysis exists but does not cover every page — the case
+  // that produced the leak above.
+  const hasPartialSpec = Boolean(spec && Array.isArray(spec.pages) && spec.pages.length > 0
+    && spec.pages.length < srcPageSizes.length);
 
   const pages = srcPageSizes.map((size, i) => {
     const specPage = spec && Array.isArray(spec.pages)
       ? spec.pages.find((p) => Number(p.index) === i + 1)
       : null;
-    const fallbackPage = fallbackRoles ? fallbackRoles.find((p) => p.index === i + 1) : null;
-    const role = specPage && specPage.role ? String(specPage.role) : (fallbackPage ? fallbackPage.role : null);
+    const fallbackPage = fallbackRoles.find((p) => p.index === i + 1);
+    // When the analysis described SOME pages but not this one, a guessed
+    // "static" must not stand: "static" means "reproduce this page exactly",
+    // and the heuristic is only position arithmetic. Guessing it on a page
+    // that actually holds the example trip's own inclusions reprints them —
+    // Nepal route map and all — inside someone's Goa itinerary. Blank and
+    // refill it instead.
+    //
+    // A template with NO spec at all is left alone: there the heuristic is
+    // the only signal there has ever been, its trailing "static" page is
+    // usually a genuine contact/boilerplate page, and blanking it would strip
+    // brand details out of documents that render correctly today.
+    const fallbackRole = fallbackPage
+      ? (fallbackPage.role === "static" && hasPartialSpec ? "details" : fallbackPage.role)
+      : null;
+    const role = specPage && specPage.role ? String(specPage.role) : fallbackRole;
 
     // Box precedence. The operator-confirmed box only ever comes from
     // reviewing PAGE 1 (analyze-pdf always previews the first page), so it
@@ -677,10 +943,29 @@ function resolveSpec({ styleSpec, regions, srcPageSizes }) {
     if (!box) box = legacyBox;
 
     box = scaleBoxToPage(box, legacySize, size);
-    return { index: i, role, box, customText: specPage && specPage.customText ? String(specPage.customText) : null };
+    return {
+      index: i,
+      role,
+      box,
+      customText: specPage && specPage.customText ? String(specPage.customText) : null,
+      // Real HTML/CSS body for this page role, when the template carries one.
+      // Its presence is what switches this page off the enum-driven PDFKit
+      // sections and onto the browser renderer.
+      bodyHtml: specPage && typeof specPage.bodyHtml === "string" && specPage.bodyHtml.trim()
+        ? specPage.bodyHtml
+        : null,
+    };
   });
 
-  return { accent, pages };
+  return {
+    accent,
+    design: renderDesign(spec && spec.design),
+    requiredFields: spec && Array.isArray(spec.requiredFields) ? spec.requiredFields : [],
+    // One stylesheet for the whole template — every page role shares it, the
+    // way a real brand document has one set of type and colour rules.
+    bodyCss: spec && typeof spec.bodyCss === "string" ? spec.bodyCss : null,
+    pages,
+  };
 }
 
 // The analyzer measured boxes against the page size it saw; if the actual page
@@ -774,13 +1059,14 @@ async function renderItineraryOnTemplate(itinerary, contact, opts = {}) {
   if (!srcPages.length) throw new Error("Template PDF has no pages");
   const srcPageSizes = srcPages.map((p) => p.getSize());
 
-  const { accent, pages: pageSpecs } = resolveSpec({ styleSpec, regions, srcPageSizes });
+  const { accent, design, requiredFields, bodyCss, pages: pageSpecs } = resolveSpec({ styleSpec, regions, srcPageSizes });
 
   const items = Array.isArray(itinerary.items) ? itinerary.items : [];
   const dayGroups = groupItemsByDay(items);
   const currency = itinerary.currency || "INR";
   const pax = Number(itinerary.pax) > 0 ? Number(itinerary.pax) : 1;
   const total = itinerary.totalAmount != null ? Number(itinerary.totalAmount) : null;
+  const templateData = parseTemplateData(itinerary.templateDataJson);
 
   const data = {
     title: String(itinerary.title || itinerary.destination || "Itinerary"),
@@ -801,6 +1087,14 @@ async function renderItineraryOnTemplate(itinerary, contact, opts = {}) {
     otherDetails: parseBullets(itinerary.otherDetailsJson),
     termsText: itinerary.termsText || "",
     staticPageText: itinerary.staticPageText || "",
+    templateFields: requiredFields
+      .filter((field) => field && field.source !== "auto")
+      .map((field) => ({
+        key: field.key,
+        label: field.label || field.key,
+        pageIndex: Number(field.pageIndex) || 1,
+        value: String(templateData[field.key] || "").trim(),
+      })),
     // Planning-only itineraries (moneyEnabled: false, the default for a new
     // itinerary) never show a price on the brochure — the whole point of the
     // toggle is a trip plan with no cost/tally attached anywhere.
@@ -862,8 +1156,22 @@ async function renderItineraryOnTemplate(itinerary, contact, opts = {}) {
       index: pageSpec.index,
       box: pageSpec.box,
       customText: pageSpec.role === "static" && staticText ? staticText : pageSpec.customText,
+      bodyHtml: pageSpec.bodyHtml,
       grouped: GROWABLE_ROLES.has(pageSpec.role),
     });
+  }
+
+  // Where the letterhead ends and the footer begins, measured from the
+  // template's own ruled lines. This is what gets erased before the real trip
+  // is drawn. The analyser's content box is not usable for this: it is derived
+  // from text positions and stops below the template's own section heading and
+  // table header, so those survived into the customer's PDF.
+  let chromeBands = [];
+  try {
+    chromeBands = await detectChromeBands(templateBuffer, srcPageSizes);
+  } catch (bandErr) {
+    console.warn("[itineraryTemplatePdf] chrome-band detection skipped:", bandErr.message);
+    chromeBands = [];
   }
 
   const out = await PdfLibDocument.create();
@@ -873,29 +1181,65 @@ async function renderItineraryOnTemplate(itinerary, contact, opts = {}) {
   // corrected afterwards for any page whose position shifted.
   const emitted = [];
 
+  // Highest point any page's content box reaches. Used as the blanking
+  // ceiling for every page — see the note at the drawRectangle below.
+  const maxContentBoxTop = renderUnits.reduce(
+    (top, u) => (u.box ? Math.max(top, u.box.y + u.box.height) : top),
+    0,
+  );
+
   for (const pageSpec of renderUnits) {
     // Static pages (contact / boilerplate) pass through byte-for-byte —
     // UNLESS the operator supplied replacement copy for that page, in which
     // case its body is blanked and their text rendered instead. Without this
     // a static page was completely uneditable: the only way to change a
     // closing/contact page was to re-author the source PDF.
-    if ((pageSpec.role === "static" || !pageSpec.role) && !pageSpec.customText) {
-      const [copied] = await out.copyPages(srcPdf, [pageSpec.index]);
-      const page = out.addPage(copied);
-      emitted.push({ page, srcIndex: pageSpec.index });
+    // A "static" page keeps its place and its chrome, but its BODY is erased
+    // like every other page.
+    //
+    // It used to be copied through byte-for-byte, on the theory that a contact
+    // or T&Cs page is brand boilerplate worth preserving. In practice the
+    // classifier calls a page static whenever it reads like prose, and on a
+    // real brochure that page is the example trip's own inclusions — which is
+    // how a Goa itinerary reached a customer carrying "Annotated Nepal route
+    // map". Nothing outside the page can tell boilerplate from someone else's
+    // trip, so the safe reading of "static" is "no generated content goes
+    // here", not "reprint whatever was here".
+    //
+    // Erasing it and emitting the page anyway just moved the problem: the
+    // customer got a page carrying nothing but a letterhead. So the page is
+    // omitted entirely unless there is something real to put on it — closing
+    // text set on the itinerary, or an HTML body on the template — at which
+    // point it renders like any other filled page.
+    if (pageSpec.role === "static" && !pageSpec.customText && !pageSpec.bodyHtml) {
       continue;
     }
-
     const box = pageSpec.box;
-    let contentBuf;
-    if (pageSpec.customText) {
-      contentBuf = await renderCustomTextSection({ box, text: pageSpec.customText, accent });
+    let contentBuf = null;
+
+    // HTML template first when this page has one. renderHtmlSection returns
+    // null for every "can't do it" case — no puppeteer, unparseable template,
+    // browser failure — so a broken template or a host with no Chromium
+    // silently keeps the previous behaviour instead of failing the PDF.
+    if (pageSpec.bodyHtml) {
+      contentBuf = await itineraryHtmlBody.renderHtmlSection({
+        bodyHtml: pageSpec.bodyHtml,
+        bodyCss,
+        context: buildHtmlContext({ data, accent, design, pageIndex: pageSpec.index + 1 }),
+        box,
+      });
+    }
+
+    if (contentBuf) {
+      /* rendered from the template's own HTML */
+    } else if (pageSpec.customText) {
+      contentBuf = await renderCustomTextSection({ box, text: pageSpec.customText, accent, design });
     } else if (pageSpec.role === "cover") {
-      contentBuf = await renderCoverSection({ box, data, accent });
+      contentBuf = await renderCoverSection({ box, data, accent, design, pageIndex: pageSpec.index + 1 });
     } else if (pageSpec.role === "itinerary") {
-      contentBuf = await renderItinerarySection({ box, data, accent });
+      contentBuf = await renderItinerarySection({ box, data, accent, design });
     } else {
-      contentBuf = await renderDetailsSection({ box, data, accent });
+      contentBuf = await renderDetailsSection({ box, data, accent, design, pageIndex: pageSpec.index + 1 });
     }
 
     const contentPdf = await PdfLibDocument.load(contentBuf);
@@ -909,8 +1253,42 @@ async function renderItineraryOnTemplate(itinerary, contact, opts = {}) {
       const [copied] = await out.copyPages(srcPdf, [pageSpec.index]);
       const page = out.addPage(copied);
       emitted.push({ page, srcIndex: pageSpec.index });
+      // Blank a slightly TALLER rectangle than the box content is actually
+      // drawn into — extending only downward, toward the page foot. The
+      // detected/confirmed box is calibrated against ONE reference page; the
+      // template's own real content on that page routinely runs a little
+      // further down than the box's bottom edge (its own last schedule row,
+      // a tail of body copy), which is exactly what left a stray leftover
+      // row ("07:30 am | Breakfast and check-out.", etc.) from the operator's
+      // own uploaded PDF peeking out beneath the newly generated content on
+      // every page. This margin is pure safety-net coverage — the generated
+      // content itself still renders inside the box's own bounds below, so
+      // its layout doesn't shift — and stays well clear of the template's
+      // OWN footer chrome (page number, tagline), which normally sits much
+      // closer to the physical page edge than this.
+      const band = chromeBands[pageSpec.index] || null;
+      const BLANK_BOTTOM_MARGIN = 40;
+      const blankY = band && band.contentBottom != null
+        ? Math.max(0, band.contentBottom)
+        : Math.max(0, box.y - BLANK_BOTTOM_MARGIN);
+      // Upward, blank as far as the HIGHEST content-box top anywhere in this
+      // template rather than a fixed margin. That ceiling is self-calibrating
+      // and safe by construction: some page legitimately draws content up to
+      // it today, so it is necessarily below the header chrome. A fixed
+      // margin cannot be both — on this Nepal template the interior pages'
+      // boxes stop at y=716 while their own black TIME/ACTIVITY header bar
+      // sits at 712-730, so 18pt was needed to cover it, yet the cover's box
+      // already reaches 732 and 18pt more would have erased the cyan header
+      // rule at 746 on that page.
+      //
+      // The extra 30pt cap stops one mis-detected outlier box from dragging
+      // every other page's blanking up into the letterhead.
+      const blankTop = band && band.contentTop != null
+        ? band.contentTop
+        : Math.min(maxContentBoxTop, box.y + box.height + 30);
+      const blankHeight = Math.max(box.height, blankTop - blankY);
       page.drawRectangle({
-        x: box.x, y: box.y, width: box.width, height: box.height, color: white,
+        x: box.x, y: blankY, width: box.width, height: blankHeight, color: white,
       });
       page.drawPage(embedded[i], {
         x: box.x, y: box.y, width: box.width, height: box.height,
@@ -975,5 +1353,7 @@ module.exports = {
   readSchedule,
   resolveSpec,
   scaleBoxToPage,
+  buildHtmlContext,
+  sniffImageMime,
   contrastInk,
 };

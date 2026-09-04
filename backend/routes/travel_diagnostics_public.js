@@ -451,6 +451,9 @@ router.post(
       const cleanName = sanitizeText(String(name || "").trim());
       const cleanEmail = sanitizeText(String(email || "").trim());
       const cleanPhone = sanitizeText(String(phone || "").trim());
+      if (cleanName.length > 120) {
+        return res.status(400).json({ error: "Name must be 120 characters or fewer", code: "NAME_INVALID" });
+      }
       if (form.includeName && form.nameRequired && !cleanName) {
         return res
           .status(400)
@@ -466,10 +469,19 @@ router.post(
           .status(400)
           .json({ error: "Email is invalid", code: "EMAIL_INVALID" });
       }
+      if (form.includeEmail && cleanEmail && cleanEmail.length > 254) {
+        return res.status(400).json({ error: "Email must be 254 characters or fewer", code: "EMAIL_INVALID" });
+      }
       if (form.includePhone && form.phoneRequired && !cleanPhone) {
         return res
           .status(400)
           .json({ error: "Phone is required", code: "PHONE_REQUIRED" });
+      }
+      if (form.includePhone && cleanPhone && !isValidPhone(cleanPhone)) {
+        return res.status(400).json({
+          error: "Phone must contain 10 to 15 digits, optionally with a leading +",
+          code: "PHONE_INVALID",
+        });
       }
 
       const { bank: parsed, warnings: parseWarnings } = parseBank(
@@ -1055,7 +1067,15 @@ function reportSlugTokenMatches(storedToken, suppliedToken) {
 }
 
 function isValidEmail(s) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
+  const value = String(s || "").trim();
+  return value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function isValidPhone(s) {
+  const value = String(s || "").trim();
+  if (!/^\+?[0-9\s().-]+$/.test(value)) return false;
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15;
 }
 
 function numberOrNull(v) {

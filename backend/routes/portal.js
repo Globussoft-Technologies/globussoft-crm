@@ -1686,6 +1686,15 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
     if (!subBrand) {
       return res.status(409).json({ error: "No sub-brand on your profile — please contact your advisor", code: "NO_SUB_BRAND" });
     }
+    const portalContact = answers.contact && typeof answers.contact === "object" ? answers.contact : {};
+    const portalEmail = typeof portalContact.email === "string" ? portalContact.email.trim() : "";
+    const portalPhone = typeof portalContact.phone === "string" ? portalContact.phone.trim() : "";
+    if (portalEmail && (portalEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(portalEmail))) {
+      return res.status(400).json({ error: "Please enter a valid email address", code: "EMAIL_INVALID" });
+    }
+    if (portalPhone && (!/^\+?[0-9\s().-]+$/.test(portalPhone) || portalPhone.replace(/\D/g, "").length < 10 || portalPhone.replace(/\D/g, "").length > 15)) {
+      return res.status(400).json({ error: "Please enter a valid phone number", code: "PHONE_INVALID" });
+    }
     const bank = await loadActiveBank(req.portal.tenantId, subBrand);
     if (!bank) {
       return res.status(404).json({ error: "No diagnostic is available right now", code: "NO_BANK" });

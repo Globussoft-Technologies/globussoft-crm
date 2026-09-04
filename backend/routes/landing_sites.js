@@ -180,6 +180,9 @@ router.post('/generate', verifyToken, async (req, res) => {
       imageMode,
     }, { tenantId: req.user.tenantId });
 
+    if (result.stub) {
+      return res.status(503).json({ error: 'AI provider is not configured. Configure an AI provider to generate this landing site.', code: 'AI_NOT_CONFIGURED' });
+    }
     if (!autoCreate) return res.json(result);
 
     const baseSlug = slugify(result.suggestedSlug || campaignName || `${normalizedSector}-landing-site`);
@@ -213,6 +216,9 @@ router.post('/generate', verifyToken, async (req, res) => {
     await snapshotSafe(prisma, created, VERSION_SOURCES.AI_GENERATION, req.user);
     return res.status(201).json({ page: created, generation: { source: result.source, model: result.model, stub: result.stub, verdict: result.verdict, guardrailIssues: result.guardrailIssues, realModeError: result.realModeError, imagesFetched: result.imagesFetched || 0 } });
   } catch (err) {
+    if (err.code === 'AI_NOT_CONFIGURED') {
+      return res.status(503).json({ error: 'AI provider is not configured. Configure an AI provider to generate this landing site.', code: 'AI_NOT_CONFIGURED' });
+    }
     if (err.code === 'LANDING_SITE_GENERATE_BUDGET_EXCEEDED') {
       return res.status(429).json({ error: 'Monthly LLM spend cap reached for this tenant.', code: 'LLM_BUDGET_EXCEEDED', spentCents: err.spentCents, capCents: err.capCents });
     }

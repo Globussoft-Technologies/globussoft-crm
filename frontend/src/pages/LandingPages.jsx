@@ -611,9 +611,7 @@ export default function LandingPages() {
         const friendly = friendlyAiError(res.generation.realModeError);
         if (friendly) notify.error(friendly);
       }
-      if (res.generation?.stub) {
-        notify.info('AI generation is in stub mode (Gemini key not set on this tenant). Draft contains [REVIEW] placeholders.');
-      } else if (res.generation?.verdict === 'fallback') {
+      if (res.generation?.verdict === 'fallback') {
         notify.info('AI content failed validation; a deterministic placeholder draft was used. Edit before publishing.');
       } else if (res.generation?.verdict === 'scrubbed') {
         notify.info('AI content was generated but some fields were scrubbed by the safety guard. Review carefully.');
@@ -626,8 +624,8 @@ export default function LandingPages() {
     } catch (err) {
       if (err?.status === 429 && err?.code === 'LLM_BUDGET_EXCEEDED') {
         setGenError("This tenant has reached its monthly LLM spend cap. Try again next month or raise the cap in tenant settings.");
-      } else if (err?.status === 429 && err?.code === 'GEMINI_LIMIT_EXHAUSTED') {
-        setGenError("Gemini limit has been exhausted. Please try again later.");
+      } else if (err?.code === 'AI_NOT_CONFIGURED') {
+        setGenError("AI provider is not configured. Configure an AI provider to generate this landing page.");
       } else {
         setGenError(err?.message || 'Generation failed. Please try again.');
       }

@@ -15,6 +15,9 @@
   --success-color: #10b981;
   --warning-color: #f59e0b;
   --danger-color: #ef4444;
+  --toast-error-bg: #451a1d;
+  --toast-error-border: #fb7185;
+  --toast-error-text: #ffe4e6;
   --page-header-count-bg: rgba(59, 130, 246, 0.16);
   --page-header-count-text: #dbeafe;
   --page-header-count-border: rgba(59, 130, 246, 0.28);
@@ -101,6 +104,9 @@
   --success-color: #059669;
   --warning-color: #d97706;
   --danger-color: #dc2626;
+  --toast-error-bg: #fff1f2;
+  --toast-error-border: #e11d48;
+  --toast-error-text: #9f1239;
   --page-header-count-bg: rgba(37, 99, 235, 0.12);
   --page-header-count-text: #1d4ed8;
   --page-header-count-border: rgba(37, 99, 235, 0.20);
@@ -165,6 +171,9 @@
   --success-color: #10b981;
   --warning-color: #f59e0b;
   --danger-color: #ef4444;
+  --toast-error-bg: #451a1d;
+  --toast-error-border: #fb7185;
+  --toast-error-text: #ffe4e6;
   --page-header-count-bg: rgba(59, 130, 246, 0.16);
   --page-header-count-text: #dbeafe;
   --page-header-count-border: rgba(59, 130, 246, 0.28);

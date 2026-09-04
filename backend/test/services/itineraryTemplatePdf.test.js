@@ -176,9 +176,62 @@ describe("itineraryTemplatePdf — pure helpers", () => {
     expect(pages.some((p) => p.role === "itinerary")).toBe(true);
     expect(pages[0].role).not.toBe("itinerary");
   });
+
+  it("extracts optional day layout metadata from item details", () => {
+    const groups = groupItemsByDay([
+      makeItem({
+        dayNumber: 1,
+        locationName: "Kathmandu",
+        detailsJson: JSON.stringify({
+          dayTitle: "Arrival and orientation",
+          routeLabel: "Airport -> Hotel",
+          learningConnection: "Locate Nepal and Kathmandu on a map.",
+        }),
+      }),
+    ]);
+    expect(groups[0]).toMatchObject({
+      title: "Arrival and orientation",
+      route: "Airport -> Hotel",
+      learning: "Locate Nepal and Kathmandu on a map.",
+    });
+  });
+
+  it("normalizes and exposes an AI design profile to the renderer", () => {
+    const result = resolveSpec({
+      styleSpec: {
+        accentColor: "#12B8D0",
+        design: {
+          typography: "serif",
+          headingCase: "uppercase",
+          tableHeaderStyle: "dark",
+          dayBandStyle: "outline",
+          density: "compact",
+          textColor: "#202020",
+        },
+        pages: [{ index: 1, role: "itinerary" }],
+      },
+      regions: null,
+      srcPageSizes: [{ width: 595.28, height: 841.89 }],
+    });
+    expect(result.design.regularFont).toBe("Times-Roman");
+    expect(result.design.headingCase).toBe("uppercase");
+    expect(result.design.tableHeaderStyle).toBe("dark");
+    expect(result.design.density).toBe("compact");
+    expect(result.design.ink).toBe("#202020");
+  });
 });
 
 describe("itineraryTemplatePdf — rendering", () => {
+  // The 4-page fixture's last page is tagged "static". A static page with no
+  // operator-supplied content is no longer emitted, so these renders produce
+  // THREE pages, not four.
+  //
+  // It used to be copied through byte-for-byte to preserve a contact or T&Cs
+  // page. That turned out to reprint whatever the uploaded brochure actually
+  // had there, which on a real template is the example trip's own inclusions —
+  // a customer's Goa itinerary arrived carrying "Annotated Nepal route map".
+  // Erasing the body instead just produced a page bearing only a letterhead,
+  // so the page is now omitted unless there is something real to put on it.
   let template4;
   beforeAll(async () => {
     template4 = await makeTemplate(4);
@@ -198,7 +251,7 @@ describe("itineraryTemplatePdf — rendering", () => {
     });
     expect(buf.subarray(0, 5).toString()).toBe("%PDF-");
     const out = await PDFDocument.load(buf);
-    expect(out.getPageCount()).toBe(4);
+    expect(out.getPageCount()).toBe(3);
   });
 
   it("grows onto extra pages when the schedule is too long for one", async () => {
@@ -237,7 +290,7 @@ describe("itineraryTemplatePdf — rendering", () => {
       styleSpec: spec,
     });
     const out = await PDFDocument.load(buf);
-    expect(out.getPageCount()).toBe(4);
+    expect(out.getPageCount()).toBe(3);
   });
 
   it("falls back to the legacy single contentBox when no style spec is stored", async () => {
@@ -254,7 +307,7 @@ describe("itineraryTemplatePdf — rendering", () => {
     });
     const out = await PDFDocument.load(buf);
     // Every page is untagged → all pass through, none are corrupted.
-    expect(out.getPageCount()).toBe(4);
+    expect(out.getPageCount()).toBe(3);
     expect(buf.length).toBeGreaterThan(500);
   });
 
@@ -264,7 +317,7 @@ describe("itineraryTemplatePdf — rendering", () => {
       styleSpec: FOUR_PAGE_SPEC,
     });
     const out = await PDFDocument.load(buf);
-    expect(out.getPageCount()).toBe(4);
+    expect(out.getPageCount()).toBe(3);
   });
 
   // Regression: a reference example's OWN schedule sometimes spans more than
@@ -288,8 +341,9 @@ describe("itineraryTemplatePdf — rendering", () => {
       ],
     };
     // Small schedule — comfortably fits on ONE generated content page, so if
-    // grouping works, page 3 (redundant) is skipped entirely: cover + one
-    // itinerary page + static = 3 output pages, not 4.
+    // grouping works, page 3 (redundant) is skipped entirely. The static page
+    // carries no operator content and is dropped too, leaving cover + one
+    // itinerary page = 2 output pages.
     const itinerary = {
       ...BASE_ITINERARY,
       items: [
@@ -299,7 +353,7 @@ describe("itineraryTemplatePdf — rendering", () => {
     };
     const buf = await renderItineraryOnTemplate(itinerary, null, { templateBuffer: template4, styleSpec: spec });
     const out = await PDFDocument.load(buf);
-    expect(out.getPageCount()).toBe(3);
+    expect(out.getPageCount()).toBe(2);
   });
 
   it("groups multiple consecutive itinerary pages but still overflows onto a 4th physical copy when the real trip genuinely needs it", async () => {
@@ -343,7 +397,7 @@ describe("itineraryTemplatePdf — rendering", () => {
       styleSpec: FOUR_PAGE_SPEC,
     });
     const out = await PDFDocument.load(buf);
-    expect(out.getPageCount()).toBe(4);
+    expect(out.getPageCount()).toBe(3);
   });
 
   it("works with a single-page template", async () => {

@@ -577,11 +577,7 @@ export default function LandingSites() {
 
       }
 
-      if (res.generation?.stub) {
-
-        notify.info('AI generation is in stub mode, so the draft uses deterministic fallback copy.');
-
-      } else if (res.generation?.verdict === 'fallback') {
+      if (res.generation?.verdict === 'fallback') {
 
         notify.info('The generator fell back to a safe draft. Review before publishing.');
 

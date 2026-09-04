@@ -50,6 +50,12 @@ describe('s3Service local fallback containment', () => {
     await s3.deleteFile(key);
   });
 
+  test('preserves the canonical extension for a valid local MP4 upload', async () => {
+    const url = await s3.uploadFile(Buffer.from('video'), 'reel.mp4', 'video/mp4', 'test-local-safe');
+    expect(url).toMatch(/\.mp4$/);
+    await s3.deleteFile(url);
+  });
+
   test('reads and deletes a contained local upload', async () => {
     const bytes = Buffer.from('safe-local-file');
     const url = await s3.uploadFile(bytes, 'sample.pdf', 'application/pdf', 'test-local-safe');

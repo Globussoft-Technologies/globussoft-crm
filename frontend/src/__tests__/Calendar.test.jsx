@@ -185,11 +185,16 @@ describe('<Calendar /> — #615 layout regressions', () => {
 
     topScroll.scrollLeft = 140;
     fireEvent.scroll(topScroll);
-    expect(bottomScroll.scrollLeft).toBe(140);
+    // Wait for the scroll sync to complete (event propagation + state update)
+    await waitFor(() => {
+      expect(bottomScroll.scrollLeft).toBe(140);
+    });
 
     bottomScroll.scrollLeft = 260;
     fireEvent.scroll(bottomScroll);
-    expect(topScroll.scrollLeft).toBe(260);
+    await waitFor(() => {
+      expect(topScroll.scrollLeft).toBe(260);
+    });
   });
 
   it('renders practitioner column headers with a tooltip + ellipsis chain', async () => {

@@ -822,6 +822,361 @@ aside.glass.app-sidebar {
      block the main thread. */
 }
 
+/* Travel CRM sidebar — reference-style navigation cards and timeline. */
+body[data-vertical="travel"] .app-sidebar {
+  background: var(--surface-color, #fff);
+  border-right: 1px solid var(--border-color);
+  color: var(--text-primary);
+  transition: width 180ms ease;
+  padding: 0.75rem 0.9rem !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-header {
+  margin-bottom: 0 !important;
+  gap: 0.6rem !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-brand-name {
+  color: var(--text-primary);
+  font-size: 0.98rem !important;
+  white-space: nowrap;
+}
+
+body[data-vertical="travel"] .travel-sidebar-logo {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 8px !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapse {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, white);
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapse:hover {
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, white);
+  color: var(--primary-color, var(--accent-color));
+}
+
+body[data-vertical="travel"] .travel-nav-section {
+  margin: 0.22rem 0;
+  flex: 0 0 auto;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 5%, white);
+  color: var(--text-primary) !important;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger:hover,
+body[data-vertical="travel"] .travel-nav-section-trigger.is-active {
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+}
+
+body[data-vertical="travel"] .travel-dashboard-link {
+  flex: 0 0 auto;
+  min-height: 40px;
+  margin: 0.2rem 0 0.3rem;
+  padding: 0.4rem 0.55rem;
+  border-left: 3px solid transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 5%, white);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+/* Direct destinations must use the same geometry as the collapsible module
+   triggers; the shared nav link inline styles otherwise give them a larger
+   gap and left inset. */
+body[data-vertical="travel"] .travel-dashboard-link,
+body[data-vertical="travel"] .travel-settings-link {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem !important;
+  padding: 0.3rem 0.5rem !important;
+  font-family: var(--font-family) !important;
+  font-size: 0.78rem !important;
+  font-weight: 700;
+  line-height: 1.2;
+  box-sizing: border-box;
+}
+
+body[data-vertical="travel"] .travel-settings-link {
+  flex: 0 0 auto;
+  min-height: 40px;
+  margin-top: 0.25rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 5%, white);
+  color: var(--text-primary) !important;
+  font-size: 0.78rem;
+}
+
+body[data-vertical="travel"] .travel-settings-link.active {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-color) 14%, transparent),
+    transparent
+  );
+  border-left: 3px solid var(--accent-color);
+  color: var(--accent-color) !important;
+}
+
+/* Dashboard and Settings are ordinary nav destinations. Keep their active
+   state identical to every other active travel link. */
+body[data-vertical="travel"] .travel-dashboard-link.active,
+body[data-vertical="travel"] .travel-settings-link.active {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-color) 14%, transparent),
+    transparent
+  );
+  border-left: 3px solid var(--accent-color);
+  color: var(--accent-color) !important;
+  font-weight: 600;
+}
+
+body[data-vertical="travel"] .travel-sidebar-vertical-label {
+  margin: 0.3rem 0 0.15rem;
+  padding: 0.35rem 0.55rem;
+  color: var(--text-secondary) !important;
+  font-size: 0.62rem !important;
+  letter-spacing: 0.14em;
+}
+
+body[data-vertical="travel"] .travel-sidebar-subbrand-row {
+  padding: 0.25rem 0.55rem 0.4rem !important;
+  gap: 0.45rem !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-subbrand-row label {
+  color: var(--text-secondary) !important;
+  font-size: 0.62rem !important;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+body[data-vertical="travel"] #travel-sub-brand-switcher {
+  min-height: 34px;
+  padding: 0.35rem 0.6rem !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 10px !important;
+  background: var(--surface-color) !important;
+  color: var(--text-primary) !important;
+  font-size: 0.78rem !important;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger > svg:last-child {
+  margin-left: auto;
+  transition: transform 160ms ease;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger > svg:last-child.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+body[data-vertical="travel"] .travel-nav-section-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger.is-active {
+  color: var(--accent-color) !important;
+  border-left: 3px solid var(--accent-color);
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger.is-active .travel-nav-section-icon {
+  background: color-mix(in srgb, var(--accent-color) 9%, transparent);
+  color: var(--accent-color);
+}
+
+body[data-vertical="travel"] .travel-dashboard-link.active .travel-nav-section-icon,
+body[data-vertical="travel"] .travel-settings-link.active .travel-nav-section-icon {
+  background: color-mix(in srgb, var(--accent-color) 9%, transparent);
+  color: var(--accent-color);
+}
+
+body[data-vertical="travel"] .travel-nav-section-items {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  margin: 0.15rem 0 0.3rem 1.15rem;
+  padding: 0.1rem 0 0.1rem 1rem;
+  border-left: 2px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, #dfe2eb);
+}
+
+body[data-vertical="travel"] .travel-nav-section-items .nav-link {
+  position: relative;
+  min-height: 31px;
+  padding: 0.32rem 0.5rem;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.72rem;
+}
+
+body[data-vertical="travel"] .travel-nav-section-items .nav-link::before {
+  content: "";
+  position: absolute;
+  left: -1.7rem;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, #d7dceb);
+  transform: translateY(-50%);
+}
+
+body[data-vertical="travel"] .travel-nav-section-items .nav-link:hover,
+body[data-vertical="travel"] .travel-nav-section-items .nav-link.active {
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, white);
+  color: var(--primary-color, var(--accent-color));
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed {
+  padding-left: 0.7rem !important;
+  padding-right: 0.7rem !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-header {
+  justify-content: center;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-logo {
+  display: none;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-collapse {
+  margin-left: 0;
+  width: 36px;
+  height: 36px;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-brand-name,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-subbrand-header,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-label,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-trigger > svg:last-child,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-label,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-items,
+body[data-vertical="travel"] .travel-sidebar-collapsed [data-testid="travel-sub-brand-switcher"] + * {
+  display: none;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-trigger {
+  justify-content: center;
+  padding: 0.5rem;
+}
+
+/* Dashboard and Settings use the same compact icon-card geometry as each
+   module tab when the sidebar is reduced to its rail. */
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-dashboard-link,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link {
+  width: 40px;
+  min-height: 40px;
+  margin: 0.25rem auto;
+  padding: 0.4rem;
+  justify-content: center;
+  border-left: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-color) 5%, white);
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-dashboard-link.active,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link.active {
+  background: color-mix(in srgb, var(--accent-color) 14%, white);
+  color: var(--accent-color) !important;
+}
+
+/* The shared light-mode travel surfaces intentionally mix with white. Keep
+   the same hierarchy in dark mode without producing white cards or white-on-
+   white labels. */
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-trigger,
+[data-theme="dark"] body[data-vertical="travel"] .travel-dashboard-link,
+[data-theme="dark"] body[data-vertical="travel"] .travel-settings-link {
+  background: color-mix(in srgb, white 8%, var(--surface-color));
+  color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-trigger:hover,
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-trigger.is-active,
+[data-theme="dark"] body[data-vertical="travel"] .travel-dashboard-link.active,
+[data-theme="dark"] body[data-vertical="travel"] .travel-settings-link.active {
+  background: color-mix(in srgb, var(--accent-color) 22%, var(--surface-color));
+  color: color-mix(in srgb, var(--accent-color) 30%, white) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-icon {
+  background: color-mix(in srgb, white 10%, var(--surface-color));
+  color: var(--text-secondary) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-trigger.is-active .travel-nav-section-icon,
+[data-theme="dark"] body[data-vertical="travel"] .travel-dashboard-link.active .travel-nav-section-icon,
+[data-theme="dark"] body[data-vertical="travel"] .travel-settings-link.active .travel-nav-section-icon {
+  background: color-mix(in srgb, var(--accent-color) 24%, var(--surface-color));
+  color: color-mix(in srgb, var(--accent-color) 30%, white) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items {
+  border-left-color: color-mix(in srgb, var(--accent-color) 28%, var(--border-color));
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link.active {
+  background: color-mix(in srgb, var(--accent-color) 20%, var(--surface-color));
+  color: color-mix(in srgb, var(--accent-color) 30%, white) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link::before {
+  background: color-mix(in srgb, var(--accent-color) 35%, var(--surface-color));
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-trigger,
+[data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-collapsed .travel-dashboard-link,
+[data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link {
+  width: 40px;
+  min-height: 40px;
+  margin: 0.25rem auto;
+  padding: 0.4rem;
+  border-radius: 12px;
+  background: color-mix(in srgb, white 8%, var(--surface-color));
+}
+
 /* PERF + UX: the inner scroll container. `contain` lets the browser fast-path
    scrolling without invalidating the parent's compositing tree;
    `scrollbar-gutter: stable` reserves the gutter so content doesn't shift.

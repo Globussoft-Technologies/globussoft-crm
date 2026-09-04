@@ -115,6 +115,6 @@ describe('<KnowledgeBaseAdmin />', () => {
     expect(await screen.findByRole('heading', { name: /Travel Brochure Library/i })).toBeInTheDocument();
     expect(screen.getByTitle('2 Total Library Updates')).toBeInTheDocument();
     expect(screen.getByTitle('12 Total Brochures In Library')).toBeInTheDocument();
-    expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
+    expect(screen.queryByText(/Page 1 of 1|Load more files/i)).not.toBeInTheDocument();
   });
 });

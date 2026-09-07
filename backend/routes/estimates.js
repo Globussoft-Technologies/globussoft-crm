@@ -104,17 +104,13 @@ router.get("/", async (req, res) => {
     if (status) where.status = status;
     if (req.query.includeDeleted !== "true") where.deletedAt = null;
 
-    // #172: pagination
-    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
-    const offset = Math.max(0, parseInt(req.query.offset) || 0);
-
     const isSummary = req.query.fields === "summary";
-    const findManyArgs = {
-      where, take: limit, skip: offset,
+    const baseArgs = {
+      where,
       orderBy: { createdAt: "desc" },
     };
     if (isSummary) {
-      findManyArgs.select = {
+      baseArgs.select = {
         id: true,
         estimateNum: true,
         title: true,
@@ -127,10 +123,44 @@ router.get("/", async (req, res) => {
         tenantId: true,
       };
     } else {
-      findManyArgs.include = { contact: true, deal: true, lineItems: true };
+      baseArgs.include = { contact: true, deal: true, lineItems: true };
     }
 
-    const estimates = await prisma.estimate.findMany(findManyArgs);
+    // Dynamic page/limit pagination. The ?page envelope is opt-in so legacy
+    // limit/offset callers keep the bare-array shape.
+    if (req.query.page != null) {
+      const MAX_LIMIT = 500;
+      let page = parseInt(req.query.page, 10);
+      if (!Number.isInteger(page) || page < 1) page = 1;
+      let limit = parseInt(req.query.limit, 10);
+      if (req.query.limit == null || !Number.isInteger(limit)) limit = 10;
+      else if (limit < 1) limit = 1;
+      else if (limit > MAX_LIMIT) limit = MAX_LIMIT;
+
+      const offset = (page - 1) * limit;
+      const [estimates, total] = await Promise.all([
+        prisma.estimate.findMany({ ...baseArgs, take: limit, skip: offset }),
+        prisma.estimate.count({ where }),
+      ]);
+      const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+      return res.json({
+        data: estimates,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1,
+        },
+      });
+    }
+
+    // #172: legacy pagination (no ?page) — bare array, unchanged.
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
+
+    const estimates = await prisma.estimate.findMany({ ...baseArgs, take: limit, skip: offset });
     res.json(estimates);
   } catch (err) {
     console.error(err);

@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Check, ArrowRight, Loader, Moon, Sun, Monitor, Building2, Briefcase, Plane } from 'lucide-react';
+import { Check, ArrowRight, Loader } from 'lucide-react';
 import { AuthContext, ThemeContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -18,17 +18,11 @@ const C = {
 
 const CURRENCY_SYM = { usd: '$', inr: '₹' };
 
-const THEME_ICONS = {
-  light: <Sun size={18} />,
-  dark: <Moon size={18} />,
-  system: <Monitor size={18} />,
-};
-
-const VERTICAL_ICONS = {
-  generic: <Briefcase size={18} />,
-  wellness: <Building2 size={18} />,
-  travel: <Plane size={18} />,
-};
+const ORG_TYPES = [
+  { key: 'generic', label: 'Generic CRM' },
+  { key: 'wellness', label: 'Wellness (Clinic/Salon)' },
+  { key: 'travel', label: 'Travel (Agency)' },
+];
 
 const STEPS = [
   { key: 'email', label: 'Email' },
@@ -73,9 +67,8 @@ export default function GetStarted() {
   const [name, setName] = useState(persisted?.name || '');
   const [organizationName, setOrganizationName] = useState(persisted?.organizationName || '');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [vertical, setVertical] = useState(persisted?.vertical || 'generic');
-  const [themePreference, setThemePreference] = useState(persisted?.themePreference || 'system');
+  const [themePreference] = useState(persisted?.themePreference || 'system');
 
   const [plans, setPlans] = useState([]);
   const [selectedPlan, setSelectedPlan] = useState(persisted?.selectedPlan || null);
@@ -84,12 +77,11 @@ export default function GetStarted() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [emailChecked, setEmailChecked] = useState(persisted?.emailChecked || false);
   // Short-lived token proving the email was OTP-verified. Required by the
   // backend register gate when REQUIRE_EMAIL_OTP=1, and gates the email-step
   // "Continue" button regardless (so the page is always OTP-safe).
   const [emailVerificationToken, setEmailVerificationToken] = useState(persisted?.emailVerificationToken || null);
-  // Tracks which contact (email or phone) was verified, so we can send the right field in the register call
+  // Tracks the verified email, so we can send it in the register call
   const [verifiedContact, setVerifiedContact] = useState(null);
 
   // Load Razorpay SDK once
@@ -119,9 +111,9 @@ export default function GetStarted() {
   useEffect(() => {
     persistState({
       step, email, name, organizationName, vertical, themePreference,
-      selectedPlan, currency, annual, emailChecked, emailVerificationToken,
+      selectedPlan, currency, annual, emailVerificationToken,
     });
-  }, [step, email, name, organizationName, vertical, themePreference, selectedPlan, currency, annual, emailChecked, emailVerificationToken]);
+  }, [step, email, name, organizationName, vertical, themePreference, selectedPlan, currency, annual, emailVerificationToken]);
 
   const validatePassword = (pw) => {
     if (!pw || pw.length < 8) return 'Password must be at least 8 characters';
@@ -130,74 +122,73 @@ export default function GetStarted() {
     return null;
   };
 
+  // Verified (token-bound) email shared by both signup steps.
+  const accountEmail = verifiedContact?.value || email;
+
+  // Step 1 — email-only verification. Bounce existing accounts to /login,
+  // otherwise advance to the organization form.
   const handleCheckEmail = async (e) => {
     e.preventDefault();
     setError('');
-    if (!emailVerificationToken) {
-      setError('Please verify your email or phone to continue');
-      return;
-    }
-    // If verified via phone, skip the email-exists check and go straight to profile
-    if (verifiedContact?.type === 'phone') {
-      setEmailChecked(true);
-      setStep('profile');
-      return;
-    }
-    if (!email || !email.includes('@')) {
+    if (!accountEmail || !accountEmail.includes('@')) {
       setError('Please enter a valid email address');
+      return;
+    }
+    if (!emailVerificationToken) {
+      setError('Please verify your email to continue');
       return;
     }
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/check-email', {
+      const check = await fetch('/api/auth/check-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email: accountEmail }),
       });
-      const data = await res.json();
-      if (data.exists) {
-        navigate(`/login?email=${encodeURIComponent(email)}`);
+      const checkData = await check.json().catch(() => ({}));
+      if (checkData.exists) {
+        navigate(`/login?email=${encodeURIComponent(accountEmail)}`);
         return;
       }
-      setEmailChecked(true);
       setStep('profile');
     } catch (err) {
-      setError('Unable to verify contact. Please try again.');
+      setError('Unable to verify email. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  // Step 2 — organization form. Registers via the existing
+  // POST /api/auth/register and continues to plan selection.
   const handleRegister = async (e) => {
     e.preventDefault();
     setError('');
 
+    if (!organizationName.trim()) {
+      setError('Please enter your organization name');
+      return;
+    }
+    if (!name.trim()) {
+      setError('Please enter your full name');
+      return;
+    }
+    if (!accountEmail || !accountEmail.includes('@')) {
+      setError('Please enter a valid email address');
+      return;
+    }
+    if (!emailVerificationToken) {
+      setError('Please verify your email to continue');
+      setStep('email');
+      return;
+    }
     const pwErr = validatePassword(password);
     if (pwErr) {
       setError(pwErr);
       return;
     }
-    if (password !== confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
-    if (!name.trim() || !organizationName.trim()) {
-      setError('Please fill in all fields');
-      return;
-    }
 
     setLoading(true);
     try {
-      const accountEmail = verifiedContact?.type === 'email'
-        ? (verifiedContact.value || email)
-        : email;
-
-      if (!accountEmail || !accountEmail.includes('@')) {
-        setError('A valid email address is required for your account.');
-        setLoading(false);
-        return;
-      }
-
       const registerPayload = {
         email: accountEmail,
         password,
@@ -207,9 +198,6 @@ export default function GetStarted() {
         themePreference,
         verificationToken: emailVerificationToken,
       };
-      if (verifiedContact?.type === 'phone') {
-        registerPayload.phone = verifiedContact.value;
-      }
 
       const res = await fetch('/api/auth/register', {
         method: 'POST',
@@ -238,7 +226,7 @@ export default function GetStarted() {
         // back to re-verify rather than leaving them stuck on a generic error.
         setEmailVerificationToken(null);
         setVerifiedContact(null);
-        setError('Your verification expired — please verify your email or phone again.');
+        setError('Your verification expired — please verify your email again.');
         setStep('email');
       } else {
         setError(data.error || 'Registration failed. Please try again.');
@@ -378,29 +366,52 @@ export default function GetStarted() {
     </div>
   );
 
+  // Only the organization form uses the standalone centered card. The
+  // email step keeps the original wizard chrome (navbar + step indicator).
+  const isOrgStep = step === 'profile';
+
+  const renderSignupHeader = (title) => (
+    <div style={{ textAlign: 'center', marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+        <img
+          src="/globussoft-logo.png"
+          alt="GlobusCRM — Brain behind your sales team"
+          style={{ height: 52, width: 'auto', maxWidth: 260, objectFit: 'contain' }}
+        />
+      </div>
+      <h1 style={{ fontSize: '1.05rem', fontWeight: 500, color: C.text2, margin: 0 }}>{title}</h1>
+    </div>
+  );
+
   return (
-    <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif" }}>
-      {/* Navbar */}
-      <nav style={{ position: 'sticky', top: 0, left: 0, right: 0, zIndex: 100, background: C.card, borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '14px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Link to="/" style={{ display: 'flex', alignItems: 'center' }}>
-            <img
-              src="/globussoft-logo.png"
-              alt="Globus CRM"
-              style={{ height: 34, width: 'auto', maxWidth: 160, objectFit: 'contain' }}
-            />
-          </Link>
-          <Link to="/login" style={{ fontSize: '0.88rem', color: C.text3, textDecoration: 'none', fontWeight: 500 }}>
-            Already have an account? Sign in
-          </Link>
-        </div>
-      </nav>
+    <div style={{ minHeight: '100vh', background: isOrgStep ? '#eef0f4' : C.bg, color: C.text, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif" }}>
+      {!isOrgStep && (
+        <nav style={{ position: 'sticky', top: 0, left: 0, right: 0, zIndex: 100, background: C.card, borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ maxWidth: 1200, margin: '0 auto', padding: '14px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Link to="/" style={{ display: 'flex', alignItems: 'center' }}>
+              <img
+                src="/globussoft-logo.png"
+                alt="Globus CRM"
+                style={{ height: 34, width: 'auto', maxWidth: 160, objectFit: 'contain' }}
+              />
+            </Link>
+            <Link to="/login" style={{ fontSize: '0.88rem', color: C.text3, textDecoration: 'none', fontWeight: 500 }}>
+              Already have an account? Sign in
+            </Link>
+          </div>
+        </nav>
+      )}
 
       {/* Main */}
-      <main style={{ maxWidth: 720, margin: '0 auto', padding: '48px 24px 80px' }}>
-        {renderStepIndicator()}
+      <main style={{ maxWidth: isOrgStep ? 520 : 720, margin: '0 auto', padding: isOrgStep ? '48px 16px 80px' : '48px 24px 80px' }}>
+        {!isOrgStep && step !== 'email' && renderStepIndicator()}
 
-        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '36px 32px', boxShadow: C.shadow }}>
+        <div style={
+          isOrgStep
+            ? { background: '#ffffff', borderRadius: 16, padding: '36px 36px 28px', boxShadow: '0 12px 40px rgba(15,23,42,0.12)' }
+            : { background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '36px 32px', boxShadow: C.shadow }
+        }>
+          {step === 'profile' && renderSignupHeader('Create your organization')}
           {error && (
             <div style={{ background: '#fef2f2', color: C.red, padding: '12px 16px', borderRadius: 8, fontSize: '0.88rem', marginBottom: 20, border: '1px solid #fecaca' }}>
               {error}
@@ -408,180 +419,158 @@ export default function GetStarted() {
           )}
 
           {step === 'email' && (
-            <>
+            <form onSubmit={handleCheckEmail}>
               <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 8 }}>Let's get started</h1>
-              <p style={{ color: C.text3, marginBottom: 28 }}>Verify your email or phone number to continue.</p>
-              <form onSubmit={handleCheckEmail}>
-                <div style={{ marginBottom: 20 }}>
-                  <ContactVerificationField
-                    purpose="signup"
-                    onVerifiedChange={(token) => {
-                      setEmailVerificationToken(token);
-                    }}
-                    onContactChange={(contact) => {
-                      setVerifiedContact(contact);
-                      if (contact?.type === 'email') setEmail(contact.value);
-                    }}
-                    inputStyle={inputStyle}
-                    labelStyle={labelStyle}
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={loading || !emailVerificationToken}
-                  style={{
-                    width: '100%', padding: '12px', borderRadius: 10, border: 'none',
-                    background: C.accent, color: '#fff', fontWeight: 600, fontSize: '0.95rem',
-                    cursor: (loading || !emailVerificationToken) ? 'not-allowed' : 'pointer',
-                    opacity: (loading || !emailVerificationToken) ? 0.6 : 1,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              <p style={{ color: C.text3, marginBottom: 28 }}>Verify your email to continue.</p>
+              <div
+                aria-hidden="true"
+                style={{
+                  padding: '0.4rem 0.75rem', borderRadius: 6, fontSize: '0.8rem',
+                  fontWeight: 600, textAlign: 'center', marginBottom: '0.75rem',
+                  background: 'var(--primary-color, var(--accent-color, #6366f1))',
+                  color: '#fff',
+                }}
+              >
+                Email
+              </div>
+              <div style={{ marginBottom: 20 }}>
+                <ContactVerificationField
+                  purpose="signup"
+                  onVerifiedChange={(token) => {
+                    setEmailVerificationToken(token);
                   }}
-                >
-                  {loading
-                    ? <Loader size={18} className="spin" />
-                    : !emailVerificationToken
-                      ? 'Verify your email or phone to continue'
-                      : <>Continue <ArrowRight size={18} /></>}
-                </button>
-              </form>
-            </>
+                  onContactChange={(contact) => {
+                    setVerifiedContact(contact);
+                    if (contact?.type === 'email') setEmail(contact.value);
+                  }}
+                  inputStyle={inputStyle}
+                  labelStyle={labelStyle}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !emailVerificationToken}
+                style={{
+                  width: '100%', padding: '12px', borderRadius: 10, border: 'none',
+                  background: '#8b8ff2', color: '#fff', fontWeight: 600, fontSize: '0.95rem',
+                  cursor: (loading || !emailVerificationToken) ? 'not-allowed' : 'pointer',
+                  opacity: (loading || !emailVerificationToken) ? 0.7 : 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                }}
+              >
+                {loading
+                  ? <Loader size={18} className="spin" />
+                  : !emailVerificationToken
+                    ? 'Verify your email to continue'
+                    : <>Continue <ArrowRight size={18} /></>}
+              </button>
+            </form>
           )}
 
           {step === 'profile' && (
-            <>
-              <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 8 }}>Create your account</h1>
-              <p style={{ color: C.text3, marginBottom: 28 }}>Tell us a bit about your organization.</p>
-              <form onSubmit={handleRegister}>
-                <div style={{ marginBottom: 16 }}>
-                  <label style={labelStyle}>Full name</label>
+            <form onSubmit={handleRegister}>
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>Organization Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Acme Inc."
+                  value={organizationName}
+                  onChange={(e) => setOrganizationName(e.target.value)}
+                  style={inputStyle}
+                  autoComplete="organization"
+                />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>Organization Type</label>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  {ORG_TYPES.map((t) => (
+                    <label
+                      key={t.key}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        fontSize: '0.85rem', color: C.text2, cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="org-type"
+                        checked={vertical === t.key}
+                        onChange={() => setVertical(t.key)}
+                        style={{ accentColor: C.accent }}
+                      />
+                      {t.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>Your Full Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="John Doe"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  style={inputStyle}
+                  autoComplete="name"
+                />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>Email Address</label>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
                   <input
-                    type="text"
-                    required
-                    placeholder="John Doe"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    style={inputStyle}
+                    type="email"
+                    value={accountEmail}
+                    disabled
+                    readOnly
+                    style={{ ...inputStyle, flex: 1, background: '#f8fafc', color: C.text2 }}
+                    autoComplete="email"
                   />
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    padding: '0 0.7rem', color: '#16a34a', fontSize: '0.8rem',
+                    fontWeight: 600, whiteSpace: 'nowrap',
+                  }}>✓ Verified</span>
                 </div>
-                {verifiedContact?.type === 'phone' && (
-                  <div style={{ marginBottom: 16 }}>
-                    <label style={labelStyle}>Account Email</label>
-                    <input
-                      type="email"
-                      required
-                      placeholder="name@company.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      style={inputStyle}
-                      autoComplete="email"
-                    />
-                    <p style={{ fontSize: '0.75rem', color: C.text3, marginTop: 4 }}>
-                      Your email is used for login and notifications.
-                    </p>
-                  </div>
-                )}
-                <div style={{ marginBottom: 16 }}>
-                  <label style={labelStyle}>Organization name</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Acme Inc."
-                    value={organizationName}
-                    onChange={(e) => setOrganizationName(e.target.value)}
-                    style={inputStyle}
-                  />
+              </div>
+              <div style={{ marginBottom: 20 }}>
+                <label style={labelStyle}>Secure Password</label>
+                <PasswordInput
+                  required
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  style={inputStyle}
+                  wrapperStyle={{ width: '100%' }}
+                  autoComplete="new-password"
+                />
+                <div style={{ fontSize: '0.75rem', color: C.text4, marginTop: 6 }}>
+                  At least 8 characters with 1 letter and 1 number.
                 </div>
-
-                <div style={{ marginBottom: 16 }}>
-                  <label style={labelStyle}>Password</label>
-                  <PasswordInput
-                    required
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    wrapperStyle={{ width: '100%' }}
-                  />
-                  <div style={{ fontSize: '0.75rem', color: C.text4, marginTop: 6 }}>
-                    At least 8 characters with 1 letter and 1 number.
-                  </div>
-                </div>
-                <div style={{ marginBottom: 20 }}>
-                  <label style={labelStyle}>Confirm password</label>
-                  <PasswordInput
-                    required
-                    placeholder="••••••••"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    wrapperStyle={{ width: '100%' }}
-                  />
-                </div>
-
-                <div style={{ marginBottom: 20 }}>
-                  <label style={labelStyle}>CRM type</label>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                    {[
-                      { key: 'generic', label: 'Generic CRM' },
-                      { key: 'wellness', label: 'Wellness' },
-                      { key: 'travel', label: 'Travel' },
-                    ].map((v) => (
-                      <button
-                        key={v.key}
-                        type="button"
-                        onClick={() => setVertical(v.key)}
-                        style={{
-                          padding: '12px', borderRadius: 10, border: `1.5px solid ${vertical === v.key ? C.accent : C.border}`,
-                          background: vertical === v.key ? C.accentBg : C.card, color: vertical === v.key ? C.accent : C.text2,
-                          fontWeight: 500, fontSize: '0.85rem', cursor: 'pointer', display: 'flex', flexDirection: 'column',
-                          alignItems: 'center', gap: 6,
-                        }}
-                      >
-                        {VERTICAL_ICONS[v.key]}
-                        {v.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: 24 }}>
-                  <label style={labelStyle}>Visual theme</label>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                    {[
-                      { key: 'light', label: 'Light' },
-                      { key: 'dark', label: 'Dark' },
-                      { key: 'system', label: 'System' },
-                    ].map((t) => (
-                      <button
-                        key={t.key}
-                        type="button"
-                        onClick={() => setThemePreference(t.key)}
-                        style={{
-                          padding: '12px', borderRadius: 10, border: `1.5px solid ${themePreference === t.key ? C.accent : C.border}`,
-                          background: themePreference === t.key ? C.accentBg : C.card, color: themePreference === t.key ? C.accent : C.text2,
-                          fontWeight: 500, fontSize: '0.85rem', cursor: 'pointer', display: 'flex', flexDirection: 'column',
-                          alignItems: 'center', gap: 6,
-                        }}
-                      >
-                        {THEME_ICONS[t.key]}
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  style={{
-                    width: '100%', padding: '12px', borderRadius: 10, border: 'none',
-                    background: C.accent, color: '#fff', fontWeight: 600, fontSize: '0.95rem',
-                    cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  }}
-                >
-                  {loading ? <Loader size={18} className="spin" /> : <>Create account <ArrowRight size={18} /></>}
-                </button>
-              </form>
-            </>
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !emailVerificationToken}
+                style={{
+                  width: '100%', padding: '12px', borderRadius: 10, border: 'none',
+                  background: '#8b8ff2', color: '#fff', fontWeight: 600, fontSize: '0.95rem',
+                  cursor: (loading || !emailVerificationToken) ? 'not-allowed' : 'pointer',
+                  opacity: (loading || !emailVerificationToken) ? 0.7 : 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                }}
+              >
+                {loading
+                  ? <Loader size={18} className="spin" />
+                  : <>Create account <ArrowRight size={18} /></>}
+              </button>
+              <p style={{ textAlign: 'center', fontSize: '0.85rem', color: C.text3, marginTop: 16, marginBottom: 0 }}>
+                Already have an account?{' '}
+                <Link to="/login" style={{ color: C.accent, fontWeight: 600, textDecoration: 'none' }}>
+                  Sign in
+                </Link>
+              </p>
+            </form>
           )}
 
           {step === 'plan' && (

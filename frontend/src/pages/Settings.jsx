@@ -82,6 +82,12 @@ export default function Settings() {
   const [recoveryLoading, setRecoveryLoading] = useState(false);
   const [recoveryError, setRecoveryError] = useState("");
   const [recoveryDialogRole, setRecoveryDialogRole] = useState(null);
+  // Role Recovery pagination — 10 roles per page, paginated server-side
+  // via GET /api/roles?page=&limit=.
+  const RECOVERY_PAGE_SIZE = 10;
+  const [recoveryPage, setRecoveryPage] = useState(1);
+  const [recoveryTotal, setRecoveryTotal] = useState(0);
+  const [recoveryTotalPages, setRecoveryTotalPages] = useState(1);
   // Restore button visibility — gated on the same OR-pair the
   // backend POST /restore endpoint enforces. settings.manage admins
   // can restore even if they don't hold roles.manage (the recovery
@@ -91,12 +97,22 @@ export default function Settings() {
     hasPermission("roles", "manage") || hasPermission("settings", "manage");
   const canSeeRecoverySection =
     hasPermission("roles", "read") || hasPermission("settings", "manage");
-  const loadRecoveryRoles = async () => {
+  const loadRecoveryRoles = async (page = recoveryPage) => {
     setRecoveryLoading(true);
     setRecoveryError("");
     try {
-      const res = await fetchApi("/api/roles");
+      const res = await fetchApi(
+        `/api/roles?page=${page}&limit=${RECOVERY_PAGE_SIZE}`,
+      );
       setRecoveryRoles(Array.isArray(res?.roles) ? res.roles : []);
+      const pagination = res?.pagination;
+      if (pagination) {
+        setRecoveryTotal(Number(pagination.total) || 0);
+        setRecoveryTotalPages(Number(pagination.totalPages) || 0);
+      } else {
+        setRecoveryTotal(Array.isArray(res?.roles) ? res.roles.length : 0);
+        setRecoveryTotalPages(1);
+      }
     } catch (err) {
       setRecoveryError(err.message || "Could not load roles");
     } finally {
@@ -106,7 +122,7 @@ export default function Settings() {
   useEffect(() => {
     if (canSeeRecoverySection) loadRecoveryRoles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canSeeRecoverySection]);
+  }, [canSeeRecoverySection, recoveryPage]);
   const [newUser, setNewUser] = useState({
     name: "",
     email: "",
@@ -3123,6 +3139,52 @@ export default function Settings() {
                     </li>
                   ))}
                 </ul>
+              )}
+              {!recoveryLoading && !recoveryError && recoveryRoles.length > 0 && (
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    gap: "1rem",
+                    marginTop: "0.75rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ fontSize: "0.78rem", padding: "0.3rem 0.7rem" }}
+                    onClick={() =>
+                      setRecoveryPage((p) => Math.max(1, p - 1))
+                    }
+                    disabled={recoveryPage === 1}
+                  >
+                    Previous
+                  </button>
+                  <span
+                    style={{
+                      color: "var(--text-secondary)",
+                      fontSize: "0.78rem",
+                    }}
+                  >
+                    Page {recoveryPage} of {Math.max(recoveryTotalPages, 1)}
+                    {recoveryTotal > 0 ? ` (${recoveryTotal} total)` : ""}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ fontSize: "0.78rem", padding: "0.3rem 0.7rem" }}
+                    onClick={() =>
+                      setRecoveryPage((p) =>
+                        Math.min(Math.max(recoveryTotalPages, 1), p + 1),
+                      )
+                    }
+                    disabled={recoveryPage >= Math.max(recoveryTotalPages, 1)}
+                  >
+                    Next
+                  </button>
+                </div>
               )}
 
               <RoleHistoryDialog

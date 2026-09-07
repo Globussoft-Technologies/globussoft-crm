@@ -1,4 +1,4 @@
-import { useEffect, useState, useContext } from 'react';
+import { useCallback, useEffect, useRef, useState, useContext } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
@@ -31,6 +31,8 @@ const sectionHeading = {
   marginBottom: '0.75rem',
 };
 
+const SERVICE_PAGE_SIZE = 24;
+
 export default function Services() {
   const notify = useNotify();
   // Backend gates POST/PUT/DELETE on adminOrPerm('services', 'write').
@@ -54,6 +56,12 @@ export default function Services() {
   const initialTab = requestedTab === 'activepackages' ? 'activetreatments' : requestedTab;
   const [tab, setTab] = useState(initialTab); // catalog | packages | activetreatments
   const [services, setServices] = useState([]);
+  const [serviceTotal, setServiceTotal] = useState(0);
+  const [servicePage, setServicePage] = useState(1);
+  const [serviceSort, setServiceSort] = useState('default');
+  const [loadingMoreServices, setLoadingMoreServices] = useState(false);
+  const serviceRequestRef = useRef({ sequence: 0, loadingPage: null });
+  const [packageServiceOptions, setPackageServiceOptions] = useState([]);
   const [categories, setCategories] = useState([]);
   const [treatments, setTreatments] = useState([]);
   const [packages, setPackages] = useState([]);
@@ -83,10 +91,46 @@ export default function Services() {
   // Practitioners the clinic can hand a requested session to.
   const [doctors, setDoctors] = useState([]);
 
-  const load = () => {
-    setLoading(true);
-    fetchApi('/api/wellness/services').then(setServices).catch(() => setServices([])).finally(() => setLoading(false));
-  };
+  const load = useCallback(({ page = 1, append = false } = {}) => {
+    const requestState = serviceRequestRef.current;
+    if (append && requestState.loadingPage !== null) return Promise.resolve();
+    const requestId = ++requestState.sequence;
+    if (append) {
+      requestState.loadingPage = page;
+      setLoadingMoreServices(true);
+    } else {
+      requestState.loadingPage = null;
+      setLoadingMoreServices(false);
+      setLoading(true);
+    }
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(SERVICE_PAGE_SIZE),
+      sortBy: serviceSort,
+    });
+    return fetchApi(`/api/wellness/services?${params}`)
+      .then((res) => {
+        if (requestId !== requestState.sequence) return;
+        const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+        setServices((current) => append ? [...current, ...rows] : rows);
+        setServiceTotal(Array.isArray(res) ? res.length : (Number(res?.total) || 0));
+        setServicePage(page);
+      })
+      .catch(() => {
+        if (requestId === requestState.sequence && !append) setServices([]);
+      })
+      .finally(() => {
+        if (append && requestState.loadingPage === page) requestState.loadingPage = null;
+        if (requestId !== requestState.sequence) return;
+        setLoading(false);
+        setLoadingMoreServices(false);
+      });
+  }, [serviceSort]);
+
+  const loadMoreServices = useCallback(() => {
+    if (loadingMoreServices || services.length >= serviceTotal) return;
+    load({ page: servicePage + 1, append: true });
+  }, [load, loadingMoreServices, servicePage, serviceTotal, services.length]);
 
   const loadCategories = () => {
     setCategoriesLoading(true);
@@ -103,10 +147,8 @@ export default function Services() {
     fetchApi('/api/wellness/activetreatment').then(res => setTreatments(res.data || [])).catch(() => setTreatments([])).finally(() => setTreatmentsLoading(false));
   };
 
-  useEffect(() => {
-    load();
-    loadCategories();
-  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadCategories(); }, []);
   // Customers only ever see published packages; the backend enforces that
   // too, so a crafted request cannot pull drafts.
   const loadPackages = ({ quiet = false } = {}) => {
@@ -147,6 +189,13 @@ export default function Services() {
       loadPackages();
     }
   }, [tab, isCustomer, canManageServices]);
+
+  useEffect(() => {
+    if (tab !== 'packages' || !canManageServices) return;
+    fetchApi('/api/wellness/services')
+      .then((rows) => setPackageServiceOptions(Array.isArray(rows) ? rows : []))
+      .catch(() => setPackageServiceOptions([]));
+  }, [tab, canManageServices]);
   // A customer deep-linking to an internal tab has it hidden — fall back
   // to the catalog so they never see a blank page. `packages` is NOT in this
   // list any more: customers now get a read-only Packages tab of their own.
@@ -242,7 +291,13 @@ export default function Services() {
       {tab === 'catalog' && (
         <CatalogTab
           services={services}
+          total={serviceTotal}
           loading={loading}
+          loadingMore={loadingMoreServices}
+          hasMore={services.length < serviceTotal}
+          onLoadMore={loadMoreServices}
+          sortBy={serviceSort}
+          onSortChange={setServiceSort}
           categories={categories}
           categoriesLoading={categoriesLoading}
           showAdd={showAdd}
@@ -271,7 +326,7 @@ export default function Services() {
             onRequestSession={setSessionRequestPkg}
           />
         ) : canManageServices ? (
-          <PackageBuilder services={services} onSaved={() => loadPackages()} />
+          <PackageBuilder services={packageServiceOptions} onSaved={() => loadPackages()} />
         ) : (
           <ActivePackagesTab packages={packages} loading={packagesLoading} readOnly />
         )

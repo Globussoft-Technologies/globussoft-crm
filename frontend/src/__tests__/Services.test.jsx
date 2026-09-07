@@ -83,7 +83,7 @@ const services = [
 // handlers don't throw.
 function defaultFetchRouter(url, opts) {
   if (typeof url !== 'string') return Promise.resolve([]);
-  if (url === '/api/wellness/services' && (!opts || !opts.method || opts.method === 'GET')) {
+  if (url.startsWith('/api/wellness/services') && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(services);
   }
   if (url === '/api/wellness/activetreatment') {
@@ -128,8 +128,11 @@ describe('<Services /> — Catalog tab', () => {
 
     fetchApi.mockImplementation((url, opts) => {
       if (typeof url !== 'string') return Promise.resolve([]);
-      if (url === '/api/wellness/services' && (!opts || !opts.method || opts.method === 'GET')) {
-        return Promise.resolve(manyServices);
+      if (url.includes('/api/wellness/services?page=1')) {
+        return Promise.resolve({ data: manyServices.slice(0, 12), total: manyServices.length, page: 1, pageSize: 12 });
+      }
+      if (url.includes('/api/wellness/services?page=2')) {
+        return Promise.resolve({ data: manyServices.slice(12), total: manyServices.length, page: 2, pageSize: 12 });
       }
       if (url === '/api/wellness/service-categories?limit=1000') {
         return Promise.resolve([]);
@@ -154,6 +157,52 @@ describe('<Services /> — Catalog tab', () => {
     expect(
       await screen.findByText('Scrollable Service 13'),
     ).toBeInTheDocument();
+  });
+
+  it('does not request the same next page twice while it is still loading', async () => {
+    const firstPage = Array.from({ length: 24 }, (_, index) => ({
+      ...services[0], id: 200 + index, name: `Paged Service ${index + 1}`,
+    }));
+    const pendingPage = new Promise(() => {});
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/services?page=1')) {
+        return Promise.resolve({ data: firstPage, total: 48, page: 1, pageSize: 24 });
+      }
+      if (url.includes('/api/wellness/services?page=2')) return pendingPage;
+      return Promise.resolve([]);
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await screen.findByText('Paged Service 1');
+    const scrollContainer = screen.getByTestId('services-catalog-scroll');
+    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
+    scrollContainer.scrollTop = 728;
+    fireEvent.scroll(scrollContainer);
+    fireEvent.scroll(scrollContainer);
+
+    expect(fetchApi.mock.calls.filter(([url]) => url.includes('/api/wellness/services?page=2'))).toHaveLength(1);
+  });
+
+  it('ignores an older response after the service sort changes', async () => {
+    let resolveInitial;
+    const initialRequest = new Promise((resolve) => { resolveInitial = resolve; });
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('sortBy=default')) return initialRequest;
+      if (url.includes('sortBy=newest')) {
+        return Promise.resolve({ data: [{ ...services[0], id: 300, name: 'Newest Service' }], total: 1, page: 1, pageSize: 24 });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Sort services'), { target: { value: 'newest' } });
+    await screen.findByText('Newest Service');
+    resolveInitial({ data: [{ ...services[0], id: 301, name: 'Stale Service' }], total: 1, page: 1, pageSize: 24 });
+    await Promise.resolve();
+
+    expect(screen.getByText('Newest Service')).toBeInTheDocument();
+    expect(screen.queryByText('Stale Service')).not.toBeInTheDocument();
   });
 
   it('clicking the pencil (Edit) button flips the card to edit mode', async () => {
@@ -699,7 +748,7 @@ describe('<Services /> — Catalog card render details', () => {
 
   it('renders "Unlimited" radius when targetRadiusKm is null/0/missing', async () => {
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') {
+      if (url.startsWith('/api/wellness/services')) {
         return Promise.resolve([
           { id: 99, name: 'Unbounded Service', category: 'aesthetics', ticketTier: 'low', basePrice: 1000, durationMin: 30, targetRadiusKm: null, isActive: true },
         ]);
@@ -863,7 +912,7 @@ describe('<Services /> — PackageBuilder dynamic recompute', () => {
 
   it('package builder shows "No services available" when services list is empty', async () => {
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve([]);
       if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
       return Promise.resolve({});
     });
@@ -896,7 +945,7 @@ describe('<Services /> — PackageBuilder multi-service selection', () => {
 
   beforeEach(() => {
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(TWO_HIGH_TIER);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(TWO_HIGH_TIER);
       if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
       return Promise.resolve({});
     });
@@ -1490,7 +1539,7 @@ describe('<Services /> — who is offered a package to buy', () => {
       hasPermission: () => canWrite,
     });
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
       if (url === '/api/wellness/packages') return Promise.resolve({ packages: [LIVE_PACKAGE] });
       if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
       return Promise.resolve({});
@@ -1551,7 +1600,7 @@ describe('<Services /> — Active Packages populated state', () => {
   it('renders treatment cards when /api/wellness/activetreatment returns rows', async () => {
     const user = userEvent.setup();
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
       if (url === '/api/wellness/activetreatment') {
         return Promise.resolve({
           data: [
@@ -1590,7 +1639,7 @@ describe('<Services /> — Active Packages populated state', () => {
     // plan a patient has bought. Building one has to land somewhere visible.
     const user = userEvent.setup();
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
       if (url === '/api/wellness/packages') {
         return Promise.resolve({
           packages: [
@@ -1644,7 +1693,7 @@ describe('<Services /> — Active Packages populated state', () => {
     // no empty section, no extra headings.
     const user = userEvent.setup();
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
       if (url === '/api/wellness/packages') return Promise.resolve({ packages: [] });
       if (url === '/api/wellness/activetreatment') {
         return Promise.resolve({
@@ -1689,7 +1738,7 @@ describe('<Services /> — Active Packages populated state', () => {
     }));
 
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
       if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: manyTreatments });
       return Promise.resolve({});
     });
@@ -1717,7 +1766,7 @@ describe('<Services /> — Active Packages populated state', () => {
   it('keeps the cancelled badge inside the treatment card container', async () => {
     const user = userEvent.setup();
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
       if (url === '/api/wellness/activetreatment') {
         return Promise.resolve({
           data: [

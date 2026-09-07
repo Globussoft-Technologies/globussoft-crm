@@ -45,9 +45,19 @@ router.get("/", async (req, res) => {
     if (req.query.isActive === "true") where.isActive = true;
     if (req.query.isActive === "false") where.isActive = false;
     const isSummary = req.query.fields === "summary";
+    const paginated = req.query.page !== undefined || req.query.pageSize !== undefined;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { parent: { is: { name: { contains: q } } } },
+      ];
+    }
     const findManyArgs = {
       where,
-      orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+      orderBy: [{ displayOrder: "asc" }, { name: "asc" }, { id: "asc" }],
     };
     if (isSummary) {
       findManyArgs.select = {
@@ -58,7 +68,21 @@ router.get("/", async (req, res) => {
         isActive: true,
       };
     } else {
-      findManyArgs.include = { _count: { select: { services: true, children: true } } };
+      findManyArgs.include = paginated
+        ? {
+            parent: { select: { id: true, name: true } },
+            _count: { select: { services: true, children: true } },
+          }
+        : { _count: { select: { services: true, children: true } } };
+    }
+    if (paginated) {
+      findManyArgs.skip = (page - 1) * pageSize;
+      findManyArgs.take = pageSize;
+      const [items, total] = await prisma.$transaction([
+        prisma.serviceCategory.findMany(findManyArgs),
+        prisma.serviceCategory.count({ where }),
+      ]);
+      return res.json({ data: items, total, page, pageSize });
     }
     const items = await prisma.serviceCategory.findMany(findManyArgs);
     res.json(items);

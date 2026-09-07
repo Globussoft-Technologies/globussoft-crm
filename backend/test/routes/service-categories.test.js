@@ -117,10 +117,12 @@ Module._cache[wellnessRolePath] = {
 // ── Prisma singleton patching — BEFORE the router is required ──────────
 prisma.serviceCategory = prisma.serviceCategory || {};
 prisma.serviceCategory.findMany = vi.fn();
+prisma.serviceCategory.count = vi.fn();
 prisma.serviceCategory.findFirst = vi.fn();
 prisma.serviceCategory.create = vi.fn();
 prisma.serviceCategory.update = vi.fn();
 prisma.serviceCategory.delete = vi.fn();
+prisma.$transaction = vi.fn((operations) => Promise.all(operations));
 
 import express from 'express';
 import request from 'supertest';
@@ -147,6 +149,7 @@ function makeApp() {
 
 beforeEach(() => {
   prisma.serviceCategory.findMany.mockReset();
+  prisma.serviceCategory.count.mockReset();
   prisma.serviceCategory.findFirst.mockReset();
   prisma.serviceCategory.create.mockReset();
   prisma.serviceCategory.update.mockReset();
@@ -178,7 +181,7 @@ describe('GET /api/wellness/service-categories', () => {
     expect(prisma.serviceCategory.findMany).toHaveBeenCalledOnce();
     const args = prisma.serviceCategory.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ tenantId: 7 });
-    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]);
     expect(args.include).toEqual({ _count: { select: { services: true, children: true } } });
   });
 
@@ -191,6 +194,30 @@ describe('GET /api/wellness/service-categories', () => {
     expect(res.status).toBe(200);
     const args = prisma.serviceCategory.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ tenantId: 7, isActive: true });
+  });
+
+  test('?page + ?pageSize return a backend-paginated envelope with search', async () => {
+    const rows = [{ id: 2, name: 'Hair', parent: null, _count: { services: 5, children: 0 } }];
+    prisma.serviceCategory.findMany.mockResolvedValueOnce(rows);
+    prisma.serviceCategory.count.mockResolvedValueOnce(31);
+    const app = makeApp();
+
+    const res = await request(app).get('/api/wellness/service-categories?page=2&pageSize=10&q=hair');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ data: rows, total: 31, page: 2, pageSize: 10 });
+    expect(prisma.serviceCategory.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      skip: 10,
+      take: 10,
+      include: {
+        parent: { select: { id: true, name: true } },
+        _count: { select: { services: true, children: true } },
+      },
+      where: expect.objectContaining({ tenantId: 7, OR: expect.any(Array) }),
+    }));
+    expect(prisma.serviceCategory.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ tenantId: 7, OR: expect.any(Array) }),
+    });
   });
 });
 
@@ -434,7 +461,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
 
     const args = prisma.serviceCategory.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ tenantId: 7 });
-    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]);
     expect(args.select).toBeDefined();
     expect(args.select.id).toBe(true);
     expect(args.select.name).toBe(true);
@@ -504,7 +531,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
       _count: { select: { services: true, children: true } },
     });
     expect(args.where).toEqual({ tenantId: 7 });
-    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]);
 
     // _count aggregate present in the row — admin index renders these.
     expect(res.body[0]._count).toEqual({ services: 4, children: 2 });
@@ -553,7 +580,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     // tenantId injection unchanged in the slim branch — critical: the
     // slim shape MUST still filter by tenant, never leak across.
     expect(args.where).toEqual({ tenantId: 99 });
-    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]);
     expect(args.select).toBeDefined();
     expect(args.include).toBeUndefined();
   });

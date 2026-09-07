@@ -50,11 +50,24 @@ router.get("/", async (req, res) => {
     if (req.query.isResolved !== undefined) {
       where.isResolved = req.query.isResolved === "true";
     }
+    // ?count=1 — return { total } only (mirrors contacts.js). Same `where`
+    // (severity/dealId/isResolved) so paged callers get an exact total for
+    // their filter.
+    if (req.query.count === "1") {
+      const total = await prisma.dealInsight.count({ where });
+      return res.json({ total });
+    }
     const isSummary = req.query.fields === "summary";
+    // #172-style paging (mirrors contacts.js / deals.js / contracts.js):
+    // honor limit/offset when passed; otherwise the historic take:500
+    // window. Existing verbatim callers are unaffected.
     const findManyArgs = {
       where,
-      orderBy: { generatedAt: "desc" },
-      take: 500,
+      orderBy: [{ generatedAt: "desc" }, { id: "desc" }],
+      take: req.query.limit !== undefined
+        ? Math.max(1, Math.min(parseInt(req.query.limit) || 50, 500))
+        : 500,
+      skip: Math.max(0, parseInt(req.query.offset) || 0),
     };
     if (isSummary) {
       findManyArgs.select = {

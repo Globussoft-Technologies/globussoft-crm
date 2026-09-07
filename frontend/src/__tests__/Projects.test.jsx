@@ -132,8 +132,24 @@ const sampleDeals = [
   { id: 22, title: 'Globex Expansion', amount: 125000 },
 ];
 
+// Query-aware projects mock: the page server-pages via ?limit=&offset=,
+// totals via ?count=1, and stats-bar data via ?fields=summary.
+function serveProjects(url, rows) {
+  if (url === '/api/projects') return Promise.resolve(rows);
+  if (typeof url === 'string' && url.startsWith('/api/projects?')) {
+    const q = new URL(url, 'http://localhost').searchParams;
+    if (q.get('count') === '1') return Promise.resolve({ total: rows.length });
+    if (q.get('fields') === 'summary') return Promise.resolve(rows);
+    const limit = Math.max(1, parseInt(q.get('limit')) || 50);
+    const offset = Math.max(0, parseInt(q.get('offset')) || 0);
+    return Promise.resolve(rows.slice(offset, offset + limit));
+  }
+  return undefined;
+}
+
 function defaultMock(url, _opts) {
-  if (url === '/api/projects') return Promise.resolve(sampleProjects);
+  const projectsRes = serveProjects(url, sampleProjects);
+  if (projectsRes) return projectsRes;
   if (url === '/api/contacts') return Promise.resolve(sampleContacts);
   if (url === '/api/deals') return Promise.resolve(sampleDeals);
   return Promise.resolve(null);
@@ -152,7 +168,7 @@ describe('<Projects /> — page surface', () => {
     fetchApiMock.mockImplementation(defaultMock);
   });
 
-  it('renders heading "Projects" + the three parallel load fetches fire on mount', async () => {
+  it('renders heading "Projects" + the parallel load fetches fire on mount', async () => {
     renderProjects();
     expect(
       screen.getByRole('heading', { name: /Projects/i })
@@ -160,15 +176,53 @@ describe('<Projects /> — page surface', () => {
 
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
-      expect(urls).toContain('/api/projects');
+      // Table page (limit/offset) + footer total (count=1) + stats-bar
+      // source (fields=summary), alongside the dropdown fetches.
+      expect(urls.some((u) => typeof u === 'string' && u.includes('/api/projects?') && u.includes('limit=') && u.includes('offset='))).toBe(true);
+      expect(urls.some((u) => typeof u === 'string' && u.includes('/api/projects?') && u.includes('count=1'))).toBe(true);
+      expect(urls.some((u) => typeof u === 'string' && u.includes('/api/projects?') && u.includes('fields=summary'))).toBe(true);
       expect(urls).toContain('/api/contacts');
       expect(urls).toContain('/api/deals');
     });
   });
 
+  it('table page slices rows via limit/offset with the total from count=1', async () => {
+    renderProjects();
+    await screen.findByText('Aurora Migration');
+
+    // 3 sample rows, pageSize 10 → all on page 1 with total 3.
+    expect(await screen.findByText(/Showing 1-3 of 3 projects/i)).toBeInTheDocument();
+
+    // A 2-row page window: limit=2&offset=1 skips the first row.
+    fetchApiMock.mockClear();
+    const pageRes = await defaultMock('/api/projects?limit=2&offset=1', {});
+    expect(pageRes.map((r) => r.id)).toEqual([2, 3]);
+    const countRes = await defaultMock('/api/projects?count=1', {});
+    expect(countRes).toEqual({ total: 3 });
+  });
+
+  it('footer reports the backend total rather than the current page length', async () => {
+    const pageRows = Array.from({ length: 10 }, (_, index) => ({
+      ...sampleProjects[index % sampleProjects.length],
+      id: index + 100,
+      name: `Project ${index + 1}`,
+    }));
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/projects?count=1') return Promise.resolve({ total: 100 });
+      const projectsRes = serveProjects(url, pageRows);
+      if (projectsRes) return projectsRes;
+      return defaultMock(url, {});
+    });
+
+    renderProjects();
+
+    expect(await screen.findByText(/Showing 1-10 of 100 projects/i)).toBeInTheDocument();
+  });
+
   it('shows empty state when /api/projects returns []', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/projects') return Promise.resolve([]);
+      const projectsRes = serveProjects(url, []);
+      if (projectsRes) return projectsRes;
       if (url === '/api/contacts') return Promise.resolve([]);
       if (url === '/api/deals') return Promise.resolve([]);
       return Promise.resolve(null);
@@ -422,7 +476,8 @@ describe('<Projects /> — page surface', () => {
     // Server-side bugs occasionally return {error:...} instead of an
     // array; the page should NOT throw — it should show empty state.
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/projects') {
+      if (typeof url === 'string' && url.startsWith('/api/projects')) {
+        if (url.includes('count=1')) return Promise.resolve({ total: 0 });
         return Promise.resolve({ error: 'unexpected' });
       }
       if (url === '/api/contacts') return Promise.resolve(sampleContacts);
@@ -439,29 +494,29 @@ describe('<Projects /> — page surface', () => {
   });
 
   it('owner fallback renders email when .owner.name is missing, dash when no owner', async () => {
+    const ownerRows = [
+      {
+        id: 50,
+        name: 'Email-only Owner',
+        status: 'Active',
+        priority: 'Medium',
+        budget: 1000,
+        owner: { email: 'noname@example.com' },
+        tasks: [],
+      },
+      {
+        id: 51,
+        name: 'No Owner At All',
+        status: 'Planning',
+        priority: 'Low',
+        budget: 0,
+        owner: null,
+        tasks: [],
+      },
+    ];
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/projects') {
-        return Promise.resolve([
-          {
-            id: 50,
-            name: 'Email-only Owner',
-            status: 'Active',
-            priority: 'Medium',
-            budget: 1000,
-            owner: { email: 'noname@example.com' },
-            tasks: [],
-          },
-          {
-            id: 51,
-            name: 'No Owner At All',
-            status: 'Planning',
-            priority: 'Low',
-            budget: 0,
-            owner: null,
-            tasks: [],
-          },
-        ]);
-      }
+      const projectsRes = serveProjects(url, ownerRows);
+      if (projectsRes) return projectsRes;
       if (url === '/api/contacts') return Promise.resolve([]);
       if (url === '/api/deals') return Promise.resolve([]);
       return Promise.resolve(null);

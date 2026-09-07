@@ -2091,3 +2091,167 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     });
   });
 });
+
+describe('Leads Web Form column (generic CRM only)', () => {
+  const genericAuth = {
+    user: { userId: 1, name: 'Admin', email: 'admin@example.com', role: 'ADMIN' },
+    token: 'fake-token',
+    tenant: { id: 1, vertical: 'generic', name: 'Generic CRM' },
+    loading: false,
+  };
+  const wellnessAuth = {
+    ...genericAuth,
+    tenant: { id: 1, vertical: 'wellness', name: 'Wellness Clinic' },
+  };
+
+  const webFormRows = [
+    {
+      id: 201,
+      name: 'Form Lead',
+      email: 'form@example.com',
+      phone: '+1 5550001111',
+      company: 'Acme',
+      title: 'Buyer',
+      source: 'website-form',
+      status: 'Lead',
+      aiScore: 70,
+      tags: [],
+      assignedToId: null,
+      assignedTo: null,
+      createdAt: '2026-08-12T09:00:00.000Z',
+      customFields: {},
+      webFormSubmissions: [{ id: 5, webForm: { id: 2, name: 'Contact Us' } }],
+    },
+    {
+      id: 202,
+      name: 'Manual Lead',
+      email: 'manual@example.com',
+      phone: '+1 5550002222',
+      company: 'Beta',
+      title: 'Founder',
+      source: 'Referral',
+      status: 'Lead',
+      aiScore: 40,
+      tags: [],
+      assignedToId: null,
+      assignedTo: null,
+      createdAt: '2026-08-13T09:00:00.000Z',
+      customFields: {},
+      webFormSubmissions: [],
+    },
+  ];
+
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifyInfo.mockReset();
+    notifySuccess.mockReset();
+    navigateMock.mockReset();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (opts?.method === 'PUT') return Promise.resolve({ ok: true });
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve(webFormRows);
+      }
+      return Promise.resolve([]);
+    });
+  });
+
+  it('renders the Web Form header with the submitting form name per row', async () => {
+    renderLeads(genericAuth);
+
+    await screen.findByText('Form Lead');
+
+    // Header from the default visible columns.
+    expect(screen.getByText('Web Form')).toBeInTheDocument();
+    // Exactly one row came through a form — single placement, right row.
+    expect(screen.getAllByText('Contact Us')).toHaveLength(1);
+    // Non-form lead renders the em-dash fallback.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('hides the Web Form column on non-generic verticals (wellness)', async () => {
+    renderLeads(wellnessAuth);
+
+    // Table mounted with rows — the absence below is a real gate, not a
+    // render crash.
+    await screen.findByText('Form Lead');
+
+    expect(screen.queryByText('Web Form')).toBeNull();
+    expect(screen.queryByText('Contact Us')).toBeNull();
+  });
+
+  it('opens the Web Form column menu and applies a web-form-only filter query', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (opts?.method === 'PUT') return Promise.resolve({ ok: true });
+      // Saved layout includes the new column (as if enabled via Customize).
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'email', 'company', 'phone', 'aiScore', 'source', 'webForm', 'tags', 'assignedTo', 'createdAt'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'email', label: 'Email' },
+            { key: 'company', label: 'Company' },
+            { key: 'phone', label: 'Phone' },
+            { key: 'aiScore', label: 'Lead Score' },
+            { key: 'source', label: 'Source' },
+            { key: 'webForm', label: 'Web Form' },
+            { key: 'tags', label: 'Tags' },
+            { key: 'assignedTo', label: 'Assigned To' },
+            { key: 'createdAt', label: 'Created' },
+          ],
+        });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead')) {
+        return Promise.resolve(webFormRows);
+      }
+      if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/webForm')) {
+        return Promise.resolve({
+          values: [{ value: 'Contact Us', label: 'Contact Us' }],
+        });
+      }
+      return Promise.resolve([]);
+    });
+    renderLeads(genericAuth);
+    await waitFor(() => expect(screen.getByText('Form Lead')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Open Web Form column menu/i }));
+    expect(await screen.findByRole('menu', { name: /Web Form column menu/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Add as filter/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Web Form filter/i });
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Contact Us' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Apply/i }));
+
+    await waitFor(() => {
+      const filteredCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/contacts?status=Lead&limit=500') &&
+          !opts &&
+          url.includes('filters='),
+      );
+      expect(filteredCall).toBeDefined();
+      const filtersParam = new URL(filteredCall[0], 'http://localhost').searchParams.get('filters');
+      expect(JSON.parse(filtersParam)).toEqual([
+        { field: 'webForm', operator: 'contains', values: ['Contact Us'] },
+      ]);
+    });
+  });
+
+  it('shows a Lead Fields button on generic that navigates to settings/lead-fields', async () => {
+    renderLeads(genericAuth);
+    await screen.findByText('Form Lead');
+
+    const btn = screen.getByRole('button', { name: /Lead Fields/i });
+    expect(btn).toBeInTheDocument();
+    fireEvent.click(btn);
+    expect(navigateMock).toHaveBeenCalledWith('/settings/lead-fields');
+  });
+
+  it('hides the Lead Fields button on non-generic verticals (wellness)', async () => {
+    renderLeads(wellnessAuth);
+    await screen.findByText('Form Lead');
+
+    expect(screen.queryByRole('button', { name: /Lead Fields/i })).toBeNull();
+  });
+});

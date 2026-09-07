@@ -227,7 +227,7 @@ describe('GET / — list insights for tenant', () => {
     // Tenant scope verified at the prisma layer.
     expect(prisma.dealInsight.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ tenantId: 1 }),
-      orderBy: { generatedAt: 'desc' },
+      orderBy: [{ generatedAt: 'desc' }, { id: 'desc' }],
       take: 500,
     }));
     // dealContext join is tenant-scoped via `tenantId` in the where clause.
@@ -245,6 +245,26 @@ describe('GET / — list insights for tenant', () => {
     expect(prisma.dealInsight.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 1, severity: 'CRITICAL', dealId: 42, isResolved: true },
     }));
+  });
+
+  test('?limit/&offset page deterministically and ?count=1 uses the same tenant/filter scope', async () => {
+    prisma.dealInsight.findMany.mockResolvedValue([]);
+    prisma.dealInsight.count.mockResolvedValue(19);
+    const app = makeApp({ tenantId: 42 });
+
+    await request(app).get('/api/deal-insights/?severity=WARNING&limit=10&offset=10');
+    expect(prisma.dealInsight.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 42, severity: 'WARNING' },
+      take: 10,
+      skip: 10,
+      orderBy: [{ generatedAt: 'desc' }, { id: 'desc' }],
+    }));
+
+    const countRes = await request(app).get('/api/deal-insights/?severity=WARNING&count=1');
+    expect(countRes.body).toEqual({ total: 19 });
+    expect(prisma.dealInsight.count).toHaveBeenCalledWith({
+      where: { tenantId: 42, severity: 'WARNING' },
+    });
   });
 });
 

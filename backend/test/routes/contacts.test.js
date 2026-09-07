@@ -205,6 +205,7 @@ authMw.verifyRole = (roles) => (req, res, next) => {
 //    pinned endpoints. ──────────────────────────────────────────────────
 prisma.contact = prisma.contact || {};
 prisma.contact.findMany = vi.fn();
+prisma.contact.count = vi.fn();
 prisma.contact.findFirst = vi.fn();
 prisma.contact.findUnique = vi.fn();
 prisma.contact.create = vi.fn();
@@ -285,6 +286,7 @@ function makeApp({ tenantId = TENANT_ID, userId = USER_ID, role = 'ADMIN', verti
 
 beforeEach(() => {
   prisma.contact.findMany.mockReset().mockResolvedValue([SAMPLE_CONTACT]);
+  prisma.contact.count.mockReset().mockResolvedValue(1);
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset();
@@ -336,6 +338,42 @@ describe('GET /api/contacts — list', () => {
     const args = prisma.contact.findMany.mock.calls[0][0];
     expect(args.take).toBe(2);
     expect(args.skip).toBe(4);
+  });
+
+  test('?q searches name/email/company server-side and composes with Customer count scope', async () => {
+    const res = await request(makeApp()).get('/api/contacts?status=Customer&q=Acme&count=1');
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        tenantId: TENANT_ID,
+        status: 'Customer',
+        OR: [
+          { name: { contains: 'Acme' } },
+          { email: { contains: 'Acme' } },
+          { company: { contains: 'Acme' } },
+        ],
+      }),
+    });
+  });
+
+  test('?q rejects blank and oversized search terms', async () => {
+    expect((await request(makeApp()).get('/api/contacts?q=%20')).status).toBe(400);
+    expect((await request(makeApp()).get(`/api/contacts?q=${'x'.repeat(201)}`)).status).toBe(400);
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+
+  test('full shape includes latest webFormSubmission (form id+name) for the Web Form column', async () => {
+    const res = await request(makeApp()).get('/api/contacts');
+
+    expect(res.status).toBe(200);
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    // Latest submission only — one tiny join per row, newest first.
+    expect(args.include.webFormSubmissions).toMatchObject({
+      take: 1,
+      orderBy: { submittedAt: 'desc' },
+    });
+    expect(args.include.webFormSubmissions.select.webForm).toBeDefined();
   });
 
   test('USER role overrides assignedToId to req.user.userId — sales rep cannot probe a colleague (#588)', async () => {

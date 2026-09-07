@@ -4,7 +4,7 @@
  * Clients.jsx is the daily-use surface for the "Customer" status slice of
  * the Contact table — a separate page from Contacts / Leads / ConvertedLeads.
  * It renders a single-table view scoped to /api/contacts?status=Customer and
- * supports a client-side text filter across name / email / company. Row name
+ * supports server-side text search across name / email / company. Row name
  * is a Link to /contacts/<id> (it deep-links into the shared ContactDetail
  * page, NOT a clients-specific detail surface).
  *
@@ -27,8 +27,8 @@
  *   7. Empty state: "No clients found" renders when the API returns [].
  *   8. Empty-via-filter: when search term doesn't match any client, the
  *      same "No clients found" row renders (no rows pass the filter).
- *   9. Typing in the search box filters rows client-side across name,
- *      email, and company (case-insensitive, substring match).
+ *   9. Typing in the search box requests server-filtered rows across name,
+ *      email, and company after the debounce.
  *  10. fetchApi rejection: the .catch() clears the loading state — the
  *      empty "No clients found" row renders (not the spinner forever).
  */
@@ -86,8 +86,17 @@ const sampleClients = [
 ];
 
 function defaultFetchMock(url) {
-  if (url === '/api/contacts?status=Customer') {
-    return Promise.resolve(sampleClients);
+  if (url.startsWith('/api/contacts?status=Customer')) {
+    const params = new URLSearchParams(url.split('?')[1]);
+    const q = (params.get('q') || '').toLowerCase();
+    const filtered = q
+      ? sampleClients.filter((client) => [client.name, client.email, client.company]
+        .some((value) => value?.toLowerCase().includes(q)))
+      : sampleClients;
+    if (params.get('count') === '1') return Promise.resolve({ total: filtered.length });
+    const offset = Number(params.get('offset') || 0);
+    const limit = Number(params.get('limit') || filtered.length);
+    return Promise.resolve(filtered.slice(offset, offset + limit));
   }
   return Promise.resolve(null);
 }
@@ -114,14 +123,15 @@ describe('<Clients /> — converted-clients list page', () => {
     expect(screen.getByPlaceholderText(/Search clients/i)).toBeInTheDocument();
   });
 
-  it('initial mount fetches /api/contacts?status=Customer (status filter is load-bearing)', async () => {
+  it('initial mount fetches a paged Customer list and matching count', async () => {
     renderClients();
     await waitFor(() => {
       const customerCall = fetchApiMock.mock.calls.find(
-        ([u]) => u === '/api/contacts?status=Customer',
+        ([u]) => u === '/api/contacts?status=Customer&limit=10&offset=0',
       );
       expect(customerCall).toBeTruthy();
     });
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts?status=Customer&count=1');
   });
 
   it('counter pluralizes: 0 → "active clients", 1 → "active client", 2 → "active clients"', async () => {
@@ -203,21 +213,21 @@ describe('<Clients /> — converted-clients list page', () => {
 
     // Filter by name fragment (case-insensitive).
     fireEvent.change(search, { target: { value: 'AARAV' } });
+    await waitFor(() => expect(screen.queryByText('Sneha Iyer')).not.toBeInTheDocument());
     expect(screen.getByText('Aarav Sharma')).toBeInTheDocument();
-    expect(screen.queryByText('Sneha Iyer')).not.toBeInTheDocument();
     expect(screen.queryByText('Rohit Verma')).not.toBeInTheDocument();
 
     // Filter by company fragment.
     fireEvent.change(search, { target: { value: 'wellness' } });
-    expect(screen.queryByText('Aarav Sharma')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Aarav Sharma')).not.toBeInTheDocument());
     expect(screen.getByText('Sneha Iyer')).toBeInTheDocument();
     expect(screen.queryByText('Rohit Verma')).not.toBeInTheDocument();
 
     // Filter by email fragment.
     fireEvent.change(search, { target: { value: 'startup.example' } });
-    expect(screen.queryByText('Aarav Sharma')).not.toBeInTheDocument();
-    expect(screen.queryByText('Sneha Iyer')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Sneha Iyer')).not.toBeInTheDocument());
     expect(screen.getByText('Rohit Verma')).toBeInTheDocument();
+    expect(screen.queryByText('Aarav Sharma')).not.toBeInTheDocument();
   });
 
   it('renders "No clients found" when search term matches no clients', async () => {
@@ -228,7 +238,7 @@ describe('<Clients /> — converted-clients list page', () => {
       target: { value: 'zzzz-no-such-client-xyz' },
     });
 
-    expect(screen.getByText(/No clients found/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No clients found/i)).toBeInTheDocument();
     expect(screen.queryByText('Aarav Sharma')).not.toBeInTheDocument();
   });
 

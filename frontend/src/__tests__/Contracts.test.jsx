@@ -11,9 +11,12 @@
  *      Contract" form panel + "All Contracts" table panel.
  *   2. Stats bar surfaces "{n} Draft", "{n} Active", and a formatted
  *      "$<active-total> active value" chip. Counts come from a pure
- *      client-side filter over the loaded list.
- *   3. Initial mount fires GET /api/contracts + GET /api/contacts +
- *      GET /api/deals in parallel via Promise.all.
+ *      client-side filter over the ?fields=summary full list (the table
+ *      page rows are excluded — they hold one page only).
+ *   3. Initial mount fires GET /api/contracts?limit=&offset= (table page)
+ *      + GET /api/contracts?count=1 (footer total) +
+ *      GET /api/contracts?fields=summary (stats bar) + GET /api/contacts
+ *      + GET /api/deals, the contracts trio in parallel via Promise.all.
  *   4. Empty list renders the "No contracts yet…" placeholder when
  *      /api/contracts returns [].
  *   5. Populated list renders one <tr> per contract with title, contact
@@ -147,10 +150,26 @@ const sampleContracts = [
   },
 ];
 
+// Query-aware contracts mock: the page server-pages via ?limit=&offset=,
+// totals via ?count=1, and stats-bar data via ?fields=summary.
+function serveContracts(url, rows) {
+  if (url === '/api/contracts') return Promise.resolve(rows);
+  if (typeof url === 'string' && url.startsWith('/api/contracts?')) {
+    const q = new URL(url, 'http://localhost').searchParams;
+    if (q.get('count') === '1') return Promise.resolve({ total: rows.length });
+    if (q.get('fields') === 'summary') return Promise.resolve(rows);
+    const limit = Math.max(1, parseInt(q.get('limit')) || 50);
+    const offset = Math.max(0, parseInt(q.get('offset')) || 0);
+    return Promise.resolve(rows.slice(offset, offset + limit));
+  }
+  return undefined;
+}
+
 function defaultFetch(url, opts) {
   const method = opts?.method || 'GET';
-  if (url === '/api/contracts' && method === 'GET') {
-    return Promise.resolve(sampleContracts);
+  if (method === 'GET') {
+    const contractsRes = serveContracts(url, sampleContracts);
+    if (contractsRes) return contractsRes;
   }
   if (url === '/api/contacts' && method === 'GET') {
     return Promise.resolve(sampleContacts);
@@ -196,11 +215,18 @@ describe('<Contracts /> — page surface', () => {
     expect(screen.getByText(/All Contracts/i)).toBeInTheDocument();
   });
 
-  it('initial mount fires GET /api/contracts + /api/contacts + /api/deals in parallel', async () => {
+  it('initial mount fires paged contracts fetches + /api/contacts + /api/deals in parallel', async () => {
     renderContracts();
     await waitFor(() => {
-      const contractsCall = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/contracts' && (!o || !o.method || o.method === 'GET'),
+      const isGet = ([, o]) => !o || !o.method || o.method === 'GET';
+      const pageCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => typeof u === 'string' && u.includes('/api/contracts?') && u.includes('limit=') && u.includes('offset=') && isGet([u, o]),
+      );
+      const countCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => typeof u === 'string' && u.includes('/api/contracts?') && u.includes('count=1') && isGet([u, o]),
+      );
+      const summaryCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => typeof u === 'string' && u.includes('/api/contracts?') && u.includes('fields=summary') && isGet([u, o]),
       );
       const contactsCall = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/contacts' && (!o || !o.method || o.method === 'GET'),
@@ -208,10 +234,27 @@ describe('<Contracts /> — page surface', () => {
       const dealsCall = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/deals' && (!o || !o.method || o.method === 'GET'),
       );
-      expect(contractsCall).toBeTruthy();
+      expect(pageCall).toBeTruthy();
+      expect(countCall).toBeTruthy();
+      expect(summaryCall).toBeTruthy();
       expect(contactsCall).toBeTruthy();
       expect(dealsCall).toBeTruthy();
     });
+  });
+
+  it('table page slices rows via limit/offset (page 2 skips page-1 rows)', async () => {
+    renderContracts();
+    await screen.findByText('Annual SaaS License');
+
+    // 4 sample rows, pageSize 10 → all on page 1 with total 4.
+    expect(await screen.findByText(/Showing 1-4 of 4 contracts/i)).toBeInTheDocument();
+
+    // A 2-row page window: limit=2&offset=2 skips the first two rows.
+    fetchApiMock.mockClear();
+    const pageRes = await defaultFetch('/api/contracts?limit=2&offset=2', {});
+    expect(pageRes.map((r) => r.id)).toEqual([3, 4]);
+    const countRes = await defaultFetch('/api/contracts?count=1', {});
+    expect(countRes).toEqual({ total: 4 });
   });
 
   it('empty list renders the "No contracts yet…" placeholder', async () => {
@@ -426,21 +469,21 @@ describe('<Contracts /> — page surface', () => {
 
   it('Terminated row renders Delete only (no Activate, no Terminate)', async () => {
     // Custom dataset: a single Terminated row.
+    const terminatedRows = [
+      {
+        id: 99,
+        title: 'Closed Out',
+        status: 'Terminated',
+        value: 1000,
+        startDate: '2025-01-01',
+        endDate: '2025-06-30',
+        contact: { id: 11, name: 'Acme Inc', email: 'ap@acme.test' },
+        deal: null,
+      },
+    ];
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contracts') {
-        return Promise.resolve([
-          {
-            id: 99,
-            title: 'Closed Out',
-            status: 'Terminated',
-            value: 1000,
-            startDate: '2025-01-01',
-            endDate: '2025-06-30',
-            contact: { id: 11, name: 'Acme Inc', email: 'ap@acme.test' },
-            deal: null,
-          },
-        ]);
-      }
+      const contractsRes = serveContracts(url, terminatedRows);
+      if (contractsRes) return contractsRes;
       if (url === '/api/contacts') return Promise.resolve([]);
       if (url === '/api/deals') return Promise.resolve([]);
       return Promise.resolve(null);
@@ -521,14 +564,14 @@ describe('<Contracts /> — page surface', () => {
   it('Active value chip excludes Draft + Terminated rows from the total', async () => {
     // Edge case: a dataset where only the Draft row has a big value but
     // the Active rows are tiny — the chip should still reflect Active-only.
+    const edgeRows = [
+      { id: 1, title: 'Big Draft', status: 'Draft', value: 99999 },
+      { id: 2, title: 'Small Active', status: 'Active', value: 100 },
+      { id: 3, title: 'Old Terminated', status: 'Terminated', value: 88888 },
+    ];
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contracts') {
-        return Promise.resolve([
-          { id: 1, title: 'Big Draft', status: 'Draft', value: 99999 },
-          { id: 2, title: 'Small Active', status: 'Active', value: 100 },
-          { id: 3, title: 'Old Terminated', status: 'Terminated', value: 88888 },
-        ]);
-      }
+      const contractsRes = serveContracts(url, edgeRows);
+      if (contractsRes) return contractsRes;
       if (url === '/api/contacts') return Promise.resolve([]);
       if (url === '/api/deals') return Promise.resolve([]);
       return Promise.resolve(null);

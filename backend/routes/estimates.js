@@ -107,7 +107,7 @@ router.get("/", async (req, res) => {
     const isSummary = req.query.fields === "summary";
     const baseArgs = {
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     };
     if (isSummary) {
       baseArgs.select = {

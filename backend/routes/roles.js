@@ -302,7 +302,7 @@ router.get(
           permissions: true,
           _count: { select: { userRoles: true } },
         },
-        orderBy: [{ isSystem: "desc" }, { name: "asc" }],
+        orderBy: [{ isSystem: "desc" }, { name: "asc" }, { id: "asc" }],
       };
       let pagination = null;
       if (req.query.page != null) {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { FileSpreadsheet, Plus, Trash2, IndianRupee, ArrowRightLeft, X, Download, Mail } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -68,8 +68,10 @@ export default function Estimates() {
   const [loading, setLoading] = useState(true);
   const [tableError, setTableError] = useState(null);
   const [reloadTick, setReloadTick] = useState(0);
+  const requestId = useRef(0);
 
   const fetchEstimates = useCallback(async () => {
+    const id = ++requestId.current;
     setLoading(true);
     setTableError(null);
 
@@ -80,6 +82,7 @@ export default function Estimates() {
       if (statusFilter !== 'all') qs.set('status', statusFilter);
 
       const res = await fetchApi(`/api/estimates?${qs.toString()}`);
+      if (id !== requestId.current) return;
       const nextRows = Array.isArray(res) ? res : (res?.data || []);
       setEstimates(nextRows);
       const pagination = Array.isArray(res) ? null : res?.pagination;
@@ -91,9 +94,10 @@ export default function Estimates() {
         setTotalPages(nextRows.length > 0 ? 1 : 0);
       }
     } catch (err) {
+      if (id !== requestId.current) return;
       setTableError(err?.message || 'Failed to load estimates');
     } finally {
-      setLoading(false);
+      if (id === requestId.current) setLoading(false);
     }
   }, [currentPage, pageSize, statusFilter]);
 

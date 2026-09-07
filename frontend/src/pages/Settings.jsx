@@ -88,6 +88,7 @@ export default function Settings() {
   const [recoveryPage, setRecoveryPage] = useState(1);
   const [recoveryTotal, setRecoveryTotal] = useState(0);
   const [recoveryTotalPages, setRecoveryTotalPages] = useState(1);
+  const recoveryRequestId = useRef(0);
   // Restore button visibility — gated on the same OR-pair the
   // backend POST /restore endpoint enforces. settings.manage admins
   // can restore even if they don't hold roles.manage (the recovery
@@ -98,12 +99,14 @@ export default function Settings() {
   const canSeeRecoverySection =
     hasPermission("roles", "read") || hasPermission("settings", "manage");
   const loadRecoveryRoles = async (page = recoveryPage) => {
+    const requestId = ++recoveryRequestId.current;
     setRecoveryLoading(true);
     setRecoveryError("");
     try {
       const res = await fetchApi(
         `/api/roles?page=${page}&limit=${RECOVERY_PAGE_SIZE}`,
       );
+      if (requestId !== recoveryRequestId.current) return;
       setRecoveryRoles(Array.isArray(res?.roles) ? res.roles : []);
       const pagination = res?.pagination;
       if (pagination) {
@@ -114,9 +117,10 @@ export default function Settings() {
         setRecoveryTotalPages(1);
       }
     } catch (err) {
+      if (requestId !== recoveryRequestId.current) return;
       setRecoveryError(err.message || "Could not load roles");
     } finally {
-      setRecoveryLoading(false);
+      if (requestId === recoveryRequestId.current) setRecoveryLoading(false);
     }
   };
   useEffect(() => {
@@ -4419,7 +4423,6 @@ function NotificationPreferencesCard({ notify }) {
     </div>
   );
 }
-
 
 
 

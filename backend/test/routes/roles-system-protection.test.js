@@ -68,6 +68,7 @@ portalPermsMod.clearCustomerRoleCache = vi.fn();
 prisma.role = {
   findUnique: vi.fn(),
   findMany: vi.fn(),
+  count: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -156,6 +157,46 @@ beforeEach(() => {
   prisma.$transaction.mockImplementation(async (fn) => fn(prisma));
   prisma.userRole.count.mockResolvedValue(2);
   delete process.env.RBAC_STRICT_VERTICAL_VALIDATION;
+});
+
+describe('GET /api/roles pagination', () => {
+  test('returns a deterministic tenant-scoped pagination envelope', async () => {
+    prisma.role.findMany.mockResolvedValue([{
+      id: 22, name: 'Manager', permissions: [], _count: { userRoles: 0 },
+      dataScope: null, subBrandScopeJson: null,
+    }]);
+    prisma.role.count.mockResolvedValue(25);
+
+    const res = await request(makeApp({ tenantId: 11 })).get('/api/roles?page=2&limit=10');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      roles: [{ id: 22, name: 'Manager', userCount: 0, permissionCount: 0 }],
+      tenantId: 11,
+      pagination: {
+        page: 2, limit: 10, total: 25, totalPages: 3,
+        hasNextPage: true, hasPreviousPage: true,
+      },
+    });
+    expect(prisma.role.count).toHaveBeenCalledWith({ where: { tenantId: 11 } });
+    expect(prisma.role.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 11 },
+      include: { permissions: true, _count: { select: { userRoles: true } } },
+      orderBy: [{ isSystem: 'desc' }, { name: 'asc' }, { id: 'asc' }],
+      skip: 10,
+      take: 10,
+    });
+  });
+
+  test('normalizes invalid pages and clamps limits to 100', async () => {
+    prisma.role.findMany.mockResolvedValue([]);
+    prisma.role.count.mockResolvedValue(0);
+
+    const res = await request(makeApp()).get('/api/roles?page=bad&limit=999');
+
+    expect(res.body.pagination).toMatchObject({ page: 1, limit: 100, totalPages: 0 });
+    expect(prisma.role.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 100, skip: 0 }));
+  });
 });
 
 afterEach(() => {

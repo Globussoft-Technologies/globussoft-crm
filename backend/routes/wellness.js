@@ -5472,6 +5472,28 @@ router.all("/treatments/*", treatmentsGone);
 
 router.get("/services", async (req, res) => {
   try {
+    const paginated = req.query.page !== undefined || req.query.pageSize !== undefined;
+    if (paginated) {
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 24));
+      const sortBy = req.query.sortBy;
+      const orderBy = sortBy === "newest"
+        ? [{ createdAt: "desc" }, { id: "desc" }]
+        : sortBy === "oldest"
+          ? [{ createdAt: "asc" }, { id: "asc" }]
+          : [{ ticketTier: "desc" }, { name: "asc" }];
+      const where = tenantWhere(req, { NOT: { isActive: false } });
+      const [services, total] = await prisma.$transaction([
+        prisma.service.findMany({
+          where,
+          orderBy,
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        prisma.service.count({ where }),
+      ]);
+      return res.json({ data: services, total, page, pageSize });
+    }
     // Hard cap at 2000 so the BookAppointment / Catalog / Memberships /
     // Calendar / TelecallerQueue / PointOfSale consumers all see the full
     // tenant catalog. The previous 200 cap silently dropped services from

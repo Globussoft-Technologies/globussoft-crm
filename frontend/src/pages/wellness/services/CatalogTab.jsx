@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useNotify } from '../../../utils/notify';
 import { currencySymbol } from '../../../utils/money';
@@ -11,53 +11,30 @@ import MultiSelectDropdown from './MultiSelectDropdown';
 import SingleSelectDropdown from './SingleSelectDropdown';
 import ImageUploadField from './ImageUploadField';
 
-const PAGE_SIZE = 12;
-
-export default function CatalogTab({ services, loading, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
+export default function CatalogTab({ services, total, loading, loadingMore, hasMore, onLoadMore, sortBy, onSortChange, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
   const { hasPermission, isReady: permsReady } = usePermissions();
   const canManageServices = permsReady && hasPermission('services', 'write');
   const notify = useNotify();
   // Sort selector — backend returns services in its default order (name
-  // alphabetical). Users asked for a "newest first" option so the most
-  // recently added service is easy to find without scrolling. Sorting
-  // happens client-side over the already-fetched list so the toggle is
-  // instant (no re-fetch).
-  const [sortBy, setSortBy] = useState('default');
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  // alphabetical). Newest/oldest sorting is sent to the backend so it applies
+  // to the complete tenant catalog, not only the rows already loaded.
   const scrollRef = useRef(null);
-  const sortedServices = useMemo(() => {
-    if (!Array.isArray(services)) return [];
-    if (sortBy === 'default') return services;
-    const tsOf = (s) => {
-      const t = s?.createdAt ? new Date(s.createdAt).getTime() : 0;
-      return Number.isFinite(t) ? t : 0;
-    };
-    const copy = [...services];
-    if (sortBy === 'newest') copy.sort((a, b) => tsOf(b) - tsOf(a));
-    if (sortBy === 'oldest') copy.sort((a, b) => tsOf(a) - tsOf(b));
-    return copy;
-  }, [services, sortBy]);
-  const displayedServices = useMemo(
-    () => sortedServices.slice(0, Math.min(visibleCount, sortedServices.length)),
-    [sortedServices, visibleCount],
-  );
 
   useEffect(() => {
-    setVisibleCount(Math.min(PAGE_SIZE, sortedServices.length));
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
     }
-  }, [sortedServices.length, sortBy]);
+  }, [sortBy]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || loading) return;
-    if (visibleCount >= sortedServices.length) return;
+    if (!hasMore || loadingMore) return;
     if (el.scrollHeight <= 0 || el.clientHeight <= 0) return;
     if (el.scrollHeight <= el.clientHeight + 8) {
-      setVisibleCount((current) => Math.min(current + PAGE_SIZE, sortedServices.length));
+      onLoadMore();
     }
-  }, [loading, sortedServices.length, visibleCount, displayedServices.length]);
+  }, [loading, loadingMore, hasMore, services.length, onLoadMore]);
 
   const handleScroll = useCallback((e) => {
     const el = e.currentTarget;
@@ -65,9 +42,9 @@ export default function CatalogTab({ services, loading, categories, categoriesLo
     const threshold = 72;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
     if (!nearBottom) return;
-    if (visibleCount >= sortedServices.length) return;
-    setVisibleCount((current) => Math.min(current + PAGE_SIZE, sortedServices.length));
-  }, [sortedServices.length, visibleCount]);
+    if (!hasMore || loadingMore) return;
+    onLoadMore();
+  }, [hasMore, loadingMore, onLoadMore]);
 
   return (
     <>
@@ -190,7 +167,7 @@ export default function CatalogTab({ services, loading, categories, categoriesLo
           <select
             id="services-sort"
             value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
+            onChange={(e) => onSortChange(e.target.value)}
             aria-label="Sort services"
             style={{
               padding: '0.4rem 0.7rem',
@@ -223,7 +200,7 @@ export default function CatalogTab({ services, loading, categories, categoriesLo
           }}
         >
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-            {displayedServices.map((s) => (
+            {services.map((s) => (
               <ServiceCard
                 key={s.id}
                 service={s}
@@ -235,12 +212,17 @@ export default function CatalogTab({ services, loading, categories, categoriesLo
             ))}
           </div>
 
-          {!loading && displayedServices.length < sortedServices.length && (
+          {!loading && hasMore && (
             <div
               data-testid="services-scroll-sentinel"
               aria-hidden="true"
               style={{ height: 1 }}
             />
+          )}
+          {!loading && services.length > 0 && (
+            <div style={{ textAlign: 'center', padding: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+              {loadingMore ? 'Loading more…' : `Showing ${services.length} of ${total}`}
+            </div>
           )}
         </div>
       </div>

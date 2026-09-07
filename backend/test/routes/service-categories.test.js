@@ -117,10 +117,12 @@ Module._cache[wellnessRolePath] = {
 // ── Prisma singleton patching — BEFORE the router is required ──────────
 prisma.serviceCategory = prisma.serviceCategory || {};
 prisma.serviceCategory.findMany = vi.fn();
+prisma.serviceCategory.count = vi.fn();
 prisma.serviceCategory.findFirst = vi.fn();
 prisma.serviceCategory.create = vi.fn();
 prisma.serviceCategory.update = vi.fn();
 prisma.serviceCategory.delete = vi.fn();
+prisma.$transaction = vi.fn((operations) => Promise.all(operations));
 
 import express from 'express';
 import request from 'supertest';
@@ -147,6 +149,7 @@ function makeApp() {
 
 beforeEach(() => {
   prisma.serviceCategory.findMany.mockReset();
+  prisma.serviceCategory.count.mockReset();
   prisma.serviceCategory.findFirst.mockReset();
   prisma.serviceCategory.create.mockReset();
   prisma.serviceCategory.update.mockReset();
@@ -191,6 +194,30 @@ describe('GET /api/wellness/service-categories', () => {
     expect(res.status).toBe(200);
     const args = prisma.serviceCategory.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ tenantId: 7, isActive: true });
+  });
+
+  test('?page + ?pageSize return a backend-paginated envelope with search', async () => {
+    const rows = [{ id: 2, name: 'Hair', parent: null, _count: { services: 5, children: 0 } }];
+    prisma.serviceCategory.findMany.mockResolvedValueOnce(rows);
+    prisma.serviceCategory.count.mockResolvedValueOnce(31);
+    const app = makeApp();
+
+    const res = await request(app).get('/api/wellness/service-categories?page=2&pageSize=10&q=hair');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ data: rows, total: 31, page: 2, pageSize: 10 });
+    expect(prisma.serviceCategory.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      skip: 10,
+      take: 10,
+      include: {
+        parent: { select: { id: true, name: true } },
+        _count: { select: { services: true, children: true } },
+      },
+      where: expect.objectContaining({ tenantId: 7, OR: expect.any(Array) }),
+    }));
+    expect(prisma.serviceCategory.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ tenantId: 7, OR: expect.any(Array) }),
+    });
   });
 });
 

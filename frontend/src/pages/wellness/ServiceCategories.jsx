@@ -61,6 +61,8 @@ export default function ServiceCategories() {
   const { hasPermission, isReady: permsReady } = usePermissions();
   const canManageServices = permsReady && hasPermission('services', 'write');
   const [categories, setCategories] = useState([]);
+  const [categoryOptions, setCategoryOptions] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -75,25 +77,10 @@ export default function ServiceCategories() {
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
   const [customPageSize, setCustomPageSize] = useState('');
 
-  const filtered = useMemo(() => {
-    const trimmed = q.trim().toLowerCase();
-    if (!trimmed) return categories;
-    return categories.filter((c) => {
-      const parent = categories.find((p) => p.id === c.parentId);
-      return (
-        (c.name || '').toLowerCase().includes(trimmed) ||
-        (parent?.name || '').toLowerCase().includes(trimmed)
-      );
-    });
-  }, [categories, q]);
-
   useEffect(() => { setPage(1); }, [q, pageSize]);
 
-  const total = filtered.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, pageCount);
-  const pageStart = (safePage - 1) * pageSize;
-  const pageRows = filtered.slice(pageStart, pageStart + pageSize);
 
   const onPickImage = async (e) => {
     const file = e.target.files?.[0];
@@ -113,12 +100,28 @@ export default function ServiceCategories() {
 
   const load = () => {
     setLoading(true);
-    fetchApi('/api/wellness/service-categories')
-      .then((rows) => setCategories(Array.isArray(rows) ? rows : []))
-      .catch(() => setCategories([]))
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (q.trim()) params.set('q', q.trim());
+    fetchApi(`/api/wellness/service-categories?${params}`)
+      .then((res) => {
+        const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+        const nextTotal = Array.isArray(res) ? res.length : (Number(res?.total) || 0);
+        setCategories(rows);
+        setTotal(nextTotal);
+        const lastPage = Math.max(1, Math.ceil(nextTotal / pageSize));
+        if (page > lastPage) setPage(lastPage);
+      })
+      .catch(() => { setCategories([]); setTotal(0); })
       .finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [page, pageSize, q]);
+
+  const loadCategoryOptions = () => {
+    fetchApi('/api/wellness/service-categories?fields=summary')
+      .then((rows) => setCategoryOptions(Array.isArray(rows) ? rows : []))
+      .catch(() => setCategoryOptions([]));
+  };
+  useEffect(loadCategoryOptions, []);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -158,6 +161,7 @@ export default function ServiceCategories() {
       }
       resetForm();
       load();
+      loadCategoryOptions();
     } catch (_err) { /* fetchApi toasts the server message */ }
     setSaving(false);
   };
@@ -174,6 +178,7 @@ export default function ServiceCategories() {
       await fetchApi(`/api/wellness/service-categories/${cat.id}`, { method: 'DELETE' });
       notify.success(`Deleted "${cat.name}"`);
       load();
+      loadCategoryOptions();
     } catch (_err) { /* fetchApi toasts */ }
   };
 
@@ -182,7 +187,7 @@ export default function ServiceCategories() {
       <PageHeader
         icon={Stethoscope}
         title="Service categories"
-        description={`${q.trim() ? `${filtered.length} of ${categories.length}` : categories.length} categor${(q.trim() ? filtered.length : categories.length) === 1 ? 'y' : 'ies'} — hierarchical taxonomy for the service catalogue.`}
+        description={`${total} categor${total === 1 ? 'y' : 'ies'}${q.trim() ? ' matching your search' : ''} — hierarchical taxonomy for the service catalogue.`}
         inlineBadge={permsReady && !canManageServices ? (
           <span
             title="You can view categories but can't make changes."
@@ -213,7 +218,7 @@ export default function ServiceCategories() {
           <input required placeholder="Name (e.g. Hair Restoration)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           <select value={form.parentId || ''} onChange={(e) => setForm({ ...form, parentId: e.target.value })}>
             <option value="">— No parent (root)</option>
-            {categories.filter((c) => c.id !== editingId).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {categoryOptions.filter((c) => c.id !== editingId).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           <input type="number" placeholder="Display order" value={form.displayOrder} onChange={(e) => setForm({ ...form, displayOrder: e.target.value })} />
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -296,9 +301,9 @@ export default function ServiceCategories() {
 
       {loading ? (
         <p>Loading categories…</p>
-      ) : categories.length === 0 ? (
+      ) : total === 0 && !q.trim() ? (
         <p style={{ color: 'var(--text-secondary)' }}>No categories yet — create one to start grouping services.</p>
-      ) : filtered.length === 0 ? (
+      ) : categories.length === 0 ? (
         <p style={{ color: 'var(--text-secondary)' }}>No categories match “{q}”.</p>
       ) : (
         <TopScrollSync>
@@ -315,8 +320,8 @@ export default function ServiceCategories() {
             </tr>
           </thead>
           <tbody>
-            {pageRows.map((c) => {
-              const parent = categories.find((p) => p.id === c.parentId);
+            {categories.map((c) => {
+              const parent = c.parent || categoryOptions.find((p) => p.id === c.parentId);
               return (
                 <tr key={c.id} style={{ borderTop: '1px solid var(--border-soft)' }}>
                   <td style={TD_STYLE}>
@@ -361,7 +366,7 @@ export default function ServiceCategories() {
         </TopScrollSync>
       )}
 
-      {!loading && filtered.length > 0 && (
+      {!loading && total > 0 && (
         <Pager
           total={total}
           page={safePage}

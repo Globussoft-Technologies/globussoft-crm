@@ -60,8 +60,8 @@ const CATEGORIES = [
 function renderPage() {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
-    if (url === '/api/wellness/service-categories' && method === 'GET') {
-      return Promise.resolve(CATEGORIES);
+    if (url.startsWith('/api/wellness/service-categories?') && method === 'GET') {
+      return Promise.resolve({ data: CATEGORIES, total: CATEGORIES.length });
     }
     return Promise.resolve({});
   });

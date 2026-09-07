@@ -63,7 +63,7 @@ router.get("/", async (req, res) => {
     // window. Existing verbatim callers are unaffected.
     const findManyArgs = {
       where,
-      orderBy: { generatedAt: "desc" },
+      orderBy: [{ generatedAt: "desc" }, { id: "desc" }],
       take: req.query.limit !== undefined
         ? Math.max(1, Math.min(parseInt(req.query.limit) || 50, 500))
         : 500,

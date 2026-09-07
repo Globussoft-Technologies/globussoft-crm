@@ -940,6 +940,21 @@ router.get('/', async (req, res) => {
     if (req.query.status) where.status = req.query.status;
     if (req.query.assignedToId) where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === 'true') where.assignedToId = null;
+    if (req.query.q !== undefined) {
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      if (q.length < 1 || q.length > 200) {
+        return res.status(400).json({
+          error: 'q must be a non-empty string ≤200 chars',
+          code: 'INVALID_SEARCH',
+          field: 'q',
+        });
+      }
+      where.OR = [
+        { name: { contains: q } },
+        { email: { contains: q } },
+        { company: { contains: q } },
+      ];
+    }
     // Arc 2 #904 slice 8 — ?source=<prefix> server-side filter. Replaces the
     // STUB client-side `source.startsWith('inbound:')` filter in
     // InboundLeads.jsx (slice 7, 56f549f7) which was bounded by the

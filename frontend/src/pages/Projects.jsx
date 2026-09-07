@@ -484,7 +484,7 @@ export default function Projects() {
           {projects.length > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
-                Showing {startItem}-{endItem} of {projects.length} project{projects.length !== 1 ? 's' : ''}
+                Showing {startItem}-{endItem} of {total} project{total !== 1 ? 's' : ''}
               </p>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>

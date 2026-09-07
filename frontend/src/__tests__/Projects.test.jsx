@@ -201,6 +201,24 @@ describe('<Projects /> — page surface', () => {
     expect(countRes).toEqual({ total: 3 });
   });
 
+  it('footer reports the backend total rather than the current page length', async () => {
+    const pageRows = Array.from({ length: 10 }, (_, index) => ({
+      ...sampleProjects[index % sampleProjects.length],
+      id: index + 100,
+      name: `Project ${index + 1}`,
+    }));
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/projects?count=1') return Promise.resolve({ total: 100 });
+      const projectsRes = serveProjects(url, pageRows);
+      if (projectsRes) return projectsRes;
+      return defaultMock(url, {});
+    });
+
+    renderProjects();
+
+    expect(await screen.findByText(/Showing 1-10 of 100 projects/i)).toBeInTheDocument();
+  });
+
   it('shows empty state when /api/projects returns []', async () => {
     fetchApiMock.mockImplementation((url) => {
       const projectsRes = serveProjects(url, []);

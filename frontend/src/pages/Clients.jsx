@@ -6,14 +6,6 @@ import { formatDateMedium as formatDate } from '../utils/date';
 import TopScrollSync from '../components/TopScrollSync';
 
 const SEARCH_DEBOUNCE_MS = 300;
-// Backend hard cap (backend/routes/contacts.js #172: limit clamped to 500).
-const SEARCH_FETCH_LIMIT = 500;
-
-const matchesTerm = (client, term) => (
-  (client.name || '').toLowerCase().includes(term) ||
-  (client.email && client.email.toLowerCase().includes(term)) ||
-  (client.company && client.company.toLowerCase().includes(term))
-);
 
 const Clients = () => {
   // `clients` holds ONLY the current page's rows — paging is server-driven
@@ -37,33 +29,21 @@ const Clients = () => {
   useEffect(() => {
     const myId = ++requestIdRef.current;
     const isCurrent = () => myId === requestIdRef.current;
-    const term = debouncedTerm.toLowerCase();
+    const term = debouncedTerm.trim();
     setLoading(true);
     const load = async () => {
       try {
-        if (!term) {
-          // Browse mode: true server-side paging + backend total, in parallel.
-          const offset = (currentPage - 1) * pageSize;
-          const [rows, countRes] = await Promise.all([
-            fetchApi(`/api/contacts?status=Customer&limit=${pageSize}&offset=${offset}`),
-            fetchApi('/api/contacts?status=Customer&count=1'),
-          ]);
-          if (!isCurrent()) return;
-          const list = Array.isArray(rows) ? rows : [];
-          setClients(list);
-          const serverTotal = countRes && typeof countRes.total === 'number' ? countRes.total : null;
-          setTotal(serverTotal != null ? serverTotal : offset + list.length);
-        } else {
-          // Search mode: /api/contacts has no OR-search param (only ANDed
-          // ?filters=), so pull a capped window (backend max) and filter
-          // client-side. Exact for tenants with <=500 customers.
-          const rows = await fetchApi(`/api/contacts?status=Customer&limit=${SEARCH_FETCH_LIMIT}`);
-          if (!isCurrent()) return;
-          const list = Array.isArray(rows) ? rows : [];
-          const filtered = list.filter(client => matchesTerm(client, term));
-          setTotal(filtered.length);
-          setClients(filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize));
-        }
+        const offset = (currentPage - 1) * pageSize;
+        const search = term ? `&q=${encodeURIComponent(term)}` : '';
+        const [rows, countRes] = await Promise.all([
+          fetchApi(`/api/contacts?status=Customer&limit=${pageSize}&offset=${offset}${search}`),
+          fetchApi(`/api/contacts?status=Customer&count=1${search}`),
+        ]);
+        if (!isCurrent()) return;
+        const list = Array.isArray(rows) ? rows : [];
+        setClients(list);
+        const serverTotal = countRes && typeof countRes.total === 'number' ? countRes.total : null;
+        setTotal(serverTotal != null ? serverTotal : offset + list.length);
       } catch {
         if (!isCurrent()) return;
         setClients([]);

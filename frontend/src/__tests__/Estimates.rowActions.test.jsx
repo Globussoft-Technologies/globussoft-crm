@@ -72,8 +72,11 @@ const sampleNoEmail = {
 };
 
 function fakeFetchApi(url, opts) {
-  if (url === '/api/estimates' && (!opts || !opts.method || opts.method === 'GET')) {
-    return Promise.resolve([sampleEstimate, sampleNoEmail]);
+  if (url.startsWith('/api/estimates?') && (!opts || !opts.method || opts.method === 'GET')) {
+    return Promise.resolve({
+      data: [sampleEstimate, sampleNoEmail],
+      pagination: { total: 2, totalPages: 1 },
+    });
   }
   if (url === '/api/contacts') return Promise.resolve([]);
   if (url === '/api/deals') return Promise.resolve([]);

@@ -5,7 +5,7 @@
  * gated via App.jsx's RoleGuard wrapper. Pattern mirrors Locations.jsx —
  * inline form + list + edit-in-place + soft-toggle isActive.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Stethoscope, Plus, Pencil, Trash2, Upload, X, Search, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 
@@ -70,6 +70,7 @@ export default function ServiceCategories() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
+  const listRequestRef = useRef(0);
 
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
@@ -98,12 +99,14 @@ export default function ServiceCategories() {
     }
   };
 
-  const load = () => {
+  const load = useCallback(() => {
+    const requestId = ++listRequestRef.current;
     setLoading(true);
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (q.trim()) params.set('q', q.trim());
     fetchApi(`/api/wellness/service-categories?${params}`)
       .then((res) => {
+        if (requestId !== listRequestRef.current) return;
         const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
         const nextTotal = Array.isArray(res) ? res.length : (Number(res?.total) || 0);
         setCategories(rows);
@@ -111,10 +114,16 @@ export default function ServiceCategories() {
         const lastPage = Math.max(1, Math.ceil(nextTotal / pageSize));
         if (page > lastPage) setPage(lastPage);
       })
-      .catch(() => { setCategories([]); setTotal(0); })
-      .finally(() => setLoading(false));
-  };
-  useEffect(load, [page, pageSize, q]);
+      .catch(() => {
+        if (requestId !== listRequestRef.current) return;
+        setCategories([]);
+        setTotal(0);
+      })
+      .finally(() => {
+        if (requestId === listRequestRef.current) setLoading(false);
+      });
+  }, [page, pageSize, q]);
+  useEffect(load, [load]);
 
   const loadCategoryOptions = () => {
     fetchApi('/api/wellness/service-categories?fields=summary')

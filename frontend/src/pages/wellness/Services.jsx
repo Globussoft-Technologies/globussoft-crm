@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useContext } from 'react';
+import { useCallback, useEffect, useRef, useState, useContext } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
@@ -60,6 +60,7 @@ export default function Services() {
   const [servicePage, setServicePage] = useState(1);
   const [serviceSort, setServiceSort] = useState('default');
   const [loadingMoreServices, setLoadingMoreServices] = useState(false);
+  const serviceRequestRef = useRef({ sequence: 0, loadingPage: null });
   const [packageServiceOptions, setPackageServiceOptions] = useState([]);
   const [categories, setCategories] = useState([]);
   const [treatments, setTreatments] = useState([]);
@@ -91,8 +92,17 @@ export default function Services() {
   const [doctors, setDoctors] = useState([]);
 
   const load = useCallback(({ page = 1, append = false } = {}) => {
-    if (append) setLoadingMoreServices(true);
-    else setLoading(true);
+    const requestState = serviceRequestRef.current;
+    if (append && requestState.loadingPage !== null) return Promise.resolve();
+    const requestId = ++requestState.sequence;
+    if (append) {
+      requestState.loadingPage = page;
+      setLoadingMoreServices(true);
+    } else {
+      requestState.loadingPage = null;
+      setLoadingMoreServices(false);
+      setLoading(true);
+    }
     const params = new URLSearchParams({
       page: String(page),
       pageSize: String(SERVICE_PAGE_SIZE),
@@ -100,15 +110,18 @@ export default function Services() {
     });
     return fetchApi(`/api/wellness/services?${params}`)
       .then((res) => {
+        if (requestId !== requestState.sequence) return;
         const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
         setServices((current) => append ? [...current, ...rows] : rows);
         setServiceTotal(Array.isArray(res) ? res.length : (Number(res?.total) || 0));
         setServicePage(page);
       })
       .catch(() => {
-        if (!append) setServices([]);
+        if (requestId === requestState.sequence && !append) setServices([]);
       })
       .finally(() => {
+        if (append && requestState.loadingPage === page) requestState.loadingPage = null;
+        if (requestId !== requestState.sequence) return;
         setLoading(false);
         setLoadingMoreServices(false);
       });

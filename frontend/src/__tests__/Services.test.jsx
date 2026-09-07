@@ -159,6 +159,52 @@ describe('<Services /> — Catalog tab', () => {
     ).toBeInTheDocument();
   });
 
+  it('does not request the same next page twice while it is still loading', async () => {
+    const firstPage = Array.from({ length: 24 }, (_, index) => ({
+      ...services[0], id: 200 + index, name: `Paged Service ${index + 1}`,
+    }));
+    const pendingPage = new Promise(() => {});
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/services?page=1')) {
+        return Promise.resolve({ data: firstPage, total: 48, page: 1, pageSize: 24 });
+      }
+      if (url.includes('/api/wellness/services?page=2')) return pendingPage;
+      return Promise.resolve([]);
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await screen.findByText('Paged Service 1');
+    const scrollContainer = screen.getByTestId('services-catalog-scroll');
+    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
+    scrollContainer.scrollTop = 728;
+    fireEvent.scroll(scrollContainer);
+    fireEvent.scroll(scrollContainer);
+
+    expect(fetchApi.mock.calls.filter(([url]) => url.includes('/api/wellness/services?page=2'))).toHaveLength(1);
+  });
+
+  it('ignores an older response after the service sort changes', async () => {
+    let resolveInitial;
+    const initialRequest = new Promise((resolve) => { resolveInitial = resolve; });
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('sortBy=default')) return initialRequest;
+      if (url.includes('sortBy=newest')) {
+        return Promise.resolve({ data: [{ ...services[0], id: 300, name: 'Newest Service' }], total: 1, page: 1, pageSize: 24 });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Sort services'), { target: { value: 'newest' } });
+    await screen.findByText('Newest Service');
+    resolveInitial({ data: [{ ...services[0], id: 301, name: 'Stale Service' }], total: 1, page: 1, pageSize: 24 });
+    await Promise.resolve();
+
+    expect(screen.getByText('Newest Service')).toBeInTheDocument();
+    expect(screen.queryByText('Stale Service')).not.toBeInTheDocument();
+  });
+
   it('clicking the pencil (Edit) button flips the card to edit mode', async () => {
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);

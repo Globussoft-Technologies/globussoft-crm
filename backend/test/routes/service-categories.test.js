@@ -181,7 +181,7 @@ describe('GET /api/wellness/service-categories', () => {
     expect(prisma.serviceCategory.findMany).toHaveBeenCalledOnce();
     const args = prisma.serviceCategory.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ tenantId: 7 });
-    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]);
     expect(args.include).toEqual({ _count: { select: { services: true, children: true } } });
   });
 
@@ -461,7 +461,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
 
     const args = prisma.serviceCategory.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ tenantId: 7 });
-    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]);
     expect(args.select).toBeDefined();
     expect(args.select.id).toBe(true);
     expect(args.select.name).toBe(true);
@@ -531,7 +531,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
       _count: { select: { services: true, children: true } },
     });
     expect(args.where).toEqual({ tenantId: 7 });
-    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]);
 
     // _count aggregate present in the row — admin index renders these.
     expect(res.body[0]._count).toEqual({ services: 4, children: 2 });
@@ -580,7 +580,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     // tenantId injection unchanged in the slim branch — critical: the
     // slim shape MUST still filter by tenant, never leak across.
     expect(args.where).toEqual({ tenantId: 99 });
-    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }]);
+    expect(args.orderBy).toEqual([{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]);
     expect(args.select).toBeDefined();
     expect(args.include).toBeUndefined();
   });

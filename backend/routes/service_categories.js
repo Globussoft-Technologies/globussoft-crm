@@ -57,7 +57,7 @@ router.get("/", async (req, res) => {
     }
     const findManyArgs = {
       where,
-      orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+      orderBy: [{ displayOrder: "asc" }, { name: "asc" }, { id: "asc" }],
     };
     if (isSummary) {
       findManyArgs.select = {

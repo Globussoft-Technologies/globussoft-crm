@@ -5481,7 +5481,7 @@ router.get("/services", async (req, res) => {
         ? [{ createdAt: "desc" }, { id: "desc" }]
         : sortBy === "oldest"
           ? [{ createdAt: "asc" }, { id: "asc" }]
-          : [{ ticketTier: "desc" }, { name: "asc" }];
+          : [{ ticketTier: "desc" }, { name: "asc" }, { id: "asc" }];
       const where = tenantWhere(req, { NOT: { isActive: false } });
       const [services, total] = await prisma.$transaction([
         prisma.service.findMany({

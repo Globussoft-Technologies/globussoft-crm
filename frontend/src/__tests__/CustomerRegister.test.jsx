@@ -182,4 +182,21 @@ describe('<CustomerRegister /> organization autocomplete', () => {
     });
     expect(screen.queryByText(/Select your organization first/i)).not.toBeInTheDocument();
   });
+
+  it('blocks OTP registration when the email already exists in the selected tenant', async () => {
+    global.fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.startsWith('/api/auth/public/tenants')) return fetchResponse(TENANTS);
+      if (path.startsWith('/api/auth/check-email')) return fetchResponse({ exists: true });
+      return fetchResponse({ error: 'not mocked' }, 404);
+    });
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText(/Organization/i), { target: { value: 'Globussoft' } });
+    fireEvent.change(screen.getByLabelText(/Email Address/i), { target: { value: 'existing@example.com' } });
+    fireEvent.click(screen.getByTestId('otp-validate'));
+
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(global.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/auth/email-otp/request'))).toBe(false);
+  });
 });

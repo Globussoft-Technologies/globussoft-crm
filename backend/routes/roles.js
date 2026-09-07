@@ -292,14 +292,42 @@ router.get(
         }
       }
 
-      const roles = await prisma.role.findMany({
+      // Backend-level pagination for the /settings Role Recovery
+      // section (10 roles per page). Opt-in via ?page so existing
+      // callers (Roles & Permissions page, tests) keep the
+      // unpaginated { roles, tenantId } shape.
+      const findManyArgs = {
         where: { tenantId },
         include: {
           permissions: true,
           _count: { select: { userRoles: true } },
         },
-        orderBy: [{ isSystem: "desc" }, { name: "asc" }],
-      });
+        orderBy: [{ isSystem: "desc" }, { name: "asc" }, { id: "asc" }],
+      };
+      let pagination = null;
+      if (req.query.page != null) {
+        const MAX_LIMIT = 100;
+        let page = parseInt(req.query.page, 10);
+        if (!Number.isInteger(page) || page < 1) page = 1;
+        let limit = parseInt(req.query.limit, 10);
+        if (req.query.limit == null || !Number.isInteger(limit)) limit = 10;
+        else if (limit < 1) limit = 1;
+        else if (limit > MAX_LIMIT) limit = MAX_LIMIT;
+        findManyArgs.skip = (page - 1) * limit;
+        findManyArgs.take = limit;
+        const total = await prisma.role.count({ where: { tenantId } });
+        const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+        pagination = {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1,
+        };
+      }
+
+      const roles = await prisma.role.findMany(findManyArgs);
 
       // Bug 5 — count consistency. The Roles table badge previously
       // rendered `role.permissions.length` (raw count including
@@ -353,6 +381,7 @@ router.get(
           };
         }),
         tenantId,
+        ...(pagination ? { pagination } : {}),
       });
     } catch (err) {
       console.error("[roles] list error:", err);

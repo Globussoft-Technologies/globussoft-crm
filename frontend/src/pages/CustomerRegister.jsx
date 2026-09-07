@@ -17,8 +17,10 @@ import EmailOtpField from "../components/EmailOtpField";
 // a User row. The wellness patient portal (OTP, phone-only) is a separate auth
 // flow at /wellness/portal and unrelated to this page.
 //
-// Tenant list is fetched from GET /api/auth/customer/tenants (public). New
-// orgs created via /api/auth/signup appear automatically once active.
+// Organization suggestions come from GET /api/auth/public/tenants (public).
+// Only a tenant selected from that list can be submitted — free-typed text
+// that matches nothing is cleared on blur (see handleOrganizationBlur) and
+// rejected again at submit (see validate).
 
 function passwordStrength(p) {
   let s = 0;
@@ -255,6 +257,17 @@ export default function CustomerRegister() {
 
   const handleOrganizationBlur = () => {
     setOrganizationSuggestionsOpen(false);
+    if (lockedToTenantSlug) return;
+    // Free-typed text that matches no registered organization must not stick:
+    // clear it immediately so only a list selection can be submitted.
+    if (form.organization.trim() && !resolveOrganizationMatch(form.organization)) {
+      setForm((prev) => ({ ...prev, organization: "", tenantId: "" }));
+      setErrors((prev) => ({
+        ...prev,
+        organization: "Please select an organization from the list.",
+      }));
+      setVerificationToken(null);
+    }
   };
 
   const handleOrganizationKeyDown = (e) => {
@@ -542,7 +555,7 @@ export default function CustomerRegister() {
             help={
               lockedToTenantSlug
                 ? "You started this booking from a specific clinic — registration is scoped to it."
-                : `Type at least ${MIN_ORG_SUGGESTION_CHARS} characters to search organizations.`
+                : `Type at least ${MIN_ORG_SUGGESTION_CHARS} characters to search registered organizations, then select yours from the list.`
             }
           >
             <div style={{ position: "relative" }}>

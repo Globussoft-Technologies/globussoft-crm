@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { FileSpreadsheet, Plus, Trash2, IndianRupee, ArrowRightLeft, X, Download, Mail } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -61,75 +61,45 @@ export default function Estimates() {
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   // #257: status pills now actually filter the ledger ('all' | 'Draft' | 'Sent').
   const [statusFilter, setStatusFilter] = useState('all');
-  const tableScrollRef = useRef(null);
-  const requestSeqRef = useRef(0);
-  const requestInFlightRef = useRef(false);
-  const hasMoreRef = useRef(true);
-  const estimatesRef = useRef([]);
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
   const [tableError, setTableError] = useState(null);
   const [reloadTick, setReloadTick] = useState(0);
+  const requestId = useRef(0);
 
-  useEffect(() => {
-    estimatesRef.current = estimates;
-  }, [estimates]);
-
-  useEffect(() => {
-    hasMoreRef.current = hasMore;
-  }, [hasMore]);
-
-  const loadPage = useCallback(async ({ reset = false } = {}) => {
-    if (!reset && (requestInFlightRef.current || !hasMoreRef.current)) return;
-
-    const requestId = ++requestSeqRef.current;
-    const nextOffset = reset ? 0 : estimatesRef.current.length;
-    requestInFlightRef.current = true;
-
-    if (reset) {
-      setLoading(true);
-      setTableError(null);
-      setEstimates([]);
-      estimatesRef.current = [];
-      setHasMore(true);
-      hasMoreRef.current = true;
-      const el = tableScrollRef.current;
-      if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: 0 });
-    } else {
-      setLoadingMore(true);
-    }
+  const fetchEstimates = useCallback(async () => {
+    const id = ++requestId.current;
+    setLoading(true);
+    setTableError(null);
 
     try {
       const qs = new URLSearchParams();
-      if (nextOffset > 0) {
-        qs.set('limit', '25');
-        qs.set('offset', String(nextOffset));
+      qs.set('page', String(currentPage));
+      qs.set('limit', String(pageSize));
+      if (statusFilter !== 'all') qs.set('status', statusFilter);
+
+      const res = await fetchApi(`/api/estimates?${qs.toString()}`);
+      if (id !== requestId.current) return;
+      const nextRows = Array.isArray(res) ? res : (res?.data || []);
+      setEstimates(nextRows);
+      const pagination = Array.isArray(res) ? null : res?.pagination;
+      if (pagination) {
+        setTotal(Number(pagination.total) || 0);
+        setTotalPages(Number(pagination.totalPages) || 0);
+      } else {
+        setTotal(nextRows.length);
+        setTotalPages(nextRows.length > 0 ? 1 : 0);
       }
-
-      const queryString = qs.toString();
-      const est = await fetchApi(`/api/estimates${queryString ? `?${queryString}` : ''}`);
-      if (requestSeqRef.current !== requestId) return;
-
-      const nextRows = Array.isArray(est) ? est : [];
-      const combined = reset ? nextRows : [...estimatesRef.current, ...nextRows];
-      const nextHasMore = nextRows.length === 25;
-
-      estimatesRef.current = combined;
-      setEstimates(combined);
-      setHasMore(nextHasMore);
-      hasMoreRef.current = nextHasMore;
     } catch (err) {
-      if (requestSeqRef.current !== requestId) return;
+      if (id !== requestId.current) return;
       setTableError(err?.message || 'Failed to load estimates');
     } finally {
-      if (requestSeqRef.current === requestId) {
-        requestInFlightRef.current = false;
-        setLoading(false);
-        setLoadingMore(false);
-      }
+      if (id === requestId.current) setLoading(false);
     }
-  }, []);
+  }, [currentPage, pageSize, statusFilter]);
 
   const loadStats = useCallback(async () => {
     try {
@@ -163,30 +133,12 @@ export default function Estimates() {
   }, [loadStats, loadContactsAndDeals]);
 
   useEffect(() => {
-    loadPage({ reset: true });
-  }, [loadPage, reloadTick]);
-
-  useEffect(() => {
-    if (!tableScrollRef.current || loading || loadingMore || !hasMore) return;
-    const el = tableScrollRef.current;
-    if (el.scrollHeight <= el.clientHeight + 24) {
-      loadPage({ reset: false });
-    }
-  }, [estimates, loading, loadingMore, hasMore, loadPage]);
-
-  const handleTableScroll = useCallback((e) => {
-    const el = e.currentTarget;
-    if (!el || requestInFlightRef.current || !hasMoreRef.current) return;
-    const threshold = 96;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
-      loadPage({ reset: false });
-    }
-  }, [loadPage]);
+    fetchEstimates();
+  }, [fetchEstimates, reloadTick]);
 
   const refreshAll = () => {
-    const el = tableScrollRef.current;
-    if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: 0 });
     loadStats();
+    setCurrentPage(1);
     setReloadTick((n) => n + 1);
   };
 
@@ -427,7 +379,7 @@ export default function Estimates() {
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
         <button
           type="button"
-          onClick={() => setStatusFilter('all')}
+          onClick={() => { setStatusFilter('all'); setCurrentPage(1); }}
           aria-pressed={statusFilter === 'all'}
           style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
@@ -441,7 +393,7 @@ export default function Estimates() {
         </button>
         <button
           type="button"
-          onClick={() => setStatusFilter(statusFilter === 'Draft' ? 'all' : 'Draft')}
+          onClick={() => { setStatusFilter(statusFilter === 'Draft' ? 'all' : 'Draft'); setCurrentPage(1); }}
           aria-pressed={statusFilter === 'Draft'}
           style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
@@ -455,7 +407,7 @@ export default function Estimates() {
         </button>
         <button
           type="button"
-          onClick={() => setStatusFilter(statusFilter === 'Sent' ? 'all' : 'Sent')}
+          onClick={() => { setStatusFilter(statusFilter === 'Sent' ? 'all' : 'Sent'); setCurrentPage(1); }}
           aria-pressed={statusFilter === 'Sent'}
           style={{
             padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
@@ -809,13 +761,8 @@ export default function Estimates() {
             </div>
           ) : (
             <div
-              ref={tableScrollRef}
-              onScroll={handleTableScroll}
               style={{
                 overflowX: 'auto',
-                overflowY: 'auto',
-                minHeight: 'calc(100vh - 380px)',
-                maxHeight: 'calc(100vh - 380px)',
                 border: '1px solid var(--border-color)',
                 borderRadius: 4,
                 background: 'var(--surface-color)',
@@ -948,22 +895,42 @@ export default function Estimates() {
                       </td>
                     </tr>
                   ))}
-                  {loadingMore && (
-                    <tr>
-                      <td colSpan={8} style={{ padding: '1rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                        Loading more estimates...
-                      </td>
-                    </tr>
-                  )}
-                  {!loading && !loadingMore && hasMore && visibleEstimates.length > 0 && (
-                    <tr>
-                      <td colSpan={8} style={{ padding: '1rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                        Scroll to load more estimates.
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
+            </div>
+          )}
+          {!loading && estimates.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={currentPage === 1}
+                style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)', cursor: currentPage === 1 ? 'not-allowed' : 'pointer', opacity: currentPage === 1 ? 0.5 : 1 }}
+              >
+                Previous
+              </button>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Page {currentPage} of {Math.max(totalPages, 1)}{total > 0 ? ` (${total} total)` : ''}</span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((page) => Math.min(Math.max(totalPages, 1), page + 1))}
+                disabled={currentPage >= Math.max(totalPages, 1)}
+                style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)', cursor: currentPage >= Math.max(totalPages, 1) ? 'not-allowed' : 'pointer', opacity: currentPage >= Math.max(totalPages, 1) ? 0.5 : 1 }}
+              >
+                Next
+              </button>
+              <label style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                Rows per page
+                <select
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value) || 10); setCurrentPage(1); }}
+                  aria-label="Rows per page"
+                  style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)' }}
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                </select>
+              </label>
             </div>
           )}
         </div>

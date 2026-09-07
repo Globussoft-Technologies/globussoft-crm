@@ -19,8 +19,7 @@
  *      lineItems (with discount baked into unitPrice).
  *   6. Validation: out-of-range line-item discount disables the submit
  *      button and surfaces an inline "out of range" message.
- *   7. Total Value pill reflects the visibleEstimates total (filter-aware):
- *      switching to Sent filter changes the total to the sum of Sent rows.
+ *   7. Total Value pill reflects the backend aggregate across every page.
  *
  * Drift note: per-row PDF/Email/Convert/Delete row actions are pinned by
  * Estimates.rowActions.test.jsx. This file covers the page chrome +
@@ -128,9 +127,12 @@ const sampleDeals = [
 ];
 
 function defaultFetchMock(url, opts) {
-  if (url === '/api/estimates' && (!opts || !opts.method || opts.method === 'GET')) {
-    return Promise.resolve(sampleEstimates);
+  if (url.startsWith('/api/estimates?') && (!opts || !opts.method || opts.method === 'GET')) {
+    const status = new URL(`http://test${url}`).searchParams.get('status');
+    const rows = status ? sampleEstimates.filter((row) => row.status === status) : sampleEstimates;
+    return Promise.resolve({ data: rows, pagination: { total: rows.length, totalPages: 1 } });
   }
+  if (url === '/api/estimates/stats') return Promise.resolve({ total: 3, byStatus: { Draft: 2, Sent: 1 }, totalValue: 8500 });
   if (url === '/api/contacts') return Promise.resolve(sampleContacts);
   if (url === '/api/deals') return Promise.resolve(sampleDeals);
   return Promise.resolve([]);
@@ -182,7 +184,7 @@ describe('<Estimates /> — page surface', () => {
 
   it('shows the empty-state message when /api/estimates returns []', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/estimates') return Promise.resolve([]);
+      if (url.startsWith('/api/estimates?')) return Promise.resolve({ data: [], pagination: { total: 0, totalPages: 0 } });
       if (url === '/api/contacts') return Promise.resolve([]);
       if (url === '/api/deals') return Promise.resolve([]);
       return Promise.resolve([]);
@@ -213,6 +215,26 @@ describe('<Estimates /> — page surface', () => {
       expect(screen.queryByText('EST-001')).not.toBeInTheDocument();
       expect(screen.queryByText('EST-003')).not.toBeInTheDocument();
     });
+  });
+
+  it('ignores an older estimates response after the filter changes', async () => {
+    let resolveInitial;
+    const initial = new Promise((resolve) => { resolveInitial = resolve; });
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/estimates?page=1&limit=10') return initial;
+      if (url === '/api/estimates?page=1&limit=10&status=Sent') {
+        return Promise.resolve({ data: [sampleEstimates[1]], pagination: { total: 1, totalPages: 1 } });
+      }
+      return defaultFetchMock(url);
+    });
+
+    renderEstimates();
+    fireEvent.click(await screen.findByRole('button', { name: /Sent$/ }));
+    expect(await screen.findByText('EST-002')).toBeInTheDocument();
+
+    resolveInitial({ data: [sampleEstimates[0]], pagination: { total: 1, totalPages: 1 } });
+    await waitFor(() => expect(screen.queryByText('EST-001')).not.toBeInTheDocument());
+    expect(screen.getByText('EST-002')).toBeInTheDocument();
   });
 
   it('submitting the create form POSTs /api/estimates with title and lineItems', async () => {
@@ -280,19 +302,19 @@ describe('<Estimates /> — page surface', () => {
     expect(submitBtn).toBeDisabled();
   });
 
-  it('Total Value pill reflects the visibleEstimates total (filter-aware)', async () => {
+  it('Total Value pill keeps the backend aggregate when filters change', async () => {
     renderEstimates();
     await waitFor(() => expect(screen.getByText('EST-001')).toBeInTheDocument());
 
     // All total = 5000 + 2000 + 1500 = 8500.
     expect(screen.getByText(/Total Value:\s*\$8500\.00/i)).toBeInTheDocument();
 
-    // Click Sent pill — visibleEstimates becomes [EST-002] (totalAmount=2000).
+    // Filtering the rows must not replace the server-side all-pages aggregate.
     const sentPill = screen.getByRole('button', { pressed: false, name: /Sent$/ });
     fireEvent.click(sentPill);
 
     await waitFor(() => {
-      expect(screen.getByText(/Total Value:\s*\$2000\.00/i)).toBeInTheDocument();
+      expect(screen.getByText(/Total Value:\s*\$8500\.00/i)).toBeInTheDocument();
     });
   });
 
@@ -314,8 +336,7 @@ describe('<Estimates /> — page surface', () => {
       expect(screen.queryByText('EST-002')).not.toBeInTheDocument();
     });
 
-    // Drafts total = 5000 + 1500 = 6500.
-    expect(screen.getByText(/Total Value:\s*\$6500\.00/i)).toBeInTheDocument();
+    expect(screen.getByText(/Total Value:\s*\$8500\.00/i)).toBeInTheDocument();
   });
 
   it('re-clicking the active status pill resets the filter back to all', async () => {
@@ -587,7 +608,9 @@ describe('<Estimates /> — page surface', () => {
       { id: 12, estimateNum: 'EST-CV', title: 'Cnv', status: 'Converted', totalAmount: 300, validUntil: null, contact: { id: 1, name: 'X', email: 'x@x.test' }, lineItems: [] },
     ];
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/estimates') return Promise.resolve(mixedStatusEstimates);
+      if (url.startsWith('/api/estimates?')) {
+        return Promise.resolve({ data: mixedStatusEstimates, pagination: { total: mixedStatusEstimates.length, totalPages: 1 } });
+      }
       if (url === '/api/contacts') return Promise.resolve([]);
       if (url === '/api/deals') return Promise.resolve([]);
       return Promise.resolve([]);
@@ -608,10 +631,11 @@ describe('<Estimates /> — page surface', () => {
 
   it('renders "-" when an estimate has no contact and no validUntil', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/estimates') {
-        return Promise.resolve([
+      if (url.startsWith('/api/estimates?')) {
+        const rows = [
           { id: 50, estimateNum: 'EST-NO', title: 'No contact', status: 'Draft', totalAmount: 0, validUntil: null, contact: null, lineItems: [] },
-        ]);
+        ];
+        return Promise.resolve({ data: rows, pagination: { total: 1, totalPages: 1 } });
       }
       if (url === '/api/contacts') return Promise.resolve([]);
       if (url === '/api/deals') return Promise.resolve([]);

@@ -886,7 +886,7 @@ export default function Settings() {
         )}
         {/* Lead custom fields — generic vertical only. LeadFields.jsx itself
             also redirects a direct URL hit from wellness/travel tenants. */}
-        {ctxTenant?.vertical !== "wellness" && ctxTenant?.vertical !== "travel" && (
+        {/* {ctxTenant?.vertical !== "wellness" && ctxTenant?.vertical !== "travel" && (
           <Link
             to="/settings/lead-fields"
             style={{
@@ -906,7 +906,7 @@ export default function Settings() {
           >
             <Sliders size={14} /> Lead Fields <ArrowRight size={13} />
           </Link>
-        )}
+        )} */}
       </header>
 
       {/* Cards flow through a CSS multi-column container so heights balance

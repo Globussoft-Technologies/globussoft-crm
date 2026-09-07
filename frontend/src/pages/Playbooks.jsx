@@ -18,9 +18,13 @@ function stageMeta(stage) {
   return STAGES.find((s) => s.value === stage) || { value: stage, label: stage, color: '#64748b' };
 }
 
+// Theme-aware surfaces: every background/border/text here resolves through
+// CSS vars (with dark-theme fallbacks) so the page reads on white, dark,
+// wellness, and travel themes. Never hardcode dark-navy rgba() or
+// near-white text — that combo is invisible on light themes.
 const glassCard = {
-  background: 'rgba(255,255,255,0.04)',
-  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'var(--surface-color, rgba(255,255,255,0.04))',
+  border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
   borderRadius: '14px',
   padding: '1.25rem',
   backdropFilter: 'blur(12px)',
@@ -30,20 +34,21 @@ const glassCard = {
 const inputStyle = {
   width: '100%',
   padding: '0.55rem 0.75rem',
-  background: 'rgba(15,23,42,0.5)',
-  border: '1px solid rgba(255,255,255,0.1)',
+  background: 'var(--input-bg, var(--surface-hover, rgba(15,23,42,0.5)))',
+  border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
   borderRadius: '8px',
   color: 'var(--text-primary, #e2e8f0)',
   fontSize: '0.9rem',
   boxSizing: 'border-box',
+  colorScheme: 'light dark',
 };
 
 const buttonStyle = (variant = 'primary') => {
   const variants = {
     primary:   { bg: 'var(--primary-color, var(--accent-color))', color: 'var(--accent-text, #fff)', border: 'transparent' },
-    secondary: { bg: 'rgba(255,255,255,0.06)', color: '#e2e8f0', border: 'rgba(255,255,255,0.12)' },
+    secondary: { bg: 'var(--surface-hover, rgba(255,255,255,0.06))', color: 'var(--text-primary, #e2e8f0)', border: 'var(--border-color, rgba(255,255,255,0.12))' },
     danger:    { bg: 'rgba(239,68,68,0.12)', color: '#ef4444', border: 'rgba(239,68,68,0.3)' },
-    ghost:     { bg: 'transparent', color: '#94a3b8', border: 'rgba(255,255,255,0.08)' },
+    ghost:     { bg: 'transparent', color: 'var(--text-secondary, #94a3b8)', border: 'var(--border-color, rgba(255,255,255,0.08))' },
   };
   const v = variants[variant] || variants.primary;
   return {
@@ -254,7 +259,7 @@ export default function Playbooks() {
           <FileText size={28} color="var(--primary-color, var(--accent-color))" />
           <div>
             <h1 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 700 }}>Sales Playbooks</h1>
-            <p style={{ margin: '0.25rem 0 0', color: '#94a3b8', fontSize: '0.85rem' }}>
+            <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
               Guided steps for each deal stage to drive consistent sales execution.
             </p>
           </div>
@@ -271,7 +276,7 @@ export default function Playbooks() {
           gap: '1rem', marginBottom: '1.5rem',
         }}>
           <div style={glassCard}>
-            <div style={{ color: '#94a3b8', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total</div>
             <div style={{ fontSize: '1.6rem', fontWeight: 700, marginTop: '0.25rem' }}>{stats.total}</div>
           </div>
           <div style={glassCard}>
@@ -279,11 +284,11 @@ export default function Playbooks() {
             <div style={{ fontSize: '1.6rem', fontWeight: 700, marginTop: '0.25rem' }}>{stats.active}</div>
           </div>
           <div style={glassCard}>
-            <div style={{ color: '#94a3b8', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Inactive</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Inactive</div>
             <div style={{ fontSize: '1.6rem', fontWeight: 700, marginTop: '0.25rem' }}>{stats.inactive}</div>
           </div>
           <div style={glassCard}>
-            <div style={{ color: '#94a3b8', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Stages Covered</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Stages Covered</div>
             <div style={{ fontSize: '1.6rem', fontWeight: 700, marginTop: '0.25rem' }}>{(stats.stages || []).length}</div>
           </div>
         </div>
@@ -291,7 +296,7 @@ export default function Playbooks() {
 
       {/* Filter */}
       <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
-        <label style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Filter by stage:</label>
+        <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Filter by stage:</label>
         <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}
           style={{ ...inputStyle, width: 'auto', minWidth: '180px' }}>
           <option value="">All stages</option>
@@ -301,9 +306,9 @@ export default function Playbooks() {
 
       {/* Playbook grid */}
       {loading ? (
-        <div style={{ ...glassCard, textAlign: 'center', color: '#94a3b8' }}>Loading playbooks...</div>
+        <div style={{ ...glassCard, textAlign: 'center', color: 'var(--text-secondary)' }}>Loading playbooks...</div>
       ) : filteredPlaybooks.length === 0 ? (
-        <div style={{ ...glassCard, textAlign: 'center', color: '#94a3b8' }}>
+        <div style={{ ...glassCard, textAlign: 'center', color: 'var(--text-secondary)' }}>
           No playbooks yet. Click "Create Playbook" to add one.
         </div>
       ) : (
@@ -331,7 +336,7 @@ export default function Playbooks() {
                 </button>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#94a3b8', fontSize: '0.85rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                 <ListChecks size={14} />
                 {pb.steps?.length || 0} step{(pb.steps?.length || 0) === 1 ? '' : 's'}
               </div>
@@ -358,7 +363,7 @@ export default function Playbooks() {
           <Target size={18} color="var(--primary-color, var(--accent-color))" />
           <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700 }}>Apply to Deal</h3>
         </div>
-        <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: 0 }}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: 0 }}>
           Select a deal to view its stage-matched playbooks and check off steps as you complete them.
         </p>
 
@@ -377,7 +382,7 @@ export default function Playbooks() {
 
         {selectedDealId && (
           dealPlaybooks.length === 0 ? (
-            <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>
+            <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>
               No active playbooks match this deal's stage.
             </div>
           ) : (
@@ -386,8 +391,8 @@ export default function Playbooks() {
                 const completed = new Set(progress?.completedSteps || []);
                 return (
                   <div key={playbook.id} style={{
-                    background: 'rgba(15,23,42,0.4)',
-                    border: '1px solid rgba(255,255,255,0.06)',
+                    background: 'var(--surface-hover, rgba(15,23,42,0.4))',
+                    border: '1px solid var(--border-color, rgba(255,255,255,0.06))',
                     borderRadius: '10px',
                     padding: '1rem',
                   }}>
@@ -406,7 +411,7 @@ export default function Playbooks() {
                     </div>
 
                     <div style={{
-                      height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px',
+                      height: '6px', background: 'var(--surface-hover, rgba(255,255,255,0.06))', borderRadius: '4px',
                       overflow: 'hidden', marginBottom: '0.75rem',
                     }}>
                       <div style={{
@@ -422,8 +427,8 @@ export default function Playbooks() {
                           <div key={idx} style={{
                             display: 'flex', alignItems: 'flex-start', gap: '0.65rem',
                             padding: '0.55rem 0.7rem',
-                            background: done ? 'rgba(16,185,129,0.06)' : 'rgba(255,255,255,0.02)',
-                            border: `1px solid ${done ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.05)'}`,
+                            background: done ? 'rgba(16,185,129,0.06)' : 'var(--surface-color, rgba(255,255,255,0.02))',
+                            border: `1px solid ${done ? 'rgba(16,185,129,0.2)' : 'var(--border-color, rgba(255,255,255,0.05))'}`,
                             borderRadius: '8px',
                             cursor: 'pointer',
                           }}
@@ -431,7 +436,7 @@ export default function Playbooks() {
                           >
                             <div style={{
                               width: '20px', height: '20px', borderRadius: '5px',
-                              border: `1.5px solid ${done ? '#10b981' : 'rgba(255,255,255,0.2)'}`,
+                              border: `1.5px solid ${done ? '#10b981' : 'var(--border-color, rgba(255,255,255,0.2))'}`,
                               background: done ? '#10b981' : 'transparent',
                               display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                               marginTop: '2px',
@@ -442,12 +447,12 @@ export default function Playbooks() {
                               <div style={{
                                 fontWeight: 600, fontSize: '0.9rem',
                                 textDecoration: done ? 'line-through' : 'none',
-                                color: done ? '#94a3b8' : '#e2e8f0',
+                                color: done ? 'var(--text-secondary)' : 'var(--text-primary, #e2e8f0)',
                               }}>
                                 {step.title}
                               </div>
                               {step.description && (
-                                <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.2rem' }}>
                                   {step.description}
                                 </div>
                               )}
@@ -472,9 +477,9 @@ export default function Playbooks() {
           zIndex: 1000, padding: '1rem',
         }} onClick={closeEditor}>
           <div onClick={(e) => e.stopPropagation()} style={{
-            background: 'rgba(15,23,42,0.95)', border: '1px solid rgba(255,255,255,0.1)',
+            background: 'var(--surface-color, rgba(15,23,42,0.95))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
             borderRadius: '14px', width: '100%', maxWidth: '640px', maxHeight: '90vh',
-            overflow: 'auto', padding: '1.5rem',
+            overflow: 'auto', padding: '1.5rem', colorScheme: 'light dark',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>
@@ -487,14 +492,14 @@ export default function Playbooks() {
 
             <div style={{ display: 'grid', gap: '0.85rem' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.3rem' }}>Name</label>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>Name</label>
                 <input style={inputStyle} value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   placeholder="e.g., Discovery Call Playbook" />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.3rem' }}>Stage</label>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>Stage</label>
                 <select style={inputStyle} value={form.stage}
                   onChange={(e) => setForm((f) => ({ ...f, stage: e.target.value }))}>
                   {STAGES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
@@ -502,7 +507,7 @@ export default function Playbooks() {
               </div>
 
               <div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: '#cbd5e1' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                   <input type="checkbox" checked={form.isActive}
                     onChange={(e) => setForm((f) => ({ ...f, isActive: e.target.checked }))} />
                   Active
@@ -511,7 +516,7 @@ export default function Playbooks() {
 
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                  <label style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Steps (drag to reorder)</label>
+                  <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Steps (drag to reorder)</label>
                   <button style={buttonStyle('secondary')} onClick={addStep}>
                     <Plus size={14} /> Add Step
                   </button>
@@ -526,8 +531,8 @@ export default function Playbooks() {
                       onDrop={() => onDrop(idx)}
                       style={{
                         display: 'flex', gap: '0.5rem', alignItems: 'flex-start',
-                        background: 'rgba(15,23,42,0.6)',
-                        border: '1px solid rgba(255,255,255,0.08)',
+                        background: 'var(--surface-hover, rgba(15,23,42,0.6))',
+                        border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
                         borderRadius: '8px', padding: '0.6rem',
                       }}>
                       <div style={{ cursor: 'grab', color: '#64748b', paddingTop: '0.4rem' }}>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
@@ -44,28 +44,94 @@ export default function DealInsights() {
   // isMissing=true). Removing the broken fallback eliminates the regression
   // class entirely.
   const [openDealCount, setOpenDealCount] = useState(0);
+  // openDeals holds ONLY the current OPEN_DEALS page, server-paged via
+  // /api/deals?limit=&offset= (see the chunk effect below) — never the full
+  // list. The bulk-generate loop fetches its own capped window instead.
   const [openDeals, setOpenDeals] = useState([]);
+  const [dealsLoading, setDealsLoading] = useState(false);
+  // Authoritative insight totals from /api/deal-insights/stats (exact beyond
+  // any list window). Null until loaded or when the shape is unexpected —
+  // KPI cards then fall back to the summary window below.
+  const [insightStats, setInsightStats] = useState(null);
+  // Server-paged insight ROWS for the list (browse mode) or capped filtered
+  // rows (type tabs). `insightTotal` is the backend ?count=1 (browse) or the
+  // filtered length (type tabs).
+  const [insightTotal, setInsightTotal] = useState(0);
+  // Lightweight ?fields=summary window (ids + severity flags only — no text,
+  // no dealContext enrichment): backbone for scanned chips + open-only
+  // severity KPIs. Exact for tenants with <=500 insights.
+  const [insightSummary, setInsightSummary] = useState([]);
+  // Detail modal owns its data: fetched per deal on open (see effect below).
+  const [modalInsights, setModalInsights] = useState([]);
+  const [modalLoading, setModalLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [filter, setFilter] = useState('All');
   const [showResolved, setShowResolved] = useState(false);
   const [selectedDealId, setSelectedDealId] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(5);
+  const dealsRequestId = useRef(0);
+  const rowsRequestId = useRef(0);
 
-  const loadAll = async () => {
+  // Insight rows for the list. Browse (All tab) pages rows server-side via
+  // ?limit=&offset= with ?isResolved=false synced whenever the toggle is
+  // off, and the footer total comes from ?count=1 under the same filter.
+  // Type tabs have no backend primitive, so they pull a capped window
+  // (limit=500) and filter client-side — exact for tenants with <=500
+  // insights. Stale rows stay visible across page turns (never cleared
+  // before the next window lands).
+  const loadInsightRows = async () => {
+    const myId = ++rowsRequestId.current;
+    const isCurrent = () => myId === rowsRequestId.current;
+    const resParam = showResolved ? '' : '&isResolved=false';
+    setLoading(true);
     try {
-      // /api/deal-insights — server attaches dealContext (every row).
+      if (filter === 'All') {
+        const offset = (Math.max(1, currentPage) - 1) * pageSize;
+        const [rows, cnt] = await Promise.all([
+          fetchApi(`/api/deal-insights?limit=${pageSize}&offset=${offset}${resParam}`),
+          fetchApi(`/api/deal-insights?count=1${showResolved ? '' : '&isResolved=false'}`).catch(() => null),
+        ]);
+        if (!isCurrent()) return;
+        const list = Array.isArray(rows) ? rows : [];
+        setInsights(list);
+        setInsightTotal(cnt && typeof cnt.total === 'number' ? cnt.total : list.length);
+      } else if (filter !== 'OPEN_DEALS') {
+        const rows = await fetchApi(`/api/deal-insights?limit=500${resParam}`).catch(() => []);
+        if (!isCurrent()) return;
+        const list = Array.isArray(rows) ? rows : [];
+        const typed = list.filter(i => i.type === filter);
+        setInsightTotal(typed.length);
+        setInsights(typed);
+      }
+    } catch (e) {
+      console.error(e);
+      if (!isCurrent()) return;
+      setInsights([]);
+      setInsightTotal(0);
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+  };
+
+  const loadSummary = async () => {
+    try {
+      const rows = await fetchApi('/api/deal-insights?fields=summary&limit=500').catch(() => []);
+      setInsightSummary(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const loadMeta = async () => {
+    try {
       // /api/deals/stats — full-population stats (byStage gives openCount).
-      // /api/deals?stage=lead|contacted|proposal — only fetched to drive the
-      //   "Generate Insights" button's per-deal POST loop. Paginated, but
-      //   we cap at 50 anyway (see generateForAll) so the limit=100 window
-      //   covers it. NOT used for join/lookup — that's strictly via
-      //   dealContext now.
-      const [ins, stats, openSampleRaw] = await Promise.all([
-        fetchApi('/api/deal-insights').catch(() => []),
+      // /api/deal-insights/stats — authoritative open/resolved insight counts.
+      const [stats, insStats] = await Promise.all([
         fetchApi('/api/deals/stats').catch(() => null),
-        fetchApi('/api/deals?limit=50').catch(() => []),
+        fetchApi('/api/deal-insights/stats').catch(() => null),
       ]);
-      setInsights(Array.isArray(ins) ? ins : []);
       // Open count = sum of stages that aren't won/lost. byStage entries
       // shape: { stage, count, value }.
       let count = 0;
@@ -75,19 +141,22 @@ export default function DealInsights() {
         }
       }
       setOpenDealCount(count);
-      // openDeals stores the full deal objects for both the OPEN_DEALS view
-      // and the bulk-generate button's per-deal POST loop.
-      const sample = Array.isArray(openSampleRaw) ? openSampleRaw : [];
-      const openOnly = sample.filter(d => d.stage !== 'won' && d.stage !== 'lost');
-      setOpenDeals(openOnly);
+      setInsightStats(insStats && typeof insStats === 'object' && !Array.isArray(insStats) ? insStats : null);
     } catch (e) {
       console.error(e);
-    } finally {
-      setLoading(false);
     }
   };
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { loadSummary(); loadMeta(); }, []);
+
+  // Rows effect also fires on mount, so no separate initial call.
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadInsightRows(); }, [filter, showResolved, currentPage, pageSize]);
+
+  // Reset to first page on filter/toggle/size change (NOT on rows reload —
+  // resolving or generating must not yank the user back to page 1).
+  useEffect(() => { setCurrentPage(1); }, [filter, showResolved, pageSize]);
 
   const filtered = useMemo(() => {
     let list = insights;
@@ -115,32 +184,159 @@ export default function DealInsights() {
     return m;
   }, [insights]);
 
-  // For Open Deals view: all insights regardless of filter
-  const allGrouped = useMemo(() => {
-    const g = {};
-    insights.forEach(ins => {
-      if (!ins.isResolved || showResolved) {
-        if (!g[ins.dealId]) g[ins.dealId] = [];
-        g[ins.dealId].push(ins);
-      }
-    });
-    return g;
-  }, [insights, showResolved]);
+  // Scanned chips (OPEN_DEALS "✓ N" + modal): insight counts per deal from
+  // the light summary window, honoring the resolved toggle client-side.
+  const chipCounts = useMemo(() => {
+    const m = {};
+    for (const i of insightSummary) {
+      if (!showResolved && i.isResolved) continue;
+      m[i.dealId] = (m[i.dealId] || 0) + 1;
+    }
+    return m;
+  }, [insightSummary, showResolved]);
 
-  const stats = useMemo(() => {
-    const open = insights.filter(i => !i.isResolved);
+  // Open-only severity split from the summary window (the /stats endpoint
+  // has no open-only severity breakdown). Exact for tenants with <=500
+  // insights. Open/Resolved tiles prefer authoritative /stats (see below).
+  const summaryStats = useMemo(() => {
+    const open = insightSummary.filter(i => !i.isResolved);
     return {
       open: open.length,
       critical: open.filter(i => i.severity === 'CRITICAL').length,
       warnings: open.filter(i => i.severity === 'WARNING').length,
-      resolved: insights.filter(i => i.isResolved).length,
+      resolved: insightSummary.filter(i => i.isResolved).length,
     };
-  }, [insights]);
+  }, [insightSummary]);
+
+  // Pagination units differ per view (footer labels match): the insights
+  // list pages ROWS server-side in browse mode (deal cards group the page's
+  // rows — a card's chip counts its VISIBLE insights, same convention the
+  // type tabs always used), while type tabs slice the capped filtered set
+  // and OPEN_DEALS pages deals. The same pageSize drives all three.
+  const groupedEntries = useMemo(() => Object.entries(grouped), [grouped]);
+  const isOpenDealsView = filter === 'OPEN_DEALS';
+  const isBrowsing = !isOpenDealsView && filter === 'All';
+  // Backend totals (stats / ?count=1); fall back to loaded rows so footers
+  // never read "of 0" with rows on screen.
+  const dealsTotal = openDealCount > 0 ? openDealCount : openDeals.length;
+  const totalItems = isOpenDealsView ? dealsTotal : isBrowsing ? insightTotal : filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const visibleEntries = isBrowsing ? groupedEntries : groupedEntries.slice(startIndex, startIndex + pageSize);
+  const startItem = totalItems === 0 ? 0 : startIndex + 1;
+  const endItem = Math.min(startIndex + pageSize, totalItems);
+
+  // Step back when the total shrinks under the current page (resolves or
+  // backend drift); the deals effect below refetches and converges.
+  useEffect(() => {
+    if (!loading && currentPage > totalPages) setCurrentPage(totalPages);
+  }, [loading, currentPage, totalPages]);
+
+  // OPEN_DEALS server paging: /api/deals has limit/offset but no open-only
+  // scope (single ?stage= only), so pages are pulled as raw chunks and
+  // won/lost rows are skipped client-side until the page is full or the
+  // server runs dry. Raw offset advances by CONSUMED rows (not open rows),
+  // which keeps pages stable under the backend's createdAt-desc ordering.
+  // Total comes from stats, so the footer stays exact without downloading
+  // the whole pipeline. NOTE: /api/deals/stats is tenant-wide while the
+  // list is role-scoped (#588) — USER-role callers may see a total above
+  // their visible rows; short trailing pages are expected there.
+  useEffect(() => {
+    if (filter !== 'OPEN_DEALS') return;
+    let cancelled = false;
+    const myId = ++dealsRequestId.current;
+    const isCurrent = () => !cancelled && myId === dealsRequestId.current;
+    setDealsLoading(true);
+    const load = async () => {
+      try {
+        const need = pageSize;
+        let rawOffset = (safePage - 1) * pageSize;
+        const collected = [];
+        for (let attempt = 0; attempt < 6 && collected.length < need; attempt++) {
+          const chunkLimit = Math.min(500, Math.max(pageSize * 2, need - collected.length));
+          const chunk = await fetchApi(`/api/deals?limit=${chunkLimit}&offset=${rawOffset}`);
+          if (!isCurrent()) return;
+          const arr = Array.isArray(chunk) ? chunk : [];
+          rawOffset += arr.length;
+          for (const d of arr) {
+            if (d.stage !== 'won' && d.stage !== 'lost') {
+              collected.push(d);
+              if (collected.length >= need) break;
+            }
+          }
+          if (arr.length < chunkLimit) break; // server exhausted
+        }
+        if (!isCurrent()) return;
+        setOpenDeals(collected);
+      } catch (e) {
+        console.error(e);
+        if (isCurrent()) setOpenDeals([]);
+      } finally {
+        if (isCurrent()) setDealsLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [filter, safePage, pageSize]);
+
+  // Footer unit follows the pagination unit: insight ROWS in the insights
+  // list (browse pages backend row windows), deals in OPEN_DEALS.
+  const pageUnit = isOpenDealsView ? 'deal' : 'insight';
+  const paginationBar = totalItems > 0 ? (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1.5rem', padding: '1rem 1.25rem', border: '1px solid var(--border-color)', borderRadius: '12px', background: 'var(--card-bg, #fff)' }}>
+      <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
+        Showing {startItem}-{endItem} of {totalItems} {pageUnit}{totalItems !== 1 ? 's' : ''}
+      </p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+          <span>{isOpenDealsView ? 'Deals per page' : 'Rows per page'}</span>
+          <select
+            aria-label={isOpenDealsView ? 'Deals per page' : 'Rows per page'}
+            value={String(pageSize)}
+            onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+            style={{ padding: '0.5rem 0.6rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--input-bg, #fff)', color: 'var(--text-primary)' }}
+          >
+            {[5, 10, 15, 25].map(size => (
+              <option key={size} value={size}>{size}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => setCurrentPage(prev => Math.max(1, Math.min(prev, totalPages) - 1))}
+          disabled={safePage <= 1}
+          aria-label="Previous page"
+          style={{ padding: '0.6rem 1rem', opacity: safePage <= 1 ? 0.6 : 1, cursor: safePage <= 1 ? 'not-allowed' : 'pointer' }}
+        >
+          Previous
+        </button>
+        <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+          Page {safePage} of {totalPages}
+        </span>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => setCurrentPage(prev => Math.min(totalPages, Math.min(prev, totalPages) + 1))}
+          disabled={safePage >= totalPages}
+          aria-label="Next page"
+          style={{ padding: '0.6rem 1rem', opacity: safePage >= totalPages ? 0.6 : 1, cursor: safePage >= totalPages ? 'not-allowed' : 'pointer' }}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   const generateForAll = async () => {
     setGenerating(true);
     try {
-      const targets = openDeals.slice(0, 50); // safety cap
+      // Own capped window for the POST loop — independent of whatever
+      // OPEN_DEALS page is on screen (openDeals holds one page only now).
+      const sample = await fetchApi('/api/deals?limit=50').catch(() => []);
+      const all = Array.isArray(sample) ? sample : [];
+      const targets = all.filter(d => d.stage !== 'won' && d.stage !== 'lost').slice(0, 50); // safety cap
       let success = 0;
       let failed = 0;
       for (const d of targets) {
@@ -154,7 +350,10 @@ export default function DealInsights() {
         }
       }
       console.log(`[DealInsights] Completed: ${success} success, ${failed} failed out of ${targets.length}`);
-      await loadAll();
+      setCurrentPage(1);
+      await loadInsightRows();
+      await loadSummary();
+      await loadMeta();
     } finally {
       setGenerating(false);
     }
@@ -163,17 +362,43 @@ export default function DealInsights() {
   const resolveOne = async (id) => {
     try {
       await fetchApi(`/api/deal-insights/${id}/resolve`, { method: 'POST' });
+      // Optimistic everywhere (list rows, modal rows, summary backbone);
+      // loadMeta re-pulls authoritative Open/Resolved totals underneath.
+      // No rows refetch — the resolved row drops out via the toggle filter,
+      // same as before.
       setInsights(prev => prev.map(i => i.id === id ? { ...i, isResolved: true } : i));
+      setModalInsights(prev => prev.map(i => i.id === id ? { ...i, isResolved: true } : i));
+      setInsightSummary(prev => prev.map(i => i.id === id ? { ...i, isResolved: true } : i));
+      loadMeta(); // backend totals (Open/Resolved tiles) stay in sync
     } catch (e) {
       console.error(e);
     }
   };
 
+  // Detail modal owns its data: exact per-deal fetch on open (the list only
+  // holds one page/capped window, so shared state can't serve it).
+  useEffect(() => {
+    if (!selectedDealId) { setModalInsights([]); setModalLoading(false); return; }
+    let cancelled = false;
+    setModalLoading(true);
+    fetchApi(`/api/deal-insights/deal/${selectedDealId}`)
+      .then(data => { if (!cancelled) setModalInsights(Array.isArray(data) ? data : []); })
+      .catch(() => { if (!cancelled) setModalInsights([]); })
+      .finally(() => { if (!cancelled) setModalLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedDealId]);
+
+  // Tiles prefer authoritative backend stats (exact beyond any window);
+  // every tile falls back to the summary window so unexpected shapes never
+  // blank them. Critical/Warnings MUST come from the summary — /stats has
+  // no open-only severity breakdown, and list rows hold one page only.
+  const openTileValue = insightStats && typeof insightStats.openCount === 'number' ? insightStats.openCount : summaryStats.open;
+  const resolvedTileValue = insightStats && typeof insightStats.resolvedCount === 'number' ? insightStats.resolvedCount : summaryStats.resolved;
   const KPI_CARDS = [
-    { label: 'Open Insights', value: stats.open, color: 'var(--accent-color)', icon: <Eye size={18} color="var(--accent-color)" /> },
-    { label: 'Critical',      value: stats.critical, color: '#ef4444', icon: <AlertTriangle size={18} color="#ef4444" /> },
-    { label: 'Warnings',      value: stats.warnings, color: '#f59e0b', icon: <AlertTriangle size={18} color="#f59e0b" /> },
-    { label: 'Resolved',      value: stats.resolved, color: '#22c55e', icon: <CheckCircle2 size={18} color="#22c55e" /> },
+    { label: 'Open Insights', value: openTileValue, color: 'var(--accent-color)', icon: <Eye size={18} color="var(--accent-color)" /> },
+    { label: 'Critical',      value: summaryStats.critical, color: '#ef4444', icon: <AlertTriangle size={18} color="#ef4444" /> },
+    { label: 'Warnings',      value: summaryStats.warnings, color: '#f59e0b', icon: <AlertTriangle size={18} color="#f59e0b" /> },
+    { label: 'Resolved',      value: resolvedTileValue, color: '#22c55e', icon: <CheckCircle2 size={18} color="#22c55e" /> },
   ];
 
   return (
@@ -190,7 +415,7 @@ export default function DealInsights() {
         </div>
         <button
           onClick={generateForAll}
-          disabled={generating || openDeals.length === 0}
+          disabled={generating || openDealCount === 0}
           className="btn-primary"
           style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: generating ? 0.7 : 1 }}
         >
@@ -250,8 +475,12 @@ export default function DealInsights() {
           Loading...
         </div>
       ) : filter === 'OPEN_DEALS' ? (
-        // OPEN DEALS view
-        openDeals.length === 0 ? (
+        // OPEN DEALS view — rows are the server-paged current page.
+        dealsLoading && openDeals.length === 0 ? (
+          <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+            Loading deals...
+          </div>
+        ) : openDeals.length === 0 ? (
           <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
             <Lightbulb size={40} color="var(--text-secondary)" style={{ marginBottom: '1rem', opacity: 0.6 }} />
             <div style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>No open deals</div>
@@ -267,9 +496,11 @@ export default function DealInsights() {
             </button>
           </div>
         ) : (
+          <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.25rem' }}>
             {openDeals.map(deal => {
-              const hasInsight = Object.keys(allGrouped).includes(String(deal.id));
+              const scannedCount = chipCounts[deal.id] || 0;
+              const hasInsight = scannedCount > 0;
               return (
                 <div
                   key={deal.id}
@@ -304,7 +535,7 @@ export default function DealInsights() {
                       whiteSpace: 'nowrap',
                       textTransform: 'uppercase'
                     }}>
-                      {hasInsight ? `✓ ${allGrouped[deal.id]?.length || 0}` : 'Not Scanned'}
+                      {hasInsight ? `✓ ${scannedCount}` : 'Not Scanned'}
                     </span>
                   </div>
                   <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -366,17 +597,19 @@ export default function DealInsights() {
               );
             })}
           </div>
+          {paginationBar}
+          </>
         )
       ) : Object.keys(grouped).length === 0 ? (
         <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <Lightbulb size={40} color="var(--text-secondary)" style={{ marginBottom: '1rem', opacity: 0.6 }} />
           <div style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>No insights yet</div>
           <div style={{ fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-            {openDeals.length > 0
+            {openDealCount > 0
               ? 'Click "Generate Insights" to scan your open deals for risks, opportunities, and next-best-actions.'
               : 'Create deals in Pipeline first, then generate insights.'}
           </div>
-          {openDeals.length === 0 && (
+          {openDealCount === 0 && (
             <button
               onClick={() => navigate('/pipeline')}
               className="btn-primary"
@@ -388,7 +621,7 @@ export default function DealInsights() {
         </div>
       ) : (
         <>
-          {Object.entries(grouped).map(([dealId, items]) => {
+          {visibleEntries.map(([dealId, items]) => {
             const deal = dealById[dealId];
             return (
               <div key={dealId} className="card" style={{ padding: '2rem', marginBottom: '1.5rem', border: '1px solid var(--border-color)' }}>
@@ -503,6 +736,7 @@ export default function DealInsights() {
               </div>
             );
           })}
+          {paginationBar}
         </>
       )}
 
@@ -529,8 +763,11 @@ export default function DealInsights() {
 
             {/* Deal header */}
             {(() => {
-              const deal = dealById[selectedDealId];
-              const dealInsights = allGrouped[selectedDealId] || [];
+              const deal = openDeals.find(d => String(d.id) === String(selectedDealId))
+                || dealById[selectedDealId]
+                || (modalInsights.length > 0 ? modalInsights[0].dealContext : null)
+                || null;
+              const dealInsights = modalInsights.filter(i => showResolved || !i.isResolved);
               const isScanned = dealInsights.length > 0;
 
               return (
@@ -562,7 +799,11 @@ export default function DealInsights() {
 
                   {/* Insights list */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                    {dealInsights.length === 0 ? (
+                    {modalLoading && dealInsights.length === 0 ? (
+                      <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                        Loading insights...
+                      </div>
+                    ) : dealInsights.length === 0 ? (
                       <div style={{ padding: '2rem', textAlign: 'center', background: 'var(--subtle-bg-2)', borderRadius: '12px', color: 'var(--text-secondary)' }}>
                         <Lightbulb size={32} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
                         <div style={{ fontWeight: 500 }}>No insights yet</div>

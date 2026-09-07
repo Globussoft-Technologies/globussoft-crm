@@ -59,6 +59,7 @@ const BUILTIN_COLUMNS = {
     { key: "company", label: "Company" },
     { key: "aiScore", label: "Lead Score" },
     { key: "source", label: "Source" },
+    { key: "webForm", label: "Web Form" },
     { key: "tags", label: "Tags" },
     { key: "assignedTo", label: "Assigned To" },
     { key: "createdAt", label: "Created" },

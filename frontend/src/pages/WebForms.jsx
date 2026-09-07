@@ -20,374 +20,11 @@ import { Navigate } from "react-router-dom";
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import {
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  ArrowDown,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  ArrowUp,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  ChevronDown,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Code2,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Copy,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Eye,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  GripVertical,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Hash,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Link2,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  ListChecks,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Paperclip,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Plus,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Save,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Search,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Trash2,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Type,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Upload,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  Info,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  X,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-} from "lucide-react";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  ArrowDown,ArrowUp,ChevronDown, Code2, Copy, Eye, GripVertical,Hash,
+Link2,ListChecks,Paperclip,Plus,Save,Search,Trash2,Type,
+Upload,Info,X,} from "lucide-react";
 import { AuthContext } from "../App";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import { fetchApi } from "../utils/api";
 
 
@@ -2668,7 +2305,7 @@ function defaultField(sourceKind = "contact", sourceKey = "name", label = "Name"
 
 
 
-      fileFormats: resolvedFieldType === "file" ? DEFAULT_FILE_FORMATS : [],
+    fileFormats: resolvedFieldType === "file" ? DEFAULT_FILE_FORMATS : [],
 
 
 
@@ -3132,7 +2769,7 @@ function normalizeField(field, index, leadFields = []) {
 
 
 
-      fileFormats: Array.isArray(field?.fileFormats) && field.fileFormats.length ? field.fileFormats.map((item) => String(item).toUpperCase()).filter((item) => FILE_FORMAT_OPTIONS.some((format) => format.value === item)) : (fieldType === "file" ? DEFAULT_FILE_FORMATS : []),
+    fileFormats: Array.isArray(field?.fileFormats) && field.fileFormats.length ? field.fileFormats.map((item) => String(item).toUpperCase()).filter((item) => FILE_FORMAT_OPTIONS.some((format) => format.value === item)) : (fieldType === "file" ? DEFAULT_FILE_FORMATS : []),
 
 
 
@@ -7350,7 +6987,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-        <div className="wf-field-editor-actions" style={{ display: "flex", alignItems: "center", gap: 14, justifyContent: "flex-end", flexWrap: "nowrap", minWidth: 0, width: "max-content", justifySelf: "end" }}>
+          <div className="wf-field-editor-actions" style={{ display: "flex", alignItems: "center", gap: 14, justifyContent: "flex-end", flexWrap: "nowrap", minWidth: 0, width: "max-content", justifySelf: "end" }}>
 
 
 
@@ -7366,7 +7003,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 14, whiteSpace: "nowrap", lineHeight: 1.35 }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 14, whiteSpace: "nowrap", lineHeight: 1.35 }}>
 
 
 
@@ -7382,7 +7019,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-            <input type="checkbox" checked={field.required} onChange={(e) => onChange(index, { required: e.target.checked })} />
+              <input type="checkbox" checked={field.required} onChange={(e) => onChange(index, { required: e.target.checked })} />
 
 
 
@@ -7398,7 +7035,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-            Required
+              Required
 
 
 
@@ -7414,7 +7051,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-          </label>
+            </label>
 
 
 
@@ -7430,7 +7067,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 14, whiteSpace: "nowrap", lineHeight: 1.35 }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 14, whiteSpace: "nowrap", lineHeight: 1.35 }}>
 
 
 
@@ -7446,7 +7083,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-            <input type="checkbox" checked={field.hidden} onChange={(e) => onChange(index, { hidden: e.target.checked })} />
+              <input type="checkbox" checked={field.hidden} onChange={(e) => onChange(index, { hidden: e.target.checked })} />
 
 
 
@@ -7462,7 +7099,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-            Hidden in form
+              Hidden in form
 
 
 
@@ -7478,7 +7115,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-          </label>
+            </label>
 
 
 
@@ -7494,7 +7131,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-          <button type="button" className="btn-secondary" onClick={() => onRemove(index)} title="Delete field" style={{ padding: "0.55rem 0.65rem", color: "var(--text-secondary)", borderColor: "var(--border-color)", background: "var(--surface-hover)" }}>
+            <button type="button" className="btn-secondary" onClick={() => onRemove(index)} title="Delete field" style={{ padding: "0.55rem 0.65rem", color: "var(--text-secondary)", borderColor: "var(--border-color)", background: "var(--surface-hover)" }}>
 
 
 
@@ -7510,7 +7147,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-            <Trash2 size={15} />
+              <Trash2 size={15} />
 
 
 
@@ -7526,7 +7163,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-          </button>
+            </button>
 
 
 
@@ -7542,200 +7179,200 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
+          </div>
         </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        {field.sourceKind !== "custom" && isChoice ? (
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--wf-border)" }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Options</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+              <textarea className="input-field" rows={3} value={field.optionsText} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="One, Two, Three" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            </label>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+          </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        ) : null}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        {field.fieldType === "file" ? <div style={{ marginTop: 12, fontSize: 12, color: "var(--text-secondary)" }}>File uploads are stored as contact attachments on submit.</div> : null}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      {field.sourceKind !== "custom" && isChoice ? (
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--wf-border)" }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Options</span>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            <textarea className="input-field" rows={3} value={field.optionsText} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="One, Two, Three" />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          </label>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      ) : null}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      {field.fieldType === "file" ? <div style={{ marginTop: 12, fontSize: 12, color: "var(--text-secondary)" }}>File uploads are stored as contact attachments on submit.</div> : null}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    </div>
     </div>
 
 
@@ -8266,7 +7903,13 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick,
 
 
 
-  const customItems = CUSTOM_FIELD_TEMPLATES.filter((item) => matches(item.label, item.helper));
+  // Temporarily HIDDEN (NOT deleted): set to `true` to re-enable the
+  // "Custom inputs" picker section below. Already-added custom fields in
+  // existing forms keep rendering — this only hides the picker entries.
+  const SHOW_CUSTOM_INPUTS = false;
+  const customItems = SHOW_CUSTOM_INPUTS
+    ? CUSTOM_FIELD_TEMPLATES.filter((item) => matches(item.label, item.helper))
+    : [];
 
 
 
@@ -8730,7 +8373,7 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick,
 
 
 
-        <div className="wf-field-picker-heading">Custom inputs</div>
+        {SHOW_CUSTOM_INPUTS && (<div className="wf-field-picker-heading">Custom inputs</div>)}
 
 
 
@@ -20278,7 +19921,7 @@ export default function WebForms() {
       ) : null}
 
       {builderOpen ? (
-      <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
+        <div style={{ display: "grid", gap: 16, alignItems: "start" }}>
 
 
 
@@ -20294,7 +19937,7 @@ export default function WebForms() {
 
 
 
-        <main style={{ display: "grid", gap: 16, minWidth: 0 }}>
+          <main style={{ display: "grid", gap: 16, minWidth: 0 }}>
 
 
 
@@ -20310,7 +19953,7 @@ export default function WebForms() {
 
 
 
-          {!selectedForm ? (
+            {!selectedForm ? (
 
 
 
@@ -20326,7 +19969,7 @@ export default function WebForms() {
 
 
 
-            <div className="card" style={{ padding: 24, minHeight: 420, display: "grid", placeItems: "center", textAlign: "center", background: "var(--surface-1, #14171c)", border: "1px solid var(--border-color, rgba(255,255,255,0.08))", borderRadius: 18 }}>
+              <div className="card" style={{ padding: 24, minHeight: 420, display: "grid", placeItems: "center", textAlign: "center", background: "var(--surface-1, #14171c)", border: "1px solid var(--border-color, rgba(255,255,255,0.08))", borderRadius: 18 }}>
 
 
 
@@ -20342,7 +19985,7 @@ export default function WebForms() {
 
 
 
-              <div>
+                <div>
 
 
 
@@ -20358,7 +20001,7 @@ export default function WebForms() {
 
 
 
-                <div style={{ width: 64, height: 64, borderRadius: 18, background: "rgba(91,107,255,0.16)", display: "grid", placeItems: "center", margin: "0 auto 12px", color: "#8ea0ff" }}><ListChecks size={28} /></div>
+                  <div style={{ width: 64, height: 64, borderRadius: 18, background: "rgba(91,107,255,0.16)", display: "grid", placeItems: "center", margin: "0 auto 12px", color: "#8ea0ff" }}><ListChecks size={28} /></div>
 
 
 
@@ -20374,7 +20017,7 @@ export default function WebForms() {
 
 
 
-                <h3 style={{ margin: 0 }}>Create your first form</h3>
+                  <h3 style={{ margin: 0 }}>Create your first form</h3>
 
 
 
@@ -20390,7 +20033,7 @@ export default function WebForms() {
 
 
 
-                <p style={{ margin: "0.5rem 0 1rem", color: "var(--text-secondary)", maxWidth: 560 }}>
+                  <p style={{ margin: "0.5rem 0 1rem", color: "var(--text-secondary)", maxWidth: 560 }}>
 
 
 
@@ -20406,7 +20049,7 @@ export default function WebForms() {
 
 
 
-                  Add contact fields, lead fields, custom inputs, and styling rules. The builder generates an embed snippet you can paste anywhere.
+                    Add contact fields, lead fields, custom inputs, and styling rules. The builder generates an embed snippet you can paste anywhere.
 
 
 
@@ -20422,7 +20065,7 @@ export default function WebForms() {
 
 
 
-                </p>
+                  </p>
 
 
 
@@ -20438,295 +20081,7 @@ export default function WebForms() {
 
 
 
-                <button type="button" className="btn-primary" onClick={createForm}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />New form</button>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          ) : (
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            <div className="wf-builder-grid">
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <aside className="card wf-step-rail">
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <button type="button" className="btn-secondary wf-step-button" onClick={() => document.getElementById("wf-fields")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>1</span>Add fields</button>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <button type="button" className="btn-secondary wf-step-button" onClick={() => document.getElementById("wf-style")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>2</span>Customize text and colors</button>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <button type="button" className="btn-secondary wf-step-button" onClick={() => document.getElementById("wf-settings")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>3</span>Settings</button>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              </aside>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <div style={{ display: "grid", gap: 16, minWidth: 0 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px 14px", marginBottom: 4, borderRadius: 16, background: "var(--surface-color)", border: "1px solid var(--border-color)", boxShadow: "var(--wf-shadow)" }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  <input
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                    className="input-field"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                    value={selectedForm.name}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                    onChange={(e) => applyDraft({ name: e.target.value })}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                    style={{ maxWidth: 820, border: 0, borderBottom: "1px solid var(--accent-color, #5b6bff)", borderRadius: 0, background: "transparent", color: "var(--text-primary)", fontSize: "1.15rem", fontWeight: 700, paddingLeft: 0 }}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  />
+                  <button type="button" className="btn-primary" onClick={createForm}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />New form</button>
 
 
 
@@ -20758,7 +20113,7 @@ export default function WebForms() {
 
 
 
-                <Section id="wf-fields" step={1} title="Add fields to the form" subtitle="Mix contact fields, lead custom fields, and your own custom inputs. Users can also upload files or choose from dropdown and radio options.">
+              </div>
 
 
 
@@ -20774,7 +20129,7 @@ export default function WebForms() {
 
 
 
-                  <div className="wf-section-actions">
+            ) : (
 
 
 
@@ -20790,7 +20145,7 @@ export default function WebForms() {
 
 
 
-                    <button ref={fieldPickerButtonRef} type="button" className="btn-secondary" onClick={toggleFieldPicker}>
+              <div className="wf-builder-grid">
 
 
 
@@ -20806,7 +20161,7 @@ export default function WebForms() {
 
 
 
-                      <Type size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add contact fields <ChevronDown size={14} style={{ marginLeft: 6, verticalAlign: "middle" }} />
+                <aside className="card wf-step-rail">
 
 
 
@@ -20822,7 +20177,7 @@ export default function WebForms() {
 
 
 
-                    </button>
+                  <button type="button" className="btn-secondary wf-step-button" onClick={() => document.getElementById("wf-fields")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>1</span>Add fields</button>
 
 
 
@@ -20838,9 +20193,8 @@ export default function WebForms() {
 
 
 
-                    {/* <button type="button" className="btn-secondary" onClick={() => addField("custom")}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add custom field</button> */}
+                  <button type="button" className="btn-secondary wf-step-button" onClick={() => document.getElementById("wf-style")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>2</span>Customize text and colors</button>
 
-                    <button type="button" className="btn-secondary" onClick={() => addField("file")}><Paperclip size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add field for file attachment</button>
 
 
 
@@ -20855,8 +20209,167 @@ export default function WebForms() {
 
 
 
+                  <button type="button" className="btn-secondary wf-step-button" onClick={() => document.getElementById("wf-settings")?.scrollIntoView({ behavior: "smooth", block: "start" })}><span style={{ width: 24, height: 24, borderRadius: 999, display: "inline-grid", placeItems: "center", background: "var(--wf-step-bg)", color: "var(--wf-step-text)", marginRight: 8 }}>3</span>Settings</button>
 
-                    <FieldPicker open={fieldPickerOpen} anchorRef={fieldPickerButtonRef} leadFields={leadFields} existingFields={selectedForm?.fields || []} onPick={handlePickField} onClose={() => setFieldPickerOpen(false)} />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                </aside>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                <div style={{ display: "grid", gap: 16, minWidth: 0 }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px 14px", marginBottom: 4, borderRadius: 16, background: "var(--surface-color)", border: "1px solid var(--border-color)", boxShadow: "var(--wf-shadow)" }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                    <input
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      className="input-field"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      value={selectedForm.name}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      onChange={(e) => applyDraft({ name: e.target.value })}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      style={{ maxWidth: 820, border: 0, borderBottom: "1px solid var(--accent-color, #5b6bff)", borderRadius: 0, background: "transparent", color: "var(--text-primary)", fontSize: "1.15rem", fontWeight: 700, paddingLeft: 0 }}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                    />
 
 
 
@@ -20888,7 +20401,7 @@ export default function WebForms() {
 
 
 
-                  {leadFields.length === 0 ? <div style={{ marginBottom: 12, color: "var(--text-secondary)", fontSize: "0.88rem" }}>Lead custom fields are not configured yet. You can still build the form with contact and custom fields.</div> : null}
+                  <Section id="wf-fields" step={1} title="Add fields to the form" subtitle="Mix contact fields, lead custom fields, and your own custom inputs. Users can also upload files or choose from dropdown and radio options.">
 
 
 
@@ -20904,7 +20417,7 @@ export default function WebForms() {
 
 
 
-                  <div className="wf-fields-list">
+                    <div className="wf-section-actions">
 
 
 
@@ -20920,13 +20433,7 @@ export default function WebForms() {
 
 
 
-                    <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAxis, restrictToWebFormsFieldList]} onDragEnd={handleDragEnd}>
-                      <SortableContext items={(selectedForm.fields || []).map((field) => String(field.id))} strategy={verticalListSortingStrategy}>
-                        {(selectedForm.fields || []).map((field, index) => (
-                          <FieldCard key={field.id} field={field} index={index} leadFields={leadFields} onChange={updateField} onMove={moveField} onRemove={removeField} />
-                        ))}
-                      </SortableContext>
-                    </DndContext>
+                      <button ref={fieldPickerButtonRef} type="button" className="btn-secondary" onClick={toggleFieldPicker}>
 
 
 
@@ -20942,7 +20449,7 @@ export default function WebForms() {
 
 
 
-                  </div>
+                        <Type size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add contact fields <ChevronDown size={14} style={{ marginLeft: 6, verticalAlign: "middle" }} />
 
 
 
@@ -20958,7 +20465,7 @@ export default function WebForms() {
 
 
 
-                </Section>
+                      </button>
 
 
 
@@ -20974,7 +20481,9 @@ export default function WebForms() {
 
 
 
+                      {/* <button type="button" className="btn-secondary" onClick={() => addField("custom")}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add custom field</button> */}
 
+                      <button type="button" className="btn-secondary" onClick={() => addField("file")}><Paperclip size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add field for file attachment</button>
 
 
 
@@ -20990,7 +20499,7 @@ export default function WebForms() {
 
 
 
-                <Section id="wf-style" step={2} title="Customize text and colors" subtitle="Tune the copy, logo, font, and colors so the embedded form matches your brand.">
+                      <FieldPicker open={fieldPickerOpen} anchorRef={fieldPickerButtonRef} leadFields={leadFields} existingFields={selectedForm?.fields || []} onPick={handlePickField} onClose={() => setFieldPickerOpen(false)} />
 
 
 
@@ -21006,7 +20515,7 @@ export default function WebForms() {
 
 
 
-                  <div className="wf-style-block">
+                    </div>
 
 
 
@@ -21022,7 +20531,7 @@ export default function WebForms() {
 
 
 
-                    <div className="wf-style-kicker">Logo and form text</div>
+                    {leadFields.length === 0 ? <div style={{ marginBottom: 12, color: "var(--text-secondary)", fontSize: "0.88rem" }}>Lead custom fields are not configured yet. You can still build the form with contact and custom fields.</div> : null}
 
 
 
@@ -21038,7 +20547,7 @@ export default function WebForms() {
 
 
 
-                    <div className="wf-logo-upload">
+                    <div className="wf-fields-list">
 
 
 
@@ -21054,7 +20563,13 @@ export default function WebForms() {
 
 
 
-                      <div className="wf-logo-upload-label">Add a logo to your form</div>
+                      <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAxis, restrictToWebFormsFieldList]} onDragEnd={handleDragEnd}>
+                        <SortableContext items={(selectedForm.fields || []).map((field) => String(field.id))} strategy={verticalListSortingStrategy}>
+                          {(selectedForm.fields || []).map((field, index) => (
+                            <FieldCard key={field.id} field={field} index={index} leadFields={leadFields} onChange={updateField} onMove={moveField} onRemove={removeField} />
+                          ))}
+                        </SortableContext>
+                      </DndContext>
 
 
 
@@ -21070,7 +20585,7 @@ export default function WebForms() {
 
 
 
-                      <input ref={logoUploadRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleLogoUpload} />
+                    </div>
 
 
 
@@ -21086,7 +20601,7 @@ export default function WebForms() {
 
 
 
-                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  </Section>
 
 
 
@@ -21102,7 +20617,6 @@ export default function WebForms() {
 
 
 
-                        <button type="button" className="btn-secondary" onClick={() => logoUploadRef.current?.click()}>
 
 
 
@@ -21118,8 +20632,8 @@ export default function WebForms() {
 
 
 
-                          <Upload size={16} style={{ marginRight: 6, verticalAlign: "middle" }} /> Upload
 
+                  <Section id="wf-style" step={2} title="Customize text and colors" subtitle="Tune the copy, logo, font, and colors so the embedded form matches your brand.">
 
 
 
@@ -21134,8 +20648,8 @@ export default function WebForms() {
 
 
 
-                        </button>
 
+                    <div className="wf-style-block">
 
 
 
@@ -21150,8 +20664,8 @@ export default function WebForms() {
 
 
 
-                        {selectedForm.style.logoUrl ? <button type="button" className="btn-secondary" onClick={() => applyDraft({ style: { ...selectedForm.style, logoUrl: "" } })}>Remove</button> : null}
 
+                      <div className="wf-style-kicker">Logo and form text</div>
 
 
 
@@ -21166,8 +20680,8 @@ export default function WebForms() {
 
 
 
-                      </div>
 
+                      <div className="wf-logo-upload">
 
 
 
@@ -21182,8 +20696,8 @@ export default function WebForms() {
 
 
 
-                      {selectedForm.style.logoUrl ? (
 
+                        <div className="wf-logo-upload-label">Add a logo to your form</div>
 
 
 
@@ -21198,8 +20712,8 @@ export default function WebForms() {
 
 
 
-                        <div className="wf-logo-preview">
 
+                        <input ref={logoUploadRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleLogoUpload} />
 
 
 
@@ -21214,8 +20728,8 @@ export default function WebForms() {
 
 
 
-                          <img src={selectedForm.style.logoUrl} alt="Form logo preview" />
 
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
 
 
 
@@ -21230,7 +20744,56 @@ export default function WebForms() {
 
 
 
-                          <span>Logo uploaded</span>
+
+                          <button type="button" className="btn-secondary" onClick={() => logoUploadRef.current?.click()}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            <Upload size={16} style={{ marginRight: 6, verticalAlign: "middle" }} /> Upload
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          </button>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          {selectedForm.style.logoUrl ? <button type="button" className="btn-secondary" onClick={() => applyDraft({ style: { ...selectedForm.style, logoUrl: "" } })}>Remove</button> : null}
 
 
 
@@ -21262,7 +20825,7 @@ export default function WebForms() {
 
 
 
-                      ) : null}
+                        {selectedForm.style.logoUrl ? (
 
 
 
@@ -21278,7 +20841,7 @@ export default function WebForms() {
 
 
 
-                    </div>
+                          <div className="wf-logo-preview">
 
 
 
@@ -21294,6 +20857,7 @@ export default function WebForms() {
 
 
 
+                            <img src={selectedForm.style.logoUrl} alt="Form logo preview" />
 
 
 
@@ -21309,8 +20873,8 @@ export default function WebForms() {
 
 
 
+                            <span>Logo uploaded</span>
 
-                    <div className="wf-style-grid-top">
 
 
 
@@ -21325,8 +20889,8 @@ export default function WebForms() {
 
 
 
+                          </div>
 
-                      <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
 
 
@@ -21341,8 +20905,8 @@ export default function WebForms() {
 
 
 
+                        ) : null}
 
-                        <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Title of the form</span>
 
 
 
@@ -21357,8 +20921,8 @@ export default function WebForms() {
 
 
 
+                      </div>
 
-                        <input className="input-field" value={selectedForm.name} onChange={(e) => applyDraft({ name: e.target.value })} />
 
 
 
@@ -21374,7 +20938,6 @@ export default function WebForms() {
 
 
 
-                      </label>
 
 
 
@@ -21390,7 +20953,7 @@ export default function WebForms() {
 
 
 
-                      <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                      <div className="wf-style-grid-top">
 
 
 
@@ -21406,7 +20969,7 @@ export default function WebForms() {
 
 
 
-                        <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Description</span>
+                        <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
 
 
@@ -21422,7 +20985,7 @@ export default function WebForms() {
 
 
 
-                        <input className="input-field" value={selectedForm.description} onChange={(e) => applyDraft({ description: e.target.value })} placeholder="Tell people what the form is for" />
+                          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Title of the form</span>
 
 
 
@@ -21438,7 +21001,7 @@ export default function WebForms() {
 
 
 
-                      </label>
+                          <input className="input-field" value={selectedForm.name} onChange={(e) => applyDraft({ name: e.target.value })} />
 
 
 
@@ -21454,7 +21017,7 @@ export default function WebForms() {
 
 
 
-                      <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                        </label>
 
 
 
@@ -21470,7 +21033,7 @@ export default function WebForms() {
 
 
 
-                        <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Field label for Submit button *</span>
+                        <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
 
 
@@ -21486,7 +21049,7 @@ export default function WebForms() {
 
 
 
-                        <input className="input-field" value={selectedForm.settings.submitButtonLabel} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, submitButtonLabel: e.target.value } })} />
+                          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Description</span>
 
 
 
@@ -21502,7 +21065,7 @@ export default function WebForms() {
 
 
 
-                      </label>
+                          <input className="input-field" value={selectedForm.description} onChange={(e) => applyDraft({ description: e.target.value })} placeholder="Tell people what the form is for" />
 
 
 
@@ -21518,7 +21081,7 @@ export default function WebForms() {
 
 
 
-                      <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                        </label>
 
 
 
@@ -21534,7 +21097,7 @@ export default function WebForms() {
 
 
 
-                        <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Font *</span>
+                        <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
 
 
@@ -21550,7 +21113,7 @@ export default function WebForms() {
 
 
 
-                        <select className="input-field" value={selectedForm.style.fontFamily} onChange={(e) => applyDraft({ style: { ...selectedForm.style, fontFamily: e.target.value } })}>
+                          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Field label for Submit button *</span>
 
 
 
@@ -21566,7 +21129,7 @@ export default function WebForms() {
 
 
 
-                          <option value="Inter, system-ui, sans-serif">Inter / system UI</option>
+                          <input className="input-field" value={selectedForm.settings.submitButtonLabel} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, submitButtonLabel: e.target.value } })} />
 
 
 
@@ -21582,7 +21145,7 @@ export default function WebForms() {
 
 
 
-                          <option value="Arial, sans-serif">Arial</option>
+                        </label>
 
 
 
@@ -21598,7 +21161,7 @@ export default function WebForms() {
 
 
 
-                          <option value="Georgia, serif">Georgia</option>
+                        <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
 
 
@@ -21614,7 +21177,7 @@ export default function WebForms() {
 
 
 
-                          <option value="Tahoma, sans-serif">Tahoma</option>
+                          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Font *</span>
 
 
 
@@ -21630,7 +21193,7 @@ export default function WebForms() {
 
 
 
-                          <option value="Verdana, sans-serif">Verdana</option>
+                          <select className="input-field" value={selectedForm.style.fontFamily} onChange={(e) => applyDraft({ style: { ...selectedForm.style, fontFamily: e.target.value } })}>
 
 
 
@@ -21646,7 +21209,7 @@ export default function WebForms() {
 
 
 
-                        </select>
+                            <option value="Inter, system-ui, sans-serif">Inter / system UI</option>
 
 
 
@@ -21662,7 +21225,7 @@ export default function WebForms() {
 
 
 
-                      </label>
+                            <option value="Arial, sans-serif">Arial</option>
 
 
 
@@ -21678,7 +21241,7 @@ export default function WebForms() {
 
 
 
-                    </div>
+                            <option value="Georgia, serif">Georgia</option>
 
 
 
@@ -21694,6 +21257,7 @@ export default function WebForms() {
 
 
 
+                            <option value="Tahoma, sans-serif">Tahoma</option>
 
 
 
@@ -21709,8 +21273,8 @@ export default function WebForms() {
 
 
 
+                            <option value="Verdana, sans-serif">Verdana</option>
 
-                    <div className="wf-style-divider">
 
 
 
@@ -21725,8 +21289,8 @@ export default function WebForms() {
 
 
 
+                          </select>
 
-                      <div className="wf-style-grid-colors">
 
 
 
@@ -21741,8 +21305,8 @@ export default function WebForms() {
 
 
 
+                        </label>
 
-                        <ColorField label="Background color *" value={selectedForm.style.backgroundColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, backgroundColor: value } })} fallback="#EBEFF3" />
 
 
 
@@ -21757,8 +21321,8 @@ export default function WebForms() {
 
 
 
+                      </div>
 
-                        <ColorField label="Form color *" value={selectedForm.style.formColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, formColor: value } })} fallback="#FFFFFF" />
 
 
 
@@ -21774,7 +21338,6 @@ export default function WebForms() {
 
 
 
-                        <ColorField label="Title color *" value={selectedForm.style.titleColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, titleColor: value } })} fallback="#000000" />
 
 
 
@@ -21790,7 +21353,7 @@ export default function WebForms() {
 
 
 
-                        <ColorField label="Color of Submit button *" value={selectedForm.style.buttonColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonColor: value } })} fallback="#12344D" />
+                      <div className="wf-style-divider">
 
 
 
@@ -21806,7 +21369,103 @@ export default function WebForms() {
 
 
 
-                        <ColorField label="Color of field labels *" value={selectedForm.style.fieldLabelColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldLabelColor: value } })} fallback="#666666" />
+                        <div className="wf-style-grid-colors">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <ColorField label="Background color *" value={selectedForm.style.backgroundColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, backgroundColor: value } })} fallback="#EBEFF3" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <ColorField label="Form color *" value={selectedForm.style.formColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, formColor: value } })} fallback="#FFFFFF" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <ColorField label="Title color *" value={selectedForm.style.titleColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, titleColor: value } })} fallback="#000000" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <ColorField label="Color of Submit button *" value={selectedForm.style.buttonColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, buttonColor: value } })} fallback="#12344D" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <ColorField label="Color of field labels *" value={selectedForm.style.fieldLabelColor} onChange={(value) => applyDraft({ style: { ...selectedForm.style, fieldLabelColor: value } })} fallback="#666666" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        </div>
 
 
 
@@ -21854,6 +21513,1099 @@ export default function WebForms() {
 
 
 
+                  </Section>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                  <Section id="wf-settings" step={3} title="Settings" subtitle="Choose what happens after submit and how the submission should be routed.">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                    <div className="wf-settings-stack">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      <div className="wf-settings-block">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        <label className="wf-settings-toggle">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <input
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            type="checkbox"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            checked={Boolean(selectedForm.settings.notificationEnabled)}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, notificationEnabled: e.target.checked } })}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <span>Send email notification to this address when a record is created/updated via the form</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        </label>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        {selectedForm.settings.notificationEnabled ? (
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <label style={{ display: "grid", gap: 6, maxWidth: 640 }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            <input className="input-field" type="email" value={selectedForm.settings.notificationEmail} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, notificationEmail: e.target.value } })} placeholder="notifications@example.com" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          </label>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        ) : null}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      <div className="wf-settings-block">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        <div className="wf-settings-inline">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <label className="wf-settings-toggle" style={{ flex: 1, minWidth: 0 }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            <input
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                              type="checkbox"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                              checked={Boolean(selectedForm.settings.optInEnabled)}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                              onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, optInEnabled: e.target.checked } })}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            <span>Include an opt-in checkbox at the end of the form</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            <Info size={14} style={{ color: "var(--text-secondary)", flexShrink: 0, marginTop: 2 }} />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          </label>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <button ref={optInLinkButtonRef} type="button" className="wf-link-button" onClick={openOptInLinkEditor}>{selectedForm.settings.optInLinkUrl ? "Edit link" : "Insert link"}</button>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        <textarea
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          className="input-field"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          rows={4}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          disabled={!selectedForm.settings.optInEnabled}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          value={selectedForm.settings.optInText}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, optInText: e.target.value } })}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          placeholder="I agree to receive communication on newsletters, promotional content, offers and events."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        {selectedForm.settings.optInLinkText || selectedForm.settings.optInLinkUrl ? (
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <div style={{ fontSize: "0.84rem", color: "var(--text-secondary)" }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            Link: <strong style={{ color: "var(--text-primary)" }}>{selectedForm.settings.optInLinkText || selectedForm.settings.optInLinkUrl}</strong>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        ) : null}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      <div className="wf-settings-block">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)" }}>What should happen after the form is submitted?</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", color: "var(--text-primary)" }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            <input type="radio" name="after-submit" checked={selectedForm.settings.afterSubmitAction === "message"} onChange={() => applyDraft({ settings: { ...selectedForm.settings, afterSubmitAction: "message" } })} />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            Display custom message
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          </label>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            <input type="radio" name="after-submit" checked={selectedForm.settings.afterSubmitAction === "redirect"} onChange={() => applyDraft({ settings: { ...selectedForm.settings, afterSubmitAction: "redirect" } })} />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            Redirect to a URL
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          </label>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        {selectedForm.settings.afterSubmitAction === "redirect" ? (
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <input className="input-field" value={selectedForm.settings.redirectUrl} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, redirectUrl: e.target.value } })} placeholder="Enter a URL" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        ) : (
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          <textarea className="input-field" rows={4} value={selectedForm.settings.successMessage} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, successMessage: e.target.value } })} />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        )}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                      </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                    </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                  </Section>
+
+                  <div className="wf-share-bar">
+
+                    <div className="wf-share-meta">
+
+                      <strong>{selectedForm.name}</strong>
+
+                      <span>{publicUrl}</span>
+
+                    </div>
+
+                    <div className="wf-share-actions">
+
+                      <button type="button" className="btn-secondary" onClick={() => copyText(publicUrl, "Public URL")}><Link2 size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Copy URL</button>
+
+                      <button type="button" className="btn-secondary" onClick={() => copyText(embedCode, "Embed code")}><Copy size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Copy embed code</button>
+
+
+                    </div>
+
                   </div>
 
 
@@ -21869,1099 +22621,6 @@ export default function WebForms() {
 
 
 
-
-                </Section>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<Section id="wf-settings" step={3} title="Settings" subtitle="Choose what happens after submit and how the submission should be routed.">
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  <div className="wf-settings-stack">
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    <div className="wf-settings-block">
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      <label className="wf-settings-toggle">
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <input
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          type="checkbox"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          checked={Boolean(selectedForm.settings.notificationEnabled)}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, notificationEnabled: e.target.checked } })}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <span>Send email notification to this address when a record is created/updated via the form</span>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      </label>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      {selectedForm.settings.notificationEnabled ? (
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <label style={{ display: "grid", gap: 6, maxWidth: 640 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          <input className="input-field" type="email" value={selectedForm.settings.notificationEmail} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, notificationEmail: e.target.value } })} placeholder="notifications@example.com" />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        </label>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      ) : null}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    <div className="wf-settings-block">
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      <div className="wf-settings-inline">
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <label className="wf-settings-toggle" style={{ flex: 1, minWidth: 0 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          <input
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            type="checkbox"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            checked={Boolean(selectedForm.settings.optInEnabled)}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, optInEnabled: e.target.checked } })}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          <span>Include an opt-in checkbox at the end of the form</span>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          <Info size={14} style={{ color: "var(--text-secondary)", flexShrink: 0, marginTop: 2 }} />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        </label>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <button ref={optInLinkButtonRef} type="button" className="wf-link-button" onClick={openOptInLinkEditor}>{selectedForm.settings.optInLinkUrl ? "Edit link" : "Insert link"}</button>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      <textarea
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        className="input-field"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        rows={4}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        disabled={!selectedForm.settings.optInEnabled}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        value={selectedForm.settings.optInText}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, optInText: e.target.value } })}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        placeholder="I agree to receive communication on newsletters, promotional content, offers and events."
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      {selectedForm.settings.optInLinkText || selectedForm.settings.optInLinkUrl ? (
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <div style={{ fontSize: "0.84rem", color: "var(--text-secondary)" }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          Link: <strong style={{ color: "var(--text-primary)" }}>{selectedForm.settings.optInLinkText || selectedForm.settings.optInLinkUrl}</strong>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      ) : null}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    <div className="wf-settings-block">
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)" }}>What should happen after the form is submitted?</div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      <div style={{ display: "flex", gap: 18, flexWrap: "wrap", color: "var(--text-primary)" }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          <input type="radio" name="after-submit" checked={selectedForm.settings.afterSubmitAction === "message"} onChange={() => applyDraft({ settings: { ...selectedForm.settings, afterSubmitAction: "message" } })} />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          Display custom message
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        </label>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          <input type="radio" name="after-submit" checked={selectedForm.settings.afterSubmitAction === "redirect"} onChange={() => applyDraft({ settings: { ...selectedForm.settings, afterSubmitAction: "redirect" } })} />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          Redirect to a URL
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        </label>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      {selectedForm.settings.afterSubmitAction === "redirect" ? (
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <input className="input-field" value={selectedForm.settings.redirectUrl} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, redirectUrl: e.target.value } })} placeholder="Enter a URL" />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      ) : (
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        <textarea className="input-field" rows={4} value={selectedForm.settings.successMessage} onChange={(e) => applyDraft({ settings: { ...selectedForm.settings, successMessage: e.target.value } })} />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      )}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-</Section>
-
-                <div className="wf-share-bar">
-
-                  <div className="wf-share-meta">
-
-                    <strong>{selectedForm.name}</strong>
-
-                    <span>{publicUrl}</span>
-
-                  </div>
-
-                  <div className="wf-share-actions">
-
-                    <button type="button" className="btn-secondary" onClick={() => copyText(publicUrl, "Public URL")}><Link2 size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Copy URL</button>
-
-                    <button type="button" className="btn-secondary" onClick={() => copyText(embedCode, "Embed code")}><Copy size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Copy embed code</button>
-
-
-                  </div>
 
                 </div>
 
@@ -22995,7 +22654,7 @@ export default function WebForms() {
 
 
 
-            </div>
+            )}
 
 
 
@@ -23011,7 +22670,7 @@ export default function WebForms() {
 
 
 
-          )}
+          </main>
 
 
 
@@ -23027,23 +22686,7 @@ export default function WebForms() {
 
 
 
-        </main>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      </div>
+        </div>
 
 
 
@@ -23093,7 +22736,7 @@ export default function WebForms() {
 
       ) : null}
 
-{showOptInLinkEditor && selectedForm && typeof document !== "undefined" ? createPortal((
+      {showOptInLinkEditor && selectedForm && typeof document !== "undefined" ? createPortal((
         <div className="wf-link-popover" style={{ top: optInLinkPosition.top, left: optInLinkPosition.left, width: optInLinkPosition.width }}>
           <div className="wf-link-popover-head">
             <button type="button" className="btn-secondary" onClick={() => setShowOptInLinkEditor(false)} style={{ minWidth: 34, padding: "0.42rem 0.5rem" }}><ArrowDown size={16} style={{ transform: "rotate(90deg)" }} /></button>

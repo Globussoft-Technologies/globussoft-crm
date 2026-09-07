@@ -608,6 +608,31 @@ function buildCustomFieldClause(defId, operator, values, kind = 'text') {
   return { leadCustomFieldValues: { some: { fieldId: defId, OR: list.map((v) => ({ valueText: { contains: String(v) } })) } } };
 }
 
+// Web-Form filter for the generic Leads "Filter by" panel + header filter
+// menu. Relation-backed (Contact.webFormSubmissions → WebForm.name), so it
+// bypasses FILTERABLE_FIELDS (Contact-column allowlist) with its own clause
+// builder, mirroring the relation style of buildCustomFieldClause.
+// contains/not_contains take EXACT form names — the panel offers checkbox
+// values from /filter-values/webForm — mirroring the `id`-kind exact-match
+// convention rather than substring matching ("Contact Us" must not also
+// match "Contact Us 2"). is_empty = never submitted any form;
+// is_not_empty = submitted ≥1 form.
+function buildWebFormClause(operator, values) {
+  if (operator === 'is_empty') {
+    return { webFormSubmissions: { none: {} } };
+  }
+  if (operator === 'is_not_empty') {
+    return { webFormSubmissions: { some: {} } };
+  }
+  const list = (values || []).filter((v) => v !== undefined && v !== null && v !== '').map(String);
+  if (list.length === 0) return null;
+  if (operator === 'not_contains') {
+    return { NOT: { webFormSubmissions: { some: { webForm: { name: { in: list } } } } } };
+  }
+  return { webFormSubmissions: { some: { webForm: { name: { in: list } } } } };
+}
+
+
 function canAccessLead(req, contact) {
   if (!req || !req.user || !contact) return false;
   if (canViewAllLeads(req)) return true;
@@ -998,6 +1023,19 @@ router.get('/', async (req, res) => {
           if (clause) clauses.push(clause);
           continue;
         }
+        // Web-Form filter (generic vertical only) — relation-backed, handled
+        // above FILTERABLE_FIELDS. Non-generic tenants skip it, mirroring
+        // the `verticals` gate below (lazy tenant lookup, same pattern).
+        if (f.field === 'webForm') {
+          if (vertical === null) {
+            const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+            vertical = tenant?.vertical || 'generic';
+          }
+          if (vertical !== 'generic') continue;
+          const clause = buildWebFormClause(f.operator, rawValues);
+          if (clause) clauses.push(clause);
+          continue;
+        }
         const fieldDef = FILTERABLE_FIELDS[f.field];
         if (!fieldDef) continue;
         if (fieldDef.verticals && !fieldDef.verticals.includes(vertical)) continue;
@@ -1050,7 +1088,20 @@ router.get('/', async (req, res) => {
         createdAt: true,
       };
     } else {
-      findManyArgs.include = { activities: true, tasks: true, assignedTo: { select: { id: true, name: true, email: true } } };
+      // webFormSubmissions powers the generic Leads table's "Web Form"
+      // column (latest submission's form name). take:1 + submittedAt-desc
+      // keeps it to one tiny join per row; the ?fields=summary slim shape
+      // above intentionally omits it.
+      findManyArgs.include = {
+        activities: true,
+        tasks: true,
+        assignedTo: { select: { id: true, name: true, email: true } },
+        webFormSubmissions: {
+          select: { id: true, webForm: { select: { id: true, name: true } } },
+          orderBy: { submittedAt: "desc" },
+          take: 1,
+        },
+      };
     }
     const contacts = await prisma.contact.findMany(findManyArgs);
     // #464: strip read-restricted fields per the caller's role.
@@ -1102,6 +1153,14 @@ router.get('/filter-fields', async (req, res) => {
         label: def.label,
         kind: def.kind,
       }));
+    // Web-Form pseudo-field (generic vertical only): relation-backed, so it
+    // is NOT part of FILTERABLE_FIELDS (Contact-column allowlist) — appended
+    // here in the same { field, label, kind } shape the picker consumes,
+    // right after Source (mirrors the table column order). kind 'text'
+    // offers contains/not_contains/is_empty/is_not_empty.
+    const webFormField = vertical === 'generic'
+      ? [{ field: 'webForm', label: 'Web Form', kind: 'text' }]
+      : [];
     const customDefs = await prisma.leadCustomFieldDefinition.findMany({
       where: { tenantId },
       orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
@@ -1120,7 +1179,10 @@ router.get('/filter-fields', async (req, res) => {
       custom: true,
       fieldType: d.fieldType,
     }));
-    res.json({ fields: [...staticFields, ...customFields] });
+    const fields = [...staticFields];
+    const sourceAt = fields.findIndex((f) => f.field === 'source');
+    fields.splice(sourceAt >= 0 ? sourceAt + 1 : fields.length, 0, ...webFormField);
+    res.json({ fields: [...fields, ...customFields] });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch filter fields' });
   }
@@ -1177,6 +1239,36 @@ router.get('/filter-values/:field', async (req, res) => {
         .map((r) => r.valueText)
         .filter((v) => v !== null && v !== '')
         .map((v) => ({ value: v, label: v }));
+      return res.json({ values });
+    }
+    // Web-Form values (generic vertical only): distinct form names actually
+    // used by in-scope contacts. Resolved through the submissions join (the
+    // name lives on WebForm, not Contact) and deduped in JS like the tags
+    // branch below. Rejected for non-generic tenants, mirroring the
+    // `verticals` gate on column-backed fields.
+    if (req.params.field === 'webForm') {
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+      if ((tenant?.vertical || 'generic') !== 'generic') {
+        return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+      }
+      const rows = await prisma.webFormSubmission.findMany({
+        where: {
+          tenantId,
+          ...(statusScope ? { contact: { status: statusScope, deletedAt: null } } : {}),
+        },
+        select: { webForm: { select: { name: true } } },
+        orderBy: { submittedAt: 'desc' },
+        take: 1000,
+      });
+      const seen = new Set();
+      const values = [];
+      for (const row of rows) {
+        const name = row.webForm?.name;
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        values.push({ value: name, label: name });
+      }
+      values.sort((a, b) => a.label.localeCompare(b.label));
       return res.json({ values });
     }
     const fieldDef = FILTERABLE_FIELDS[req.params.field];

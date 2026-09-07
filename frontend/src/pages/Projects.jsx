@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { FolderKanban, Plus, Trash2, IndianRupee, CheckCircle2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -73,32 +73,88 @@ export default function Projects() {
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
   const [form, setForm] = useState(INITIAL_FORM);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  // Server-driven paging: `projects` holds ONLY the current page (full
+  // shape with owner/contact/deal/tasks for the table), `statsProjects` is
+  // the lightweight ?fields=summary full list (status/priority/budget —
+  // enough for the stats chips), and `countTotal` (?count=1) is the
+  // authoritative footer/total-chip count. Stale rows stay visible across
+  // page turns (never cleared before the next page lands).
+  const [statsProjects, setStatsProjects] = useState([]);
+  const [countTotal, setCountTotal] = useState(null);
+  const pageRequestId = useRef(0);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  // Form dropdowns + stats-bar source. Runs on mount and after mutations.
+  const loadStatic = async () => {
     try {
-      const [proj, c, d] = await Promise.all([
-        fetchApi('/api/projects'),
+      const [c, d, sc] = await Promise.all([
         fetchApi('/api/contacts'),
         fetchApi('/api/deals'),
+        fetchApi('/api/projects?fields=summary').catch(() => null),
       ]);
-      setProjects(Array.isArray(proj) ? proj : []);
       setContacts(Array.isArray(c) ? c : []);
       setDeals(Array.isArray(d) ? d : []);
+      setStatsProjects(Array.isArray(sc) ? sc : []);
     } catch {
       // handled by fetchApi
     }
   };
 
+  // Current table page + authoritative total. Runs on mount, page turns,
+  // page-size changes, and after mutations.
+  const loadPage = async () => {
+    const myId = ++pageRequestId.current;
+    const isCurrent = () => myId === pageRequestId.current;
+    try {
+      const offset = (Math.max(1, currentPage) - 1) * pageSize;
+      const [proj, cn] = await Promise.all([
+        fetchApi(`/api/projects?limit=${pageSize}&offset=${offset}`),
+        fetchApi('/api/projects?count=1').catch(() => null),
+      ]);
+      if (!isCurrent()) return;
+      setProjects(Array.isArray(proj) ? proj : []);
+      setCountTotal(cn && typeof cn.total === 'number' ? cn.total : null);
+    } catch {
+      // handled by fetchApi
+      if (!isCurrent()) return;
+      setProjects([]);
+      setCountTotal(0);
+    }
+  };
+
+  const loadData = async () => {
+    await Promise.all([loadStatic(), loadPage()]);
+  };
+
+  useEffect(() => { loadStatic(); }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadPage(); }, [currentPage, pageSize]);
+
+  // Stats chips stay full-population: they read the lightweight summary
+  // list, NOT the single table page.
   const stats = useMemo(() => {
-    const activeCount = projects.filter(p => p.status === 'Active').length;
-    const completedCount = projects.filter(p => p.status === 'Completed').length;
-    const totalBudget = projects.reduce((sum, p) => sum + Number(p.budget), 0);
+    const activeCount = statsProjects.filter(p => p.status === 'Active').length;
+    const completedCount = statsProjects.filter(p => p.status === 'Completed').length;
+    const totalBudget = statsProjects.reduce((sum, p) => sum + Number(p.budget), 0);
     return { activeCount, completedCount, totalBudget };
-  }, [projects]);
+  }, [statsProjects]);
+
+  // Footer/total-chip count is backend-synced (?count=1), falling back to
+  // the summary-list length so it never reads 0 with rows on screen.
+  const total = countTotal != null ? countTotal : statsProjects.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const startItem = total === 0 ? 0 : startIndex + 1;
+  const endItem = Math.min(startIndex + pageSize, total);
+
+  // Step back when the backend total shrinks under the current page
+  // (deletes). Converges: totalPages >= 1 always.
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
 
   const handleFormChange = (field, value) => {
     setForm(prev => ({ ...prev, [field]: value }));
@@ -187,7 +243,7 @@ export default function Projects() {
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem',
           background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
         }}>
-          {projects.length} total projects
+          {total} total projects
         </span>
       </div>
 
@@ -423,6 +479,51 @@ export default function Projects() {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+          {projects.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
+                Showing {startItem}-{endItem} of {projects.length} project{projects.length !== 1 ? 's' : ''}
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                  <span>Rows per page</span>
+                  <select
+                    aria-label="Rows per page"
+                    value={String(pageSize)}
+                    onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                    style={{ padding: '0.5rem 0.6rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--input-bg, var(--surface-hover))', color: 'var(--text-primary)' }}
+                  >
+                    {[10, 15, 25, 50].map(size => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setCurrentPage(prev => Math.max(1, Math.min(prev, totalPages) - 1))}
+                  disabled={safePage <= 1}
+                  aria-label="Previous page"
+                  style={{ padding: '0.6rem 1rem', opacity: safePage <= 1 ? 0.6 : 1, cursor: safePage <= 1 ? 'not-allowed' : 'pointer' }}
+                >
+                  Previous
+                </button>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                  Page {safePage} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, Math.min(prev, totalPages) + 1))}
+                  disabled={safePage >= totalPages}
+                  aria-label="Next page"
+                  style={{ padding: '0.6rem 1rem', opacity: safePage >= totalPages ? 0.6 : 1, cursor: safePage >= totalPages ? 'not-allowed' : 'pointer' }}
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </div>

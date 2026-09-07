@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FileText, Plus, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -43,23 +43,65 @@ export default function Contracts() {
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  // Server-driven paging: `contracts` holds ONLY the current page (full
+  // shape with contact/deal relations for the table), `statsContracts` is
+  // the lightweight ?fields=summary full list (status+value, no terms text
+  // or joins) feeding the stats bar, and `countTotal` (?count=1) is the
+  // authoritative footer total. Stale rows stay visible across page turns
+  // (never cleared before the next page lands).
+  const [statsContracts, setStatsContracts] = useState([]);
+  const [countTotal, setCountTotal] = useState(null);
+  const pageRequestId = useRef(0);
 
-  useEffect(() => { loadData(); }, []);
-
-  const loadData = async () => {
+  // Form dropdowns + stats-bar source. Runs on mount and after mutations.
+  const loadStatic = async () => {
     try {
-      const [ct, co, dl] = await Promise.all([
-        fetchApi('/api/contracts'),
+      const [co, dl, sc] = await Promise.all([
         fetchApi('/api/contacts'),
         fetchApi('/api/deals'),
+        fetchApi('/api/contracts?fields=summary').catch(() => null),
       ]);
-      setContracts(Array.isArray(ct) ? ct : []);
       setContacts(Array.isArray(co) ? co : []);
       setDeals(Array.isArray(dl) ? dl : []);
+      setStatsContracts(Array.isArray(sc) ? sc : []);
     } catch (err) {
       console.error(err);
     }
   };
+
+  // Current table page + authoritative total. Runs on mount, page turns,
+  // page-size changes, and after mutations.
+  const loadPage = async () => {
+    const myId = ++pageRequestId.current;
+    const isCurrent = () => myId === pageRequestId.current;
+    try {
+      const offset = (Math.max(1, currentPage) - 1) * pageSize;
+      const [ct, cn] = await Promise.all([
+        fetchApi(`/api/contracts?limit=${pageSize}&offset=${offset}`),
+        fetchApi('/api/contracts?count=1').catch(() => null),
+      ]);
+      if (!isCurrent()) return;
+      setContracts(Array.isArray(ct) ? ct : []);
+      setCountTotal(cn && typeof cn.total === 'number' ? cn.total : null);
+    } catch (err) {
+      console.error(err);
+      if (!isCurrent()) return;
+      setContracts([]);
+      setCountTotal(0);
+    }
+  };
+
+  const loadData = async () => {
+    await Promise.all([loadStatic(), loadPage()]);
+  };
+
+  useEffect(() => { loadStatic(); }, []);
+  // Page effect also fires on mount, so no separate initial loadPage call.
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadPage(); }, [currentPage, pageSize]);
 
   const createContract = async (e) => {
     e.preventDefault();
@@ -114,10 +156,29 @@ export default function Contracts() {
     }
   };
 
-  const draftCount = contracts.filter(c => c.status === 'Draft').length;
-  const activeContracts = contracts.filter(c => c.status === 'Active');
+  // Stats bar stays full-population: it reads the lightweight ?fields=summary
+  // list (status+value only), NOT the single table page.
+  const draftCount = statsContracts.filter(c => c.status === 'Draft').length;
+  const activeContracts = statsContracts.filter(c => c.status === 'Active');
   const activeCount = activeContracts.length;
   const activeValue = activeContracts.reduce((sum, c) => sum + (c.value || 0), 0);
+
+  // Pagination is server-driven: page rows via ?limit=&offset=, footer total
+  // via ?count=1 (same tenant scope). Falls back to the summary-list length
+  // when the count call fails, so the footer never reads "of 0" with rows
+  // on screen.
+  const total = countTotal != null ? countTotal : statsContracts.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const startItem = total === 0 ? 0 : startIndex + 1;
+  const endItem = Math.min(startIndex + pageSize, total);
+
+  // Step back when the backend total shrinks under the current page
+  // (deletes). Converges: totalPages >= 1 always.
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
 
   return (
     <div className="contracts-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
@@ -344,6 +405,51 @@ export default function Contracts() {
                 </tbody>
               </table>
             </TopScrollSync>
+          )}
+          {total > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
+                Showing {startItem}-{endItem} of {total} contract{total !== 1 ? 's' : ''}
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                  <span>Rows per page</span>
+                  <select
+                    aria-label="Rows per page"
+                    value={String(pageSize)}
+                    onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                    style={{ padding: '0.5rem 0.6rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--input-bg, var(--surface-hover))', color: 'var(--text-primary)' }}
+                  >
+                    {[5,10, 15, 25, 50].map(size => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setCurrentPage(prev => Math.max(1, Math.min(prev, totalPages) - 1))}
+                  disabled={safePage <= 1}
+                  aria-label="Previous page"
+                  style={{ padding: '0.6rem 1rem', opacity: safePage <= 1 ? 0.6 : 1, cursor: safePage <= 1 ? 'not-allowed' : 'pointer' }}
+                >
+                  Previous
+                </button>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                  Page {safePage} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, Math.min(prev, totalPages) + 1))}
+                  disabled={safePage >= totalPages}
+                  aria-label="Next page"
+                  style={{ padding: '0.6rem 1rem', opacity: safePage >= totalPages ? 0.6 : 1, cursor: safePage >= totalPages ? 'not-allowed' : 'pointer' }}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           )}
         </div>
       </div>

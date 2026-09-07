@@ -338,6 +338,19 @@ describe('GET /api/contacts — list', () => {
     expect(args.skip).toBe(4);
   });
 
+  test('full shape includes latest webFormSubmission (form id+name) for the Web Form column', async () => {
+    const res = await request(makeApp()).get('/api/contacts');
+
+    expect(res.status).toBe(200);
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    // Latest submission only — one tiny join per row, newest first.
+    expect(args.include.webFormSubmissions).toMatchObject({
+      take: 1,
+      orderBy: { submittedAt: 'desc' },
+    });
+    expect(args.include.webFormSubmissions.select.webForm).toBeDefined();
+  });
+
   test('USER role overrides assignedToId to req.user.userId — sales rep cannot probe a colleague (#588)', async () => {
     const res = await request(makeApp({ role: 'USER', userId: 42 }))
       .get('/api/contacts?assignedToId=999');

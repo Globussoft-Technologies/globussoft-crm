@@ -23,6 +23,13 @@ router.get("/", async (req, res) => {
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
 
+    // ?count=1 — return { total } only (mirrors contacts.js). Same `where`
+    // so paged callers get an exact total for their filter.
+    if (req.query.count === "1") {
+      const total = await prisma.contract.count({ where });
+      return res.json({ total });
+    }
+
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where,
@@ -44,6 +51,15 @@ router.get("/", async (req, res) => {
       };
     } else {
       findManyArgs.include = { contact: true, deal: true };
+    }
+
+    // #172-style paging (mirrors contacts.js / deals.js): honor
+    // limit/offset when the caller passes them. Absent params = full list
+    // (pre-existing behavior — DocumentTracking dropdown, e2e specs, and
+    // other verbatim callers are unaffected).
+    if (req.query.limit !== undefined || req.query.offset !== undefined) {
+      findManyArgs.take = Math.max(1, Math.min(parseInt(req.query.limit) || 50, 500));
+      findManyArgs.skip = Math.max(0, parseInt(req.query.offset) || 0);
     }
 
     const contracts = await prisma.contract.findMany(findManyArgs);

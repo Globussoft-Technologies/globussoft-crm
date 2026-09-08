@@ -11,8 +11,10 @@
  *      DRAFT page; the page is then PUBLISHED via the existing
  *      landing-pages route so /p/<slug>/submit can accept submissions.
  *   3. POST /p/<slug>/submit with mode=registration-draft
- *      creates a PendingTripRegistration AND returns a microsite
- *      redirect URL containing only the opaque draftToken (NO PII).
+ *      creates a PendingTripRegistration and returns a customer-portal
+ *      redirect (PR #1399: `/customer/register?...next=/travel/portal`
+ *      so the parent can continue into the portal; the draft also flows
+ *      through the CRM approval queue).
  *   4. POST /api/travel/microsites/public/:uuid/request-otp issues an
  *      OTP for purpose=registration.
  *   5. POST .../verify-otp WITH draftToken atomically marks the draft
@@ -53,7 +55,7 @@ let tripId = null;
 let micrositeUuid = null;
 let landingPageId = null;
 let landingPageSlug = null;
-let draftToken = null;
+
 let pendingRegistrationId = null;
 const createdContactIds = [];
 
@@ -188,7 +190,7 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(r.ok()).toBeTruthy();
   });
 
-  test('4) Phase 3 — POST /p/<slug>/submit creates PendingTripRegistration + returns microsite redirect with opaque token', async ({ request }) => {
+  test('4) Phase 3 — POST /p/<slug>/submit creates PendingTripRegistration + returns customer-portal redirect', async ({ request }) => {
     test.skip(!landingPageSlug || !micrositeUuid, 'no landing page slug or microsite available');
     const submitRes = await postPublic(request, `/p/${landingPageSlug}/submit`, {
       student: {
@@ -211,22 +213,14 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(body.ok).toBe(true);
     expect(body.draftId).toBeTruthy();
     pendingRegistrationId = body.draftId;
+    // PR #1399: trip-linked submits redirect to the customer portal
+    // registration page so the parent can continue into /travel/portal.
     expect(body.redirect).toBeTruthy();
-    expect(body.redirect.type).toBe('microsite');
-    // URL contains only the opaque draftToken — no PII
-    expect(body.redirect.url).toMatch(new RegExp(`^/p/tripmicrosite/${micrositeUuid}\\?draftToken=[0-9a-f]{64}(?:&.*)?$`));
-    expect(body.redirect.url).not.toContain('Student');
-    expect(body.redirect.url).not.toContain('Parent');
-    expect(body.redirect.url).not.toContain('parent@e2e.test');
-    expect(body.redirect.url).not.toContain('919876543210');
-    expect(body.redirect.url).not.toContain('M1234567');
-    // Extract draftToken from URL for subsequent steps
-    const urlMatch = body.redirect.url.match(/draftToken=([0-9a-f]{64})/);
-    expect(urlMatch).toBeTruthy();
-    draftToken = urlMatch[1];
+    expect(body.redirect.type).toBe('customer-registration');
+    expect(body.redirect.url).toMatch(/^\/customer\/register\?/);
   });
 
-  test('5) Phase 5 — admin GET /trips/:id/registrations sees the DRAFT row', async ({ request }) => {
+  test('5) Phase 5 — admin GET /trips/:id/registrations sees the CONVERTED row (streamlined flow)', async ({ request }) => {
     test.skip(!pendingRegistrationId, 'no pending registration available');
     const r = await get(request, travelAdminToken, `/api/travel/trips/${tripId}/registrations`);
     expect(r.ok()).toBeTruthy();
@@ -234,27 +228,23 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(Array.isArray(rows)).toBe(true);
     const row = rows.find((x) => x.id === pendingRegistrationId);
     expect(row).toBeTruthy();
-    expect(row.status).toBe('DRAFT');
-    expect(row.otpVerified).toBe(false);
+    // PR #1399 streamlines registration: a trip-linked submit converts the
+    // draft immediately (participant + instalments materialised on submit).
+    expect(row.status).toBe('CONVERTED');
     expect(row.studentName).toContain('Student');
     // draftToken MUST NOT leak via admin list — it's a server secret
     expect(row.draftToken).toBeUndefined();
   });
 
-  test('6) Phase 5 — admin can approve a DRAFT (relaxed gate)', async ({ request }) => {
+  test('6) Phase 5 — approving an already-CONVERTED registration is rejected (terminal state)', async ({ request }) => {
     test.skip(!pendingRegistrationId, 'no pending registration available');
+    // The submit already converted the draft (PR #1399), so the first approve
+    // hits the terminal-state guard.
     const r = await post(request, travelAdminToken, `/api/travel/trips/${tripId}/registrations/${pendingRegistrationId}/approve`, {});
-    expect(r.status()).toBe(200);
+    expect(r.status()).toBe(409);
     const body = await r.json();
-    expect(body.approved).toBe(true);
-    expect(body.registration.status).toBe('CONVERTED');
-    expect(body.participant).toBeTruthy();
-    // Once converted, the draft is terminal and cannot be re-approved.
-    const re = await post(request, travelAdminToken, `/api/travel/trips/${tripId}/registrations/${pendingRegistrationId}/approve`, {});
-    expect(re.status()).toBe(409);
-    const rebody = await re.json();
-    expect(rebody.code).toBe('INVALID_STATE');
-    expect(rebody.currentStatus).toBe('CONVERTED');
+    expect(body.code).toBe('INVALID_STATE');
+    expect(body.currentStatus).toBe('CONVERTED');
   });
 
   test('7) Phase 4 — verify-otp with bogus draftToken returns 404 DRAFT_NOT_FOUND (decision #9)', async ({ request }) => {

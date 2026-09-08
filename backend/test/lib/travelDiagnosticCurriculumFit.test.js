@@ -14,9 +14,14 @@ prisma.travelCurriculumMapping = {
   ...(prisma.travelCurriculumMapping || {}),
   findMany: vi.fn(),
 };
+prisma.tenantSetting = {
+  ...(prisma.tenantSetting || {}),
+  findUnique: vi.fn(),
+};
 
 beforeEach(() => {
   prisma.travelCurriculumMapping.findMany.mockReset();
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null); // default topK (10)
 });
 
 describe("extractLearningProfile", () => {
@@ -26,7 +31,7 @@ describe("extractLearningProfile", () => {
         { curriculum: "CBSE", grade: "Grade 8", subject: "Geography" },
         [],
       ),
-    ).toEqual({ curriculum: "CBSE", grade: "Grade 8", subject: "Geography" });
+    ).toEqual({ curriculum: "CBSE", grade: "Grade 8", subject: "Geography", outcomes: null });
   });
 
   test("extracts profile from question labels when ids are custom", () => {
@@ -39,7 +44,7 @@ describe("extractLearningProfile", () => {
           { id: "q3", text: "Subject focus" },
         ],
       ),
-    ).toEqual({ curriculum: "IB", grade: "Grade 9", subject: "Science" });
+    ).toEqual({ curriculum: "IB", grade: "Grade 9", subject: "Science", outcomes: null });
   });
 
   test("extracts option labels when submitted answers are option values", () => {
@@ -64,7 +69,7 @@ describe("extractLearningProfile", () => {
           },
         ],
       ),
-    ).toEqual({ curriculum: "CBSE", grade: "8", subject: "Geography" });
+    ).toEqual({ curriculum: "CBSE", grade: "8", subject: "Geography", outcomes: null });
   });
 });
 
@@ -120,5 +125,47 @@ describe("buildCurriculumFitForDiagnostic", () => {
 
     expect(fit).toBeNull();
     expect(prisma.travelCurriculumMapping.findMany).not.toHaveBeenCalled();
+  });
+
+  test("caps recommendations at the admin-configured topK instead of the hardcoded default", async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: JSON.stringify({ topK: 3 }) });
+    prisma.travelCurriculumMapping.findMany.mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({
+        id: i + 1,
+        destinationLabel: `Destination ${i + 1}`,
+        subject: "Geography",
+        fitScore: 90 - i,
+      })),
+    );
+
+    const fit = await buildCurriculumFitForDiagnostic({
+      tenantId: 1,
+      subBrand: "tmc",
+      answers: { curriculum: "CBSE", grade: "Grade 8" },
+      questions: [],
+    });
+
+    expect(fit.recommendations).toHaveLength(3);
+  });
+
+  test("defaults to 10 recommendations when no topK setting is configured", async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    prisma.travelCurriculumMapping.findMany.mockResolvedValue(
+      Array.from({ length: 15 }, (_, i) => ({
+        id: i + 1,
+        destinationLabel: `Destination ${i + 1}`,
+        subject: "Geography",
+        fitScore: 90 - i,
+      })),
+    );
+
+    const fit = await buildCurriculumFitForDiagnostic({
+      tenantId: 1,
+      subBrand: "tmc",
+      answers: { curriculum: "CBSE", grade: "Grade 8" },
+      questions: [],
+    });
+
+    expect(fit.recommendations).toHaveLength(10);
   });
 });

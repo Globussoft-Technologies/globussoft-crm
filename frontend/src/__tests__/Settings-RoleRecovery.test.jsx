@@ -26,7 +26,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -148,8 +148,8 @@ const SAMPLE_VERSIONS = {
   ],
 };
 
-function renderSettings() {
-  return render(
+function settingsTree() {
+  return (
     <AuthContext.Provider
       value={{
         user: { id: 1, role: 'ADMIN', userType: 'STAFF', email: 'a@x' },
@@ -166,8 +166,12 @@ function renderSettings() {
           <Settings />
         </MemoryRouter>
       </ThemeContext.Provider>
-    </AuthContext.Provider>,
+    </AuthContext.Provider>
   );
+}
+
+function renderSettings() {
+  return render(settingsTree());
 }
 
 beforeEach(() => {
@@ -179,8 +183,8 @@ beforeEach(() => {
   isOwnerForTest = false;
   // Default URL-routing mock; per-test handlers override.
   fetchApiMock.mockImplementation((url, opts) => {
-    if (url === '/api/roles' && (!opts || !opts.method || opts.method === 'GET')) {
-      return Promise.resolve({ roles: SAMPLE_ROLES, tenantId: 11 });
+    if (url === '/api/roles?page=1&limit=10' && (!opts || !opts.method || opts.method === 'GET')) {
+      return Promise.resolve({ roles: SAMPLE_ROLES, tenantId: 11, pagination: { total: 2, totalPages: 1 } });
     }
     if (url === '/api/roles/193/permissions/versions') {
       return Promise.resolve(SAMPLE_VERSIONS);
@@ -227,8 +231,55 @@ describe('Settings → Role Recovery — listing + open + restore', () => {
     expect(await screen.findByTestId('settings-role-recovery-open-ADMIN')).toBeTruthy();
     expect(await screen.findByTestId('settings-role-recovery-open-MANAGER')).toBeTruthy();
     // The GET /api/roles call landed at least once.
-    const listCalls = fetchApiMock.mock.calls.filter(([url]) => url === '/api/roles');
+    const listCalls = fetchApiMock.mock.calls.filter(([url]) => url === '/api/roles?page=1&limit=10');
     expect(listCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('requests and renders the next server-side role page', async () => {
+    const pageTwoRole = { ...SAMPLE_ROLES[1], id: 295, key: 'SALES', name: 'Sales' };
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/roles?page=1&limit=10') {
+        return Promise.resolve({ roles: SAMPLE_ROLES, tenantId: 11, pagination: { total: 11, totalPages: 2 } });
+      }
+      if (url === '/api/roles?page=2&limit=10') {
+        return Promise.resolve({ roles: [pageTwoRole], tenantId: 11, pagination: { total: 11, totalPages: 2 } });
+      }
+      return Promise.resolve({});
+    });
+
+    renderSettings();
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+
+    expect(await screen.findByText('Sales')).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/roles?page=2&limit=10');
+  });
+
+  it('ignores an older role response after a newer recovery request', async () => {
+    let resolveOld;
+    const oldRequest = new Promise((resolve) => { resolveOld = resolve; });
+    const newestRole = { ...SAMPLE_ROLES[1], id: 296, key: 'SUPPORT', name: 'Support' };
+    let roleCalls = 0;
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/roles?page=1&limit=10') {
+        roleCalls += 1;
+        if (roleCalls === 1) return oldRequest;
+        return Promise.resolve({ roles: [newestRole], tenantId: 11, pagination: { total: 1, totalPages: 1 } });
+      }
+      return Promise.resolve({});
+    });
+
+    const view = renderSettings();
+    permsForTest = new Set(['contacts.read']);
+    view.rerender(settingsTree());
+    permsForTest = new Set(['roles.read']);
+    view.rerender(settingsTree());
+
+    expect(await screen.findByText('Support')).toBeInTheDocument();
+    await act(async () => {
+      resolveOld({ roles: SAMPLE_ROLES, tenantId: 11, pagination: { total: 2, totalPages: 1 } });
+    });
+    expect(screen.getByText('Support')).toBeInTheDocument();
+    expect(screen.queryByText('Admin')).not.toBeInTheDocument();
   });
 
   it('opens the history dialog and fetches versions when "View history" is clicked', async () => {

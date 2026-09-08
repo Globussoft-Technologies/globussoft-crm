@@ -53,6 +53,7 @@ import prisma from '../../lib/prisma.js';
 
 prisma.project = prisma.project || {};
 prisma.project.findMany = vi.fn();
+prisma.project.count = vi.fn();
 prisma.project.findFirst = vi.fn();
 prisma.project.create = vi.fn();
 prisma.project.update = vi.fn();
@@ -81,6 +82,7 @@ const FULL_INCLUDE = { owner: true, contact: true, deal: true, tasks: true };
 
 beforeEach(() => {
   prisma.project.findMany.mockReset();
+  prisma.project.count.mockReset().mockResolvedValue(0);
   prisma.project.findFirst.mockReset();
   prisma.project.create.mockReset();
   prisma.project.update.mockReset();
@@ -114,7 +116,7 @@ describe('GET / — list projects under tenant scope', () => {
     expect(prisma.project.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
       include: FULL_INCLUDE,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   });
 
@@ -126,7 +128,7 @@ describe('GET / — list projects under tenant scope', () => {
     expect(prisma.project.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1, status: 'Active' },
       include: FULL_INCLUDE,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   });
 
@@ -145,6 +147,25 @@ describe('GET / — list projects under tenant scope', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/failed to fetch projects/i);
+  });
+
+  test('?limit/&offset page deterministically and ?count=1 uses the same tenant/status scope', async () => {
+    prisma.project.count.mockResolvedValue(28);
+    const app = makeApp({ tenantId: 42 });
+
+    await request(app).get('/api/projects?status=Active&limit=10&offset=10');
+    expect(prisma.project.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 42, status: 'Active' },
+      take: 10,
+      skip: 10,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    }));
+
+    const countRes = await request(app).get('/api/projects?status=Active&count=1');
+    expect(countRes.body).toEqual({ total: 28 });
+    expect(prisma.project.count).toHaveBeenCalledWith({
+      where: { tenantId: 42, status: 'Active' },
+    });
   });
 });
 

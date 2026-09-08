@@ -26,7 +26,7 @@ const categoryOptions = [
   { key: 'expense', label: 'Expense Reports', paths: ['/expenses'] },
   // Wellness vertical surfaces
   { key: 'appointment', label: 'Appointments & Bookings', paths: ['/wellness/appointments', '/wellness/my-appointments', '/wellness/my-bookings', '/wellness/book-appointment', '/wellness/calendar', '/booking-pages'] },
-  { key: 'prescription', label: 'Prescriptions', paths: ['/wellness/prescriptions', '/wellness/my-prescriptions'] },
+  { key: 'prescription', label: 'Prescriptions', paths: ['/wellness/prescriptions', '/wellness/my-prescriptions', '/wellness/prescription-requests', '/wellness/my-prescription-requests'] },
   { key: 'visit', label: 'Visits', paths: ['/wellness/visits'] },
   { key: 'membership', label: 'Memberships', paths: ['/wellness/memberships'] },
   { key: 'payment', label: 'Payments & Transactions', paths: ['/payments', '/wellness/my-transactions', '/wellness/wallet', '/invoices', '/wellness/invoices'] },

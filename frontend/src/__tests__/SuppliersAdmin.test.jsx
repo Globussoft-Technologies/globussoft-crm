@@ -278,6 +278,20 @@ beforeEach(() => {
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
+  global.fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    blob: async () => new Blob(["export"]),
+  });
+  if (!global.URL.createObjectURL) {
+    global.URL.createObjectURL = vi.fn(() => "blob:mock-url");
+  } else {
+    vi.spyOn(global.URL, "createObjectURL").mockReturnValue("blob:mock-url");
+  }
+  if (!global.URL.revokeObjectURL) {
+    global.URL.revokeObjectURL = vi.fn();
+  } else {
+    vi.spyOn(global.URL, "revokeObjectURL").mockImplementation(() => {});
+  }
   installFetchMock();
 });
 
@@ -297,6 +311,40 @@ describe('<SuppliersAdmin /> — page chrome + RBAC', () => {
       const calls = fetchApiMock.mock.calls.filter(([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers'));
       expect(calls.length).toBeGreaterThan(0);
     });
+  });
+
+  it('shows the compact Export group and downloads the xlsx export with the active filters', async () => {
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /^Export$/i }));
+    const exportMenu = await screen.findByRole('menu', { name: /^Export$/i });
+    fireEvent.click(within(exportMenu).getByRole('menuitem', { name: /^Excel$/i }));
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/travel/suppliers/export.xlsx',
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer test-token' },
+        }),
+      );
+    });
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    expect(URL.revokeObjectURL).toHaveBeenCalled();
+  });
+
+  it('upload dropdown shows the bulk import guide confirmation before opening the file picker', async () => {
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+    renderPage();
+    await screen.findByText('Acme Hotels');
+    fireEvent.click(screen.getByRole('button', { name: /^Upload$/i }));
+    const uploadMenu = await screen.findByRole('menu', { name: /^Upload$/i });
+    fireEvent.click(within(uploadMenu).getByRole('menuitem', { name: /^CSV$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Bulk import guide confirmation/i });
+    expect(within(dialog).getByText(/Required fields:/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Continue to file picker/i }));
+    await waitFor(() => {
+      expect(clickSpy).toHaveBeenCalled();
+    });
+    clickSpy.mockRestore();
   });
 
   it('MANAGER role also sees "New Supplier" CTA (canWrite = ADMIN || MANAGER)', async () => {
@@ -587,7 +635,7 @@ describe('<SuppliersAdmin /> — create + edit + delete', () => {
 // taxRegimeCode, primaryContactRole, notes + GSTIN format validation).
 // ─────────────────────────────────────────────────────────────────────────────
 describe('<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit + GSTIN hint', () => {
-  it('create modal renders the 6 new fields + GSTIN format hint', async () => {
+  it('create modal renders payment, credit, and Accounts destination fields', async () => {
     renderPage();
     await screen.findByText('Acme Hotels');
     fireEvent.click(screen.getByRole('button', { name: /New Supplier/i }));
@@ -598,8 +646,14 @@ describe('<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit + GSTIN h
     expect(screen.getByLabelText(/^Tax regime$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Primary contact role$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Notes$/i)).toBeInTheDocument();
+    expect(screen.getByText('Payment destination (for Accounts)')).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Beneficiary name$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Bank name$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Bank account number$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^IFSC code$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^UPI ID$/i)).toBeInTheDocument();
     // GSTIN format hint inline below the GSTIN input.
-    expect(screen.getByText(/Format: 22ABCDE1234F1Z5/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('GSTIN (e.g. 22ABCDE1234F1Z5)')).toBeInTheDocument();
   });
 
   it('edit modal pre-fills the 6 new fields from the row', async () => {
@@ -615,6 +669,11 @@ describe('<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit + GSTIN h
             creditCurrency: 'INR',
             taxRegimeCode: 'regular',
             primaryContactRole: 'Accounts payable',
+            beneficiaryName: 'Acme Hotels Pvt Ltd',
+            bankName: 'HDFC Bank',
+            bankAccountNumber: '001234567890',
+            ifscCode: 'HDFC0001234',
+            upiId: 'acme@hdfc',
             notes: 'Prefer NEFT; quarterly reconcile.',
           }),
         ],
@@ -629,6 +688,11 @@ describe('<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit + GSTIN h
     expect(screen.getByLabelText(/^Credit currency$/i).value).toBe('INR');
     expect(screen.getByLabelText(/^Tax regime$/i).value).toBe('regular');
     expect(screen.getByLabelText(/^Primary contact role$/i).value).toBe('Accounts payable');
+    expect(screen.getByLabelText(/^Beneficiary name$/i).value).toBe('Acme Hotels Pvt Ltd');
+    expect(screen.getByLabelText(/^Bank name$/i).value).toBe('HDFC Bank');
+    expect(screen.getByLabelText(/^Bank account number$/i).value).toBe('001234567890');
+    expect(screen.getByLabelText(/^IFSC code$/i).value).toBe('HDFC0001234');
+    expect(screen.getByLabelText(/^UPI ID$/i).value).toBe('acme@hdfc');
     expect(screen.getByLabelText(/^Notes$/i).value).toBe('Prefer NEFT; quarterly reconcile.');
   });
 
@@ -643,6 +707,11 @@ describe('<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit + GSTIN h
     fireEvent.change(screen.getByLabelText(/^Tax regime$/i), { target: { value: 'composite' } });
     fireEvent.change(screen.getByLabelText(/^Primary contact role$/i), { target: { value: 'Owner' } });
     fireEvent.change(screen.getByLabelText(/^Notes$/i), { target: { value: 'Bulk discount available' } });
+    fireEvent.change(screen.getByLabelText(/^Beneficiary name$/i), { target: { value: 'New Co Pvt Ltd' } });
+    fireEvent.change(screen.getByLabelText(/^Bank name$/i), { target: { value: 'ICICI Bank' } });
+    fireEvent.change(screen.getByLabelText(/^Bank account number$/i), { target: { value: '009876543210' } });
+    fireEvent.change(screen.getByLabelText(/^IFSC code$/i), { target: { value: 'icic0001234' } });
+    fireEvent.change(screen.getByLabelText(/^UPI ID$/i), { target: { value: 'newco@icici' } });
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
@@ -661,6 +730,11 @@ describe('<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit + GSTIN h
       expect(body.creditCurrency).toBe('USD');
       expect(body.taxRegimeCode).toBe('composite');
       expect(body.primaryContactRole).toBe('Owner');
+      expect(body.beneficiaryName).toBe('New Co Pvt Ltd');
+      expect(body.bankName).toBe('ICICI Bank');
+      expect(body.bankAccountNumber).toBe('009876543210');
+      expect(body.ifscCode).toBe('ICIC0001234');
+      expect(body.upiId).toBe('newco@icici');
       expect(body.notes).toBe('Bulk discount available');
     });
   });
@@ -689,6 +763,11 @@ describe('<SuppliersAdmin /> — slice 2 (#903) payment-terms + credit + GSTIN h
       expect(body.creditCurrency).toBe('INR');
       expect(body.taxRegimeCode).toBeNull();
       expect(body.primaryContactRole).toBeNull();
+      expect(body.beneficiaryName).toBeNull();
+      expect(body.bankName).toBeNull();
+      expect(body.bankAccountNumber).toBeNull();
+      expect(body.ifscCode).toBeNull();
+      expect(body.upiId).toBeNull();
       expect(body.notes).toBeNull();
     });
   });

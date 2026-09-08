@@ -36,6 +36,7 @@ const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
+const { applyLandingPagePaymentToTrip } = require("../lib/landingPagePayments");
 
 const VALID_ROOM_TYPES = ["single", "twin", "triple", "quad"];
 const VALID_INSTALMENT_STATUSES = ["pending", "partial", "paid", "overdue"];
@@ -1230,6 +1231,41 @@ router.get(
   async (req, res) => {
     try {
       const trip = await loadTrip(req);
+      // Repair successful landing-page payments whose webhook was processed
+      // before the participant installment allocation ran. This is safe to
+      // repeat because the allocator is idempotent.
+      const successfulPayments = await prisma.payment.findMany({
+        where: { tenantId: req.travelTenant.id, status: { in: ["SUCCESS", "CAPTURED", "PAID"] } },
+        select: { amount: true, metadata: true },
+        take: 500,
+      });
+      for (const payment of successfulPayments) {
+        let metadata;
+        try { metadata = JSON.parse(payment.metadata || "{}"); } catch (_e) { metadata = {}; }
+        if (metadata.kind !== "landing-page-registration" || Number(metadata.tripId) !== trip.id) continue;
+        let participantId = metadata.participantId;
+        if (!participantId && metadata.draftToken) {
+          const draft = await prisma.pendingTripRegistration.findUnique({
+            where: { draftToken: String(metadata.draftToken) },
+            select: { convertedToParticipantId: true },
+          });
+          participantId = draft?.convertedToParticipantId;
+        }
+        if (!participantId) continue;
+        try {
+          await applyLandingPagePaymentToTrip({
+            db: prisma,
+            tripId: trip.id,
+            participantId,
+            amountMajor: payment.amount || metadata.amountMajor,
+            mode: metadata.paymentMode === "complete" ? "complete" : "installment",
+            installmentIndex: Number.isFinite(Number(metadata.installmentIndex)) ? Number(metadata.installmentIndex) : 0,
+            capturedAt: new Date(),
+          });
+        } catch (repairError) {
+          console.error("[travel-trip-billing] landing payment repair failed:", repairError.message);
+        }
+      }
       const where = { tripId: trip.id };
       if (req.query.participantId) {
         const pid = parseInt(req.query.participantId, 10);

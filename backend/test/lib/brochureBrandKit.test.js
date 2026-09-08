@@ -14,29 +14,30 @@ const PNG_1x1 =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
 
 describe('brochureBrandKit.sanitizeBrandKit', () => {
-  it('returns undefined for non-objects / empty input', () => {
-    expect(sanitizeBrandKit(undefined)).toBeUndefined();
-    expect(sanitizeBrandKit(null)).toBeUndefined();
-    expect(sanitizeBrandKit('nope')).toBeUndefined();
-    expect(sanitizeBrandKit({})).toBeUndefined();
+  it('returns undefined kit for non-objects / empty input', () => {
+    expect(sanitizeBrandKit(undefined).kit).toBeUndefined();
+    expect(sanitizeBrandKit(null).kit).toBeUndefined();
+    expect(sanitizeBrandKit('nope').kit).toBeUndefined();
+    expect(sanitizeBrandKit({}).kit).toBeUndefined();
   });
 
   it('passes a clean PNG logo through, re-emitted as a normalised data: URI', () => {
-    const kit = sanitizeBrandKit({ logoUrl: PNG_1x1 });
+    const { kit, warnings } = sanitizeBrandKit({ logoUrl: PNG_1x1 });
     expect(kit).toBeDefined();
     expect(kit.logoUrl).toMatch(/^data:image\/png;base64,/);
+    expect(warnings).toEqual([]);
   });
 
   it('drops an SVG logo (script-bearing) → no logoUrl', () => {
     const svg = 'data:image/svg+xml;base64,' + Buffer.from('<svg onload="alert(1)"></svg>').toString('base64');
-    const kit = sanitizeBrandKit({ logoUrl: svg, name: 'Acme' });
+    const { kit } = sanitizeBrandKit({ logoUrl: svg, name: 'Acme' });
     expect(kit).toBeDefined();
     expect(kit.logoUrl).toBeUndefined(); // logo dropped, but name survives
     expect(kit.name).toBe('Acme');
   });
 
   it('drops an external-URL logo (SSRF / non-determinism)', () => {
-    const kit = sanitizeBrandKit({ logoUrl: 'https://evil.example.com/logo.png', name: 'Acme' });
+    const { kit } = sanitizeBrandKit({ logoUrl: 'https://evil.example.com/logo.png', name: 'Acme' });
     expect(kit.logoUrl).toBeUndefined();
   });
 
@@ -45,7 +46,7 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
     s3Service.S3_BASE_URL = 'https://bucket.example.com';
     try {
       const url = 'https://bucket.example.com/brand-kits/1/1700000000000-logo.png';
-      const kit = sanitizeBrandKit({ logoUrl: url, name: 'Acme' });
+      const { kit } = sanitizeBrandKit({ logoUrl: url, name: 'Acme' });
       expect(kit.logoUrl).toBe(url);
       expect(kit.name).toBe('Acme');
     } finally {
@@ -57,7 +58,7 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
     const originalBase = s3Service.S3_BASE_URL;
     s3Service.S3_BASE_URL = 'https://bucket.example.com';
     try {
-      const kit = sanitizeBrandKit({ logoUrl: 'https://other-bucket.example.com/brand-kits/1/logo.png', name: 'Acme' });
+      const { kit } = sanitizeBrandKit({ logoUrl: 'https://other-bucket.example.com/brand-kits/1/logo.png', name: 'Acme' });
       expect(kit.logoUrl).toBeUndefined();
     } finally {
       s3Service.S3_BASE_URL = originalBase;
@@ -69,7 +70,7 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
     const pngBytes = Buffer.from(PNG_1x1.replace(/^data:image\/png;base64,/, ''), 'base64');
     fs.readFileSync = () => pngBytes;
     try {
-      const kit = sanitizeBrandKit({ logoUrl: '/uploads/brand-kits/1/_default/logo-abc.png', name: 'Acme' });
+      const { kit } = sanitizeBrandKit({ logoUrl: '/uploads/brand-kits/1/_default/logo-abc.png', name: 'Acme' });
       expect(kit.logoUrl).toMatch(/^data:image\/png;base64,/);
       expect(kit.name).toBe('Acme');
     } finally {
@@ -81,7 +82,7 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
     const originalRead = fs.readFileSync;
     fs.readFileSync = () => Buffer.from('evil');
     try {
-      const kit = sanitizeBrandKit({ logoUrl: '/uploads/brand-kits/../etc/passwd', name: 'Acme' });
+      const { kit } = sanitizeBrandKit({ logoUrl: '/uploads/brand-kits/../etc/passwd', name: 'Acme' });
       expect(kit.logoUrl).toBeUndefined();
     } finally {
       fs.readFileSync = originalRead;
@@ -91,12 +92,12 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
   it('drops an oversized logo (> 120KB)', () => {
     // ~135KB of decoded bytes — well over the 120KB cap.
     const big = 'data:image/png;base64,' + 'A'.repeat(184_000);
-    const kit = sanitizeBrandKit({ logoUrl: big, name: 'Acme' });
+    const { kit } = sanitizeBrandKit({ logoUrl: big, name: 'Acme' });
     expect(kit.logoUrl).toBeUndefined();
   });
 
   it('length-caps text fields and validates hex colours', () => {
-    const kit = sanitizeBrandKit({
+    const { kit } = sanitizeBrandKit({
       name: 'x'.repeat(500),
       tagline: 'y'.repeat(500),
       colors: { accent: '#12ab34', accentSecondary: 'not-a-hex' },
@@ -108,12 +109,12 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
   });
 
   it('rejects a fully-invalid colour object (no colors key)', () => {
-    const kit = sanitizeBrandKit({ name: 'Acme', colors: { accent: 'blue' } });
+    const { kit } = sanitizeBrandKit({ name: 'Acme', colors: { accent: 'blue' } });
     expect(kit.colors).toBeUndefined();
   });
 
   it('slugs socials, caps contact lines', () => {
-    const kit = sanitizeBrandKit({
+    const { kit } = sanitizeBrandKit({
       name: 'Acme',
       socials: ['Insta gram!', 'face@book', 'x', 'y', 'z', 'a', 'b', 'overflow'],
       contact: ['+91 1', '+91 2', '+91 3', '+91 4', '+91 5', '+91 6'],
@@ -123,7 +124,7 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
   });
 
   it('clamps custom placement numbers and coerces an invalid corner to top-left', () => {
-    const kit = sanitizeBrandKit({
+    const { kit } = sanitizeBrandKit({
       logoUrl: PNG_1x1,
       custom: {
         cover: { x: -5, y: 99, scale: 99 },
@@ -141,16 +142,58 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
   });
 
   it('ignores custom placement when there is no logo to place', () => {
-    const kit = sanitizeBrandKit({ name: 'Acme', custom: { cover: { x: 0.5, y: 0.3, scale: 0.2 } } });
+    const { kit } = sanitizeBrandKit({ name: 'Acme', custom: { cover: { x: 0.5, y: 0.3, scale: 0.2 } } });
     expect(kit.custom).toBeUndefined();
   });
 
   it('backing:"none" forces onDark false (logo as-uploaded)', () => {
-    const kit = sanitizeBrandKit({
+    const { kit } = sanitizeBrandKit({
       logoUrl: PNG_1x1,
       custom: { interior: { corner: 'top-right', scale: 0.12 }, backing: 'none' },
     });
     expect(kit.onDark).toBe(false);
     expect(kit.custom.interior.corner).toBe('top-right');
+  });
+
+  it('includes a valid school name and school logo in the sanitized kit', () => {
+    const { kit, warnings } = sanitizeBrandKit({
+      logoUrl: PNG_1x1,
+      name: 'The Modern Classroom',
+      schoolName: 'Greenfield Academy',
+      schoolLogoUrl: PNG_1x1,
+    });
+    expect(kit.schoolName).toBe('Greenfield Academy');
+    expect(kit.schoolLogoUrl).toMatch(/^data:image\/png;base64,/);
+    // PNG at 1x1 is below the soft dimension threshold — should warn.
+    expect(warnings.some((w) => w.includes('dimensions'))).toBe(true);
+  });
+
+  it('soft-warns about a missing school logo but does not block generation', () => {
+    const { kit, warnings } = sanitizeBrandKit({ logoUrl: PNG_1x1, name: 'TMC', schoolName: 'Greenfield Academy' });
+    expect(kit.schoolName).toBe('Greenfield Academy');
+    expect(kit.schoolLogoUrl).toBeUndefined();
+    expect(warnings).toEqual(['School logo is missing; the cover will show TMC branding only.']);
+  });
+
+  it('soft-warns about a non-PNG school logo but keeps it', () => {
+    // Real 1x1 GIF — GIF magic bytes are accepted by the raster guard.
+    const gif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    const { kit, warnings } = sanitizeBrandKit({
+      logoUrl: PNG_1x1,
+      schoolName: 'Greenfield Academy',
+      schoolLogoUrl: gif,
+    });
+    expect(kit.schoolLogoUrl).toMatch(/^data:image\/gif;base64,/);
+    expect(warnings.some((w) => w.includes('not a PNG'))).toBe(true);
+  });
+
+  it('drops an invalid school logo with a soft warning', () => {
+    const { kit, warnings } = sanitizeBrandKit({
+      logoUrl: PNG_1x1,
+      schoolName: 'Greenfield Academy',
+      schoolLogoUrl: 'https://evil.example.com/logo.png',
+    });
+    expect(kit.schoolLogoUrl).toBeUndefined();
+    expect(warnings.some((w) => w.includes('not a valid raster image'))).toBe(true);
   });
 });

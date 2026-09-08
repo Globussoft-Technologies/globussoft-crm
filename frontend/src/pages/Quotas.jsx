@@ -164,8 +164,8 @@ export default function Quotas() {
           <select
             value={period}
             onChange={(e) => setPeriod(e.target.value)}
-            className="input"
-            style={{ minWidth: '200px' }}
+            className="input-field"
+            style={{ minWidth: '200px', width: 'auto', padding: '0.6rem 0.9rem', colorScheme: 'light dark' }}
           >
             {periodOptions.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
@@ -298,7 +298,7 @@ export default function Quotas() {
       {showModal && (
         <div onClick={() => setShowModal(false)} style={modalBackdrop}>
           <div onClick={(e) => e.stopPropagation()} className="card" style={modalCard}>
-            <h3 style={{ marginTop: 0 }}>{form.id ? 'Edit Quota' : 'Set Quota'}</h3>
+            <h3 style={{ marginTop: 0, color: 'var(--text-primary, #111)' }}>{form.id ? 'Edit Quota' : 'Set Quota'}</h3>
             <form onSubmit={submitForm} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               {!form.id && (
                 <label style={lbl}>
@@ -306,7 +306,8 @@ export default function Quotas() {
                   <select
                     value={form.userId}
                     onChange={(e) => setForm(f => ({ ...f, userId: e.target.value }))}
-                    className="input"
+                    className="input-field"
+                    style={{ colorScheme: 'light dark' }}
                     required
                   >
                     <option value="">Select user…</option>
@@ -320,7 +321,7 @@ export default function Quotas() {
               )}
               <label style={lbl}>
                 <span>Period</span>
-                <input className="input" value={period} disabled />
+                <input className="input-field" value={period} disabled style={{ opacity: 0.8 }} />
               </label>
               <label style={lbl}>
                 <span>Target Amount ({currencySymbol()})</span>
@@ -330,7 +331,8 @@ export default function Quotas() {
                   step="100"
                   value={form.target}
                   onChange={(e) => setForm(f => ({ ...f, target: e.target.value }))}
-                  className="input"
+                  className="input-field"
+                  style={{ colorScheme: 'light dark' }}
                   required
                 />
               </label>
@@ -364,4 +366,14 @@ const modalBackdrop = {
   display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
   backdropFilter: 'blur(4px)',
 };
-const modalCard = { padding: '1.75rem', width: '100%', maxWidth: '440px' };
+const modalCard = {
+  padding: '1.75rem',
+  width: '100%',
+  maxWidth: '440px',
+  background: 'var(--surface-color, var(--card-bg, #fff))',
+  color: 'var(--text-primary, #111)',
+  border: '1px solid var(--border-color, rgba(0,0,0,0.12))',
+  borderRadius: '14px',
+  boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
+  colorScheme: 'light dark',
+};

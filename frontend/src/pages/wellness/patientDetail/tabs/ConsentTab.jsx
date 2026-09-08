@@ -4,6 +4,7 @@ import { fetchApi, getAuthToken } from '../../../../utils/api';
 import { useNotify } from '../../../../utils/notify';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../../components/wellness/DateRangeFilter';
 import { labelStyle, inputStyle } from '../shared/helpers';
+import SearchableSingleSelect from '../../services/SearchableSingleSelect';
 
 // ── Consent tab with signature canvas ─────────────────────────────
 export default function ConsentTab({ patient, services, onSaved }) {
@@ -119,9 +120,9 @@ export default function ConsentTab({ patient, services, onSaved }) {
   const [consentRangeStart, consentRangeEnd] = resolveDateRange(consentFilter);
   const priorConsents = (consentRangeStart && consentRangeEnd)
     ? allPriorConsents.filter((c) => {
-        const ts = new Date(c.signedAt).getTime();
-        return ts >= consentRangeStart.getTime() && ts <= consentRangeEnd.getTime();
-      })
+      const ts = new Date(c.signedAt).getTime();
+      return ts >= consentRangeStart.getTime() && ts <= consentRangeEnd.getTime();
+    })
     : allPriorConsents;
   const formatPriorDate = (iso) => {
     if (!iso) return '';
@@ -237,10 +238,13 @@ export default function ConsentTab({ patient, services, onSaved }) {
         </div>
         <div>
           <label style={labelStyle}>Service (optional)</label>
-          <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
-            <option value="">— none —</option>
-            {services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          <SearchableSingleSelect
+            value={serviceId}
+            onChange={setServiceId}
+            options={(services || []).map((s) => ({ value: String(s.id), label: s.name }))}
+            placeholder="Search service..."
+            aria-label="Service"
+          />
         </div>
       </div>
 

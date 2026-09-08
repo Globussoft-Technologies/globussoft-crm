@@ -2,7 +2,54 @@
  * Central, typed access to environment configuration.
  * Every package reads config through here — no `process.env` scattered around.
  */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { CapabilityTier } from './types.js';
+
+/**
+ * Load the workspace `.env` into process.env — ONCE, at module load.
+ *
+ * This repo documents "secrets live in .env; loadConfig() reads them", but
+ * nothing actually loaded that file: there is no dotenv dependency and no
+ * --env-file flag, so `loadConfig()` only ever saw variables that happened to
+ * be exported by the parent process. Keys that live ONLY in this workspace's
+ * .env (GEOAPIFY_API_KEY / MAPTILER_API_KEY) were therefore invisible whenever
+ * the engine ran as a subprocess of the CRM backend, silently disabling the
+ * route map. Implemented inline rather than via dotenv so no new dependency is
+ * introduced.
+ *
+ * IMPORTANT — only fills variables that are genuinely ABSENT. The CRM
+ * deliberately blanks provider keys to "" (see brochureEngineProviderEnv.js)
+ * to pin a tenant's chosen provider; treating "" as unset would resurrect the
+ * keys it just cleared and break that isolation. An inherited value always wins.
+ */
+function loadWorkspaceEnvOnce(): void {
+  const g = globalThis as { __agenticEnvLoaded?: boolean };
+  if (g.__agenticEnvLoaded) return;
+  g.__agenticEnvLoaded = true;
+  try {
+    // packages/shared/src → up to the workspace root.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const root = path.resolve(here, '..', '..', '..');
+    const file = path.join(root, '.env');
+    if (!fs.existsSync(file)) return;
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+      if (!m || line.trimStart().startsWith('#')) continue;
+      const key = m[1]!;
+      if (process.env[key] !== undefined) continue; // inherited value wins
+      let value = m[2]!.trim();
+      const quoted = /^(['"])([\s\S]*)\1$/.exec(value);
+      value = quoted ? quoted[2]! : value.replace(/\s+#.*$/, '').trim();
+      process.env[key] = value;
+    }
+  } catch {
+    /* Never let config loading crash startup — env may simply be provided. */
+  }
+}
+
+loadWorkspaceEnvOnce();
 
 function str(name: string, fallback = ''): string {
   return process.env[name] ?? fallback;

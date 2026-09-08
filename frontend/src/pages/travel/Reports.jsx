@@ -18,6 +18,7 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
+import { useActiveSubBrand } from "../../utils/subBrand";
 
 const TABS = [
   { key: "overview", label: "Overview", icon: BarChart3 },
@@ -72,6 +73,8 @@ export default function TravelReports() {
   const [customTo, setCustomTo] = useState("");
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
+  const { activeSubBrand } = useActiveSubBrand();
+  const isTmc = activeSubBrand === "tmc";
 
   const dateParams = useMemo(() => {
     if (datePreset === "custom") {
@@ -193,7 +196,7 @@ export default function TravelReports() {
         })}
       </div>
 
-      {tab === "overview" && <OverviewTab dateParams={dateParams} onSelectTab={setTab} />}
+      {tab === "overview" && <OverviewTab dateParams={dateParams} onSelectTab={setTab} isTmc={isTmc} />}
       {tab === "tmc" && <TmcTab dateParams={dateParams} />}
       {tab === "rfu" && <RfuTab dateParams={dateParams} />}
       {tab === "cross-brand" && <CrossBrandTab dateParams={dateParams} />}
@@ -257,7 +260,7 @@ function StateShell({ loading, error, reload, children }) {
 }
 
 // Complete Reports overview: baseline report areas requested by the client.
-function OverviewTab({ dateParams, onSelectTab }) {
+function OverviewTab({ dateParams, onSelectTab, isTmc = false }) {
   const { data, loading, error, reload } = useReport("/api/travel/reports/summary", dateParams);
   const navigate = useNavigateSafe();
 
@@ -332,19 +335,21 @@ function OverviewTab({ dateParams, onSelectTab }) {
               actionLabel="Open Visa reports"
               onClick={() => navigate(`/travel/visa/reports?${reportQuery()}`)}
             />
-            <ReportAreaCard
-              icon={PlaneTakeoff}
-              title="Check-in miss rate"
-              status="Wired"
-              primary={`${data.checkinMiss?.missRatePct ?? 0}% missed/at-risk`}
-              details={[
-                `${data.checkinMiss?.completed ?? 0} completed`,
-                `${data.checkinMiss?.missed ?? 0} failed or manual fallback`,
-                `${data.checkinMiss?.total ?? 0} check-ins`,
-              ]}
-              actionLabel="Open check-ins"
-              onClick={() => navigate(`/travel/web-checkins?${reportQuery()}`)}
-            />
+            {!isTmc ? (
+              <ReportAreaCard
+                icon={PlaneTakeoff}
+                title="Check-in miss rate"
+                status="Wired"
+                primary={`${data.checkinMiss?.missRatePct ?? 0}% missed/at-risk`}
+                details={[
+                  `${data.checkinMiss?.completed ?? 0} completed`,
+                  `${data.checkinMiss?.missed ?? 0} failed or manual fallback`,
+                  `${data.checkinMiss?.total ?? 0} check-ins`,
+                ]}
+                actionLabel="Open check-ins"
+                onClick={() => navigate(`/travel/web-checkins?${reportQuery()}`)}
+              />
+            ) : null}
             <ReportAreaCard
               icon={BarChart3}
               title="Brand drill-downs"

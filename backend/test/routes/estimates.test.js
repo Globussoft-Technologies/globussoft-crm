@@ -89,6 +89,7 @@ eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
 // no other tables.
 prisma.estimate = {
   findMany: vi.fn(),
+  count: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -130,6 +131,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   prisma.estimate.findMany.mockReset();
+  prisma.estimate.count.mockReset();
   prisma.estimate.findFirst.mockReset();
   prisma.estimate.create.mockReset();
   prisma.estimate.update.mockReset();
@@ -609,7 +611,40 @@ describe('GET /api/estimates?fields=summary — slim-shape opt-in (#920 slice 13
     expect(args.where.status).toBe('Sent');
     expect(args.take).toBe(25);
     expect(args.skip).toBe(50);
-    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+  });
+
+  test('?page returns a deterministic, tenant/status-scoped pagination envelope', async () => {
+    prisma.estimate.findMany.mockResolvedValue([{ id: 12, status: 'Sent' }]);
+    prisma.estimate.count.mockResolvedValue(26);
+
+    const res = await request(makeApp({ tenantId: 7 }))
+      .get('/api/estimates?page=2&limit=10&status=Sent');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      data: [{ id: 12, status: 'Sent' }],
+      pagination: {
+        page: 2, limit: 10, total: 26, totalPages: 3,
+        hasNextPage: true, hasPreviousPage: true,
+      },
+    });
+    const args = prisma.estimate.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 7, status: 'Sent', deletedAt: null });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+    expect(args.take).toBe(10);
+    expect(args.skip).toBe(10);
+    expect(prisma.estimate.count).toHaveBeenCalledWith({ where: args.where });
+  });
+
+  test('?page normalizes invalid pages and clamps limits to 500', async () => {
+    prisma.estimate.findMany.mockResolvedValue([]);
+    prisma.estimate.count.mockResolvedValue(0);
+
+    const res = await request(makeApp()).get('/api/estimates?page=nope&limit=999');
+
+    expect(res.body.pagination).toMatchObject({ page: 1, limit: 500, totalPages: 0 });
+    expect(prisma.estimate.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 500, skip: 0 }));
   });
 
   test('?fields=summary returns the slim rows verbatim (no enrichment / shape transform)', async () => {

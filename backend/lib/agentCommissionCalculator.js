@@ -15,6 +15,8 @@
 //                    covers (prev.uptoCents, this.uptoCents]. The last
 //                    tier with `uptoCents == null` (or omitted) covers
 //                    everything above the previous cap.
+//   flat_fee       — agent gets `flatFeeAmount` as a fixed commission
+//                    regardless of sale price.
 //   per_pax_flat   — agent gets `amountPerPax` × number of passengers,
 //                    regardless of sale price.
 //   hybrid         — agent gets `baseAmount` (always paid) plus
@@ -77,6 +79,12 @@
  */
 
 /**
+ * @typedef {object} FlatFeeProfile
+ * @property {"flat_fee"} type
+ * @property {number} flatFeeAmount - e.g. 2500 for a fixed ₹2,500 payout
+ */
+
+/**
  * @typedef {object} PerPaxProfile
  * @property {"per_pax_flat"} type
  * @property {number} amountPerPax - e.g. 500 for ₹500/pax
@@ -96,7 +104,7 @@
  * @param {object} args
  * @param {number} args.saleAmount - sale total in operator's base currency
  * @param {number} [args.paxCount] - number of passengers (only used by per_pax_flat). Default 1.
- * @param {FlatPercentProfile|TieredProfile|PerPaxProfile|HybridProfile} args.profile
+ * @param {FlatPercentProfile|TieredProfile|FlatFeeProfile|PerPaxProfile|HybridProfile} args.profile
  * @returns {{ commission: number, breakdown: string, profileType: string }}
  */
 function computeCommission({ saleAmount, paxCount = 1, profile } = {}) {
@@ -115,6 +123,17 @@ function computeCommission({ saleAmount, paxCount = 1, profile } = {}) {
       return {
         commission: c,
         breakdown: `${pct}% of ${sale} = ${c}`,
+        profileType: profile.type,
+      };
+    }
+
+    case "flat_fee": {
+      const feeRaw = profile.flatFeeAmount ?? profile.amount ?? profile.flatAmount;
+      const fee = Number(feeRaw) || 0;
+      const c = round2(fee);
+      return {
+        commission: c,
+        breakdown: `flat fee ${c}`,
         profileType: profile.type,
       };
     }

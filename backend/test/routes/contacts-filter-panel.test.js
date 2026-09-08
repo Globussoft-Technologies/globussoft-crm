@@ -51,6 +51,8 @@ prisma.leadCustomFieldValue = prisma.leadCustomFieldValue || {};
 prisma.leadCustomFieldValue.findMany = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.webFormSubmission = prisma.webFormSubmission || {};
+prisma.webFormSubmission.findMany = vi.fn();
 const callifiedClient = requireCJS("../../services/callifiedClient");
 callifiedClient.listCampaigns = vi.fn();
 
@@ -123,6 +125,7 @@ describe("GET /api/contacts/filter-fields", () => {
       "company",
       "status",
       "source",
+      "webForm",
       "callifiedCampaignId",
       "callifiedLeadStatus",
       "tags",
@@ -163,6 +166,7 @@ describe("GET /api/contacts/filter-fields", () => {
       "company",
       "aiScore",
       "source",
+      "webForm",
       "status",
       "callifiedCampaignId",
       "callifiedLeadStatus",
@@ -1181,5 +1185,142 @@ describe("GET /api/contacts?filters=<JSON> — generic where-clause builder", ()
       expect(some.fieldId).toBe(9);
       expect(some.OR).toEqual([{ valueText: { contains: "Google" } }]);
     });
+  });
+});
+
+describe("webForm relation filter (generic Leads only)", () => {
+  beforeEach(() => {
+    prisma.webFormSubmission.findMany.mockReset().mockResolvedValue([]);
+  });
+
+  test("filter-fields lists Web Form right after Source for generic tenants", async () => {
+    const res = await request(makeApp()).get("/api/contacts/filter-fields");
+
+    expect(res.status).toBe(200);
+    const fields = res.body.fields;
+    expect(fields.find((f) => f.field === "webForm")).toMatchObject({
+      label: "Web Form",
+      kind: "text",
+    });
+    const keys = fields.map((f) => f.field);
+    expect(keys.indexOf("webForm")).toBe(keys.indexOf("source") + 1);
+  });
+
+  test("filter-fields hides Web Form for wellness/travel tenants", async () => {
+    for (const vertical of ["wellness", "travel"]) {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical });
+
+      const res = await request(makeApp()).get("/api/contacts/filter-fields");
+
+      expect(res.status).toBe(200);
+      expect(res.body.fields.map((f) => f.field)).not.toContain("webForm");
+    }
+  });
+
+  test('?filters= webForm "contains" → some-submission name-in clause', async () => {
+    const filters = [
+      { field: "webForm", operator: "contains", values: ["Contact Us"] },
+    ];
+    const res = await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`,
+    );
+
+    expect(res.status).toBe(200);
+    const call = prisma.contact.findMany.mock.calls[0][0];
+    expect(call.where.AND).toEqual([
+      {
+        webFormSubmissions: {
+          some: { webForm: { name: { in: ["Contact Us"] } } },
+        },
+      },
+    ]);
+  });
+
+  test('?filters= webForm "not_contains" → NOT-some clause (never-submitted included)', async () => {
+    const filters = [
+      { field: "webForm", operator: "not_contains", values: ["Contact Us"] },
+    ];
+    const res = await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`,
+    );
+
+    expect(res.status).toBe(200);
+    const call = prisma.contact.findMany.mock.calls[0][0];
+    expect(call.where.AND).toEqual([
+      {
+        NOT: {
+          webFormSubmissions: {
+            some: { webForm: { name: { in: ["Contact Us"] } } },
+          },
+        },
+      },
+    ]);
+  });
+
+  test("?filters= webForm is_empty/is_not_empty map to none/some on submissions", async () => {
+    await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(
+        JSON.stringify([{ field: "webForm", operator: "is_empty", values: [] }]),
+      )}`,
+    );
+    expect(prisma.contact.findMany.mock.calls[0][0].where.AND).toEqual([
+      { webFormSubmissions: { none: {} } },
+    ]);
+
+    await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(
+        JSON.stringify([{ field: "webForm", operator: "is_not_empty", values: [] }]),
+      )}`,
+    );
+    expect(prisma.contact.findMany.mock.calls[1][0].where.AND).toEqual([
+      { webFormSubmissions: { some: {} } },
+    ]);
+  });
+
+  test("?filters= webForm clause is skipped for non-generic tenants", async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: "wellness" });
+    const filters = [
+      { field: "webForm", operator: "contains", values: ["Contact Us"] },
+    ];
+    const res = await request(makeApp()).get(
+      `/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`,
+    );
+
+    expect(res.status).toBe(200);
+    const call = prisma.contact.findMany.mock.calls[0][0];
+    expect(call.where.AND).toBeUndefined();
+  });
+
+  test("filter-values/webForm returns distinct used form names, alpha-sorted", async () => {
+    prisma.webFormSubmission.findMany.mockResolvedValue([
+      { webForm: { name: "Contact Us" } },
+      { webForm: { name: "Demo Request" } },
+      { webForm: { name: "Contact Us" } },
+      { webForm: null },
+    ]);
+
+    const res = await request(makeApp()).get(
+      "/api/contacts/filter-values/webForm?status=Lead",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      values: [
+        { value: "Contact Us", label: "Contact Us" },
+        { value: "Demo Request", label: "Demo Request" },
+      ],
+    });
+    // Status scoping flows through the contact relation.
+    const args = prisma.webFormSubmission.findMany.mock.calls[0][0];
+    expect(args.where.contact).toMatchObject({ status: "Lead" });
+  });
+
+  test("filter-values/webForm 404s for non-generic tenants", async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: "travel" });
+
+    const res = await request(makeApp()).get("/api/contacts/filter-values/webForm");
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: "UNKNOWN_FIELD" });
   });
 });

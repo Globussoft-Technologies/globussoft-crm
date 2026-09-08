@@ -308,6 +308,7 @@ router.post(
         reportSkillBlurb,
         summaryForBrief,
         imageUrl,
+        sourceItineraryId,
       } = req.body || {};
 
       // Required fields per the schema's NOT NULL columns.
@@ -372,6 +373,10 @@ router.post(
         reportSkillBlurb: sanitizeText(String(reportSkillBlurb)),
         summaryForBrief: sanitizeText(String(summaryForBrief)),
         imageUrl: coerceOptionalString(imageUrl) ?? null,
+        // Lineage only — which Itinerary this row was AI-drafted from via
+        // "Add to Diagnostic KB". Optional; no validation beyond numeric
+        // coercion, informational only (see schema.prisma comment).
+        sourceItineraryId: sourceItineraryId == null ? null : Number(sourceItineraryId),
         // ALWAYS archived on create — PRD §3.2 human-verify gate. Caller
         // cannot bypass via body.status (deliberately ignored).
         status: STATUS_ARCHIVED,

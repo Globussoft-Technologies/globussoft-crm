@@ -49,6 +49,87 @@ const { buildEngineEnv } = require("../lib/brochureEngineProviderEnv");
  * fields are merged — placement, cover logos, interior band and QR remain fully
  * custom. Returns { mergedBrand, existingBrandKitId }.
  */
+/**
+ * Validate the structured TMC school trip input. Returns { valid, missing };
+ * missing is an array of dotted field paths so the frontend can map errors
+ * back to form fields. All checks are presence / shape only — soft quality
+ * warnings (logo size, format, etc.) live in the brand sanitizer.
+ */
+function validateTripInput(tripInput) {
+  const missing = [];
+  if (!tripInput || typeof tripInput !== "object" || Array.isArray(tripInput)) {
+    return { valid: false, missing: ["tripInput"] };
+  }
+
+  const requireField = (path, test = (v) => v != null && v !== "") => {
+    const parts = path.split(".");
+    let value = tripInput;
+    for (const p of parts) {
+      value = value?.[p];
+    }
+    if (!test(value)) missing.push(path);
+  };
+  const requireArray = (path, minLength = 1) =>
+    requireField(path, (v) => Array.isArray(v) && v.length >= minLength);
+
+  requireField("schoolName");
+  requireField("schoolLogoUrl");
+  requireField("schoolLogoFileName");
+  requireField("schoolLogoApproved", (v) => v === true);
+  requireField("tmcBrandKitId");
+  requireField("tripTitle");
+  requireField("destinationCountry");
+  requireField("travelDates.from");
+  requireField("travelDates.to");
+  requireField("durationDays", (v) => Number.isFinite(v) && v > 0);
+  requireField("durationNights", (v) => Number.isFinite(v) && v >= 0);
+  requireField("targetGrades");
+  requireField("tripSummary");
+  requireField("primaryObjective");
+  requireArray("learningOutcomes", 3);
+  requireField("routeCities");
+  requireArray("overnightCities", 1);
+  requireArray("inclusions", 1);
+  requireArray("exclusions", 1);
+  requireField("currency");
+  requireField("pricePerPerson", (v) => Number.isFinite(v) && v >= 0);
+  requireField("occupancyBasis");
+  requireField("deposit.amount", (v) => Number.isFinite(v) && v >= 0);
+  requireField("deposit.dueDate");
+  requireField("themeMode");
+  requireField("travelSeason");
+  requireField("primaryPhone");
+  requireField("email");
+  requireField("website");
+  requireField("callToAction");
+
+  if (Array.isArray(tripInput.days)) {
+    tripInput.days.forEach((day, idx) => {
+      if (!day || typeof day !== "object") {
+        missing.push(`days[${idx}]`);
+        return;
+      }
+      const dayReq = (path, test = (v) => v != null && v !== "") => {
+        const parts = path.split(".");
+        let value = day;
+        for (const p of parts) {
+          value = value?.[p];
+        }
+        if (!test(value)) missing.push(`days[${idx}].${path}`);
+      };
+      dayReq("dayNumber", (v) => Number.isInteger(v));
+      dayReq("date");
+      dayReq("route");
+      dayReq("activities");
+      dayReq("overnightCity");
+    });
+  } else {
+    missing.push("days");
+  }
+
+  return { valid: missing.length === 0, missing };
+}
+
 async function mergeExistingBrandKit(bodyBrand, existingBrandKitId, tenantId) {
   const id = Number(existingBrandKitId);
   if (!Number.isFinite(id) || id <= 0) return { mergedBrand: bodyBrand, existingBrandKitId: null };
@@ -153,17 +234,48 @@ router.post(
   requirePermission("marketing", "write"),
   async (req, res) => {
     try {
-      const goal = typeof req.body.goal === "string" ? req.body.goal.trim() : "";
       const sectorKey =
         typeof req.body.sectorKey === "string" && req.body.sectorKey.trim()
           ? req.body.sectorKey.trim()
           : "travel";
+      // TMC school flow: the travel sector defaults to the tmc-school template.
       const styleKey =
         typeof req.body.styleKey === "string" && req.body.styleKey.trim()
           ? req.body.styleKey.trim()
-          : undefined;
-      const existingBrandKitId =
-        typeof req.body.existingBrandKitId === "number" ? req.body.existingBrandKitId : undefined;
+          : sectorKey === "travel"
+            ? "tmc-school"
+            : undefined;
+
+      // Structured trip input (TMC school flow) → JSON-stringified as the engine goal.
+      // Keeps backward compatibility with the legacy `goal` string when tripInput is absent.
+      let goal;
+      const tripInput =
+        req.body.tripInput && typeof req.body.tripInput === "object" && !Array.isArray(req.body.tripInput)
+          ? req.body.tripInput
+          : null;
+      if (tripInput) {
+        const { valid, missing } = validateTripInput(tripInput);
+        if (!valid) {
+          return res.status(400).json({
+            error: "Missing required tripInput fields",
+            code: "TRIP_INPUT_INVALID",
+            missing,
+          });
+        }
+        goal = JSON.stringify(tripInput);
+      } else {
+        goal = typeof req.body.goal === "string" ? req.body.goal.trim() : "";
+      }
+
+      const kitIdFromBody =
+        typeof req.body.existingBrandKitId === "number"
+          ? req.body.existingBrandKitId
+          : (typeof req.body.brand?.tmcBrandKitId === "number"
+              ? req.body.brand.tmcBrandKitId
+              : (typeof req.body.brand?.tmcBrandKitId === "string"
+                  ? Number(req.body.brand.tmcBrandKitId)
+                  : (typeof req.body.tmcBrandKitId === "string" ? Number(req.body.tmcBrandKitId) : NaN)));
+      const existingBrandKitId = Number.isFinite(kitIdFromBody) && kitIdFromBody > 0 ? kitIdFromBody : undefined;
       // Merge any selected existing BrandKit into the form before the trust boundary.
       // Kit values form the base; UI edits override them so custom placement/QR stay
       // under operator control while logo/accent/contacts/socials come from the kit.
@@ -175,14 +287,18 @@ router.post(
       // Trust boundary: the engine forwards `brand` verbatim into the render
       // subprocess, so it MUST be sanitized here (raster-only logo, length caps,
       // clamped placement). Invalid input is dropped → undefined, never rejected.
-      const brand = sanitizeBrandKit(mergedBrand);
+      // The sanitizer returns soft warnings separately so we can show them in the
+      // start-run response without leaking them into the engine payload.
+      const { kit: brand, warnings } = sanitizeBrandKit(mergedBrand);
       // Switchable models: an optional per-tier model id map, OR a strategy
       // preset ('recommended' | 'cheapest' | 'smartest'). The engine applies
       // `models` first and falls back to `strategy`; both are validated there
       // against the live catalog, so we only shape-check here.
+      // For the TMC school flow only a single { reasoning: modelId } map is used;
+      // strategy is optional and ignored by the engine for this sector.
       const models =
         req.body.models && typeof req.body.models === "object" && !Array.isArray(req.body.models)
-          ? req.body.models
+          ? (typeof req.body.models.reasoning === "string" ? { reasoning: req.body.models.reasoning } : undefined)
           : undefined;
       const strategy =
         typeof req.body.strategy === "string" && req.body.strategy.trim()
@@ -196,10 +312,10 @@ router.post(
       if (!goal) {
         return res.status(400).json({ error: "goal is required", code: "GOAL_REQUIRED" });
       }
-      if (goal.length > 8000) {
+      if (goal.length > 64000) {
         return res
           .status(400)
-          .json({ error: "goal exceeds 8000 characters", code: "GOAL_TOO_LONG" });
+          .json({ error: "goal exceeds 64000 characters", code: "GOAL_TOO_LONG" });
       }
 
       const providerConfig = await aiProviderManagement.resolveProviderConfig(req.travelTenant.id);
@@ -341,7 +457,7 @@ router.post(
           }
         });
 
-      return res.json({ runId, brochureId: initial.id, status: "running" });
+      return res.json({ runId, brochureId: initial.id, status: "running", warnings });
     } catch (e) {
       console.error("[brochures] start run error:", e);
       return res
@@ -710,6 +826,63 @@ router.post(
     } catch (e) {
       console.error("[brand-images] upload error:", e);
       return res.status(500).json({ error: "Failed to upload brand images", code: "UPLOAD_FAILED" });
+    }
+  },
+);
+
+/** Multer instance for Source Control reference files (Block 2's "uploaded
+ *  itinerary, costing, flight, hotel and terms files"). These are stored for
+ *  the operator's own record-keeping and audit trail ONLY — the composer
+ *  never reads their contents (no file-parsing pipeline exists for this
+ *  flow); the operator still transcribes the real facts into the structured
+ *  form fields, matching Block 1's "use only the approved brief" rule. */
+const referenceFileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 5 },
+  fileFilter: (req, file, cb) => {
+    const ok = /^(application\/pdf|application\/vnd\.openxmlformats-officedocument\.|application\/msword|application\/vnd\.ms-excel|image\/(png|jpe?g|webp))/i.test(
+      file.mimetype,
+    );
+    if (ok) cb(null, true);
+    else cb(new Error("Only PDF, Word, Excel, or image files are allowed"));
+  },
+});
+
+router.post(
+  "/brochures/reference-files/upload",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("marketing", "write"),
+  referenceFileUpload.array("files", 5),
+  async (req, res) => {
+    try {
+      const files = Array.isArray(req.files) ? req.files : [];
+      if (!files.length) {
+        return res.status(400).json({ error: "No files uploaded", code: "NO_FILES" });
+      }
+      const tenantId = req.travelTenant.id;
+
+      if (brochureS3Store.isEnabled()) {
+        const uploaded = await Promise.all(
+          files.map(async (f) => ({
+            name: f.originalname,
+            size: f.size,
+            url: await brochureS3Store.uploadReferenceFile(tenantId, f),
+          })),
+        );
+        return res.json({ files: uploaded, storage: "s3" });
+      }
+
+      // Zero-config fallback: inline as data URIs (fine for a handful of small reference docs).
+      const uploaded = files.map((f) => ({
+        name: f.originalname,
+        size: f.size,
+        url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}`,
+      }));
+      return res.json({ files: uploaded, storage: "inline" });
+    } catch (e) {
+      console.error("[reference-files] upload error:", e);
+      return res.status(500).json({ error: "Failed to upload reference files", code: "UPLOAD_FAILED" });
     }
   },
 );

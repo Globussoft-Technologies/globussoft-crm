@@ -703,7 +703,7 @@ try {
 async function resolveInboundMediaUrl({ tenantId, fileName, mediaType }) {
   if (!fileName) return null;
   const proxyUrl = `/api/travel/whatsapp/media?fileName=${encodeURIComponent(fileName)}`;
-  if (!s3Service || !process.env.AWS_S3_BUCKET_NAME) return proxyUrl;
+  if (!s3Service || !s3Service.BUCKET_NAME) return proxyUrl;
   try {
     const upstream = await watiClient.getMediaResponse(fileName);
     if (!upstream) return proxyUrl;
@@ -890,7 +890,7 @@ router.post(
 // mount (dev fallback — server.js already serves backend/uploads/).
 async function persistOutboundMedia({ tenantId, buffer, filename, mimeType }) {
   const safeName = `${crypto.randomUUID()}-${String(filename || "file").replace(/[^\w.-]/g, "_")}`;
-  if (s3Service && process.env.AWS_S3_BUCKET_NAME) {
+  if (s3Service && s3Service.BUCKET_NAME) {
     try {
       return await s3Service.uploadFile(
         buffer,

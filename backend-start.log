@@ -1,88 +1,742 @@
 
-> globussoft-crm-backend@3.9.2 start
-> node server.js
+> globussoft-crm-backend@3.9.2 dev
+> nodemon server.js
 
-[env] AI keys: GEMINI=MISSING OPENAI=MISSING
+[33m[nodemon] 3.1.14[39m
+[33m[nodemon] to restart at any time, enter `rs`[39m
+[33m[nodemon] watching path(s): *.*[39m
+[33m[nodemon] watching extensions: js,mjs,cjs,json[39m
+[32m[nodemon] starting `node server.js`[39m
+[env] AI keys: GEMINI=set OPENAI=set
 [Sentry] SENTRY_DSN not set — error monitoring disabled
-[metaWebhook] META_APP_SECRET unset — running in DEV mode without signature verification. This is acceptable for local/ngrok development but MUST be set before deploying to production.
-[whatsappWeb] init — socket handle attached; restoring previously-linked sessions…
-[Email] SENDGRID_API_KEY not set — emails will be logged but not delivered
-[AI] GEMINI_API_KEY not found — AI draft will use fallback templates
-[Sentiment] GEMINI_API_KEY not set — using rule-based fallback
-[Report Engine] Initialized — checking every hour for due reports.
-Sequence Execution Engine initialized (cron: * * * * *)
-[LeadScoring] Cron initialized (every 10 minutes).
-[RecurringInvoice] Cron scheduled: daily at 6 AM
-[MarketplaceEngine] Cron scheduled: every 5 minutes
-[Retention] Cron scheduled: daily at 03:00.
-Scheduled Email Engine initialized (cron: * * * * *)
-[Sentiment] Cron initialized (every 15 minutes).
-[DealInsightsEngine] Cron initialized (every 6 hours).
-[ForecastSnapshot] cron initialized
+[callifiedAgentBridge] listening for agent bridges on /ws/callified-agent
+[whatsappWeb] init  socket handle attached; restoring previously-linked sessions...
+[whatsappWeb] init: killed any orphan chromium processes from previous runs
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] boot-restore: re-initializing 1 saved session(s): 8
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] tenant 8 cleared 1 stale Chromium lock artifact(s) before launch
+[Email] SendGrid configured with sender: shiksha@blondmail.com
+[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts
+[callifiedAutoDial] processor started
+[callifiedDnpRetry] engine started
 [WorkflowEngine] Initialized — listening for CRM events via eventBus
-[CampaignEngine] Campaign scheduling cron initialized (runs every minute)
-[Backup] Cron scheduled: daily at 02:00
-[Orchestrator] cron initialized (daily 07:00 IST)
-Appointment Reminders Engine initialized (cron: */15 * * * *)
-[NoShowRisk] cron initialized (daily 08:30 IST)
-[WellnessOps] cron initialized (hourly NPS + retention)
-[TripPostTripFeedback] cron initialized (daily 06:13 IST)
-[TripPaymentReminders] cron initialized (daily 07:13 IST)
-[payment-schedule-reminder] cron initialized (daily 09:13 IST, reminders + escalation)
-[TravelDiagnosticAlerts] cron initialized (every 5 min)
-[TravelJourneyReminders] cron initialized (every 30 min)
-[TripCountdown] cron scheduled (hourly :17)
-[PaymentDeadline] cron scheduled (hourly :37)
-[WebCheckinEmail] cron scheduled (hourly :47)
-[TravelReview] cron scheduled (daily 09:07)
-[VisaRiskFlag] cron initialized (every 6 hours)
 ✓ Cron engine: visaRiskFlagEngine (every 6 hours)
-[WebCheckinScheduler] cron initialized (every 15 min, off-minute jitter)
-[ContactGreetings] cron initialized (daily 08:13 IST)
-[ReligiousGuidance] cron initialized (daily 09:13 IST)
-[quoteExpirySweep] cron initialized (daily 09:00 IST)
-[fxRateEngine] cron initialized (hourly, top-of-the-hour UTC)
-[gstr-filing-reminder] cron initialized (daily 05:00 UTC / 10:30 IST)
-[LowStock] cron initialized (daily 09:00 IST)
 [autoConsumption] listener registered for visit.completed
-SLA Breach Engine initialized (cron: */5 * * * *)
-[whatsappOutboundEngine] initialized (cron: */30 * * * * *)
-[whatsappMediaEngine] initialized (cron: */60 * * * * *)
-[whatsappTokenRefreshEngine] initialized (cron: 30 4 * * *)
-[whatsappTemplateSyncEngine] initialized (cron: 30 3 * * *)
-[demoHygiene] Cron scheduled: hourly at :17
-Lead SLA Breach Engine initialized (cron: */2 * * * *)
-[AuditIntegrity] Cron scheduled: daily at 04:00.
+[whatsappOutboundEngine] registered (default tick: */30 * * * * *)
 [posReceiptDispatcher] subscribed to sale.completed
-[LeavePolicy] cron scheduled: 02:30 IST daily
-[walletExpiry] cron initialized (daily 03:30 IST)
 [Backend] Enterprise Express Server running securely on port 5000
-[LeadScoring] Scored 0 contacts across 3 tenants.
+[cronRegistry] reportEngine: scheduled "0 * * * *"
+[cronRegistry] appointmentRemindersEngine: scheduled "*/15 * * * *"
+[cronRegistry] recurringInvoiceEngine: scheduled "0 6 * * *"
+[cost-master-boot] no duplicate rows found (204 scanned).
+[cronRegistry] retentionEngine: scheduled "0 3 * * *"
+[cronRegistry] statusSnapshotEngine: scheduled "5 0 * * *"
+[cronRegistry] noShowRiskEngine: scheduled "30 8 * * *"
+[cronRegistry] travelDiagnosticAdvisorAlerts: scheduled "*/5 * * * *"
+[cronRegistry] campaignEngine: scheduled "* * * * *"
+[cronRegistry] sentimentEngine: scheduled "*/15 * * * *"
+[cronRegistry] tripPaymentReminders: scheduled "13 7 * * *"
+[cronRegistry] paymentDeadlineEngine: scheduled "37 * * * *"
+[cronRegistry] scheduledEmailEngine: scheduled "* * * * *"
+[cronRegistry] travelReviewEngine: scheduled "7 9 * * *"
+[cronRegistry] visaRiskFlagEngine: scheduled "0 */6 * * *"
+[cronRegistry] sequenceEngine: scheduled "* * * * *"
+[cronRegistry] webCheckinAutomation: scheduled "8,23,38,53 * * * *"
+[cronRegistry] slaBreachEngine: scheduled "*/5 * * * *"
+[cronRegistry] backupEngine: scheduled "0 2 * * *"
+[cronRegistry] marketplaceEngine: disabled — no task scheduled
+[cronRegistry] dealInsightsEngine: scheduled "0 */6 * * *"
+[cronRegistry] travelJourneyReminders: scheduled "13,43 * * * *"
+[cronRegistry] webCheckinEngine: scheduled "47 * * * *"
+[cronRegistry] aiCreditLowBalanceEngine: scheduled "*/30 * * * *"
+[cronRegistry] contactGreetingsEngine: scheduled "13 8 * * *"
+[cronRegistry] lowStockEngine: scheduled "0 9 * * *"
+[cronRegistry] religiousGuidanceEngine: scheduled "13 9 * * *"
+[cronRegistry] paymentScheduleReminderEngine: scheduled "13 9 * * *"
+[cronRegistry] quoteExpirySweep: scheduled "0 9 * * *"
+[cronRegistry] wellnessOpsEngine: scheduled "17 * * * *"
+[cronRegistry] fxRateEngine: scheduled "0 * * * *"
+[cronRegistry] gstrFilingReminderEngine: scheduled "0 5 * * *"
+[cronRegistry] leavePolicyEngine: scheduled "30 2 * * *"
+[cronRegistry] whatsappTokenRefreshEngine: scheduled "30 4 * * *"
+[cronRegistry] tripCountdownEngine: scheduled "17 * * * *"
+[cronRegistry] orchestratorEngine: scheduled "30 1 * * *"
+[cronRegistry] tripPostTripFeedback: scheduled "13 6 * * *"
+[cronRegistry] whatsappOutboundEngine: scheduled "*/30 * * * * *"
+[cronRegistry] demoHygieneEngine: scheduled "17 * * * *"
+[cronRegistry] leadSlaEngine: scheduled "*/2 * * * *"
+[cronRegistry] auditIntegrityEngine: scheduled "0 4 * * *"
+[cronRegistry] walletExpiryEngine: scheduled "30 3 * * *"
+[cronRegistry] webCheckinScheduler: scheduled "13,28,43,58 * * * *"
+[cronRegistry] whatsappTemplateSyncEngine: scheduled "30 3 * * *"
+[cronRegistry] forecastSnapshotEngine: scheduled "0 1 * * 1"
+[cronRegistry] cronLogRetentionEngine: scheduled "15 3 * * *"
+[cronRegistry] apiCallLogRetentionEngine: scheduled "20 3 * * *"
+[cronRegistry] statusProbeEngine: scheduled "*/5 * * * *"
+[cronRegistry] whatsappMediaEngine: scheduled "*/60 * * * * *"
+[whatsappWeb] boot-restore: tenant 8 resuming from saved session
+[wellness-role-boot] reverse — promoted 30 user(s) to matching RBAC role (scanned 44 tagged users across 8 tenant(s))
+[wellness-role-boot] forward — already in sync (scanned 84 users across 8 tenant(s)).
 [rbac-boot] RBAC state already compatible — no changes.
-[wellness-role-boot] reverse — promoted 4 user(s) to matching RBAC role (scanned 18 tagged users across 1 tenant(s))
-[wellness-role-boot] forward — already in sync (scanned 22 users across 1 tenant(s)).
-[MarketplaceEngine] Running sync cycle...
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (116ms)
 [Sentiment] processed 0 messages
-[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (11ms)
-[SLABreach] tenants=3 checked=0 breached=0 (17ms)
+[statusProbe] probed 3 component(s) in 33ms; 0 status change(s)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[statusProbe] probed 3 component(s) in 48ms; 0 status change(s)
+[LeadSLABreach] tenants=141 checked=0 breached=0 (242ms)
+[SLABreach] tenants=141 checked=0 breached=0 (309ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (114ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (228ms)
+[statusProbe] probed 3 component(s) in 62ms; 0 status change(s)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[SLABreach] tenants=141 checked=0 breached=0 (306ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (279ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (194ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
 [Sentiment] processed 0 messages
-[LeadSLABreach] tenants=3 checked=0 breached=0 (17ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (13ms)
-[LeadScoring] Cron tick — rescoring all contacts...
-[MarketplaceEngine] Running sync cycle...
-[LeadSLABreach] tenants=3 checked=0 breached=0 (20ms)
-[LeadScoring] Scored 0 contacts across 3 tenants.
-[SLABreach] tenants=3 checked=0 breached=0 (27ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (13ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
-[MarketplaceEngine] Running sync cycle...
-[SLABreach] tenants=3 checked=0 breached=0 (20ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (9ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (13ms)
-[LeadScoring] Cron tick — rescoring all contacts...
-[MarketplaceEngine] Running sync cycle...
+[AppointmentReminders] tenants=8 queued24=0 queued1=0 skipped=0 (67ms)
+[statusProbe] probed 3 component(s) in 73ms; 0 status change(s)
+[LeadSLABreach] tenants=141 checked=0 breached=0 (247ms)
+[SLABreach] tenants=141 checked=0 breached=0 (303ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (210ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[availability] tenantId=1 date=2026-08-26
+[availability] returning 18 doctor(s)
+[availability] tenantId=1 date=2026-08-26
+[availability] returning 18 doctor(s)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[notifications.get] Fetching notifications for user: { userId: 1, tenantId: 1, where: { userId: 1, tenantId: 1 } }
+[notifications.get] Found: { total: 1, returned: 1 }
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (111ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[statusProbe] probed 3 component(s) in 27ms; 0 status change(s)
+[SLABreach] tenants=141 checked=0 breached=0 (145ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (141ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (107ms)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node server.js`[39m
+[env] AI keys: GEMINI=set OPENAI=set
+[Sentry] SENTRY_DSN not set — error monitoring disabled
+[callifiedAgentBridge] listening for agent bridges on /ws/callified-agent
+[whatsappWeb] init  socket handle attached; restoring previously-linked sessions...
+[whatsappWeb] init: killed any orphan chromium processes from previous runs
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] boot-restore: re-initializing 1 saved session(s): 8
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] tenant 8 cleared 1 stale Chromium lock artifact(s) before launch
+[Email] SendGrid configured with sender: shiksha@blondmail.com
+[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts
+[callifiedAutoDial] processor started
+[callifiedDnpRetry] engine started
+[WorkflowEngine] Initialized — listening for CRM events via eventBus
+✓ Cron engine: visaRiskFlagEngine (every 6 hours)
+[autoConsumption] listener registered for visit.completed
+[whatsappOutboundEngine] registered (default tick: */30 * * * * *)
+[posReceiptDispatcher] subscribed to sale.completed
+[Backend] Enterprise Express Server running securely on port 5000
+[cronRegistry] forecastSnapshotEngine: scheduled "0 1 * * 1"
+[cronRegistry] sequenceEngine: scheduled "* * * * *"
+[cronRegistry] reportEngine: scheduled "0 * * * *"
+[cronRegistry] statusProbeEngine: scheduled "*/5 * * * *"
+[cronRegistry] appointmentRemindersEngine: scheduled "*/15 * * * *"
+[cronRegistry] noShowRiskEngine: scheduled "30 8 * * *"
+[cronRegistry] wellnessOpsEngine: scheduled "17 * * * *"
+[cronRegistry] recurringInvoiceEngine: scheduled "0 6 * * *"
+[cronRegistry] marketplaceEngine: disabled — no task scheduled
+[cronRegistry] campaignEngine: scheduled "* * * * *"
+[cronRegistry] tripPostTripFeedback: scheduled "13 6 * * *"
+[cronRegistry] orchestratorEngine: scheduled "30 1 * * *"
+[cronRegistry] paymentDeadlineEngine: scheduled "37 * * * *"
+[cronRegistry] tripPaymentReminders: scheduled "13 7 * * *"
+[cronRegistry] statusSnapshotEngine: scheduled "5 0 * * *"
+[cronRegistry] dealInsightsEngine: scheduled "0 */6 * * *"
+[cronRegistry] contactGreetingsEngine: scheduled "13 8 * * *"
+[cronRegistry] sentimentEngine: scheduled "*/15 * * * *"
+[cronRegistry] travelJourneyReminders: scheduled "13,43 * * * *"
+[cronRegistry] scheduledEmailEngine: scheduled "* * * * *"
+[cronRegistry] paymentScheduleReminderEngine: scheduled "13 9 * * *"
+[cronRegistry] aiCreditLowBalanceEngine: scheduled "*/30 * * * *"
+[cronRegistry] travelReviewEngine: scheduled "7 9 * * *"
+[cronRegistry] backupEngine: scheduled "0 2 * * *"
+[cronRegistry] webCheckinScheduler: scheduled "13,28,43,58 * * * *"
+[cronRegistry] visaRiskFlagEngine: scheduled "0 */6 * * *"
+[cronRegistry] whatsappTemplateSyncEngine: scheduled "30 3 * * *"
+[cronRegistry] travelDiagnosticAdvisorAlerts: scheduled "*/5 * * * *"
+[cronRegistry] quoteExpirySweep: scheduled "0 9 * * *"
+[cronRegistry] slaBreachEngine: scheduled "*/5 * * * *"
+[cronRegistry] religiousGuidanceEngine: scheduled "13 9 * * *"
+[cronRegistry] fxRateEngine: scheduled "0 * * * *"
+[cronRegistry] whatsappTokenRefreshEngine: scheduled "30 4 * * *"
+[cronRegistry] whatsappMediaEngine: scheduled "*/60 * * * * *"
+[cronRegistry] demoHygieneEngine: scheduled "17 * * * *"
+[cronRegistry] tripCountdownEngine: scheduled "17 * * * *"
+[cronRegistry] webCheckinEngine: scheduled "47 * * * *"
+[cronRegistry] gstrFilingReminderEngine: scheduled "0 5 * * *"
+[cronRegistry] retentionEngine: scheduled "0 3 * * *"
+[cronRegistry] whatsappOutboundEngine: scheduled "*/30 * * * * *"
+[cronRegistry] webCheckinAutomation: scheduled "8,23,38,53 * * * *"
+[cost-master-boot] no duplicate rows found (204 scanned).
+[cronRegistry] auditIntegrityEngine: scheduled "0 4 * * *"
+[cronRegistry] leadSlaEngine: scheduled "*/2 * * * *"
+[cronRegistry] leavePolicyEngine: scheduled "30 2 * * *"
+[cronRegistry] walletExpiryEngine: scheduled "30 3 * * *"
+[cronRegistry] lowStockEngine: scheduled "0 9 * * *"
+[cronRegistry] cronLogRetentionEngine: scheduled "15 3 * * *"
+[cronRegistry] apiCallLogRetentionEngine: scheduled "20 3 * * *"
+[whatsappWeb] boot-restore: tenant 8 resuming from saved session
+[wellness-role-boot] reverse — promoted 30 user(s) to matching RBAC role (scanned 44 tagged users across 8 tenant(s))
+[wellness-role-boot] forward — already in sync (scanned 84 users across 8 tenant(s)).
+[rbac-boot] RBAC state already compatible — no changes.
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
 [Sentiment] processed 0 messages
-[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (20ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (20ms)
-[LeadScoring] Scored 0 contacts across 3 tenants.
-[SLABreach] tenants=3 checked=0 breached=0 (27ms)
+[statusProbe] probed 3 component(s) in 68ms; 0 status change(s)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node server.js`[39m
+[env] AI keys: GEMINI=set OPENAI=set
+[Sentry] SENTRY_DSN not set — error monitoring disabled
+[callifiedAgentBridge] listening for agent bridges on /ws/callified-agent
+[whatsappWeb] init  socket handle attached; restoring previously-linked sessions...
+[whatsappWeb] init: killed any orphan chromium processes from previous runs
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] boot-restore: re-initializing 1 saved session(s): 8
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] tenant 8 cleared 1 stale Chromium lock artifact(s) before launch
+[Email] SendGrid configured with sender: shiksha@blondmail.com
+[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts
+[callifiedAutoDial] processor started
+[callifiedDnpRetry] engine started
+[WorkflowEngine] Initialized — listening for CRM events via eventBus
+✓ Cron engine: visaRiskFlagEngine (every 6 hours)
+[autoConsumption] listener registered for visit.completed
+[whatsappOutboundEngine] registered (default tick: */30 * * * * *)
+[posReceiptDispatcher] subscribed to sale.completed
+[Backend] Enterprise Express Server running securely on port 5000
+[cost-master-boot] no duplicate rows found (204 scanned).
+[cronRegistry] sequenceEngine: scheduled "* * * * *"
+[cronRegistry] reportEngine: scheduled "0 * * * *"
+[cronRegistry] marketplaceEngine: disabled — no task scheduled
+[cronRegistry] orchestratorEngine: scheduled "30 1 * * *"
+[cronRegistry] dealInsightsEngine: scheduled "0 */6 * * *"
+[cronRegistry] visaRiskFlagEngine: scheduled "0 */6 * * *"
+[cronRegistry] appointmentRemindersEngine: scheduled "*/15 * * * *"
+[cronRegistry] webCheckinAutomation: scheduled "8,23,38,53 * * * *"
+[cronRegistry] forecastSnapshotEngine: scheduled "0 1 * * 1"
+[cronRegistry] recurringInvoiceEngine: scheduled "0 6 * * *"
+[cronRegistry] paymentDeadlineEngine: scheduled "37 * * * *"
+[cronRegistry] travelJourneyReminders: scheduled "13,43 * * * *"
+[cronRegistry] tripCountdownEngine: scheduled "17 * * * *"
+[cronRegistry] webCheckinScheduler: scheduled "13,28,43,58 * * * *"
+[cronRegistry] religiousGuidanceEngine: scheduled "13 9 * * *"
+[cronRegistry] travelReviewEngine: scheduled "7 9 * * *"
+[cronRegistry] webCheckinEngine: scheduled "47 * * * *"
+[cronRegistry] gstrFilingReminderEngine: scheduled "0 5 * * *"
+[cronRegistry] fxRateEngine: scheduled "0 * * * *"
+[cronRegistry] auditIntegrityEngine: scheduled "0 4 * * *"
+[cronRegistry] whatsappOutboundEngine: scheduled "*/30 * * * * *"
+[cronRegistry] tripPostTripFeedback: scheduled "13 6 * * *"
+[cronRegistry] slaBreachEngine: scheduled "*/5 * * * *"
+[cronRegistry] lowStockEngine: scheduled "0 9 * * *"
+[cronRegistry] whatsappTokenRefreshEngine: scheduled "30 4 * * *"
+[cronRegistry] aiCreditLowBalanceEngine: scheduled "*/30 * * * *"
+[cronRegistry] demoHygieneEngine: scheduled "17 * * * *"
+[cronRegistry] leadSlaEngine: scheduled "*/2 * * * *"
+[cronRegistry] scheduledEmailEngine: scheduled "* * * * *"
+[cronRegistry] quoteExpirySweep: scheduled "0 9 * * *"
+[cronRegistry] apiCallLogRetentionEngine: scheduled "20 3 * * *"
+[cronRegistry] leavePolicyEngine: scheduled "30 2 * * *"
+[cronRegistry] cronLogRetentionEngine: scheduled "15 3 * * *"
+[cronRegistry] walletExpiryEngine: scheduled "30 3 * * *"
+[cronRegistry] retentionEngine: scheduled "0 3 * * *"
+[cronRegistry] paymentScheduleReminderEngine: scheduled "13 9 * * *"
+[cronRegistry] contactGreetingsEngine: scheduled "13 8 * * *"
+[cronRegistry] whatsappTemplateSyncEngine: scheduled "30 3 * * *"
+[cronRegistry] noShowRiskEngine: scheduled "30 8 * * *"
+[cronRegistry] whatsappMediaEngine: scheduled "*/60 * * * * *"
+[cronRegistry] statusSnapshotEngine: scheduled "5 0 * * *"
+[cronRegistry] sentimentEngine: scheduled "*/15 * * * *"
+[cronRegistry] backupEngine: scheduled "0 2 * * *"
+[cronRegistry] campaignEngine: scheduled "* * * * *"
+[cronRegistry] travelDiagnosticAdvisorAlerts: scheduled "*/5 * * * *"
+[cronRegistry] statusProbeEngine: scheduled "*/5 * * * *"
+[cronRegistry] wellnessOpsEngine: scheduled "17 * * * *"
+[cronRegistry] tripPaymentReminders: scheduled "13 7 * * *"
+[whatsappWeb] boot-restore: tenant 8 resuming from saved session
+[wellness-role-boot] reverse — promoted 30 user(s) to matching RBAC role (scanned 44 tagged users across 8 tenant(s))
+[wellness-role-boot] forward — already in sync (scanned 84 users across 8 tenant(s)).
+[rbac-boot] RBAC state already compatible — no changes.
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[Sentiment] processed 0 messages
+[statusProbe] probed 3 component(s) in 73ms; 0 status change(s)
+[statusProbe] probed 3 component(s) in 73ms; 0 status change(s)
+[LeadSLABreach] tenants=141 checked=0 breached=0 (336ms)
+[SLABreach] tenants=141 checked=0 breached=0 (471ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (171ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node server.js`[39m
+[env] AI keys: GEMINI=set OPENAI=set
+[Sentry] SENTRY_DSN not set — error monitoring disabled
+[callifiedAgentBridge] listening for agent bridges on /ws/callified-agent
+[whatsappWeb] init  socket handle attached; restoring previously-linked sessions...
+[whatsappWeb] init: killed any orphan chromium processes from previous runs
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] boot-restore: re-initializing 1 saved session(s): 8
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] tenant 8 cleared 1 stale Chromium lock artifact(s) before launch
+[Email] SendGrid configured with sender: shiksha@blondmail.com
+[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts
+[callifiedAutoDial] processor started
+[callifiedDnpRetry] engine started
+[WorkflowEngine] Initialized — listening for CRM events via eventBus
+✓ Cron engine: visaRiskFlagEngine (every 6 hours)
+[autoConsumption] listener registered for visit.completed
+[whatsappOutboundEngine] registered (default tick: */30 * * * * *)
+[posReceiptDispatcher] subscribed to sale.completed
+[Backend] Enterprise Express Server running securely on port 5000
+[cronRegistry] reportEngine: scheduled "0 * * * *"
+[cronRegistry] recurringInvoiceEngine: scheduled "0 6 * * *"
+[cronRegistry] tripCountdownEngine: scheduled "17 * * * *"
+[cronRegistry] sequenceEngine: scheduled "* * * * *"
+[cronRegistry] orchestratorEngine: scheduled "30 1 * * *"
+[cronRegistry] noShowRiskEngine: scheduled "30 8 * * *"
+[cronRegistry] dealInsightsEngine: scheduled "0 */6 * * *"
+[cost-master-boot] no duplicate rows found (204 scanned).
+[cronRegistry] tripPostTripFeedback: scheduled "13 6 * * *"
+[cronRegistry] campaignEngine: scheduled "* * * * *"
+[cronRegistry] paymentScheduleReminderEngine: scheduled "13 9 * * *"
+[cronRegistry] contactGreetingsEngine: scheduled "13 8 * * *"
+[cronRegistry] travelReviewEngine: scheduled "7 9 * * *"
+[cronRegistry] retentionEngine: scheduled "0 3 * * *"
+[cronRegistry] travelJourneyReminders: scheduled "13,43 * * * *"
+[cronRegistry] fxRateEngine: scheduled "0 * * * *"
+[cronRegistry] webCheckinScheduler: scheduled "13,28,43,58 * * * *"
+[cronRegistry] tripPaymentReminders: scheduled "13 7 * * *"
+[cronRegistry] scheduledEmailEngine: scheduled "* * * * *"
+[cronRegistry] quoteExpirySweep: scheduled "0 9 * * *"
+[cronRegistry] religiousGuidanceEngine: scheduled "13 9 * * *"
+[cronRegistry] webCheckinAutomation: scheduled "8,23,38,53 * * * *"
+[cronRegistry] webCheckinEngine: scheduled "47 * * * *"
+[cronRegistry] visaRiskFlagEngine: scheduled "0 */6 * * *"
+[cronRegistry] marketplaceEngine: disabled — no task scheduled
+[cronRegistry] travelDiagnosticAdvisorAlerts: scheduled "*/5 * * * *"
+[cronRegistry] gstrFilingReminderEngine: scheduled "0 5 * * *"
+[cronRegistry] slaBreachEngine: scheduled "*/5 * * * *"
+[cronRegistry] lowStockEngine: scheduled "0 9 * * *"
+[cronRegistry] aiCreditLowBalanceEngine: scheduled "*/30 * * * *"
+[cronRegistry] whatsappOutboundEngine: scheduled "*/30 * * * * *"
+[cronRegistry] whatsappTemplateSyncEngine: scheduled "30 3 * * *"
+[cronRegistry] demoHygieneEngine: scheduled "17 * * * *"
+[cronRegistry] whatsappMediaEngine: scheduled "*/60 * * * * *"
+[cronRegistry] leavePolicyEngine: scheduled "30 2 * * *"
+[cronRegistry] statusSnapshotEngine: scheduled "5 0 * * *"
+[cronRegistry] whatsappTokenRefreshEngine: scheduled "30 4 * * *"
+[cronRegistry] leadSlaEngine: scheduled "*/2 * * * *"
+[cronRegistry] cronLogRetentionEngine: scheduled "15 3 * * *"
+[cronRegistry] auditIntegrityEngine: scheduled "0 4 * * *"
+[cronRegistry] walletExpiryEngine: scheduled "30 3 * * *"
+[cronRegistry] apiCallLogRetentionEngine: scheduled "20 3 * * *"
+[cronRegistry] backupEngine: scheduled "0 2 * * *"
+[cronRegistry] forecastSnapshotEngine: scheduled "0 1 * * 1"
+[cronRegistry] sentimentEngine: scheduled "*/15 * * * *"
+[cronRegistry] paymentDeadlineEngine: scheduled "37 * * * *"
+[cronRegistry] wellnessOpsEngine: scheduled "17 * * * *"
+[cronRegistry] statusProbeEngine: scheduled "*/5 * * * *"
+[cronRegistry] appointmentRemindersEngine: scheduled "*/15 * * * *"
+[whatsappWeb] boot-restore: tenant 8 resuming from saved session
+[wellness-role-boot] reverse — promoted 30 user(s) to matching RBAC role (scanned 44 tagged users across 8 tenant(s))
+[wellness-role-boot] forward — already in sync (scanned 84 users across 8 tenant(s)).
+[rbac-boot] RBAC state already compatible — no changes.
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node server.js`[39m
+[env] AI keys: GEMINI=set OPENAI=set
+[Sentry] SENTRY_DSN not set — error monitoring disabled
+[callifiedAgentBridge] listening for agent bridges on /ws/callified-agent
+[whatsappWeb] init  socket handle attached; restoring previously-linked sessions...
+[whatsappWeb] init: killed any orphan chromium processes from previous runs
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] boot-restore: re-initializing 1 saved session(s): 8
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] tenant 8 cleared 1 stale Chromium lock artifact(s) before launch
+[Email] SendGrid configured with sender: shiksha@blondmail.com
+[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts
+[callifiedAutoDial] processor started
+[callifiedDnpRetry] engine started
+[WorkflowEngine] Initialized — listening for CRM events via eventBus
+✓ Cron engine: visaRiskFlagEngine (every 6 hours)
+[autoConsumption] listener registered for visit.completed
+[whatsappOutboundEngine] registered (default tick: */30 * * * * *)
+[posReceiptDispatcher] subscribed to sale.completed
+[Backend] Enterprise Express Server running securely on port 5000
+[cronRegistry] reportEngine: scheduled "0 * * * *"
+[cronRegistry] travelReviewEngine: scheduled "7 9 * * *"
+[cronRegistry] statusProbeEngine: scheduled "*/5 * * * *"
+[cronRegistry] marketplaceEngine: disabled — no task scheduled
+[cost-master-boot] no duplicate rows found (204 scanned).
+[cronRegistry] recurringInvoiceEngine: scheduled "0 6 * * *"
+[cronRegistry] orchestratorEngine: scheduled "30 1 * * *"
+[cronRegistry] forecastSnapshotEngine: scheduled "0 1 * * 1"
+[cronRegistry] sentimentEngine: scheduled "*/15 * * * *"
+[cronRegistry] webCheckinAutomation: scheduled "8,23,38,53 * * * *"
+[cronRegistry] statusSnapshotEngine: scheduled "5 0 * * *"
+[cronRegistry] paymentDeadlineEngine: scheduled "37 * * * *"
+[cronRegistry] noShowRiskEngine: scheduled "30 8 * * *"
+[cronRegistry] wellnessOpsEngine: scheduled "17 * * * *"
+[cronRegistry] webCheckinScheduler: scheduled "13,28,43,58 * * * *"
+[cronRegistry] contactGreetingsEngine: scheduled "13 8 * * *"
+[cronRegistry] quoteExpirySweep: scheduled "0 9 * * *"
+[cronRegistry] webCheckinEngine: scheduled "47 * * * *"
+[cronRegistry] campaignEngine: scheduled "* * * * *"
+[cronRegistry] lowStockEngine: scheduled "0 9 * * *"
+[cronRegistry] whatsappTokenRefreshEngine: scheduled "30 4 * * *"
+[cronRegistry] gstrFilingReminderEngine: scheduled "0 5 * * *"
+[cronRegistry] travelJourneyReminders: scheduled "13,43 * * * *"
+[cronRegistry] religiousGuidanceEngine: scheduled "13 9 * * *"
+[cronRegistry] fxRateEngine: scheduled "0 * * * *"
+[cronRegistry] whatsappOutboundEngine: scheduled "*/30 * * * * *"
+[cronRegistry] slaBreachEngine: scheduled "*/5 * * * *"
+[cronRegistry] whatsappMediaEngine: scheduled "*/60 * * * * *"
+[cronRegistry] tripPostTripFeedback: scheduled "13 6 * * *"
+[cronRegistry] auditIntegrityEngine: scheduled "0 4 * * *"
+[cronRegistry] visaRiskFlagEngine: scheduled "0 */6 * * *"
+[cronRegistry] scheduledEmailEngine: scheduled "* * * * *"
+[cronRegistry] leadSlaEngine: scheduled "*/2 * * * *"
+[cronRegistry] whatsappTemplateSyncEngine: scheduled "30 3 * * *"
+[cronRegistry] demoHygieneEngine: scheduled "17 * * * *"
+[cronRegistry] aiCreditLowBalanceEngine: scheduled "*/30 * * * *"
+[cronRegistry] leavePolicyEngine: scheduled "30 2 * * *"
+[cronRegistry] walletExpiryEngine: scheduled "30 3 * * *"
+[cronRegistry] cronLogRetentionEngine: scheduled "15 3 * * *"
+[cronRegistry] apiCallLogRetentionEngine: scheduled "20 3 * * *"
+[cronRegistry] tripPaymentReminders: scheduled "13 7 * * *"
+[cronRegistry] tripCountdownEngine: scheduled "17 * * * *"
+[cronRegistry] dealInsightsEngine: scheduled "0 */6 * * *"
+[cronRegistry] sequenceEngine: scheduled "* * * * *"
+[cronRegistry] retentionEngine: scheduled "0 3 * * *"
+[cronRegistry] appointmentRemindersEngine: scheduled "*/15 * * * *"
+[cronRegistry] travelDiagnosticAdvisorAlerts: scheduled "*/5 * * * *"
+[cronRegistry] backupEngine: scheduled "0 2 * * *"
+[cronRegistry] paymentScheduleReminderEngine: scheduled "13 9 * * *"
+[wellness-role-boot] reverse — promoted 30 user(s) to matching RBAC role (scanned 44 tagged users across 8 tenant(s))
+[whatsappWeb] boot-restore: tenant 8 resuming from saved session
+[wellness-role-boot] forward — already in sync (scanned 84 users across 8 tenant(s)).
+[rbac-boot] RBAC state already compatible — no changes.
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[Sentiment] processed 0 messages
+[LeadSLABreach] tenants=141 checked=0 breached=0 (195ms)
+[statusProbe] probed 3 component(s) in 63ms; 0 status change(s)
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node server.js`[39m
+[32m[nodemon] restarting due to changes...[39m
+[env] AI keys: GEMINI=set OPENAI=set
+[32m[nodemon] starting `node server.js`[39m
+[env] AI keys: GEMINI=set OPENAI=set
+[Sentry] SENTRY_DSN not set — error monitoring disabled
+[callifiedAgentBridge] listening for agent bridges on /ws/callified-agent
+[whatsappWeb] init  socket handle attached; restoring previously-linked sessions...
+[whatsappWeb] init: killed any orphan chromium processes from previous runs
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] boot-restore: re-initializing 1 saved session(s): 8
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] tenant 8 cleared 1 stale Chromium lock artifact(s) before launch
+[Email] SendGrid configured with sender: shiksha@blondmail.com
+[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts
+[callifiedAutoDial] processor started
+[callifiedDnpRetry] engine started
+[WorkflowEngine] Initialized — listening for CRM events via eventBus
+✓ Cron engine: visaRiskFlagEngine (every 6 hours)
+[autoConsumption] listener registered for visit.completed
+[whatsappOutboundEngine] registered (default tick: */30 * * * * *)
+[posReceiptDispatcher] subscribed to sale.completed
+[Backend] Enterprise Express Server running securely on port 5000
+[cost-master-boot] no duplicate rows found (204 scanned).
+[cronRegistry] statusSnapshotEngine: scheduled "5 0 * * *"
+[cronRegistry] sequenceEngine: scheduled "* * * * *"
+[cronRegistry] retentionEngine: scheduled "0 3 * * *"
+[cronRegistry] reportEngine: scheduled "0 * * * *"
+[cronRegistry] marketplaceEngine: disabled — no task scheduled
+[cronRegistry] tripCountdownEngine: scheduled "17 * * * *"
+[cronRegistry] campaignEngine: scheduled "* * * * *"
+[cronRegistry] visaRiskFlagEngine: scheduled "0 */6 * * *"
+[cronRegistry] scheduledEmailEngine: scheduled "* * * * *"
+[cronRegistry] webCheckinAutomation: scheduled "8,23,38,53 * * * *"
+[cronRegistry] webCheckinScheduler: scheduled "13,28,43,58 * * * *"
+[cronRegistry] paymentDeadlineEngine: scheduled "37 * * * *"
+[cronRegistry] fxRateEngine: scheduled "0 * * * *"
+[cronRegistry] appointmentRemindersEngine: scheduled "*/15 * * * *"
+[cronRegistry] quoteExpirySweep: scheduled "0 9 * * *"
+[cronRegistry] contactGreetingsEngine: scheduled "13 8 * * *"
+[cronRegistry] dealInsightsEngine: scheduled "0 */6 * * *"
+[cronRegistry] religiousGuidanceEngine: scheduled "13 9 * * *"
+[cronRegistry] recurringInvoiceEngine: scheduled "0 6 * * *"
+[cronRegistry] statusProbeEngine: scheduled "*/5 * * * *"
+[cronRegistry] orchestratorEngine: scheduled "30 1 * * *"
+[cronRegistry] lowStockEngine: scheduled "0 9 * * *"
+[cronRegistry] aiCreditLowBalanceEngine: scheduled "*/30 * * * *"
+[cronRegistry] backupEngine: scheduled "0 2 * * *"
+[cronRegistry] sentimentEngine: scheduled "*/15 * * * *"
+[cronRegistry] forecastSnapshotEngine: scheduled "0 1 * * 1"
+[cronRegistry] travelReviewEngine: scheduled "7 9 * * *"
+[cronRegistry] gstrFilingReminderEngine: scheduled "0 5 * * *"
+[cronRegistry] webCheckinEngine: scheduled "47 * * * *"
+[cronRegistry] slaBreachEngine: scheduled "*/5 * * * *"
+[cronRegistry] whatsappTemplateSyncEngine: scheduled "30 3 * * *"
+[cronRegistry] whatsappMediaEngine: scheduled "*/60 * * * * *"
+[cronRegistry] whatsappOutboundEngine: scheduled "*/30 * * * * *"
+[cronRegistry] whatsappTokenRefreshEngine: scheduled "30 4 * * *"
+[cronRegistry] leadSlaEngine: scheduled "*/2 * * * *"
+[cronRegistry] apiCallLogRetentionEngine: scheduled "20 3 * * *"
+[cronRegistry] demoHygieneEngine: scheduled "17 * * * *"
+[cronRegistry] cronLogRetentionEngine: scheduled "15 3 * * *"
+[cronRegistry] auditIntegrityEngine: scheduled "0 4 * * *"
+[cronRegistry] walletExpiryEngine: scheduled "30 3 * * *"
+[cronRegistry] noShowRiskEngine: scheduled "30 8 * * *"
+[cronRegistry] leavePolicyEngine: scheduled "30 2 * * *"
+[cronRegistry] travelDiagnosticAdvisorAlerts: scheduled "*/5 * * * *"
+[cronRegistry] tripPostTripFeedback: scheduled "13 6 * * *"
+[cronRegistry] travelJourneyReminders: scheduled "13,43 * * * *"
+[cronRegistry] paymentScheduleReminderEngine: scheduled "13 9 * * *"
+[cronRegistry] tripPaymentReminders: scheduled "13 7 * * *"
+[cronRegistry] wellnessOpsEngine: scheduled "17 * * * *"
+[wellness-role-boot] reverse — promoted 30 user(s) to matching RBAC role (scanned 44 tagged users across 8 tenant(s))
+[whatsappWeb] boot-restore: tenant 8 resuming from saved session
+[wellness-role-boot] forward — already in sync (scanned 84 users across 8 tenant(s)).
+[rbac-boot] RBAC state already compatible — no changes.
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[Sentiment] processed 0 messages
+[statusProbe] probed 3 component(s) in 43ms; 0 status change(s)
+[Sentiment] processed 0 messages
+[AppointmentReminders] tenants=8 queued24=0 queued1=0 skipped=0 (67ms)
+[statusProbe] probed 3 component(s) in 63ms; 0 status change(s)
+[SLABreach] tenants=141 checked=0 breached=0 (251ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (160ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (159ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[statusProbe] probed 3 component(s) in 59ms; 0 status change(s)
+[LeadSLABreach] tenants=141 checked=0 breached=0 (197ms)
+[SLABreach] tenants=141 checked=0 breached=0 (246ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[31m[nodemon] app crashed - waiting for file changes before starting...[39m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node server.js`[39m
+[env] AI keys: GEMINI=set OPENAI=set
+[Sentry] SENTRY_DSN not set — error monitoring disabled
+[callifiedAgentBridge] listening for agent bridges on /ws/callified-agent
+[whatsappWeb] init  socket handle attached; restoring previously-linked sessions...
+[whatsappWeb] init: killed any orphan chromium processes from previous runs
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] boot-restore: re-initializing 1 saved session(s): 8
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] tenant 8 cleared 1 stale Chromium lock artifact(s) before launch
+[Email] SendGrid configured with sender: shiksha@blondmail.com
+[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts
+[callifiedAutoDial] processor started
+[callifiedDnpRetry] engine started
+[WorkflowEngine] Initialized — listening for CRM events via eventBus
+✓ Cron engine: visaRiskFlagEngine (every 6 hours)
+[autoConsumption] listener registered for visit.completed
+[whatsappOutboundEngine] registered (default tick: */30 * * * * *)
+[posReceiptDispatcher] subscribed to sale.completed
+[Backend] Enterprise Express Server running securely on port 5000
+[cronRegistry] reportEngine: scheduled "0 * * * *"
+[cronRegistry] recurringInvoiceEngine: scheduled "0 6 * * *"
+[cronRegistry] dealInsightsEngine: scheduled "0 */6 * * *"
+[cronRegistry] paymentScheduleReminderEngine: scheduled "13 9 * * *"
+[cronRegistry] scheduledEmailEngine: scheduled "* * * * *"
+[cronRegistry] orchestratorEngine: scheduled "30 1 * * *"
+[cronRegistry] backupEngine: scheduled "0 2 * * *"
+[cost-master-boot] no duplicate rows found (204 scanned).
+[cronRegistry] campaignEngine: scheduled "* * * * *"
+[cronRegistry] wellnessOpsEngine: scheduled "17 * * * *"
+[cronRegistry] retentionEngine: scheduled "0 3 * * *"
+[cronRegistry] statusProbeEngine: scheduled "*/5 * * * *"
+[cronRegistry] appointmentRemindersEngine: scheduled "*/15 * * * *"
+[cronRegistry] sequenceEngine: scheduled "* * * * *"
+[cronRegistry] tripPaymentReminders: scheduled "13 7 * * *"
+[cronRegistry] sentimentEngine: scheduled "*/15 * * * *"
+[cronRegistry] visaRiskFlagEngine: scheduled "0 */6 * * *"
+[cronRegistry] forecastSnapshotEngine: scheduled "0 1 * * 1"
+[cronRegistry] statusSnapshotEngine: scheduled "5 0 * * *"
+[cronRegistry] paymentDeadlineEngine: scheduled "37 * * * *"
+[cronRegistry] travelDiagnosticAdvisorAlerts: scheduled "*/5 * * * *"
+[cronRegistry] tripPostTripFeedback: scheduled "13 6 * * *"
+[cronRegistry] marketplaceEngine: disabled — no task scheduled
+[cronRegistry] tripCountdownEngine: scheduled "17 * * * *"
+[cronRegistry] travelReviewEngine: scheduled "7 9 * * *"
+[cronRegistry] quoteExpirySweep: scheduled "0 9 * * *"
+[cronRegistry] noShowRiskEngine: scheduled "30 8 * * *"
+[cronRegistry] webCheckinEngine: scheduled "47 * * * *"
+[cronRegistry] travelJourneyReminders: scheduled "13,43 * * * *"
+[cronRegistry] fxRateEngine: scheduled "0 * * * *"
+[cronRegistry] contactGreetingsEngine: scheduled "13 8 * * *"
+[cronRegistry] religiousGuidanceEngine: scheduled "13 9 * * *"
+[cronRegistry] gstrFilingReminderEngine: scheduled "0 5 * * *"
+[cronRegistry] webCheckinAutomation: scheduled "8,23,38,53 * * * *"
+[cronRegistry] aiCreditLowBalanceEngine: scheduled "*/30 * * * *"
+[cronRegistry] webCheckinScheduler: scheduled "13,28,43,58 * * * *"
+[cronRegistry] lowStockEngine: scheduled "0 9 * * *"
+[cronRegistry] slaBreachEngine: scheduled "*/5 * * * *"
+[cronRegistry] auditIntegrityEngine: scheduled "0 4 * * *"
+[cronRegistry] whatsappOutboundEngine: scheduled "*/30 * * * * *"
+[cronRegistry] whatsappTokenRefreshEngine: scheduled "30 4 * * *"
+[cronRegistry] leavePolicyEngine: scheduled "30 2 * * *"
+[cronRegistry] whatsappTemplateSyncEngine: scheduled "30 3 * * *"
+[cronRegistry] whatsappMediaEngine: scheduled "*/60 * * * * *"
+[cronRegistry] demoHygieneEngine: scheduled "17 * * * *"
+[cronRegistry] cronLogRetentionEngine: scheduled "15 3 * * *"
+[cronRegistry] apiCallLogRetentionEngine: scheduled "20 3 * * *"
+[cronRegistry] leadSlaEngine: scheduled "*/2 * * * *"
+[cronRegistry] walletExpiryEngine: scheduled "30 3 * * *"
+[whatsappWeb] boot-restore: tenant 8 resuming from saved session
+[wellness-role-boot] reverse — promoted 30 user(s) to matching RBAC role (scanned 44 tagged users across 8 tenant(s))
+[wellness-role-boot] forward — already in sync (scanned 84 users across 8 tenant(s)).
+[rbac-boot] RBAC state already compatible — no changes.
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[Sentiment] processed 0 messages
+[statusProbe] probed 3 component(s) in 33ms; 0 status change(s)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (236ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[Report Engine] Checking for due scheduled reports...
+[Sentiment] processed 0 messages
+[AppointmentReminders] tenants=8 queued24=0 queued1=0 skipped=0 (103ms)
+[statusProbe] probed 3 component(s) in 115ms; 0 status change(s)
+[LeadSLABreach] tenants=141 checked=0 breached=0 (342ms)
+[SLABreach] tenants=141 checked=0 breached=0 (450ms)
+[fxRateEngine] { fetched: 6, skipped: 2, errors: [] }
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[LeadSLABreach] tenants=141 checked=0 breached=0 (171ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[31m[nodemon] app crashed - waiting for file changes before starting...[39m
+[32m[nodemon] restarting due to changes...[39m
+[32m[nodemon] starting `node server.js`[39m
+[env] AI keys: GEMINI=set OPENAI=set
+[Sentry] SENTRY_DSN not set — error monitoring disabled
+[callifiedAgentBridge] listening for agent bridges on /ws/callified-agent
+[whatsappWeb] init  socket handle attached; restoring previously-linked sessions...
+[whatsappWeb] init: killed any orphan chromium processes from previous runs
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] boot-restore: re-initializing 1 saved session(s): 8
+[whatsappWeb] tenant 8 killed any orphan chromium holding session-travel-8
+[whatsappWeb] tenant 8 cleared 1 stale Chromium lock artifact(s) before launch
+[Email] SendGrid configured with sender: shiksha@blondmail.com
+[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts
+[callifiedAutoDial] processor started
+[callifiedDnpRetry] engine started
+[WorkflowEngine] Initialized — listening for CRM events via eventBus
+✓ Cron engine: visaRiskFlagEngine (every 6 hours)
+[autoConsumption] listener registered for visit.completed
+[whatsappOutboundEngine] registered (default tick: */30 * * * * *)
+[posReceiptDispatcher] subscribed to sale.completed
+[Backend] Enterprise Express Server running securely on port 5000
+[cronRegistry] sentimentEngine: scheduled "*/15 * * * *"
+[cronRegistry] marketplaceEngine: disabled — no task scheduled
+[cronRegistry] retentionEngine: scheduled "0 3 * * *"
+[cronRegistry] sequenceEngine: scheduled "* * * * *"
+[cronRegistry] forecastSnapshotEngine: scheduled "0 1 * * 1"
+[cronRegistry] orchestratorEngine: scheduled "30 1 * * *"
+[cronRegistry] appointmentRemindersEngine: scheduled "*/15 * * * *"
+[cronRegistry] recurringInvoiceEngine: scheduled "0 6 * * *"
+[cronRegistry] backupEngine: scheduled "0 2 * * *"
+[cronRegistry] scheduledEmailEngine: scheduled "* * * * *"
+[cost-master-boot] no duplicate rows found (204 scanned).
+[cronRegistry] tripPostTripFeedback: scheduled "13 6 * * *"
+[cronRegistry] reportEngine: scheduled "0 * * * *"
+[cronRegistry] paymentScheduleReminderEngine: scheduled "13 9 * * *"
+[cronRegistry] campaignEngine: scheduled "* * * * *"
+[cronRegistry] paymentDeadlineEngine: scheduled "37 * * * *"
+[cronRegistry] tripPaymentReminders: scheduled "13 7 * * *"
+[cronRegistry] wellnessOpsEngine: scheduled "17 * * * *"
+[cronRegistry] webCheckinEngine: scheduled "47 * * * *"
+[cronRegistry] dealInsightsEngine: scheduled "0 */6 * * *"
+[cronRegistry] visaRiskFlagEngine: scheduled "0 */6 * * *"
+[cronRegistry] statusSnapshotEngine: scheduled "5 0 * * *"
+[cronRegistry] contactGreetingsEngine: scheduled "13 8 * * *"
+[cronRegistry] travelJourneyReminders: scheduled "13,43 * * * *"
+[cronRegistry] travelDiagnosticAdvisorAlerts: scheduled "*/5 * * * *"
+[cronRegistry] tripCountdownEngine: scheduled "17 * * * *"
+[cronRegistry] gstrFilingReminderEngine: scheduled "0 5 * * *"
+[cronRegistry] travelReviewEngine: scheduled "7 9 * * *"
+[cronRegistry] demoHygieneEngine: scheduled "17 * * * *"
+[cronRegistry] whatsappMediaEngine: scheduled "*/60 * * * * *"
+[cronRegistry] fxRateEngine: scheduled "0 * * * *"
+[cronRegistry] statusProbeEngine: scheduled "*/5 * * * *"
+[cronRegistry] whatsappTemplateSyncEngine: scheduled "30 3 * * *"
+[cronRegistry] noShowRiskEngine: scheduled "30 8 * * *"
+[cronRegistry] leadSlaEngine: scheduled "*/2 * * * *"
+[cronRegistry] whatsappOutboundEngine: scheduled "*/30 * * * * *"
+[cronRegistry] webCheckinScheduler: scheduled "13,28,43,58 * * * *"
+[cronRegistry] slaBreachEngine: scheduled "*/5 * * * *"
+[cronRegistry] religiousGuidanceEngine: scheduled "13 9 * * *"
+[cronRegistry] aiCreditLowBalanceEngine: scheduled "*/30 * * * *"
+[cronRegistry] leavePolicyEngine: scheduled "30 2 * * *"
+[cronRegistry] walletExpiryEngine: scheduled "30 3 * * *"
+[cronRegistry] whatsappTokenRefreshEngine: scheduled "30 4 * * *"
+[cronRegistry] cronLogRetentionEngine: scheduled "15 3 * * *"
+[cronRegistry] apiCallLogRetentionEngine: scheduled "20 3 * * *"
+[cronRegistry] quoteExpirySweep: scheduled "0 9 * * *"
+[cronRegistry] lowStockEngine: scheduled "0 9 * * *"
+[cronRegistry] webCheckinAutomation: scheduled "8,23,38,53 * * * *"
+[cronRegistry] auditIntegrityEngine: scheduled "0 4 * * *"
+[whatsappWeb] boot-restore: tenant 8 resuming from saved session
+[wellness-role-boot] reverse — promoted 30 user(s) to matching RBAC role (scanned 44 tagged users across 8 tenant(s))
+[wellness-role-boot] forward — already in sync (scanned 84 users across 8 tenant(s)).
+[rbac-boot] RBAC state already compatible — no changes.
+[LeadSLABreach] tenants=141 checked=0 breached=0 (150ms)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[Sentiment] processed 0 messages
+[statusProbe] probed 3 component(s) in 39ms; 0 status change(s)
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[whatsappWeb] tenant 8 QR ready  scan from WhatsApp -> Linked devices
+[31m[nodemon] app crashed - waiting for file changes before starting...[39m

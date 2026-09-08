@@ -23,6 +23,14 @@ export default function TravelDiagnosticPublicReport() {
   const [data, setData] = useState(null);
   const [theme, setTheme] = useState({});
   const [styling, setStyling] = useState({});
+  // "Chosen interests" (2026-08-27) — which of the recommended trips the
+  // school checked off, keyed by trip name (no numeric id exists on RAG
+  // recommendations). Pre-populated from any prior submission on load so a
+  // refresh shows what was already picked instead of a blank checklist.
+  const [selectedNames, setSelectedNames] = useState(() => new Set());
+  const [interestsSubmitting, setInterestsSubmitting] = useState(false);
+  const [interestsSubmittedAt, setInterestsSubmittedAt] = useState(null);
+  const [interestsError, setInterestsError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +69,13 @@ export default function TravelDiagnosticPublicReport() {
         setData(report);
         setTheme(formTheme);
         setStyling(formStyling);
+        const priorInterests = Array.isArray(report?.chosenInterests?.interests)
+          ? report.chosenInterests.interests
+          : [];
+        if (priorInterests.length) {
+          setSelectedNames(new Set(priorInterests.map((i) => i.name)));
+          setInterestsSubmittedAt(report.chosenInterests.submittedAt || null);
+        }
       } catch (e) {
         if (!cancelled) setError(e.message || "Failed to load report");
       } finally {
@@ -146,7 +161,51 @@ export default function TravelDiagnosticPublicReport() {
   }
 
   const rag = data?.ragResult?.recommendations || {};
-  const trips = Array.isArray(rag.recommendedTrips) ? rag.recommendedTrips : [];
+  // Fixed safety ceiling (not the live admin-configured topK — see
+  // backend/lib/diagnosticRecommendationSettings.js's MAX_TOP_K), capped
+  // defensively at render time too: a diagnostic scored before that cap
+  // existed can still have an already-persisted result with more entries
+  // than any sane topK.
+  const trips = (Array.isArray(rag.recommendedTrips) ? rag.recommendedTrips : []).slice(0, 20);
+
+  function toggleInterest(name) {
+    setSelectedNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+    setInterestsError("");
+  }
+
+  async function submitInterests() {
+    const chosen = trips
+      .filter((t) => selectedNames.has(t.name))
+      .map((t) => ({ name: t.name, driveLink: t.driveLink || "" }));
+    if (!chosen.length) return;
+    setInterestsSubmitting(true);
+    setInterestsError("");
+    try {
+      const res = await fetch(
+        `/api/travel/diagnostics/public/report/${encodeURIComponent(slug || "")}/interests`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ interests: chosen }),
+        },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.error || "Failed to submit your chosen interests.");
+      }
+      setInterestsSubmittedAt(body.submittedAt || new Date().toISOString());
+    } catch (e) {
+      setInterestsError(e.message || "Failed to submit your chosen interests.");
+    } finally {
+      setInterestsSubmitting(false);
+    }
+  }
+
   const readiness = resolveReadiness();
   const summary = rag.summary || "";
   // Deterministic curriculum × grade × subject matches from
@@ -157,6 +216,15 @@ export default function TravelDiagnosticPublicReport() {
   // report — this section was simply missing.
   const curriculumFitRecs = Array.isArray(data?.curriculumFit?.recommendations)
     ? data.curriculumFit.recommendations
+    : [];
+  // Cancellation policy — set on the report by the diagnostics API's
+  // resolveCancellationPolicyForForm() helper (backend/routes/travel_diagnostics_public.js).
+  // Only present when the admin has the "show cancellation policy" toggle on
+  // and has picked an active policy for this sub-brand; null otherwise, in
+  // which case this section renders nothing.
+  const cancellationPolicy = data?.cancellationPolicy || null;
+  const cancellationTiers = Array.isArray(cancellationPolicy?.tiers)
+    ? cancellationPolicy.tiers
     : [];
 
   return (
@@ -244,37 +312,106 @@ export default function TravelDiagnosticPublicReport() {
         {trips.length > 0 && (
           <section style={section(theme)}>
             <h2 style={sectionTitle(theme)}>Curriculum alignment recommendations</h2>
+            <p style={{ margin: "0 0 12px", fontSize: 13, opacity: 0.75 }}>
+              Check off the trips you&rsquo;re actually interested in — we&rsquo;ll share your picks with your advisor.
+            </p>
             <div style={{ display: "grid", gap: 12 }}>
               {trips.map((trip, idx) => (
-                <div key={idx} style={tripCard(theme)}>
-                  <h3 style={{ margin: "0 0 6px", fontSize: 16 }}>
-                    {trip.name}
-                  </h3>
-                  {trip.summary && (
-                    <p style={{ margin: "0 0 8px", fontSize: 14, opacity: 0.85 }}>
-                      {trip.summary}
-                    </p>
-                  )}
-                  {Array.isArray(trip.learnings) && trip.learnings.length > 0 && (
-                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
-                      {trip.learnings.map((l, i) => (
-                        <li key={i}>{l}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {trip.driveLink && (
-                    <a
-                      href={trip.driveLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ ...secondaryBtn(theme), marginTop: 10 }}
-                    >
-                      View brochure
-                    </a>
-                  )}
-                </div>
+                <label
+                  key={idx}
+                  style={{
+                    ...tripCard(theme),
+                    display: "flex",
+                    gap: 12,
+                    alignItems: "flex-start",
+                    cursor: "pointer",
+                    border: selectedNames.has(trip.name)
+                      ? `2px solid ${theme.primaryColor || DEFAULT_PRIMARY}`
+                      : tripCard(theme).border,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedNames.has(trip.name)}
+                    onChange={() => toggleInterest(trip.name)}
+                    style={{ marginTop: 4, width: 18, height: 18, flexShrink: 0, cursor: "pointer" }}
+                    aria-label={`I'm interested in ${trip.name}`}
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <h3 style={{ margin: "0 0 6px", fontSize: 16 }}>
+                      {trip.name}
+                    </h3>
+                    {trip.summary && (
+                      <p style={{ margin: "0 0 8px", fontSize: 14, opacity: 0.85 }}>
+                        {trip.summary}
+                      </p>
+                    )}
+                    {Array.isArray(trip.learnings) && trip.learnings.length > 0 && (
+                      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
+                        {trip.learnings.map((l, i) => (
+                          <li key={i}>{l}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {trip.driveLink && (
+                      <a
+                        href={trip.driveLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ ...secondaryBtn(theme), marginTop: 10 }}
+                      >
+                        View brochure
+                      </a>
+                    )}
+                  </div>
+                </label>
               ))}
             </div>
+            <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              {selectedNames.size > 0 && (
+                <button
+                  type="button"
+                  onClick={submitInterests}
+                  disabled={interestsSubmitting}
+                  style={{ ...primaryBtn(theme), opacity: interestsSubmitting ? 0.7 : 1 }}
+                >
+                  {interestsSubmitting
+                    ? "Submitting…"
+                    : `Submit chosen interests (${selectedNames.size})`}
+                </button>
+              )}
+              {interestsSubmittedAt && !interestsSubmitting && (
+                <span style={{ fontSize: 13, opacity: 0.75 }}>
+                  <CheckCircle2 size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
+                  Thanks — we&rsquo;ve noted your interests. You can update your picks anytime before an advisor reaches out.
+                </span>
+              )}
+              {interestsError && (
+                <span style={{ fontSize: 13, color: "#b91c1c" }}>{interestsError}</span>
+              )}
+            </div>
+          </section>
+        )}
+
+        {cancellationPolicy && (
+          <section style={section(theme)}>
+            <h2 style={sectionTitle(theme)}>Cancellation Policy</h2>
+            <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>{cancellationPolicy.name}</h3>
+            {cancellationPolicy.description && (
+              <p style={{ margin: "0 0 12px", fontSize: 14, opacity: 0.85, lineHeight: 1.6 }}>
+                {cancellationPolicy.description}
+              </p>
+            )}
+            {cancellationTiers.length > 0 && (
+              <div style={{ display: "grid", gap: 8 }}>
+                {cancellationTiers.map((tier, idx) => (
+                  <div key={idx} style={tripCard(theme)}>
+                    {tier.daysBeforeServiceStart}+ days before departure — {tier.refundPercent}% refund
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
 
@@ -293,7 +430,7 @@ export default function TravelDiagnosticPublicReport() {
           </section>
         )}
 
-        {!trips.length && !curriculumFitRecs.length && !summary && !data?.reportPdfUrl && (
+        {!trips.length && !curriculumFitRecs.length && !summary && !data?.reportPdfUrl && !cancellationPolicy && (
           <div style={emptyState}>
             <CheckCircle2 size={36} style={{ opacity: 0.5 }} />
             <p>Your diagnostic has been recorded. An advisor will reach out soon.</p>

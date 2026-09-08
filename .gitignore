@@ -193,6 +193,9 @@ drharors-wellness/
 # Local wellness landing folder used for API-only lead capture testing.
 well2-updated430pm/
 
+# Local updated wellness landing folder used for live testing.
+final-123/
+
 # WhatsApp Web (QR-scan) transport session data — whatsapp-web.js LocalAuth +
 # puppeteer cache. Per-tenant linked-device credentials live here; NEVER commit.
 backend/.wwebjs_auth/

@@ -35,7 +35,7 @@
 
 import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Archive, ArchiveRestore, Copy, Upload, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Download, X, ChevronDown, ChevronUp, ArrowUpDown } from 'lucide-react';
+import { Archive, ArchiveRestore, Code2, Copy, Upload, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Download, X, ChevronDown, ChevronUp, ArrowUpDown } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import CountBadge from '../../components/CountBadge';
@@ -48,6 +48,7 @@ import {
   subBrandShortLabel,
 } from '../../utils/travelSubBrand';
 import MapPreview from '../../components/MapPreview';
+import Spinner from '../../components/ui/Spinner';
 
 const SUB_BRANDS = [
   { value: 'all', label: 'All sub-brands' },
@@ -146,7 +147,6 @@ const EMPTY_FORM = {
   defaultMarkupPercent: '',
   basePriceMinor: '',
   currency: 'INR',
-  llmGeneratedBy: '',
   isActive: true,
   // G115 — PDF underprint template upload.
   pdfTemplateUrl: '',
@@ -166,6 +166,16 @@ export default function ItineraryTemplates() {
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
+  // Two deliberately separate concepts used to live mixed in one table,
+  // told apart only by a small "PDF" badge next to the name — confusing
+  // enough that operators couldn't reliably tell which was which. A "Trip
+  // template" is CONTENT (destination/duration/price/day-plan) applied to a
+  // NEW itinerary at create time; a "PDF template" is a pure brand PDF
+  // STYLE applied when rendering an EXISTING itinerary. Same underlying
+  // ItineraryTemplate row shape (isPdfTemplate discriminates them — already
+  // set correctly today, just never surfaced as a real split), so this tab
+  // only changes what's fetched/shown/created, not the data model.
+  const [templateTab, setTemplateTab] = useState(searchParams.get('kind') === 'pdf' ? 'pdf' : 'trip');
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
@@ -190,6 +200,12 @@ export default function ItineraryTemplates() {
     const next = new URLSearchParams(searchParams);
     Object.entries(patch).forEach(([key, value]) => { if (value === null || value === undefined || value === '' || value === false) next.delete(key); else next.set(key, String(value)); });
     setSearchParams(next, { replace: true });
+  };
+  const switchTemplateTab = (tab) => {
+    setTemplateTab(tab);
+    setPage(1);
+    updateParams({ kind: tab === 'pdf' ? 'pdf' : null, page: 1 });
+    setShowForm(false);
   };
   // Form state
   const [showForm, setShowForm] = useState(false);
@@ -221,6 +237,32 @@ export default function ItineraryTemplates() {
   // G115 — PDF underprint upload.
   const pdfInputRef = useRef(null);
   const [uploadingPdf, setUploadingPdf] = useState(false);
+  // Per-page role review (cover/itinerary/details/static + accent colour).
+  // Runs AFTER the region-confirm step closes (sequential, not parallel —
+  // avoids juggling two loading states / two dialogs racing to appear).
+  // structureConfirm holds the analyze-structure response while its dialog
+  // is open; confirmedStructure holds the operator's final choice as a JSON
+  // string, sent as pdfStyleSpecJson on submit. Both null = fall back to the
+  // server's own auto-classification (AI if configured, else heuristic),
+  // exactly like before this review step existed.
+  const [analyzingStructure, setAnalyzingStructure] = useState(false);
+  const [structureConfirm, setStructureConfirm] = useState(null);
+  const [confirmedStructure, setConfirmedStructure] = useState(null);
+
+  const runStructureAnalysis = async (pdfTemplateUrl) => {
+    setAnalyzingStructure(true);
+    try {
+      const structure = await fetchApi('/api/travel/itinerary-templates/analyze-structure', {
+        method: 'POST',
+        body: JSON.stringify({ pdfTemplateUrl }),
+      });
+      setStructureConfirm(structure);
+    } catch (structErr) {
+      notify.error(structErr?.body?.error || 'Page-role detection failed — you can still save with default detection');
+    } finally {
+      setAnalyzingStructure(false);
+    }
+  };
 
   const pickPdfFile = async (e) => {
     const file = e.target.files?.[0];
@@ -236,7 +278,29 @@ export default function ItineraryTemplates() {
       fd.append('file', file);
       const data = await fetchApi('/api/travel/itinerary-templates/upload-pdf', { method: 'POST', body: fd });
       setForm((prev) => ({ ...prev, pdfTemplateUrl: data.url, pdfTemplateFileName: file.name }));
+      setConfirmedStructure(null);
       notify.success('PDF template uploaded');
+      await runStructureAnalysis(data.url);
+      /*
+      try {
+        const analysis = await fetchApi('/api/travel/itinerary-templates/analyze-pdf', {
+          method: 'POST',
+          body: JSON.stringify({ pdfTemplateUrl: data.url }),
+        });
+        setRegionConfirm(analysis);
+        regionShown = true;
+      } catch (analyzeErr) {
+        // Non-fatal — the operator can still save; the server's own
+        // heuristic recompute runs regardless on create/update.
+        notify.error(analyzeErr?.body?.error || 'Region auto-detect failed — you can still save with default detection');
+      } finally {
+        setAnalyzingPdf(false);
+      }
+      // Page-role review runs sequentially AFTER the region step — if the
+      // region dialog didn't open (its analysis failed), go straight to it
+      // instead of never showing it at all.
+      if (!regionShown) await runStructureAnalysis(data.url);
+      */
     } catch (err) {
       notify.error(err?.body?.error || 'PDF upload failed');
     } finally {
@@ -246,6 +310,7 @@ export default function ItineraryTemplates() {
 
   const removePdfTemplate = () => {
     setForm((prev) => ({ ...prev, pdfTemplateUrl: '', pdfTemplateFileName: '' }));
+    setConfirmedStructure(null);
     if (pdfInputRef.current) pdfInputRef.current.value = '';
   };
 
@@ -254,6 +319,8 @@ export default function ItineraryTemplates() {
   // the operator commits to cloning. State holds the template currently
   // being previewed; null when the modal is closed.
   const [previewTemplate, setPreviewTemplate] = useState(null);
+  // Which PDF template has its HTML/CSS body editor open. Null = closed.
+  const [htmlEditorTemplate, setHtmlEditorTemplate] = useState(null);
   // Contact list + selected contact for the clone-to-customer step.
   const [contacts, setContacts] = useState([]);
   const [cloneContactId, setCloneContactId] = useState('');
@@ -261,6 +328,7 @@ export default function ItineraryTemplates() {
   const fetchItems = useCallback((currentPage = page, currentPageSize = pageSize) => {
     setLoading(true);
     const qs = new URLSearchParams();
+    qs.set('isPdfTemplate', templateTab === 'pdf' ? 'true' : 'false');
     if (destinationFilter.trim()) qs.set('destinationName', destinationFilter.trim());
     if (categoryFilter) qs.set('category', categoryFilter);
     if (subBrandFilter && subBrandFilter !== 'all') qs.set('subBrand', subBrandFilter);
@@ -285,7 +353,7 @@ export default function ItineraryTemplates() {
       .finally(() => {
         setLoading(false);
       });
-  }, [destinationFilter, categoryFilter, subBrandFilter, budgetTierFilter, activeOnly, includeArchived, notify, page, pageSize]);
+  }, [templateTab, destinationFilter, categoryFilter, subBrandFilter, budgetTierFilter, activeOnly, includeArchived, notify, page, pageSize]);
 
   useEffect(() => {
     if (!searchParams.get('subBrand')) {
@@ -328,6 +396,8 @@ export default function ItineraryTemplates() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setShowForm(false);
+    setStructureConfirm(null);
+    setConfirmedStructure(null);
   };
 
   // Open a fresh create form with the sub-brand pre-resolved to the user's
@@ -352,7 +422,6 @@ export default function ItineraryTemplates() {
       basePriceMinor:
         item.basePriceMinor != null ? String(item.basePriceMinor) : '',
       currency: item.currency || 'INR',
-      llmGeneratedBy: item.llmGeneratedBy || '',
       isActive: item.isActive !== false,
       // G115 — PDF underprint template.
       pdfTemplateUrl: item.pdfTemplateUrl || '',
@@ -368,19 +437,22 @@ export default function ItineraryTemplates() {
       notify.error('name is required');
       return;
     }
-    if (!form.destinationName.trim()) {
-      notify.error('destinationName is required');
+    if (templateTab === 'pdf' && !form.pdfTemplateUrl.trim()) {
+      notify.error('Upload a reference PDF — a PDF template with no PDF has nothing to render');
       return;
     }
-    if (!form.durationDays || Number(form.durationDays) < 1) {
-      notify.error('durationDays is required (positive integer)');
+    // Destination/duration are optional browsing metadata now — a template
+    // is primarily a PDF style asset (Reference PDF below), reusable across
+    // any destination or trip length. Only validate SHAPE when provided.
+    if (form.durationDays && Number(form.durationDays) < 1) {
+      notify.error('durationDays must be a positive integer');
       return;
     }
 
     const payload = {
       name: form.name.trim(),
-      destinationName: form.destinationName.trim(),
-      durationDays: Number(form.durationDays),
+      destinationName: form.destinationName.trim() || null,
+      durationDays: form.durationDays ? Number(form.durationDays) : null,
       description: form.description.trim() || null,
       thumbnailUrl: form.thumbnailUrl.trim() || null,
       category: form.category || null,
@@ -390,11 +462,17 @@ export default function ItineraryTemplates() {
         : null,
       basePriceMinor: form.basePriceMinor ? Number(form.basePriceMinor) : null,
       currency: form.currency.trim() || null,
-      llmGeneratedBy: form.llmGeneratedBy.trim() || null,
       isActive: form.isActive !== false,
       // G115 — PDF underprint template. Empty string clears it on edit.
       pdfTemplateUrl: form.pdfTemplateUrl.trim() || null,
     };
+    // Operator-confirmed content region (AI-assisted or manually adjusted).
+    // Merges over the server's own heuristic recompute — omit entirely to
+    // keep today's exact heuristic-only behavior (the "Skip" path).
+    // Operator-confirmed page-role structure (cover/itinerary/details/static
+    // per page + accent colour). Overrides the server's own auto-classified
+    // spec entirely — omit to keep the auto-computed one (the "Skip" path).
+    if (confirmedStructure) payload.pdfStyleSpecJson = confirmedStructure;
 
     try {
       if (editingId) {
@@ -636,14 +714,21 @@ export default function ItineraryTemplates() {
             <FileText size={28} aria-hidden /> Itinerary Template Library
             <CountBadge count={total} title={`${total.toLocaleString()} templates`} />
           </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-            Pre-loaded itinerary templates - destination, duration, base price, sub-brand
-            affinity, with preserved sightseeing, supplier cost, and pricing-rule context.
-            Operators clone these into new itineraries via the builder. Linked master
-            data lives in{' '}
-            <Link to="/travel/sightseeing" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Sightseeing Master</Link>,{' '}
-            <Link to="/travel/cost-master" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Cost Master</Link>, and{' '}
-            <Link to="/travel/pricing-rules" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Pricing Rules</Link>.
+          <p style={{ color: 'var(--text-secondary)', marginTop: 4, maxWidth: 1100, lineHeight: 1.55 }}>
+            {templateTab === 'pdf' ? (
+              <>Uploaded reference PDFs become reusable document designs. AI identifies the fixed branding,
+                cover, repeating itinerary layout, details pages, visual styling, and any extra fields the
+                design requires. Choose a design from an itinerary&apos;s Publish panel to generate that trip&apos;s
+                content in the same visual structure.</>
+            ) : (
+              <>Reusable trip plans preserve destination, duration, day-by-day items, pricing context, and
+                sub-brand settings. Clone one in the itinerary builder, then tailor it for the customer. Linked
+                data comes from{' '}
+                <Link to="/travel/sightseeing" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Sightseeing Master</Link>,{' '}
+                <Link to="/travel/cost-master" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Cost Master</Link>, and{' '}
+                <Link to="/travel/pricing-rules" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Pricing Rules</Link>.
+              </>
+            )}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -659,13 +744,49 @@ export default function ItineraryTemplates() {
           </button>
           {!showForm && (
             <button type="button" onClick={openCreateForm} style={primaryBtn}>
-              <Plus size={14} /> Add template
+              <Plus size={14} /> {templateTab === 'pdf' ? 'Add PDF template' : 'Add trip template'}
             </button>
           )}
         </div>
       </div>
 
-      {/* Filters */}
+      {/* Trip template (content, applied on itinerary create) vs PDF template
+          (brand PDF style, applied when rendering an existing itinerary) —
+          two separate lists, two separate create flows. */}
+      <div role="tablist" aria-label="Template kind" style={{ display: 'flex', gap: 4, marginTop: 16, borderBottom: '1px solid var(--border-color)' }}>
+        {[
+          { value: 'trip', label: 'Trip templates', hint: 'Destination, price, day-plan — pre-fills a new itinerary' },
+          { value: 'pdf', label: 'PDF templates', hint: 'Brand PDF style — used when generating a PDF from an itinerary' },
+        ].map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            role="tab"
+            aria-selected={templateTab === t.value}
+            title={t.hint}
+            onClick={() => switchTemplateTab(t.value)}
+            style={{
+              padding: '0.6rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
+              background: 'none', border: 'none', borderBottom: templateTab === t.value ? '2px solid var(--primary-color, var(--accent-color, #6366f1))' : '2px solid transparent',
+              color: templateTab === t.value ? 'var(--text-primary)' : 'var(--text-secondary)',
+              marginBottom: -1,
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <p style={{ margin: '8px 0 0', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+        {templateTab === 'trip'
+          ? 'Content templates — destination, duration, price and a saved day-plan. Pick one when creating a new itinerary to start from it.'
+          : "Brand PDF styles — an uploaded reference PDF only. Picked from inside an itinerary's Publish panel when generating its PDF; never applies content."}
+      </p>
+
+      {/* Filters — hidden while the Add/Edit form is open. Showing both at
+          once let an operator try to filter the (unrelated, still-visible)
+          list while actually mid-way through creating a new template, which
+          read as confusing clutter rather than two related controls. */}
+      {!showForm && (
       <div
         style={{
           display: 'grid',
@@ -780,6 +901,7 @@ export default function ItineraryTemplates() {
           <button type="button" onClick={resetFilters} style={secondaryBtn}>Reset filters</button>
         </div>
       </div>
+      )}
 
       {/* Add / edit form */}
       {showForm && (
@@ -802,7 +924,9 @@ export default function ItineraryTemplates() {
             }}
           >
             <h2 style={{ margin: 0, fontSize: 18 }}>
-              {editingId ? 'Edit itinerary template' : 'Add itinerary template'}
+              {editingId
+                ? (templateTab === 'pdf' ? 'Edit PDF template' : 'Edit trip template')
+                : (templateTab === 'pdf' ? 'Add PDF template' : 'Add trip template')}
             </h2>
             <button
               type="button"
@@ -813,6 +937,16 @@ export default function ItineraryTemplates() {
               <X size={18} />
             </button>
           </div>
+
+          <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--text-secondary)' }}>
+            {templateTab === 'pdf'
+              ? <>A PDF template is a reusable brand <strong>style</strong> — upload a reference PDF below and any itinerary&apos;s
+                  own content (destination, days, pricing) renders inside that look, regardless of trip length. It never carries
+                  destination/price/day-plan content of its own.</>
+              : <>A trip template is reusable <strong>content</strong> — destination, duration, price, and (once saved from a real
+                  itinerary via &ldquo;Save as template&rdquo;) a full day-plan. Picking it when creating a new itinerary pre-fills
+                  all of that; it has no PDF style of its own.</>}
+          </p>
 
           <div
             style={{
@@ -830,41 +964,45 @@ export default function ItineraryTemplates() {
                 style={inputStyle}
               />
             </Field>
-            <Field label="Destination *">
-              <input
-                value={form.destinationName}
-                onChange={(e) => setForm({ ...form, destinationName: e.target.value })}
-                placeholder="e.g. Makkah + Madinah"
-                aria-label="destinationName"
-                style={inputStyle}
-              />
-            </Field>
-            <Field label="Duration (days) *">
-              <input
-                type="number"
-                min={1}
-                value={form.durationDays}
-                onChange={(e) => setForm({ ...form, durationDays: e.target.value })}
-                placeholder="e.g. 10"
-                aria-label="durationDays"
-                style={inputStyle}
-              />
-            </Field>
-            <Field label="Category">
-              <select
-                value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value })}
-                aria-label="category"
-                style={selectStyle}
-              >
-                <option value="">— Uncategorized —</option>
-                {CATEGORIES.filter((c) => c.value).map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            {templateTab === 'trip' && (
+              <>
+                <Field label="Destination">
+                  <input
+                    value={form.destinationName}
+                    onChange={(e) => setForm({ ...form, destinationName: e.target.value })}
+                    placeholder="e.g. Makkah + Madinah"
+                    aria-label="destinationName"
+                    style={inputStyle}
+                  />
+                </Field>
+                <Field label="Duration in days">
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.durationDays}
+                    onChange={(e) => setForm({ ...form, durationDays: e.target.value })}
+                    placeholder="e.g. 10"
+                    aria-label="durationDays"
+                    style={inputStyle}
+                  />
+                </Field>
+                <Field label="Category">
+                  <select
+                    value={form.category}
+                    onChange={(e) => setForm({ ...form, category: e.target.value })}
+                    aria-label="category"
+                    style={selectStyle}
+                  >
+                    <option value="">— Uncategorized —</option>
+                    {CATEGORIES.filter((c) => c.value).map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </>
+            )}
             <Field label="Sub-brand">
               {lockedBrand ? (
                 // Single-brand user: field is locked to their assigned brand.
@@ -893,44 +1031,48 @@ export default function ItineraryTemplates() {
                 </select>
               )}
             </Field>
-            <Field label="Base price (minor units)">
-              <input
-                type="number"
-                min={0}
-                value={form.basePriceMinor}
-                onChange={(e) => setForm({ ...form, basePriceMinor: e.target.value })}
-                placeholder="e.g. 12500000 for ₹1,25,000"
-                aria-label="basePriceMinor"
-                style={inputStyle}
-              />
-            </Field>
-            <Field label="Currency (ISO 3-letter)">
-              <input
-                value={form.currency}
-                onChange={(e) =>
-                  setForm({ ...form, currency: e.target.value.toUpperCase() })
-                }
-                placeholder="INR"
-                maxLength={3}
-                aria-label="currency"
-                style={inputStyle}
-              />
-            </Field>
-            <Field label="Default markup (%)">
-              <input
-                type="number"
-                step="0.1"
-                min={0}
-                value={form.defaultMarkupPercent}
-                onChange={(e) =>
-                  setForm({ ...form, defaultMarkupPercent: e.target.value })
-                }
-                placeholder="e.g. 15"
-                aria-label="defaultMarkupPercent"
-                style={inputStyle}
-              />
-            </Field>
-            <Field label="Thumbnail">
+            {templateTab === 'trip' && (
+              <>
+                <Field label="Base price (minor units)">
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.basePriceMinor}
+                    onChange={(e) => setForm({ ...form, basePriceMinor: e.target.value })}
+                    placeholder="e.g. 12500000 for ₹1,25,000"
+                    aria-label="basePriceMinor"
+                    style={inputStyle}
+                  />
+                </Field>
+                <Field label="Currency (ISO 3-letter)">
+                  <input
+                    value={form.currency}
+                    onChange={(e) =>
+                      setForm({ ...form, currency: e.target.value.toUpperCase() })
+                    }
+                    placeholder="INR"
+                    maxLength={3}
+                    aria-label="currency"
+                    style={inputStyle}
+                  />
+                </Field>
+                <Field label="Default markup (%)">
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={0}
+                    value={form.defaultMarkupPercent}
+                    onChange={(e) =>
+                      setForm({ ...form, defaultMarkupPercent: e.target.value })
+                    }
+                    placeholder="e.g. 15"
+                    aria-label="defaultMarkupPercent"
+                    style={inputStyle}
+                  />
+                </Field>
+              </>
+            )}
+            {templateTab !== 'pdf' && <Field label="Thumbnail">
               <input
                 ref={thumbInputRef}
                 type="file"
@@ -975,10 +1117,11 @@ export default function ItineraryTemplates() {
                   </button>
                 )}
               </div>
-            </Field>
+            </Field>}
 
             {/* G115 — PDF underprint template upload */}
-            <Field label="Reference PDF (optional)">
+            {templateTab === 'pdf' && (
+            <Field label="Reference PDF *">
               <input
                 ref={pdfInputRef}
                 type="file"
@@ -987,7 +1130,7 @@ export default function ItineraryTemplates() {
                 style={{ display: 'none' }}
                 aria-label="Upload reference PDF template"
               />
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', width: '100%', minWidth: 0 }}>
                 {form.pdfTemplateUrl ? (
                   <>
                     <span
@@ -1001,10 +1144,17 @@ export default function ItineraryTemplates() {
                         color: '#60a5fa',
                         fontSize: '0.8rem',
                         border: '1px solid rgba(59,130,246,0.25)',
+                        maxWidth: '100%',
+                        minWidth: 0,
                       }}
                     >
                       <FileText size={14} />
-                      {form.pdfTemplateFileName || 'PDF template'}
+                      <span
+                        title={form.pdfTemplateFileName || 'PDF template'}
+                        style={{ minWidth: 0, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
+                        {form.pdfTemplateFileName || 'PDF template'}
+                      </span>
                     </span>
                     <button
                       type="button"
@@ -1034,20 +1184,32 @@ export default function ItineraryTemplates() {
                   </button>
                 )}
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 4 }}>
-                Upload a branded PDF. When this template is used, the itinerary data will be overlaid on top.
-              </div>
+              {analyzingStructure ? (
+                <div
+                  role="status"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, marginTop: 8,
+                    padding: '0.55rem 0.75rem', borderRadius: 6,
+                    background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)',
+                  }}
+                >
+                  <Spinner size="small" label="Analyzing PDF" />
+                  <div>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Reading the design and page structure with AI…
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      Detecting fixed branding, reusable page layouts, schedule styling, and template-specific fields.
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                  Upload a branded PDF. When this template is used, the itinerary data will be overlaid on top.
+                </div>
+              )}
             </Field>
-
-            <Field label="LLM source (if AI-drafted)">
-              <input
-                value={form.llmGeneratedBy}
-                onChange={(e) => setForm({ ...form, llmGeneratedBy: e.target.value })}
-                placeholder="e.g. gemini-2.5-flash"
-                aria-label="llmGeneratedBy"
-                style={inputStyle}
-              />
-            </Field>
+            )}
           </div>
 
           <div style={{ marginTop: 12 }}>
@@ -1110,7 +1272,10 @@ export default function ItineraryTemplates() {
               maxHeight: 730,
             }}
           >
-            <table style={{ width: '100%', minWidth: ITINERARY_TABLE_WIDTH, borderCollapse: 'collapse' }}>
+            {templateTab === 'pdf' && (
+              <style>{`.itinerary-templates-pdf-table th:nth-child(2), .itinerary-templates-pdf-table td:nth-child(2), .itinerary-templates-pdf-table th:nth-child(3), .itinerary-templates-pdf-table td:nth-child(3), .itinerary-templates-pdf-table th:nth-child(4), .itinerary-templates-pdf-table td:nth-child(4), .itinerary-templates-pdf-table th:nth-child(6), .itinerary-templates-pdf-table td:nth-child(6), .itinerary-templates-pdf-table th:nth-child(7), .itinerary-templates-pdf-table td:nth-child(7), .itinerary-templates-pdf-table th:nth-child(8), .itinerary-templates-pdf-table td:nth-child(8), .itinerary-templates-pdf-table th:nth-child(9), .itinerary-templates-pdf-table td:nth-child(9), .itinerary-templates-pdf-table th:nth-child(10), .itinerary-templates-pdf-table td:nth-child(10), .itinerary-templates-pdf-table th:nth-child(11), .itinerary-templates-pdf-table td:nth-child(11) { display: none; }`}</style>
+            )}
+            <table className={templateTab === 'pdf' ? 'itinerary-templates-pdf-table' : undefined} style={{ width: '100%', minWidth: templateTab === 'pdf' ? 760 : ITINERARY_TABLE_WIDTH, borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
                 <th style={th}>{sortButton('name', 'Name')}</th>
@@ -1270,6 +1435,21 @@ export default function ItineraryTemplates() {
                       >
                         <Edit2 size={16} />
                       </button>
+                      {/* Only PDF-underprint templates have page bodies to
+                          author — a plain itinerary template has no content
+                          box to render HTML into. */}
+                      {item.isPdfTemplate ? (
+                        <button
+                          type="button"
+                          onClick={() => setHtmlEditorTemplate(item)}
+                          style={iconBtn}
+                          aria-label={`Edit HTML template for ${item.name}`}
+                          data-testid={`html-tpl-${item.id}`}
+                          title="Design the page bodies with HTML/CSS"
+                        >
+                          <Code2 size={16} />
+                        </button>
+                      ) : null}
                       {/* G048 — Archive / Restore button. When the row is
                           archived (item.archivedAt set), show Restore
                           instead so the operator can bring it back. */}
@@ -1337,6 +1517,22 @@ export default function ItineraryTemplates() {
           CTA inside the modal triggers the actual clone (POST /api/travel/
           itineraries with clonedFromTemplateId); the operator lands on the
           new itinerary's editor. */}
+      {structureConfirm && (
+        <PdfStructureConfirmModal
+          analysis={structureConfirm}
+          onConfirm={(specJson) => {
+            setConfirmedStructure(specJson);
+            setStructureConfirm(null);
+          }}
+          onSkip={() => setStructureConfirm(null)}
+        />
+      )}
+      {htmlEditorTemplate && (
+        <HtmlTemplateModal
+          template={htmlEditorTemplate}
+          onClose={() => setHtmlEditorTemplate(null)}
+        />
+      )}
       {previewTemplate && (
         <TemplatePreviewModal
           template={previewTemplate}
@@ -1351,6 +1547,378 @@ export default function ItineraryTemplates() {
           onContactChange={setCloneContactId}
         />
       )}
+    </div>
+  );
+}
+
+// Drag-based region confirmation (extends G115). Shows a preview of page 1
+// with the proposed content box drawn on top of it; the operator drags the
+// box itself to reposition it, or any corner handle to resize it — directly
+// on the image, the way a human actually thinks about "cover this area", not
+// by typing four PDF-point numbers into disconnected fields. "Skip" leaves
+// confirmedRegions null so the server's own heuristic recompute is used
+// unchanged.
+const HANDLES = [
+  { mode: 'tl', top: 0, left: 0, cursor: 'nwse-resize' },
+  { mode: 'tr', top: 0, left: 100, cursor: 'nesw-resize' },
+  { mode: 'bl', top: 100, left: 0, cursor: 'nesw-resize' },
+  { mode: 'br', top: 100, left: 100, cursor: 'nwse-resize' },
+];
+const MIN_BOX_PCT = 6;
+
+function PdfRegionConfirmModal({ analysis, onConfirm, onSkip }) {
+  const pageSize = analysis.pageSize || { width: 595.28, height: 841.89 };
+  const suggestedBox = useMemo(() => ({
+    x: analysis.contentBox?.x || 0,
+    y: analysis.contentBox?.y || 0,
+    width: analysis.contentBox?.width || pageSize.width,
+    height: analysis.contentBox?.height || pageSize.height,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [analysis]);
+  const [box, setBox] = useState(suggestedBox);
+  const containerRef = useRef(null);
+  const dragRef = useRef(null);
+
+  const DIAGRAM_WIDTH = 420;
+  const diagramHeight = Math.round(DIAGRAM_WIDTH * (pageSize.height / pageSize.width));
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  // PDF points (bottom-left origin) -> CSS percentages (top-left origin) —
+  // the box's on-screen position, recomputed whenever `box` changes.
+  const pct = useMemo(() => {
+    const top = clamp(((pageSize.height - box.y - box.height) / pageSize.height) * 100, 0, 100);
+    const left = clamp((box.x / pageSize.width) * 100, 0, 100);
+    const width = clamp((box.width / pageSize.width) * 100, MIN_BOX_PCT, 100 - left);
+    const height = clamp((box.height / pageSize.height) * 100, MIN_BOX_PCT, 100 - top);
+    return { top, left, width, height };
+  }, [box, pageSize]);
+
+  const pctToBox = (p) => {
+    const width = (p.width / 100) * pageSize.width;
+    const height = (p.height / 100) * pageSize.height;
+    const x = (p.left / 100) * pageSize.width;
+    const y = pageSize.height - (p.top / 100) * pageSize.height - height;
+    return { x, y, width, height };
+  };
+
+  const handlePointerMove = (e) => {
+    const st = dragRef.current;
+    if (!st || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const dxPct = ((e.clientX - st.startClientX) / rect.width) * 100;
+    const dyPct = ((e.clientY - st.startClientY) / rect.height) * 100;
+    let { left, top, width, height } = st.startPct;
+
+    if (st.mode === 'move') {
+      left = clamp(left + dxPct, 0, 100 - width);
+      top = clamp(top + dyPct, 0, 100 - height);
+    } else {
+      if (st.mode.includes('l')) {
+        const right = left + width;
+        left = clamp(left + dxPct, 0, right - MIN_BOX_PCT);
+        width = right - left;
+      }
+      if (st.mode.includes('r')) {
+        width = clamp(width + dxPct, MIN_BOX_PCT, 100 - left);
+      }
+      if (st.mode.includes('t')) {
+        const bottom = top + height;
+        top = clamp(top + dyPct, 0, bottom - MIN_BOX_PCT);
+        height = bottom - top;
+      }
+      if (st.mode.includes('b')) {
+        height = clamp(height + dyPct, MIN_BOX_PCT, 100 - top);
+      }
+    }
+    setBox(pctToBox({ left, top, width, height }));
+  };
+
+  const endDrag = () => {
+    dragRef.current = null;
+    window.removeEventListener('pointermove', handlePointerMove);
+    window.removeEventListener('pointerup', endDrag);
+  };
+
+  const startDrag = (mode) => (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = { mode, startClientX: e.clientX, startClientY: e.clientY, startPct: pct };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', endDrag);
+  };
+
+  useEffect(() => () => {
+    window.removeEventListener('pointermove', handlePointerMove);
+    window.removeEventListener('pointerup', endDrag);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Confirm PDF template content region"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.5)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onSkip(); }}
+    >
+      <div
+        style={{
+          background: 'var(--surface-color)', borderRadius: 8, border: '1px solid var(--border-color)',
+          maxWidth: 620, width: '100%', maxHeight: '90vh', overflow: 'auto', padding: 20,
+          boxShadow: '0 12px 32px rgba(0, 0, 0, 0.3)',
+        }}
+      >
+        <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em', color: 'var(--accent-color, #6366f1)', marginBottom: 4 }}>
+          STEP 1 OF 2
+        </div>
+        <h2 style={{ margin: '0 0 6px', fontSize: 17 }}>Mark where your trip content goes</h2>
+        <p style={{ margin: '0 0 6px', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          The blue box below is what gets replaced with real itinerary content (dates, day plans,
+          pricing) every time this template is used. Drag it to move it, or drag a corner to resize
+          it — make sure it fully covers this sample&apos;s own text and photos, but stays clear of
+          your logo, header and footer, which stay fixed on every page.
+        </p>
+        <p style={{ margin: '0 0 14px', fontSize: 12, color: 'var(--text-secondary)' }}>
+          {analysis.source === 'ai'
+            ? `Starting position suggested by AI (${analysis.aiProvider || 'your configured provider'}).`
+            : 'Starting position suggested by automatic layout detection.'}
+        </p>
+
+        <div
+          ref={containerRef}
+          style={{
+            position: 'relative', width: DIAGRAM_WIDTH, height: diagramHeight,
+            maxWidth: '100%', margin: '0 auto',
+            border: '1px solid var(--border-color)', borderRadius: 4, overflow: 'hidden',
+            backgroundImage: analysis.previewImageBase64 ? `url(data:image/png;base64,${analysis.previewImageBase64})` : undefined,
+            backgroundSize: 'cover', backgroundColor: 'var(--bg-color, #1a1a1a)',
+            touchAction: 'none', userSelect: 'none',
+          }}
+        >
+          <div
+            onPointerDown={startDrag('move')}
+            title="Drag to move"
+            style={{
+              position: 'absolute',
+              top: `${pct.top}%`, left: `${pct.left}%`, width: `${pct.width}%`, height: `${pct.height}%`,
+              background: 'rgba(59,130,246,0.22)', border: '2px solid #3b82f6', cursor: 'move', boxSizing: 'border-box',
+            }}
+          >
+            {HANDLES.map((h) => (
+              <div
+                key={h.mode}
+                onPointerDown={startDrag(h.mode)}
+                title="Drag to resize"
+                style={{
+                  position: 'absolute', top: `${h.top}%`, left: `${h.left}%`,
+                  width: 14, height: 14, marginTop: -7, marginLeft: -7,
+                  background: '#fff', border: '2px solid #3b82f6', borderRadius: '50%',
+                  cursor: h.cursor,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 12, display: 'flex', justifyContent: 'center' }}>
+          <button type="button" onClick={() => setBox(suggestedBox)} style={{ ...secondaryBtn, padding: '0.3rem 0.65rem', fontSize: '0.76rem' }}>
+            Reset to suggested position
+          </button>
+        </div>
+
+        <div style={{ marginTop: 18, display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            // confirmedByOperator marks this box as reviewed, so the renderer
+            // gives it precedence over every auto-detected per-page box —
+            // without the flag the heuristic silently won and this dialog
+            // had no real effect on the output.
+            onClick={() => onConfirm(JSON.stringify({ pageSize, contentBox: box, confirmedByOperator: true }))}
+            style={primaryBtn}
+          >
+            Confirm &amp; continue
+          </button>
+          <button type="button" onClick={onSkip} style={secondaryBtn}>
+            Skip (use automatic detection)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Legacy editor retained for previously saved region data. New uploads use
+// automatic per-page regions and never expose PDF coordinates to operators.
+void PdfRegionConfirmModal;
+
+const PAGE_ROLE_OPTIONS = [
+  { value: 'cover', label: 'Cover — title, hero photo, intro blurb' },
+  { value: 'itinerary', label: 'Itinerary — day-by-day schedule (grows/shrinks with trip length)' },
+  { value: 'details', label: 'Details — costing, inclusions, exclusions, terms' },
+  { value: 'static', label: 'Static — never changes between trips (about us, contact)' },
+];
+
+// Page-role review (extends the structure classification added after G115).
+// Shows a thumbnail strip — one small preview per page — each with a role
+// dropdown pre-filled from the AI/heuristic classification, so the operator
+// can catch and correct a misclassification BEFORE it's saved (previously
+// this ran silently with no way to see or override the result). "Skip"
+// leaves confirmedStructure null so the server's own auto-classification
+// (same AI-then-heuristic fallback) is used unchanged.
+const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
+
+function PdfStructureConfirmModal({ analysis, onConfirm, onSkip }) {
+  const [roles, setRoles] = useState(() =>
+    Object.fromEntries((analysis.pages || []).map((p) => [p.index, p.role])),
+  );
+  // Detected automatically (AI or a heuristic sample of the template) — never
+  // reliable enough to ship unchecked. It previously went straight from
+  // detection into every generated PDF's day-bands/headings with no human
+  // ever seeing the swatch, so a wrong guess (a secondary color picked up
+  // instead of the actual brand color) silently rendered every trip in the
+  // wrong hue until someone happened to notice.
+  const [accentColor, setAccentColor] = useState(
+    HEX_COLOR_RE.test(analysis.accentColor || '') ? analysis.accentColor : '#00A9CE',
+  );
+
+  const setRole = (index, role) => setRoles((prev) => ({ ...prev, [index]: role }));
+
+  const confirm = () => {
+    const pages = (analysis.pages || []).map((p) => ({
+      index: p.index,
+      role: roles[p.index] || p.role,
+      contentBox: p.contentBox || null,
+    }));
+    onConfirm(JSON.stringify({
+      version: 4,
+      accentColor,
+      design: analysis.design || null,
+      requiredFields: analysis.requiredFields || [],
+      pages,
+    }));
+  };
+
+  const beyondPreviewCap = analysis.pageCount > (analysis.pages || []).length;
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Confirm page roles"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.5)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onSkip(); }}
+    >
+      <div
+        style={{
+          background: 'var(--surface-color)', borderRadius: 8, border: '1px solid var(--border-color)',
+          maxWidth: 760, width: '100%', maxHeight: '90vh', overflow: 'auto', padding: 20,
+          boxShadow: '0 12px 32px rgba(0, 0, 0, 0.3)',
+        }}
+      >
+        <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em', color: 'var(--accent-color, #6366f1)', marginBottom: 4 }}>
+          AUTOMATIC TEMPLATE BLUEPRINT
+        </div>
+        <h2 style={{ margin: '0 0 6px', fontSize: 17 }}>Review what AI understood</h2>
+        <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          For each page below, tell us what kind of content it holds — that&apos;s how the
+          system knows what to replace with real trip data and what to leave exactly as
+          you designed it.{' '}
+          {analysis.source === 'ai'
+            ? `We took a first guess with AI (${analysis.aiProvider || 'your configured provider'}) — check it&apos;s right.`
+            : 'We took a first guess using page layout — check it&apos;s right.'}
+        </p>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, padding: '8px 10px', border: '1px solid var(--border-color)', borderRadius: 6 }}>
+          <input
+            type="color"
+            value={HEX_COLOR_RE.test(accentColor) ? accentColor : '#00A9CE'}
+            onChange={(e) => setAccentColor(e.target.value)}
+            aria-label="Brand accent color"
+            style={{ width: 34, height: 34, padding: 0, border: '1px solid var(--border-color)', borderRadius: 6, cursor: 'pointer', background: 'none' }}
+          />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '0.78rem', fontWeight: 600 }}>Brand accent color</div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+              Used for day bands, headings and accents on every generated PDF.{' '}
+              {analysis.accentColor ? 'Detected from your template — check it against the logo/header before confirming.' : "Couldn't detect one automatically — pick the actual brand color here."}
+            </div>
+          </div>
+          <input
+            value={accentColor}
+            onChange={(e) => setAccentColor(e.target.value)}
+            aria-label="Brand accent color hex value"
+            style={{ ...inputStyle, width: 90, fontFamily: 'monospace', fontSize: '0.78rem', padding: '0.3rem 0.4rem' }}
+          />
+        </div>
+
+        <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
+          {(analysis.pages || []).map((p) => (
+            <div key={p.index} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div
+                style={{
+                  border: '1px solid var(--border-color)', borderRadius: 6, overflow: 'hidden',
+                  aspectRatio: '1 / 1.3', background: 'var(--bg-color, #1a1a1a)',
+                  backgroundImage: p.previewImageBase64 ? `url(data:image/png;base64,${p.previewImageBase64})` : undefined,
+                  backgroundSize: 'cover', backgroundPosition: 'top center',
+                  display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-start',
+                }}
+              >
+                <span
+                  style={{
+                    margin: 6, padding: '1px 6px', borderRadius: 4, fontSize: '0.68rem', fontWeight: 700,
+                    background: 'rgba(0,0,0,0.6)', color: '#fff',
+                  }}
+                >
+                  Page {p.index}
+                </span>
+              </div>
+              <select
+                value={roles[p.index] || p.role}
+                onChange={(e) => setRole(p.index, e.target.value)}
+                aria-label={`What's on page ${p.index}`}
+                style={{ ...inputStyle, fontSize: '0.76rem', padding: '0.3rem 0.4rem' }}
+              >
+                {PAGE_ROLE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label.split(' — ')[0]}</option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+
+        {beyondPreviewCap && (
+          <p style={{ margin: '12px 0 0', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+            This template has {analysis.pageCount} pages — only the first {(analysis.pages || []).length} show a
+            preview here; the rest keep their automatically detected role.
+          </p>
+        )}
+
+        <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--subtle-bg)', borderRadius: 6, fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+          {PAGE_ROLE_OPTIONS.map((o) => (
+            <div key={o.value}>
+              <strong style={{ color: 'var(--text-primary)' }}>{o.label.split(' — ')[0]}:</strong> {o.label.split(' — ')[1]}
+            </div>
+          ))}
+          <div style={{ marginTop: 4 }}>
+            Want to replace what&apos;s on a &quot;Static&quot; page for one specific trip? Do that in
+            that itinerary&apos;s Details tab, not here — this only sets the template&apos;s default.
+          </div>
+        </div>
+
+        <div style={{ marginTop: 18, display: 'flex', gap: 8 }}>
+          <button type="button" onClick={confirm} style={primaryBtn}>
+            Confirm &amp; save template
+          </button>
+          <button type="button" onClick={onSkip} style={secondaryBtn}>
+            Skip (use automatic detection)
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1388,6 +1956,32 @@ function TemplatePreviewModal({
     // lands at the top so the operator sees it before the day-by-day flow.
     return Array.from(map.entries()).sort(([a], [b]) => a - b);
   }, [items]);
+
+  // Reference-PDF pages + their stored roles. This is what a PDF style
+  // template actually IS, so it leads the preview; the item/map/linked-master
+  // panels below are hidden entirely when the template carries no items,
+  // since for a style template they are always empty and pure noise.
+  const [pdfPages, setPdfPages] = useState(null);
+  const [pdfPagesLoading, setPdfPagesLoading] = useState(false);
+  useEffect(() => {
+    if (!template?.id || !template?.pdfTemplateUrl) { setPdfPages(null); return undefined; }
+    let cancelled = false;
+    setPdfPagesLoading(true);
+    fetchApi(`/api/travel/itinerary-templates/${template.id}/pdf-pages`, { silent: true })
+      .then((r) => { if (!cancelled) setPdfPages(r?.hasPdf ? r : null); })
+      .catch(() => { if (!cancelled) setPdfPages(null); })
+      .finally(() => { if (!cancelled) setPdfPagesLoading(false); });
+    return () => { cancelled = true; };
+  }, [template?.id, template?.pdfTemplateUrl]);
+
+  const hasItems = (items || []).length > 0;
+  // For a PDF STYLE template the item / map / linked-master panels are
+  // structurally empty — it has no day-by-day content by design — so they are
+  // pure noise and get hidden. A content template with no items is different:
+  // there the emptiness is itself the signal (nothing added yet, or a
+  // malformed templateJson), so its placeholders still render.
+  const isStyleTemplate = Boolean(template?.pdfTemplateUrl);
+  const showContentPanels = hasItems || !isStyleTemplate;
 
   const pinCount = (items || []).filter((it) => {
     if (!it) return false;
@@ -1493,7 +2087,56 @@ function TemplatePreviewModal({
           </div>
         )}
 
-        {/* Linked data summary */}
+        {/* Reference PDF pages — what a style template actually is. */}
+        {(pdfPagesLoading || pdfPages) && (
+          <div style={{ padding: 16, borderBottom: '1px solid var(--border-color)' }} data-testid="preview-pdf-pages-section">
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>
+              Reference PDF — page roles
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10, lineHeight: 1.5 }}>
+              Every itinerary using this template renders inside these pages. The
+              itinerary page grows or shrinks to fit each trip&apos;s real length.
+            </div>
+            {pdfPagesLoading ? (
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Loading pages…</div>
+            ) : (
+              <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))' }}>
+                {(pdfPages.pages || []).map((p) => (
+                  <div key={p.index} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <div
+                      style={{
+                        border: '1px solid var(--border-color)', borderRadius: 6, overflow: 'hidden',
+                        aspectRatio: '1 / 1.3', background: 'var(--bg-color, #1a1a1a)',
+                        backgroundImage: p.previewImageBase64 ? `url(data:image/png;base64,${p.previewImageBase64})` : undefined,
+                        backgroundSize: 'cover', backgroundPosition: 'top center',
+                      }}
+                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Page {p.index}</span>
+                      <span
+                        style={{
+                          padding: '1px 6px', borderRadius: 10, fontSize: '0.66rem', fontWeight: 700,
+                          background: 'rgba(59,130,246,0.14)', color: 'var(--primary-color, #2563eb)',
+                          textTransform: 'capitalize',
+                        }}
+                      >
+                        {p.role || 'auto'}
+                      </span>
+                      {p.hasCustomText && (
+                        <span style={{ fontSize: '0.64rem', color: 'var(--text-secondary)' }}>· custom text</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Linked data summary — only meaningful for templates that carry
+            pre-built day-by-day content; hidden for pure PDF style templates
+            where every one of these counts is always zero. */}
+        {showContentPanels && (
         <div
           style={{
             padding: 16,
@@ -1521,7 +2164,10 @@ function TemplatePreviewModal({
             Review the source masters in <Link to="/travel/sightseeing">Sightseeing Master</Link>, <Link to="/travel/cost-master">Cost Master</Link>, and <Link to="/travel/pricing-rules">Pricing Rules</Link>.
           </div>
         </div>
-        {/* Map preview */}
+        )}
+        {/* Map preview — same reasoning as above: a style template has no
+            items, so it can never have map pins. */}
+        {showContentPanels && (
         <div
           style={{
             padding: 16,
@@ -1567,8 +2213,11 @@ function TemplatePreviewModal({
             </div>
           )}
         </div>
+        )}
 
-        {/* Day-by-day item summary */}
+        {/* Day-by-day item summary — only for starter-package templates that
+            actually carry pre-built content. */}
+        {showContentPanels && (
         <div
           style={{
             padding: 16,
@@ -1656,6 +2305,7 @@ function TemplatePreviewModal({
             </div>
           )}
         </div>
+        )}
 
         {/* Footer — contact picker + CTAs */}
         <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-color)' }}>
@@ -1704,7 +2354,7 @@ function TemplatePreviewModal({
 
 function Field({ label, children }) {
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, minWidth: 0, maxWidth: '100%' }}>
       <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{label}</span>
       {children}
     </label>
@@ -1799,6 +2449,269 @@ const statusBadgeArchived = {
   background: 'rgba(245, 158, 11, 0.16)',
   color: 'rgb(180, 83, 9)',
 };
+
+// Authoring surface for a PDF template's HTML/CSS page bodies.
+//
+// The enum "design" object could only describe a template in ~18 fixed
+// values, so anything outside that vocabulary — a real brand font, a two
+// column day spread — was unreachable, and when the detection guessed wrong
+// an operator had no way to correct it. This is that missing recourse: the
+// actual markup, editable, with an AI draft as the starting point and the
+// built-in renderer always one click away.
+function HtmlTemplateModal({ template, onClose }) {
+  const notify = useNotify();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [error, setError] = useState('');
+  const [bodyCss, setBodyCss] = useState('');
+  const [pages, setPages] = useState([]);
+  const [starter, setStarter] = useState(null);
+  const [activeIndex, setActiveIndex] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const data = await fetchApi(`/api/travel/itinerary-templates/${template.id}/html-template`);
+        if (cancelled) return;
+        setBodyCss(data.bodyCss || '');
+        setPages(data.pages || []);
+        setStarter(data.starter || null);
+        const firstFillable = (data.pages || []).find((p) => p.role && p.role !== 'static');
+        setActiveIndex(firstFillable ? firstFillable.index : (data.pages || [])[0]?.index ?? null);
+      } catch (e) {
+        if (!cancelled) setError(e.message || 'Could not load this template');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [template.id]);
+
+  const setPageHtml = (index, html) => {
+    setPages((prev) => prev.map((p) => (p.index === index ? { ...p, bodyHtml: html } : p)));
+  };
+
+  const active = pages.find((p) => p.index === activeIndex) || null;
+  const enabledCount = pages.filter((p) => (p.bodyHtml || '').trim()).length;
+
+  const draftWithAi = async () => {
+    setDrafting(true);
+    setError('');
+    try {
+      const data = await fetchApi(`/api/travel/itinerary-templates/${template.id}/propose-html-template`, {
+        method: 'POST',
+      });
+      setBodyCss(data.bodyCss || '');
+      // Only pages the model actually returned are replaced; anything it
+      // skipped (a static page, or one it could not read) keeps what it had.
+      const byIndex = new Map((data.pages || []).map((p) => [p.index, p.bodyHtml]));
+      setPages((prev) => prev.map((p) => (byIndex.has(p.index) ? { ...p, bodyHtml: byIndex.get(p.index) } : p)));
+      notify.success(`Drafted ${data.pages?.length || 0} page(s)${data.aiModel ? ` with ${data.aiModel}` : ''}`);
+    } catch (e) {
+      setError(e.message || 'Could not draft a template');
+    } finally {
+      setDrafting(false);
+    }
+  };
+
+  const insertStarter = () => {
+    if (!starter) return;
+    setBodyCss(starter.bodyCss || '');
+    const byIndex = new Map((starter.pages || []).map((p) => [p.index, p.bodyHtml]));
+    setPages((prev) => prev.map((p) => (byIndex.get(p.index) ? { ...p, bodyHtml: byIndex.get(p.index) } : p)));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      await fetchApi(`/api/travel/itinerary-templates/${template.id}/html-template`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bodyCss,
+          pages: pages.map((p) => ({ index: p.index, bodyHtml: p.bodyHtml || '' })),
+        }),
+      });
+      notify.success('HTML template saved');
+      onClose();
+    } catch (e) {
+      // The server rejects unparseable template syntax and names the page, so
+      // surface it verbatim rather than a generic failure.
+      setError(e.message || 'Could not save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revert = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      await fetchApi(`/api/travel/itinerary-templates/${template.id}/html-template`, { method: 'DELETE' });
+      notify.success('Reverted to the built-in renderer');
+      onClose();
+    } catch (e) {
+      setError(e.message || 'Could not revert');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const mono = {
+    width: '100%', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: '0.76rem', lineHeight: 1.5, padding: 10, borderRadius: 6,
+    border: '1px solid var(--border-color)', background: 'var(--bg-color)',
+    color: 'var(--text-color)', resize: 'vertical',
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-label={`HTML template for ${template.name}`}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        style={{
+          background: 'var(--surface-color)', borderRadius: 8, border: '1px solid var(--border-color)',
+          maxWidth: 900, width: '100%', maxHeight: '92vh', overflow: 'auto', padding: 20,
+          boxShadow: '0 12px 32px rgba(0,0,0,0.3)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.04em', color: 'var(--accent-color, #6366f1)' }}>
+              PAGE BODY DESIGN
+            </div>
+            <h2 style={{ margin: '4px 0 4px', fontSize: 17 }}>{template.name}</h2>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, maxWidth: 620 }}>
+              Your uploaded PDF still supplies every page&apos;s logo, header and footer — this only
+              controls what fills the content area. Leave a page empty to keep the built-in layout for it.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} style={iconBtn} aria-label="Close"><X size={18} /></button>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: '2rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading…</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '14px 0' }}>
+              <button type="button" onClick={draftWithAi} disabled={drafting || saving} style={drafting ? disabledBtn : primaryBtn}>
+                {drafting ? 'Drafting…' : 'Draft with AI'}
+              </button>
+              {starter ? (
+                <button type="button" onClick={insertStarter} disabled={saving} style={secondaryBtn}>
+                  Insert starter
+                </button>
+              ) : null}
+              <span style={{ flex: 1 }} />
+              <button type="button" onClick={revert} disabled={saving || enabledCount === 0} style={enabledCount === 0 ? disabledBtn : secondaryBtn}>
+                Revert to built-in
+              </button>
+              <button type="button" onClick={save} disabled={saving} style={saving ? disabledBtn : primaryBtn}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+              {enabledCount > 0
+                ? `${enabledCount} of ${pages.length} pages will render from HTML.`
+                : 'No pages use HTML yet — this template still renders with the built-in layout.'}
+            </div>
+
+            {error ? (
+              <div
+                role="alert"
+                style={{
+                  padding: '0.6rem 0.8rem', borderRadius: 6, marginBottom: 12, fontSize: 12,
+                  background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)',
+                  color: 'var(--danger-color, #ef4444)',
+                }}
+              >
+                {error}
+              </div>
+            ) : null}
+
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+              Stylesheet (shared by every page)
+            </label>
+            <textarea
+              value={bodyCss}
+              onChange={(e) => setBodyCss(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              style={{ ...mono, marginBottom: 16 }}
+              placeholder="@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');"
+            />
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+              {pages.map((p) => (
+                <button
+                  key={p.index}
+                  type="button"
+                  onClick={() => setActiveIndex(p.index)}
+                  style={{
+                    ...secondaryBtn,
+                    padding: '0.35rem 0.6rem',
+                    fontSize: '0.76rem',
+                    borderColor: p.index === activeIndex ? 'var(--accent-color, #6366f1)' : 'var(--border-color)',
+                    color: p.index === activeIndex ? 'var(--accent-color, #6366f1)' : undefined,
+                  }}
+                >
+                  Page {p.index}
+                  <span style={{ opacity: 0.65, marginLeft: 4 }}>{p.role || '—'}</span>
+                  {(p.bodyHtml || '').trim() ? <span style={{ marginLeft: 4 }}>●</span> : null}
+                </button>
+              ))}
+            </div>
+
+            {active ? (
+              <>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                  Page {active.index} body — {active.role || 'unclassified'}
+                  {active.role === 'static' ? ' (usually left empty; static pages copy through untouched)' : ''}
+                </label>
+                <textarea
+                  value={active.bodyHtml || ''}
+                  onChange={(e) => setPageHtml(active.index, e.target.value)}
+                  rows={16}
+                  spellCheck={false}
+                  style={mono}
+                  placeholder="{{#each days}} … {{/each}}"
+                />
+                <details style={{ marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
+                  <summary style={{ cursor: 'pointer' }}>Available data and syntax</summary>
+                  <pre style={{ ...mono, marginTop: 8, whiteSpace: 'pre-wrap' }}>
+{`{{title}} {{introText}} {{accent}} {{hero}} {{hasHero}}
+{{#each days}}
+  {{label}} {{title}} {{route}} {{hasRoute}} {{learning}}
+  {{#each items}} {{time}} {{activity}} {{location}} {{/each}}
+{{/each}}
+{{#each inclusions}}{{this}}{{/each}}   also: exclusions, otherDetails, terms
+{{perPerson}} {{groupTotal}} {{hasPrice}}
+{{#each fields}}{{label}} {{value}}{{/each}}
+
+{{#if x}}…{{else}}…{{/if}}   {{#unless x}}…{{/unless}}`}
+                  </pre>
+                </details>
+              </>
+            ) : null}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const primaryBtn = {
   display: 'inline-flex',
   alignItems: 'center',

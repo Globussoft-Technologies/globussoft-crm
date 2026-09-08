@@ -796,15 +796,33 @@ test.describe('POS — POST /shifts/:id/close', () => {
 //
 // Both POST /shifts/open and POST /shifts/:id/close call emitEvent(...) inside
 // a try/catch swallow so a flaky bus never reds a real shift mutation. Pin
-// the emission via the workflows audit-log side effect: the AutomationRule
-// engine writes an audit-log row keyed by (entity:'AutomationRule',
-// entityId:<rule.id>) every time it executes a matching rule. By creating
-// a no-op rule subscribed to shift.opened (or shift.closed) BEFORE firing
-// the shift mutation, the post-mutation /api/workflows/history list grows
-// by ≥1 row referencing the rule's id — proving the emission landed.
+// the emission via the workflow engine's side effect: it writes a
+// WorkflowExecution row referencing the rule (`workflowId`) every time it
+// executes one. By creating a no-op rule subscribed to shift.opened (or
+// shift.closed) BEFORE firing the shift mutation, the post-mutation
+// /api/workflows/history list grows by ≥1 row referencing the rule's id —
+// proving the emission landed. (A compliance AuditLog row keyed
+// entity:'AutomationRule' is still written too; /history just no longer
+// serves it.)
 //
 // The trigger names (shift.opened / shift.closed) are whitelisted in
 // routes/workflows.js TRIGGER_TYPES so the rule create itself doesn't 400.
+
+// Poll rather than sleep once. The workflow engine retries a failed action
+// three times with backoff (500ms, then 1000ms) BEFORE writing its execution
+// row, so a `send_sms` probe rule — deliberately no-op, no provider configured
+// — lands its row ~1.5-2s after the shift mutation returns. emitEvent is also
+// fire-and-forget, so none of that starts until after the 201. A fixed 350ms
+// gap read the table while the engine was still on attempt 2.
+async function historyAfter(request, beforeTotal, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let body;
+  do {
+    await new Promise((r) => setTimeout(r, 250));
+    body = await (await authGet(request, '/api/workflows/history?limit=200')).json();
+  } while (body.total <= beforeTotal && Date.now() < deadline);
+  return body;
+}
 
 test.describe('POS — shift.opened / shift.closed event emission', () => {
   test('POST /shifts/open emits shift.opened (audit-log proof)', async ({ request }) => {
@@ -841,24 +859,20 @@ test.describe('POS — shift.opened / shift.closed event emission', () => {
     const shift = await openRes.json();
     createdShiftIds.push(shift.id);
 
-    // Tiny gap so emitEvent's async tail (rule scan + audit write) commits
-    // before we read history. Mirrors the workflows-api pattern exactly.
-    await new Promise((r) => setTimeout(r, 350));
-
-    const after = await authGet(request, '/api/workflows/history?limit=200');
-    const afterBody = await after.json();
+    const afterBody = await historyAfter(request, beforeTotal);
     expect(
       afterBody.total,
       `history total should grow by ≥1 after shift.opened fired; delta ${afterBody.total - beforeTotal}`
     ).toBeGreaterThan(beforeTotal);
 
-    // Stronger contract — at least one new audit row references our rule's id.
-    const ourRow = afterBody.logs.find(
-      (l) => l.entity === 'AutomationRule' && l.entityId === rule.id
-    );
+    // Stronger contract — at least one new row references our rule. /history
+    // serves WorkflowExecution rows, so the rule is `workflowId`; it used to
+    // serve AuditLog rows keyed (entity, entityId). The compliance row is
+    // still written, it is just not what this endpoint returns any more.
+    const ourRow = afterBody.logs.find((l) => l.workflowId === rule.id);
     expect(
       ourRow,
-      `expected audit row with entityId=${rule.id} after shift.opened fired; latest entityIds: ${JSON.stringify(afterBody.logs.slice(0, 5).map((l) => l.entityId))}`
+      `expected a history row with workflowId=${rule.id} after shift.opened fired; latest workflowIds: ${JSON.stringify(afterBody.logs.slice(0, 5).map((l) => l.workflowId))}`
     ).toBeTruthy();
   });
 
@@ -906,20 +920,16 @@ test.describe('POS — shift.opened / shift.closed event emission', () => {
     expect(closed.variance).toBeCloseTo(1234 - 1000, 2);
     expect(closed.status).toBe('CLOSED');
 
-    await new Promise((r) => setTimeout(r, 350));
-    const after = await authGet(request, '/api/workflows/history?limit=200');
-    const afterBody = await after.json();
+    const afterBody = await historyAfter(request, beforeTotal);
     expect(
       afterBody.total,
       `history total should grow by ≥1 after shift.closed fired; delta ${afterBody.total - beforeTotal}`
     ).toBeGreaterThan(beforeTotal);
 
-    const ourRow = afterBody.logs.find(
-      (l) => l.entity === 'AutomationRule' && l.entityId === rule.id
-    );
+    const ourRow = afterBody.logs.find((l) => l.workflowId === rule.id);
     expect(
       ourRow,
-      `expected audit row with entityId=${rule.id} after shift.closed fired`
+      `expected a history row with workflowId=${rule.id} after shift.closed fired`
     ).toBeTruthy();
 
     // Audit-log details JSON carries the original payload — assert variance

@@ -1,5 +1,5 @@
 const express = require('express');
-const { verifyToken, verifyRole } = require('../middleware/auth');
+const { verifyToken, verifyRole, RBAC_DENIED_MESSAGE, RBAC_DENIED_CODE } = require('../middleware/auth');
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const audienceController = require("../controllers/audienceController");
@@ -57,7 +57,16 @@ function normalizeContactPhone(contact) {
   return normalizedPhone === contact.phone ? contact : { ...contact, phone: normalizedPhone };
 }
 
-function workflowContactPayload(contact, userId, changedFields = []) {
+/**
+ * Build the payload a contact.* workflow rule sees.
+ *
+ * `previous` is the prior-value snapshot the changed / changed_to /
+ * changed_from condition operators read. Without it a rule can only test the
+ * post-update state, which makes "status moved off Lead" or "owner was
+ * reassigned" impossible to express. Optional so the create path — where
+ * there is no prior state — simply omits it.
+ */
+function workflowContactPayload(contact, userId, changedFields = [], previous = null) {
   const callifiedStatus = String(contact.callifiedLeadStatus || "").toLowerCase();
   const isJunk = contact.status === "Junk" || callifiedStatus === "junk";
   const isQualified = ["Prospect", "Customer"].includes(contact.status) || callifiedStatus === "qualified";
@@ -84,6 +93,7 @@ function workflowContactPayload(contact, userId, changedFields = []) {
     metaIsJunk: isJunk,
     metaIsQualified: isQualified,
     changedFields,
+    ...(previous ? { previous } : {}),
     userId,
     tenantId: contact.tenantId,
   };
@@ -257,7 +267,21 @@ function validateContactInput(body, { isUpdate = false } = {}) {
 }
 
 function canViewAllLeads(req) {
-  return !!(req && req.user && ['ADMIN', 'MANAGER'].includes(req.user.role));
+  if (!req || !req.user) return false;
+  const vertical = req.user.vertical || 'generic';
+  // Travel keeps the stricter rule: only ADMIN can see the full tenant.
+  // Other verticals preserve the pre-existing ADMIN/MANAGER behavior.
+  if (vertical === 'travel') {
+    return req.user.role === 'ADMIN';
+  }
+  return ['ADMIN', 'MANAGER'].includes(req.user.role);
+}
+
+function canReassignLead(req, contact) {
+  if (!req || !req.user || !contact) return false;
+  if (req.user.role === 'ADMIN') return true;
+  const vertical = req.user.vertical || 'generic';
+  return vertical === 'travel' && Number(contact.assignedToId) === Number(req.user.userId);
 }
 
 // Freshsales-style "Filter by" panel — field allowlist. Each entry maps a
@@ -584,6 +608,31 @@ function buildCustomFieldClause(defId, operator, values, kind = 'text') {
   return { leadCustomFieldValues: { some: { fieldId: defId, OR: list.map((v) => ({ valueText: { contains: String(v) } })) } } };
 }
 
+// Web-Form filter for the generic Leads "Filter by" panel + header filter
+// menu. Relation-backed (Contact.webFormSubmissions → WebForm.name), so it
+// bypasses FILTERABLE_FIELDS (Contact-column allowlist) with its own clause
+// builder, mirroring the relation style of buildCustomFieldClause.
+// contains/not_contains take EXACT form names — the panel offers checkbox
+// values from /filter-values/webForm — mirroring the `id`-kind exact-match
+// convention rather than substring matching ("Contact Us" must not also
+// match "Contact Us 2"). is_empty = never submitted any form;
+// is_not_empty = submitted ≥1 form.
+function buildWebFormClause(operator, values) {
+  if (operator === 'is_empty') {
+    return { webFormSubmissions: { none: {} } };
+  }
+  if (operator === 'is_not_empty') {
+    return { webFormSubmissions: { some: {} } };
+  }
+  const list = (values || []).filter((v) => v !== undefined && v !== null && v !== '').map(String);
+  if (list.length === 0) return null;
+  if (operator === 'not_contains') {
+    return { NOT: { webFormSubmissions: { some: { webForm: { name: { in: list } } } } } };
+  }
+  return { webFormSubmissions: { some: { webForm: { name: { in: list } } } } };
+}
+
+
 function canAccessLead(req, contact) {
   if (!req || !req.user || !contact) return false;
   if (canViewAllLeads(req)) return true;
@@ -891,6 +940,21 @@ router.get('/', async (req, res) => {
     if (req.query.status) where.status = req.query.status;
     if (req.query.assignedToId) where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === 'true') where.assignedToId = null;
+    if (req.query.q !== undefined) {
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      if (q.length < 1 || q.length > 200) {
+        return res.status(400).json({
+          error: 'q must be a non-empty string ≤200 chars',
+          code: 'INVALID_SEARCH',
+          field: 'q',
+        });
+      }
+      where.OR = [
+        { name: { contains: q } },
+        { email: { contains: q } },
+        { company: { contains: q } },
+      ];
+    }
     // Arc 2 #904 slice 8 — ?source=<prefix> server-side filter. Replaces the
     // STUB client-side `source.startsWith('inbound:')` filter in
     // InboundLeads.jsx (slice 7, 56f549f7) which was bounded by the
@@ -974,6 +1038,19 @@ router.get('/', async (req, res) => {
           if (clause) clauses.push(clause);
           continue;
         }
+        // Web-Form filter (generic vertical only) — relation-backed, handled
+        // above FILTERABLE_FIELDS. Non-generic tenants skip it, mirroring
+        // the `verticals` gate below (lazy tenant lookup, same pattern).
+        if (f.field === 'webForm') {
+          if (vertical === null) {
+            const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+            vertical = tenant?.vertical || 'generic';
+          }
+          if (vertical !== 'generic') continue;
+          const clause = buildWebFormClause(f.operator, rawValues);
+          if (clause) clauses.push(clause);
+          continue;
+        }
         const fieldDef = FILTERABLE_FIELDS[f.field];
         if (!fieldDef) continue;
         if (fieldDef.verticals && !fieldDef.verticals.includes(vertical)) continue;
@@ -984,11 +1061,11 @@ router.get('/', async (req, res) => {
     }
     // #167: hide soft-deleted rows by default; admin views can opt in.
     applyDeletedAtFilter(where, req.query.includeDeleted === 'true');
-    // #588: USER role sees only contacts assigned to them; ADMIN/MANAGER see
-    // full tenant. Mirrors the deals-list scoping. An explicit ?assignedToId
-    // from a USER is overridden by their own userId — a sales rep cannot
-    // probe a colleague's book of business by URL. Total Contacts KPI on
-    // /dashboard now reflects own-book size for sales reps.
+    // #588: non-admin callers see only contacts assigned to them. Travel
+    // tightens this further so only ADMIN can view the full tenant; an
+    // explicit ?assignedToId from a restricted caller is overridden by their
+    // own userId — a rep cannot probe a colleague's book of business by URL.
+    // Total Contacts KPI on /dashboard now reflects own-book size for sales reps.
     if (!canViewAllLeads(req)) where.assignedToId = req.user.userId;
     // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
     if (req.query.count === '1') {
@@ -1026,7 +1103,20 @@ router.get('/', async (req, res) => {
         createdAt: true,
       };
     } else {
-      findManyArgs.include = { activities: true, tasks: true, assignedTo: { select: { id: true, name: true, email: true } } };
+      // webFormSubmissions powers the generic Leads table's "Web Form"
+      // column (latest submission's form name). take:1 + submittedAt-desc
+      // keeps it to one tiny join per row; the ?fields=summary slim shape
+      // above intentionally omits it.
+      findManyArgs.include = {
+        activities: true,
+        tasks: true,
+        assignedTo: { select: { id: true, name: true, email: true } },
+        webFormSubmissions: {
+          select: { id: true, webForm: { select: { id: true, name: true } } },
+          orderBy: { submittedAt: "desc" },
+          take: 1,
+        },
+      };
     }
     const contacts = await prisma.contact.findMany(findManyArgs);
     // #464: strip read-restricted fields per the caller's role.
@@ -1078,6 +1168,14 @@ router.get('/filter-fields', async (req, res) => {
         label: def.label,
         kind: def.kind,
       }));
+    // Web-Form pseudo-field (generic vertical only): relation-backed, so it
+    // is NOT part of FILTERABLE_FIELDS (Contact-column allowlist) — appended
+    // here in the same { field, label, kind } shape the picker consumes,
+    // right after Source (mirrors the table column order). kind 'text'
+    // offers contains/not_contains/is_empty/is_not_empty.
+    const webFormField = vertical === 'generic'
+      ? [{ field: 'webForm', label: 'Web Form', kind: 'text' }]
+      : [];
     const customDefs = await prisma.leadCustomFieldDefinition.findMany({
       where: { tenantId },
       orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
@@ -1096,7 +1194,10 @@ router.get('/filter-fields', async (req, res) => {
       custom: true,
       fieldType: d.fieldType,
     }));
-    res.json({ fields: [...staticFields, ...customFields] });
+    const fields = [...staticFields];
+    const sourceAt = fields.findIndex((f) => f.field === 'source');
+    fields.splice(sourceAt >= 0 ? sourceAt + 1 : fields.length, 0, ...webFormField);
+    res.json({ fields: [...fields, ...customFields] });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch filter fields' });
   }
@@ -1153,6 +1254,36 @@ router.get('/filter-values/:field', async (req, res) => {
         .map((r) => r.valueText)
         .filter((v) => v !== null && v !== '')
         .map((v) => ({ value: v, label: v }));
+      return res.json({ values });
+    }
+    // Web-Form values (generic vertical only): distinct form names actually
+    // used by in-scope contacts. Resolved through the submissions join (the
+    // name lives on WebForm, not Contact) and deduped in JS like the tags
+    // branch below. Rejected for non-generic tenants, mirroring the
+    // `verticals` gate on column-backed fields.
+    if (req.params.field === 'webForm') {
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+      if ((tenant?.vertical || 'generic') !== 'generic') {
+        return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+      }
+      const rows = await prisma.webFormSubmission.findMany({
+        where: {
+          tenantId,
+          ...(statusScope ? { contact: { status: statusScope, deletedAt: null } } : {}),
+        },
+        select: { webForm: { select: { name: true } } },
+        orderBy: { submittedAt: 'desc' },
+        take: 1000,
+      });
+      const seen = new Set();
+      const values = [];
+      for (const row of rows) {
+        const name = row.webForm?.name;
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        values.push({ value: name, label: name });
+      }
+      values.sort((a, b) => a.label.localeCompare(b.label));
       return res.json({ values });
     }
     const fieldDef = FILTERABLE_FIELDS[req.params.field];
@@ -1870,7 +2001,17 @@ const updateContactById = async (req, res) => {
     try {
       require("../lib/eventBus").emitEvent(
         "contact.updated",
-        workflowContactPayload(contact, req.user.userId, Object.keys(req.body || {})),
+        workflowContactPayload(contact, req.user.userId, Object.keys(req.body || {}), {
+          status: existing.status,
+          source: existing.source,
+          assignedToId: existing.assignedToId,
+          email: existing.email,
+          phone: existing.phone,
+          company: existing.company,
+          aiScore: existing.aiScore,
+          tags: parseContactTags(existing.tagsJson),
+          callifiedLeadStatus: existing.callifiedLeadStatus,
+        }),
         req.user.tenantId,
         req.io
       ).catch((error) => console.error("[contacts] contact.updated workflow failed:", error.message));
@@ -2112,23 +2253,52 @@ router.post('/import-csv', async (req, res) => {
   }
 });
 
-// Assign agent to a contact — restricted to ADMIN only.
-router.put('/:id/assign', verifyRole(['ADMIN']), async (req, res) => {
+// Assign agent to a contact.
+// - ADMIN: can reassign any lead in the tenant.
+// - travel non-admins: can reassign only the lead assigned to them.
+// The dropdowns on the travel pages are filtered to non-admin staff, and
+// this route keeps the validation in place so a forged request can't assign
+// a lead to an admin.
+router.put('/:id/assign', async (req, res) => {
   try {
     const { assignedToId } = req.body;
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    if (!canReassignLead(req, existing)) {
+      if ((req.user?.vertical || 'generic') !== 'travel' || req.user?.role === 'ADMIN') {
+        return res.status(403).json({ error: RBAC_DENIED_MESSAGE, code: RBAC_DENIED_CODE });
+      }
+      return res.status(404).json({ error: 'Contact not found' });
+    }
+    const nextAssignedToId = assignedToId ? parseInt(assignedToId, 10) : null;
+    if (assignedToId && !Number.isInteger(nextAssignedToId)) {
+      return res.status(400).json({ error: 'Invalid staff member', code: 'INVALID_ASSIGNEE' });
+    }
+    const targetUser = nextAssignedToId !== null
+      ? await prisma.user.findFirst({
+          where: { id: nextAssignedToId, tenantId: req.user.tenantId },
+          select: { id: true, role: true, userType: true },
+        })
+      : null;
+    if (nextAssignedToId !== null && !targetUser) {
+      return res.status(404).json({ error: 'Staff member not found', code: 'ASSIGNEE_NOT_FOUND' });
+    }
+    if ((req.user?.vertical || 'generic') === 'travel' && req.user?.role !== 'ADMIN' && targetUser?.role === 'ADMIN') {
+      return res.status(403).json({
+        error: "Travel agents can't assign leads to admins",
+        code: 'ASSIGNEE_ADMIN_FORBIDDEN',
+      });
+    }
     // Travel security guard — a brand-tagged lead can only be assigned to staff
     // who have access to that sub-brand. Contacts with no subBrand (generic /
     // wellness) skip this entirely, so their behaviour is unchanged.
-    if (existing.subBrand && assignedToId) {
+    if (existing.subBrand && nextAssignedToId) {
       const { getSubBrandAccessSet, canAccessSubBrand } = require('../middleware/travelGuards');
-      const allowed = await getSubBrandAccessSet(parseInt(assignedToId));
+      const allowed = await getSubBrandAccessSet(nextAssignedToId);
       if (!canAccessSubBrand(allowed, existing.subBrand)) {
         return res.status(403).json({ error: "That staff member doesn't have access to this lead's sub-brand", code: 'SUB_BRAND_ASSIGN_DENIED' });
       }
     }
-    const nextAssignedToId = assignedToId ? parseInt(assignedToId) : null;
     const contact = await prisma.contact.update({
       where: { id: existing.id },
       data: { assignedToId: nextAssignedToId },

@@ -175,8 +175,8 @@ async function renderHTML(landingPage) {
     method: 'GET',
   });
 
-  if (!response.ok) {
-    throw new Error(`Failed to render HTML: ${response.status}`);
+  if (!response?.ok) {
+    throw new Error(`Failed to render HTML: ${response?.status ?? "no response"}`);
   }
 
   return response.text();
@@ -190,9 +190,11 @@ async function renderReact(landingPage) {
   // 1. Render the React component to a string (SSR)
   // 2. Or fetch the rendered content via a server endpoint
   // For now, we'll fetch from the test page and extract the content
-  const testPageHtml = await fetch(`/test/react-landing-page?id=${landingPage.id}`).then((r) =>
-    r.text()
-  );
+  const response = await fetch(`/test/react-landing-page?id=${landingPage.id}`);
+  if (!response?.ok) {
+    throw new Error(`Failed to render React page: ${response?.status ?? "no response"}`);
+  }
+  const testPageHtml = await response.text();
 
   // Extract the rendered content from the test page
   const parser = new DOMParser();

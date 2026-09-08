@@ -201,7 +201,7 @@ const ALLOWED_NOTIFICATION_TYPES = new Set(["info", "success", "warning", "error
 // already records.
 router.post("/", async (req, res) => {
   try {
-    const { targetUserId, title, message, type, link, channels } = req.body;
+    const { targetUserId, title, message, type, link, channels, entityType, entityId } = req.body;
     if (!title || !message) {
       return res.status(400).json({ error: "title and message are required" });
     }
@@ -239,7 +239,18 @@ router.post("/", async (req, res) => {
     if (targetId !== callerId && !isAdmin) {
       return res.status(403).json({ error: "Only admins can notify other users", code: "CROSS_USER_FORBIDDEN" });
     }
-    const result = await notify({ userId: targetId, tenantId, title, message, type, link, channels, io });
+    const result = await notify({
+      userId: targetId,
+      tenantId,
+      title,
+      message,
+      type,
+      link,
+      channels,
+      entityType,
+      entityId,
+      io,
+    });
     // #179: only audit cross-user notifications. Self-notify is too noisy and
     // not security-relevant; admin → other-user is.
     if (targetId !== callerId) {

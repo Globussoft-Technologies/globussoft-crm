@@ -1,10 +1,10 @@
 import React, {
   useState,
   useContext,
-  createContext,
   useEffect,
   useMemo,
   useCallback,
+  useRef,
   Suspense,
 } from "react";
 import { flushSync } from "react-dom";
@@ -33,7 +33,42 @@ import {
   clearAuthToken,
   markAuthReady,
 } from "./utils/api";
+import {
+  VALID_THEME_VALUES,
+  resolveThemePreference,
+} from "./utils/themePreference";
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
+
+const THEME_STORAGE_KEY = "theme";
+const PUBLIC_LIGHT_THEME_ROUTES = new Set([
+  "/login",
+  "/signup",
+  "/reset-password",
+  "/customer/register",
+  "/get-started",
+  "/super-admin/login",
+]);
+
+function shouldDefaultPublicThemeToLight(pathname) {
+  if (!pathname) return false;
+  for (const route of PUBLIC_LIGHT_THEME_ROUTES) {
+    if (pathname === route || pathname.startsWith(`${route}/`)) return true;
+  }
+  return false;
+}
+
+function readPersistedTheme() {
+  if (typeof window === "undefined") return null;
+  try {
+    const localTheme = localStorage.getItem(THEME_STORAGE_KEY);
+    if (VALID_THEME_VALUES.has(localTheme)) return localTheme;
+    const sessionTheme = sessionStorage.getItem(THEME_STORAGE_KEY);
+    if (VALID_THEME_VALUES.has(sessionTheme)) return sessionTheme;
+  } catch {
+    /* ignore storage access issues and fall back below */
+  }
+  return null;
+}
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Home = lazy(() => import("./pages/Home"));
@@ -132,10 +167,15 @@ const ItineraryPaymentSuccess = lazy(
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
 // Public marketing landing page entry point  /trips. Resolves the
 // admin-selected featured LandingPage via /api/landing-pages/public/
-// featured and forwards the browser to /p/<slug>. When no page is
-// featured yet, falls back to the hardcoded TripsLanding (Japan).
-// No auth  renders outside the AuthContext shell.
+// featured-full and renders it in place. When no page is featured yet,
+// falls back to the hardcoded TripsLanding (Japan). No auth, renders
+// outside the AuthContext shell.
 const TripsResolver = lazy(() => import("./pages/public/TripsResolver"));
+const ExplorePage = lazy(() => import("./pages/public/ExplorePage"));
+const ExplorePageBuilder = lazy(() => import("./pages/ExplorePageBuilder"));
+// Public travel share page  /trips/:id-or-slug. SPA route so direct
+// share links render the public landing page without bouncing through /p.
+const TripsShareResolver = lazy(() => import("./pages/public/TripsShareResolver"));
 // Cross-vertical staff attendance dashboard  visible to wellness + travel
 // tenants. Backend (/api/attendance/list + /summary) is role-gated to
 // ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
@@ -295,7 +335,7 @@ const TravelKnowledgeBaseAdmin = lazy(
 // T16 — dedicated TMC catalogue admin (extracts the Promote-to-active sub-panel
 // from DiagnosticBuilder's EngineWeights tab into a first-class page).
 const TravelTmcCatalogueAdmin = lazy(
-  () => import("./pages/travel/TmcCatalogueAdmin"),
+  () => import("./pages/travel/TmcCatalogueLibrary"),
 );
 const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
 const TravelTrips = lazy(() => import("./pages/travel/Trips"));
@@ -329,9 +369,13 @@ const TravelItineraryTemplates = lazy(
 // surface  backend RBAC enforces; frontend RoleGuard mirrors so non-ADMIN
 // roles hit a friendly access-denied surface rather than a 403 from the
 // queue fetch. Backend route mounted S98 (commit 37d9ce40).
-const TravelPoiPendingApprovalQueue = lazy(
-  () => import("./pages/travel/PoiPendingApprovalQueue"),
-);
+//
+// HIDDEN 2026-08-28 — POI approval queue is temporarily removed from the UI
+// but the page component and backend route are preserved so it can be
+// re-enabled without rebuilding anything.
+// const TravelPoiPendingApprovalQueue = lazy(
+//   () => import("./pages/travel/PoiPendingApprovalQueue"),
+// );
 // S49 (TRAVEL_BIG_SCOPE_BACKLOG)  App.jsx route registration for the S31
 // QuoteTemplates admin page (frontend/src/pages/travel/QuoteTemplates.jsx,
 // commit 8fb23237). Sibling to ItineraryTemplates above. Without this lazy
@@ -451,12 +495,19 @@ const TravelReligiousPackets = lazy(
 const TravelTmcMicrositePreview = lazy(
   () => import("./pages/travel/TmcMicrositePreview"),
 );
-const TravelItineraryDetail = lazy(
-  () => import("./pages/travel/ItineraryDetail"),
+// Unified itinerary workspace — replaces the old ItineraryDetail (money /
+// status) + ItineraryEditor (days / map) two-page split, which forced an
+// operator to switch routes to give one item both a day and a price.
+const TravelItineraryWorkspace = lazy(
+  () => import("./pages/travel/ItineraryWorkspace"),
 );
-const TravelItineraryEditor = lazy(
-  () => import("./pages/travel/ItineraryEditor"),
-);
+
+// /travel/itineraries/:id/edit used to be the standalone day planner. That
+// surface is now the workspace's Plan tab, so the old path just forwards.
+function ItineraryEditRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/travel/itineraries/${id}`} replace />;
+}
 const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
 // Arc 2 #904 slice  InboundLeads admin page (STUB consumer). Operator-facing
 // list of inbound leads ingested via POST /api/travel/inbound/leads/:channel
@@ -561,6 +612,9 @@ const WellnessBookAppointment = lazy(
 const WellnessAppointments = lazy(
   () => import("./pages/wellness/Appointments"),
 );
+const WellnessCallHistory = lazy(
+  () => import("./pages/wellness/CallHistory"),
+);
 const WellnessMyAppointments = lazy(
   () => import("./pages/wellness/MyAppointments"),
 );
@@ -575,6 +629,17 @@ const WellnessPrescriptions = lazy(
 // are ALSO patients at this clinic.
 const WellnessMyPrescriptions = lazy(
   () => import("./pages/wellness/MyPrescriptions"),
+);
+// Prescription renewal / medicine requests raised by patients from the
+// Android app — the clinic-side queue (gated on prescription_requests.read).
+const WellnessPrescriptionRequests = lazy(
+  () => import("./pages/wellness/PrescriptionRequests"),
+);
+// Patient-side counterpart — the surface a CUSTOMER role's
+// `my_prescription_requests.read` grant unlocks. Without it that grant has no
+// page behind it and the customer's sidebar stays empty.
+const WellnessMyPrescriptionRequests = lazy(
+  () => import("./pages/wellness/MyPrescriptionRequests"),
 );
 const WellnessPublicBooking = lazy(
   () => import("./pages/wellness/PublicBooking"),
@@ -648,8 +713,11 @@ const KbArticleView = lazy(() => import("./pages/KbArticleView"));
 // because the SPA layout served but nothing inside it matched.
 const NotFound = lazy(() => import("./pages/NotFound"));
 
-export const AuthContext = createContext();
-export const ThemeContext = createContext();
+// The contexts live in ./appContexts so that editing this file cannot hand
+// mounted children a fresh context object — see the note there. Re-exported
+// here because ~230 modules import them from '../App'.
+export { AuthContext, ThemeContext } from "./appContexts";
+import { AuthContext, ThemeContext } from "./appContexts";
 
 // Issue #207/#214/#216: wellness staff carry RBAC role=USER + an orthogonal
 // `wellnessRole` (doctor/professional/telecaller/helper/stylist). The Owner
@@ -896,15 +964,27 @@ export default function App() {
   // and getting 403s. We render a splash until `loading` flips false on
   // first effect tick (synchronous-after-mount).
   const [loading, setLoading] = useState(true);
-  const [theme, setTheme] = useState(() => {
-    const stored = localStorage.getItem("theme");
+  const [theme, setThemeState] = useState(() => {
+    const stored = readPersistedTheme();
     if (stored) return stored;
+    if (
+      typeof window !== "undefined" &&
+      !token &&
+      shouldDefaultPublicThemeToLight(window.location.pathname)
+    ) {
+      return "light";
+    }
     return window.matchMedia("(prefers-color-scheme: dark)").matches
       ? "dark"
       : "light";
   });
+  const themeRef = useRef(theme);
   const [subscription, setSubscription] = useState(null);
   const [daysRemaining, setDaysRemaining] = useState(null);
+
+  useEffect(() => {
+    themeRef.current = theme;
+  }, [theme]);
 
   useEffect(() => {
     // Token storage is owned by setAuthToken/clearAuthToken in utils/api.js
@@ -915,6 +995,35 @@ export default function App() {
       clearAuthToken();
     }
   }, [token]);
+
+  const saveThemePreference = useCallback(
+    async (nextTheme) => {
+      const authToken = getAuthToken();
+      if (!authToken) return;
+      try {
+        await fetch("/api/user/theme", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ theme: nextTheme }),
+        });
+      } catch {
+        /* best-effort background sync */
+      }
+    },
+    [],
+  );
+
+  const setTheme = useCallback(
+    (nextTheme) => {
+      if (!VALID_THEME_VALUES.has(nextTheme)) return;
+      setThemeState(nextTheme);
+      void saveThemePreference(nextTheme);
+    },
+    [saveThemePreference],
+  );
 
   // #347 + #1284: gate initial mount until we've finished rehydrating the
   // token from sessionStorage AND validated it against the server. Without
@@ -951,6 +1060,7 @@ export default function App() {
           if (!cancelled) {
             setUser(profile);
             if (profile.tenant) setTenant(profile.tenant);
+            setTheme(resolveThemePreference(themeRef.current, profile?.themePreference));
           }
         } else if (res.status === 401 || res.status === 403) {
           // The token is expired, revoked, or for the wrong tenant/vertical.
@@ -981,7 +1091,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, setTheme]);
 
   useEffect(() => {
     if (user) {
@@ -1025,7 +1135,12 @@ export default function App() {
         : "light";
     }
     document.documentElement.setAttribute("data-theme", effectiveTheme);
-    localStorage.setItem("theme", theme);
+    try {
+      sessionStorage.setItem(THEME_STORAGE_KEY, theme);
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      /* ignore storage write failures */
+    }
   }, [theme]);
 
   useEffect(() => {
@@ -1142,11 +1257,9 @@ export default function App() {
   // transition was removed in index.css).
   const toggleTheme = () => {
     const advance = () =>
-      setTheme((t) => {
-        if (t === "light") return "dark";
-        if (t === "dark") return "system";
-        return "light";
-      });
+      setTheme(
+        theme === "light" ? "dark" : theme === "dark" ? "system" : "light",
+      );
     if (typeof document.startViewTransition === "function") {
       document.startViewTransition(() => {
         flushSync(advance);
@@ -1195,8 +1308,9 @@ export default function App() {
     const profile = await res.json();
     setUser(profile);
     localStorage.setItem("user", JSON.stringify(profile));
+    setTheme(resolveThemePreference(themeRef.current, profile?.themePreference));
     return profile;
-  }, []);
+  }, [setTheme]);
 
   // #529 / #530: memoise the AuthContext value so consumers don't re-render
   // (and re-fire mount effects) on every App render. State setters from
@@ -1438,13 +1552,13 @@ export default function App() {
                     />
                     {/* Public flyer share + iframe-embed viewer (no auth; JWT in ?t=). */}
                     <Route path="/p/flyer/:slug" element={<FlyerView />} />
-                    {/* Dynamic /trips entry point  resolves to the admin-
-                      selected featured LandingPage via the public
-                      /api/landing-pages/public/featured endpoint and
-                      forwards the browser to /p/<slug>. Falls back to the
-                      hardcoded Japan TripsLanding if no page is featured
-                      yet (lazy-imported by the resolver). */}
+                    {/* Dynamic /trips entry point. Direct browser loads are
+                      served by the backend/Nginx proxy so the public page
+                      matches production HTML. The SPA resolver is only a
+                      fallback for client-side navigation or local tests. */}
+                    <Route path="/explore" element={<ExplorePage />} />
                     <Route path="/trips" element={<TripsResolver />} />
+                    <Route path="/trips/:tripRef" element={<TripsShareResolver />} />
                     <Route
                       path="/landing-sites/:slug"
                       element={<LandingSiteResolver />}
@@ -1667,6 +1781,30 @@ export default function App() {
                           </WellnessOnly>
                         }
                       />
+                      {/* Prescription renewal / medicine requests raised by
+                        patients from the Android app. Notifications to the
+                        admin + prescribing doctor deep-link here with
+                        ?request=<id>, which opens the review panel directly.
+                        Gated on prescription_requests.read via the page
+                        catalog (Sidebar) AND this RoleGuard; the backend
+                        routes carry the same permission plus tenant scope. */}
+                      <Route
+                        path="wellness/prescription-requests"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "prescription_requests",
+                                action: "read",
+                              }}
+                              feature="Prescription Requests"
+                              lockedInPlace
+                            >
+                              <WellnessPrescriptionRequests />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
                       {/* Staff-authed self-view of own Rx. Sidebar surfacing comes
                         from the page catalog entry (gated on my_prescriptions.read).
                         Backend `/api/wellness/my-prescriptions[/:id/pdf]` is gated
@@ -1685,6 +1823,28 @@ export default function App() {
                               lockedInPlace
                             >
                               <WellnessMyPrescriptions />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Patient-facing renewal surface. Same /portal/*
+                        endpoints the Android app calls — verifyPatientToken
+                        accepts a CUSTOMER session token and resolves it to the
+                        caller's own linked Patient row, so the web and the app
+                        see the same requests. */}
+                      <Route
+                        path="wellness/my-prescription-requests"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "my_prescription_requests",
+                                action: "read",
+                              }}
+                              feature="My Prescription Requests"
+                              lockedInPlace
+                            >
+                              <WellnessMyPrescriptionRequests />
                             </RoleGuard>
                           </WellnessOnly>
                         }
@@ -1857,6 +2017,14 @@ export default function App() {
                         element={
                           <WellnessOnly>
                             <WellnessAppointments />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/call-history"
+                        element={
+                          <WellnessOnly>
+                            <WellnessCallHistory />
                           </WellnessOnly>
                         }
                       />
@@ -2325,6 +2493,10 @@ export default function App() {
                             <LandingPageBuilder />
                           </TravelOnly>
                         }
+                      />
+                      <Route
+                        path="landing-pages/explore-builder/:id"
+                        element={<TravelOnly><ExplorePageBuilder /></TravelOnly>}
                       />
                       <Route path="objects" element={<CustomObjects />} />
                       <Route
@@ -2970,7 +3142,12 @@ export default function App() {
                   on /api/travel/pois/pending + approve + reject, frontend
                   RoleGuard mirrors to surface an access-denied panel for
                   non-ADMIN roles rather than the route's 403. SUT page
-                  shipped S12; backend mount S98 (commit 37d9ce40). */}
+                  shipped S12; backend mount S98 (commit 37d9ce40).
+
+                  HIDDEN 2026-08-28 — temporarily removed from the running UI
+                  while the page component + backend route stay intact for
+                  future re-enable. */}
+                      {/*
                       <Route
                         path="travel/pois/pending"
                         element={
@@ -2988,6 +3165,7 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
+                      */}
                       {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG)  QuoteTemplates admin
                   route registration. SUT page commit 8fb23237 (S31). Sits
                   adjacent to ItineraryTemplates because both are reusable-
@@ -3310,17 +3488,17 @@ export default function App() {
                         path="travel/itineraries/:id"
                         element={
                           <TravelOnly>
-                            <TravelItineraryDetail />
+                            <TravelItineraryWorkspace />
                           </TravelOnly>
                         }
                       />
+                      {/* The day planner is no longer a separate page — it is
+                          the workspace's Plan tab. Kept as a redirect so
+                          bookmarks and the older "Day planner" links still
+                          land somewhere sensible. */}
                       <Route
                         path="travel/itineraries/:id/edit"
-                        element={
-                          <TravelOnly>
-                            <TravelItineraryEditor />
-                          </TravelOnly>
-                        }
+                        element={<ItineraryEditRedirect />}
                       />
                       <Route
                         path="travel/leads/:contactId"

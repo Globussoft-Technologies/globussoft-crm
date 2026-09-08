@@ -35,13 +35,22 @@ const IST_FRIDAY_22_00 = '2026-05-15T22:00:00+05:30';
 beforeAll(() => {
   prisma.holiday = { findMany: vi.fn() };
   prisma.workingHours = { findMany: vi.fn() };
-  prisma.visit = { findFirst: vi.fn() };
+  // The doctor conflict class now reads a LIST of surrounding visits and
+  // compares real [start, start+duration) intervals, so findMany is needed
+  // alongside findFirst (still used by the resource class). `service` backs the
+  // duration lookup.
+  prisma.visit = { findFirst: vi.fn(), findMany: vi.fn() };
+  prisma.service = { findUnique: vi.fn() };
 });
 
 beforeEach(() => {
   prisma.holiday.findMany.mockReset();
   prisma.workingHours.findMany.mockReset();
   prisma.visit.findFirst.mockReset();
+  prisma.visit.findMany.mockReset();
+  prisma.visit.findMany.mockResolvedValue([]);
+  prisma.service.findUnique.mockReset();
+  prisma.service.findUnique.mockResolvedValue({ durationMin: 30 });
   prisma.holiday.findMany.mockResolvedValue([]);
   prisma.workingHours.findMany.mockResolvedValue([]);
   prisma.visit.findFirst.mockResolvedValue(null);
@@ -366,12 +375,12 @@ describe('lib/bookingAvailability — RESOURCE_DOUBLE_BOOKED', () => {
 });
 
 describe('lib/bookingAvailability — DOCTOR_DOUBLE_BOOKED', () => {
-  test('overlap on same doctor + same hour bucket blocks', async () => {
-    prisma.visit.findFirst.mockImplementation(async (args) => {
+  test('overlapping appointment on the same doctor blocks', async () => {
+    prisma.visit.findMany.mockImplementation(async (args) => {
       if (args.where.doctorId === 7) {
-        return { id: 666, visitDate: new Date(IST_FRIDAY_14_00) };
+        return [{ id: 666, visitDate: new Date(IST_FRIDAY_14_00), service: { durationMin: 30 } }];
       }
-      return null;
+      return [];
     });
     const result = await assertVisitSlotAvailable({
       tenantId: 1,

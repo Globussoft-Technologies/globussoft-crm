@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import React from 'react';
 import Layout from '../components/Layout';
 import { AuthContext, ThemeContext } from '../App';
 
@@ -83,6 +82,28 @@ function renderTravelLayout(args = {}) {
   );
 }
 
+function renderLayoutAtRoute(initialRoute, args = {}) {
+  const tenant = 'tenant' in args ? args.tenant : { vertical: 'generic' };
+  return render(
+    <MemoryRouter initialEntries={[initialRoute]}>
+      <AuthContext.Provider value={{
+        user: args.user || { name: 'Alice', email: 'alice@x.test', role: 'USER' },
+        setUser: vi.fn(),
+        token: 't-abc',
+        setToken: vi.fn(),
+        tenant,
+        setTenant: vi.fn(),
+      }}>
+        <Routes>
+          <Route path="/*" element={<Layout />}>
+            <Route path="*" element={<div data-testid="outlet">ROUTE</div>} />
+          </Route>
+        </Routes>
+      </AuthContext.Provider>
+    </MemoryRouter>
+  );
+}
+
 describe('Layout', () => {
   beforeEach(() => {
     setupPushMock.mockClear();
@@ -112,6 +133,16 @@ describe('Layout', () => {
 
   it('hides Softphone for wellness tenants (Callified handles voice)', () => {
     renderLayout({ tenant: { vertical: 'wellness' } });
+    expect(screen.queryByTestId('softphone-stub')).not.toBeInTheDocument();
+  });
+
+  it('hides Softphone for travel tenants (Travel CRM removes the dialer)', () => {
+    renderTravelLayout();
+    expect(screen.queryByTestId('softphone-stub')).not.toBeInTheDocument();
+  });
+
+  it('hides Softphone on the inbox route', () => {
+    renderLayoutAtRoute('/inbox');
     expect(screen.queryByTestId('softphone-stub')).not.toBeInTheDocument();
   });
 
@@ -366,7 +397,7 @@ describe('Layout', () => {
     renderLayout({ user: { name: 'U', email: 'u@x.test', role: 'USER' } });
     const footer = screen.getByTestId('app-build-footer');
     expect(footer).toBeInTheDocument();
-    expect(footer.textContent).toMatch(/v[\w.\-]+/);
+    expect(footer.textContent).toMatch(/v[\w.-]+/);
   });
 
   // Push setup is gated on a truthy token; without a token, setupPush is

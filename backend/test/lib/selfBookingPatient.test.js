@@ -35,7 +35,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   prisma.user = prisma.user || {};
   prisma.patient = prisma.patient || {};
-  prisma.user.findUnique = vi.fn().mockResolvedValue({ ...USER });
+  prisma.user.findUnique = vi.fn().mockResolvedValue({ ...USER, deactivatedAt: null });
   prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
   prisma.patient.create = vi.fn().mockImplementation(({ data }) => ({ id: 900, ...data }));
   prisma.patient.update = vi.fn().mockImplementation(({ where, data }) => ({ id: where.id, ...data }));
@@ -117,6 +117,19 @@ describe('resolveSelfBookingPatient', () => {
     expect(data.normalizedPhone).toBeNull();
   });
 
+  test('rejects a deactivated account instead of recreating the patient', async () => {
+    prisma.user.findUnique = vi.fn().mockResolvedValue({
+      ...USER,
+      deactivatedAt: new Date('2026-08-25T00:00:00Z'),
+    });
+
+    await expect(resolveSelfBookingPatient({ userId: 251, tenantId: 1 })).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(prisma.patient.create).not.toHaveBeenCalled();
+    expect(prisma.patient.update).not.toHaveBeenCalled();
+  });
+
   test('fills the phone on an existing patient that never had one', async () => {
     prisma.patient.findFirst = vi.fn().mockResolvedValue({
       id: 2965,
@@ -151,7 +164,7 @@ describe('resolveSelfBookingPatient', () => {
   test('scopes the lookup to the tenant', async () => {
     await resolveSelfBookingPatient({ userId: 251, tenantId: 7 });
     expect(prisma.patient.findFirst).toHaveBeenCalledWith({
-      where: { tenantId: 7, userId: 251 },
+      where: { tenantId: 7, userId: 251, deletedAt: null },
     });
   });
 
@@ -187,6 +200,17 @@ describe('syncPatientFromUser', () => {
     prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 
     await expect(syncPatientFromUser({ userId: 9, tenantId: 1 })).resolves.toBeNull();
+    expect(prisma.patient.update).not.toHaveBeenCalled();
+    expect(prisma.patient.create).not.toHaveBeenCalled();
+  });
+
+  test('is a no-op for a deactivated customer account', async () => {
+    prisma.user.findUnique = vi.fn().mockResolvedValue({
+      ...USER,
+      deactivatedAt: new Date('2026-08-25T00:00:00Z'),
+    });
+
+    await expect(syncPatientFromUser({ userId: 251, tenantId: 1 })).resolves.toBeNull();
     expect(prisma.patient.update).not.toHaveBeenCalled();
     expect(prisma.patient.create).not.toHaveBeenCalled();
   });

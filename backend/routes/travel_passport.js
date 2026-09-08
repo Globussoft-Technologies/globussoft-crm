@@ -9,6 +9,9 @@
 //   GET    /verification-queue                       — ADMIN+MANAGER only.
 //                                                      Tenant-scoped list of pending participants
 //                                                      (extractedAt IS NOT NULL AND verifiedAt IS NULL).
+//   GET    /participants/:id/view-url                — ADMIN+MANAGER/READ only.
+//                                                      Returns a short-lived signed URL for the
+//                                                      stored passport image.
 //   POST   /participants/:id/passport-verify         — ADMIN+MANAGER only.
 //                                                      Body: { approved, editedFields? }.
 //                                                      On approve: copies extraction (with optional manual edits)
@@ -18,6 +21,9 @@
 //   DELETE /participants/:id/passport-extraction     — ADMIN+MANAGER only.
 //                                                      Clears extraction JSON (for re-upload).
 //                                                      Audit-logged.
+//   GET    /customer-travellers/:id/view-url         — ADMIN+MANAGER/READ only.
+//                                                      Returns a short-lived signed URL for the
+//                                                      stored passport image.
 //
 // Per docs/PRD_PASSPORT_OCR.md §5.4 — stub-mode landing while PC-1 (vendor
 // decision) is pending. Real-mode swap happens entirely in
@@ -54,7 +60,8 @@ const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const passportOcrClient = require("../services/passportOcrClient");
 const { writeAudit } = require("../lib/audit");
-const { removeScanFromEnvelopeJson } = require("../lib/passportFileStore");
+const passportFileStore = require("../lib/passportFileStore");
+const { removeScanFromEnvelopeJson } = passportFileStore;
 const visaDocStore = require("../lib/visaDocStore");
 const { findPassportIdentityCandidates, persistPassportIdentity } = require("../lib/passportIdentityLinker");
 
@@ -1347,6 +1354,62 @@ async function loadCustomerTraveller(req) {
   }
   return traveller;
 }
+
+function passportViewItemFromEnvelope(json) {
+  const envelope = parseEnvelopeJson(json);
+  if (!envelope) return null;
+  return {
+    storage: envelope.storage,
+    imageKey: envelope.imageKey,
+    imageFilename: envelope.imageFilename,
+    imageUrl: envelope.imageUrl,
+  };
+}
+
+async function respondWithPassportViewUrl(res, row) {
+  const item = passportViewItemFromEnvelope(row?.passportExtractionJson);
+  const url = await passportFileStore.resolveViewUrl(item);
+  if (!url) {
+    return res.status(404).json({ error: "Passport image not found", code: "NOT_FOUND" });
+  }
+  return res.json({ url, expiresInSeconds: passportFileStore.DEFAULT_VIEW_TTL_SEC });
+}
+
+router.get(
+  "/participants/:id/view-url",
+  verifyToken,
+  requirePermission("passport", "read"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const participant = await loadParticipant(req);
+      return respondWithPassportViewUrl(res, participant);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-passport] participant view-url error:", e.message);
+      return res.status(500).json({ error: "Failed to open passport image" });
+    }
+  },
+);
+
+router.get(
+  "/customer-travellers/:id/view-url",
+  verifyToken,
+  requirePermission("passport", "read"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const traveller = await loadCustomerTraveller(req);
+      return respondWithPassportViewUrl(res, traveller);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-passport] customer view-url error:", e.message);
+      return res.status(500).json({ error: "Failed to open passport image" });
+    }
+  },
+);
 
 router.post(
   "/customer-travellers/:id/assign-contact",

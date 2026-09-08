@@ -147,17 +147,49 @@ function makeFixture() {
   return { insights, openDeals, stats };
 }
 
+// Query-aware insights mock: emulates the backend's limit/offset/count,
+// fields=summary, and /deal/:dealId primitives over the fixture rows,
+// including the ?isResolved=false server filter.
+function serveInsights(url, rows) {
+  if (typeof url !== 'string' || !url.startsWith('/api/deal-insights')) return undefined;
+  if (url.includes('/resolve') || url.includes('/generate/')) return undefined;
+  if (url.includes('/stats')) return undefined;
+  if (url.includes('/deal/')) {
+    const id = parseInt(url.split('/deal/')[1], 10);
+    return Promise.resolve(rows.filter((r) => r.dealId === id));
+  }
+  const q = new URL(url, 'http://localhost').searchParams;
+  let pool = rows;
+  if (q.get('isResolved') === 'false') pool = pool.filter((r) => !r.isResolved);
+  if (q.get('count') === '1') return Promise.resolve({ total: pool.length });
+  if (q.get('fields') === 'summary') {
+    return Promise.resolve(pool.map((r) => ({
+      id: r.id,
+      dealId: r.dealId,
+      type: r.type,
+      severity: r.severity,
+      isResolved: r.isResolved,
+      generatedAt: r.generatedAt,
+    })));
+  }
+  const limit = Math.max(1, parseInt(q.get('limit')) || 500);
+  const offset = Math.max(0, parseInt(q.get('offset')) || 0);
+  return Promise.resolve(pool.slice(offset, offset + limit));
+}
+
 function mockLoaded(fx = makeFixture()) {
+  // Backend-authoritative stats matching the fixture (open 2 / resolved 1).
+  const statsShape = { openCount: 2, resolvedCount: 1, byType: [], bySeverity: [] };
   fetchApi.mockImplementation((url, opts) => {
-    if (url === '/api/deal-insights') return Promise.resolve(fx.insights);
+    if (typeof url === 'string' && opts?.method === 'POST') {
+      if (/^\/api\/deal-insights\/\d+\/resolve$/.test(url)) return Promise.resolve({ ok: true });
+      if (url.startsWith('/api/deal-insights/generate/')) return Promise.resolve({ generated: 2 });
+    }
+    if (url === '/api/deal-insights/stats') return Promise.resolve(statsShape);
+    const served = serveInsights(url, fx.insights);
+    if (served) return served;
     if (url === '/api/deals/stats') return Promise.resolve(fx.stats);
     if (url.startsWith('/api/deals?')) return Promise.resolve(fx.openDeals);
-    if (url.startsWith('/api/deal-insights/') && url.endsWith('/resolve') && opts?.method === 'POST') {
-      return Promise.resolve({ ok: true });
-    }
-    if (url.startsWith('/api/deal-insights/generate/') && opts?.method === 'POST') {
-      return Promise.resolve({ generated: 2 });
-    }
     return Promise.resolve([]);
   });
   return fx;
@@ -208,10 +240,17 @@ describe('<DealInsights /> — #593 rebrand pin', () => {
 
 describe('<DealInsights /> — loading + empty + error states', () => {
   it('shows the "Loading..." placeholder before the initial fetch resolves', async () => {
-    // Defer all resolutions so the page sits in loading state.
+    // Defer the rows-window resolution so the page sits in loading state.
     let resolveIns;
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/deal-insights') {
+      if (
+        typeof url === 'string' &&
+        url.startsWith('/api/deal-insights?') &&
+        !url.includes('count=1') &&
+        !url.includes('fields=summary') &&
+        !url.includes('stats') &&
+        !url.includes('/deal/')
+      ) {
         return new Promise((res) => { resolveIns = res; });
       }
       if (url === '/api/deals/stats') return Promise.resolve({ byStage: [] });
@@ -316,8 +355,12 @@ describe('<DealInsights /> — loaded insights list', () => {
     // Acme's deal title appears in the grouped-list header (deal #1 has 2 insights).
     expect(screen.getByText(/Acme Corp Renewal/i)).toBeInTheDocument();
 
-    // The "2 insights" deal-count chip is rendered on the Acme card.
-    expect(screen.getByText(/2 insights/i)).toBeInTheDocument();
+    // The "2 insights" deal-count chip is rendered on the Acme card. The
+    // footer ("Showing 1-2 of 2 insights", backend ?count=1) also matches
+    // /2 insights/i, so pin the chip via getAllByText and the footer
+    // separately with its "Showing" prefix (footer-only match).
+    expect(screen.getAllByText(/2 insights/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Showing 1-2 of 2 insights/i)).toBeInTheDocument();
   });
 
   it('renders severity badges + type labels for each insight', async () => {
@@ -477,10 +520,18 @@ describe('<DealInsights /> — Generate Insights button', () => {
       }
     });
 
-    // After the POST loop, loadAll re-runs — /api/deal-insights is hit
-    // a second time (initial mount + post-generate refresh).
+    // After the POST loop, the rows window re-loads — a rows-window fetch
+    // (limit/offset, no count/summary/stats/deal suffix) fires again
+    // (initial mount + post-generate refresh).
     await waitFor(() => {
-      const insightFetches = fetchApi.mock.calls.filter(([url]) => url === '/api/deal-insights');
+      const insightFetches = fetchApi.mock.calls.filter(([url]) =>
+        typeof url === 'string' &&
+        url.startsWith('/api/deal-insights?') &&
+        !url.includes('count=1') &&
+        !url.includes('fields=summary') &&
+        !url.includes('stats') &&
+        !url.includes('/deal/'),
+      );
       expect(insightFetches.length).toBeGreaterThanOrEqual(2);
     });
   });
@@ -652,7 +703,9 @@ describe('<DealInsights /> — Generate button transient state', () => {
     let unblock;
     const blockedGenerate = new Promise((res) => { unblock = res; });
     fetchApi.mockImplementation((url, opts) => {
-      if (url === '/api/deal-insights') return Promise.resolve(fx.insights);
+      if (url === '/api/deal-insights/stats') return Promise.resolve(fx.stats);
+      const served = serveInsights(url, fx.insights);
+      if (served) return served;
       if (url === '/api/deals/stats') return Promise.resolve(fx.stats);
       if (url.startsWith('/api/deals?')) return Promise.resolve(fx.openDeals);
       if (url.startsWith('/api/deal-insights/generate/') && opts?.method === 'POST') {
@@ -674,6 +727,132 @@ describe('<DealInsights /> — Generate button transient state', () => {
     unblock();
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /Generating\.\.\./i })).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('<DealInsights /> — backend-synced pagination wiring', () => {
+  it('browse mode pages rows via limit/offset with ?isResolved=false and totals via ?count=1', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+
+    await waitFor(() => {
+      const rowsCall = fetchApi.mock.calls.find(([u]) =>
+        typeof u === 'string' &&
+        u.includes('/api/deal-insights?') &&
+        u.includes('limit=') &&
+        u.includes('offset=') &&
+        u.includes('isResolved=false'),
+      );
+      expect(rowsCall).toBeTruthy();
+      const countCall = fetchApi.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('/api/deal-insights?') && u.includes('count=1'),
+      );
+      expect(countCall).toBeTruthy();
+    });
+
+    // Footer total comes from the backend count (2 open fixture rows).
+    expect(await screen.findByText(/Showing 1-2 of 2 insights/i)).toBeInTheDocument();
+  });
+
+  it('type tabs pull a capped limit=500 window (no per-tab backend filter exists)', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+    fetchApi.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'RISK' }));
+
+    await waitFor(() => {
+      const cappedCall = fetchApi.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('/api/deal-insights?') && u.includes('limit=500'),
+      );
+      expect(cappedCall).toBeTruthy();
+    });
+    // Only the RISK insight survives the client-side type filter.
+    expect(screen.getByText(/No activity in 45 days/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Schedule a check-in call/i)).not.toBeInTheDocument();
+  });
+
+  it('toggling Show resolved drops the ?isResolved=false server filter', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+    fireEvent.click(screen.getByLabelText(/Show resolved/i));
+
+    await waitFor(() => {
+      const unfilteredCall = fetchApi.mock.calls.find(([u]) =>
+        typeof u === 'string' &&
+        u.includes('/api/deal-insights?') &&
+        u.includes('limit=') &&
+        !u.includes('isResolved=false') &&
+        !u.includes('count=1') &&
+        !u.includes('fields=summary') &&
+        !u.includes('/deal/'),
+      );
+      expect(unfilteredCall).toBeTruthy();
+    });
+    // The resolved OPPORTUNITY insight is now visible.
+    expect(await screen.findByText(/High engagement detected/i)).toBeInTheDocument();
+  });
+
+  it('mount fetches the light ?fields=summary window for chips + severity KPIs', async () => {
+    mockLoaded();
+    renderPage();
+
+    await screen.findByText(/No activity in 45 days/i);
+
+    await waitFor(() => {
+      const summaryCall = fetchApi.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('/api/deal-insights?') && u.includes('fields=summary'),
+      );
+      expect(summaryCall).toBeTruthy();
+    });
+  });
+
+  it('opening See Insights fetches /api/deal-insights/deal/:dealId for the modal', async () => {
+    mockLoaded();
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /OPEN DEALS/i }));
+    const seeButtons = await screen.findAllByText(/See Insights/i);
+    fireEvent.click(seeButtons[0]);
+
+    await waitFor(() => {
+      const dealCall = fetchApi.mock.calls.find(([u]) =>
+        typeof u === 'string' && u === '/api/deal-insights/deal/1',
+      );
+      expect(dealCall).toBeTruthy();
+    });
+    expect(await screen.findByText(/✓ Scanned/i)).toBeInTheDocument();
+  });
+
+  it('KPI tiles fall back to summary-window counts when /stats is unavailable', async () => {
+    // /stats resolves null (backend down / unexpected shape) — tiles must
+    // still show summary-derived values, never blank.
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/deal-insights/stats') return Promise.resolve(null);
+      if (url === '/api/deals/stats') return Promise.resolve(null);
+      if (typeof url === 'string') {
+        const served = serveInsights(url, makeFixture().insights);
+        if (served) return served;
+      }
+      if (url.startsWith('/api/deals?')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    await screen.findByText('Open Insights');
+    await waitFor(() => {
+      const openTile = screen.getByText('Open Insights').closest('.card');
+      expect(within(openTile).getByText('2')).toBeInTheDocument();
+      const resolvedTile = screen.getByText('Resolved').closest('.card');
+      expect(within(resolvedTile).getByText('1')).toBeInTheDocument();
+      const criticalTile = screen.getByText('Critical').closest('.card');
+      expect(within(criticalTile).getByText('1')).toBeInTheDocument();
     });
   });
 });

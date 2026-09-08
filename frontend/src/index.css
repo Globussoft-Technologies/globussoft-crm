@@ -15,6 +15,9 @@
   --success-color: #10b981;
   --warning-color: #f59e0b;
   --danger-color: #ef4444;
+  --toast-error-bg: #451a1d;
+  --toast-error-border: #fb7185;
+  --toast-error-text: #ffe4e6;
   --page-header-count-bg: rgba(59, 130, 246, 0.16);
   --page-header-count-text: #dbeafe;
   --page-header-count-border: rgba(59, 130, 246, 0.28);
@@ -67,6 +70,11 @@
   --subtle-bg-4: rgba(255, 255, 255, 0.04);
   --table-header-bg: rgba(0, 0, 0, 0.2);
   --tooltip-bg: rgba(11, 12, 16, 0.9);
+  /* Floating popovers (autocomplete/combobox menus). MUST stay fully opaque:
+     --surface-color is deliberately translucent for layered card surfaces, but
+     a menu that floats OVER page content shows that content straight through,
+     leaving the option labels illegibly overlapped by whatever is behind them. */
+  --popover-bg: #16181d;
   --hover-bg: rgba(255, 255, 255, 0.03);
   --kbd-bg: rgba(255, 255, 255, 0.1);
 
@@ -82,6 +90,7 @@
 
 [data-theme="light"] {
   --bg-color: #f0f2f5;
+  --popover-bg: #ffffff;
   --surface-color: rgba(255, 255, 255, 0.7);
   --surface-hover: rgba(235, 238, 245, 0.8);
   --text-primary: #1a1a2e;
@@ -95,6 +104,9 @@
   --success-color: #059669;
   --warning-color: #d97706;
   --danger-color: #dc2626;
+  --toast-error-bg: #fff1f2;
+  --toast-error-border: #e11d48;
+  --toast-error-text: #9f1239;
   --page-header-count-bg: rgba(37, 99, 235, 0.12);
   --page-header-count-text: #1d4ed8;
   --page-header-count-border: rgba(37, 99, 235, 0.20);
@@ -159,6 +171,9 @@
   --success-color: #10b981;
   --warning-color: #f59e0b;
   --danger-color: #ef4444;
+  --toast-error-bg: #451a1d;
+  --toast-error-border: #fb7185;
+  --toast-error-text: #ffe4e6;
   --page-header-count-bg: rgba(59, 130, 246, 0.16);
   --page-header-count-text: #dbeafe;
   --page-header-count-border: rgba(59, 130, 246, 0.28);
@@ -196,6 +211,7 @@
   --subtle-bg-4: rgba(255, 255, 255, 0.04);
   --table-header-bg: rgba(0, 0, 0, 0.3);
   --tooltip-bg: rgba(11, 12, 16, 0.95);
+  --popover-bg: #16181d;
   --hover-bg: rgba(255, 255, 255, 0.05);
   --kbd-bg: rgba(255, 255, 255, 0.1);
 
@@ -648,6 +664,31 @@ input[type="week"]::-webkit-calendar-picker-indicator {
   cursor: pointer;
 }
 
+/* File inputs (logo/image uploads): left unstyled, the native "Choose File"
+ * button and "No file chosen" text render with the browser's own light-mode
+ * chrome regardless of page theme — a harsh grey button + unreadable-ish text
+ * sitting on a dark card. Theme both the button (::file-selector-button is
+ * the standard pseudo-element; -webkit-file-upload-button is the older Chrome/
+ * Safari alias, both needed) and the "No file chosen" label text. */
+input[type="file"] {
+  color: var(--text-secondary);
+}
+input[type="file"]::file-selector-button,
+input[type="file"]::-webkit-file-upload-button {
+  margin-right: 10px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+}
+input[type="file"]::file-selector-button:hover,
+input[type="file"]::-webkit-file-upload-button:hover {
+  background: var(--subtle-bg-3, var(--input-bg));
+}
+
 /* Per-tag !important wins over inline `color: inherit` on the parent <select>
  * (CustomReports.jsx applies that via inputStyle). --surface-color is the
  * theme-aware tint used by cards / popovers; it tracks light vs dark
@@ -788,6 +829,361 @@ aside.glass.app-sidebar {
      .app-sidebar > nav below). This isolates the scrollable region from
      the rest of the sidebar so raster/paint work during scroll doesn't
      block the main thread. */
+}
+
+/* Travel CRM sidebar — reference-style navigation cards and timeline. */
+body[data-vertical="travel"] .app-sidebar {
+  background: var(--surface-color, #fff);
+  border-right: 1px solid var(--border-color);
+  color: var(--text-primary);
+  transition: width 180ms ease;
+  padding: 0.75rem 0.9rem !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-header {
+  margin-bottom: 0 !important;
+  gap: 0.6rem !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-brand-name {
+  color: var(--text-primary);
+  font-size: 0.98rem !important;
+  white-space: nowrap;
+}
+
+body[data-vertical="travel"] .travel-sidebar-logo {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 8px !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapse {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, white);
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapse:hover {
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, white);
+  color: var(--primary-color, var(--accent-color));
+}
+
+body[data-vertical="travel"] .travel-nav-section {
+  margin: 0.22rem 0;
+  flex: 0 0 auto;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 5%, white);
+  color: var(--text-primary) !important;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger:hover,
+body[data-vertical="travel"] .travel-nav-section-trigger.is-active {
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+}
+
+body[data-vertical="travel"] .travel-dashboard-link {
+  flex: 0 0 auto;
+  min-height: 40px;
+  margin: 0.2rem 0 0.3rem;
+  padding: 0.4rem 0.55rem;
+  border-left: 3px solid transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 5%, white);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+/* Direct destinations must use the same geometry as the collapsible module
+   triggers; the shared nav link inline styles otherwise give them a larger
+   gap and left inset. */
+body[data-vertical="travel"] .travel-dashboard-link,
+body[data-vertical="travel"] .travel-settings-link {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem !important;
+  padding: 0.3rem 0.5rem !important;
+  font-family: var(--font-family) !important;
+  font-size: 0.78rem !important;
+  font-weight: 700;
+  line-height: 1.2;
+  box-sizing: border-box;
+}
+
+body[data-vertical="travel"] .travel-settings-link {
+  flex: 0 0 auto;
+  min-height: 40px;
+  margin-top: 0.25rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 5%, white);
+  color: var(--text-primary) !important;
+  font-size: 0.78rem;
+}
+
+body[data-vertical="travel"] .travel-settings-link.active {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-color) 14%, transparent),
+    transparent
+  );
+  border-left: 3px solid var(--accent-color);
+  color: var(--accent-color) !important;
+}
+
+/* Dashboard and Settings are ordinary nav destinations. Keep their active
+   state identical to every other active travel link. */
+body[data-vertical="travel"] .travel-dashboard-link.active,
+body[data-vertical="travel"] .travel-settings-link.active {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent-color) 14%, transparent),
+    transparent
+  );
+  border-left: 3px solid var(--accent-color);
+  color: var(--accent-color) !important;
+  font-weight: 600;
+}
+
+body[data-vertical="travel"] .travel-sidebar-vertical-label {
+  margin: 0.3rem 0 0.15rem;
+  padding: 0.35rem 0.55rem;
+  color: var(--text-secondary) !important;
+  font-size: 0.62rem !important;
+  letter-spacing: 0.14em;
+}
+
+body[data-vertical="travel"] .travel-sidebar-subbrand-row {
+  padding: 0.25rem 0.55rem 0.4rem !important;
+  gap: 0.45rem !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-subbrand-row label {
+  color: var(--text-secondary) !important;
+  font-size: 0.62rem !important;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+body[data-vertical="travel"] #travel-sub-brand-switcher {
+  min-height: 34px;
+  padding: 0.35rem 0.6rem !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 10px !important;
+  background: var(--surface-color) !important;
+  color: var(--text-primary) !important;
+  font-size: 0.78rem !important;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger > svg:last-child {
+  margin-left: auto;
+  transition: transform 160ms ease;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger > svg:last-child.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+body[data-vertical="travel"] .travel-nav-section-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger.is-active {
+  color: var(--accent-color) !important;
+  border-left: 3px solid var(--accent-color);
+}
+
+body[data-vertical="travel"] .travel-nav-section-trigger.is-active .travel-nav-section-icon {
+  background: color-mix(in srgb, var(--accent-color) 9%, transparent);
+  color: var(--accent-color);
+}
+
+body[data-vertical="travel"] .travel-dashboard-link.active .travel-nav-section-icon,
+body[data-vertical="travel"] .travel-settings-link.active .travel-nav-section-icon {
+  background: color-mix(in srgb, var(--accent-color) 9%, transparent);
+  color: var(--accent-color);
+}
+
+body[data-vertical="travel"] .travel-nav-section-items {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  margin: 0.15rem 0 0.3rem 1.15rem;
+  padding: 0.1rem 0 0.1rem 1rem;
+  border-left: 2px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, #dfe2eb);
+}
+
+body[data-vertical="travel"] .travel-nav-section-items .nav-link {
+  position: relative;
+  min-height: 31px;
+  padding: 0.32rem 0.5rem;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.72rem;
+}
+
+body[data-vertical="travel"] .travel-nav-section-items .nav-link::before {
+  content: "";
+  position: absolute;
+  left: -1.7rem;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 16%, #d7dceb);
+  transform: translateY(-50%);
+}
+
+body[data-vertical="travel"] .travel-nav-section-items .nav-link:hover,
+body[data-vertical="travel"] .travel-nav-section-items .nav-link.active {
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, white);
+  color: var(--primary-color, var(--accent-color));
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed {
+  padding-left: 0.7rem !important;
+  padding-right: 0.7rem !important;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-header {
+  justify-content: center;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-logo {
+  display: none;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-collapse {
+  margin-left: 0;
+  width: 36px;
+  height: 36px;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-brand-name,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-sidebar-subbrand-header,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-label,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-trigger > svg:last-child,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-label,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-items,
+body[data-vertical="travel"] .travel-sidebar-collapsed [data-testid="travel-sub-brand-switcher"] + * {
+  display: none;
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-trigger {
+  justify-content: center;
+  padding: 0.5rem;
+}
+
+/* Dashboard and Settings use the same compact icon-card geometry as each
+   module tab when the sidebar is reduced to its rail. */
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-dashboard-link,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link {
+  width: 40px;
+  min-height: 40px;
+  margin: 0.25rem auto;
+  padding: 0.4rem;
+  justify-content: center;
+  border-left: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-color) 5%, white);
+}
+
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-dashboard-link.active,
+body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link.active {
+  background: color-mix(in srgb, var(--accent-color) 14%, white);
+  color: var(--accent-color) !important;
+}
+
+/* The shared light-mode travel surfaces intentionally mix with white. Keep
+   the same hierarchy in dark mode without producing white cards or white-on-
+   white labels. */
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-trigger,
+[data-theme="dark"] body[data-vertical="travel"] .travel-dashboard-link,
+[data-theme="dark"] body[data-vertical="travel"] .travel-settings-link {
+  background: color-mix(in srgb, white 8%, var(--surface-color));
+  color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-trigger:hover,
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-trigger.is-active,
+[data-theme="dark"] body[data-vertical="travel"] .travel-dashboard-link.active,
+[data-theme="dark"] body[data-vertical="travel"] .travel-settings-link.active {
+  background: color-mix(in srgb, var(--accent-color) 22%, var(--surface-color));
+  color: color-mix(in srgb, var(--accent-color) 30%, white) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-icon {
+  background: color-mix(in srgb, white 10%, var(--surface-color));
+  color: var(--text-secondary) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-trigger.is-active .travel-nav-section-icon,
+[data-theme="dark"] body[data-vertical="travel"] .travel-dashboard-link.active .travel-nav-section-icon,
+[data-theme="dark"] body[data-vertical="travel"] .travel-settings-link.active .travel-nav-section-icon {
+  background: color-mix(in srgb, var(--accent-color) 24%, var(--surface-color));
+  color: color-mix(in srgb, var(--accent-color) 30%, white) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items {
+  border-left-color: color-mix(in srgb, var(--accent-color) 28%, var(--border-color));
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link.active {
+  background: color-mix(in srgb, var(--accent-color) 20%, var(--surface-color));
+  color: color-mix(in srgb, var(--accent-color) 30%, white) !important;
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-nav-section-items .nav-link::before {
+  background: color-mix(in srgb, var(--accent-color) 35%, var(--surface-color));
+}
+
+[data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-collapsed .travel-nav-section-trigger,
+[data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-collapsed .travel-dashboard-link,
+[data-theme="dark"] body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link {
+  width: 40px;
+  min-height: 40px;
+  margin: 0.25rem auto;
+  padding: 0.4rem;
+  border-radius: 12px;
+  background: color-mix(in srgb, white 8%, var(--surface-color));
 }
 
 /* PERF + UX: the inner scroll container. `contain` lets the browser fast-path
@@ -1164,33 +1560,134 @@ html[data-theme="dark"] .travel-flight-details-box {
   border: 2px solid transparent;
   background-clip: padding-box;
 }
+
+.top-scroll-sync__bottom--hidden-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* Itineraries list — responsive filter bar. Below 768px it switches from a
+   single crowded row to a stacked column so every control gets full,
+   readable width instead of being squeezed onto one unreadable line. A
+   single-row flex layout can't tell "wrap to a new line" apart from
+   "shrink everything until it barely still fits" — explicit stacking here
+   removes that ambiguity. */
+.itin-filter-bar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.itin-filter-search {
+  flex: 1 1 180px;
+  min-width: 160px;
+  max-width: 320px;
+}
+.itin-filter-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+@media (max-width: 768px) {
+  .itin-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .itin-filter-bar select,
+  .itin-filter-search {
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+  }
+  .itin-filter-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+.itin-filter-actions button {
+    flex: 1;
+  }
+}
+
+/* Itineraries owns horizontal scrolling through TopScrollSync. The generic
+   mobile stable-table rule must not create a second scroll container inside
+   it, otherwise the visible top scrollbar can stop tracking the table. */
+.itineraries-table {
+  display: table;
+  width: max-content !important;
+  min-width: 1180px !important;
+  overflow: visible !important;
+}
+
+.top-scroll-sync__bottom--hidden-scrollbar::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
+
+/* Web Check-ins scrollbar matches the Trips page: visible, neutral gray,
+   and easy to grab without introducing a brand-blue accent. */
+.webcheckins-table-scroll-shell .top-scroll-sync__top,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom {
+  scrollbar-width: auto;
+  scrollbar-color: rgba(128, 128, 128, 0.72) rgba(128, 128, 128, 0.12);
+  scrollbar-gutter: stable both-edges;
+}
+
+.webcheckins-table-scroll-shell .top-scroll-sync__top::-webkit-scrollbar,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom::-webkit-scrollbar {
+  height: 18px;
+}
+
+.webcheckins-table-scroll-shell .top-scroll-sync__top::-webkit-scrollbar-track,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom::-webkit-scrollbar-track {
+  background: rgba(128, 128, 128, 0.12);
+  border-radius: 999px;
+}
+
+.webcheckins-table-scroll-shell .top-scroll-sync__top::-webkit-scrollbar-thumb,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  min-width: 64px;
+}
+
+.webcheckins-table-scroll-shell .top-scroll-sync__top::-webkit-scrollbar-thumb:hover,
+.webcheckins-table-scroll-shell .top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+}
 /* Travel Leads fit mode: keep every column visible without a horizontal table scrollbar. */
 .leads-split-table {
   display: flex;
   align-items: flex-start;
   width: 100%;
   max-width: 100%;
-  overflow: hidden;
-  background: var(--bg-color);
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: calc(100vh - 24rem);
+  background: var(--surface-color);
 }
 
 .leads-table-frozen-pane {
   flex: 0 0 auto;
+  align-self: flex-start;
   position: relative;
   z-index: 3;
-  background: var(--bg-color);
+  background: var(--surface-color);
   box-shadow: 1px 0 0 var(--border-color);
 }
 
 .leads-table-frozen-spacer {
   height: 16px;
-  background: var(--bg-color);
+  background: var(--surface-color);
 }
 
 .leads-table-scroll-pane {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
+  min-height: 0;
+  overflow: visible;
 }
 
 .leads-split-table table.leads-table thead tr {
@@ -1210,7 +1707,7 @@ table.leads-table {
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
-  background-color: var(--bg-color);
+  background-color: var(--surface-color);
 }
 
 table.leads-table th,
@@ -1218,7 +1715,7 @@ table.leads-table td {
   box-sizing: border-box;
   border-right: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
-  background-color: var(--bg-color);
+  background-color: var(--surface-color);
   background-clip: padding-box;
 }
 
@@ -1524,7 +2021,11 @@ table.leads-table--scrollable td:first-child {
 }
 
 table.leads-table thead th {
-  background-color: var(--table-header-bg);
+  position: sticky;
+  top: 16px;
+  z-index: 6;
+  background-color: var(--modal-bg);
+  box-shadow: inset 0 -1px 0 var(--border-color);
 }
 
 table.leads-table thead tr:first-child th {
@@ -1536,6 +2037,100 @@ table.leads-table tbody td {
 }
 
 table.leads-table tbody tr:hover td {
+  background-color: var(--surface-hover);
+}
+
+/* Contacts split-table shell: freeze the name pane and keep the rest of the
+   grid inside a single scrollable viewport, while preserving the existing
+   card chrome and sticky top scrollbar. */
+.contacts-split-table {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: calc(100vh - 24rem);
+  background: var(--surface-color);
+}
+
+.contacts-table-frozen-pane {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  position: relative;
+  z-index: 3;
+  background: var(--surface-color);
+  box-shadow: 1px 0 0 var(--border-color);
+}
+
+.contacts-table-frozen-spacer {
+  height: 16px;
+  background: var(--surface-color);
+}
+
+.contacts-table-scroll-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+.contacts-split-table table.stable-table thead tr {
+  height: 50px;
+}
+
+.contacts-split-table table.stable-table tbody tr {
+  height: 52px;
+}
+
+.contacts-split-table table.stable-table th,
+.contacts-split-table table.stable-table td {
+  height: inherit;
+}
+
+table.stable-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  background-color: var(--surface-color);
+}
+
+.contacts-split-table table.stable-table th,
+.contacts-split-table table.stable-table td {
+  box-sizing: border-box;
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--surface-color);
+  background-clip: padding-box;
+}
+
+.contacts-split-table table.stable-table th:first-child,
+.contacts-split-table table.stable-table td:first-child {
+  border-left: 1px solid var(--border-color);
+}
+
+.contacts-table-scroll-pane table.stable-table th:first-child,
+.contacts-table-scroll-pane table.stable-table td:first-child {
+  border-left: 0;
+}
+
+.contacts-split-table table.stable-table thead th {
+  position: sticky;
+  top: 16px;
+  z-index: 6;
+  background-color: var(--modal-bg);
+  box-shadow: inset 0 -1px 0 var(--border-color);
+}
+
+.contacts-split-table table.stable-table thead tr:first-child th {
+  border-top: 1px solid var(--border-color);
+}
+
+.contacts-split-table table.stable-table tbody td {
+  transition: background-color 0.15s ease;
+}
+
+.contacts-split-table table.stable-table tbody tr:hover td {
   background-color: var(--surface-hover);
 }
 
@@ -2711,8 +3306,135 @@ table.leads-table--compact td.leads-assigned-col select.input-field {
 .workflow-history-row b {
   color: #173c61;
 }
+/* Status was previously always red, because the old panel inferred failure by
+   regex-testing the raw details blob and had no notion of a successful or
+   skipped run to colour differently. It is a real column now. */
 .workflow-history-status {
   color: #b03039;
+  font-weight: 600;
+}
+.workflow-history-status.is-success {
+  color: #1c7c46;
+}
+.workflow-history-status.is-skipped {
+  color: #8a6d1f;
+}
+
+/* ── Workflow parity additions ───────────────────────────────────── */
+
+/* Auto-disable / last-failure banner at the top of the editor. */
+.workflow-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #e4b4b4;
+  border-left: 3px solid #b03039;
+  border-radius: 8px;
+  background: #fdf3f3;
+  color: #7d2229;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.workflow-alert svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.workflow-alert.workflow-alert-warn {
+  border-color: #e6d2a8;
+  border-left-color: #b3861f;
+  background: #fdf8ec;
+  color: #7a5c14;
+}
+
+/* Per-row failure line under a workflow name in the list. */
+.workflow-row-error {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  color: #b03039;
+  /* min-width:0 at every nesting level so the ellipsis actually engages. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shown instead of a value box for operators that take no operand
+   ("is empty", "has changed"). */
+.workflow-operator-hint {
+  align-self: center;
+  color: #7a8899;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.workflow-action-hint {
+  margin: 4px 0 0;
+  color: #7a8899;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workflow-confirm-label,
+.workflow-inline-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+  color: #445;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.workflow-confirm-label input,
+.workflow-inline-check input {
+  margin-top: 2px;
+}
+
+/* Multi-select pool for round-robin / least-busy owner assignment. */
+.workflow-pool-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #7a8899;
+}
+.workflow-pool-picker select[multiple] {
+  min-height: 92px;
+  padding: 6px;
+}
+
+/* Time-based trigger builder. */
+.workflow-schedule-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.workflow-schedule-builder .workflow-trigger-line {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.workflow-schedule-builder input[type="number"],
+.workflow-schedule-builder input {
+  max-width: 160px;
+}
+
+@media (max-width: 720px) {
+  .workflow-schedule-builder {
+    padding: 12px;
+  }
+  .workflow-schedule-builder input,
+  .workflow-schedule-builder input[type="number"] {
+    max-width: 100%;
+  }
 }
 .workflow-history-footer {
   display: flex;

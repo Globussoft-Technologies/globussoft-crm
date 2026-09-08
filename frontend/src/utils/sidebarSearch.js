@@ -6,7 +6,7 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   { path: '/travel/diagnostics', label: 'Diagnostics' },
   { path: '/travel/trip-knowledge', label: 'Travel Knowledge', description: 'Travel knowledge base admin' },
   { path: '/travel/itineraries', label: 'Itineraries' },
-  { path: '/travel/pois/pending', label: 'POI Approvals' },
+  // { path: '/travel/pois/pending', label: 'POI Approvals' }, // hidden 2026-08-28 — preserved for future re-enable
   { path: '/travel/trips', label: 'TMC Trips', brand: 'tmc' },
   { path: '/travel/tmc/catalogue', label: 'TMC Catalogue', brand: 'tmc' },
   { path: '/travel/web-checkins', label: 'Web Check-ins' },
@@ -182,6 +182,18 @@ export function filterSidebarPages(pages, { vertical = null, activeSubBrand = nu
   for (const page of pages) {
     const spec = TRAVEL_SIDEBAR_PAGE_MAP.get(page?.path);
     if (!spec) continue;
+    // TMC does not use Web Check-ins, Sightseeing Master, Supplier
+    // Credentials, or the Gmail page. Keep them searchable for the other
+    // sub-brands and for the All (4) view, but hide them when TMC is active.
+    if (
+      activeSubBrand === 'tmc' &&
+      (
+        page?.path === '/travel/web-checkins' ||
+        page?.path === '/travel/sightseeing' ||
+        page?.path === '/travel/suppliers' ||
+        page?.path === '/gmail'
+      )
+    ) continue;
     if (spec.brand && activeSubBrand && spec.brand !== activeSubBrand) continue;
     filtered.push({
       ...page,

@@ -1172,6 +1172,32 @@ router.post(
         return res.status(400).json({ error: "departureAt is not a valid date", code: "INVALID_DATE" });
       }
 
+      // TMC does not use Web Check-in. Keep manual creation intact for the
+      // other sub-brands, but block TMC at the API boundary.
+      if (itineraryId) {
+        const itinerary = await prisma.itinerary.findUnique({
+          where: { id: parseInt(itineraryId, 10) },
+          select: { tenantId: true, subBrand: true },
+        });
+        if (itinerary?.tenantId === req.travelTenant.id && String(itinerary.subBrand || "").toLowerCase() === "tmc") {
+          return res.status(403).json({
+            error: "Web Check-in is disabled for the TMC sub-brand",
+            code: "WEBCHECKIN_DISABLED_FOR_SUB_BRAND",
+          });
+        }
+      } else {
+        const contact = await prisma.contact.findUnique({
+          where: { id: cid },
+          select: { subBrand: true },
+        });
+        if (String(contact?.subBrand || "").toLowerCase() === "tmc") {
+          return res.status(403).json({
+            error: "Web Check-in is disabled for the TMC sub-brand",
+            code: "WEBCHECKIN_DISABLED_FOR_SUB_BRAND",
+          });
+        }
+      }
+
       // Caller can override windowOpenAt explicitly (rare — typically
       // when an airline ran an early-window promotion); otherwise use
       // the per-airline T-window table.

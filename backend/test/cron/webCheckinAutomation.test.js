@@ -157,7 +157,7 @@ describe('processRow — transient retry policy (FR-6)', () => {
 describe('runWebCheckinAutomationTick — paid/visasure gate', () => {
   test('paid + non-visasure itinerary → processed (done)', async () => {
     prisma.webCheckin.findMany.mockResolvedValueOnce([baseRow()]);
-    prisma.itinerary.findMany.mockResolvedValueOnce([{ id: 90, status: 'fully_paid', subBrand: 'tmc' }]);
+    prisma.itinerary.findMany.mockResolvedValueOnce([{ id: 90, status: 'fully_paid', subBrand: 'travel-stall' }]);
     const summary = await runWebCheckinAutomationTick(NOW, { resolveAdapter: () => okAdapter });
     expect(summary.scanned).toBe(1);
     expect(summary.done).toBe(1);
@@ -165,7 +165,7 @@ describe('runWebCheckinAutomationTick — paid/visasure gate', () => {
 
   test('unpaid itinerary → skipped (no adapter call)', async () => {
     prisma.webCheckin.findMany.mockResolvedValueOnce([baseRow()]);
-    prisma.itinerary.findMany.mockResolvedValueOnce([{ id: 90, status: 'draft', subBrand: 'tmc' }]);
+    prisma.itinerary.findMany.mockResolvedValueOnce([{ id: 90, status: 'draft', subBrand: 'travel-stall' }]);
     const summary = await runWebCheckinAutomationTick(NOW, { resolveAdapter: () => okAdapter });
     expect(summary.skipped).toBe(1);
     expect(summary.done).toBe(0);

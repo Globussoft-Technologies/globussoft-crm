@@ -41,9 +41,18 @@ import FilterPanel from "../components/FilterPanel";
 import InlineCellEditor from "../components/InlineCellEditor";
 import ScrollableSelect from "../components/ScrollableSelect";
 import TopScrollSync from "../components/TopScrollSync";
-import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
+import {
+  SUB_BRAND_IDS,
+  accessibleSubBrands,
+  subBrandShortLabel,
+} from "../utils/travelSubBrand";
 import { useActiveSubBrand } from "../utils/subBrand";
 import CallifiedLeadCallDialog from "../components/CallifiedLeadCallDialog";
+import { useLeadCalling } from "../hooks/useLeadCalling";
+import {
+  LeadCallButton as WellnessLeadCallButton,
+  LeadCallDialog as WellnessLeadCallDialog,
+} from "../components/wellness/LeadCallAction";
 import CallifiedCallDetailsDrawer from "../components/CallifiedCallDetailsDrawer";
 import CallifiedCallStatusDrawer from "../components/CallifiedCallStatusDrawer";
 import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolbar";
@@ -123,6 +132,7 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "phone",
   "aiScore",
   "source",
+  "webForm",
   "tags",
   "assignedTo",
   "createdAt",
@@ -135,6 +145,7 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   phone: 150,
   aiScore: 118,
   source: 150,
+  webForm: 170,
   tags: 190,
   campaign: 190,
   callStatus: 160,
@@ -678,6 +689,11 @@ const leadSourceLabel = (lead) =>
   lead?.customFields?.lead_source ||
   lead?.customFields?.leadSource ||
   "Organic";
+// Web Form column (generic Leads table only): name of the latest web form
+// the lead submitted, via contact.webFormSubmissions[0]. Empty string when
+// the lead never came through a form (cell renders "—").
+const leadWebFormName = (lead) =>
+  lead?.webFormSubmissions?.[0]?.webForm?.name || "";
 // Reject all C0 controls (NUL/BEL/etc.) + DEL. \t \n \r are intentionally
 // included  text inputs shouldn't carry them either, and any paste-from-
 // malicious-source typically smuggles via NUL or BEL. Detecting control
@@ -976,8 +992,8 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
-  // Only ADMINs may assign / reassign leads. All other roles see the
-  // assignee name as plain text and have no checkbox / bulk-assign surface.
+  // ADMINs always get the full assignment UI. Travel non-admins can also
+  // reassign the leads they own, but only to non-admin staff targets.
   const isAdmin = auth?.user?.role === "ADMIN";
   const [leads, setLeads] = useState([]);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
@@ -1019,6 +1035,12 @@ const Leads = () => {
     useState(false);
   const [bulkCampaignSaving, setBulkCampaignSaving] = useState(false);
   const [leadBulkActionsOpen, setLeadBulkActionsOpen] = useState(false);
+  // Wellness Callified calling — the AI / Manual chooser used by Appointments
+  // and Patients. Distinct from the generic-vertical flow below, which has its
+  // own dialog, auto-campaign rules and lead-status sync; the hook returns
+  // disabled on every non-wellness tenant so the two never both appear.
+  const wellnessCall = useLeadCalling();
+
   // Callified AI calling state
   const [callifiedCallLead, setCallifiedCallLead] = useState(null);
   const [callifiedDetailsLead, setCallifiedDetailsLead] = useState(null);
@@ -1194,17 +1216,17 @@ const Leads = () => {
       ? LEADS_COLUMN_COLLAPSED_WIDTH
       : key === "actions"
         ? Math.max(
-            Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key),
-            LEADS_ACTIONS_COLUMN_WIDTH,
-          )
+          Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key),
+          LEADS_ACTIONS_COLUMN_WIDTH,
+        )
         : key === "name"
           ? Math.max(
-              LEADS_NAME_COLUMN_MIN_WIDTH,
-              Math.min(
-                Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key),
-                LEADS_NAME_COLUMN_MAX_WIDTH,
-              ),
-            )
+            LEADS_NAME_COLUMN_MIN_WIDTH,
+            Math.min(
+              Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key),
+              LEADS_NAME_COLUMN_MAX_WIDTH,
+            ),
+          )
           : Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
   const setColumnWidth = (key, width) => {
     const minWidth =
@@ -1327,6 +1349,28 @@ const Leads = () => {
     }
   };
 
+  const staffBrandSuffix = (member) => {
+    if (!isTravel) return "";
+    const brands = accessibleSubBrands(member).map(subBrandShortLabel);
+    return brands.length ? ` (${brands.join(", ")})` : "";
+  };
+
+  const staffOptionLabel = (member) =>
+    `${member.name || member.email}${staffBrandSuffix(member)}`;
+
+  const assignableStaff = (lead) => {
+    let rows = staff;
+    if (isTravel && !isAdmin) {
+      rows = rows.filter((s) => s.role !== "ADMIN");
+    }
+    if (!isTravel || !lead?.subBrand) return rows;
+    return rows.filter(
+      (s) =>
+        accessibleSubBrands(s).includes(lead.subBrand) ||
+        String(s.id) === String(lead.assignedToId),
+    );
+  };
+
   const loadAutoCampaignRules = useCallback(async () => {
     if (!isGeneric) return;
     setAutoCampaignRulesLoading(true);
@@ -1335,9 +1379,9 @@ const Leads = () => {
       const enabled = !!d?.enabled;
       const rules = Array.isArray(d?.rules)
         ? d.rules.map((r, idx) => ({
-            ...r,
-            id: r.id || `rule-${idx}-${Date.now()}`,
-          }))
+          ...r,
+          id: r.id || `rule-${idx}-${Date.now()}`,
+        }))
         : [];
       setAutoCampaignRulesEnabled(enabled);
       setAutoCampaignRules(rules);
@@ -1387,8 +1431,8 @@ const Leads = () => {
       } catch (err) {
         notify.error(
           err?.body?.error ||
-            err?.message ||
-            "Failed to save auto-assign rules",
+          err?.message ||
+          "Failed to save auto-assign rules",
         );
       } finally {
         setAutoCampaignRulesSaving(false);
@@ -2433,9 +2477,9 @@ const Leads = () => {
         prev.map((l) =>
           l.id === lead.id
             ? {
-                ...l,
-                callifiedCampaignId: previousId ? Number(previousId) : null,
-              }
+              ...l,
+              callifiedCampaignId: previousId ? Number(previousId) : null,
+            }
             : l,
         ),
       );
@@ -2653,19 +2697,19 @@ const Leads = () => {
         prev.map((l) =>
           l.id === lead.id
             ? {
-                ...l,
-                callifiedLeadStatus: result?.callifiedLeadStatus ?? status,
-                callifiedLeadStatusSource:
-                  result?.callifiedLeadStatusSource ?? "manual",
-                callifiedLeadStatusReason:
-                  result?.callifiedLeadStatusReason ??
-                  "Status changed manually by user.",
-                callifiedLeadStatusUpdatedAt:
-                  result?.callifiedLeadStatusUpdatedAt ??
-                  new Date().toISOString(),
-                assignedToId: result?.assignedToId ?? l.assignedToId,
-                assignedTo: result?.assignedTo ?? l.assignedTo,
-              }
+              ...l,
+              callifiedLeadStatus: result?.callifiedLeadStatus ?? status,
+              callifiedLeadStatusSource:
+                result?.callifiedLeadStatusSource ?? "manual",
+              callifiedLeadStatusReason:
+                result?.callifiedLeadStatusReason ??
+                "Status changed manually by user.",
+              callifiedLeadStatusUpdatedAt:
+                result?.callifiedLeadStatusUpdatedAt ??
+                new Date().toISOString(),
+              assignedToId: result?.assignedToId ?? l.assignedToId,
+              assignedTo: result?.assignedTo ?? l.assignedTo,
+            }
             : l,
         ),
       );
@@ -2778,9 +2822,9 @@ const Leads = () => {
       Array.isArray(visibleColumns)
         ? visibleColumns
         : [
-            ...LEADS_DEFAULT_VISIBLE_COLUMNS,
-            ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
-          ],
+          ...LEADS_DEFAULT_VISIBLE_COLUMNS,
+          ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
+        ],
     [customFieldDefs, visibleColumns],
   );
   const leadUserColumnDefs = preferredVisibleColumns
@@ -2792,6 +2836,8 @@ const Leads = () => {
         key === "phone" ||
         key === "aiScore" ||
         key === "source" ||
+        // Web Form is generic-CRM only (wellness/travel never see it).
+        (key === "webForm" && isGeneric) ||
         key === "tags" ||
         key === "assignedTo" ||
         key === "createdAt" ||
@@ -2804,6 +2850,7 @@ const Leads = () => {
       if (key === "phone") return { key, label: "Phone" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
+      if (key === "webForm") return { key, label: "Web Form" };
       if (key === "tags") return { key, label: "Tags" };
       if (key === "assignedTo") return { key, label: "Assigned To" };
       if (key === "createdAt") return { key, label: "Created" };
@@ -2818,16 +2865,16 @@ const Leads = () => {
   const leadFixedExtraColumnDefs = [
     ...(isGeneric
       ? [
-          { key: "campaign", label: "Callified Campaign" },
-          { key: "callStatus", label: "Call Status" },
-          { key: "callifiedAi", label: "Callified AI call" },
-          { key: "callifiedScore", label: "Callified Score" },
-        ]
+        { key: "campaign", label: "Callified Campaign" },
+        { key: "callStatus", label: "Call Status" },
+        { key: "callifiedAi", label: "Callified AI call" },
+        { key: "callifiedScore", label: "Callified Score" },
+      ]
       : []),
     ...(isTravel
       ? [
-          { key: "subBrand", label: "Sub-brand" },
-          { key: "amount", label: "Amount" },
+        { key: "subBrand", label: "Sub-brand" },
+        { key: "amount", label: "Amount" },
       ]
       : []),
   ];
@@ -2857,6 +2904,10 @@ const Leads = () => {
         return { fieldKey: "phone", label: "Phone", kind: "text" };
       case "source":
         return { fieldKey: "source", label: "Source", kind: "text" };
+      case "webForm":
+        // Generic-only column (never rendered for wellness/travel), so the
+        // menu — and this filter entry — is unreachable outside generic.
+        return { fieldKey: "webForm", label: "Web Form", kind: "text" };
       case "campaign":
         return { fieldKey: "callifiedCampaignId", label: "Callified Campaign", kind: "id" };
       case "callStatus":
@@ -3066,6 +3117,8 @@ const Leads = () => {
           return Number(lead.aiScore ?? 0);
         case "source":
           return lead.source || "";
+        case "webForm":
+          return leadWebFormName(lead);
         case "tags":
           return normalizeLeadTags(lead.tags).join(", ");
         case "assignedTo":
@@ -3519,10 +3572,10 @@ const Leads = () => {
               prev.map((l) =>
                 l.id === lead.id
                   ? {
-                      ...l,
-                      assignedToId: result.assignedToId,
-                      assignedTo: result.assignedTo,
-                    }
+                    ...l,
+                    assignedToId: result.assignedToId,
+                    assignedTo: result.assignedTo,
+                  }
                   : l,
               ),
             );
@@ -3560,38 +3613,38 @@ const Leads = () => {
     sortedLeads.length === 0
       ? 0
       : Math.min(
-          sortedLeads.length,
-          currentLeadsPage * leadsPageSize + leadsPageSize,
-        );
+        sortedLeads.length,
+        currentLeadsPage * leadsPageSize + leadsPageSize,
+      );
   const paginatedLeads = sortedLeads.slice(
     currentLeadsPage * leadsPageSize,
     currentLeadsPage * leadsPageSize + leadsPageSize,
   );
   const leadsRowSyncSignature = leadsRowSyncEnabled
     ? paginatedLeads
-        .map((lead) =>
-          [
-            lead.id,
-            lead.name,
-            lead.email,
-            lead.company,
-            lead.phone,
-            lead.source,
-            Array.isArray(lead.tags) ? lead.tags.join(",") : String(lead.tags || ""),
-            lead.assignedToId ?? "",
-            lead.createdAt ?? "",
-            lead.subBrand ?? "",
-            lead.aiScore ?? "",
-            lead.status ?? "",
-            lead.callifiedLeadStatus ?? "",
-            lead.callifiedCampaignId ?? "",
-          ].join("|"),
-        )
-        .concat(
-          isGeneric
-            ? `::${genericHeaderSyncSignature}::${JSON.stringify(columnLayout)}`
-            : "",
-        )
+      .map((lead) =>
+        [
+          lead.id,
+          lead.name,
+          lead.email,
+          lead.company,
+          lead.phone,
+          lead.source,
+          Array.isArray(lead.tags) ? lead.tags.join(",") : String(lead.tags || ""),
+          lead.assignedToId ?? "",
+          lead.createdAt ?? "",
+          lead.subBrand ?? "",
+          lead.aiScore ?? "",
+          lead.status ?? "",
+          lead.callifiedLeadStatus ?? "",
+          lead.callifiedCampaignId ?? "",
+        ].join("|"),
+      )
+      .concat(
+        isGeneric
+          ? `::${genericHeaderSyncSignature}::${JSON.stringify(columnLayout)}`
+          : "",
+      )
     : "";
 
   useLayoutEffect(() => {
@@ -3608,7 +3661,7 @@ const Leads = () => {
         ?.querySelectorAll("thead tr, tbody tr")
         .forEach((row) => {
           row.style.height = "";
-      });
+        });
     };
   }, [leadsRowSyncEnabled, leadsRowSyncSignature, syncSplitTableRowHeights]);
 
@@ -3838,8 +3891,8 @@ const Leads = () => {
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "normal",
-            lineHeight: 1.2,
-          }}
+              lineHeight: 1.2,
+            }}
           >
             {label}
           </span>
@@ -3893,9 +3946,9 @@ const Leads = () => {
         options={options}
         onSave={updateLeadInlineValue}
         renderValue={renderValue}
-      required={required}
-    />
-  </td>
+        required={required}
+      />
+    </td>
   );
   const renderLeadUserHeaderCell = (column) => {
     if (!column) return null;
@@ -3905,9 +3958,9 @@ const Leads = () => {
       { paddingRight: "2rem" },
       column.customField
         ? {
-            key: column.field?.id || column.key,
-            className: "leads-custom-field-col",
-          }
+          key: column.field?.id || column.key,
+          className: "leads-custom-field-col",
+        }
         : {},
       renderHeaderMenuTrigger(column),
     );
@@ -3935,12 +3988,12 @@ const Leads = () => {
                 prev.map((l) =>
                   l.id === lead.id
                     ? {
-                        ...l,
-                        customFields: {
-                          ...(l.customFields || {}),
-                          [field.fieldKey]: newValue,
-                        },
-                      }
+                      ...l,
+                      customFields: {
+                        ...(l.customFields || {}),
+                        [field.fieldKey]: newValue,
+                      },
+                    }
                     : l,
                 ),
               );
@@ -4018,6 +4071,31 @@ const Leads = () => {
             <span style={sourceBadgeStyle}>{displayValue}</span>
           ),
         });
+      case "webForm": {
+        // Read-only: which web form this lead came through (generic only).
+        const formName = leadWebFormName(lead);
+        return (
+          <td
+            style={getBodyCellStyle("webForm", {
+              color: formName ? "var(--text-primary)" : "var(--text-secondary)",
+              fontSize: "0.875rem",
+            })}
+            title={formName || undefined}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span
+              style={{
+                display: "block",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {formName || "—"}
+            </span>
+          </td>
+        );
+      }
       case "tags":
         return (
           <td
@@ -4039,7 +4117,7 @@ const Leads = () => {
             style={getBodyCellStyle("assignedTo")}
             onClick={(e) => e.stopPropagation()}
           >
-            {isAdmin ? (
+            {isAdmin || isTravel ? (
               <select
                 className="input-field"
                 value={lead.assignedToId || ""}
@@ -4053,9 +4131,9 @@ const Leads = () => {
                 aria-label={`Assign ${lead.name || "lead"} to staff`}
               >
                 <option value="">Unassigned</option>
-                {staff.map((s) => (
+                {assignableStaff(lead).map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name || s.email}
+                    {staffOptionLabel(s)}
                   </option>
                 ))}
               </select>
@@ -4104,8 +4182,8 @@ const Leads = () => {
   const headerMenuRect = headerMenuState?.rect || null;
   const headerMenuOpenUp = Boolean(
     headerMenuRect &&
-      window.innerHeight - headerMenuRect.bottom - 12 < 260 &&
-      headerMenuRect.top > 260,
+    window.innerHeight - headerMenuRect.bottom - 12 < 260 &&
+    headerMenuRect.top > 260,
   );
   const headerMenuTop = headerMenuRect
     ? Math.max(12, headerMenuRect.bottom + LEADS_HEADER_MENU_GAP)
@@ -4115,45 +4193,45 @@ const Leads = () => {
     : 0;
   const headerMenuLeft = headerMenuRect
     ? Math.max(
-        12,
-        Math.min(
-          window.innerWidth - LEADS_HEADER_MENU_WIDTH - 12,
-          headerMenuRect.left,
-        ),
-      )
+      12,
+      Math.min(
+        window.innerWidth - LEADS_HEADER_MENU_WIDTH - 12,
+        headerMenuRect.left,
+      ),
+    )
     : 0;
   const headerMenuMaxHeight = headerMenuRect
     ? Math.max(
-        220,
-        Math.min(
-          headerMenuOpenUp
-            ? headerMenuRect.top - 12
-            : window.innerHeight - headerMenuRect.bottom - 12,
-          420,
-        ),
-      )
+      220,
+      Math.min(
+        headerMenuOpenUp
+          ? headerMenuRect.top - 12
+          : window.innerHeight - headerMenuRect.bottom - 12,
+        420,
+      ),
+    )
     : 0;
   const headerSubmenuLeft = headerMenuRect
     ? Math.max(
-        12,
-        Math.min(
-          window.innerWidth - LEADS_HEADER_MENU_SUBMENU_WIDTH - 12,
-          headerMenuLeft + LEADS_HEADER_MENU_WIDTH + LEADS_HEADER_MENU_GAP,
-        ),
-      )
+      12,
+      Math.min(
+        window.innerWidth - LEADS_HEADER_MENU_SUBMENU_WIDTH - 12,
+        headerMenuLeft + LEADS_HEADER_MENU_WIDTH + LEADS_HEADER_MENU_GAP,
+      ),
+    )
     : 0;
   const headerSubmenuOpenLeft =
     headerMenuRect &&
     headerMenuLeft +
-      LEADS_HEADER_MENU_WIDTH +
-      LEADS_HEADER_MENU_SUBMENU_WIDTH +
-      (LEADS_HEADER_MENU_GAP * 2) >
-      window.innerWidth;
+    LEADS_HEADER_MENU_WIDTH +
+    LEADS_HEADER_MENU_SUBMENU_WIDTH +
+    (LEADS_HEADER_MENU_GAP * 2) >
+    window.innerWidth;
   const headerSubmenuFallbackLeft = headerMenuRect
     ? Math.max(
-        12,
-        headerMenuLeft - LEADS_HEADER_MENU_SUBMENU_WIDTH - LEADS_HEADER_MENU_GAP,
-      )
+      12,
+      headerMenuLeft - LEADS_HEADER_MENU_SUBMENU_WIDTH - LEADS_HEADER_MENU_GAP,
+    )
     : 0;
   const headerSubmenuActualLeft = headerSubmenuOpenLeft
     ? headerSubmenuFallbackLeft
@@ -4208,906 +4286,491 @@ const Leads = () => {
           justifyContent: "flex-start",
         }}
       >
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={refreshAll}
-            style={{
-              ...compactToolbarButtonStyle,
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={refreshAll}
+          style={{
+            ...compactToolbarButtonStyle,
+          }}
+        >
+          <RefreshCw size={14} /> Refresh
+        </button>
+
+        {(isGeneric || isWellness) && (
+          <CsvImportExportToolbar
+            entity="contacts"
+            label="Leads"
+            formats={["csv", "xlsx"]}
+            compact
+            endpoints={{
+              export: "/api/csv/contacts/export.csv",
+              template: "/api/csv/contacts/template.csv",
+              meta: "/api/csv/contacts",
+              import: "/api/csv/contacts/import.csv",
             }}
-          >
-            <RefreshCw size={14} /> Refresh
-          </button>
+          />
+        )}
 
-          {(isGeneric || isWellness) && (
-            <CsvImportExportToolbar
-              entity="contacts"
-              label="Leads"
-              formats={["csv", "xlsx"]}
-              compact
-              endpoints={{
-                export: "/api/csv/contacts/export.csv",
-                template: "/api/csv/contacts/template.csv",
-                meta: "/api/csv/contacts",
-                import: "/api/csv/contacts/import.csv",
-              }}
-            />
-          )}
+        <span aria-hidden="true" style={compactToolbarDividerStyle} />
 
-          <span aria-hidden="true" style={compactToolbarDividerStyle} />
-
-          {isGeneric && callifiedConfigured && (
-            <>
-              {/* Auto-assign campaign rules: dropdown shows a grid where each
+        {isGeneric && callifiedConfigured && (
+          <>
+            {/* Auto-assign campaign rules: dropdown shows a grid where each
                   rule maps a lead column + value to a Callified campaign. */}
-              <div style={{ position: "relative" }}>
-                <button
-                  type="button"
-                  className="input-field"
-                  onClick={() => setAutoCampaignRulesOpen((o) => !o)}
-                  disabled={autoCampaignRulesLoading || autoCampaignRulesSaving}
-                  aria-haspopup="menu"
-                  aria-expanded={autoCampaignRulesOpen}
-                  style={{
-                    ...compactToolbarButtonStyle,
-                    minWidth: "160px",
-                    padding: "0.42rem 0.7rem",
-                    cursor: "pointer",
-                    position: "relative",
-                  }}
-                  aria-label="Auto-assign Callified Campaigns rules"
-                  title="Configure rules to automatically assign Callified campaigns to new leads"
-                >
-                  <Settings size={14} />
-                  <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.05 }}>
-                    <span>Auto-assign</span>
-                    <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>Callified Campaigns</span>
-                  </span>
-                  {autoCampaignRulesEnabled && (
-                    <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        background: "var(--success-color, #22c55e)",
-                        marginLeft: "0.25rem",
-                      }}
-                    />
-                  )}
-                </button>
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                className="input-field"
+                onClick={() => setAutoCampaignRulesOpen((o) => !o)}
+                disabled={autoCampaignRulesLoading || autoCampaignRulesSaving}
+                aria-haspopup="menu"
+                aria-expanded={autoCampaignRulesOpen}
+                style={{
+                  ...compactToolbarButtonStyle,
+                  minWidth: "160px",
+                  padding: "0.42rem 0.7rem",
+                  cursor: "pointer",
+                  position: "relative",
+                }}
+                aria-label="Auto-assign Callified Campaigns rules"
+                title="Configure rules to automatically assign Callified campaigns to new leads"
+              >
+                <Settings size={14} />
+                <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.05 }}>
+                  <span>Auto-assign</span>
+                  <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>Callified Campaigns</span>
+                </span>
+                {autoCampaignRulesEnabled && (
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: "var(--success-color, #22c55e)",
+                      marginLeft: "0.25rem",
+                    }}
+                  />
+                )}
+              </button>
 
-                {autoCampaignRulesOpen && (
-                  <>
+              {autoCampaignRulesOpen && (
+                <>
+                  <div
+                    style={{ position: "fixed", inset: 0, zIndex: 50 }}
+                    onClick={() => setAutoCampaignRulesOpen(false)}
+                  />
+                  <div
+                    className="card"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      position: "absolute",
+                      top: "calc(100% + 4px)",
+                      right: 0,
+                      zIndex: 51,
+                      minWidth: 520,
+                      maxWidth: 560,
+                      padding: "1rem",
+                      boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
+                      background: "var(--bg-color)",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
                     <div
-                      style={{ position: "fixed", inset: 0, zIndex: 50 }}
-                      onClick={() => setAutoCampaignRulesOpen(false)}
-                    />
-                    <div
-                      className="card"
-                      onClick={(e) => e.stopPropagation()}
                       style={{
-                        position: "absolute",
-                        top: "calc(100% + 4px)",
-                        right: 0,
-                        zIndex: 51,
-                        minWidth: 520,
-                        maxWidth: 560,
-                        padding: "1rem",
-                        boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
-                        background: "var(--bg-color)",
-                        border: "1px solid var(--border-color)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        marginBottom: "0.75rem",
                       }}
                     >
+                      <span
+                        style={{
+                          fontSize: "0.85rem",
+                          fontWeight: 600,
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        Auto-assign Callified Campaigns rules
+                      </span>
+                      <label
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.4rem",
+                          cursor: isAdmin ? "pointer" : "not-allowed",
+                          fontSize: "0.8rem",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={autoCampaignRulesEnabled}
+                          disabled={autoCampaignRulesSaving || !isAdmin}
+                          onChange={() => {
+                            const next = !autoCampaignRulesEnabled;
+                            setAutoCampaignRulesEnabled(next);
+                            saveAutoCampaignRules({
+                              enabled: next,
+                              rules: autoCampaignRules,
+                            });
+                          }}
+                        />
+                        {autoCampaignRulesEnabled ? "On" : "Off"}
+                      </label>
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: "0.75rem",
+                        color: "var(--text-secondary)",
+                        marginBottom: "0.75rem",
+                      }}
+                    >
+                      When a new lead arrives, the first matching rule assigns
+                      the chosen campaign. Values match ignoring case, spaces,
+                      and punctuation.
+                    </div>
+
+                    {autoCampaignRulesEnabled && (
                       <div
                         style={{
                           display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          marginBottom: "0.75rem",
+                          flexDirection: "column",
+                          gap: "0.5rem",
                         }}
                       >
-                        <span
-                          style={{
-                            fontSize: "0.85rem",
-                            fontWeight: 600,
-                            color: "var(--text-primary)",
-                          }}
-                        >
-                          Auto-assign Callified Campaigns rules
-                        </span>
-                        <label
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "0.4rem",
-                            cursor: isAdmin ? "pointer" : "not-allowed",
-                            fontSize: "0.8rem",
-                            color: "var(--text-secondary)",
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={autoCampaignRulesEnabled}
-                            disabled={autoCampaignRulesSaving || !isAdmin}
-                            onChange={() => {
-                              const next = !autoCampaignRulesEnabled;
-                              setAutoCampaignRulesEnabled(next);
-                              saveAutoCampaignRules({
-                                enabled: next,
-                                rules: autoCampaignRules,
-                              });
-                            }}
-                          />
-                          {autoCampaignRulesEnabled ? "On" : "Off"}
-                        </label>
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: "0.75rem",
-                          color: "var(--text-secondary)",
-                          marginBottom: "0.75rem",
-                        }}
-                      >
-                        When a new lead arrives, the first matching rule assigns
-                        the chosen campaign. Values match ignoring case, spaces,
-                        and punctuation.
-                      </div>
-
-                      {autoCampaignRulesEnabled && (
                         <div
                           style={{
-                            display: "flex",
-                            flexDirection: "column",
+                            display: "grid",
+                            gridTemplateColumns: "34px 1fr 1fr 1fr 80px 32px",
                             gap: "0.5rem",
+                            alignItems: "center",
+                            fontSize: "0.7rem",
+                            color: "var(--text-secondary)",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.03em",
+                            padding: "0 0.25rem",
                           }}
                         >
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "34px 1fr 1fr 1fr 80px 32px",
-                              gap: "0.5rem",
-                              alignItems: "center",
-                              fontSize: "0.7rem",
-                              color: "var(--text-secondary)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.03em",
-                              padding: "0 0.25rem",
-                            }}
-                          >
-                            <span>On</span>
-                            <span>Lead column</span>
-                            <span>Value</span>
-                            <span>Campaign</span>
-                            <span style={{ textAlign: "center" }}>Save</span>
-                            <span />
-                          </div>
+                          <span>On</span>
+                          <span>Lead column</span>
+                          <span>Value</span>
+                          <span>Campaign</span>
+                          <span style={{ textAlign: "center" }}>Save</span>
+                          <span />
+                        </div>
 
-                          {autoCampaignRules.map((rule) => {
-                            const columnOptions = [
-                              ...BUILTIN_RULE_COLUMNS,
-                              ...customFieldDefs.map((f) => ({
-                                key: `cf_${f.fieldKey}`,
-                                label: f.label,
-                              })),
-                            ];
-                            const ruleIsSaved = savedAutoCampaignRuleIds.has(
-                              rule.id,
-                            );
-                            const ruleIsValid =
-                              rule.column &&
-                              String(rule.value || "").trim() &&
-                              rule.campaignId;
-                            const removeSavedStatus = () => {
-                              setSavedAutoCampaignRuleIds((prev) => {
-                                if (!prev.has(rule.id)) return prev;
-                                const next = new Set(prev);
-                                next.delete(rule.id);
-                                return next;
-                              });
-                            };
-                            return (
-                              <div
-                                key={rule.id}
+                        {autoCampaignRules.map((rule) => {
+                          const columnOptions = [
+                            ...BUILTIN_RULE_COLUMNS,
+                            ...customFieldDefs.map((f) => ({
+                              key: `cf_${f.fieldKey}`,
+                              label: f.label,
+                            })),
+                          ];
+                          const ruleIsSaved = savedAutoCampaignRuleIds.has(
+                            rule.id,
+                          );
+                          const ruleIsValid =
+                            rule.column &&
+                            String(rule.value || "").trim() &&
+                            rule.campaignId;
+                          const removeSavedStatus = () => {
+                            setSavedAutoCampaignRuleIds((prev) => {
+                              if (!prev.has(rule.id)) return prev;
+                              const next = new Set(prev);
+                              next.delete(rule.id);
+                              return next;
+                            });
+                          };
+                          return (
+                            <div
+                              key={rule.id}
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns:
+                                  "34px 1fr 1fr 1fr 80px 32px",
+                                gap: "0.5rem",
+                                alignItems: "center",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={!!rule.enabled}
+                                disabled={autoCampaignRulesSaving || !isAdmin}
+                                onChange={() => {
+                                  const next = autoCampaignRules.map((r) =>
+                                    r.id === rule.id
+                                      ? { ...r, enabled: !r.enabled }
+                                      : r,
+                                  );
+                                  setAutoCampaignRules(next);
+                                  removeSavedStatus();
+                                }}
                                 style={{
-                                  display: "grid",
-                                  gridTemplateColumns:
-                                    "34px 1fr 1fr 1fr 80px 32px",
-                                  gap: "0.5rem",
-                                  alignItems: "center",
+                                  cursor: isAdmin ? "pointer" : "not-allowed",
+                                }}
+                              />
+                              <select
+                                className="input-field"
+                                value={rule.column || ""}
+                                disabled={autoCampaignRulesSaving || !isAdmin}
+                                onChange={(e) => {
+                                  const next = autoCampaignRules.map((r) =>
+                                    r.id === rule.id
+                                      ? { ...r, column: e.target.value }
+                                      : r,
+                                  );
+                                  setAutoCampaignRules(next);
+                                  removeSavedStatus();
+                                }}
+                                style={{
+                                  padding: "0.35rem 0.5rem",
+                                  fontSize: "0.8rem",
+                                  minWidth: 0,
                                 }}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={!!rule.enabled}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
-                                  onChange={() => {
-                                    const next = autoCampaignRules.map((r) =>
-                                      r.id === rule.id
-                                        ? { ...r, enabled: !r.enabled }
-                                        : r,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    removeSavedStatus();
+                                <option value="">Select column</option>
+                                {columnOptions.map((col) => (
+                                  <option key={col.key} value={col.key}>
+                                    {col.label}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="text"
+                                value={rule.value || ""}
+                                disabled={autoCampaignRulesSaving || !isAdmin}
+                                placeholder="e.g. web-form"
+                                onChange={(e) => {
+                                  const next = autoCampaignRules.map((r) =>
+                                    r.id === rule.id
+                                      ? { ...r, value: e.target.value }
+                                      : r,
+                                  );
+                                  setAutoCampaignRules(next);
+                                  removeSavedStatus();
+                                }}
+                                style={{
+                                  padding: "0.35rem 0.5rem",
+                                  fontSize: "0.8rem",
+                                  borderRadius: 6,
+                                  border: "1px solid var(--border-color)",
+                                  background: "var(--surface)",
+                                  color: "var(--text-primary)",
+                                  minWidth: 0,
+                                }}
+                              />
+                              <select
+                                className="input-field"
+                                value={rule.campaignId || ""}
+                                disabled={autoCampaignRulesSaving || !isAdmin}
+                                onChange={(e) => {
+                                  const next = autoCampaignRules.map((r) =>
+                                    r.id === rule.id
+                                      ? { ...r, campaignId: e.target.value }
+                                      : r,
+                                  );
+                                  setAutoCampaignRules(next);
+                                  removeSavedStatus();
+                                }}
+                                style={{
+                                  padding: "0.35rem 0.5rem",
+                                  fontSize: "0.8rem",
+                                  minWidth: 0,
+                                }}
+                              >
+                                <option value="">Select campaign</option>
+                                {callifiedCampaigns.map((c) => (
+                                  <option key={c.id} value={String(c.id)}>
+                                    {c.name || `Campaign ${c.id}`}
+                                  </option>
+                                ))}
+                              </select>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  gap: "0.4rem",
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  disabled={
+                                    !ruleIsValid ||
+                                    autoCampaignRulesSaving ||
+                                    !isAdmin
+                                  }
+                                  onClick={() => {
+                                    saveAutoCampaignRules({
+                                      enabled: autoCampaignRulesEnabled,
+                                      rules: autoCampaignRules,
+                                      markSavedId: rule.id,
+                                    });
                                   }}
                                   style={{
-                                    cursor: isAdmin ? "pointer" : "not-allowed",
-                                  }}
-                                />
-                                <select
-                                  className="input-field"
-                                  value={rule.column || ""}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
-                                  onChange={(e) => {
-                                    const next = autoCampaignRules.map((r) =>
-                                      r.id === rule.id
-                                        ? { ...r, column: e.target.value }
-                                        : r,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    removeSavedStatus();
-                                  }}
-                                  style={{
-                                    padding: "0.35rem 0.5rem",
-                                    fontSize: "0.8rem",
-                                    minWidth: 0,
-                                  }}
-                                >
-                                  <option value="">Select column</option>
-                                  {columnOptions.map((col) => (
-                                    <option key={col.key} value={col.key}>
-                                      {col.label}
-                                    </option>
-                                  ))}
-                                </select>
-                                <input
-                                  type="text"
-                                  value={rule.value || ""}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
-                                  placeholder="e.g. web-form"
-                                  onChange={(e) => {
-                                    const next = autoCampaignRules.map((r) =>
-                                      r.id === rule.id
-                                        ? { ...r, value: e.target.value }
-                                        : r,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    removeSavedStatus();
-                                  }}
-                                  style={{
-                                    padding: "0.35rem 0.5rem",
-                                    fontSize: "0.8rem",
+                                    padding: "0.35rem 0.6rem",
                                     borderRadius: 6,
                                     border: "1px solid var(--border-color)",
                                     background: "var(--surface)",
                                     color: "var(--text-primary)",
-                                    minWidth: 0,
-                                  }}
-                                />
-                                <select
-                                  className="input-field"
-                                  value={rule.campaignId || ""}
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
-                                  onChange={(e) => {
-                                    const next = autoCampaignRules.map((r) =>
-                                      r.id === rule.id
-                                        ? { ...r, campaignId: e.target.value }
-                                        : r,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    removeSavedStatus();
-                                  }}
-                                  style={{
-                                    padding: "0.35rem 0.5rem",
-                                    fontSize: "0.8rem",
-                                    minWidth: 0,
-                                  }}
-                                >
-                                  <option value="">Select campaign</option>
-                                  {callifiedCampaigns.map((c) => (
-                                    <option key={c.id} value={String(c.id)}>
-                                      {c.name || `Campaign ${c.id}`}
-                                    </option>
-                                  ))}
-                                </select>
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    gap: "0.4rem",
-                                  }}
-                                >
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      !ruleIsValid ||
-                                      autoCampaignRulesSaving ||
-                                      !isAdmin
-                                    }
-                                    onClick={() => {
-                                      saveAutoCampaignRules({
-                                        enabled: autoCampaignRulesEnabled,
-                                        rules: autoCampaignRules,
-                                        markSavedId: rule.id,
-                                      });
-                                    }}
-                                    style={{
-                                      padding: "0.35rem 0.6rem",
-                                      borderRadius: 6,
-                                      border: "1px solid var(--border-color)",
-                                      background: "var(--surface)",
-                                      color: "var(--text-primary)",
-                                      fontSize: "0.75rem",
-                                      cursor:
-                                        isAdmin &&
+                                    fontSize: "0.75rem",
+                                    cursor:
+                                      isAdmin &&
                                         ruleIsValid &&
                                         !autoCampaignRulesSaving
-                                          ? "pointer"
-                                          : "not-allowed",
-                                      opacity: ruleIsValid ? 1 : 0.5,
-                                      whiteSpace: "nowrap",
-                                    }}
-                                  >
-                                    Save
-                                  </button>
-                                  {ruleIsSaved && (
-                                    <span
-                                      title="Saved"
-                                      style={{
-                                        width: 8,
-                                        height: 8,
-                                        borderRadius: "50%",
-                                        background:
-                                          "var(--success-color, #22c55e)",
-                                        flexShrink: 0,
-                                      }}
-                                    />
-                                  )}
-                                </div>
-                                <button
-                                  type="button"
-                                  disabled={autoCampaignRulesSaving || !isAdmin}
-                                  onClick={() => {
-                                    const next = autoCampaignRules.filter(
-                                      (r) => r.id !== rule.id,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    setSavedAutoCampaignRuleIds((prev) => {
-                                      const s = new Set(prev);
-                                      s.delete(rule.id);
-                                      return s;
-                                    });
-                                    saveAutoCampaignRules({
-                                      enabled: autoCampaignRulesEnabled,
-                                      rules: next,
-                                    });
+                                        ? "pointer"
+                                        : "not-allowed",
+                                    opacity: ruleIsValid ? 1 : 0.5,
+                                    whiteSpace: "nowrap",
                                   }}
-                                  style={{
-                                    background: "none",
-                                    border: "none",
-                                    color: "var(--danger-color, #ef4444)",
-                                    cursor: isAdmin ? "pointer" : "not-allowed",
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    padding: "0.25rem",
-                                  }}
-                                  title="Remove rule"
                                 >
-                                  <Trash2 size={16} />
+                                  Save
                                 </button>
+                                {ruleIsSaved && (
+                                  <span
+                                    title="Saved"
+                                    style={{
+                                      width: 8,
+                                      height: 8,
+                                      borderRadius: "50%",
+                                      background:
+                                        "var(--success-color, #22c55e)",
+                                      flexShrink: 0,
+                                    }}
+                                  />
+                                )}
                               </div>
-                            );
-                          })}
-
-                          <button
-                            type="button"
-                            disabled={autoCampaignRulesSaving || !isAdmin}
-                            onClick={() => {
-                              const next = [
-                                ...autoCampaignRules,
-                                {
-                                  id: `rule-${Date.now()}`,
-                                  enabled: true,
-                                  column: "",
-                                  value: "",
-                                  campaignId: "",
-                                },
-                              ];
-                              setAutoCampaignRules(next);
-                            }}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              gap: "0.35rem",
-                              marginTop: "0.5rem",
-                              padding: "0.45rem 0.75rem",
-                              borderRadius: 6,
-                              border: "1px dashed var(--border-color)",
-                              background: "transparent",
-                              color: "var(--text-secondary)",
-                              cursor: isAdmin ? "pointer" : "not-allowed",
-                              fontSize: "0.8rem",
-                              alignSelf: "flex-start",
-                            }}
-                          >
-                            <Plus size={14} /> Add rule
-                          </button>
-
-                          {!isAdmin && (
-                            <div
-                              style={{
-                                fontSize: "0.75rem",
-                                color: "var(--text-secondary)",
-                                marginTop: "0.5rem",
-                              }}
-                            >
-                              Only admins can change auto-assign rules.
+                              <button
+                                type="button"
+                                disabled={autoCampaignRulesSaving || !isAdmin}
+                                onClick={() => {
+                                  const next = autoCampaignRules.filter(
+                                    (r) => r.id !== rule.id,
+                                  );
+                                  setAutoCampaignRules(next);
+                                  setSavedAutoCampaignRuleIds((prev) => {
+                                    const s = new Set(prev);
+                                    s.delete(rule.id);
+                                    return s;
+                                  });
+                                  saveAutoCampaignRules({
+                                    enabled: autoCampaignRulesEnabled,
+                                    rules: next,
+                                  });
+                                }}
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "var(--danger-color, #ef4444)",
+                                  cursor: isAdmin ? "pointer" : "not-allowed",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  padding: "0.25rem",
+                                }}
+                                title="Remove rule"
+                              >
+                                <Trash2 size={16} />
+                              </button>
                             </div>
-                          )}
-                        </div>
-                      )}
+                          );
+                        })}
 
-                      {autoCampaignRulesSaving && (
-                        <div
-                          style={{
-                            fontSize: "0.75rem",
-                            color: "var(--text-secondary)",
-                            marginTop: "0.75rem",
-                          }}
-                        >
-                          Saving…
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Multi-select campaign dropdown for bulk dial. */}
-              <div style={{ position: "relative" }}>
-                <button
-                  type="button"
-                  className="input-field"
-                  onClick={() => setCampaignDropdownOpen((o) => !o)}
-                  disabled={callQueueActive}
-                  aria-haspopup="menu"
-                  aria-expanded={campaignDropdownOpen}
-                  style={{
-                    ...compactToolbarButtonStyle,
-                    minWidth: "175px",
-                    padding: "0.42rem 0.7rem",
-                    cursor: "pointer",
-                  }}
-                >
-                  <Filter size={14} />
-                  {selectedCampaignIds.length === 0
-                    ? "Select campaigns to dial"
-                    : `${selectedCampaignIds.length} campaign${selectedCampaignIds.length === 1 ? "" : "s"} selected`}
-                  {campaignDropdownOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </button>
-                {campaignDropdownOpen && (
-                  <>
-                    <div
-                      style={{ position: "fixed", inset: 0, zIndex: 50 }}
-                      onClick={() => setCampaignDropdownOpen(false)}
-                    />
-                    <div
-                      className="card"
-                      style={{
-                        position: "absolute",
-                        top: "calc(100% + 4px)",
-                        right: 0,
-                        zIndex: 51,
-                        minWidth: 260,
-                        maxHeight: 320,
-                        overflowY: "auto",
-                        padding: "0.5rem",
-                        background: "var(--bg-color)",
-                        border: "1px solid var(--border-color)",
-                        boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
-                      }}
-                    >
-                      {callifiedCampaigns.length === 0 ? (
-                        <div
-                          style={{
-                            padding: "0.5rem",
-                            fontSize: "0.85rem",
-                            color: "var(--text-secondary)",
-                          }}
-                        >
-                          No campaigns
-                        </div>
-                      ) : (
-                        callifiedCampaigns.map((c) => (
-                          <label
-                            key={c.id}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.5rem",
-                              padding: "0.4rem 0.5rem",
-                              fontSize: "0.85rem",
-                              cursor: "pointer",
-                              borderRadius: 6,
-                            }}
-                            className="table-row-hover"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedCampaignIds.includes(
-                                String(c.id),
-                              )}
-                              onChange={() => {
-                                setSelectedCampaignIds((prev) =>
-                                  prev.includes(String(c.id))
-                                    ? prev.filter((id) => id !== String(c.id))
-                                    : [...prev, String(c.id)],
-                                );
-                              }}
-                            />
-                            <span
-                              style={{
-                                flex: 1,
-                                minWidth: 0,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {c.name || `Campaign ${c.id}`}
-                            </span>
-                            <span
-                              style={{
-                                fontSize: "0.75rem",
-                                color: "var(--text-secondary)",
-                              }}
-                            >
-                              {c.leadCount || 0}
-                            </span>
-                          </label>
-                        ))
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={handleDialSelectedCampaigns}
-                disabled={callQueueActive || selectedCampaignIds.length === 0}
-                style={{
-                  ...compactToolbarButtonStyle,
-                  padding: "0.42rem 0.7rem",
-                }}
-              >
-                {callQueueActive ? (
-                  <>
-                    <RefreshCw
-                      size={14}
-                      style={{ animation: "spin 1s linear infinite" }}
-                    />{" "}
-                    Dialling...
-                  </>
-                ) : (
-                  <>
-                    <Phone size={14} /> Dial Campaigns
-                  </>
-                )}
-              </button>
-
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setCallStatusDrawerOpen(true)}
-                style={{
-                  ...compactToolbarButtonStyle,
-                  padding: "0.42rem 0.7rem",
-                }}
-              >
-                <Phone size={14} /> Call Status
-              </button>
-            </>
-          )}
-
-          <span aria-hidden="true" style={compactToolbarDividerStyle} />
-
-          <div style={{ position: "relative" }}>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleLeadBulkActionsToggle}
-                aria-haspopup="menu"
-                aria-expanded={leadBulkActionsOpen}
-                style={{
-                  ...compactToolbarButtonStyle,
-                  padding: "0.42rem 0.7rem",
-                }}
-              >
-              <SlidersHorizontal size={14} />
-              Bulk actions
-              {leadBulkActionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-              {selectedLeads.length > 0 && (
-                <span
-                  style={{
-                    minWidth: 18,
-                    height: 18,
-                    padding: "0 5px",
-                    borderRadius: 999,
-                    background: "var(--accent-color)",
-                    color: "#fff",
-                    fontSize: "0.7rem",
-                    fontWeight: 600,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  {selectedLeads.length}
-                </span>
-              )}
-            </button>
-            {leadBulkActionsOpen && (
-              <>
-                <div
-                  style={{
-                    position: "fixed",
-                    inset: 0,
-                    zIndex: 1088,
-                    background: "transparent",
-                  }}
-                  onClick={() => setLeadBulkActionsOpen(false)}
-                />
-                <div
-                  role="menu"
-                  aria-label="Bulk actions"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  style={{
-                    position: "absolute",
-                    top: "calc(100% + 4px)",
-                    left: 0,
-                    right: "auto",
-                    zIndex: 1089,
-                    width: "min(420px, 92vw)",
-                    padding: "0.85rem",
-                    background: "var(--bg-color)",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: 12,
-                    boxShadow: "0 12px 32px rgba(0,0,0,0.2)",
-                    display: "grid",
-                    gap: "0.75rem",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: "0.5rem",
-                    }}
-                  >
-                    <strong
-                      style={{
-                        fontSize: "0.9rem",
-                        color: "var(--text-primary)",
-                      }}
-                    >
-                      Bulk actions
-                    </strong>
-                    <span
-                      style={{
-                        fontSize: "0.78rem",
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      {selectedLeads.length} selected
-                    </span>
-                  </div>
-                  {selectedLeads.length === 0 ? (
-                    <div
-                      style={{
-                        fontSize: "0.85rem",
-                        color: "var(--text-secondary)",
-                        lineHeight: 1.5,
-                      }}
-                    >
-                      Select one or more leads to use bulk actions.
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        display: "grid",
-                        gap: "0.65rem",
-                      }}
-                    >
-                      {isGeneric && (
                         <button
                           type="button"
-                          className="btn-secondary"
+                          disabled={autoCampaignRulesSaving || !isAdmin}
                           onClick={() => {
-                            setLeadBulkActionsOpen(false);
-                            handleDialSelectedLeads();
+                            const next = [
+                              ...autoCampaignRules,
+                              {
+                                id: `rule-${Date.now()}`,
+                                enabled: true,
+                                column: "",
+                                value: "",
+                                campaignId: "",
+                              },
+                            ];
+                            setAutoCampaignRules(next);
                           }}
-                          disabled={callQueueActive}
                           style={{
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
                             gap: "0.35rem",
-                            fontSize: "0.85rem",
+                            marginTop: "0.5rem",
+                            padding: "0.45rem 0.75rem",
+                            borderRadius: 6,
+                            border: "1px dashed var(--border-color)",
+                            background: "transparent",
+                            color: "var(--text-secondary)",
+                            cursor: isAdmin ? "pointer" : "not-allowed",
+                            fontSize: "0.8rem",
+                            alignSelf: "flex-start",
                           }}
                         >
-                          <Phone size={14} /> Dial selected
+                          <Plus size={14} /> Add rule
                         </button>
-                      )}
+
+                        {!isAdmin && (
+                          <div
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "var(--text-secondary)",
+                              marginTop: "0.5rem",
+                            }}
+                          >
+                            Only admins can change auto-assign rules.
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {autoCampaignRulesSaving && (
                       <div
                         style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "0.5rem",
-                          flexWrap: "wrap",
+                          fontSize: "0.75rem",
+                          color: "var(--text-secondary)",
+                          marginTop: "0.75rem",
                         }}
                       >
-                        <select
-                          className="input-field"
-                          value={bulkAgent}
-                          onChange={(e) => setBulkAgent(e.target.value)}
-                          style={{
-                            flex: 1,
-                            minWidth: 180,
-                            padding: "0.5rem",
-                          }}
-                          aria-label="Bulk assign staff"
-                        >
-                          <option value="">Unassign</option>
-                          {staff.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.name || s.email}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => {
-                            setLeadBulkActionsOpen(false);
-                            handleBulkAssign();
-                          }}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            gap: "0.35rem",
-                            fontSize: "0.85rem",
-                          }}
-                        >
-                          Assign to staff
-                        </button>
+                        Saving…
                       </div>
-                      {isGeneric && callifiedConfigured && (
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => {
-                            setLeadBulkActionsOpen(false);
-                            setBulkCampaignDropdownOpen(true);
-                          }}
-                          disabled={bulkCampaignSaving}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            gap: "0.35rem",
-                            fontSize: "0.85rem",
-                          }}
-                          >
-                          <Filter size={14} /> Assign campaign
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="btn-danger"
-                        onClick={() => {
-                          handleBulkDelete();
-                        }}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: "0.35rem",
-                          fontSize: "0.85rem",
-                        }}
-                      >
-                        <Trash2 size={14} /> Delete selected leads
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => {
-                          setSelectedLeads([]);
-                          setBulkAgent("");
-                          setBulkCampaignDropdownOpen(false);
-                          setLeadBulkActionsOpen(false);
-                        }}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: "0.35rem",
-                          fontSize: "0.85rem",
-                        }}
-                      >
-                        Clear selection
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-
-          {isGeneric && selectedLeads.length > 0 && (
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleDialSelectedLeads}
-              disabled={callQueueActive}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.35rem",
-                fontSize: "0.85rem",
-                padding: "0.42rem 0.7rem",
-              }}
-            >
-              {callQueueActive ? (
-                <>
-                  <RefreshCw
-                    size={14}
-                    style={{ animation: "spin 1s linear infinite" }}
-                  />{" "}
-                  Dialling...
-                </>
-              ) : (
-                <>
-                  <Phone size={14} /> Dial Selected ({selectedLeads.length})
+                    )}
+                  </div>
                 </>
               )}
-            </button>
-          )}
+            </div>
 
-          {isGeneric && selectedLeads.length > 0 && callifiedConfigured && (
+            {/* Multi-select campaign dropdown for bulk dial. */}
             <div style={{ position: "relative" }}>
               <button
                 type="button"
-                className="btn-secondary"
-                onClick={() => setBulkCampaignDropdownOpen((o) => !o)}
-                disabled={bulkCampaignSaving}
+                className="input-field"
+                onClick={() => setCampaignDropdownOpen((o) => !o)}
+                disabled={callQueueActive}
+                aria-haspopup="menu"
+                aria-expanded={campaignDropdownOpen}
                 style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  fontSize: "0.85rem",
+                  ...compactToolbarButtonStyle,
+                  minWidth: "175px",
                   padding: "0.42rem 0.7rem",
+                  cursor: "pointer",
                 }}
               >
                 <Filter size={14} />
-                {bulkCampaignDropdownOpen ? (
-                  <ChevronUp size={14} />
-                ) : (
-                  <ChevronDown size={14} />
-                )}
-                Assign Campaign ({selectedLeads.length})
+                {selectedCampaignIds.length === 0
+                  ? "Select campaigns to dial"
+                  : `${selectedCampaignIds.length} campaign${selectedCampaignIds.length === 1 ? "" : "s"} selected`}
+                {campaignDropdownOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </button>
-              {bulkCampaignDropdownOpen && (
+              {campaignDropdownOpen && (
                 <>
                   <div
                     style={{ position: "fixed", inset: 0, zIndex: 50 }}
-                    onClick={() => setBulkCampaignDropdownOpen(false)}
+                    onClick={() => setCampaignDropdownOpen(false)}
                   />
                   <div
                     className="card"
@@ -5136,59 +4799,489 @@ const Leads = () => {
                         No campaigns
                       </div>
                     ) : (
-                      <>
-                        <div
+                      callifiedCampaigns.map((c) => (
+                        <label
+                          key={c.id}
                           style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
                             padding: "0.4rem 0.5rem",
                             fontSize: "0.85rem",
                             cursor: "pointer",
                             borderRadius: 6,
-                            color: "var(--text-secondary)",
                           }}
                           className="table-row-hover"
-                          onClick={() => handleBulkAssignCampaign(null)}
                         >
-                          No campaign
-                        </div>
-                        {callifiedCampaigns.map((c) => (
-                          <div
-                            key={c.id}
-                            style={{
-                              padding: "0.4rem 0.5rem",
-                              fontSize: "0.85rem",
-                              cursor: "pointer",
-                              borderRadius: 6,
+                          <input
+                            type="checkbox"
+                            checked={selectedCampaignIds.includes(
+                              String(c.id),
+                            )}
+                            onChange={() => {
+                              setSelectedCampaignIds((prev) =>
+                                prev.includes(String(c.id))
+                                  ? prev.filter((id) => id !== String(c.id))
+                                  : [...prev, String(c.id)],
+                              );
                             }}
-                            className="table-row-hover"
-                            onClick={() => handleBulkAssignCampaign(c.id)}
+                          />
+                          <span
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
                           >
-                            {c.name || `Campaign ${c.id}`}{" "}
-                            {c.product_name ? `— ${c.product_name}` : ""}
-                          </div>
-                        ))}
-                      </>
+                            {c.name || `Campaign ${c.id}`}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
+                            {c.leadCount || 0}
+                          </span>
+                        </label>
+                      ))
                     )}
                   </div>
                 </>
               )}
             </div>
-          )}
 
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleDialSelectedCampaigns}
+              disabled={callQueueActive || selectedCampaignIds.length === 0}
+              style={{
+                ...compactToolbarButtonStyle,
+                padding: "0.42rem 0.7rem",
+              }}
+            >
+              {callQueueActive ? (
+                <>
+                  <RefreshCw
+                    size={14}
+                    style={{ animation: "spin 1s linear infinite" }}
+                  />{" "}
+                  Dialling...
+                </>
+              ) : (
+                <>
+                  <Phone size={14} /> Dial Campaigns
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setCallStatusDrawerOpen(true)}
+              style={{
+                ...compactToolbarButtonStyle,
+                padding: "0.42rem 0.7rem",
+              }}
+            >
+              <Phone size={14} /> Call Status
+            </button>
+          </>
+        )}
+
+        <span aria-hidden="true" style={compactToolbarDividerStyle} />
+
+        <div style={{ position: "relative" }}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleLeadBulkActionsToggle}
+            aria-haspopup="menu"
+            aria-expanded={leadBulkActionsOpen}
+            style={{
+              ...compactToolbarButtonStyle,
+              padding: "0.42rem 0.7rem",
+            }}
+          >
+            <SlidersHorizontal size={14} />
+            Bulk actions
+            {leadBulkActionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {selectedLeads.length > 0 && (
+              <span
+                style={{
+                  minWidth: 18,
+                  height: 18,
+                  padding: "0 5px",
+                  borderRadius: 999,
+                  background: "var(--accent-color)",
+                  color: "#fff",
+                  fontSize: "0.7rem",
+                  fontWeight: 600,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {selectedLeads.length}
+              </span>
+            )}
+          </button>
+          {leadBulkActionsOpen && (
+            <>
+              <div
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  zIndex: 1088,
+                  background: "transparent",
+                }}
+                onClick={() => setLeadBulkActionsOpen(false)}
+              />
+              <div
+                role="menu"
+                aria-label="Bulk actions"
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 4px)",
+                  left: 0,
+                  right: "auto",
+                  zIndex: 1089,
+                  width: "min(420px, 92vw)",
+                  padding: "0.85rem",
+                  background: "var(--bg-color)",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 12,
+                  boxShadow: "0 12px 32px rgba(0,0,0,0.2)",
+                  display: "grid",
+                  gap: "0.75rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "0.5rem",
+                  }}
+                >
+                  <strong
+                    style={{
+                      fontSize: "0.9rem",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    Bulk actions
+                  </strong>
+                  <span
+                    style={{
+                      fontSize: "0.78rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    {selectedLeads.length} selected
+                  </span>
+                </div>
+                {selectedLeads.length === 0 ? (
+                  <div
+                    style={{
+                      fontSize: "0.85rem",
+                      color: "var(--text-secondary)",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Select one or more leads to use bulk actions.
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: "0.65rem",
+                    }}
+                  >
+                    {isGeneric && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          setLeadBulkActionsOpen(false);
+                          handleDialSelectedLeads();
+                        }}
+                        disabled={callQueueActive}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "0.35rem",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        <Phone size={14} /> Dial selected
+                      </button>
+                    )}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <select
+                        className="input-field"
+                        value={bulkAgent}
+                        onChange={(e) => setBulkAgent(e.target.value)}
+                        style={{
+                          flex: 1,
+                          minWidth: 180,
+                          padding: "0.5rem",
+                        }}
+                        aria-label="Bulk assign staff"
+                      >
+                        <option value="">Unassign</option>
+                        {staff.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name || s.email}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          setLeadBulkActionsOpen(false);
+                          handleBulkAssign();
+                        }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "0.35rem",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        Assign to staff
+                      </button>
+                    </div>
+                    {isGeneric && callifiedConfigured && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          setLeadBulkActionsOpen(false);
+                          setBulkCampaignDropdownOpen(true);
+                        }}
+                        disabled={bulkCampaignSaving}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "0.35rem",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        <Filter size={14} /> Assign campaign
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn-danger"
+                      onClick={() => {
+                        handleBulkDelete();
+                      }}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "0.35rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      <Trash2 size={14} /> Delete selected leads
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        setSelectedLeads([]);
+                        setBulkAgent("");
+                        setBulkCampaignDropdownOpen(false);
+                        setLeadBulkActionsOpen(false);
+                      }}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "0.35rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      Clear selection
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {isGeneric && selectedLeads.length > 0 && (
           <button
             type="button"
             className="btn-primary"
-            aria-label="Create a new lead"
-            onClick={openCreate}
+            onClick={handleDialSelectedLeads}
+            disabled={callQueueActive}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.35rem",
+              fontSize: "0.85rem",
+              padding: "0.42rem 0.7rem",
+            }}
+          >
+            {callQueueActive ? (
+              <>
+                <RefreshCw
+                  size={14}
+                  style={{ animation: "spin 1s linear infinite" }}
+                />{" "}
+                Dialling...
+              </>
+            ) : (
+              <>
+                <Phone size={14} /> Dial Selected ({selectedLeads.length})
+              </>
+            )}
+          </button>
+        )}
+
+        {isGeneric && selectedLeads.length > 0 && callifiedConfigured && (
+          <div style={{ position: "relative" }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setBulkCampaignDropdownOpen((o) => !o)}
+              disabled={bulkCampaignSaving}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.35rem",
+                fontSize: "0.85rem",
+                padding: "0.42rem 0.7rem",
+              }}
+            >
+              <Filter size={14} />
+              {bulkCampaignDropdownOpen ? (
+                <ChevronUp size={14} />
+              ) : (
+                <ChevronDown size={14} />
+              )}
+              Assign Campaign ({selectedLeads.length})
+            </button>
+            {bulkCampaignDropdownOpen && (
+              <>
+                <div
+                  style={{ position: "fixed", inset: 0, zIndex: 50 }}
+                  onClick={() => setBulkCampaignDropdownOpen(false)}
+                />
+                <div
+                  className="card"
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 4px)",
+                    right: 0,
+                    zIndex: 51,
+                    minWidth: 260,
+                    maxHeight: 320,
+                    overflowY: "auto",
+                    padding: "0.5rem",
+                    background: "var(--bg-color)",
+                    border: "1px solid var(--border-color)",
+                    boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
+                  }}
+                >
+                  {callifiedCampaigns.length === 0 ? (
+                    <div
+                      style={{
+                        padding: "0.5rem",
+                        fontSize: "0.85rem",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      No campaigns
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        style={{
+                          padding: "0.4rem 0.5rem",
+                          fontSize: "0.85rem",
+                          cursor: "pointer",
+                          borderRadius: 6,
+                          color: "var(--text-secondary)",
+                        }}
+                        className="table-row-hover"
+                        onClick={() => handleBulkAssignCampaign(null)}
+                      >
+                        No campaign
+                      </div>
+                      {callifiedCampaigns.map((c) => (
+                        <div
+                          key={c.id}
+                          style={{
+                            padding: "0.4rem 0.5rem",
+                            fontSize: "0.85rem",
+                            cursor: "pointer",
+                            borderRadius: 6,
+                          }}
+                          className="table-row-hover"
+                          onClick={() => handleBulkAssignCampaign(c.id)}
+                        >
+                          {c.name || `Campaign ${c.id}`}{" "}
+                          {c.product_name ? `— ${c.product_name}` : ""}
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {isGeneric && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => navigate("/settings/lead-fields")}
+            title="Manage lead custom fields"
             style={{
               display: "inline-flex",
               alignItems: "center",
               gap: "0.45rem",
-              marginLeft: "auto",
             }}
           >
-            <Plus size={16} /> Create Lead
+            <SlidersHorizontal size={16} /> Lead Fields
           </button>
-        </div>
+        )}
+        <button
+          type="button"
+          className="btn-primary"
+          aria-label="Create a new lead"
+          onClick={openCreate}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.45rem",
+            marginLeft: "auto",
+          }}
+        >
+          <Plus size={16} /> Create Lead
+        </button>
+      </div>
 
       {isTravel && (
         <div
@@ -5352,14 +5445,14 @@ const Leads = () => {
 
       <div
         className="card"
-        style={{ overflow: "hidden", maxHeight: "unset", minHeight: "auto" }}
+        style={{ overflow: "hidden" }}
       >
         <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "0.75rem",
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.75rem",
             flexWrap: "wrap",
             padding: "1rem",
             borderBottom: "1px solid var(--border-color)",
@@ -5401,7 +5494,7 @@ const Leads = () => {
                 }}
               />
             </div>
-
+            
             <FilterPanel
               fieldsUrl="/api/contacts/filter-fields?status=Lead"
               valuesUrl={(field) => `/api/contacts/filter-values/${field}?status=Lead`}
@@ -5424,6 +5517,7 @@ const Leads = () => {
               }}
             />
           </div>
+
           <div
             style={{
               display: "flex",
@@ -5790,19 +5884,19 @@ const Leads = () => {
                                         const minutes =
                                           dnpIntervalHours === 0
                                             ? Math.max(
-                                                5,
-                                                Math.min(
-                                                  59,
-                                                  Number(e.target.value) || 0,
-                                                ),
-                                              )
+                                              5,
+                                              Math.min(
+                                                59,
+                                                Number(e.target.value) || 0,
+                                              ),
+                                            )
                                             : Math.max(
-                                                0,
-                                                Math.min(
-                                                  59,
-                                                  Number(e.target.value) || 0,
-                                                ),
-                                              );
+                                              0,
+                                              Math.min(
+                                                59,
+                                                Number(e.target.value) || 0,
+                                              ),
+                                            );
                                         const nextMinutes =
                                           dnpIntervalHours * 60 + minutes;
                                         setDnpIntervalMinutes(nextMinutes);
@@ -6242,6 +6336,9 @@ const Leads = () => {
             <TopScrollSync
               forceScrollbar
               scrollWidth={leadsScrollableTableMinWidth}
+              stickyTop
+              stickyTopOffset={0}
+              hideBottomScrollbar
             >
               <table
                 ref={leadsScrollableTableRef}
@@ -6428,7 +6525,7 @@ const Leads = () => {
                                 queueItem &&
                                 (queueItem.status === "calling" ||
                                   queueItem.status ===
-                                    "waiting_for_completion");
+                                  "waiting_for_completion");
                               if (isConnected) {
                                 return (
                                   <span
@@ -6784,6 +6881,12 @@ const Leads = () => {
                           })}
                           onClick={(e) => e.stopPropagation()}
                         >
+                          {wellnessCall.enabled && (
+                            <WellnessLeadCallButton
+                              lead={lead}
+                              onCall={() => wellnessCall.open(lead)}
+                            />
+                          )}
                           <button
                             onClick={() => setPreviewLead(lead)}
                             title="Preview lead"
@@ -6831,6 +6934,10 @@ const Leads = () => {
             </TopScrollSync>
           </div>
         </div>
+        <WellnessLeadCallDialog
+          lead={wellnessCall.target}
+          onClose={wellnessCall.close}
+        />
         {headerMenuState &&
           headerMenuRect &&
           createPortal(
@@ -8035,21 +8142,21 @@ const Leads = () => {
               >
                 {isWellness
                   ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))
+                  : isTravel
+                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
                         {opt.label}
                       </option>
                     ))
-                  : isTravel
-                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))
                     : SOURCE_OPTIONS.map((src) => (
-                        <option key={src} value={src}>
-                          {src}
-                        </option>
-                      ))}
+                      <option key={src} value={src}>
+                        {src}
+                      </option>
+                    ))}
               </select>
 
               {/* #600  wellness extras: treatment of interest (dropdown of
@@ -8108,29 +8215,29 @@ const Leads = () => {
                   {staff.filter(
                     (s) => (s.wellnessRole || "").toLowerCase() === "doctor",
                   ).length > 0 && (
-                    <select
-                      className="input-field"
-                      name="preferredPractitionerId"
-                      value={newLead.preferredPractitionerId}
-                      onChange={(e) =>
-                        handleChange("preferredPractitionerId", e.target.value)
-                      }
-                    >
-                      <option value="">
-                        Preferred practitioner (optional)
-                      </option>
-                      {staff
-                        .filter(
-                          (s) =>
-                            (s.wellnessRole || "").toLowerCase() === "doctor",
-                        )
-                        .map((doc) => (
-                          <option key={doc.id} value={doc.id}>
-                            {doc.name || doc.email}
-                          </option>
-                        ))}
-                    </select>
-                  )}
+                      <select
+                        className="input-field"
+                        name="preferredPractitionerId"
+                        value={newLead.preferredPractitionerId}
+                        onChange={(e) =>
+                          handleChange("preferredPractitionerId", e.target.value)
+                        }
+                      >
+                        <option value="">
+                          Preferred practitioner (optional)
+                        </option>
+                        {staff
+                          .filter(
+                            (s) =>
+                              (s.wellnessRole || "").toLowerCase() === "doctor",
+                          )
+                          .map((doc) => (
+                            <option key={doc.id} value={doc.id}>
+                              {doc.name || doc.email}
+                            </option>
+                          ))}
+                      </select>
+                    )}
                 </>
               )}
 
@@ -8288,21 +8395,21 @@ const Leads = () => {
               >
                 {isWellness
                   ? WELLNESS_SOURCE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))
+                  : isTravel
+                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
                         {opt.label}
                       </option>
                     ))
-                  : isTravel
-                    ? TRAVEL_SOURCE_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))
                     : SOURCE_OPTIONS.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
               </select>
               {renderCustomFieldInputs(
                 editForm.customFields,

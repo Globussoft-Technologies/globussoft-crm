@@ -38,18 +38,43 @@ async function wasRecentlyDialed(tenantId, contactId, sinceMs = REDIAL_COOLDOWN_
   return recent ? recent.createdAt : null;
 }
 
+/** "45 seconds" / "2 minutes" — how long is left, in words a person reads. */
+function describeWait(ms) {
+  const seconds = Math.max(1, Math.ceil(ms / 1000));
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? '' : 's'}`;
+  const minutes = Math.ceil(seconds / 60);
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
 /**
  * Build the canonical 429 body for a cooldown rejection.
+ *
+ * The message says how long is LEFT rather than printing an ISO timestamp of
+ * the previous call — an operator staring at a dialog wants to know whether to
+ * wait or move on, not to do date arithmetic. `redialAfter` keeps the precise
+ * machine-readable instant for any caller that wants to schedule against it.
  *
  * @param {Date} recentDial
  * @param {number} [cooldownMs]
  */
 function redialCooldownError(recentDial, cooldownMs = REDIAL_COOLDOWN_MS) {
+  const readyAt = new Date(recentDial.getTime() + cooldownMs);
+  const remainingMs = readyAt.getTime() - Date.now();
+
   return {
-    error: `This customer was called recently at ${recentDial.toISOString()}. Please wait before calling again.`,
+    error:
+      remainingMs > 0
+        ? `This customer was called moments ago. You can call again in ${describeWait(remainingMs)}.`
+        : 'This customer was called moments ago. Please try again.',
     code: 'CALLIFIED_REDIAL_COOLDOWN',
-    redialAfter: new Date(recentDial.getTime() + cooldownMs).toISOString(),
+    redialAfter: readyAt.toISOString(),
+    retryAfterSeconds: Math.max(1, Math.ceil(remainingMs / 1000)),
   };
 }
 
-module.exports = { REDIAL_COOLDOWN_MS, wasRecentlyDialed, redialCooldownError };
+module.exports = {
+  REDIAL_COOLDOWN_MS,
+  wasRecentlyDialed,
+  redialCooldownError,
+  describeWait,
+};

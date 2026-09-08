@@ -117,6 +117,8 @@ model Tenant {
   tickets               Ticket[]
   campaigns             Campaign[]
   automationRules       AutomationRule[]
+  workflowExecutions    WorkflowExecution[]
+  workflowScheduledActions WorkflowScheduledAction[]
   emailMessages         EmailMessage[]
   callLogs              CallLog[]
   attachments           Attachment[]
@@ -173,6 +175,7 @@ model Tenant {
   services             Service[]
   visits               Visit[]
   prescriptions        Prescription[]
+  prescriptionRequests PrescriptionRequest[]
   consentForms         ConsentForm[]
   consentTemplates     ConsentTemplate[]
   treatmentPlans       TreatmentPlan[]
@@ -256,7 +259,7 @@ model Tenant {
   // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles
   // (additive; consumes lib/agentCommissionCalculator.js from slice 1
   // commit cb284098). Each row is one named operator-facing pricing
-  // profile (flat_percent | tiered | per_pax_flat | hybrid).
+  // profile (flat_percent | flat_fee | tiered | per_pax_flat | hybrid).
   travelCommissionProfiles            TravelCommissionProfile[]
   // PRD_TRAVEL_MARKETING_FLYER #908 slice 3 — saved flyer templates
   // (additive; consumes lib/flyerTemplateValidator.js from slice 1
@@ -452,6 +455,10 @@ model Tenant {
   sales           Sale[]
   invoiceCounters InvoiceCounter[]
   saleLineItems   SaleLineItem[]
+  // Per-Product report — snapshots imported from the clinic's previous PMS
+  // while POS history builds up. See ProductSalesImport.
+  productSalesImports     ProductSalesImport[]
+  productSalesImportRows  ProductSalesImportRow[]
   // #779 — petty-cash deposits/withdrawals against open shifts.
   pettyCashLedger PettyCashLedger[]
 
@@ -459,6 +466,8 @@ model Tenant {
   //   ServiceCategory — hierarchical taxonomy for Service.
   //   Drug            — drug catalogue used by prescription writing.
   serviceCategories ServiceCategory[]
+  //   ServicePackage — saleable bundles of services sold as N sessions.
+  servicePackages   ServicePackage[]
   drugs             Drug[]
 
   // PRD Gap §1.5 / §1.6 — staff commission profiles + per-staff revenue
@@ -508,6 +517,7 @@ model Tenant {
   // back-relation type per @@unique([tenantId]) on EngineWeights).
   tmcTripCatalogues TmcTripCatalogue[]
   engineWeights     EngineWeights?
+  travelItemTypes   TravelItemType[]
 
   // PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) — security telemetry sink.
   // CSP violation reports + cross-tenant intercepts + future incident classes
@@ -636,6 +646,13 @@ model User {
   // Wellness vertical
   doctorVisits        Visit[]        @relation("DoctorVisits")
   doctorPrescriptions Prescription[] @relation("DoctorPrescriptions")
+  // Renewal requests raised against an Rx THIS user prescribed — the
+  // doctor half of the notify-on-request fan-out. Distinct from
+  // `reviewedPrescriptionRequests`, which is whoever actioned the request
+  // (often an admin, not the original prescriber).
+  doctorPrescriptionRequests   PrescriptionRequest[]      @relation("DoctorPrescriptionRequests")
+  reviewedPrescriptionRequests PrescriptionRequest[]      @relation("PrescriptionRequestReviewer")
+  prescriptionRequestEvents    PrescriptionRequestEvent[]
   // One self-booking User → many Patient rows (one per tenant the user
   // is registered at). Enforcement that there's at most ONE Patient per
   // (tenantId, userId) lives in the @@unique constraint on the Patient
@@ -1343,8 +1360,147 @@ model AutomationRule {
   condition   String? @db.Text
   isActive    Boolean @default(true)
 
+  // ── Freshsales-parity metadata (workflow-parity wave) ────────────────
+  // The builder UI has always rendered "Last updated <date>" and a
+  // "modified by" affordance, but the model carried no timestamps at all,
+  // so the list permanently read "Not run yet". These are the columns that
+  // back those cells, plus the health counters the auto-disable guard and
+  // the failure banner read.
+  //
+  // `createdById` is a PLAIN scalar, not a relation: staff churn must never
+  // cascade-delete a tenant's automation, and eventBus only ever needs the id
+  // as a fallback requester for the create_approval action (it referenced
+  // `rule.createdById` for months against a column that did not exist).
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+  createdById Int?
+  updatedById Int?
+
+  // Execution health. `lastRunAt` powers the list's "last run" cell,
+  // `consecutiveFailures` drives the auto-disable guard (Freshsales pauses a
+  // workflow and emails the admin after N consecutive failures), and
+  // `autoDisabledAt` records that the guard — not a human — flipped isActive.
+  lastRunAt           DateTime?
+  lastError           String?   @db.Text
+  runCount            Int       @default(0)
+  failureCount        Int       @default(0)
+  consecutiveFailures Int       @default(0)
+  autoDisabledAt      DateTime?
+
+  // Execution order. Was previously smuggled inside the targetState JSON
+  // blob, which meant every reorder rewrote every rule's whole config and
+  // the engine had to JSON.parse each rule just to sort. Real column; the
+  // engine still falls back to targetState.order for rows written before
+  // this migration.
+  sortOrder Int @default(0)
+
+  // Time-based ("scheduled") workflows — the entire second half of the
+  // Freshsales workflow feature, which was previously absent. NULL for every
+  // event-driven rule. Shape is documented in lib/workflowSchedule.js:
+  //   { mode: "date_field", entity, field, offsetDays, timeOfDay, ... }
+  //   { mode: "recurring",  frequency, timeOfDay, dayOfWeek, dayOfMonth, ... }
+  scheduleConfig String?   @db.Text
+  nextScheduledAt DateTime?
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  executions       WorkflowExecution[]
+  scheduledActions WorkflowScheduledAction[]
+
+  @@index([tenantId, isActive, triggerType])
+  @@index([tenantId, sortOrder])
+}
+
+/// Per-execution log for a single AutomationRule action.
+///
+/// Replaces the previous approach of scanning `AuditLog` rows with
+/// `entity="AutomationRule"`. That had three concrete failures the parity
+/// audit surfaced:
+///   1. The history panel could only fetch the last 50 tenant-wide audit rows
+///      and then filter client-side, so on a busy tenant clicking "View
+///      history" on a real workflow showed "No actions found".
+///   2. Success/failure was inferred by regex-testing the raw details JSON for
+///      the substring "fail", so any payload containing that word (a deal's
+///      lost reason, a ticket subject) was mislabelled Failed.
+///   3. "Run once per record" deduped by reading the 500 most recent audit
+///      rows and JSON.parsing each one — O(n) on every single event, and
+///      silently began re-firing past 500 executions.
+///
+/// A dedicated table with a `recordKey` index fixes all three: the dedupe is
+/// an indexed findFirst, the status is a real column, and history is a
+/// server-side filtered + paginated query.
+model WorkflowExecution {
+  id     Int            @id @default(autoincrement())
+  ruleId Int
+  rule   AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  triggerType String
+  actionType  String
+  /// SUCCESS | FAILED | SKIPPED — a real column, never a regex over the blob.
+  status      String  @default("SUCCESS")
+  /// "contactId:42" — the dedupe key for execution: "once" rules.
+  recordKey   String?
+  /// Denormalised so the history table's CONTACT column has something real to
+  /// render without an N+1 join per row.
+  contactId   Int?
+  entityLabel String?
+  error       String? @db.Text
+  details     String? @db.Text
+  durationMs  Int?
+  /// POST /:id/test and "apply to existing records" dry-runs set this so they
+  /// can be filtered out of the "N successful actions" counter.
+  isTest      Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, ruleId, createdAt])
+  @@index([tenantId, ruleId, recordKey])
+  @@index([tenantId, createdAt])
+}
+
+/// Deferred workflow actions — the backing store for the `wait` action.
+///
+/// Freshsales lets an author put a delay between actions ("wait 2 days, then
+/// send the follow-up"). Previously every action in `targetState.actions` ran
+/// synchronously inside the triggering HTTP request, so a delay was
+/// impossible to express. A `wait` action now serialises the REMAINING
+/// actions plus the frozen event payload into one of these rows; the
+/// workflowScheduler cron drains them.
+///
+/// `lockedAt`/`lockedBy` mirror the SequenceEnrollment pessimistic-lock
+/// pattern so two app instances never double-fire the same deferred action.
+model WorkflowScheduledAction {
+  id     Int            @id @default(autoincrement())
+  ruleId Int
+  rule   AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  runAt  DateTime
+  /// PENDING | DONE | FAILED | CANCELLED
+  status String   @default("PENDING")
+
+  triggerType String
+  /// JSON array of the actions still to run once the delay elapses.
+  actionsJson String @db.Text
+  /// Frozen copy of the event payload the rule fired on.
+  payloadJson String @db.Text
+  recordKey   String?
+
+  attempts  Int       @default(0)
+  lastError String?   @db.Text
+  lockedAt  DateTime?
+  lockedBy  String?
+
+  createdAt DateTime @default(now())
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, runAt])
+  @@index([ruleId])
 }
 
 model EmailMessage {
@@ -1390,7 +1546,13 @@ model CallLog {
   duration       Int // seconds
   notes          String?  @db.Text
   direction      String   @default("OUTBOUND")
-  recordingUrl   String?
+  // TEXT, not the default varchar(191): Callified now returns absolute object
+  // -storage URLs rather than a short relative path, e.g.
+  // https://objectstorage.ap-mumbai-1.oraclecloud.com/n/<ns>/b/callified-live-media/o/recordings/<org>/<tenant>/<uuid>_<ts>.wav
+  // — observed at 193 chars, two over the limit, which made the whole
+  // fetch-call-details write fail with "value too long for the column" and
+  // surfaced as a 500 on GET /api/callified/calls/:id/details.
+  recordingUrl   String?  @db.Text
   provider       String? // "myoperator", "knowlarity", "twilio", "webrtc"
   providerCallId String?
   status         String   @default("COMPLETED") // INITIATED, RINGING, CONNECTED, COMPLETED, MISSED, FAILED
@@ -3483,6 +3645,10 @@ model SignatureRequest {
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())
   expiresAt    DateTime?
+  documentName String?
+  patientId    Int?
+  visitId      Int?
+  serviceIds   String?   @db.Text
 }
 
 // ── Document Templates ───────────────────────────────────────────
@@ -3989,8 +4155,9 @@ model Patient {
   userId Int?
   user   User? @relation("PatientUser", fields: [userId], references: [id], onDelete: SetNull)
 
-  visits              Visit[]
-  prescriptions       Prescription[]
+  visits               Visit[]
+  prescriptions        Prescription[]
+  prescriptionRequests PrescriptionRequest[]
   consents            ConsentForm[]
   treatmentPlans      TreatmentPlan[]
   // Agent B: waitlist back-relation
@@ -4241,6 +4408,11 @@ model Visit {
   @@index([tenantId, visitDate])
   @@index([patientId, visitDate])
   @@index([tenantId, status])
+  // Double-booking guard: "what else does this doctor hold around this time".
+  // Every booking, reschedule and assign-doctor runs this lookup, and the
+  // Assign Doctor dropdown runs it for every practitioner at once — without
+  // the index each one scans the tenant's whole visit history.
+  @@index([tenantId, doctorId, visitDate])
   @@index([tenantId, locationId, visitDate])
   // Wave 2 Agent LL — tenant-scoped bookingType + UTM filtering
   // (e.g. "show me all IN_HOME visits this week", "GROUP BY utmSource for
@@ -4255,6 +4427,25 @@ model Prescription {
   drugs        String  @db.Text // JSON array: [{name, dosage, frequency, duration}]
   instructions String? @db.Text
   pdfUrl       String?
+
+  // ── Structured clinical narrative ──────────────────────────────────
+  // These four were previously PARSED out of `instructions` by scanning it
+  // for "Chief Complaint:" / "Diagnosis:" / "Investigations:" / "Advice:"
+  // line prefixes (lib parseRxInstructions). That existed to read
+  // prescriptions migrated from Zylu, whose free-text notes carried those
+  // sections — but nothing in this CRM ever WROTE them, so for every
+  // natively-written prescription all four rendered as an em dash and there
+  // was no way to fill them short of a clinician knowing to type the magic
+  // prefix into a plain textarea.
+  //
+  // Real nullable columns instead. The read path still falls back to the
+  // parser when a column is null, so Zylu-imported rows keep displaying the
+  // narrative they were migrated with — the parser is now a legacy reader,
+  // not the storage format.
+  chiefComplaint String? @db.Text
+  diagnosis      String? @db.Text
+  investigations String? @db.Text
+  advice         String? @db.Text
 
   // S62 — slim-shape PRD additions per S42 carry-over.
   //   status       : lifecycle marker. Conventional values:
@@ -4275,6 +4466,21 @@ model Prescription {
   status      String?
   dispensedAt DateTime?
 
+  // How long this prescription is meant to last, captured at prescribing time.
+  //   validityDays : what the clinician entered ("30 days"). The record of
+  //                  intent — kept verbatim rather than re-derived, because a
+  //                  later amendment to `drugs` must not silently rewrite how
+  //                  long the doctor said the course runs.
+  //   validUntil   : createdAt + validityDays, computed server-side. Stored
+  //                  rather than derived on read so the renewal-reminder sweep
+  //                  can do an INDEXED range scan ("expiring in the next 7
+  //                  days"); `DATE_ADD(createdAt, INTERVAL validityDays DAY)`
+  //                  in a WHERE clause cannot use an index.
+  // Both additive nullable — every existing Rx keeps null, meaning "no stated
+  // validity", and nothing downstream may treat null as expired.
+  validityDays Int?
+  validUntil   DateTime?
+
   visitId Int?
   visit   Visit? @relation(fields: [visitId], references: [id], onDelete: SetNull)
 
@@ -4293,8 +4499,141 @@ model Prescription {
 
   createdAt DateTime @default(now())
 
+  // Renewal / medicine requests a patient raised against this Rx.
+  renewalRequests PrescriptionRequest[]
+
   @@index([tenantId, createdAt])
   @@index([patientId])
+  // Drives the (not-yet-built) renewal-reminder sweep: "which prescriptions in
+  // this tenant lapse between X and Y". Leading tenantId keeps it tenant-scoped.
+  @@index([tenantId, validUntil])
+}
+
+// Prescription renewal / medicine request raised by a patient from the
+// Android app (or the patient portal).
+//
+// WHY A SEPARATE TABLE AND NOT A Prescription FLAG
+//   A renewal request is a *demand*, not a prescription. It carries no
+//   prescribing authority, it can be rejected, and several requests can
+//   stack against the same Rx over time. Folding it into Prescription would
+//   mean either mutating a medico-legal record on every patient tap or
+//   creating draft Rx rows no doctor authored — both unacceptable. The
+//   issued Rx stays immutable; this row is the workflow around it.
+//
+// FULL-PRESCRIPTION VS SPECIFIC-MEDICINE REQUESTS
+//   `requestedDrugs` is NULL when the patient asked to renew the WHOLE
+//   prescription (the app sent only a prescriptionId). It holds a JSON
+//   array — same JSON-string-column convention as Prescription.drugs —
+//   when the patient picked specific medicines. An empty array is
+//   normalised to NULL on write so "whole prescription" has exactly one
+//   representation downstream.
+//
+// TRUST BOUNDARY
+//   patientId, doctorId and tenantId are ALL resolved server-side from the
+//   prescription row + the portal token. The client supplies a prescription
+//   id and, optionally, a medicine selection / duration / note — nothing it
+//   says about who prescribed what is trusted.
+model PrescriptionRequest {
+  id Int @id @default(autoincrement())
+
+  // The Rx being renewed. Always required — a request with no prescription
+  // is not a renewal, it is a new consultation.
+  prescriptionId Int
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  patientId Int
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  // Prescribing doctor, copied from Prescription.doctorId at request time.
+  // Nullable because Prescription.doctorId is itself nullable (SetNull on
+  // user deletion) and legacy rows may carry no prescriber.
+  doctorId Int?
+  doctor   User? @relation("DoctorPrescriptionRequests", fields: [doctorId], references: [id], onDelete: SetNull)
+
+  // JSON array of the specific medicines requested; NULL = whole Rx.
+  requestedDrugs String? @db.Text
+
+  // What the patient asked for, in whichever form the app collected it.
+  // Duration and an explicit window are independent and both optional — an
+  // app may send "another 60 days", or "1 Sep → 31 Oct", or neither and
+  // leave the call to the doctor.
+  requestedDurationDays Int?
+  requestedFrom         DateTime?
+  requestedTo           DateTime?
+
+  // Free-text from the patient ("the 10mg made me drowsy").
+  notes String? @db.Text
+
+  // PENDING | ACCEPTED | REJECTED | COMPLETED. String (not enum) for
+  // additive safety — same rationale as Prescription.status above.
+  status String @default("PENDING")
+
+  // Who actioned it last, and what they said. `reviewNote` is echoed to the
+  // patient on reject / complete so a refusal is never silent.
+  reviewedById Int?
+  reviewedBy   User?     @relation("PrescriptionRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  reviewNote   String?   @db.Text
+
+  // Set when a doctor issues a NEW Prescription off the back of this
+  // request. Deliberately a plain Int, not a relation: the fulfilment Rx
+  // must outlive this row being cascade-deleted with its source Rx.
+  fulfilledPrescriptionId Int?
+
+  // Restrict (not Cascade) on Tenant deletion, mirroring Prescription — the
+  // row records a patient's medication demand and is discoverable in a
+  // clinical audit.
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events PrescriptionRequestEvent[]
+
+  // The admin listing is "newest first, optionally filtered by status", so
+  // the leading (tenantId, status) pair serves the filtered read and
+  // (tenantId, createdAt) the unfiltered one.
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([patientId, createdAt])
+  @@index([doctorId, status])
+  @@index([prescriptionId])
+}
+
+// Append-only history for a renewal request — one row per state change.
+//
+// AuditLog already records every transition for compliance, but it is
+// tenant-wide, hash-chained and admin-gated; the review screen needs a
+// cheap request-scoped "what has happened to this so far" list it can
+// render inline. This is that list, not a replacement for the audit trail.
+model PrescriptionRequestEvent {
+  id Int @id @default(autoincrement())
+
+  requestId Int
+  request   PrescriptionRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  // CREATED | ACCEPTED | REJECTED | COMPLETED
+  action String
+
+  // Status either side of the change. `fromStatus` is null on CREATED.
+  fromStatus String?
+  toStatus   String?
+
+  note String? @db.Text
+
+  // Null actor = the patient raised it from the app (portal tokens carry a
+  // Patient id, never a User id). `actorType` disambiguates.
+  actorUserId Int?
+  actor       User?  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorType   String @default("user") // user | patient | system
+
+  tenantId Int @default(1)
+
+  createdAt DateTime @default(now())
+
+  @@index([requestId, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model ConsentForm {
@@ -4420,6 +4759,14 @@ model TreatmentPlan {
   serviceId Int?
   service   Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
 
+  /// The catalog package this plan was bought from, when it came from a
+  /// customer purchase rather than being written up by hand. Lets the customer
+  /// catalog say "you already own this" and show the window left to use it.
+  /// SetNull, not Cascade: deleting a package must never delete the plans
+  /// patients paid for.
+  servicePackageId Int?
+  servicePackage   ServicePackage? @relation(fields: [servicePackageId], references: [id], onDelete: SetNull)
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -4427,6 +4774,7 @@ model TreatmentPlan {
 
   @@index([tenantId, status])
   @@index([patientId])
+  @@index([tenantId, servicePackageId])
   // #534 (PERF-1): TreatmentPlan list query is `where: { tenantId, patientId? }
   // orderBy: { startedAt: desc }`. Same shape as Patient — composite index
   // covers both the tenant filter and the orderBy. Saves the filesort.
@@ -5741,6 +6089,22 @@ model Drug {
   notes    String? @db.Text // admin-only — scheduling info, contraindications, etc.
   isActive Boolean @default(true)
 
+  // Stock, held on the drug itself.
+  //
+  // The clinic dispenses from the same shelf the doctor prescribes off, so the
+  // drug catalogue IS the stock ledger — there is no separate inventory row to
+  // reconcile against. Prescribing decrements `quantity`; when it lands at or
+  // below `lowStockThreshold` the admins are notified.
+  //
+  //   quantity           units on hand. Not nullable — "unknown stock" is not a
+  //                      state we want, and 0 is the honest default for a drug
+  //                      nobody has counted yet.
+  //   lowStockThreshold  reorder point. 0 means "don't alert on this one",
+  //                      matching the convention Product.threshold already uses
+  //                      (see cron/lowStockEngine.js).
+  quantity          Int @default(0)
+  lowStockThreshold Int @default(0)
+
   tenantId  Int      @default(1)
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
@@ -5752,6 +6116,9 @@ model Drug {
   @@index([tenantId, name])
   @@index([tenantId, genericName])
   @@index([tenantId, isActive])
+  // Drives the low-stock sweep: "which drugs in this tenant are at or below
+  // their reorder point".
+  @@index([tenantId, quantity])
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -6561,6 +6928,67 @@ model Itinerary {
   // ItineraryTemplate doesn't need a `itineraries` collection at the ORM
   // layer — analytics queries read by templateId index instead.
   clonedFromTemplateId    Int?
+  // Which branded PDF style "Generate PDF" uses — DELIBERATELY separate from
+  // clonedFromTemplateId above. That field is CONTENT lineage ("this
+  // itinerary's day-plan/pricing was cloned from template X" — often a
+  // content-only "trip template" with no PDF file behind it at all) and
+  // must never change after creation. This field is a live, freely
+  // changeable PDF-style choice, made in the itinerary's Publish panel —
+  // picking a different brand PDF must not silently overwrite where the
+  // itinerary's own content came from. Nullable Int, no formal @relation,
+  // matching the clonedFromTemplateId / sourceItineraryId convention
+  // elsewhere in this schema. Falls back to clonedFromTemplateId at render
+  // time ONLY when that template happens to itself be a PDF template
+  // (isPdfTemplate), so pre-existing itineraries render exactly as before.
+  pdfTemplateId           Int?
+  // GDrive "Add to Catalogue" output. Set by POST /itineraries/:id/add-to-catalogue
+  // once the itinerary PDF is generated and uploaded into the "CRM Itineraries"
+  // subfolder of the tenant's knowledge-base Drive root. Nullable/additive; not
+  // reusing pdfUrl (still writable via the generic PATCH passthrough elsewhere).
+  catalogueDriveFileId    String?
+  catalogueDriveViewLink  String?         @db.Text
+  catalogueSyncedAt       DateTime?
+  // Presentation content blocks for the customer-facing PDF. Until now the
+  // Itinerary carried no title, no intro blurb, and no inclusions/exclusions/
+  // terms at all, so a branded brochure-style PDF (cover blurb, "Inclusions"/
+  // "Exclusions" lists, refund policy) was impossible to render from CRM data.
+  // title falls back to `destination` when unset. The three *Json columns each
+  // hold a JSON array of strings (one bullet per entry); termsText/introText
+  // are free prose. All nullable + additive — existing rows and every existing
+  // read path are unaffected.
+  title                   String?
+  introText               String?         @db.Text
+  inclusionsJson          String?         @db.Text
+  exclusionsJson          String?         @db.Text
+  otherDetailsJson        String?         @db.Text
+  termsText               String?         @db.Text
+  // Soft reference to a reusable CancellationPolicy "library" row (one with
+  // itineraryId=null) the operator picked for this trip's terms. Plain
+  // nullable Int, no formal @relation — mirrors the clonedFromTemplateId /
+  // sourceItineraryId convention elsewhere in this schema so no onDelete
+  // decision is forced. Selecting a policy also seeds termsText (still fully
+  // editable afterwards); this field just remembers which one was picked.
+  cancellationPolicyId    Int?
+  // Replacement copy for the branded PDF template's "static" page(s) —
+  // contact info / closing note / about-us — scoped to THIS itinerary, not
+  // the template. Templates are reused across many unrelated trips, so
+  // baking a fixed override into the template itself (the original design)
+  // meant every itinerary using that template got the same replacement text
+  // whether it applied to them or not. Nullable: leave unset and the
+  // template's static page renders exactly as uploaded.
+  staticPageText          String?         @db.Text
+  // Answers to custom fields discovered from the selected PDF template.
+  // Additive, nullable and travel-only; existing itinerary paths ignore it.
+  templateDataJson        String?         @db.LongText
+  // Planning-only mode toggle. Default false: a new itinerary starts as pure
+  // day-by-day planning with no pricing/cost/tally shown anywhere (Plan tab
+  // item costs, day totals, the Pricing tab, and the PDF's costing section
+  // all hide). Flip to true to opt this ONE itinerary back into the normal
+  // money-aware behavior that predates this field. Nothing about existing
+  // money handling changes when true — this only gates the UI/PDF surfaces
+  // that display it, so invoicing/payment routes that already have a
+  // totalAmount recorded are untouched regardless of this flag.
+  moneyEnabled            Boolean         @default(false)
   items                   ItineraryItem[]
   cancellationPolicies     CancellationPolicy[]
   contact                 Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
@@ -6608,11 +7036,26 @@ model ItineraryItem {
   // pre-existing items + manual additions stay un-badged. Additive-with-
   // default; no bless marker required.
   draftedByAi Boolean   @default(false)
+  // Time-of-day + place label, promoted out of detailsJson into real columns.
+  // Previously these lived ONLY as untyped detailsJson keys written by a single
+  // inline form, so nothing else (sorting, conflict detection, the PDF
+  // renderer) could read them without parsing JSON. Both "HH:MM" 24h strings;
+  // nullable so untimed items (and every pre-existing row) stay valid. Readers
+  // fall back to detailsJson.startTime/endTime for rows written before this.
+  startTime    String?
+  endTime      String?
+  // Human-facing place label for the item ("MyFlying Academy"), distinct from
+  // the free-text description. Was detailsJson.locationName on the template-
+  // clone + LLM-materialise paths only.
+  locationName String?
   itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   @@index([itineraryId, position])
+  // Day-ordered reads for the planner + PDF: WHERE itineraryId = X
+  // ORDER BY dayNumber, startTime, position.
+  @@index([itineraryId, dayNumber, startTime])
   // S37 — composite index for S9's day-by-day editor: query shape is
   // `WHERE itineraryId = X AND dayNumber = Y ORDER BY position` (group
   // items by day, then preserve in-day order). The existing
@@ -6620,6 +7063,29 @@ model ItineraryItem {
   // be hit on the day-filtered read. Additive index — non-destructive,
   // no bless marker required per CLAUDE.md migration-safety rule.
   @@index([itineraryId, dayNumber])
+}
+
+// Tenant-defined item types, supplementing the fixed built-in vocabulary
+// (flight|train|bus|cab|transfer|hotel|sightseeing|activity|meals|visa|
+// insurance|other, see VALID_ITEM_TYPES in travel_itineraries.js). Operators
+// can add a type the planner's item-type combobox doesn't already cover
+// ("Ferry", "Photography session") and remove ones they created — built-ins
+// are never represented as rows here so they can never be deleted this way.
+// `key` is what actually gets stored in ItineraryItem.itemType (validated
+// against VALID_ITEM_TYPES ∪ this table by assertValidItemType()).
+model TravelItemType {
+  id        Int      @id @default(autoincrement())
+  tenantId  Int      @default(1)
+  subBrand  String? // null = tenant-wide; set = only offered under that sub-brand
+  key       String // slug used as ItineraryItem.itemType, e.g. "ferry"
+  label     String // display label, e.g. "Ferry"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, key])
+  @@index([tenantId, subBrand, isActive])
 }
 
 // ── Cost master + seasonal calendar + markup rules ───────────────────
@@ -6681,8 +7147,18 @@ model ItineraryTemplate {
   id                   Int       @id @default(autoincrement())
   tenantId             Int // each tenant has its own template library
   name                 String // "5-day Paris" / "Goa Beach Holiday" etc.
-  destinationName      String // primary destination tag
-  durationDays         Int // typical day count
+  // Both nullable — a template is now primarily a PDF STYLE asset (see
+  // pdfTemplateUrl/pdfStyleSpecJson below), reusable across any destination
+  // or trip length. destinationName/durationDays remain as OPTIONAL browsing
+  // metadata for templates that also carry pre-built starter content
+  // (templateJson.items, set via "Save as template" on a real itinerary) —
+  // a pure style upload has no meaningful value for either and should not
+  // be forced to invent one. Previously required (NOT NULL); relaxed
+  // because forcing a destination/duration onto a style-only template meant
+  // picking it for its LOOK would silently overwrite a new itinerary's real
+  // destination with whatever placeholder was typed here.
+  destinationName      String? // primary destination tag, when meaningful
+  durationDays         Int? // typical day count, when meaningful
   description          String?   @db.Text // 1-2 paragraph blurb shown to operator
   thumbnailUrl         String?   @db.Text // hero image for the catalog grid
   category             String? // free-form tag: "Adventure" | "Religious" | "Family" | ...
@@ -6760,6 +7236,31 @@ model ItineraryTemplate {
   pdfTemplateUrl       String?   @db.Text
   pdfTemplateRegions   String?   @db.LongText
   isPdfTemplate        Boolean   @default(false)
+  // Per-page blueprint for template-faithful rendering. pdfTemplateRegions
+  // only ever described ONE content box applied uniformly to every page, so a
+  // 4-page brochure (cover / itinerary table / costing / contact) rendered as
+  // four identical generic pages. This spec classifies each template page by
+  // role — "cover" | "itinerary" | "details" | "static" — carries its own
+  // content box, and records the brand accent colour so generated tables and
+  // headings match the template's own styling. Nullable: templates without a
+  // spec fall back to the legacy single-contentBox path unchanged.
+  pdfStyleSpecJson     String?   @db.LongText
+  // The UNBLANKED upload. pdfTemplateUrl stores a copy with the body area
+  // whited out on every page, which the legacy overlay renderer requires — but
+  // that same blanking destroys pages the template-faithful renderer needs to
+  // reproduce intact (a contact/boilerplate page has no "variable content" to
+  // strip). Keeping the source lets the new renderer blank per page ROLE
+  // instead of uniformly. Nullable: templates uploaded before this fall back
+  // to the blanked copy.
+  pdfTemplateSourceUrl String?   @db.Text
+  // Boilerplate the cloned itinerary inherits (JSON arrays of strings /
+  // prose). Inclusions, exclusions and refund terms are template-level in
+  // practice — the same text repeats on every trip sold off one template.
+  defaultInclusionsJson   String? @db.Text
+  defaultExclusionsJson   String? @db.Text
+  defaultOtherDetailsJson String? @db.Text
+  defaultTermsText        String? @db.Text
+  defaultIntroText        String? @db.Text
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -6906,6 +7407,7 @@ model TmcTrip {
   tripCode             String // "bali2026"
   schoolContactId      Int // FK Contact (B2B school)
   destination          String
+  tripType             String                      @default("international") // domestic | international | day_trip
   departDate           DateTime
   returnDate           DateTime
   legalEntity          String                    @default("tmc_nexus")
@@ -8527,6 +9029,13 @@ model TravelSupplier {
   taxRegimeCode         String?
   primaryContactRole    String?
   notes                 String?                             @db.Text
+  // Payment destination used by Accounts when settling supplier payables.
+  // bankAccountNumber + upiId are transparently encrypted by lib/prisma.js.
+  beneficiaryName       String?
+  bankName              String?
+  bankAccountNumber     String?                             @db.Text
+  ifscCode              String?
+  upiId                  String?                             @db.Text
   // PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e) — default supplier-side
   // commission rate (e.g. 7.50% IATA inward commission for air bookings,
   // 10% hotel commission, etc.). Override-able per
@@ -9000,7 +9509,7 @@ model TravelCommissionProfile {
   // on_booking         -> release when the deal is won / booked.
   // on_trip_completion -> release only after the trip completes.
   releaseMode String   @default("on_booking")
-  profileType String // flat_percent | tiered | per_pax_flat | hybrid
+  profileType String // flat_percent | flat_fee | tiered | per_pax_flat | hybrid
   profileJson String   @db.Text // JSON serialization of profile shape
   isActive    Boolean  @default(true)
   notes       String?  @db.Text
@@ -9109,6 +9618,12 @@ model TmcTripCatalogue {
   summaryForBrief           String   @db.Text // 2-3 sentences destination-specific note for the executive
   imageUrl                  String?
   status                    String   @default("archived") // "active" | "archived" — engine recommends active only
+  // Lineage: which Itinerary this row was AI-drafted from via "Add to
+  // Diagnostic KB" (extract-to-tmc-catalogue). Plain nullable Int, no
+  // formal @relation — mirrors Itinerary.clonedFromTemplateId's soft-
+  // lineage convention so no onDelete decision is forced onto Itinerary.
+  // Null for existing rows and for manual/CSV-imported rows.
+  sourceItineraryId         Int?
   tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
@@ -9121,6 +9636,8 @@ model TmcTripCatalogue {
   @@index([tenantId, status, tier])
   // Engine-hot index: list all active trips in a specific price band
   @@index([tenantId, status, priceBand])
+  // Lineage lookup: catalogue rows drafted from a given itinerary
+  @@index([tenantId, sourceItineraryId])
 }
 
 // ── TMC Diagnostic Engine tunable weights ────────────────────────────
@@ -9912,4 +10429,161 @@ model TravelDiagnosticRagResult {
 
   @@index([tenantId, subBrand])
   @@index([tenantId, diagnosticId])
+}
+
+/// A saleable bundle of wellness services sold as N discounted sessions.
+///
+/// Before this model the "package builder" was a pricing calculator only — it
+/// produced a copy-paste sales pitch and explicitly created no record. Nothing
+/// could be listed to a customer, priced consistently twice, or bought.
+///
+/// `serviceIds` is a JSON-stringified array of Service ids (the canonical
+/// JSON-string-column convention used across this schema — see
+/// SequenceStep.conditionJson, Campaign.scheduleFilters, Patient.tags). A
+/// package intentionally does NOT use a relation table: the bundle is a
+/// priced snapshot, and a service later being renamed, repriced or retired
+/// must not silently mutate a package already quoted to a customer. `price`
+/// is likewise stored, not derived, for the same reason.
+model ServicePackage {
+  id          Int     @id @default(autoincrement())
+  name        String
+  description String? @db.Text
+
+  /// JSON array of Service ids, e.g. "[10,11]". Snapshot, not a relation.
+  serviceIds String @db.Text
+  /// Per-service session counts, as JSON keyed by service id: {"10":3,"11":2}.
+  /// A package is no longer "the whole bundle, N times" — each service carries
+  /// its own count, so 5 sessions can be 3 of one treatment and 2 of another,
+  /// and the price follows the split rather than a flat multiple.
+  ///
+  /// NULL means the pre-split shape: every service runs `sessions` times.
+  /// Existing rows keep that reading, so nothing needs backfilling.
+  serviceSessions String? @db.Text
+  /// How the per-service runs are packed into visits the patient attends.
+  /// "combined" = one visit delivers every service that still has a run left,
+  /// so 3 + 4 is 4 visits. "separate" = one service per visit, so 3 + 4 is 7.
+  /// `sessions` is the resulting visit count, because that is what the
+  /// treatment plan counts down.
+  sessionMode String @default("combined")
+  /// How many times the WHOLE bundle repeats.
+  sessions        Int   @default(6)
+  discountPercent Int   @default(0)
+  /// Gross (sum of the bundled services' base prices) before discount.
+  grossPrice Float @default(0)
+  /// What the customer pays — stored so a later price change to a service
+  /// cannot retroactively alter a package already sold or quoted.
+  price    Float  @default(0)
+  currency String @default("INR")
+
+  /// GST applied when the package is SOLD, on top of `price`. 0 = no tax.
+  /// The builder offers 0 / 5 / 18, but the column takes any 0-100 rate so a
+  /// slab change is a data edit, not a migration.
+  taxPercent Float @default(0)
+  /// How long the package stays usable after a customer buys it, in days
+  /// (7 = a week, 365 = a year). Null = no expiry.
+  validityDays Int?
+  /// Last date the package may be SOLD. Past it the customer catalog stops
+  /// listing the package; staff keep seeing it, flagged. Null = sell forever.
+  sellByDate DateTime?
+
+  /// Off = retired; the package stops being offered but existing sales keep
+  /// resolving against it.
+  isActive Boolean @default(true)
+  /// On = listed on the customer-facing catalog. Off = internal/quote-only,
+  /// which is how a bespoke package negotiated for one client stays private.
+  isPublic Boolean @default(false)
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Plans created when customers bought this package.
+  plans TreatmentPlan[]
+
+  createdBy Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, isPublic, isActive])
+}
+
+/// ─────────────────────────────────────────────────────────────────────
+/// Per-Product sales reporting — imported snapshots.
+///
+/// The live source of truth for the "Per Product" tab on /wellness/reports
+/// is POS: SaleLineItem rows with lineType='PRODUCT' belonging to a
+/// COMPLETED Sale. Clinics migrating onto the CRM, however, have months of
+/// product sales that only exist as a CSV/XLSX export from the system they
+/// are leaving. These two tables hold those exports so the tab has history
+/// on day one and switches to live POS numbers with no UI change once the
+/// clinic starts ringing sales here.
+///
+/// A batch (ProductSalesImport) is a whole uploaded file covering one
+/// period. Re-uploading the same period does NOT merge — the operator
+/// deletes the old batch and uploads again — because a partial merge of two
+/// snapshot exports silently double-counts every overlapping product.
+model ProductSalesImport {
+  id       Int    @id @default(autoincrement())
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Original upload filename, for the "which file was this?" column.
+  fileName String?
+  /// Period this snapshot covers. Set by the operator at upload time — the
+  /// export files themselves carry no date column, so the report window can
+  /// only be matched against an operator-declared period.
+  periodStart DateTime
+  periodEnd   DateTime
+  /// Optional free-text note ("Zenoti export, Jan-Mar FY25").
+  note String? @db.Text
+
+  /// Denormalised batch rollup so the imports list renders without
+  /// aggregating every row. Equals the sum of the batch's rows.
+  rowCount     Int   @default(0)
+  productCount Int   @default(0)
+  grossSales   Float @default(0)
+  discount     Float @default(0)
+  netSales     Float @default(0)
+  tax          Float @default(0)
+  totalSales   Float @default(0)
+
+  importedBy Int?
+  createdAt  DateTime @default(now())
+
+  rows ProductSalesImportRow[]
+
+  @@index([tenantId, periodStart, periodEnd])
+  @@index([tenantId, createdAt])
+}
+
+/// One product line of an imported snapshot. Column set mirrors the export
+/// shape every clinic PMS produces: gross → discount → net → tax → total.
+///
+/// `productId` is a best-effort match against the tenant's Product catalogue
+/// (exact name, then SKU, case-insensitive) resolved once at import time and
+/// left null when the product is not in the catalogue. It is deliberately NOT
+/// a foreign key: an imported snapshot is a historical record and must keep
+/// resolving after the catalogue row is renamed or retired. `productName` is
+/// the frozen display name, always populated.
+model ProductSalesImportRow {
+  id       Int    @id @default(autoincrement())
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  importId Int
+  import   ProductSalesImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  productName String
+  hsnCode     String?
+  productId   Int?
+
+  productCount Int   @default(0)
+  grossSales   Float @default(0)
+  discount     Float @default(0)
+  netSales     Float @default(0)
+  tax          Float @default(0)
+  totalSales   Float @default(0)
+
+  @@index([tenantId, importId])
+  @@index([tenantId, productName])
 }

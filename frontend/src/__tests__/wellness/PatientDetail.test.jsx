@@ -7,7 +7,7 @@
  * tab/Wallet refresh that was not present in the component, so this file
  * was rewritten to match the actual rendered tabs). The component renders
  * a tab strip with: Case history (default), New prescription, Consent form,
- * Treatment plans, Log visit, Photos, Inventory used, Telehealth, Wallet,
+ * Packages, Log visit, Photos, Inventory used, Telehealth, Wallet,
  * Memberships. Per the project's "prefer editing the test file" rule we
  * pin the actual surface rather than fabricating components to satisfy
  * an outdated test.
@@ -174,12 +174,12 @@ describe('<wellness/PatientDetail /> — page surface', () => {
     expect(screen.getByText(/HydraFacial Elite/i)).toBeInTheDocument();
   });
 
-  it('exposes Case history (default), Treatment plans, Photos, and Inventory tabs', async () => {
+  it('exposes Case history (default), Packages, Photos, and Inventory tabs', async () => {
     renderPatientDetail();
     await screen.findByRole('heading', { name: /Anita Sharma/i });
 
     expect(screen.getByRole('button', { name: /Case history/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Treatment plans/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Packages$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Photos/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inventory used/i })).toBeInTheDocument();
   });

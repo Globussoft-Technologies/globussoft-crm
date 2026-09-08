@@ -30,6 +30,24 @@
 const prisma = require('./prisma');
 const { normalizePhone } = require('../utils/deduplication');
 
+const activePatientWhere = (extra = {}) => ({
+  ...extra,
+  deletedAt: null,
+});
+
+async function loadSelfBookingUser(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true, email: true, phone: true, deactivatedAt: true },
+  });
+
+  if (!user || user.deactivatedAt) {
+    return null;
+  }
+
+  return user;
+}
+
 /**
  * The identity fields a linked Patient mirrors from its User account.
  *
@@ -69,14 +87,16 @@ function identityDrift(patient, desired) {
  * @returns {Promise<object>} the patient row
  */
 async function resolveSelfBookingPatient({ userId, tenantId }) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { name: true, email: true, phone: true },
-  });
+  const user = await loadSelfBookingUser(userId);
+  if (!user) {
+    const err = new Error('User not found');
+    err.status = 401;
+    throw err;
+  }
   const desired = desiredIdentityFromUser(user);
 
   const existing = await prisma.patient.findFirst({
-    where: { tenantId, userId },
+    where: activePatientWhere({ tenantId, userId }),
   });
 
   if (!existing) {
@@ -110,16 +130,14 @@ async function resolveSelfBookingPatient({ userId, tenantId }) {
  * @returns {Promise<object|null>}
  */
 async function syncPatientFromUser({ userId, tenantId }) {
+  const user = await loadSelfBookingUser(userId);
+  if (!user) return null;
+
   const existing = await prisma.patient.findFirst({
-    where: { tenantId, userId },
+    where: activePatientWhere({ tenantId, userId }),
     select: { id: true, name: true, email: true, phone: true },
   });
   if (!existing) return null;
-
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { name: true, email: true, phone: true },
-  });
 
   const drift = identityDrift(existing, desiredIdentityFromUser(user));
   if (Object.keys(drift).length === 0) return existing;
@@ -129,6 +147,7 @@ async function syncPatientFromUser({ userId, tenantId }) {
 module.exports = {
   resolveSelfBookingPatient,
   syncPatientFromUser,
+  loadSelfBookingUser,
   desiredIdentityFromUser,
   identityDrift,
 };

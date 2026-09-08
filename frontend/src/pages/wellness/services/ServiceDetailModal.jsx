@@ -31,7 +31,10 @@ export default function ServiceDetailModal({ service, categories, onClose, onCha
   // USER / CUSTOMER roles get a customer-facing view: the internal "marketing
   // radius" metric is hidden and a "Book service" CTA is shown instead. Admin
   // / Manager keep the full management view untouched.
-  const isUserOrCustomer = userType === 'CUSTOMER' || user?.role === 'USER';
+  // Same correction as Services.jsx: staff are role USER / userType STAFF, so
+  // reading role === 'USER' as "customer" put a self-booking button in front of
+  // every doctor and nurse.
+  const isCustomer = userType === 'CUSTOMER' || user?.role === 'CUSTOMER';
 
   const bookService = () => {
     onClose && onClose();
@@ -142,7 +145,7 @@ export default function ServiceDetailModal({ service, categories, onClose, onCha
           <DetailStat icon={<IndianRupee size={14} />} label="Base price" value={service.basePrice != null ? formatMoney(service.basePrice, { maximumFractionDigits: 0 }) : '—'} />
           <DetailStat icon={<Clock size={14} />} label="Duration" value={service.durationMin ? `${service.durationMin} min` : '—'} />
           {/* Marketing radius is an internal metric — hidden for USER/CUSTOMER. */}
-          {!isUserOrCustomer && (
+          {!isCustomer && (
             <DetailStat icon={<MapPin size={14} />} label="Marketing radius" value={service.targetRadiusKm ? `${service.targetRadiusKm} km` : 'Unlimited'} />
           )}
           <DetailStat icon={<Activity size={14} />} label="Status" value={service.isActive !== false ? 'Active' : 'Inactive'} />
@@ -155,7 +158,7 @@ export default function ServiceDetailModal({ service, categories, onClose, onCha
           </div>
         )}
 
-        {isUserOrCustomer && service.isActive !== false && (
+        {isCustomer && service.isActive !== false && (
           <div style={{ marginBottom: '0.75rem' }}>
             <button
               type="button"

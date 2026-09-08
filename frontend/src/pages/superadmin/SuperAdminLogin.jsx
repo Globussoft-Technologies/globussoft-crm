@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ShieldCheck } from "lucide-react";
 import { superAdminFetch, setSuperAdminSession, getSuperAdminToken } from "../../utils/superAdminApi";
+import PasswordInput from "../../components/PasswordInput";
 
 export default function SuperAdminLogin() {
   const navigate = useNavigate();
@@ -78,9 +79,7 @@ export default function SuperAdminLogin() {
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.85rem" }}>
           Password
-          <input
-            className="input-field"
-            type="password"
+          <PasswordInput
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="new-password"

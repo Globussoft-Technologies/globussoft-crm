@@ -13,6 +13,7 @@ import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
 import PageHeader from "../../components/PageHeader";
 import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
+import ModalShell from "../../components/wellness/ModalShell";
 
 export default function ProductCategories() {
   const notify = useNotify();
@@ -368,35 +369,42 @@ export default function ProductCategories() {
       )}
 
       {showModal && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-          onClick={() => setShowModal(false)}
+        <ModalShell
+          title={editingId ? "Edit Category" : "New Category"}
+          onClose={() => setShowModal(false)}
+          width={500}
+          footer={(
+            <>
+              <button
+                onClick={() => setShowModal(false)}
+                style={{
+                  padding: "0.6rem 1.25rem",
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  color: "inherit",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                style={{
+                  padding: "0.6rem 1.25rem",
+                  background: "var(--primary-color, var(--accent-color))",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                Save
+              </button>
+            </>
+          )}
         >
-          <div
-            className="glass"
-            style={{
-              padding: "2rem",
-              borderRadius: 12,
-              maxWidth: 500,
-              width: "90%",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 style={{ marginTop: 0, marginBottom: "1.5rem" }}>
-              {editingId ? "Edit Category" : "New Category"}
-            </h2>
-
             <div style={{ marginBottom: "1rem" }}>
               <label
                 style={{
@@ -533,43 +541,7 @@ export default function ProductCategories() {
               />
               <span>Active</span>
             </label>
-
-            <div
-              style={{
-                display: "flex",
-                gap: "0.75rem",
-                justifyContent: "flex-end",
-              }}
-            >
-              <button
-                onClick={() => setShowModal(false)}
-                style={{
-                  padding: "0.6rem 1.25rem",
-                  background: "transparent",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSave}
-                style={{
-                  padding: "0.6rem 1.25rem",
-                  background: "var(--primary-color, var(--accent-color))",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  fontWeight: 500,
-                }}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
+        </ModalShell>
       )}
     </div>
   );

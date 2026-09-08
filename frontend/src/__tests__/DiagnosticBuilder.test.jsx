@@ -667,7 +667,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   // GET /api/travel/engine-weights default-row resolver used across the
   // T11 cases. Returns the §3.3.3 defaults so the form initial-render
   // matches what the PRD pins.
-  function makeWeightsFetch({ existingWeights, archivedCatalogue } = {}) {
+  function makeWeightsFetch({ existingWeights, archivedCatalogue, topK } = {}) {
     const weightsRow = existingWeights || {
       id: 1,
       tenantId: 1,
@@ -681,6 +681,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
       scoresWellThreshold: 70,
     };
     const archived = archivedCatalogue || [];
+    let currentTopK = topK ?? 10;
     return (url, opts) => {
       if (typeof url === 'string' && url.startsWith('/api/travel/engine-weights')) {
         if (opts?.method === 'PUT') {
@@ -688,6 +689,14 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
           return Promise.resolve({ ...weightsRow, ...body });
         }
         return Promise.resolve(weightsRow);
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel/diagnostics/recommendation-settings')) {
+        if (opts?.method === 'PUT') {
+          const body = opts.body ? JSON.parse(opts.body) : {};
+          currentTopK = body.topK;
+          return Promise.resolve({ topK: currentTopK });
+        }
+        return Promise.resolve({ topK: currentTopK, min: 3, max: 20, default: 10 });
       }
       if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
         if (url.includes('/promote-to-active')) {
@@ -801,6 +810,54 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(screen.getByText(/Read-only\. Admin access is required to save\./i)).toBeTruthy();
   });
 
+  // ─── Max recommendations shown (topK) — 2026-08-27 ─────────────────────
+
+  it('Max recommendations shown renders with the default value (10) when unset', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendation Settings/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Max recommendations shown/i)).toBeTruthy();
+    });
+    expect(screen.getByLabelText(/Max recommendations shown/i).value).toBe('10');
+  });
+
+  it('Max recommendations shown loads a previously-saved custom value', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch({ topK: 15 }));
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendation Settings/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Max recommendations shown/i).value).toBe('15');
+    });
+  });
+
+  it('saving Max recommendations shown PUTs /api/travel/diagnostics/recommendation-settings independently of the weights save', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendation Settings/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Max recommendations shown/i)).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText(/Max recommendations shown/i), { target: { value: '14' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save recommendation count/i }));
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/diagnostics/recommendation-settings' && o?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body).toEqual({ subBrand: 'tmc', topK: 14 });
+    });
+    // The weights PUT must NOT have fired just from saving topK — the two
+    // save actions are independent.
+    expect(
+      fetchApiMock.mock.calls.some(([u, o]) => u === '/api/travel/engine-weights' && o?.method === 'PUT'),
+    ).toBe(false);
+    await waitFor(() => {
+      expect(notifyObj.success).toHaveBeenCalledWith('Max recommendations shown set to 14.');
+    });
+  });
+
   // T25: the legacy in-tab Promote-to-active sub-panel was deprecated
   // once T16 shipped the dedicated /travel/tmc/catalogue admin page
   // (TmcCatalogueAdmin.jsx). Recommendation Settings tab now surfaces a single
@@ -824,25 +881,41 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(archivedListCalls.length).toBe(0);
   });
 
+  // ─── Notifications tab (2026-08-28) — NOT sub-brand-gated, unlike ──────
+  // Recommendation Settings, since every sub-brand's diagnostics can have
+  // configured recipients.
+
+  it('Notifications tab is visible for every sub-brand and renders the panel', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    expect(screen.getByRole('tab', { name: /Notifications/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /RFU \(Umrah\)/i }));
+    expect(screen.getByRole('tab', { name: /Notifications/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: /Notifications/i }));
+    expect(await screen.findByRole('heading', { name: /Notifications/i })).toBeTruthy();
+  });
+
   // Mount-GET resolver that returns one existing TMC bank (id 42, v3).
-  function makeExistingBankFetch(postHandler) {
+  function makeExistingBankFetch(postHandler, bankPatch = {}) {
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string' && url.includes('/diagnostic-banks?')) {
+        const bank = {
+          id: 42,
+          version: 3,
+          subBrand: 'tmc',
+          templateName: 'Apple',
+          isActive: true,
+          questionsJson: JSON.stringify({
+            questions: [{ id: 'q1', text: 'T?', type: 'single-choice', options: [{ value: 'a', label: 'A', weight: 1 }] }],
+          }),
+          scoringRulesJson: JSON.stringify({
+            method: 'weighted-sum',
+            bands: [{ minScore: 0, maxScore: 9, classification: 'level_1', label: 'L1', recommendedTier: 'entry' }],
+          }),
+          ...bankPatch,
+        };
         return Promise.resolve({
-          banks: [{
-            id: 42,
-            version: 3,
-            subBrand: 'tmc',
-            templateName: 'Apple',
-            isActive: true,
-            questionsJson: JSON.stringify({
-              questions: [{ id: 'q1', text: 'T?', type: 'single-choice', options: [{ value: 'a', label: 'A', weight: 1 }] }],
-            }),
-            scoringRulesJson: JSON.stringify({
-              method: 'weighted-sum',
-              bands: [{ minScore: 0, maxScore: 9, classification: 'level_1', label: 'L1', recommendedTier: 'entry' }],
-            }),
-          }],
+          banks: [bank],
         });
       }
       if (postHandler) return postHandler(url, opts);
@@ -850,6 +923,40 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     });
   }
 
+
+  it('Save and use normalizes legacy TMC sentinel scoring method without showing the weighted-sum error', async () => {
+    makeExistingBankFetch(
+      (url, opts) => {
+        if (url === '/api/travel/diagnostic-banks' && opts?.method === 'POST') {
+          return Promise.resolve({ id: 43, version: 4, subBrand: 'tmc' });
+        }
+        return Promise.resolve(null);
+      },
+      {
+        scoringRulesJson: JSON.stringify({
+          method: 'tmc-deterministic-engine',
+          bands: [{ minScore: 0, maxScore: 9, classification: 'level_1', label: 'L1', recommendedTier: 'entry' }],
+        }),
+      },
+    );
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText(/Question shown on form/i), {
+      target: { value: 'Updated question?' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save and use template/i }));
+
+    await waitFor(() => {
+      const createCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/diagnostic-banks' && o?.method === 'POST',
+      );
+      expect(createCall).toBeTruthy();
+      expect(JSON.parse(createCall[1].body).scoringRulesJson).toMatch(/"method": "weighted-sum"/);
+    });
+    expect(notifyObj.error).not.toHaveBeenCalledWith(
+      expect.stringMatching(/scoringRulesJson\.method must be "weighted-sum"/),
+    );
+  });
 
   it('Delete template button renders for an existing bank and uses the in-CRM confirm modal', async () => {
     makeExistingBankFetch();

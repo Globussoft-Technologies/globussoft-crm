@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import {
@@ -495,6 +495,8 @@ export default function Staff() {
   const { hasPermission } = usePermissions();
   const canViewPermissions = hasPermission("roles", "read");
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const highlightedStaffId = searchParams.get("highlight") || "";
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState(null);
@@ -553,6 +555,7 @@ export default function Staff() {
   const [availability, setAvailability] = useState([]);
   const [availLoading, setAvailLoading] = useState(false);
   const [showAvailability, setShowAvailability] = useState(false);
+  const highlightedRowRef = useRef(null);
 
   useEffect(() => {
     loadStaff();
@@ -570,6 +573,13 @@ export default function Staff() {
       loadAvailability();
     }
   }, [availDate, showAvailability]);
+
+  const clearHighlightedStaff = () => {
+    if (!highlightedStaffId) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("highlight");
+    setSearchParams(next, { replace: true });
+  };
 
   // Close the filter dropdown when the user clicks anywhere outside it.
   useEffect(() => {
@@ -1075,6 +1085,38 @@ export default function Staff() {
     [filteredStaff.length],
   );
   const visibleStaff = filteredStaff.slice(0, visibleStaffCount);
+  const highlightedStaffIndex = highlightedStaffId
+    ? filteredStaff.findIndex((member) => String(member.id) === highlightedStaffId)
+    : -1;
+  useEffect(() => {
+    if (!highlightedStaffId || loading || highlightedStaffIndex < 0) return;
+
+    if (highlightedStaffIndex >= visibleStaffCount) {
+      setVisibleStaffCount(
+        Math.min(highlightedStaffIndex + 1, filteredStaff.length),
+      );
+      return;
+    }
+
+    highlightedRowRef.current?.scrollIntoView?.({
+      behavior: "smooth",
+      block: "center",
+    });
+    const timer = window.setTimeout(() => {
+      const next = new URLSearchParams(searchParams);
+      next.delete("highlight");
+      setSearchParams(next, { replace: true });
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [
+    filteredStaff.length,
+    highlightedStaffId,
+    highlightedStaffIndex,
+    loading,
+    searchParams,
+    setSearchParams,
+    visibleStaffCount,
+  ]);
   const handleStaffTableScroll = (event) => {
     const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
     if (scrollHeight - scrollTop - clientHeight < 80) {
@@ -1841,19 +1883,39 @@ export default function Staff() {
                 {visibleStaff.map((member) => (
                   <tr
                     key={member.id}
+                    ref={String(member.id) === highlightedStaffId ? highlightedRowRef : undefined}
+                    onClick={String(member.id) === highlightedStaffId ? clearHighlightedStaff : undefined}
                     style={{
                       borderBottom: "1px solid var(--border-color)",
                       transition: "0.15s",
+                      background:
+                        String(member.id) === highlightedStaffId
+                          ? "color-mix(in srgb, var(--primary-color) 10%, transparent)"
+                          : "transparent",
+                      boxShadow:
+                        String(member.id) === highlightedStaffId
+                          ? "inset 4px 0 0 var(--primary-color)"
+                          : "none",
                     }}
                     onMouseEnter={(e) =>
-                      (e.currentTarget.style.background = "var(--subtle-bg-2)")
+                      (e.currentTarget.style.background =
+                        String(member.id) === highlightedStaffId
+                          ? "color-mix(in srgb, var(--primary-color) 14%, transparent)"
+                          : "var(--subtle-bg-2)")
                     }
                     onMouseLeave={(e) =>
-                      (e.currentTarget.style.background = "transparent")
+                      (e.currentTarget.style.background =
+                        String(member.id) === highlightedStaffId
+                          ? "color-mix(in srgb, var(--primary-color) 10%, transparent)"
+                          : "transparent")
                     }
                   >
                     <td
-                      style={{ padding: "0.75rem 0.5rem", fontWeight: "500" }}
+                      style={{
+                        padding: "0.75rem 0.5rem",
+                        fontWeight:
+                          String(member.id) === highlightedStaffId ? "700" : "500",
+                      }}
                     >
                       {member.name || "—"}
                     </td>

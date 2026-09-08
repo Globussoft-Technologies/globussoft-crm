@@ -4,24 +4,21 @@
  *
  * SUT: frontend/src/pages/LandingPages.jsx
  *
- * Post-merge behavior (the standalone Feature/Unfeature action buttons
- * were removed): the /publish endpoint now also features the page on
- * /trips, so publishing a sibling silently swaps the Featured marker.
- * The "★ Featured" badge remains as a read-only signal on the current
- * /trips page so operators can tell at a glance which page is live.
+ * Post-merge behavior: publishing a trip now keeps it published but does
+ * NOT change the featured /trips page. The travel cards expose explicit
+ * Feature / Unfeature actions so operators can choose which published
+ * trip should point to /trips, while every other published trip keeps its
+ * own /trips/<id> share URL.
  *
  * Scope:
  *   1. The currently-featured row renders a "★ Featured" badge.
- *   2. Publishing a sibling when no other page is featured fires
- *      POST /:id/publish directly (no swap confirm).
- *   3. Publishing a sibling when ANOTHER page in the same (tenant,
- *      subBrand) scope is currently featured shows a confirm naming
- *      both pages — the current "live at /trips" page + the candidate
- *      replacement.
- *   4. Declining that swap confirm does NOT fire POST /:id/publish.
- *   5. Unpublish does NOT prompt a swap confirm; it just POSTs
- *      /:id/unpublish directly (it un-features in the same atomic op).
- *   6. Backend 409 PUBLISH_GATE_FAILED surfaces a friendly confirm
+  *   2. Publishing a sibling keeps it publishable without changing the
+  *      current /trips holder.
+ *   3. Clicking Feature on a published travel row POSTs /:id/feature and
+ *      moves the /trips pointer to that trip.
+ *   4. Unpublish POSTs /:id/unpublish directly and clears featured state
+ *      if the row was the current /trips holder.
+ *   5. Backend 409 PUBLISH_GATE_FAILED surfaces a friendly confirm
  *      that, on accept, navigates into the builder so the operator
  *      can fix the issues (defence-in-depth for travel pages with
  *      missing content).
@@ -64,7 +61,7 @@ vi.mock('../utils/notify', () => ({
 
 import LandingPages from '../pages/LandingPages';
 
-// Three pages in the same (tenantId, subBrand=tmc) scope. publishedFeatured
+// Three pages in the same tenant and travel bucket. publishedFeatured
 // is the current /trips holder; publishedSibling is a publish candidate;
 // draftRow is publish-first.
 const FIXTURE = [
@@ -86,7 +83,7 @@ const FIXTURE = [
     status: 'PUBLISHED',
     visits: 80,
     submissions: 5,
-    subBrand: 'tmc',
+    subBrand: 'rfu',
     isFeatured: false,
     featuredAt: null,
   },
@@ -97,7 +94,7 @@ const FIXTURE = [
     status: 'DRAFT',
     visits: 0,
     submissions: 0,
-    subBrand: 'tmc',
+    subBrand: 'travelstall',
     isFeatured: false,
     featuredAt: null,
   },
@@ -155,41 +152,76 @@ describe('<LandingPages /> — Featured badge + publish-swap UX', () => {
     expect(screen.getAllByText('Featured').length).toBe(1);
   });
 
-  it('the standalone Feature / Unfeature action buttons were removed (now collapsed into Publish/Unpublish)', async () => {
+  it('published travel rows expose explicit Feature / Unfeature actions', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Japan 2026')).toBeInTheDocument());
-    // The action row no longer carries a "Feature" or "Unfeature" button —
-    // those collapsed into Publish/Unpublish per the single-page-live
-    // workflow.
-    expect(screen.queryByRole('button', { name: /^Feature$/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /^Unfeature$/i })).toBeNull();
-    // Publish/Unpublish buttons render on each row: Unpublish on the
+    const japanCard = screen.getByText('Japan 2026').closest('.card');
+    const umrahCard = screen.getByText('Umrah 2026').closest('.card');
+    expect(japanCard).toBeTruthy();
+    expect(umrahCard).toBeTruthy();
+
+    expect(japanCard.querySelector('button[title="Remove this trip from /trips"]')).toBeTruthy();
+    expect(umrahCard.querySelector('button[title="Make this trip the featured /trips page"]')).toBeTruthy();
+    // Publish/Unpublish buttons still render on each row: Unpublish on the
     // PUBLISHED rows (Japan + Umrah), Publish on the DRAFT row (Bali).
     expect(screen.getAllByRole('button', { name: /^Unpublish$/i }).length).toBe(2);
     expect(screen.getAllByRole('button', { name: /^Publish$/i }).length).toBe(1);
   });
 
-  it('Bali Draft Publish button is disabled when another PUBLISHED page exists (hard-block UX)', async () => {
+  it('Bali Draft Publish button stays enabled when another PUBLISHED page exists and still POSTs /publish', async () => {
     // FIXTURE has Japan (id=100, PUBLISHED) and Umrah (id=101, PUBLISHED).
-    // Bali Draft's Publish button must be disabled — that IS the hard-block.
-    // React 18 suppresses onClick on disabled buttons even with fireEvent,
-    // so the correct contract to test is the disabled state + tooltip, not
-    // a handler invocation.
+    // Bali Draft can still publish — featuring is separate, so publish only
+    // changes the draft's own status/share URL.
     renderPage();
     await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
 
     const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
-    expect(publishBtn).toBeDisabled();
+    expect(publishBtn).not.toBeDisabled();
+    expect(publishBtn.title).toMatch(/make it live at \/trips\/102/i);
 
-    // Tooltip names the blocking page so operator knows why.
-    expect(publishBtn.title).toMatch(/currently live/i);
-
-    // No publish API call has fired — button is disabled.
     fetchApiMock.mockClear();
-    const postCalls = fetchApiMock.mock.calls.filter(
-      ([u, o]) => o?.method === 'POST' && /publish/.test(u),
-    );
-    expect(postCalls.length).toBe(0);
+    fireEvent.click(publishBtn);
+    await waitFor(() => {
+      const postCalls = fetchApiMock.mock.calls.filter(
+        ([u, o]) => o?.method === 'POST' && /publish/.test(u),
+      );
+      expect(postCalls.length).toBe(1);
+    });
+  });
+
+  it('clicking Feature on a published travel row POSTs /feature and keeps publish separate', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Japan 2026')).toBeInTheDocument());
+
+    const umrahCard = screen.getByText('Umrah 2026').closest('.card');
+    const featureBtn = umrahCard.querySelector('button[title="Make this trip the featured /trips page"]');
+    expect(featureBtn).toBeTruthy();
+
+    fetchApiMock.mockClear();
+    await user.click(featureBtn);
+
+    await waitFor(() => {
+      const postCalls = fetchApiMock.mock.calls.filter(
+        ([u, o]) => u === '/api/landing-pages/101/feature' && o?.method === 'POST',
+      );
+      expect(postCalls.length).toBe(1);
+    });
+  });
+
+  it('published travel rows expose the expected share URLs and copy buttons', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Japan 2026')).toBeInTheDocument());
+
+    const japanCard = screen.getByText('Japan 2026').closest('.card');
+    const umrahCard = screen.getByText('Umrah 2026').closest('.card');
+    expect(japanCard).toBeTruthy();
+    expect(umrahCard).toBeTruthy();
+
+    expect(japanCard.querySelector('input[readonly]')?.value).toMatch(/\/trips$/);
+    expect(japanCard.querySelector('button[title="Copy public URL"]')).toBeTruthy();
+    expect(umrahCard.querySelector('input[readonly]')?.value).toMatch(/\/trips\/101$/);
+    expect(umrahCard.querySelector('button[title="Copy public URL"]')).toBeTruthy();
   });
 
   it('with no PUBLISHED page the Publish button is enabled and POSTs /publish on click', async () => {

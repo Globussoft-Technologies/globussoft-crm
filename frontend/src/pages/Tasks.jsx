@@ -6,7 +6,7 @@ import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
 import { useActiveSubBrand } from '../utils/subBrand';
-import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X, ChevronDown, Eye, Edit3, Trash2, Save, UserRound } from 'lucide-react';
+import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X, ChevronDown, Eye, Edit3, Trash2, Save, UserRound, Mail, MessageCircle } from 'lucide-react';
 import TagPickerPopover from './wellness/patients/TagPickerPopover';
 import { tagChipStyle, chipRemoveStyle, modalInputStyle, filterLabelStyle } from './wellness/patients/styles';
 import { tagColour } from './wellness/patients/constants';
@@ -52,8 +52,12 @@ function PriorityBadge({ priority }) {
   );
 }
 
+function isOpenStatus(status) {
+  return !['Completed', 'Cancelled'].includes(String(status || 'Pending'));
+}
+
 function isOverdue(task) {
-  return task.dueDate && task.status === 'Pending' && new Date(task.dueDate) < new Date();
+  return task.dueDate && isOpenStatus(task.status) && new Date(task.dueDate) < new Date();
 }
 
 // #608: warn when the user is creating a task with a due date that is already
@@ -145,6 +149,9 @@ const EMPTY_FORM = {
   resolutionNote: '',
 };
 
+const TRAVEL_STATUS_OPTIONS = ['Pending', 'In Process', 'Completed'];
+const DEFAULT_STATUS_OPTIONS = ['Pending', 'In Progress', 'Completed', 'Cancelled'];
+
 export default function Tasks() {
   const notify = useNotify();
   const { hasPermission, isReady: permsReady } = usePermissions();
@@ -183,6 +190,8 @@ export default function Tasks() {
   const [selectedTask, setSelectedTask] = useState(null);
   const [editingTask, setEditingTask] = useState(false);
   const [editTask, setEditTask] = useState(EMPTY_FORM);
+  const [notificationReadiness, setNotificationReadiness] = useState(null);
+  const [lastAssignmentNotice, setLastAssignmentNotice] = useState(null);
 
   useEffect(() => { loadData(); }, []);
 
@@ -226,6 +235,17 @@ export default function Tasks() {
       .then((d) => setStaff(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!isTravel) return;
+    fetchApi('/api/tasks/assignment-readiness')
+      .then((d) => setNotificationReadiness(d || null))
+      .catch(() => setNotificationReadiness({
+        travel: true,
+        email: { configured: false, reason: 'Could not check email setup' },
+        whatsapp: { configured: false, reason: 'Could not check WhatsApp setup' },
+      }));
+  }, [isTravel]);
 
   // #893: ESC closes the drawer to match the c031ba0 Travel-page convention.
   useEffect(() => {
@@ -284,15 +304,49 @@ export default function Tasks() {
         // raw `userId` from the body). Only send when an assignee was picked.
         targetUserId: newTask.assignedToId || undefined,
       };
-      await fetchApi('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
+      const created = await fetchApi('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
       setNewTask(EMPTY_FORM);
       setCreating(false);
       setShowTagPicker(false);
+      if (isTravel) {
+        setLastAssignmentNotice(created?.notificationResults || null);
+      }
       loadData();
       // #625: invalidate sidebar counters so the My Tasks badge bumps.
       window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
     } catch (err) {
       notify.error('Failed to create task');
+    }
+  };
+
+  const updateTaskStatus = async (task, status) => {
+    if (!task || task.status === status) return;
+    if (status === 'Completed') {
+      await markComplete(task);
+      return;
+    }
+    try {
+      const decoded = decodeNotes(task.notes || '');
+      const updated = await fetchApi(`/api/tasks/${task.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: task.title,
+          status,
+          priority: task.priority || 'Medium',
+          type: task.type || null,
+          outcome: task.outcome || null,
+          dueDate: task.dueDate || null,
+          notes: encodeNotes(decoded.tagIds, decoded.description, decoded.resolutionNote),
+          targetUserId: task.userId || '',
+        }),
+      });
+      if (selectedTask?.id === task.id) setSelectedTask(updated);
+      await loadData();
+      window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
+      notify.success(`Task moved to ${status}`);
+    } catch (err) {
+      console.error(err);
+      notify.error('Failed to update task status');
     }
   };
 
@@ -366,11 +420,12 @@ export default function Tasks() {
 
   const openTaskDetails = (task) => {
     const decoded = decodeNotes(task.notes);
+    const normalizedStatus = isTravel && task.status === 'In Progress' ? 'In Process' : (task.status || 'Pending');
     setSelectedTask(task);
     setEditingTask(false);
     setEditTask({
       title: task.title || '',
-      status: task.status || 'Pending',
+      status: normalizedStatus,
       priority: normalizePriority(task.priority),
       type: task.type || '',
       outcome: task.outcome || '',
@@ -446,7 +501,7 @@ export default function Tasks() {
   // the true queue size — a chip that shrank to match its own filter would
   // make it impossible to tell what clearing the filter would bring back.
   const allActiveTasks = tasks
-    .filter(t => t.status !== 'Completed')
+    .filter(t => isOpenStatus(t.status))
     .sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 99) - (PRIORITY_ORDER[b.priority] ?? 99));
   const allCompletedTasks = tasks.filter(t => t.status === 'Completed');
 
@@ -535,6 +590,22 @@ export default function Tasks() {
     Medium: '#3b82f6',
     Low: '#64748b',
   }[newTask.priority] || '#3b82f6';
+  const statusOptions = isTravel ? TRAVEL_STATUS_OPTIONS : DEFAULT_STATUS_OPTIONS;
+  const selectedAssignee = assignableStaff.find((s) => String(s.id) === String(newTask.assignedToId));
+  const travelNotifyReady = {
+    assignee: Boolean(newTask.assignedToId),
+    dueDate: Boolean(newTask.dueDate),
+    email: Boolean(notificationReadiness?.email?.configured && selectedAssignee?.email),
+    whatsapp: Boolean(notificationReadiness?.whatsapp?.configured && selectedAssignee?.phone),
+  };
+  const travelNotifyIssues = [
+    !travelNotifyReady.assignee ? 'Pick one assignee' : '',
+    !travelNotifyReady.dueDate ? 'Set a due date/time' : '',
+    newTask.assignedToId && !selectedAssignee?.email ? 'Assignee has no email address' : '',
+    newTask.assignedToId && !selectedAssignee?.phone ? 'Assignee has no phone number for WhatsApp' : '',
+    notificationReadiness?.email && !notificationReadiness.email.configured ? notificationReadiness.email.reason : '',
+    notificationReadiness?.whatsapp && !notificationReadiness.whatsapp.configured ? notificationReadiness.whatsapp.reason : '',
+  ].filter(Boolean);
 
   return (
     <div className="tasks-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
@@ -570,6 +641,60 @@ export default function Tasks() {
       {/* Counter chips double as one-click filters — the number you want to act
           on is the thing you click. Counts stay unfiltered so the chips always
           describe the whole queue, not the slice currently on screen. */}
+      {isTravel && lastAssignmentNotice && (
+        <div
+          role="status"
+          style={{
+            margin: '-0.75rem 0 1.25rem',
+            padding: '0.85rem 1rem',
+            border: '1px solid var(--border-color)',
+            borderRadius: 8,
+            background: 'var(--surface-color)',
+            color: 'var(--text-primary)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.45rem',
+          }}
+        >
+          <strong style={{ fontSize: '0.9rem' }}>Assignment notification status</strong>
+          {lastAssignmentNotice.reason && (
+            <span style={{ color: '#f97316', fontSize: '0.82rem' }}>{lastAssignmentNotice.reason}</span>
+          )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+            {(lastAssignmentNotice.channels || []).map((ch) => {
+              const good = ['sent', 'queued'].includes(ch.status);
+              return (
+                <span
+                  key={`${ch.channel}-${ch.recipient || ch.reason}`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '0.28rem 0.55rem',
+                    borderRadius: 999,
+                    fontSize: '0.75rem',
+                    border: `1px solid ${good ? '#22c55e55' : '#f9731655'}`,
+                    color: good ? '#16a34a' : '#f97316',
+                    background: good ? 'rgba(34,197,94,0.08)' : 'rgba(249,115,22,0.08)',
+                  }}
+                >
+                  {ch.channel === 'email' ? <Mail size={12} /> : <MessageCircle size={12} />}
+                  {ch.channel}: {ch.status}{ch.reason ? ` - ${ch.reason}` : ''}
+                </span>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={() => setLastAssignmentNotice(null)}
+            className="btn-secondary"
+            style={{ alignSelf: 'flex-start', padding: '0.3rem 0.55rem', fontSize: '0.75rem' }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {allActiveTasks.length > 0 && (
         <div className="tasks-chips" role="group" aria-label="Filter the queue">
           {criticalCount > 0 && (
@@ -746,6 +871,34 @@ export default function Tasks() {
                     <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: '0.2rem 0 0' }}>
                       <UserRound size={12} /> Assigned to {assigneeName(t)}
                     </p>
+                    {isTravel && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.65rem' }} aria-label="Task status">
+                        {TRAVEL_STATUS_OPTIONS.map((status) => {
+                          const active = t.status === status;
+                          return (
+                            <button
+                              key={status}
+                              type="button"
+                              onClick={() => updateTaskStatus(t, status)}
+                              aria-pressed={active}
+                              disabled={active}
+                              style={{
+                                padding: '0.35rem 0.65rem',
+                                borderRadius: 6,
+                                border: active ? '1px solid var(--primary-color, var(--accent-color))' : '1px solid var(--border-color)',
+                                background: active ? 'var(--primary-color, var(--accent-color))' : 'var(--surface-color)',
+                                color: active ? 'var(--accent-text, #fff)' : 'var(--text-primary)',
+                                fontSize: '0.76rem',
+                                fontWeight: 700,
+                                cursor: active ? 'default' : 'pointer',
+                              }}
+                            >
+                              {status}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                     {decoded.description && (
                       <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: '0.45rem 0 0', maxWidth: 760, lineHeight: 1.45 }}>
                         {decoded.description.length > 170 ? `${decoded.description.slice(0, 170).trimEnd()}...` : decoded.description}
@@ -871,10 +1024,7 @@ export default function Tasks() {
                   <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
                     Status
                     <select value={editTask.status} onChange={(e) => setEditTask({ ...editTask, status: e.target.value })} style={modalInputStyle}>
-                      <option value="Pending">Pending</option>
-                      <option value="In Progress">In Progress</option>
-                      <option value="Completed">Completed</option>
-                      <option value="Cancelled">Cancelled</option>
+                      {statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
                     </select>
                   </label>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
@@ -959,6 +1109,34 @@ export default function Tasks() {
                     <UserRound size={12} /> {assigneeName(selectedTask)}
                   </span>
                 </div>
+                {isTravel && canResolveTask(selectedTask) && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }} aria-label="Task status">
+                    {TRAVEL_STATUS_OPTIONS.map((status) => {
+                      const active = selectedTask.status === status;
+                      return (
+                        <button
+                          key={status}
+                          type="button"
+                          onClick={() => updateTaskStatus(selectedTask, status)}
+                          disabled={active}
+                          aria-pressed={active}
+                          style={{
+                            padding: '0.45rem 0.75rem',
+                            borderRadius: 6,
+                            border: active ? '1px solid var(--primary-color, var(--accent-color))' : '1px solid var(--border-color)',
+                            background: active ? 'var(--primary-color, var(--accent-color))' : 'var(--surface-color)',
+                            color: active ? 'var(--accent-text, #fff)' : 'var(--text-primary)',
+                            fontSize: '0.8rem',
+                            fontWeight: 700,
+                            cursor: active ? 'default' : 'pointer',
+                          }}
+                        >
+                          {status}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {selectedTask.dueDate && (
                   <p style={{ margin: 0, color: isOverdue(selectedTask) ? '#ef4444' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                     <Clock size={14} /> {new Date(selectedTask.dueDate).toLocaleString()}
@@ -1108,9 +1286,9 @@ export default function Tasks() {
                     outline: 'none', cursor: 'pointer',
                   }}
                 >
-                  <option value="Pending">Pending</option>
-                  <option value="Completed">Completed</option>
-                  <option value="In Progress">In Progress</option>
+                  {(isTravel ? TRAVEL_STATUS_OPTIONS : ['Pending', 'Completed', 'In Progress']).map((status) => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
                 </select>
               </div>
 
@@ -1187,7 +1365,7 @@ export default function Tasks() {
             </div>
 
             {/* Due At + Completed At — stacked label above input, two columns */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isTravel ? '1fr' : '1fr 1fr', gap: '0.75rem' }}>
               {/* Due At */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
@@ -1213,27 +1391,28 @@ export default function Tasks() {
                 />
               </div>
 
-              {/* Completed At */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                  <Calendar size={12} style={{ flexShrink: 0 }} />
-                  Completed At:
-                </label>
-                <input
-                  type="datetime-local"
-                  value={newTask.completedAt}
-                  onChange={e => setNewTask({ ...newTask, completedAt: e.target.value })}
-                  style={{
-                    width: '100%', boxSizing: 'border-box',
-                    padding: '0.42rem 0.6rem', fontSize: '0.8rem',
-                    border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
-                    borderRadius: 7,
-                    background: 'var(--surface-color, #fff)',
-                    color: 'var(--text-primary)',
-                    outline: 'none',
-                  }}
-                />
-              </div>
+              {!isTravel && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                    <Calendar size={12} style={{ flexShrink: 0 }} />
+                    Completed At:
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={newTask.completedAt}
+                    onChange={e => setNewTask({ ...newTask, completedAt: e.target.value })}
+                    style={{
+                      width: '100%', boxSizing: 'border-box',
+                      padding: '0.42rem 0.6rem', fontSize: '0.8rem',
+                      border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
+                      borderRadius: 7,
+                      background: 'var(--surface-color, #fff)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+              )}
             </div>
 
             {isPastDate(newTask.dueDate) && (
@@ -1280,6 +1459,40 @@ export default function Tasks() {
 
             {/* Tags — only on wellness tenants; mirrors the BulkTagModal pattern exactly:
                 dropdown button → TagPickerPopover → chip strip below */}
+            {isTravel && (
+              <div
+                style={{
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 8,
+                  padding: '0.75rem',
+                  background: 'var(--surface-color)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.55rem',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: '0.85rem' }}>Assignment notifications</strong>
+                  <span style={{ fontSize: '0.75rem', color: travelNotifyIssues.length ? '#f97316' : '#16a34a', fontWeight: 700 }}>
+                    {travelNotifyIssues.length ? 'Needs attention' : 'Ready to notify'}
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 190px), 1fr))', gap: '0.5rem' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: travelNotifyReady.email ? '#16a34a' : '#f97316' }}>
+                    <Mail size={14} /> Email {travelNotifyReady.email ? 'will be sent' : 'not ready'}
+                  </span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: travelNotifyReady.whatsapp ? '#16a34a' : '#f97316' }}>
+                    <MessageCircle size={14} /> WhatsApp {travelNotifyReady.whatsapp ? 'will be queued' : 'not ready'}
+                  </span>
+                </div>
+                {travelNotifyIssues.length > 0 && (
+                  <ul style={{ margin: 0, paddingLeft: '1rem', color: 'var(--text-secondary)', fontSize: '0.76rem', lineHeight: 1.45 }}>
+                    {travelNotifyIssues.map((issue) => <li key={issue}>{issue}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
+
             {isWellness && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
                 <span style={{ ...filterLabelStyle, fontSize: '0.78rem' }}>Tags:</span>

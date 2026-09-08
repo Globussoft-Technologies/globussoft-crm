@@ -30,7 +30,7 @@ import { fetchApi } from '../utils/api';
 import { formatMoney, formatMoneyCompact } from '../utils/money';
 import { formatPercent } from '../utils/percent';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 
 const DEFAULT_STATS = {
   totalDeals: 0,
@@ -121,19 +121,46 @@ export default function Dashboard() {
   const pendingTaskCount = myPendingTasks.length;
   const tiles = isUser
     ? [
-        { label: 'My Closed Revenue',   value: formatMoney(totalRevenue),     icon: <IndianRupee size={24} />,   color: 'var(--accent-color)' },
-        { label: 'My Expected Revenue', value: formatMoney(expectedRevenue),  icon: <Activity size={24} />,     color: 'var(--success-color)' },
-        { label: 'My Pending Tasks',    value: pendingTaskCount.toString(),   icon: <CheckSquare size={24} />,  color: '#3b82f6' },
-        { label: 'My Win Rate',         value: formatPercent(conversionRate), icon: <TrendingUp size={24} />,   color: 'var(--warning-color)' },
-        { label: 'My Open Deals',       value: dealCount.toString(),          icon: <Calendar size={24} />,     color: '#a855f7' },
-      ]
+      { label: 'My Closed Revenue', value: formatMoney(totalRevenue), icon: <IndianRupee size={24} />, color: 'var(--accent-color)', path: '/pipeline', },
+      {
+        label: 'My Expected Revenue', value: formatMoney(expectedRevenue), icon: <Activity size={24} />, color: 'var(--success-color)',
+        path: '/pipeline',
+      },
+      {
+        label: 'My Pending Tasks', value: pendingTaskCount.toString(), icon: <CheckSquare size={24} />, color: '#3b82f6',
+        path: '/tasks',
+      },
+      {
+        label: 'My Win Rate', value: formatPercent(conversionRate), icon: <TrendingUp size={24} />, color: 'var(--warning-color)',
+        path: '/reports',
+      },
+      {
+        label: 'My Open Deals', value: dealCount.toString(), icon: <Calendar size={24} />, color: '#a855f7',
+        path: '/pipeline',
+      },
+    ]
     : [
-        { label: 'Closed Revenue',   value: formatMoney(totalRevenue),     icon: <IndianRupee size={24} />,  color: 'var(--accent-color)' },
-        { label: 'Expected Revenue', value: formatMoney(expectedRevenue),  icon: <Activity size={24} />,    color: 'var(--success-color)' },
-        { label: 'Total Contacts',   value: activeLeads.toString(),        icon: <Users size={24} />,       color: '#3b82f6' },
-        { label: 'Conversion Rate',  value: formatPercent(conversionRate), icon: <TrendingUp size={24} />,  color: 'var(--warning-color)' },
-        { label: 'Total Deals',      value: dealCount.toString(),          icon: <Calendar size={24} />,    color: '#a855f7' },
-      ];
+      {
+        label: 'Closed Revenue', value: formatMoney(totalRevenue), icon: <IndianRupee size={24} />, color: 'var(--accent-color)',
+        path: '/pipeline',
+      },
+      {
+        label: 'Expected Revenue', value: formatMoney(expectedRevenue), icon: <Activity size={24} />, color: 'var(--success-color)',
+        path: '/pipeline',
+      },
+      {
+        label: 'Total Contacts', value: activeLeads.toString(), icon: <Users size={24} />, color: '#3b82f6',
+        path: '/contacts',
+      },
+      {
+        label: 'Conversion Rate', value: formatPercent(conversionRate), icon: <TrendingUp size={24} />, color: 'var(--warning-color)',
+        path: '/reports',
+      },
+      {
+        label: 'Total Deals', value: dealCount.toString(), icon: <Calendar size={24} />, color: '#a855f7',
+        path: '/pipeline',
+      },
+    ];
 
   // Header copy varies by role. We keep the same chrome (gradient h1, search
   // hint, primary CTA) so the visual hierarchy doesn't shift between roles.
@@ -160,7 +187,7 @@ export default function Dashboard() {
             {pageTitle}
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            {pageSubtitle} Press <kbd style={{background:'var(--kbd-bg)', padding:'2px 6px', borderRadius:'4px', color:'var(--accent-color)'}}>{shortcutKey} K</kbd> to search globally.
+            {pageSubtitle} Press <kbd style={{ background: 'var(--kbd-bg)', padding: '2px 6px', borderRadius: '4px', color: 'var(--accent-color)' }}>{shortcutKey} K</kbd> to search globally.
           </p>
         </div>
         {/* #128: this button only navigates — rename so the label matches the action */}
@@ -169,15 +196,23 @@ export default function Dashboard() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
         {tiles.map((stat, i) => (
-          <div key={i} className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--subtle-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: stat.color, border: `1px solid ${stat.color}40`, boxShadow: `0 0 15px ${stat.color}40` }}>
-              {stat.icon}
+          <Link key={i}
+            to={stat.path}
+            style={{
+              textDecoration: 'none',
+              color: 'inherit',
+              display: 'block',
+            }}>
+            <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--subtle-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: stat.color, border: `1px solid ${stat.color}40`, boxShadow: `0 0 15px ${stat.color}40` }}>
+                {stat.icon}
+              </div>
+              <div>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>{stat.label}</p>
+                <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stat.value}</h2>
+              </div>
             </div>
-            <div>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>{stat.label}</p>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stat.value}</h2>
-            </div>
-          </div>
+          </Link>
         ))}
       </div>
 
@@ -191,8 +226,8 @@ export default function Dashboard() {
               <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} />

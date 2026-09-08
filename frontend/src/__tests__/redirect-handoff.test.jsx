@@ -22,7 +22,6 @@
  *   - global.fetch is stubbed per test (existing pattern from Invoices.test.jsx).
  *   - AuthContext is provided directly via <AuthContext.Provider> wrapper.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -130,6 +129,7 @@ describe('Marketing-site → CRM redirect handoff', () => {
     it('navigates to ?next= after a successful register (in-app path is preserved)', async () => {
       global.fetch = mockFetch([
         ['/api/auth/public/tenants', TENANTS],
+        ['/api/auth/check-email', { exists: false }],
         ['/api/auth/email-otp/request', { devCode: '123456' }],
         ['/api/auth/email-otp/verify', { verificationToken: 'email-verified-token' }],
         ['/api/auth/customer/register', { token: 'jwt-abc', user: { id: 99 }, tenant: WELLNESS_TENANT_RESPONSE }],
@@ -184,6 +184,7 @@ describe('Marketing-site → CRM redirect handoff', () => {
     it('rejects hostile ?next=https://evil.com and falls back to /wellness', async () => {
       global.fetch = mockFetch([
         ['/api/auth/public/tenants', TENANTS],
+        ['/api/auth/check-email', { exists: false }],
         ['/api/auth/email-otp/request', { devCode: '123456' }],
         ['/api/auth/email-otp/verify', { verificationToken: 'email-verified-token' }],
         ['/api/auth/customer/register', { token: 'jwt-x', user: { id: 99 }, tenant: WELLNESS_TENANT_RESPONSE }],
@@ -221,6 +222,88 @@ describe('Marketing-site → CRM redirect handoff', () => {
       // Crucially: never an external URL.
       expect(target).not.toMatch(/evil\.com/);
       expect(target).not.toMatch(/^https?:/);
+    });
+
+    it('stops an existing email before sending the OTP and shows the sign-in hint', async () => {
+      global.fetch = vi.fn(async (url) => {
+        if (String(url).startsWith('/api/auth/public/tenants')) {
+          return { ok: true, status: 200, json: async () => TENANTS };
+        }
+        if (String(url).startsWith('/api/auth/check-email')) {
+          return { ok: true, status: 200, json: async () => ({ exists: true }) };
+        }
+        return { ok: false, status: 404, json: async () => ({ error: 'not mocked' }) };
+      });
+
+      renderAt(CustomerRegister, '/customer/register?tenantSlug=enhanced-wellness');
+
+      await waitFor(() => {
+        const sel = screen.getByLabelText(/Booking for/i);
+        expect(sel).toBeDisabled();
+        expect(sel.value).toBe("Dr. Haror's Wellness");
+      });
+
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'jane@example.com' } });
+      fireEvent.click(screen.getByTestId('otp-validate'));
+
+      expect(await screen.findByText(/This email already exists\. Sign in to your account\./i)).toBeInTheDocument();
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/auth/check-email'),
+        expect.objectContaining({
+          method: 'POST',
+        }),
+      );
+      expect(screen.queryByTestId('otp-box')).not.toBeInTheDocument();
+    });
+
+    it('re-checks availability on submit and blocks registration if the email is taken', async () => {
+      let checkEmailCalls = 0;
+      global.fetch = vi.fn(async (url) => {
+        const path = String(url);
+        if (path.startsWith('/api/auth/public/tenants')) {
+          return { ok: true, status: 200, json: async () => TENANTS };
+        }
+        if (path.startsWith('/api/auth/check-email')) {
+          checkEmailCalls += 1;
+          return { ok: true, status: 200, json: async () => ({ exists: checkEmailCalls >= 2 }) };
+        }
+        if (path.startsWith('/api/auth/email-otp/request')) {
+          return { ok: true, status: 200, json: async () => ({ devCode: '123456' }) };
+        }
+        if (path.startsWith('/api/auth/email-otp/verify')) {
+          return { ok: true, status: 200, json: async () => ({ verificationToken: 'email-verified-token' }) };
+        }
+        return { ok: false, status: 404, json: async () => ({ error: 'not mocked' }) };
+      });
+
+      renderAt(CustomerRegister, '/customer/register?tenantSlug=enhanced-wellness');
+
+      await waitFor(() => {
+        const sel = screen.getByLabelText(/Booking for/i);
+        expect(sel).toBeDisabled();
+        expect(sel.value).toBe("Dr. Haror's Wellness");
+      });
+
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'jane@example.com' } });
+      fireEvent.click(screen.getByTestId('otp-validate'));
+      await waitFor(() => {
+        expect(screen.getByTestId('otp-box')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('otp-code'), { target: { value: '123456' } });
+      fireEvent.click(screen.getByTestId('otp-verify'));
+      await waitFor(() => {
+        expect(screen.getByTestId('otp-verified')).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByLabelText(/Full name/i), { target: { value: 'Jane Doe' } });
+      fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'Secret123' } });
+      fireEvent.change(screen.getByLabelText(/Confirm password/i), { target: { value: 'Secret123' } });
+      fireEvent.click(screen.getByRole('button', { name: /Create account/i }));
+
+      expect(await screen.findByText(/This email already exists\. Sign in to your account\./i)).toBeInTheDocument();
+      expect(checkEmailCalls).toBeGreaterThanOrEqual(2);
+      expect(global.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/auth/customer/register'))).toBe(false);
+      expect(navigateMock).not.toHaveBeenCalled();
     });
   });
 

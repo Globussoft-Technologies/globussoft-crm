@@ -96,10 +96,12 @@ const MAX_CONCURRENT_RUNS = (() => {
 
 // Wall-clock cap per run. The LLM phase is unbounded by design, but a wedged
 // engine (stuck provider call, hung Chrome past protocol timeouts) must not
-// hold its subprocess + Chromium forever. Default 8 minutes.
+// hold its subprocess + Chromium forever. Default 5 minutes.
 const RUN_TIMEOUT_MS = (() => {
   const v = parseInt(process.env.BROCHURE_RUN_TIMEOUT_MS, 10);
-  return Number.isFinite(v) && v >= 60_000 ? v : 8 * 60_000;
+  // Keep the operator override for shorter limits, but never allow a stale
+  // deployment value to silently restore the old 8-minute ceiling.
+  return Number.isFinite(v) && v >= 60_000 ? Math.min(v, 5 * 60_000) : 5 * 60_000;
 })();
 
 // Kill a subprocess AND its whole process tree. The engine's Chromium is a
@@ -380,13 +382,12 @@ function listSectors() {
   return Promise.resolve([
     {
       key: "travel",
-      name: "Travel Brochure",
+      name: "TMC School Brochure",
       description:
-        "Agency-grade travel brochure — cover, day-by-day itinerary, route map, inclusions, pricing.",
-      // From packages/tools/src/brochure/templates.ts — these are TEMPLATE
-      // keys (look-and-feel), not art-direction briefs. tmc-press is the
-      // default if styleKey is omitted.
-      styles: ["tmc-press", "editorial-sakura"],
+        "The Modern Classroom school trip brochure — cover, day-by-day itinerary, route map, inclusions, pricing.",
+      // TMC school flow: only the tmc-school template is exposed for the
+      // travel sector. The route defaults styleKey to 'tmc-school'.
+      styles: ["tmc-school"],
     },
     {
       key: "report-writing",

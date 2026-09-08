@@ -108,6 +108,20 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'appointments', action: 'read' }],
   },
   {
+    path: '/wellness/call-history',
+    label: 'Call History',
+    description:
+      'Every AI and manual Callified call, with filters, paging and per-call transcript / recording / AI review',
+    category: 'Clinical',
+    // `call_history.read` opens the page and shows YOUR OWN calls.
+    // `call_history.read_all` (or ADMIN / MANAGER) widens it to the whole
+    // clinic — see resolveCallScope in routes/callified.js. Split that way
+    // because a recording is a real patient discussing real treatment, so
+    // clinic-wide access is a deliberate grant rather than a side effect of
+    // being able to place a call.
+    requiredPermissions: [{ module: 'call_history', action: 'read' }],
+  },
+  {
     path: '/wellness/my-appointments',
     label: 'My appointments',
     description: 'Appointments where you are the assigned practitioner',
@@ -146,6 +160,17 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'prescriptions', action: 'read' }],
   },
   {
+    path: '/wellness/prescription-requests',
+    label: 'Prescription Requests',
+    description: 'Renewal + medicine requests raised by patients',
+    category: 'Clinical',
+    // Separate `prescription_requests` module — the queue is triage work a
+    // receptionist or manager can own, whereas `prescriptions.write` is the
+    // medico-legal act of prescribing and stays doctor-only. Granting this
+    // page therefore never implies prescribing rights.
+    requiredPermissions: [{ module: 'prescription_requests', action: 'read' }],
+  },
+  {
     path: '/wellness/my-prescriptions',
     label: 'My Prescriptions',
     description: 'Your own prescriptions (linked Patient profile)',
@@ -156,6 +181,19 @@ const PAGE_CATALOG = [
     // req.user.userId's linked Patient row; cross-patient access is
     // structurally impossible regardless of role grants.
     requiredPermissions: [{ module: 'my_prescriptions', action: 'read' }],
+  },
+  {
+    path: '/wellness/my-prescription-requests',
+    label: 'My Prescription Requests',
+    description: 'Ask for a repeat of your own prescription',
+    category: 'Clinical',
+    // The PATIENT-side counterpart to '/wellness/prescription-requests'
+    // above. Both surfaces have to exist: granting a CUSTOMER role
+    // `my_prescription_requests.read` has to put SOMETHING in their sidebar,
+    // and the staff module is the wrong thing to grant them (it would expose
+    // the whole clinic's queue). Backend is the same /portal/* pair the
+    // Android app calls, scoped to the caller's own linked Patient row.
+    requiredPermissions: [{ module: 'my_prescription_requests', action: 'read' }],
   },
   {
     path: '/wellness/visits',

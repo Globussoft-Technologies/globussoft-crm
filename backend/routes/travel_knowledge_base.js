@@ -22,6 +22,7 @@
  */
 
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
@@ -37,6 +38,11 @@ const {
 } = require("../middleware/travelGuards");
 
 const CONFIG_KEY = "travel.knowledgeBase.rootFolderId";
+const tmcCatalogueUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => cb(null, file.mimetype === "application/pdf" || /\.pdf$/i.test(file.originalname)),
+});
 
 async function getRootFolderId(tenantId) {
   const row = await prisma.tenantSetting.findUnique({
@@ -752,6 +758,138 @@ router.get(
       }
       console.error("[travel-kb] folders error:", e.message);
       res.status(500).json({ error: "Failed to list folders" });
+    }
+  },
+);
+
+// GET /api/travel/knowledge-base/browse?parentId=root
+// Like /folders but returns BOTH folders and files (PDFs) — read-only Drive
+// browse for the TMC Catalogue admin's "Drive Library" tab, so operators can
+// see the existing sub-brand PDF tree alongside the new "CRM Itineraries"
+// output folder in one place. On-demand only, no sync/cron.
+router.get(
+  "/browse",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const parentId = String(req.query.parentId || "root").trim() || "root";
+      const drive = await oauth.getDriveClient(req.travelTenant.id);
+      const children = await syncEngine.listFolderChildren(drive, parentId);
+      const items = children.map((c) => ({ ...c, isFolder: c.mimeType === "application/vnd.google-apps.folder" }));
+      res.json({ parentId, items });
+    } catch (e) {
+      if (e.code === "DRIVE_NOT_CONNECTED") {
+        return res.status(401).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-kb] browse error:", e.message);
+      res.status(500).json({ error: "Failed to browse Drive" });
+    }
+  },
+);
+
+// TMC-only Drive management. Files are kept in root/TMC/CRM Itineraries so
+// the catalogue can manage generated and manually uploaded itinerary PDFs.
+router.post(
+  "/tmc-catalogue/upload",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  tmcCatalogueUpload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "Please choose a PDF file", code: "PDF_REQUIRED" });
+      const rootFolderId = await getRootFolderId(req.travelTenant.id);
+      if (!rootFolderId) return res.status(400).json({ error: "Connect Google Drive and choose a knowledge folder first", code: "FOLDER_NOT_CONFIGURED" });
+      const drive = await oauth.getDriveClient(req.travelTenant.id);
+      const rootItems = await syncEngine.listFolderChildren(drive, rootFolderId);
+      const tmc = rootItems.find((item) => item.mimeType === "application/vnd.google-apps.folder" && String(item.name).replace(/[^a-z0-9]/gi, "").toLowerCase() === "tmc");
+      const tmcFolderId = tmc?.id || await oauth.findOrCreateFolder(drive, rootFolderId, "TMC");
+      const itineraryFolderId = await oauth.findOrCreateFolder(drive, tmcFolderId, "CRM Itineraries");
+      const uploaded = await oauth.uploadFileToDrive(drive, itineraryFolderId, req.file.originalname, "application/pdf", req.file.buffer);
+      res.status(201).json({ ...uploaded, fileName: req.file.originalname, folder: "TMC/CRM Itineraries" });
+    } catch (e) {
+      if (e.code === "DRIVE_NOT_CONNECTED") return res.status(401).json({ error: e.message, code: e.code });
+      console.error("[travel-kb] TMC catalogue upload error:", e.message);
+      res.status(500).json({ error: "Failed to upload PDF" });
+    }
+  },
+);
+
+router.get(
+  "/tmc-catalogue/drive-files/:fileId/thumbnail",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const drive = await oauth.getDriveClient(req.travelTenant.id);
+      const meta = await drive.files.get({ fileId: String(req.params.fileId), fields: "thumbnailLink" });
+      if (!meta.data.thumbnailLink) return res.status(404).json({ error: "Thumbnail not available", code: "THUMBNAIL_NOT_AVAILABLE" });
+      const authClient = drive.context?._options?.auth;
+      const token = await authClient?.getAccessToken();
+      const thumbnail = await fetch(meta.data.thumbnailLink, { headers: token?.token ? { Authorization: `Bearer ${token.token}` } : {} });
+      if (!thumbnail.ok) return res.status(404).json({ error: "Thumbnail not available", code: "THUMBNAIL_NOT_AVAILABLE" });
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.setHeader("Content-Type", thumbnail.headers.get("content-type") || "image/jpeg");
+      res.send(Buffer.from(await thumbnail.arrayBuffer()));
+    } catch (e) {
+      console.error("[travel-kb] TMC thumbnail error:", e.message);
+      res.status(404).json({ error: "Thumbnail not available", code: "THUMBNAIL_NOT_AVAILABLE" });
+    }
+  },
+);
+
+router.delete(
+  "/tmc-catalogue/drive-files/:fileId",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    let fileId = null;
+    try {
+      fileId = String(req.params.fileId || "").trim();
+      if (!fileId) return res.status(400).json({ error: "fileId is required", code: "INVALID_FILE_ID" });
+      const rootFolderId = await getRootFolderId(req.travelTenant.id);
+      if (!rootFolderId) return res.status(400).json({ error: "Drive folder is not configured", code: "FOLDER_NOT_CONFIGURED" });
+      const drive = await oauth.getDriveClient(req.travelTenant.id);
+      const file = await drive.files.get({ fileId, fields: "id, name, parents, mimeType, trashed" });
+      const generatedItinerary = await prisma.itinerary.findFirst({
+        where: { tenantId: req.travelTenant.id, subBrand: "tmc", catalogueDriveFileId: fileId },
+        select: { id: true },
+      });
+      let parentIds = file.data.parents || [];
+      let foundTmc = false;
+      let foundCrmItineraries = false;
+      // A generated PDF may sit in a child folder under CRM Itineraries. Walk
+      // its complete Drive ancestry rather than requiring a direct parent.
+      for (let depth = 0; depth < 10 && parentIds.length > 0; depth += 1) {
+        const parentId = parentIds[0];
+        const parent = await drive.files.get({ fileId: parentId, fields: "id, name, parents" });
+        const normalized = String(parent.data.name || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+        if (normalized === "crmitineraries") foundCrmItineraries = true;
+        if (normalized === "tmc") foundTmc = true;
+        if (parent.data.id === rootFolderId) break;
+        parentIds = parent.data.parents || [];
+      }
+      if (!generatedItinerary && (!foundTmc || !foundCrmItineraries)) return res.status(403).json({ error: "Only files in TMC / CRM Itineraries can be deleted here", code: "OUTSIDE_TMC_FOLDER" });
+      await oauth.deleteFileFromDrive(drive, fileId);
+      res.json({ deleted: true, fileId });
+    } catch (e) {
+      if (e.code === "DRIVE_NOT_CONNECTED") return res.status(401).json({ error: e.message, code: e.code });
+      if (e.code === 404 || e.response?.status === 404) {
+        // The Drive file may already have been removed outside the CRM. Clear
+        // the generated-itinerary reference so it does not remain stuck in
+        // the pending-sync list forever.
+        await prisma.itinerary.updateMany({
+          where: { tenantId: req.travelTenant.id, subBrand: "tmc", catalogueDriveFileId: fileId },
+          data: { catalogueDriveFileId: null, catalogueDriveViewLink: null, catalogueSyncedAt: null },
+        });
+        return res.json({ deleted: true, stale: true, fileId });
+      }
+      console.error("[travel-kb] TMC catalogue delete error:", e.message);
+      res.status(500).json({ error: "Failed to delete Drive file" });
     }
   },
 );

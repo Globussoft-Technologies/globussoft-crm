@@ -14,7 +14,11 @@ const INITIAL_PLAN = {
   serviceId: '',
 };
 
-// ── Treatment plans tab ───────────────────────────────────────────
+// ── Packages tab ──────────────────────────────────────────────────
+//
+// Backed by TreatmentPlan rows; the clinic calls them packages, so every
+// user-facing string here does too. The model, the route and the `plans` tab
+// key keep their original names.
 export default function PlansTab({ patient, services, onSaved }) {
   const notify = useNotify();
   const [draft, setDraft, isDirty, clearDraft] = useFormAutosave(`plan-${patient.id}`, INITIAL_PLAN);
@@ -46,7 +50,7 @@ export default function PlansTab({ patient, services, onSaved }) {
           name, totalSessions, totalPrice, serviceId: serviceId || null,
         }),
       });
-      notify.success(`Treatment plan "${name}" created`);
+      notify.success(`Package "${name}" created`);
       clearDraft();
       onSaved();
     } catch (_err) { /* fetchApi already toasted */ } finally {
@@ -67,17 +71,17 @@ export default function PlansTab({ patient, services, onSaved }) {
           <DateRangeFilter value={filter} onChange={setFilter} label="Filter by created date" />
           <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
             {plans.length === allPlans.length
-              ? `${allPlans.length} plan${allPlans.length === 1 ? '' : 's'}`
-              : `${plans.length} of ${allPlans.length} plans`}
+              ? `${allPlans.length} package${allPlans.length === 1 ? '' : 's'}`
+              : `${plans.length} of ${allPlans.length} packages`}
           </span>
         </div>
       )}
       <div style={{ marginBottom: '1rem', display: 'grid', gap: '0.5rem' }}>
         {allPlans.length === 0 && (
-          <div className="glass" style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No treatment plans yet.</div>
+          <div className="glass" style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No packages yet.</div>
         )}
         {allPlans.length > 0 && plans.length === 0 && (
-          <div className="glass" style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No plans in the selected range.</div>
+          <div className="glass" style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No packages in the selected range.</div>
         )}
         {plans.map((tp) => (
           <div key={tp.id} className="glass" style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -98,10 +102,10 @@ export default function PlansTab({ patient, services, onSaved }) {
       </div>
 
       <form onSubmit={submit} className="glass" style={{ padding: '1.25rem' }}>
-        <h4 style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>New treatment plan</h4>
+        <h4 style={{ marginBottom: '0.75rem', fontSize: '0.95rem' }}>New package</h4>
         {isDirty && <RestoredBanner onDiscard={clearDraft} />}
         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: '0.5rem' }}>
-          <input placeholder="Plan name (e.g. PRP 6-session package)" value={name} onChange={(e) => setName(e.target.value)} required style={inputStyle} />
+          <input placeholder="Package name (e.g. PRP 6-session package)" value={name} onChange={(e) => setName(e.target.value)} required style={inputStyle} />
           <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} style={inputStyle}>
             <option value="">Service</option>
             {services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}

@@ -47,9 +47,15 @@ const callifiedClient = require('../services/callifiedClient');
 const BRIDGE_PATH = '/ws/callified-agent';
 
 // A ticket is a one-shot capability minted by an already-authenticated,
-// role-checked HTTP request. Short TTL because the browser redeems it
-// immediately after the POST that created it resolves.
-const TICKET_TTL_MS = Number(process.env.CALLIFIED_BRIDGE_TICKET_TTL_MS) || 60 * 1000;
+// role-checked HTTP request.
+//
+// The browser does NOT redeem it instantly: it opens the microphone first,
+// and a first-time visitor can leave the browser's permission prompt sitting
+// on screen for a while. At the original 60s that prompt could outlive the
+// ticket, and the agent got a 401 the moment they clicked Allow. Three
+// minutes covers a human reading a permission dialog while keeping the
+// window short for a token that is already single-use and bound to one call.
+const TICKET_TTL_MS = Number(process.env.CALLIFIED_BRIDGE_TICKET_TTL_MS) || 3 * 60 * 1000;
 const TICKET_SWEEP_MS = 60 * 1000;
 
 // Frames the browser sends before the upstream socket finishes connecting.
@@ -144,6 +150,47 @@ function buildUpstreamUrl(agentSocketUrl, jwt, { tokenInQuery = true } = {}) {
   }
 }
 
+// Frame-shape tracing for the undocumented /ws/agent protocol.
+//
+// API_FLOW.md documents that the agent socket exists but not the audio
+// envelope it speaks, so when audio flows one way and not the other the only
+// way to settle it is to look at the wire. Set
+// CALLIFIED_BRIDGE_DEBUG_FRAMES=<n> to log the first <n> frames in EACH
+// direction, then leave it unset.
+//
+// Never logs a full frame: base64 audio payloads are replaced with their
+// length, so the log records the SHAPE of a frame and never its contents.
+const DEBUG_FRAMES = Number(process.env.CALLIFIED_BRIDGE_DEBUG_FRAMES) || 0;
+
+function describeFrame(data, isBinary) {
+  const bytes = Buffer.isBuffer(data) ? data.length : (data && data.byteLength) || 0;
+  if (isBinary) return `BINARY ${bytes} bytes`;
+
+  const text = String(data);
+  try {
+    const parsed = JSON.parse(text);
+    // Redact anything that looks like an audio payload — keep its size, which
+    // is the diagnostically useful part (frame duration / codec inference).
+    const redact = (node) => {
+      if (!node || typeof node !== 'object') return node;
+      const out = Array.isArray(node) ? [] : {};
+      for (const [k, v] of Object.entries(node)) {
+        if (typeof v === 'string' && v.length > 64 && /payload|audio|media|data/i.test(k)) {
+          out[k] = `<${v.length} base64 chars>`;
+        } else if (v && typeof v === 'object') {
+          out[k] = redact(v);
+        } else {
+          out[k] = v;
+        }
+      }
+      return out;
+    };
+    return `TEXT ${bytes} bytes ${JSON.stringify(redact(parsed))}`;
+  } catch (_e) {
+    return `TEXT ${bytes} bytes (not JSON) ${text.slice(0, 120)}`;
+  }
+}
+
 function safeSend(socket, payload, isBinary = false) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return false;
   try {
@@ -233,20 +280,29 @@ function handleAgentConnection(client, grant) {
   let pending = [];
   let closed = false;
   let connectedAt = null;
+  // Set only when Callified reports the CUSTOMER answered — see teardown.
+  let answeredAt = null;
 
   const teardown = (reason, code) => {
     if (closed) return;
     closed = true;
     clearInterval(keepalive);
 
-    if (connectedAt) {
-      const duration = Math.max(0, Math.round((Date.now() - connectedAt) / 1000));
+    // `connectedAt` is when OUR socket to Callified opened; `answeredAt` is
+    // when the CUSTOMER picked up. Only the second one makes a call
+    // "completed" — using the first meant a call that never rang was logged
+    // as COMPLETED with a duration equal to however long the agent sat
+    // waiting, which then showed up in Call History as a real conversation.
+    if (answeredAt) {
       updateBridgeCallLog(callLogId, {
         status: 'COMPLETED',
-        duration,
+        duration: Math.max(0, Math.round((Date.now() - answeredAt) / 1000)),
       });
+    } else if (connectedAt) {
+      // Bridge was up, customer never answered.
+      updateBridgeCallLog(callLogId, { status: 'MISSED', duration: 0 });
     } else {
-      updateBridgeCallLog(callLogId, { status: 'FAILED' });
+      updateBridgeCallLog(callLogId, { status: 'FAILED', duration: 0 });
     }
 
     try {
@@ -272,8 +328,15 @@ function handleAgentConnection(client, grant) {
   }, KEEPALIVE_MS);
   if (typeof keepalive.unref === 'function') keepalive.unref();
 
+  let sentTrace = 0;
+  let recvTrace = 0;
+
   // Browser → Callified. Queue until the upstream handshake completes.
   client.on('message', (data, isBinary) => {
+    if (DEBUG_FRAMES && sentTrace < DEBUG_FRAMES) {
+      sentTrace += 1;
+      console.log(`${tag} agent→callified #${sentTrace} ${describeFrame(data, isBinary)}`);
+    }
     if (upstream && upstream.readyState === WebSocket.OPEN) {
       safeSend(upstream, data, isBinary);
       return;
@@ -325,6 +388,28 @@ function handleAgentConnection(client, grant) {
 
     // Callified → browser, verbatim.
     upstream.on('message', (data, isBinary) => {
+      // The relay forwards frames verbatim and does not interpret the audio
+      // protocol — but it does need ONE signal: whether the customer actually
+      // answered, so the CallLog records a real conversation rather than
+      // however long the agent sat listening to a phone that never rang.
+      if (!answeredAt && !isBinary) {
+        const text = String(data);
+        if (text.includes('"connected"')) {
+          try {
+            const frame = JSON.parse(text);
+            if (frame && frame.type === 'status' && frame.status === 'connected') {
+              answeredAt = Date.now();
+              updateBridgeCallLog(callLogId, { status: 'CONNECTED' });
+            }
+          } catch (_e) {
+            /* not JSON — nothing to learn from it */
+          }
+        }
+      }
+      if (DEBUG_FRAMES && recvTrace < DEBUG_FRAMES) {
+        recvTrace += 1;
+        console.log(`${tag} callified→agent #${recvTrace} ${describeFrame(data, isBinary)}`);
+      }
       safeSend(client, data, isBinary);
     });
 

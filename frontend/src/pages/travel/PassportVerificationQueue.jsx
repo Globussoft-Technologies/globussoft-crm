@@ -7,8 +7,10 @@
 //
 // Endpoints consumed (per row kind — see below):
 //   GET    /api/travel/passport/verification-queue                          — pending list
+//   GET    /api/travel/passport/participants/:id/view-url                    — trip rows
 //   POST   /api/travel/passport/participants/:id/passport-verify            — trip rows
 //   DELETE /api/travel/passport/participants/:id/passport-extraction        — trip rows
+//   GET    /api/travel/passport/customer-travellers/:id/view-url             — customer rows
 //   POST   /api/travel/passport/customer-travellers/:id/passport-verify     — customer rows
 //   DELETE /api/travel/passport/customer-travellers/:id/passport-extraction — customer rows
 //
@@ -84,6 +86,19 @@ function rowBase(row) {
     : `/api/travel/passport/participants/${id}`;
 }
 
+async function openPassportImageForRow(row, notify) {
+  try {
+    const data = await fetchApi(`${rowBase(row)}/view-url`);
+    if (!data?.url) {
+      notify?.error?.("Failed to open passport image");
+      return;
+    }
+    window.open(data.url, "_blank", "noopener,noreferrer");
+  } catch (_e) {
+    // fetchApi already surfaced the error or redirected the session.
+  }
+}
+
 function requestSearchText(row) {
   return [
     row.fullName,
@@ -116,7 +131,7 @@ const SUB_BRAND_LABEL = {
   visa_sure: "Visa Sure",
 };
 
-function PassportVerificationTab() {
+function PassportVerificationTab({ pendingEditKey, onPendingEditConsumed }) {
   const notify = useNotify();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -128,6 +143,7 @@ function PassportVerificationTab() {
   const [rejectingId, setRejectingId] = useState(null);
   const [rejectReason, setRejectReason] = useState("blurry_photo");
   const [busyId, setBusyId] = useState(null);
+  const rowRefs = useRef(new Map());
 
   const load = useCallback(() => {
     setLoading(true);
@@ -150,7 +166,7 @@ function PassportVerificationTab() {
     .filter((row) => !normalizedSearch || requestSearchText(row).includes(normalizedSearch))
     .sort((a, b) => compareRequests(a, b, sortOrder));
 
-  const startEdit = (row) => {
+  const startEdit = useCallback((row) => {
     setEditingId(rowKey(row));
     setEditDraft({
       passportNumber: row.extraction?.passportNumber || "",
@@ -159,7 +175,7 @@ function PassportVerificationTab() {
       givenNames: row.extraction?.givenNames || "",
       dateOfBirth: row.extraction?.dateOfBirth || "",
     });
-  };
+  }, []);
 
   const cancelEdit = () => {
     setEditingId(null);
@@ -219,6 +235,32 @@ function PassportVerificationTab() {
       .catch((e) => notify.error(e?.message || "Failed to clear extraction"))
       .finally(() => setBusyId(null));
   };
+
+  const openPassportImage = (row) => openPassportImageForRow(row, notify);
+
+  const setRowRef = useCallback((key, element) => {
+    if (element) {
+      rowRefs.current.set(key, element);
+    } else {
+      rowRefs.current.delete(key);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!pendingEditKey) return;
+    const row = rows.find((candidate) => rowKey(candidate) === pendingEditKey);
+    if (!row) return;
+    startEdit(row);
+    const targetKey = pendingEditKey;
+    const timer = window.setTimeout(() => {
+      rowRefs.current.get(targetKey)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      onPendingEditConsumed?.();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [pendingEditKey, rows, startEdit, onPendingEditConsumed]);
 
   // ── Styles (theme variables) ──────────────────────────────────────
 
@@ -424,9 +466,21 @@ function PassportVerificationTab() {
         const isEditing = editingId === key;
         const isRejecting = rejectingId === key;
         const isBusy = busyId === key;
+        const rowCard = isEditing ? {
+          ...card,
+          borderColor: "var(--primary-color, var(--accent-color))",
+          boxShadow: "0 0 0 3px rgba(200,154,78,0.16), 0 10px 24px rgba(15, 23, 42, 0.08)",
+          background: "linear-gradient(180deg, rgba(200,154,78,0.05), var(--surface-color) 26%)",
+        } : card;
 
         return (
-          <div key={key} style={card}>
+          <div
+            key={key}
+            ref={(el) => setRowRef(key, el)}
+            data-passport-row-key={key}
+            data-passport-row-active={isEditing ? "true" : "false"}
+            style={rowCard}
+          >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)" }}>
@@ -483,21 +537,17 @@ function PassportVerificationTab() {
                   {row.confidence != null ? ` · confidence: ${fmtConfidence(row.confidence)}` : ""}
                 </div>
               </div>
-              {row.imageUrl && (
-                <a
-                  href={row.imageUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    ...secondaryBtn,
-                    color: "var(--primary-color, var(--accent-color))",
-                    textDecoration: "none",
-                  }}
-                  aria-label={`View passport image for ${row.fullName}`}
-                >
-                  <Eye size={14} aria-hidden /> View image
-                </a>
-              )}
+              <button
+                type="button"
+                onClick={() => openPassportImage(row)}
+                style={{
+                  ...secondaryBtn,
+                  color: "var(--primary-color, var(--accent-color))",
+                }}
+                aria-label={`View passport image for ${row.fullName}`}
+              >
+                <Eye size={14} aria-hidden /> View image
+              </button>
             </div>
 
             {/* Manual-entry guidance when OCR couldn't extract the MRZ. */}
@@ -723,7 +773,7 @@ function PassportVerificationTab() {
 }
 
 
-function PassportListTab() {
+function PassportListTab({ onRequestEdit }) {
   const notify = useNotify();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -757,6 +807,8 @@ function PassportListTab() {
   const listRef = useRef(null);
   const sentinelRef = useRef(null);
   const loadingMoreRef = useRef(false);
+  const openPassportImage = (row) => openPassportImageForRow(row, notify);
+  const requestEdit = (row) => onRequestEdit?.(row);
 
   const load = useCallback((
     nextPage = page,
@@ -1219,9 +1271,28 @@ function PassportListTab() {
                           Assign Contact
                         </button>
                       )}
-                      {row.imageUrl && (
-                        <a href={row.imageUrl} target="_blank" rel="noopener noreferrer" style={{ ...secondaryBtn, textDecoration: 'none' }}>View</a>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => openPassportImage(row)}
+                        style={{ ...secondaryBtn }}
+                        aria-label={`View passport image for ${row.fullName}`}
+                      >
+                        View
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => requestEdit(row)}
+                        style={{
+                          ...secondaryBtn,
+                          opacity: row.status === 'pending' ? 1 : 0.55,
+                          cursor: row.status === 'pending' ? "pointer" : "not-allowed",
+                        }}
+                        disabled={row.status !== 'pending'}
+                        aria-label={`Edit passport for ${row.fullName}`}
+                        title={row.status === 'pending' ? undefined : "Only pending passports can be edited"}
+                      >
+                        <Pencil size={14} aria-hidden /> Edit
+                      </button>
                     </div>
                   </div>
 
@@ -1344,6 +1415,12 @@ function PassportListTab() {
 
 export default function PassportVerificationQueue() {
   const [activeTab, setActiveTab] = useState('verification');
+  const [pendingEditKey, setPendingEditKey] = useState(null);
+  const requestEditFromList = (row) => {
+    setPendingEditKey(rowKey(row));
+    setActiveTab('verification');
+  };
+  const clearPendingEditKey = () => setPendingEditKey(null);
   const tabBtn = (isActive) => ({
     display: 'inline-flex',
     alignItems: 'center',
@@ -1375,7 +1452,14 @@ export default function PassportVerificationQueue() {
           <List size={14} aria-hidden /> Passport List
         </button>
       </div>
-      {activeTab === 'verification' ? <PassportVerificationTab /> : <PassportListTab />}
+      {activeTab === 'verification' ? (
+        <PassportVerificationTab
+          pendingEditKey={pendingEditKey}
+          onPendingEditConsumed={clearPendingEditKey}
+        />
+      ) : (
+        <PassportListTab onRequestEdit={requestEditFromList} />
+      )}
     </div>
   );
 }

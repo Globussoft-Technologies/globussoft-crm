@@ -12,6 +12,10 @@ const prisma = require("../lib/prisma");
 const { parseSlotWindow, freeSlots } = require("../lib/calendarSlots");
 const zoomClient = require("../services/zoomClient");
 
+function includesBirthdayText(value) {
+  return /birthday/i.test(String(value || ""));
+}
+
 const GOOGLE_CLIENT_ID =
   process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET =
@@ -230,9 +234,12 @@ router.post("/sync", verifyToken, async (req, res) => {
     const now = Date.now();
     const timeMin = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString(); // last 30d
     const timeMax = new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString(); // next 90d
+    const timeMinDate = new Date(timeMin);
+    const timeMaxDate = new Date(timeMax);
 
     let pageToken = undefined;
     let synced = 0;
+    const seenExternalIds = new Set();
     do {
       const resp = await calendar.events.list({
         calendarId: integration.calendarId || "primary",
@@ -246,6 +253,7 @@ router.post("/sync", verifyToken, async (req, res) => {
       const events = resp.data.items || [];
       for (const ev of events) {
         if (!ev.id) continue;
+        seenExternalIds.add(ev.id);
         const start = ev.start && (ev.start.dateTime || ev.start.date);
         const end = ev.end && (ev.end.dateTime || ev.end.date);
         if (!start || !end) continue;
@@ -301,6 +309,19 @@ router.post("/sync", verifyToken, async (req, res) => {
       }
       pageToken = resp.data.nextPageToken || undefined;
     } while (pageToken);
+
+    await prisma.calendarEvent.deleteMany({
+      where: {
+        tenantId,
+        userId,
+        provider: "google",
+        externalId: { notIn: Array.from(seenExternalIds) },
+        startTime: {
+          gte: timeMinDate,
+          lte: timeMaxDate,
+        },
+      },
+    });
 
     await prisma.calendarIntegration.update({
       where: {
@@ -383,6 +404,8 @@ router.post("/events", verifyToken, async (req, res) => {
       description,
       startTime,
       endTime,
+      startDate,
+      endDate,
       attendees,
       contactId,
       dealId,
@@ -390,11 +413,18 @@ router.post("/events", verifyToken, async (req, res) => {
       createMeet,
       createZoom,
       conferencing,
+      allDay,
+      recurrence,
     } = req.body || {};
-    if (!title || !startTime || !endTime) {
+    const wantsAllDay = allDay === true || allDay === "true";
+    if (wantsAllDay ? (!title || !startDate) : (!title || !startTime || !endTime)) {
       return res
         .status(400)
-        .json({ error: "title, startTime and endTime are required" });
+        .json({
+          error: wantsAllDay
+            ? "title and startDate are required for all-day events"
+            : "title, startTime and endTime are required",
+        });
     }
 
     // Opt-in Google Meet link generation (T18). Off by default so every
@@ -413,32 +443,71 @@ router.post("/events", verifyToken, async (req, res) => {
     // No-op when Zoom creds are absent (zoomClient.createMeeting returns null).
     const wantsZoom =
       createZoom === true || createZoom === "true" || conferencing === "zoom";
+    const isBirthdayLikeEvent =
+      wantsAllDay &&
+      includesBirthdayText(`${String(title || "")} ${String(description || "")}`);
+
+    const formatDateKey = (date) => {
+      const d = date instanceof Date ? date : new Date(date);
+      if (!Number.isFinite(d.getTime())) return "";
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
 
     // Validate and parse dates
-    const start = new Date(startTime);
-    const end = new Date(endTime);
+    const start = wantsAllDay
+      ? new Date(`${String(startDate).slice(0, 10)}T00:00:00.000Z`)
+      : new Date(startTime);
+    const resolvedEndDate = wantsAllDay ? (endDate || startDate) : endTime;
+    const end = wantsAllDay
+      ? new Date(`${String(resolvedEndDate).slice(0, 10)}T00:00:00.000Z`)
+      : new Date(endTime);
     if (isNaN(start.getTime()) || isNaN(end.getTime())) {
       return res
         .status(400)
         .json({ error: "Invalid startTime or endTime format" });
     }
 
-    // Check if start time is in the past
     const now = new Date();
-    if (start < now) {
-      return res
-        .status(400)
-        .json({
-          error:
-            "Cannot create events in the past. Start time must be in the future.",
-        });
-    }
+    if (wantsAllDay) {
+      const todayKey = formatDateKey(now);
+      const startKey = String(startDate).slice(0, 10);
+      const endKey = String(resolvedEndDate).slice(0, 10);
+      if (!startKey || !endKey) {
+        return res
+          .status(400)
+          .json({ error: "Invalid startDate or endDate format" });
+      }
+      if (startKey < todayKey) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Cannot create events in the past. Start date must be today or later.",
+          });
+      }
+      if (endKey <= startKey) {
+        return res
+          .status(400)
+          .json({ error: "End date must be after start date" });
+      }
+    } else {
+      if (start < now) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Cannot create events in the past. Start time must be in the future.",
+          });
+      }
 
-    // Check if end time is after start time
-    if (end <= start) {
-      return res
-        .status(400)
-        .json({ error: "End time must be after start time" });
+      if (end <= start) {
+        return res
+          .status(400)
+          .json({ error: "End time must be after start time" });
+      }
     }
 
     const userId = req.user.userId;
@@ -447,22 +516,32 @@ router.post("/events", verifyToken, async (req, res) => {
     }
     const tenantId = req.user.tenantId;
 
-    // Check for conflicting events (same timing)
-    const conflictingEvent = await prisma.calendarEvent.findFirst({
-      where: {
-        userId,
-        tenantId,
-        startTime: { lt: end },
-        endTime: { gt: start },
-      },
-    });
-    if (conflictingEvent) {
-      return res
-        .status(409)
-        .json({
-          error:
-            "Event time conflicts with an existing event. Please choose a different time.",
-        });
+    // Birthday events are informational, not availability blockers.
+    // They may overlap with meetings or other birthdays on the same day.
+    if (!isBirthdayLikeEvent) {
+      const overlappingEvents = await prisma.calendarEvent.findMany({
+        where: {
+          userId,
+          tenantId,
+          startTime: { lt: end },
+          endTime: { gt: start },
+        },
+        select: {
+          title: true,
+          description: true,
+        },
+      });
+      const conflictingEvent = overlappingEvents.find(
+        (event) => !includesBirthdayText(`${event?.title || ""} ${event?.description || ""}`),
+      );
+      if (conflictingEvent) {
+        return res
+          .status(409)
+          .json({
+            error:
+              "Event time conflicts with an existing event. Please choose a different time.",
+          });
+      }
     }
 
     const { client, integration } = await getAuthorizedClientForUser(
@@ -484,7 +563,7 @@ router.post("/events", verifyToken, async (req, res) => {
       try {
         const zoom = await zoomClient.createMeeting({
           topic: title,
-          startTime,
+          startTime: wantsAllDay ? start.toISOString() : startTime,
           durationMins: Math.round((end - start) / 60000),
           agenda: description,
         });
@@ -504,10 +583,24 @@ router.post("/events", verifyToken, async (req, res) => {
       summary: title,
       description: eventDescription || undefined,
       location: location || undefined,
-      start: { dateTime: new Date(startTime).toISOString() },
-      end: { dateTime: new Date(endTime).toISOString() },
       attendees: attendeesArr.length ? attendeesArr : undefined,
     };
+    if (wantsAllDay) {
+      requestBody.start = { date: String(startDate).slice(0, 10) };
+      requestBody.end = { date: String(resolvedEndDate).slice(0, 10) };
+      const recurrenceRules = Array.isArray(recurrence)
+        ? recurrence.map((rule) => String(rule).trim()).filter(Boolean)
+        : [];
+      if (recurrenceRules.length) {
+        requestBody.recurrence = recurrenceRules;
+      }
+      if (isBirthdayLikeEvent) {
+        requestBody.transparency = "transparent";
+      }
+    } else {
+      requestBody.start = { dateTime: new Date(startTime).toISOString() };
+      requestBody.end = { dateTime: new Date(endTime).toISOString() };
+    }
     if (wantsMeet) {
       // Ask Google to provision a Meet conference for this event. requestId
       // must be unique per create-request; a UUID satisfies that.
@@ -557,8 +650,12 @@ router.post("/events", verifyToken, async (req, res) => {
         provider: "google",
         title: ev.summary || title,
         description: ev.description || eventDescription || null,
-        startTime: new Date(startTime),
-        endTime: new Date(endTime),
+        startTime: wantsAllDay
+          ? new Date(`${String(startDate).slice(0, 10)}T00:00:00.000Z`)
+          : new Date(startTime),
+        endTime: wantsAllDay
+          ? new Date(`${String(resolvedEndDate).slice(0, 10)}T00:00:00.000Z`)
+          : new Date(endTime),
         location: location || null,
         attendees: attendeesArr.length ? JSON.stringify(attendeesArr) : null,
         meetingUrl,
@@ -570,8 +667,12 @@ router.post("/events", verifyToken, async (req, res) => {
       update: {
         title: ev.summary || title,
         description: ev.description || eventDescription || null,
-        startTime: new Date(startTime),
-        endTime: new Date(endTime),
+        startTime: wantsAllDay
+          ? new Date(`${String(startDate).slice(0, 10)}T00:00:00.000Z`)
+          : new Date(startTime),
+        endTime: wantsAllDay
+          ? new Date(`${String(resolvedEndDate).slice(0, 10)}T00:00:00.000Z`)
+          : new Date(endTime),
         location: location || null,
         attendees: attendeesArr.length ? JSON.stringify(attendeesArr) : null,
         meetingUrl,

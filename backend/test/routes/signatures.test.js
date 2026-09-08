@@ -75,6 +75,10 @@ prisma.signatureRequest.findMany = vi.fn();
 prisma.signatureRequest.create = vi.fn();
 prisma.signatureRequest.update = vi.fn();
 prisma.signatureRequest.delete = vi.fn();
+prisma.visit = prisma.visit || {};
+prisma.visit.findFirst = vi.fn();
+prisma.service = prisma.service || {};
+prisma.service.count = vi.fn();
 
 // Document-lookup paths used by the optional Activity-log side-effect in
 // POST /sign/:token. Stub so the side-effect doesn't blow up when the
@@ -180,6 +184,8 @@ beforeEach(() => {
   prisma.signatureRequest.create.mockReset();
   prisma.signatureRequest.update.mockReset();
   prisma.signatureRequest.delete.mockReset();
+  prisma.visit.findFirst.mockReset().mockResolvedValue(null);
+  prisma.service.count.mockReset().mockResolvedValue(0);
 
   // Defaults — individual tests override.
   prisma.signatureRequest.findUnique.mockResolvedValue(null);
@@ -567,6 +573,34 @@ describe('POST / — create signature request', () => {
     const expectedMax = Date.now() + sevenDaysMs + 5_000;
     expect(createArg.expiresAt.getTime()).toBeGreaterThanOrEqual(expectedMin);
     expect(createArg.expiresAt.getTime()).toBeLessThanOrEqual(expectedMax);
+  });
+
+  test('201 stores validated patient signature context for the tenant', async () => {
+    prisma.visit.findFirst.mockResolvedValue({ id: 99 });
+    prisma.service.count.mockResolvedValue(2);
+    prisma.signatureRequest.create.mockImplementation(async ({ data }) => ({ id: 100, ...data }));
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .post('/api/signatures')
+      .send({
+        documentType: 'Custom', documentId: 99,
+        signerName: 'Asha Patel', signerEmail: 'asha@example.com',
+        targetPatientId: 7, visitId: 99, serviceIds: [11, 12],
+        documentName: 'Consent Pack',
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.visit.findFirst).toHaveBeenCalledWith({
+      where: { id: 99, patientId: 7, tenantId: 42 },
+      select: { id: true },
+    });
+    expect(prisma.service.count).toHaveBeenCalledWith({
+      where: { id: { in: [11, 12] }, tenantId: 42 },
+    });
+    expect(prisma.signatureRequest.create.mock.calls[0][0].data).toMatchObject({
+      documentName: 'Consent Pack', patientId: 7, visitId: 99,
+      serviceIds: '[11,12]', tenantId: 42,
+    });
   });
 });
 

@@ -246,10 +246,10 @@ Routes: /wellness/services, /wellness/service-categories
 3. Fill name, one or more categories, ticket tier (low/medium/high), base price, duration in minutes, target marketing radius in km, and a description. You can add an image.
 4. Save. The service is immediately bookable.
 
-### How to manage packages and active treatments
+### How to manage packages and active packages
 
 - Packages live in the Packages tab on the Service Catalog page (staff/admin only). Build a bundle of sessions with a price.
-- Active Treatments (also a tab on the same page) shows treatment plans currently in progress across patients.
+- Active Packages (also a tab on the same page) shows the packages patients have bought and are working through — sessions completed, what is due next, and the status of each.
 
 ### How to manage service categories
 

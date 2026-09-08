@@ -169,10 +169,12 @@ const ALLOWED_ORIGINS = [
   // that fetches the public CRM-rendered landing-page HTML from the browser.
   "https://themodernclassroom.in",
   "https://www.themodernclassroom.in",
-  // Dr. Haror's external marketing site — consumes the public wellness
-  // catalog + payment endpoints (POST /api/wellness/public/payment/order +
-  // /confirm). Hardcoded because it's part of the product surface, not a
-  // one-off env override.
+  // Dr. Enhance Wellness external marketing site — submits public enquiries
+  // and also consumes the public wellness catalog + payment endpoints.
+  // Hardcoded because it's part of the product surface, not a one-off env
+  // override.
+  "https://drenhance.com",
+  "https://www.drenhance.com",
   "https://enhancewellness.globusdemos.com",
   "http://localhost:8080",
   "http://127.0.0.1:8080",
@@ -872,6 +874,15 @@ const wellnessAiConfigRoutes = require("./routes/wellness_ai_config");
 // services/callifiedClient.js the generic CRM Leads page uses; declares only
 // /callified/* paths that wellness.js does NOT own.
 const wellnessCallifiedRoutes = require("./routes/wellness_callified");
+// Wellness service packages — saleable bundles of services sold as N
+// discounted sessions. Declares only /packages* paths that wellness.js does
+// NOT own.
+const wellnessPackagesRoutes = require("./routes/wellness_packages");
+// Prescription renewal / medicine requests — the staff half of the workflow a
+// patient starts from the Android app. Declares only /prescription-requests*
+// paths that wellness.js does NOT own; the patient half lives on
+// /portal/prescription-requests inside wellness.js (next to verifyPatientToken).
+const wellnessPrescriptionRequestRoutes = require("./routes/wellness_prescription_requests");
 // Wave 2 Agent II — POS / cash register / shift / sale backbone.
 const posRoutes = require("./routes/pos");
 // D16 Wallet Top-up Arc 1 slice 2-partial — read-only wallet endpoints
@@ -1026,6 +1037,7 @@ app.use("/api", (req, res, next) => {
     "/terms-and-conditions",
     "/legal",
     "/landing-pages/public",
+    "/explore",
     "/landing-sites/public",
     "/landing-pages/wanderlux-static",
     "/brochure-assets",
@@ -1402,6 +1414,7 @@ app.use(
 // to /api/travel/cancellation-policies/cancellation-policies, so the real
 // /api/travel/cancellation-policies fell through to the global 404.
 app.use("/api/travel", require("./routes/travel_cancellation_policies"));
+app.use("/api/travel", require("./routes/travel_item_types"));
 app.use("/api/travel", travelQuotesRoutes);
 // G018 — FX-rate read endpoints. Mounted at /api/fx (cross-currency
 // reference data; tenant-agnostic; verifyToken at the router level).
@@ -1507,6 +1520,7 @@ app.use(
   travelPersonalisedDestinationsRoutes,
 );
 app.use("/api/travel-tmc-catalogue", require("./routes/travel_tmc_catalogue"));
+app.use("/api/explore", require("./routes/explore_public"));
 app.use(
   "/api/travel/engine-weights",
   require("./routes/travel_engine_weights"),
@@ -1523,6 +1537,10 @@ app.use("/api/support-chat", supportChatRoutes);
 app.use("/api/wellness", wellnessAiConfigRoutes);
 // Callified calling for the wellness Appointments page (/callified/* paths).
 app.use("/api/wellness", wellnessCallifiedRoutes);
+// Wellness service packages (/packages* paths).
+app.use("/api/wellness", wellnessPackagesRoutes);
+// Prescription renewal / medicine requests (/prescription-requests* paths).
+app.use("/api/wellness", wellnessPrescriptionRequestRoutes);
 // Standalone geofence zones + bulk staff assignment (/geofence-zones,
 // /geofence-zone-assignments/* paths). Decoupled from clinic Location — see
 // routes/wellness_geofence_zones.js for the global-fallback design.
@@ -1604,12 +1622,12 @@ app.use("/p", landingPagesPublic);
 // Public legal/policy pages — rendered from Markdown (no auth)
 app.use(require("./routes/legal"));
 
-// Public /trips marketing surface — root still resolves the featured
-// travel page when one exists, while /trips/:id-or-slug serves the direct
-// share link for other published travel trips. When no featured page
-// exists, /trips falls through to the SPA shell so the frontend
-// TripsResolver can show the hardcoded Japan TripsLanding fallback
-// instead of a bare 404. No nginx changes are required for this flow.
+// Public /trips marketing surface — root renders the featured travel
+// page when one exists, while /trips/:id-or-slug serves the direct share
+// link for other published travel trips. When no featured page exists,
+// /trips falls through to the SPA shell so the frontend TripsResolver can
+// show the hardcoded Japan TripsLanding fallback instead of a bare 404.
+// No nginx changes are required for this flow.
 app.use("/trips", require("./routes/trips_public").router);
 
 // #917 slice S119 (FR-3.X) — CSP-nonce static-file middleware.
@@ -1857,6 +1875,7 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
 // never hit this path — their signed URL points straight at AWS.) Registered
 // BEFORE the static mounts so it intercepts first.
 const visaDocStore = require("./lib/visaDocStore");
+const passportFileStore = require("./lib/passportFileStore");
 const gateVisaDocs = (req, res, next) => {
   if (visaDocStore.verifyDiskToken(path.basename(req.path || ""), req.query.t))
     return next();
@@ -1869,6 +1888,17 @@ const gateVisaDocs = (req, res, next) => {
 };
 app.use("/uploads/visa-docs", gateVisaDocs);
 app.use("/api/uploads/visa-docs", gateVisaDocs);
+const gatePassportScans = (req, res, next) => {
+  if (passportFileStore.verifyDiskToken(path.basename(req.path || ""), req.query.t))
+    return next();
+  return res
+    .status(403)
+    .json({
+      error:
+        "Forbidden — open this passport image from the passport screen.",
+    });
+};
+app.use("/api/uploads/passport-ocr", gatePassportScans);
 app.use("/api/uploads", require("./routes/file-uploads"));
 // Web-form attachments: force download + nosniff so a forged HTML/JS file
 // cannot execute in the user's browser if the upload mimetype was spoofed.
@@ -2342,6 +2372,10 @@ if (process.env.DISABLE_CRONS === "1") {
   // PRD Gap §12 #4e — daily 08:30 IST no-show risk Notification fan-out.
   initNoShowRiskCron();
 
+  // Initialize Calendar Reminder Engine (every minute, meeting notifications)
+  const { initCalendarReminderCron } = require("./cron/calendarReminderEngine");
+  initCalendarReminderCron(io);
+
   // Initialize Wellness Ops Engine (hourly: NPS surveys + junk-lead retention)
   const { initWellnessOpsCron } = require("./cron/wellnessOpsEngine");
   initWellnessOpsCron();
@@ -2524,6 +2558,11 @@ if (process.env.DISABLE_CRONS === "1") {
   // Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
   const { initSlaBreachCron } = require("./cron/slaBreachEngine");
   initSlaBreachCron();
+
+  // Time-based workflow triggers (schedule.date_field / schedule.recurring),
+  // the `wait` action's resume queue, and the invoice.overdue emitter.
+  const { initWorkflowScheduler } = require("./cron/workflowScheduler");
+  initWorkflowScheduler();
 
   // WhatsApp SaaS P3 — async outbound delivery (every 30s) + media download
   // pipeline (every 60s). Both engines no-op gracefully when the underlying

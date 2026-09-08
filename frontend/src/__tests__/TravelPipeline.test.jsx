@@ -72,7 +72,7 @@ function makeItin(overrides = {}) {
     id: 1,
     destination: "Bali Honeymoon Special",
     contactId: 10,
-    contact: { id: 10, name: "Sankar Rathod", email: "sankar@test.com" },
+    contact: { id: 10, name: "Sankar Rathod", email: "sankar@test.com", company: "Sankar Travels" },
     subBrand: "tmc",
     totalAmount: 124300,
     currency: "INR",
@@ -86,8 +86,8 @@ function makeItin(overrides = {}) {
 
 const DEFAULT_ITINS = [
   makeItin({ id: 1, destination: "Bali Honeymoon Special", status: "accepted", totalAmount: 124300 }),
-  makeItin({ id: 2, destination: "Europe Grand Tour", subBrand: "travelstall", status: "sent", totalAmount: 467000, contact: { id: 11, name: "Meera Iyer", email: "meera@test.com" }, contactId: 11 }),
-  makeItin({ id: 3, destination: "Ladakh Adventure Circuit", subBrand: "travelstall", status: "rejected", totalAmount: 210500, contact: { id: 12, name: "Priya Nair", email: "priya@test.com" }, contactId: 12 }),
+  makeItin({ id: 2, destination: "Europe Grand Tour", subBrand: "travelstall", status: "sent", totalAmount: 467000, contact: { id: 11, name: "Meera Iyer", email: "meera@test.com", company: "Meera Travels" }, contactId: 11 }),
+  makeItin({ id: 3, destination: "Ladakh Adventure Circuit", subBrand: "travelstall", status: "rejected", totalAmount: 210500, contact: { id: 12, name: "Priya Nair", email: "priya@test.com", company: "Priya Holidays" }, contactId: 12 }),
 ];
 
 function mockFetch(itins = DEFAULT_ITINS, contacts = []) {
@@ -237,6 +237,42 @@ describe("TravelPipeline", () => {
       "revised tour",
       "sent tour",
       "draft tour",
+    ]);
+  });
+
+  it("sorts the Company column by contact company name", async () => {
+    mockFetch([
+      makeItin({
+        id: 1,
+        destination: "Gamma Trip",
+        contactId: 21,
+        contact: { id: 21, name: "Gamma Owner", email: "gamma@test.com", company: "Zen Travels" },
+      }),
+      makeItin({
+        id: 2,
+        destination: "Alpha Trip",
+        contactId: 22,
+        contact: { id: 22, name: "Alpha Owner", email: "alpha@test.com", company: "Apex Tours" },
+      }),
+      makeItin({
+        id: 3,
+        destination: "Beta Trip",
+        contactId: 23,
+        contact: { id: 23, name: "Beta Owner", email: "beta@test.com", company: "Blue Sky Holidays" },
+      }),
+    ]);
+    renderPage();
+    await screen.findByText("Gamma Trip");
+
+    const destinations = () => within(screen.getByRole("table"))
+      .getAllByTitle("Open itinerary detail")
+      .map((link) => link.textContent);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sort Company" }));
+    expect(destinations()).toEqual([
+      "Alpha Trip",
+      "Beta Trip",
+      "Gamma Trip",
     ]);
   });
 

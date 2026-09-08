@@ -63,6 +63,13 @@ prisma.tenant = {
 };
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+// Chosen-interests storage (2026-08-27) — zero-migration TenantSetting-backed
+// (see diagnosticChosenInterests.js).
+prisma.tenantSetting = {
+  ...(prisma.tenantSetting || {}),
+  findUnique: vi.fn(),
+  upsert: vi.fn(),
+};
 
 // Stub out RAG + PDF so tests don't need those modules.
 const travelRag = requireCJS("../../lib/travelRag");
@@ -74,6 +81,13 @@ pdfModule.generateDiagnosticPdfBestEffort = vi.fn().mockResolvedValue("/api/uplo
 
 const dedup = requireCJS("../../utils/deduplication");
 dedup.findDuplicateContactFull = vi.fn().mockResolvedValue(null);
+
+// Self-mocked so these tests exercise the ROUTE's plumbing (does it call
+// notifyDiagnosticSubmitted with the right args on submit?) without
+// depending on diagnosticNotifications.js's own send logic — that's
+// covered in test/lib/diagnosticNotifications.test.js.
+const diagnosticNotifications = requireCJS("../../lib/diagnosticNotifications");
+diagnosticNotifications.notifyDiagnosticSubmitted = vi.fn().mockResolvedValue(undefined);
 
 const router = requireCJS("../../routes/travel_diagnostics_public");
 
@@ -274,6 +288,9 @@ beforeEach(() => {
   prisma.brandKit.findFirst.mockReset().mockResolvedValue(null);
   prisma.tenant.findFirst.mockReset().mockResolvedValue({ id: 1, slug: "travelstall", name: "Travel Stall" });
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ id: 1, slug: "travelstall", name: "Travel Stall", vertical: "travel" });
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tenantSetting.upsert.mockReset().mockResolvedValue({});
+  diagnosticNotifications.notifyDiagnosticSubmitted.mockReset().mockResolvedValue(undefined);
 });
 
 afterAll(() => {
@@ -374,6 +391,36 @@ describe("POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit"
     expect(res.body.classification).toBe("level_2");
     expect(res.body.reportSlug).toMatch(/^\d+-[a-f0-9]+$/);
     expect(res.body.reportPdfUrl).toBeTruthy();
+  });
+
+  test("fires notifyDiagnosticSubmitted with the submitter's name + score on a successful submit", async () => {
+    prisma.travelDiagnosticPublicForm.findUnique.mockResolvedValue(formRow({ isPublished: true }));
+    const res = await request(makeApp())
+      .post("/api/travel/diagnostics/public/form/travelstall/travelstall/submit")
+      .send({
+        answers: { q1: "few", q2: ["mountain"] },
+        name: "Yasin",
+        email: "yasin@example.com",
+        phone: "+919999999999",
+      });
+    expect(res.status).toBe(201);
+    expect(diagnosticNotifications.notifyDiagnosticSubmitted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subBrand: "travelstall",
+        contactLabel: "Yasin",
+        score: 6,
+        classificationLabel: "Regular",
+      }),
+    );
+  });
+
+  test("a notification failure never blocks the submit response", async () => {
+    prisma.travelDiagnosticPublicForm.findUnique.mockResolvedValue(formRow({ isPublished: true }));
+    diagnosticNotifications.notifyDiagnosticSubmitted.mockRejectedValue(new Error("boom"));
+    const res = await request(makeApp())
+      .post("/api/travel/diagnostics/public/form/travelstall/travelstall/submit")
+      .send({ answers: { q1: "few", q2: ["mountain"] }, name: "Yasin", email: "yasin@example.com", phone: "+919999999999" });
+    expect(res.status).toBe(201);
   });
 
   test("TMC public form saves curriculum-fit recommendations before PDF generation", async () => {
@@ -516,6 +563,76 @@ describe("POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit"
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("EMAIL_REQUIRED");
   });
+
+  // Per-question required flag (2026-08-24) — admins can mark individual
+  // diagnostic questions as required in the builder; the public submit
+  // endpoint must reject a submission that skips one, since the client-side
+  // check alone can be bypassed by calling this endpoint directly.
+  test("rejects submission when a required question is unanswered", async () => {
+    const questionsWithRequired = JSON.stringify({
+      questions: [
+        {
+          id: "q1",
+          text: "How many trips per year?",
+          type: "single-choice",
+          required: true,
+          options: [
+            { value: "first", label: "First time", weight: 1 },
+            { value: "few", label: "2-4", weight: 3 },
+          ],
+        },
+        {
+          id: "q2",
+          text: "Interests?",
+          type: "multi-select",
+          options: [
+            { value: "beach", label: "Beach", weight: 2 },
+            { value: "mountain", label: "Mountain", weight: 3 },
+          ],
+        },
+      ],
+    });
+    prisma.travelDiagnosticPublicForm.findUnique.mockResolvedValue(formRow({ isPublished: true }));
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(
+      bankRow({ questionsJson: questionsWithRequired }),
+    );
+
+    const res = await request(makeApp())
+      .post("/api/travel/diagnostics/public/form/travelstall/travelstall/submit")
+      .send({ answers: { q2: ["beach"] }, name: "Yasin", email: "yasin@example.com" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("REQUIRED_QUESTION_MISSING");
+    expect(res.body.questionId).toBe("q1");
+    expect(prisma.travelDiagnostic.create).not.toHaveBeenCalled();
+  });
+
+  test("accepts submission once every required question is answered", async () => {
+    const questionsWithRequired = JSON.stringify({
+      questions: [
+        {
+          id: "q1",
+          text: "How many trips per year?",
+          type: "single-choice",
+          required: true,
+          options: [
+            { value: "first", label: "First time", weight: 1 },
+            { value: "few", label: "2-4", weight: 3 },
+          ],
+        },
+      ],
+    });
+    prisma.travelDiagnosticPublicForm.findUnique.mockResolvedValue(formRow({ isPublished: true }));
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(
+      bankRow({ questionsJson: questionsWithRequired }),
+    );
+
+    const res = await request(makeApp())
+      .post("/api/travel/diagnostics/public/form/travelstall/travelstall/submit")
+      .send({ answers: { q1: "few" }, name: "Yasin", email: "yasin@example.com" });
+
+    expect(res.status).toBe(201);
+  });
 });
 
 describe("GET /api/travel/diagnostics/public/report/:slug", () => {
@@ -549,5 +666,69 @@ describe("GET /api/travel/diagnostics/public/report/:slug", () => {
     const res = await request(makeApp()).get("/api/travel/diagnostics/public/report/555");
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("INVALID_SLUG");
+  });
+
+  test("includes null chosenInterests when nothing was ever submitted", async () => {
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/report/555-abc123abc123abcd",
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.chosenInterests).toBeNull();
+  });
+
+  test("includes a prior chosen-interests submission", async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({
+        interests: [{ name: "Hampi Heritage Trail", driveLink: "https://drive.example/hampi" }],
+        submittedAt: "2026-08-27T10:00:00.000Z",
+      }),
+    });
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/report/555-abc123abc123abcd",
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.chosenInterests).toEqual({
+      interests: [{ name: "Hampi Heritage Trail", driveLink: "https://drive.example/hampi" }],
+      submittedAt: "2026-08-27T10:00:00.000Z",
+    });
+  });
+});
+
+describe("POST /api/travel/diagnostics/public/report/:slug/interests", () => {
+  test("happy: saves the chosen interests and echoes them back", async () => {
+    const res = await request(makeApp())
+      .post("/api/travel/diagnostics/public/report/555-abc123abc123abcd/interests")
+      .send({ interests: [{ name: "Hampi Heritage Trail", driveLink: "https://drive.example/hampi" }] });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.interests).toEqual([{ name: "Hampi Heritage Trail", driveLink: "https://drive.example/hampi" }]);
+    expect(prisma.tenantSetting.upsert.mock.calls[0][0]).toMatchObject({
+      where: { tenantId_key: { tenantId: 1, key: "travel.diagnostic.interests.555" } },
+    });
+  });
+
+  test("rejects a well-formed slug whose token doesn't match the stored one (IDOR guard)", async () => {
+    const res = await request(makeApp())
+      .post("/api/travel/diagnostics/public/report/555-0000000000000000/interests")
+      .send({ interests: [{ name: "Hampi Heritage Trail" }] });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("NOT_FOUND");
+    expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+  });
+
+  test("rejects malformed slug", async () => {
+    const res = await request(makeApp())
+      .post("/api/travel/diagnostics/public/report/bad-slug/interests")
+      .send({ interests: [{ name: "x" }] });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_SLUG");
+  });
+
+  test("400 MISSING_INTERESTS when the array is empty or every name is blank", async () => {
+    const res = await request(makeApp())
+      .post("/api/travel/diagnostics/public/report/555-abc123abc123abcd/interests")
+      .send({ interests: [] });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("MISSING_INTERESTS");
   });
 });

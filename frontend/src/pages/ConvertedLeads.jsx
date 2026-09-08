@@ -7,6 +7,8 @@ import { AuthContext } from '../App';
 import FilterPanel from '../components/FilterPanel';
 import TopScrollSync from '../components/TopScrollSync';
 import Pagination from '../components/ui/Pagination';
+import { useLeadCalling } from '../hooks/useLeadCalling';
+import { LeadCallButton, LeadCallDialog } from '../components/wellness/LeadCallAction';
 
 // #366: include Junk so the chip can show its count if the tenant uses it.
 const STATUSES = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
@@ -156,6 +158,8 @@ const ConvertedLeads = () => {
   const auth = useContext(AuthContext);
   const isWellness = auth?.tenant?.vertical === 'wellness';
   const isTravel = auth?.tenant?.vertical === 'travel';
+  // Wellness-only Callified calling; a no-op on generic / travel tenants.
+  const leadCall = useLeadCalling();
   const [leads, setLeads] = useState([]);
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -760,6 +764,9 @@ const ConvertedLeads = () => {
                   </td>
                   {/* #367: revert flow  confirm dialog moves the contact back to /leads. */}
                   <td style={{ padding: '1rem' }}>
+                    {leadCall.enabled && (
+                      <LeadCallButton lead={lead} onCall={() => leadCall.open(lead)} />
+                    )}
                     <button
                       onClick={() => handleRevertToLead(lead.id, lead.name)}
                       aria-label={`Revert ${lead.name || 'lead'} to Lead`}
@@ -872,6 +879,7 @@ const ConvertedLeads = () => {
           </div>
         )}
       </div>
+      <LeadCallDialog lead={leadCall.target} onClose={leadCall.close} />
     </div>
   );
 };

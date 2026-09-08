@@ -75,6 +75,7 @@ vi.mock('../utils/date', () => ({
 }));
 
 import Signatures from '../pages/Signatures';
+import { AuthContext } from '../App';
 
 const sampleRequests = [
   {
@@ -141,10 +142,12 @@ function defaultFetchMock(url, opts) {
   return Promise.resolve(null);
 }
 
-function renderSignatures() {
+function renderSignatures(vertical = 'generic') {
   return render(
     <MemoryRouter>
-      <Signatures />
+      <AuthContext.Provider value={{ tenant: { vertical } }}>
+        <Signatures />
+      </AuthContext.Provider>
     </MemoryRouter>,
   );
 }
@@ -305,10 +308,16 @@ describe('<Signatures /> — page surface', () => {
     // Drift: the documentType select was removed when ENDPOINT_FOR_TYPE
     // narrowed to Estimate-only (Signatures.jsx:35). Modal now exposes
     // a single document <select> + signer inputs + submit.
+    // Drift 2: the modal now defaults to the Patient tab — switch to the
+    // Estimate tab before asserting the estimate form fields.
     renderSignatures();
     await screen.findByText('Anita Sharma');
 
     fireEvent.click(screen.getByRole('button', { name: /Request Signature/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Estimate$/ }));
+
+    // Modal uses the solid theme-aware surface (visible in dark theme).
+    expect(document.querySelector('.sig-modal-card')).toBeInTheDocument();
 
     const selects = await screen.findAllByRole('combobox');
     expect(selects.length).toBeGreaterThanOrEqual(1);
@@ -326,6 +335,7 @@ describe('<Signatures /> — page surface', () => {
     await screen.findByText('Anita Sharma');
 
     fireEvent.click(screen.getByRole('button', { name: /Request Signature/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Estimate$/ }));
 
     // Fill name/email but leave documentId empty. The HTML5 `required` on
     // the document <select> would normally block a click-driven submit in
@@ -363,6 +373,7 @@ describe('<Signatures /> — page surface', () => {
     await screen.findByText('Anita Sharma');
 
     fireEvent.click(screen.getByRole('button', { name: /Request Signature/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Estimate$/ }));
 
     // Wait for the estimate options to populate the document <select>
     // (page-mount loadDocOptions targets /api/estimates by default).
@@ -406,6 +417,178 @@ describe('<Signatures /> — page surface', () => {
       expect(body.signerEmail).toBe('test@example.com');
       expect(body.expiresInDays).toBe(7);
       expect(typeof body.expiresInDays).toBe('number');
+    });
+  });
+
+  // ── Patient tab: tied-to-visit + services ─────────────────────────
+  // Mirrors PrescribeTab's "Tied to visit" (required, one option per
+  // visit rendered "<date> — <service>") and the ConsentTab service
+  // source (tenant catalog), kept as a multi-select per product call.
+  const patientTabFixtures = (visits) => (url, opts) => {
+    if (url === '/api/signatures' && (!opts || !opts.method || opts.method === 'GET')) {
+      return Promise.resolve([]);
+    }
+    if (url === '/api/estimates') return Promise.resolve([]);
+    if (url === '/api/wellness/patients?limit=200') {
+      return Promise.resolve({
+        patients: [{ id: 7, name: 'Asha Nair', email: 'asha@example.com' }],
+        total: 1,
+      });
+    }
+    if (url === '/api/wellness/services') {
+      return Promise.resolve([
+        { id: 11, name: 'Hair Transplant' },
+        { id: 12, name: 'IV Glow Drip' },
+      ]);
+    }
+    if (url === '/api/wellness/patients/7/visits') {
+      return Promise.resolve(visits);
+    }
+    return Promise.resolve(null);
+  };
+
+  const sampleVisits = [
+    {
+      id: 99,
+      visitDate: '2026-05-01T10:00:00.000Z',
+      service: { id: 11, name: 'Hair Transplant' },
+    },
+  ];
+
+  async function openPatientTab() {
+    renderSignatures('wellness');
+    // Empty list → empty-state renders once the GET settles.
+    await screen.findByText(/No signature requests yet\./i);
+    fireEvent.click(screen.getByRole('button', { name: /Request Signature/i }));
+    // Patient tab is the modal default — document-name input pins it open.
+    await screen.findByPlaceholderText(/Enter document name/i);
+  }
+
+  it('Patient tab: picking a patient loads visits and catalog services', async () => {
+    fetchApiMock.mockImplementation(patientTabFixtures(sampleVisits));
+    await openPatientTab();
+
+    // Signer is the first combobox in the Patient form.
+    const signerSelect = screen.getAllByRole('combobox')[0];
+    fireEvent.change(signerSelect, { target: { value: '7' } });
+
+    // Visits endpoint hit for the picked patient…
+    await waitFor(() => {
+      const visitsCall = fetchApiMock.mock.calls.find(
+        ([u]) => u === '/api/wellness/patients/7/visits',
+      );
+      expect(visitsCall).toBeTruthy();
+    });
+    // …and the Tied-to-visit option mirrors PrescribeTab's shape.
+    expect(
+      await screen.findByRole('option', { name: '2026-05-01 — Hair Transplant' }),
+    ).toBeInTheDocument();
+    // Services dropdown lists the tenant catalog (consent-form source)
+    // once opened — collapsed trigger first, checkbox menu after.
+    expect(screen.getByRole('button', { name: /Select services/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Select services/i }));
+    expect(screen.getByRole('option', { name: 'Hair Transplant' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'IV Glow Drip' })).toBeInTheDocument();
+  });
+
+  it('Patient tab: submitting without a visit fires notify.error and does NOT POST', async () => {
+    fetchApiMock.mockImplementation(patientTabFixtures(sampleVisits));
+    await openPatientTab();
+
+    fireEvent.change(screen.getByPlaceholderText(/Enter document name/i), {
+      target: { value: 'Consent Pack' },
+    });
+    const signerSelect = screen.getAllByRole('combobox')[0];
+    fireEvent.change(signerSelect, { target: { value: '7' } });
+    await screen.findByRole('option', { name: '2026-05-01 — Hair Transplant' });
+
+    fetchApiMock.mockClear();
+    const submitBtn = screen.getByRole('button', { name: /Send Signature Request/i });
+    fireEvent.submit(submitBtn.closest('form'));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Pick a visit this signature belongs to/i),
+      );
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      ([u, opts]) => u === '/api/signatures' && opts?.method === 'POST',
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('Patient tab: submitting with a visit POSTs Custom with the tied context', async () => {
+    fetchApiMock.mockImplementation(patientTabFixtures(sampleVisits));
+    await openPatientTab();
+
+    fireEvent.change(screen.getByPlaceholderText(/Enter document name/i), {
+      target: { value: 'Consent Pack' },
+    });
+    const signerSelect = screen.getAllByRole('combobox')[0];
+    fireEvent.change(signerSelect, { target: { value: '7' } });
+    await screen.findByRole('option', { name: '2026-05-01 — Hair Transplant' });
+
+    // Pick the visit — its service pre-selects into Services.
+    const selects = screen.getAllByRole('combobox');
+    const visitSelect = selects.find((s) => s !== signerSelect);
+    fireEvent.change(visitSelect, { target: { value: '99' } });
+
+    fetchApiMock.mockClear();
+    const submitBtn = screen.getByRole('button', { name: /Send Signature Request/i });
+    fireEvent.submit(submitBtn.closest('form'));
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([u, opts]) => u === '/api/signatures' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.documentType).toBe('Custom');
+      expect(body.documentId).toBe(99);
+      expect(typeof body.documentId).toBe('number');
+      expect(body.signerName).toBe('Asha Nair');
+      expect(body.signerEmail).toBe('asha@example.com');
+      expect(body.targetPatientId).toBe(7);
+      expect(body.visitId).toBe(99);
+      // Visit's service auto-selected (nothing was picked manually).
+      expect(body.serviceIds).toEqual([11]);
+      expect(body.documentName).toBe('Consent Pack');
+    });
+  });
+
+  it('Patient tab: services dropdown stays multi-select via checkboxes', async () => {
+    fetchApiMock.mockImplementation(patientTabFixtures(sampleVisits));
+    await openPatientTab();
+
+    fireEvent.change(screen.getByPlaceholderText(/Enter document name/i), {
+      target: { value: 'Combo Pack' },
+    });
+    const signerSelect = screen.getAllByRole('combobox')[0];
+    fireEvent.change(signerSelect, { target: { value: '7' } });
+    await screen.findByRole('option', { name: '2026-05-01 — Hair Transplant' });
+
+    // Pick the visit — auto-preselects its service (Hair Transplant).
+    const selects = screen.getAllByRole('combobox');
+    const visitSelect = selects.find((s) => s !== signerSelect);
+    fireEvent.change(visitSelect, { target: { value: '99' } });
+    expect(screen.getByRole('button', { name: 'Hair Transplant' })).toBeInTheDocument();
+
+    // Open the dropdown and tick a second service — menu stays open,
+    // trigger collapses the count into a single dropdown label.
+    fireEvent.click(screen.getByRole('button', { name: 'Hair Transplant' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'IV Glow Drip' }));
+    expect(screen.getByRole('button', { name: /2 services selected/i })).toBeInTheDocument();
+
+    fetchApiMock.mockClear();
+    const submitBtn = screen.getByRole('button', { name: /Send Signature Request/i });
+    fireEvent.submit(submitBtn.closest('form'));
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([u, opts]) => u === '/api/signatures' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall[1].body).serviceIds).toEqual([11, 12]);
     });
   });
 });

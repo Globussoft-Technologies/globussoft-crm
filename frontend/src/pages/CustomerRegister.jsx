@@ -1,4 +1,4 @@
-import { useContext, useState, useEffect } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { CheckCircle2, XCircle } from "lucide-react";
 import { AuthContext } from "../App";
@@ -17,15 +17,10 @@ import EmailOtpField from "../components/EmailOtpField";
 // a User row. The wellness patient portal (OTP, phone-only) is a separate auth
 // flow at /wellness/portal and unrelated to this page.
 //
-// Tenant list is fetched from GET /api/auth/customer/tenants (public). New
-// orgs created via /api/auth/signup appear automatically once active.
-
-function tenantLabel(t) {
-  if (t.vertical === "wellness") return `${t.name} (Wellness Clinic)`;
-  if (t.vertical === "travel") return `${t.name} (Travel Agency)`;
-  if (t.vertical === "generic") return `${t.name} (Generic CRM)`;
-  return t.name;
-}
+// Organization suggestions come from GET /api/auth/public/tenants (public).
+// Only a tenant selected from that list can be submitted — free-typed text
+// that matches nothing is cleared on blur (see handleOrganizationBlur) and
+// rejected again at submit (see validate).
 
 function passwordStrength(p) {
   let s = 0;
@@ -35,6 +30,65 @@ function passwordStrength(p) {
   if (/[0-9]/.test(p)) s += 1;
   if (/[^A-Za-z0-9]/.test(p)) s += 1;
   return s;
+}
+
+const EXISTING_EMAIL_MESSAGE = "This email already exists. Sign in to your account.";
+const SELECT_ORG_MESSAGE = "Select your organization first to verify email availability.";
+const EMAIL_CHECK_FAILED_MESSAGE = "Unable to check email availability. Please try again.";
+const MIN_ORG_SUGGESTION_CHARS = 3;
+const ORGANIZATION_SUGGESTION_PANEL_STYLE = {
+  position: "absolute",
+  top: "calc(100% + 6px)",
+  left: 0,
+  right: 0,
+  zIndex: 20,
+  background: "var(--modal-bg)",
+  border: "1px solid var(--border-color)",
+  borderRadius: 10,
+  boxShadow: "0 14px 40px rgba(0, 0, 0, 0.24)",
+  overflow: "hidden",
+};
+const ORGANIZATION_SUGGESTION_ITEM_STYLE = {
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  gap: "0.75rem",
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  borderBottom: "1px solid var(--border-color)",
+  padding: "0.7rem 0.85rem",
+  cursor: "pointer",
+  color: "var(--text-primary)",
+};
+const ORGANIZATION_SUGGESTION_BADGE_STYLE = {
+  flexShrink: 0,
+  padding: "0.18rem 0.55rem",
+  borderRadius: 999,
+  fontSize: "0.7rem",
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  color: "var(--primary-color, var(--accent-color))",
+  background: "var(--accent-bg)",
+  border: "1px solid var(--border-color)",
+};
+
+function normalizeOrganizationKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function scoreOrganizationMatch(tenant, queryKey) {
+  const nameKey = normalizeOrganizationKey(tenant?.name);
+  const slugKey = normalizeOrganizationKey(tenant?.slug);
+  if (!queryKey || (!nameKey && !slugKey)) return Number.POSITIVE_INFINITY;
+  if (nameKey === queryKey || slugKey === queryKey) return 0;
+  if (nameKey.startsWith(queryKey) || slugKey.startsWith(queryKey)) return 1;
+  if (nameKey.includes(queryKey) || slugKey.includes(queryKey)) return 2;
+  return Number.POSITIVE_INFINITY;
 }
 
 export default function CustomerRegister() {
@@ -57,6 +111,7 @@ export default function CustomerRegister() {
 
   const [tenants, setTenants] = useState([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
+  const [organizationSuggestionsOpen, setOrganizationSuggestionsOpen] = useState(false);
   // Email verification gate - null until the customer verifies their email.
   const [verificationToken, setVerificationToken] = useState(null);
   const [form, setForm] = useState({
@@ -99,25 +154,175 @@ export default function CustomerRegister() {
           ? prev
           : { ...prev, tenantId: String(match.id), organization: match.name }
       );
+      setVerificationToken(null);
     }
   }, [tenantSlugParam, tenants]);
 
-  const update = (field) => (e) =>
-    setForm({ ...form, [field]: e.target.value });
+  const organizationQueryKey = normalizeOrganizationKey(form.organization);
+  const organizationSuggestions = useMemo(() => {
+    if (
+      lockedToTenantSlug ||
+      organizationQueryKey.length < MIN_ORG_SUGGESTION_CHARS
+    ) return [];
+    return tenants
+      .filter((tenant) => scoreOrganizationMatch(tenant, organizationQueryKey) !== Number.POSITIVE_INFINITY)
+      .slice()
+      .sort((a, b) => {
+        const scoreA = scoreOrganizationMatch(a, organizationQueryKey);
+        const scoreB = scoreOrganizationMatch(b, organizationQueryKey);
+        if (scoreA !== scoreB) return scoreA - scoreB;
+        return String(a.name || "").localeCompare(String(b.name || ""));
+      })
+      .slice(0, 6);
+  }, [lockedToTenantSlug, organizationQueryKey, tenants]);
 
-  const normalizeOrg = (s) => s.trim().toLowerCase().replace(/\s+/g, "");
+  const update = (field) => (e) =>
+    setForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  const clearError = (field) => {
+    setErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const clearEmailAvailabilityError = () => clearError("email");
+  const clearOrganizationAvailabilityError = () => clearError("organization");
+
+  const setEmailAvailabilityError = (message) => {
+    setErrors((prev) => ({ ...prev, email: message }));
+    setSubmitError("");
+  };
+
+  const handleEmailChange = (e) => {
+    update("email")(e);
+    clearEmailAvailabilityError();
+    setSubmitError("");
+  };
+
+  const resolveOrganizationMatch = (text) => {
+    const key = normalizeOrganizationKey(text);
+    if (!key) return null;
+    return (
+      tenants.find((tenant) => {
+        const nameKey = normalizeOrganizationKey(tenant.name);
+        const slugKey = normalizeOrganizationKey(tenant.slug);
+        return nameKey === key || slugKey === key;
+      }) || null
+    );
+  };
+
+  const selectOrganization = (tenant) => {
+    if (!tenant) return;
+    const nextTenantId = String(tenant.id);
+    const previousTenantId = form.tenantId;
+    setForm((prev) => ({
+      ...prev,
+      organization: tenant.name || prev.organization,
+      tenantId: nextTenantId,
+    }));
+    clearEmailAvailabilityError();
+    clearOrganizationAvailabilityError();
+    setSubmitError("");
+    setOrganizationSuggestionsOpen(false);
+    if (previousTenantId !== nextTenantId) {
+      setVerificationToken(null);
+    }
+  };
 
   const handleOrganizationChange = (e) => {
     const text = e.target.value;
-    const match = tenants.find(
-      (t) => normalizeOrg(t.name) === normalizeOrg(text)
-    );
+    const match = resolveOrganizationMatch(text);
+    const nextTenantId = match ? String(match.id) : "";
+    const previousTenantId = form.tenantId;
     setForm((prev) => ({
       ...prev,
-      organization: text,
-      tenantId: match ? String(match.id) : "",
+      organization: match ? match.name : text,
+      tenantId: nextTenantId,
     }));
+    clearEmailAvailabilityError();
+    clearOrganizationAvailabilityError();
+    setSubmitError("");
+    setOrganizationSuggestionsOpen(
+      !lockedToTenantSlug &&
+      !match &&
+      normalizeOrganizationKey(text).length >= MIN_ORG_SUGGESTION_CHARS
+    );
+    if (previousTenantId !== nextTenantId) {
+      setVerificationToken(null);
+    }
   };
+
+  const handleOrganizationBlur = () => {
+    setOrganizationSuggestionsOpen(false);
+    if (lockedToTenantSlug) return;
+    // Free-typed text that matches no registered organization must not stick:
+    // clear it immediately so only a list selection can be submitted.
+    if (form.organization.trim() && !resolveOrganizationMatch(form.organization)) {
+      setForm((prev) => ({ ...prev, organization: "", tenantId: "" }));
+      setErrors((prev) => ({
+        ...prev,
+        organization: "Please select an organization from the list.",
+      }));
+      setVerificationToken(null);
+    }
+  };
+
+  const handleOrganizationKeyDown = (e) => {
+    if (e.key === "Escape") {
+      setOrganizationSuggestionsOpen(false);
+    }
+    if (
+      e.key === "Enter" &&
+      organizationSuggestions.length > 0 &&
+      !form.tenantId &&
+      organizationQueryKey.length >= MIN_ORG_SUGGESTION_CHARS
+    ) {
+      e.preventDefault();
+      selectOrganization(organizationSuggestions[0]);
+    }
+  };
+
+  const checkEmailAvailability = async ({ email: rawEmail } = {}) => {
+    const email = (rawEmail || form.email || "").trim().toLowerCase();
+    const tenantId = Number(form.tenantId);
+
+    if (!tenantId) {
+      setEmailAvailabilityError(SELECT_ORG_MESSAGE);
+      return false;
+    }
+
+    if (!email || !email.includes("@")) {
+      return true;
+    }
+
+    try {
+      const res = await fetch("/api/auth/check-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          registrationTenantId: tenantId,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error("Email availability check failed");
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data.exists) {
+        setEmailAvailabilityError(EXISTING_EMAIL_MESSAGE);
+        return false;
+      }
+      clearEmailAvailabilityError();
+      return true;
+    } catch {
+      setEmailAvailabilityError(EMAIL_CHECK_FAILED_MESSAGE);
+      return false;
+    }
+  };
+
   const strength = passwordStrength(form.password);
   const strengthLabel =
     strength <= 2
@@ -162,6 +367,7 @@ export default function CustomerRegister() {
     ev.preventDefault();
     setSubmitError("");
     if (!validate()) return;
+    if (!(await checkEmailAvailability())) return;
     setIsLoading(true);
     try {
       // Travel orgs use the Customer Portal registration API (Contact-based),
@@ -187,7 +393,7 @@ export default function CustomerRegister() {
         if (!pres.ok) {
           const msg = String(pdata?.error || "");
           if (pres.status === 409 || /already/i.test(msg)) {
-            setErrors((prev) => ({ ...prev, email: "This email is already registered" }));
+            setEmailAvailabilityError(EXISTING_EMAIL_MESSAGE);
           } else if (pres.status === 400) {
             setSubmitError(msg || "Please check your inputs and try again.");
           } else {
@@ -222,10 +428,7 @@ export default function CustomerRegister() {
       if (!res.ok) {
         const msg = String(data?.error || "");
         if (res.status === 409 || /already/i.test(msg)) {
-          setErrors((prev) => ({
-            ...prev,
-            email: "This email is already registered",
-          }));
+          setEmailAvailabilityError(EXISTING_EMAIL_MESSAGE);
         } else if (res.status === 400) {
           setSubmitError(msg || "Please check your inputs and try again.");
         } else {
@@ -317,13 +520,15 @@ export default function CustomerRegister() {
           <div style={{ marginBottom: "1rem" }}>
             <EmailOtpField
               value={form.email}
-              onChange={update("email")}
+              onChange={handleEmailChange}
               purpose="customer-register"
               onVerifiedChange={setVerificationToken}
               label="Email Address"
               placeholder="name@company.com"
               inputClassName="input-field"
+              beforeRequest={checkEmailAvailability}
               disabled={isLoading}
+              key={form.tenantId || "no-tenant"}
             />
             {errors.email && (
               <div style={{ color: "var(--danger-color, #ef4444)", fontSize: "0.78rem", marginTop: 4 }}>{errors.email}</div>
@@ -350,20 +555,102 @@ export default function CustomerRegister() {
             help={
               lockedToTenantSlug
                 ? "You started this booking from a specific clinic — registration is scoped to it."
-                : undefined
+                : `Type at least ${MIN_ORG_SUGGESTION_CHARS} characters to search registered organizations, then select yours from the list.`
             }
           >
-            <input
-              id="cr-organization"
-              type="text"
-              className="input-field"
-              autoComplete="organization"
-              placeholder={tenantsLoading ? "Loading…" : "Enter your organization name"}
-              value={form.organization}
-              onChange={handleOrganizationChange}
-              disabled={isLoading || lockedToTenantSlug}
-              required
-            />
+            <div style={{ position: "relative" }}>
+              <input
+                id="cr-organization"
+                type="text"
+                className="input-field"
+                autoComplete="off"
+                aria-autocomplete="list"
+                aria-expanded={organizationSuggestionsOpen && organizationSuggestions.length > 0}
+                aria-controls="cr-organization-suggestions"
+                placeholder={tenantsLoading ? "Loading…" : "Enter your organization name"}
+                value={form.organization}
+                onChange={handleOrganizationChange}
+                onFocus={() => {
+                  if (
+                    !lockedToTenantSlug &&
+                    organizationSuggestions.length > 0 &&
+                    organizationQueryKey.length >= MIN_ORG_SUGGESTION_CHARS
+                  ) {
+                    setOrganizationSuggestionsOpen(true);
+                  }
+                }}
+                onBlur={handleOrganizationBlur}
+                onKeyDown={handleOrganizationKeyDown}
+                disabled={isLoading || lockedToTenantSlug}
+                required
+              />
+              {organizationSuggestionsOpen && organizationSuggestions.length > 0 && (
+                <div
+                  id="cr-organization-suggestions"
+                  role="listbox"
+                  style={ORGANIZATION_SUGGESTION_PANEL_STYLE}
+                >
+                  {organizationSuggestions.map((tenant) => (
+                    <button
+                      key={tenant.id}
+                      type="button"
+                      role="option"
+                      aria-selected={String(form.tenantId) === String(tenant.id)}
+                      aria-label={tenant.name}
+                      onMouseDown={(ev) => {
+                        ev.preventDefault();
+                        selectOrganization(tenant);
+                      }}
+                      style={ORGANIZATION_SUGGESTION_ITEM_STYLE}
+                    >
+                      <span style={{ minWidth: 0, flex: 1 }}>
+                        <span
+                          style={{
+                            display: "block",
+                            fontSize: "0.92rem",
+                            fontWeight: 600,
+                            color: "var(--text-primary)",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {tenant.name}
+                        </span>
+                        <span
+                          style={{
+                            display: "block",
+                            marginTop: "0.1rem",
+                            fontSize: "0.72rem",
+                            color: "var(--text-secondary)",
+                          }}
+                        >
+                          {tenant.slug}
+                        </span>
+                      </span>
+                      <span
+                        style={ORGANIZATION_SUGGESTION_BADGE_STYLE}
+                      >
+                        {tenant.vertical || "generic"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {organizationSuggestionsOpen && !tenantsLoading && organizationQueryKey.length >= MIN_ORG_SUGGESTION_CHARS && organizationSuggestions.length === 0 && (
+                <div
+                  role="status"
+                  style={{
+                    ...ORGANIZATION_SUGGESTION_PANEL_STYLE,
+                    padding: "0.7rem 0.85rem",
+                    color: "var(--text-secondary)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  No matching organizations found.
+                </div>
+              )}
+            </div>
           </Field>
 
           <Field
@@ -451,7 +738,7 @@ export default function CustomerRegister() {
                 ) : (
                   <>
                     <XCircle size={14} aria-hidden />
-                    <span>Passwords don't match</span>
+                    <span>Passwords do not match</span>
                   </>
                 )}
               </div>

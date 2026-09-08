@@ -73,8 +73,26 @@ export default function TravelDiagnosticPublicForm() {
     });
   };
 
+  const findUnansweredRequired = () => {
+    for (const q of questions) {
+      if (!q.required) continue;
+      const ans = answers[q.id];
+      const empty =
+        ans == null ||
+        (typeof ans === "string" && ans.trim() === "") ||
+        (Array.isArray(ans) && ans.length === 0);
+      if (empty) return q;
+    }
+    return null;
+  };
+
   const submit = async () => {
     setSubmitError("");
+    const missing = findUnansweredRequired();
+    if (missing) {
+      setSubmitError(`Please answer "${missing.text}" before submitting — it's required.`);
+      return;
+    }
     setSubmitting(true);
     try {
       const payload = {

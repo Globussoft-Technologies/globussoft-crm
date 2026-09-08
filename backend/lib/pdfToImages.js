@@ -7,7 +7,12 @@
 const path = require("path");
 const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
 
-const STANDARD_FONT_DATA_URL = path.join(__dirname, "..", "node_modules", "pdfjs-dist", "standard_fonts");
+// pdfjs concatenates this with a bare filename, so it MUST end in a separator.
+// Without the trailing slash it resolved to ".../standard_fontsFoo.ttf", every
+// standard-font fetch failed, and any PDF relying on the base-14 fonts (most
+// operator-uploaded brochures) rasterised with its text missing — which
+// silently blinded the vision-based template analysis to that text.
+const STANDARD_FONT_DATA_URL = `${path.join(__dirname, "..", "node_modules", "pdfjs-dist", "standard_fonts")}${path.sep}`;
 
 let canvasModule = null;
 let canvasModuleFailed = false;

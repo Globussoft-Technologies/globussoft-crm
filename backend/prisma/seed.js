@@ -987,11 +987,12 @@ async function main() {
   // Travel-login quick cards on the shared login page. These are the exact
   // demo accounts the UI advertises, so the seed keeps them aligned with the
   // travel-specific login surface instead of leaving dead cards behind.
+  const travelDemoPassword = await bcrypt.hash('password123', 10);
   const travelLoginUsers = await Promise.all([
     prisma.user.create({
       data: {
         email: 'yasin@travelstall.in',
-        password: await bcrypt.hash('password123', 10),
+        password: travelDemoPassword,
         name: 'Yasin Malik',
         userType: 'OWNER',
         role: 'ADMIN',
@@ -1001,7 +1002,7 @@ async function main() {
     prisma.user.create({
       data: {
         email: 'admin@travelstall.demo',
-        password: await bcrypt.hash('password123', 10),
+        password: travelDemoPassword,
         name: 'Travel Stall Admin',
         userType: 'STAFF',
         role: 'ADMIN',
@@ -1011,7 +1012,7 @@ async function main() {
     prisma.user.create({
       data: {
         email: 'tmc-ops@travelstall.demo',
-        password: await bcrypt.hash('password123', 10),
+        password: travelDemoPassword,
         name: 'TMC Operator',
         userType: 'STAFF',
         role: 'MANAGER',
@@ -1021,7 +1022,7 @@ async function main() {
     prisma.user.create({
       data: {
         email: 'rfu-advisor@travelstall.demo',
-        password: await bcrypt.hash('password123', 10),
+        password: travelDemoPassword,
         name: 'RFU Advisor',
         userType: 'STAFF',
         role: 'USER',
@@ -1031,7 +1032,7 @@ async function main() {
     prisma.user.create({
       data: {
         email: 'telecaller@travelstall.demo',
-        password: await bcrypt.hash('password123', 10),
+        password: travelDemoPassword,
         name: 'Telecaller',
         userType: 'STAFF',
         role: 'USER',

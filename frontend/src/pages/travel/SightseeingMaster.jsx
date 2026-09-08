@@ -91,6 +91,9 @@ export default function SightseeingMaster() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
+  const isTmcContext = activeSubBrand === 'tmc';
+  const createableBrands = accessibleSubBrands(user).filter((b) => b !== 'tmc');
+  const canCreateSightseeing = !isTmcContext && createableBrands.length > 0;
 
   // Sub-brand access resolution (mirrors Leads.jsx): ADMIN / unrestricted users
   // get a dropdown of all accessible brands; a user restricted to exactly one
@@ -273,9 +276,13 @@ export default function SightseeingMaster() {
   };
 
   const openCreate = () => {
+    if (!canCreateSightseeing) {
+      notify.error('Sightseeing creation is disabled for TMC');
+      return;
+    }
     setForm({
       ...EMPTY_FORM,
-      subBrand: defaultSubBrandFor(user, activeSubBrand),
+      subBrand: defaultSubBrandFor(user, isTmcContext ? null : activeSubBrand, createableBrands[0] || undefined),
     });
     setEditingId(null);
     setShowForm(true);
@@ -310,6 +317,10 @@ export default function SightseeingMaster() {
     }
     if (!form.name.trim()) {
       notify.error('name is required');
+      return;
+    }
+    if (!editingId && form.subBrand === 'tmc') {
+      notify.error('Sightseeing creation is disabled for TMC');
       return;
     }
 
@@ -444,6 +455,11 @@ export default function SightseeingMaster() {
             </Link>{' '}
             holds the supplier rate book that feeds itinerary pricing.
           </p>
+          {!canCreateSightseeing && (
+            <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-secondary)', fontSize: 13 }}>
+              Sightseeing creation is disabled for TMC. Existing rows can still be reviewed, but new TMC sightseeing entries should not be added here.
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" onClick={() => downloadTemplate('csv')} style={secondaryBtn}>
@@ -452,6 +468,7 @@ export default function SightseeingMaster() {
           <button type="button" onClick={() => downloadTemplate('xlsx')} style={secondaryBtn}>
             <Download size={14} /> Excel template
           </button>
+          {canCreateSightseeing && (
           <button
             type="button"
             onClick={() => importInputRef.current?.click()}
@@ -459,20 +476,23 @@ export default function SightseeingMaster() {
             disabled={importing}
             title="Bulk-import sightseeing rows from CSV or Excel using the shared template."
           >
-            <Download size={14} /> {importing ? 'Importing...' : 'Import CSV/Excel'}
+            <Upload size={14} /> {importing ? 'Importing...' : 'Import CSV/Excel'}
           </button>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            onChange={importCsv}
-            style={{ display: 'none' }}
-            aria-label="Upload sightseeing CSV or Excel file"
-          />
-          {!showForm && (
+          )}
+          {canCreateSightseeing && (
             <button type="button" onClick={openCreate} style={primaryBtn}>
               <Plus size={14} /> Add sightseeing
             </button>
+          )}
+          {canCreateSightseeing && (
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={importCsv}
+              style={{ display: 'none' }}
+              aria-label="Upload sightseeing CSV or Excel file"
+            />
           )}
         </div>      </div>
 
@@ -663,7 +683,7 @@ export default function SightseeingMaster() {
                   style={selectStyle}
                 >
                   <option value="">Tenant-wide</option>
-                  {myBrands.map((b) => (
+                  {createableBrands.map((b) => (
                     <option key={b} value={b}>
                       {subBrandShortLabel(b)}
                     </option>

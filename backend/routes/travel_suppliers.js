@@ -456,11 +456,47 @@ const SUPPLIER_IMPORT_HEADERS = [
   "taxRegimeCode",
   "primaryContactRole",
   "commissionPercent",
+  "beneficiaryName",
+  "bankName",
+  "bankAccountNumber",
+  "ifscCode",
+  "upiId",
+  "notes",
+];
+const SUPPLIER_IMPORT_REQUIRED_PAYMENT_FIELDS = [
+  "beneficiaryName",
+  "bankName",
+  "bankAccountNumber",
+  "ifscCode",
+];
+const SUPPLIER_EXPORT_HEADERS = [
+  "subBrand",
+  "name",
+  "supplierCategory",
+  "contactPerson",
+  "phone",
+  "email",
+  "gstin",
+  "addressLine",
+  "status",
+  "paymentTermsKind",
+  "paymentTermsDays",
+  "creditLimit",
+  "outstandingAmount",
+  "creditCurrency",
+  "taxRegimeCode",
+  "primaryContactRole",
+  "commissionPercent",
+  "beneficiaryName",
+  "bankName",
+  "bankAccountNumber",
+  "ifscCode",
+  "upiId",
   "notes",
 ];
 const SUPPLIER_IMPORT_TEMPLATE_ROWS = [
   {
-    subBrand: "# Required: subBrand, name, supplierCategory",
+    subBrand: "# Required: subBrand, name, supplierCategory, beneficiaryName, bankName, bankAccountNumber, ifscCode",
     name: "# Optional: contactPerson, phone, email, gstin, addressLine",
     supplierCategory: "# Optional: status, paymentTermsKind, paymentTermsDays",
     contactPerson: "# Optional: creditLimit, creditCurrency, taxRegimeCode",
@@ -476,6 +512,11 @@ const SUPPLIER_IMPORT_TEMPLATE_ROWS = [
     taxRegimeCode: "",
     primaryContactRole: "",
     commissionPercent: "",
+    beneficiaryName: "# Required: accounts payee name",
+    bankName: "# Required: beneficiary bank name",
+    bankAccountNumber: "# Required: bank account number",
+    ifscCode: "# Required: 11-character IFSC (e.g. HDFC0001234)",
+    upiId: "# Accounts: optional UPI ID",
     notes: "",
   },
   {
@@ -495,6 +536,11 @@ const SUPPLIER_IMPORT_TEMPLATE_ROWS = [
     taxRegimeCode: "",
     primaryContactRole: "",
     commissionPercent: "",
+    beneficiaryName: "Ramesh Travel",
+    bankName: "HDFC Bank",
+    bankAccountNumber: "001234567890",
+    ifscCode: "HDFC0001234",
+    upiId: "",
     notes: "",
   },
 ];
@@ -552,6 +598,24 @@ function assertValidCreditLimit(c) {
     const err = new Error("creditLimit must be a non-negative number");
     err.status = 400;
     err.code = "INVALID_CREDIT_LIMIT";
+    throw err;
+  }
+}
+
+const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const UPI_ID_REGEX = /^[A-Z0-9._-]{2,256}@[A-Z]{2,64}$/i;
+
+function assertValidPaymentDestination({ ifscCode, upiId } = {}) {
+  if (ifscCode != null && ifscCode !== "" && !IFSC_REGEX.test(String(ifscCode).trim().toUpperCase())) {
+    const err = new Error("ifscCode must be a valid 11-character Indian IFSC");
+    err.status = 400;
+    err.code = "INVALID_IFSC";
+    throw err;
+  }
+  if (upiId != null && upiId !== "" && !UPI_ID_REGEX.test(String(upiId).trim())) {
+    const err = new Error("upiId must be a valid UPI ID (for example accounts@bank)");
+    err.status = 400;
+    err.code = "INVALID_UPI_ID";
     throw err;
   }
 }
@@ -625,8 +689,23 @@ function buildSupplierExportRows(rows) {
     taxRegimeCode: row.taxRegimeCode || "",
     primaryContactRole: row.primaryContactRole || "",
     commissionPercent: row.commissionPercent ?? "",
+    beneficiaryName: row.beneficiaryName || "",
+    bankName: row.bankName || "",
+    bankAccountNumber: row.bankAccountNumber || "",
+    ifscCode: row.ifscCode || "",
+    upiId: row.upiId || "",
     notes: row.notes || "",
   }));
+}
+
+function buildSupplierExportRowsWithOutstanding(rows, outstandingBySupplierId = new Map()) {
+  return (rows || []).map((row) => {
+    const outstanding = outstandingBySupplierId.get(row.id) || { amount: 0 };
+    return {
+      ...buildSupplierExportRows([row])[0],
+      outstandingAmount: round2Exposure(outstanding.amount || 0).toFixed(2),
+    };
+  });
 }
 
 // PRD_TRAVEL_SUPPLIER_MASTER G041 — payment-terms kind enum.
@@ -820,13 +899,91 @@ router.get(
         orderBy: [{ subBrand: "asc" }, { supplierCategory: "asc" }, { name: "asc" }],
         take: 10000,
       });
-      const csv = withBom(toCsv(SUPPLIER_IMPORT_HEADERS, buildSupplierExportRows(rows)));
+      const supplierIds = rows.map((r) => r.id);
+      const outstandingBySupplierId = new Map();
+      if (supplierIds.length > 0) {
+        const exposureRows = await prisma.travelSupplierPayable.groupBy({
+          by: ["supplierId"],
+          where: {
+            tenantId: req.travelTenant.id,
+            supplierId: { in: supplierIds },
+            status: { notIn: ["paid", "cancelled"] },
+          },
+          _sum: { amount: true },
+        });
+        for (const entry of exposureRows || []) {
+          outstandingBySupplierId.set(entry.supplierId, {
+            amount: entry?._sum?.amount != null ? Number(entry._sum.amount) : 0,
+          });
+        }
+      }
+      const csv = withBom(toCsv(SUPPLIER_EXPORT_HEADERS, buildSupplierExportRowsWithOutstanding(rows, outstandingBySupplierId)));
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", "attachment; filename=\"travel-suppliers-export.csv\"");
       return res.send(csv);
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-sup] supplier export error:", e.message);
+      return res.status(500).json({ error: "Failed to export suppliers" });
+    }
+  },
+);
+
+router.get(
+  "/suppliers/export.xlsx",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("suppliers", "read"),
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+      if (req.query.subBrand) {
+        assertValidSubBrand(String(req.query.subBrand));
+        where.subBrand = String(req.query.subBrand);
+      }
+      if (req.query.includeInactive !== "1" && req.query.includeInactive !== "true") {
+        where.isActive = true;
+      }
+      if (req.query.supplierCategory) {
+        assertValidSupplierCategory(String(req.query.supplierCategory));
+        where.supplierCategory = String(req.query.supplierCategory);
+      }
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
+          : { in: [...allowed] };
+      }
+      const rows = await prisma.travelSupplier.findMany({
+        where,
+        orderBy: [{ subBrand: "asc" }, { supplierCategory: "asc" }, { name: "asc" }],
+        take: 10000,
+      });
+      const supplierIds = rows.map((r) => r.id);
+      const outstandingBySupplierId = new Map();
+      if (supplierIds.length > 0) {
+        const exposureRows = await prisma.travelSupplierPayable.groupBy({
+          by: ["supplierId"],
+          where: {
+            tenantId: req.travelTenant.id,
+            supplierId: { in: supplierIds },
+            status: { notIn: ["paid", "cancelled"] },
+          },
+          _sum: { amount: true },
+        });
+        for (const entry of exposureRows || []) {
+          outstandingBySupplierId.set(entry.supplierId, {
+            amount: entry?._sum?.amount != null ? Number(entry._sum.amount) : 0,
+          });
+        }
+      }
+      const xlsx = toXlsxBuffer(SUPPLIER_EXPORT_HEADERS, buildSupplierExportRowsWithOutstanding(rows, outstandingBySupplierId), "Suppliers");
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", "attachment; filename=\"travel-suppliers-export.xlsx\"");
+      return res.send(xlsx);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] supplier export xlsx error:", e.message);
       return res.status(500).json({ error: "Failed to export suppliers" });
     }
   },
@@ -894,6 +1051,17 @@ router.post(
             : null;
           assertValidPaymentTerms(paymentTermsDays);
           assertValidCreditLimit(creditLimit);
+          const missingPaymentFields = SUPPLIER_IMPORT_REQUIRED_PAYMENT_FIELDS.filter(
+            (field) => String(row[field] || "").trim() === "",
+          );
+          if (missingPaymentFields.length > 0) {
+            errors.push({
+              rowNumber,
+              reason: `${missingPaymentFields.join(", ")} required`,
+            });
+            continue;
+          }
+          assertValidPaymentDestination({ ifscCode: row.ifscCode, upiId: row.upiId });
           if (commissionPercent != null && (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100)) {
             errors.push({ rowNumber, reason: "commissionPercent must be 0-100" });
             continue;
@@ -916,6 +1084,11 @@ router.post(
             taxRegimeCode: row.taxRegimeCode ? String(row.taxRegimeCode).trim() : null,
             primaryContactRole: row.primaryContactRole ? String(row.primaryContactRole).trim() : null,
             commissionPercent: commissionPercent != null ? String(commissionPercent) : null,
+            beneficiaryName: row.beneficiaryName ? String(row.beneficiaryName).trim() : null,
+            bankName: row.bankName ? String(row.bankName).trim() : null,
+            bankAccountNumber: row.bankAccountNumber ? String(row.bankAccountNumber).trim() : null,
+            ifscCode: row.ifscCode ? String(row.ifscCode).trim().toUpperCase() : null,
+            upiId: row.upiId ? String(row.upiId).trim() : null,
             notes: row.notes ? String(row.notes).trim() : null,
           };
           const existing = await prisma.travelSupplier.findFirst({
@@ -3455,6 +3628,7 @@ router.post(
         // Slice 1 (#903) — payment terms + credit-tracking + metadata.
         paymentTermsDays, creditLimit, creditCurrency, taxRegimeCode,
         primaryContactRole, notes,
+        beneficiaryName, bankName, bankAccountNumber, ifscCode, upiId,
         // G045 — supplier-side default commission rate (used as fallback
         // by the commission ledger when an accrual omits commissionPercent).
         commissionPercent,
@@ -3472,6 +3646,7 @@ router.post(
       assertValidGstin(gstin);
       assertValidPaymentTerms(paymentTermsDays);
       assertValidCreditLimit(creditLimit);
+      assertValidPaymentDestination({ ifscCode, upiId });
       assertValidStatus(status);
       assertValidPaymentTermsKind(paymentTermsKind);
       if (subBrand) assertValidSubBrand(subBrand);
@@ -3525,6 +3700,11 @@ router.post(
           creditCurrency: creditCurrency ? String(creditCurrency) : undefined,
           taxRegimeCode: taxRegimeCode ? String(taxRegimeCode) : null,
           primaryContactRole: primaryContactRole ? String(primaryContactRole) : null,
+          beneficiaryName: beneficiaryName ? String(beneficiaryName).trim() : null,
+          bankName: bankName ? String(bankName).trim() : null,
+          bankAccountNumber: bankAccountNumber ? String(bankAccountNumber).trim() : null,
+          ifscCode: ifscCode ? String(ifscCode).trim().toUpperCase() : null,
+          upiId: upiId ? String(upiId).trim() : null,
           notes: notes ? String(notes) : null,
           commissionPercent: commissionPercent != null ? String(commissionPercent) : null,
         },
@@ -3579,6 +3759,7 @@ router.put(
         // Slice 1 (#903) — payment terms + credit-tracking + metadata.
         paymentTermsDays, creditLimit, creditCurrency, taxRegimeCode,
         primaryContactRole, notes,
+        beneficiaryName, bankName, bankAccountNumber, ifscCode, upiId,
         // G045 — supplier-side default commission rate.
         commissionPercent,
         // G040 / G041 — governance status + payment-terms kind enums.
@@ -3630,6 +3811,22 @@ router.put(
       }
       if (primaryContactRole !== undefined) {
         data.primaryContactRole = primaryContactRole ? String(primaryContactRole) : null;
+      }
+      assertValidPaymentDestination({ ifscCode, upiId });
+      if (beneficiaryName !== undefined) {
+        data.beneficiaryName = beneficiaryName ? String(beneficiaryName).trim() : null;
+      }
+      if (bankName !== undefined) {
+        data.bankName = bankName ? String(bankName).trim() : null;
+      }
+      if (bankAccountNumber !== undefined) {
+        data.bankAccountNumber = bankAccountNumber ? String(bankAccountNumber).trim() : null;
+      }
+      if (ifscCode !== undefined) {
+        data.ifscCode = ifscCode ? String(ifscCode).trim().toUpperCase() : null;
+      }
+      if (upiId !== undefined) {
+        data.upiId = upiId ? String(upiId).trim() : null;
       }
       if (notes !== undefined) {
         data.notes = notes ? String(notes) : null;

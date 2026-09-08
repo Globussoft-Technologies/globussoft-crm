@@ -32,6 +32,9 @@ export default function DiagnosticWizard() {
   const [banks, setBanks] = useState([]);
   const [loadingBanks, setLoadingBanks] = useState(true);
   const [selectedBank, setSelectedBank] = useState(null);
+  // Backend returns banks ordered version-desc for a single subBrand query
+  // (see GET /diagnostic-banks), so the first row is always the current one.
+  const currentBank = banks[0] || null;
 
   // ── Step 2: answer questions ───────────────────────────────────────
   const [parsedBank, setParsedBank] = useState(null);
@@ -155,34 +158,37 @@ export default function DiagnosticWizard() {
         </section>
 
         <section style={card}>
-          <h2 style={cardTitle}>2. Choose a question bank</h2>
+          <h2 style={cardTitle}>2. Start with your current template</h2>
           {loadingBanks ? (
-            <div style={empty}>Loading banks&hellip;</div>
-          ) : banks.length === 0 ? (
+            <div style={empty}>Loading your current template&hellip;</div>
+          ) : !currentBank ? (
             <div style={empty}>
-              No active banks for <strong>{subBrand}</strong> yet. Ask an admin to
-              create one via <Link to="/travel/diagnostics/banks/new">New bank</Link>.
+              No diagnostic template for <strong>{subBrand}</strong> yet. Ask an admin to
+              create one via <Link to="/travel/diagnostics/banks/new">New template</Link>.
             </div>
           ) : (
-            <div style={{ display: 'grid', gap: 8 }}>
-              {banks.map((b) => (
-                <button
-                  key={b.id}
-                  type="button"
-                  onClick={() => onPickBank(b)}
-                  style={bankRow}
-                  aria-label={`Use bank version ${b.version}`}
-                >
-                  <div>
-                    <strong>Bank v{b.version}</strong>
-                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                      Created {new Date(b.createdAt).toLocaleDateString()} · {b.isActive ? 'active' : 'inactive'}
-                    </div>
-                  </div>
-                  <ChevronRight size={18} aria-hidden style={{ color: 'var(--text-secondary)' }} />
-                </button>
-              ))}
-            </div>
+            // Each save in the builder creates a new version in one linear
+            // history per sub-brand (see travel_diagnostics.js's POST
+            // /diagnostic-banks) — there's exactly one CURRENT template per
+            // sub-brand, not a set of interchangeable banks to pick between.
+            // `banks` comes back version-desc, so banks[0] is that current
+            // template; listing every historical version here (as this page
+            // used to) was confusing and didn't match the builder's own
+            // "Current" template picker.
+            <button
+              type="button"
+              onClick={() => onPickBank(currentBank)}
+              style={bankRow}
+              aria-label={`Start diagnostic with ${currentBank.templateName || 'current template'}`}
+            >
+              <div>
+                <strong>{currentBank.templateName || `${subBrand.toUpperCase()} Template`}</strong>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  Version {currentBank.version} · Current · Updated {new Date(currentBank.updatedAt || currentBank.createdAt).toLocaleDateString()}
+                </div>
+              </div>
+              <ChevronRight size={18} aria-hidden style={{ color: 'var(--text-secondary)' }} />
+            </button>
           )}
         </section>
       </div>

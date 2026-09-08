@@ -358,25 +358,51 @@ describe('POST /api/travel/itinerary-templates — create', () => {
     expect(prisma.itineraryTemplate.create).not.toHaveBeenCalled();
   });
 
-  test('missing destinationName → 400 MISSING_DESTINATION', async () => {
+  // A template is primarily a PDF STYLE asset now (pdfTemplateUrl +
+  // pdfStyleSpecJson) — reusable across any destination/duration — so
+  // neither field is required any more. Forcing them meant picking a style
+  // template for its LOOK silently overwrote a new itinerary's real
+  // destination/price with whatever placeholder had been typed here.
+  test('missing destinationName → 201, stored as null', async () => {
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 1001, ...data, createdAt: new Date(), updatedAt: new Date(),
+    }));
+
     const res = await request(makeApp())
       .post('/api/travel/itinerary-templates')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ name: 'Mystery Trip', durationDays: 5 });
+      .send({ name: 'Branded PDF style only', durationDays: 5 });
 
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('MISSING_DESTINATION');
-    expect(prisma.itineraryTemplate.create).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(res.body.destinationName).toBeNull();
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(data.destinationName).toBeNull();
   });
 
-  test('missing durationDays → 400 MISSING_DURATION', async () => {
+  test('missing durationDays → 201, stored as null', async () => {
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 1002, ...data, createdAt: new Date(), updatedAt: new Date(),
+    }));
+
     const res = await request(makeApp())
       .post('/api/travel/itinerary-templates')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ name: 'Paris', destinationName: 'Paris' });
+      .send({ name: 'Branded PDF style only' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.durationDays).toBeNull();
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(data.durationDays).toBeNull();
+  });
+
+  test('destinationName provided but not a string → 400 INVALID_DESTINATION', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'Bad shape', destinationName: 12345 });
 
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('MISSING_DURATION');
+    expect(res.body.code).toBe('INVALID_DESTINATION');
     expect(prisma.itineraryTemplate.create).not.toHaveBeenCalled();
   });
 
@@ -1432,6 +1458,63 @@ describe('G115 — PDF underprint upload + template fields', () => {
     expect(data.pdfTemplateUrl).toBeNull();
     expect(data.pdfTemplateRegions).toBeNull();
     expect(data.isPdfTemplate).toBe(false);
+  });
+
+  // Regression: pdfStyleSpecJson was missing from MUTABLE_FIELDS, so
+  // pickMutable() silently stripped it from the request body before the
+  // "caller override wins" logic ever ran — a page-role review confirmed by
+  // the operator was never actually persisted, it always silently fell back
+  // to the auto-computed spec (which is `null` here since axios.get is
+  // mocked to reject, forcing processUploadedTemplatePdf's fallback path).
+  test('POST / create with caller-supplied pdfStyleSpecJson persists the operator-confirmed roles', async () => {
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 780, ...data, createdAt: new Date(), updatedAt: new Date(),
+    }));
+
+    const confirmedSpec = {
+      accentColor: '#00A9CE',
+      pages: [
+        { index: 1, role: 'cover' },
+        { index: 2, role: 'itinerary' },
+        { index: 3, role: 'details' },
+        { index: 4, role: 'static' },
+      ],
+    };
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Operator-reviewed Template',
+        pdfTemplateUrl: 'https://cdn.example.com/reviewed.pdf',
+        pdfStyleSpecJson: JSON.stringify(confirmedSpec),
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(JSON.parse(data.pdfStyleSpecJson)).toEqual(confirmedSpec);
+  });
+
+  test('POST / create with pdfTemplateUrl but no pdfStyleSpecJson falls back to the auto-computed spec', async () => {
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 781, ...data, createdAt: new Date(), updatedAt: new Date(),
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Auto-classified Template',
+        pdfTemplateUrl: 'https://cdn.example.com/auto.pdf',
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    // processUploadedTemplatePdf's axios fetch is mocked to reject in this
+    // suite, so the auto-computed spec is null here — this pins that the
+    // "Skip" path doesn't fabricate a value, not that auto-classification
+    // never runs (see the real-AI-call assertion in aiPdfTemplateAnalysis
+    // tests for that).
+    expect(data.pdfStyleSpecJson).toBeNull();
   });
 
   test('POST / create with custom pdfTemplateRegions preserves caller shape', async () => {

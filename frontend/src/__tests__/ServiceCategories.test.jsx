@@ -172,8 +172,11 @@ function installFetchMock({
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
-    if (url === '/api/wellness/service-categories' && method === 'GET') {
+    if (url.startsWith('/api/wellness/service-categories?page=') && method === 'GET') {
       if (categoriesPromise) return categoriesPromise;
+      return Promise.resolve({ data: categories, total: categories.length, page: 1, pageSize: 20 });
+    }
+    if (url === '/api/wellness/service-categories?fields=summary' && method === 'GET') {
       return Promise.resolve(categories);
     }
     if (/^\/api\/wellness\/service-categories(\/\d+)?$/.test(url)) {
@@ -204,11 +207,17 @@ beforeEach(() => {
 });
 
 describe('<ServiceCategories /> — page chrome', () => {
-  it('renders heading + "New category" CTA + categories-count sub-copy', async () => {
+  it('renders heading + import/export + "New category" CTA + categories-count sub-copy', async () => {
     installFetchMock();
     renderPage();
     expect(
       screen.getByRole('heading', { name: /Service categories/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Export Service Categories/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Import Service Categories/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /New category/i }),
@@ -236,12 +245,12 @@ describe('<ServiceCategories /> — page chrome', () => {
 });
 
 describe('<ServiceCategories /> — mount fetch + list render', () => {
-  it('fires GET /api/wellness/service-categories on mount and renders rows', async () => {
+  it('fires the paginated category GET on mount and renders rows', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith(
-        '/api/wellness/service-categories',
+        '/api/wellness/service-categories?page=1&pageSize=20',
       );
     });
     // "Hair Restoration" appears twice (root row Name cell + child PRP Therapy
@@ -379,7 +388,7 @@ describe('<ServiceCategories /> — create POST', () => {
     // After create, list refetches → at least 2 GETs total.
     const getCalls = fetchApiMock.mock.calls.filter(
       ([u, opts]) =>
-        u === '/api/wellness/service-categories' &&
+        u.startsWith('/api/wellness/service-categories?') &&
         (opts?.method || 'GET') === 'GET',
     );
     expect(getCalls.length).toBeGreaterThanOrEqual(2);

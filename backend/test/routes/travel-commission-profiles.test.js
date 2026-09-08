@@ -5,7 +5,7 @@
  * Pins the contract for routes/travel_commission_profiles.js shipped
  * alongside the TravelCommissionProfile Prisma model and consuming the
  * lib/agentCommissionCalculator.js (slice 1, commit cb284098) profile
- * shapes (flat_percent | tiered | per_pax_flat | hybrid).
+ * shapes (flat_percent | flat_fee | tiered | per_pax_flat | hybrid).
  *
  * What's pinned
  * -------------
@@ -92,6 +92,7 @@ function tokenFor(role = 'ADMIN', { userId = 7, tenantId = 1 } = {}) {
 
 // Canonical sample profile shapes that match lib/agentCommissionCalculator.js.
 const flatPercentProfile = { type: 'flat_percent', percent: 5 };
+const flatFeeProfile = { type: 'flat_fee', flatFeeAmount: 2500 };
 const tieredProfile = {
   type: 'tiered',
   tiers: [
@@ -169,6 +170,30 @@ describe('POST /api/travel/commission-profiles', () => {
     expect(prisma.auditLog.create).toHaveBeenCalled();
   });
 
+  test('happy path with flat_fee profile returns 201', async () => {
+    prisma.travelCommissionProfile.create.mockResolvedValue({
+      id: 44,
+      tenantId: 1,
+      name: 'Fixed fee',
+      profileType: 'flat_fee',
+      profileJson: JSON.stringify(flatFeeProfile),
+      subBrand: null,
+      isActive: true,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/commission-profiles')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Fixed fee',
+        profileType: 'flat_fee',
+        profileJson: flatFeeProfile,
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.profileType).toBe('flat_fee');
+    expect(JSON.parse(prisma.travelCommissionProfile.create.mock.calls[0][0].data.profileJson))
+      .toEqual(flatFeeProfile);
+  });
+
   test('happy path with tiered profile (richer JSON) returns 201', async () => {
     prisma.travelCommissionProfile.create.mockResolvedValue({
       id: 43,
@@ -223,10 +248,11 @@ describe('POST /api/travel/commission-profiles', () => {
         name: 'bad',
         profileType: 'percentage_of_margin',
         profileJson: flatPercentProfile,
-      });
+    });
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_PROFILE_TYPE' });
     expect(res.body.error).toMatch(/flat_percent/);
+    expect(res.body.error).toMatch(/flat_fee/);
     expect(res.body.error).toMatch(/tiered/);
     expect(res.body.error).toMatch(/per_pax_flat/);
     expect(res.body.error).toMatch(/hybrid/);

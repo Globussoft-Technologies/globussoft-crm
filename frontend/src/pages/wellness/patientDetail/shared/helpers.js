@@ -7,11 +7,19 @@ export const labelStyle = {
   letterSpacing: '0.05em',
 };
 
+// Fields on every patient-detail form (Prescribe, Consent, Plans, Photos,
+// Inventory) share this style.
+//
+// It used to be a 5%-white fill with an 8%-white border. That reads on the
+// near-black dark ground but is invisible on the cream light one — white on
+// cream, with no discernible border, so the inputs had no visible boundary at
+// all in light mode. `--input-bg` and `--border-color` are both defined per
+// theme, so the field now has an edge in either.
 export const inputStyle = {
   width: '100%',
   padding: '0.55rem 0.75rem',
-  background: 'rgba(255,255,255,0.05)',
-  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'var(--input-bg)',
+  border: '1px solid var(--border-color)',
   borderRadius: 8,
   color: 'var(--text-primary)',
   fontSize: '0.9rem',

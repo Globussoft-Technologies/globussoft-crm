@@ -286,6 +286,7 @@ jobs:
             tests/travel-tmc-diagnostic-api.spec.js \
             tests/travel-digilocker-stub-api.spec.js \
             tests/travel-itineraries-api.spec.js \
+            tests/travel-itinerary-template-html-api.spec.js \
             tests/travel-itinerary-suggest-api.spec.js \
             tests/travel-flight-plugin-api.spec.js \
             tests/travel-trips-api.spec.js \

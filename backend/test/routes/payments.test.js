@@ -98,10 +98,14 @@ prisma.invoice = prisma.invoice || {};
 prisma.invoice.findFirst = vi.fn();
 prisma.invoice.findMany = vi.fn();
 prisma.invoice.update = vi.fn();
+prisma.sale = prisma.sale || {};
+prisma.sale.findMany = vi.fn();
 prisma.visit = prisma.visit || {};
 prisma.visit.findFirst = vi.fn();
 prisma.visit.findMany = vi.fn();
 prisma.visit.update = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findMany = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 // eventBus.emitEvent reads automationRule.findMany — stub so the
@@ -184,6 +188,7 @@ beforeEach(() => {
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.findMany.mockReset().mockResolvedValue([]);
   prisma.invoice.update.mockReset();
+  prisma.sale.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset();
   prisma.paymentGatewayConfig.findFirst.mockReset();
   prisma.auditLog.create.mockClear();
@@ -204,6 +209,7 @@ beforeEach(() => {
   prisma.visit.findFirst.mockReset().mockResolvedValue(null);
   prisma.visit.findMany.mockReset().mockResolvedValue([]);
   prisma.visit.update.mockReset().mockResolvedValue({});
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
 
   // Sensible defaults — each test overrides what it cares about.
   prisma.payment.findMany.mockResolvedValue([]);
@@ -351,6 +357,45 @@ describe('GET / — list payments under tenant scope', () => {
     expect(res.body[0].staff).toEqual({ id: 5, name: 'Dr. Anita Das' });
     expect(res.body[1].service).toEqual({ id: 201, name: 'Acne Peel' });
     expect(res.body[1].staff).toEqual({ id: 6, name: 'Dr. Harsh' });
+  });
+
+  test('falls back to POS sale line items and cashier when a payment has no visit linkage', async () => {
+    prisma.payment.findMany.mockResolvedValue([
+      {
+        id: 3,
+        invoiceId: 33,
+        amount: 308418,
+        currency: 'INR',
+        gateway: 'razorpay',
+        status: 'SUCCESS',
+        tenantId: 1,
+        metadata: null,
+        createdAt: new Date('2026-08-27T15:40:31Z'),
+      },
+    ]);
+    prisma.invoice.findMany.mockResolvedValue([
+      { id: 33, visitId: null, invoiceNum: 'POS-2026-101' },
+    ]);
+    prisma.visit.findMany.mockResolvedValue([]);
+    prisma.sale.findMany.mockResolvedValue([
+      {
+        id: 91,
+        invoiceNumber: 'POS-2026-101',
+        cashierId: 77,
+        lineItems: [
+          { id: 501, lineType: 'SERVICE', name: 'Advance Manicure female' },
+        ],
+      },
+    ]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 77, name: 'Ganesh Sharma' },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/payments');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].service).toEqual({ id: 501, name: 'Advance Manicure female' });
+    expect(res.body[0].staff).toEqual({ id: 77, name: 'Ganesh Sharma' });
   });
 });
 

@@ -1036,6 +1036,45 @@ async function resolveAgentSocketUrl(tenantId, agentUrl) {
 }
 
 /**
+ * Fetch a call recording from Callified as a streamable Response.
+ *
+ * Transcripts carry `recording_url` as a path on CALLIFIED's host
+ * (`/api/recordings/<org>/<product>/<sid>.wav`), and that endpoint is behind
+ * their Bearer JWT — `GET /api/recordings/{filename...}` is wrapped in
+ * `auth(...)`, and they deliberately removed the `?token=` fallback so the
+ * JWT never lands in a URL.
+ *
+ * An `<audio src>` cannot send an Authorization header, and our browser has no
+ * Callified credential by design, so the CRM streams the bytes instead — the
+ * same shape as the agent-bridge relay.
+ *
+ * The path is constrained to /api/recordings/ so this cannot be turned into a
+ * general-purpose proxy for the rest of the Callified API.
+ *
+ * @param {number} tenantId
+ * @param {string} recordingPath  the `recording_url` from a transcript
+ * @param {{range?: string}} [opts]  forward the browser's Range header so the
+ *   audio element can seek
+ * @returns {Promise<Response>}
+ */
+async function fetchRecording(tenantId, recordingPath, opts = {}) {
+  const raw = String(recordingPath || '').trim();
+  // Reject anything that is not a recordings path: absolute URLs pointing
+  // elsewhere, traversal, or a different Callified endpoint.
+  const normalized = raw.startsWith('/') ? raw : `/${raw}`;
+  if (!/^\/api\/recordings\/[^?#]+$/.test(normalized) || normalized.includes('..')) {
+    const err = new Error('Not a Callified recording path');
+    err.status = 400;
+    err.code = 'INVALID_RECORDING_PATH';
+    throw err;
+  }
+
+  return await callifiedFetch(tenantId, normalized, {
+    headers: opts.range ? { Range: opts.range } : {},
+  });
+}
+
+/**
  * Fetch all transcripts for a Callified lead.
  */
 async function getLeadTranscripts(tenantId, callifiedLeadId) {
@@ -1810,6 +1849,7 @@ module.exports = {
   dialCampaign,
   browserCall,
   resolveAgentSocketUrl,
+  fetchRecording,
   getLeadTranscripts,
   getTranscriptReview,
   getCallDetails,

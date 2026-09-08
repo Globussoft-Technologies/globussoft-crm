@@ -372,6 +372,7 @@ export default function TravelPipeline() {
     );
     if (sortKey) {
       const getValue = (row) => {
+        if (sortKey === "company") return row.contact?.company || row.company || "";
         if (sortKey === "contact") return row.contact?.name || "";
         if (sortKey === "amount") return Number(row.totalAmount || 0);
         if (sortKey === "status") {
@@ -717,9 +718,16 @@ export default function TravelPipeline() {
                       )}
                     </td>
 
-                    {/* Sub-brand */}
+                    {/* Company */}
                     <td style={tdStyle}>
-                      <SubBrandBadge value={row.subBrand} />
+                      <div>
+                        {row.contact?.company || row.company || (
+                          <span style={{ color: "var(--text-tertiary)" }}>—</span>
+                        )}
+                      </div>
+                      <div style={{ marginTop: 4 }}>
+                        <SubBrandBadge value={row.subBrand} />
+                      </div>
                     </td>
 
                     {/* Package cost */}
@@ -1029,7 +1037,7 @@ const sortButtonStyle = {
   width: "100%", padding: "4px 8px", border: "none", borderRadius: 999,
   background: "transparent", color: "inherit", font: "inherit", cursor: "pointer", textAlign: "left",
 };
-const sortButtonActiveStyle = { color: "var(--primary-color)", background: "var(--accent-bg)" };
+const sortButtonActiveStyle = { color: "var(--primary-color)", background: "transparent" };
 
 const tdStyle = {
   padding: "12px 14px",

@@ -361,7 +361,8 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
 
     expect(table.style.width).toBe('100%');
     expect(table.style.tableLayout).toBe('fixed');
-    expect(table.querySelectorAll('col').length).toBe(6);
+    // 6 data columns + 1 trailing "View diagnostic" actions column.
+    expect(table.querySelectorAll('col').length).toBe(7);
     expect(screen.queryByTestId('diagnostics-table-scroll')).toBeNull();
     expect(screen.queryByText('travelstall')).toBeNull();
   });
@@ -464,7 +465,7 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     });
   });
 
-  it('renders table columns in the order Submitted → Contact → Sub-brand → Classification → Tier → Score', async () => {
+  it('renders table columns in the order Submitted → Contact → Sub-brand → Classification → Tier → Score → Actions', async () => {
     renderPage();
     await screen.findByText('tmc');
 
@@ -479,7 +480,19 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
       'Classification',
       'Tier',
       'Score',
+      // Visually-hidden text on the trailing "view diagnostic" icon column —
+      // present for screen readers, invisible on screen.
+      'Actions',
     ]);
+  });
+
+  it('each row has a "View diagnostic" link that opens the detail page', async () => {
+    renderPage();
+    await screen.findByText('tmc');
+
+    const viewLinks = screen.getAllByRole('link', { name: /View diagnostic #/i });
+    expect(viewLinks.length).toBeGreaterThan(0);
+    expect(viewLinks[0]).toHaveAttribute('href', expect.stringMatching(/^\/travel\/diagnostics\/\d+$/));
   });
 
   it('notifies when new diagnostic submissions appear after a refresh', async () => {

@@ -26,12 +26,13 @@ const plusDays = (n) => new Date(Date.UTC(2026, 5, 20 + n, 9, 0, 0)); // 2026-06
 beforeEach(() => {
   prisma.itinerary = { findMany: vi.fn() };
   prisma.contact = { findMany: vi.fn() };
-  prisma.tripCountdownNudge = { create: vi.fn(), update: vi.fn() };
+  prisma.tripCountdownNudge = { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() };
   prisma.travelPortalNotification = { create: vi.fn().mockResolvedValue({ id: 1 }) };
   emailSender.sendEmail = vi.fn();
   content.buildNudge = vi.fn(async () => ({ subject: "S", text: "T", html: "T", llmSourced: false }));
 
   prisma.contact.findMany.mockResolvedValue([{ id: 7, name: "Mohit", email: "mohit@example.com" }]);
+  prisma.tripCountdownNudge.findUnique.mockResolvedValue(null);
   prisma.tripCountdownNudge.create.mockResolvedValue({ id: 100 });
   prisma.tripCountdownNudge.update.mockResolvedValue({});
   emailSender.sendEmail.mockResolvedValue({ sent: true });
@@ -70,6 +71,15 @@ describe("tripCountdownEngine.runTripCountdownTick", () => {
     prisma.itinerary.findMany.mockResolvedValue([itin()]);
     prisma.tripCountdownNudge.create.mockRejectedValue(Object.assign(new Error("dup"), { code: "P2002" }));
     const s = await runTripCountdownTick(NOW);
+    expect(emailSender.sendEmail).not.toHaveBeenCalled();
+    expect(s).toMatchObject({ fired: 0, skipped: 1 });
+  });
+
+  it("is idempotent — an existing claim skips without creating or emailing", async () => {
+    prisma.itinerary.findMany.mockResolvedValue([itin()]);
+    prisma.tripCountdownNudge.findUnique.mockResolvedValue({ id: 99 });
+    const s = await runTripCountdownTick(NOW);
+    expect(prisma.tripCountdownNudge.create).not.toHaveBeenCalled();
     expect(emailSender.sendEmail).not.toHaveBeenCalled();
     expect(s).toMatchObject({ fired: 0, skipped: 1 });
   });

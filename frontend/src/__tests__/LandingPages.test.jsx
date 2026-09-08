@@ -29,13 +29,13 @@
  *   8. The publish-toggle button reads "Publish" for a DRAFT page and
  *      "Unpublish" for a PUBLISHED page; clicking fires the matching
  *      POST /api/landing-pages/:id/{publish|unpublish}.
- *   9. Clicking "Create Page" opens the template-picker modal with the
- *      templates from /api/landing-pages/templates/list plus a "Blank
- *      Page" tile (#377 — blank picks a seeded heading + text block
- *      pair so the editor doesn't render an empty canvas).
- *  10. Picking a template POSTs /api/landing-pages with the seed
- *      content + navigates to the builder for the returned id.
- *  11. The delete confirm dialog (#452) embeds the page title and a
+ *   9. Clicking "Create Page" opens a two-option chooser for the
+ *      marketing page and confirmed-trip page flows.
+ *  10. The confirmed-trip tile opens the generator modal with
+ *      trip-prefilled fields.
+ *  11. The marketing tile POSTs /api/landing-pages with seeded content
+ *      and navigates to the builder for the returned id.
+ *  12. The delete confirm dialog (#452) embeds the page title and a
  *      stronger warning when the page is PUBLISHED (mentions the
  *      public URL going offline); cancelling does NOT fire DELETE.
  *
@@ -85,6 +85,8 @@ const samplePages = [
     status: 'PUBLISHED',
     visits: 100,
     submissions: 7,
+    subBrand: 'travelstall',
+    isFeatured: false,
   },
   {
     id: 12,
@@ -96,10 +98,21 @@ const samplePages = [
   },
 ];
 
-const sampleTemplates = [
-  { id: 'lead-gen', name: 'Lead Gen', description: 'Capture leads fast', content: [{ id: 'h1', type: 'heading', props: { text: 'LeadGen Hero' } }] },
-  { id: 'event', name: 'Event RSVP', description: 'RSVP capture', content: [{ id: 'h2', type: 'heading', props: { text: 'Event Hero' } }] },
-];
+const TRIP_PAGE_STATE = {
+  returnTo: { label: 'TMC Trips', path: '/travel/trips/101?tab=overview' },
+  currentLabel: 'Public experience',
+  currentPath: '/travel/trips/101?tab=microsite',
+  backTo: '/travel/trips',
+  backLabel: 'Trips',
+  tripContext: {
+    tripId: 101,
+    tripCode: 'TMC-AND-2026-MUMBAI-G7',
+    destination: 'Andaman',
+    durationDays: 7,
+    audience: 'School students',
+    subBrand: 'tmc',
+  },
+};
 
 function setTheme(theme = 'light') {
   document.documentElement.setAttribute('data-theme', theme);
@@ -108,9 +121,6 @@ function setTheme(theme = 'light') {
 function defaultFetchMock(url, opts) {
   if (url === '/api/landing-pages' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(samplePages);
-  }
-  if (url === '/api/landing-pages/templates/list') {
-    return Promise.resolve(sampleTemplates);
   }
   return Promise.resolve(null);
 }
@@ -169,8 +179,11 @@ describe('<LandingPages /> — index page surface', () => {
       expect(screen.getByRole('heading', { name: /Landing Pages/i })).toBeInTheDocument();
     });
     expect(
-      screen.getByText(/Build no-code landing pages to capture leads/i),
+      screen.getByText(/Manage pre-trip marketing and confirmed-trip landing pages/i),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Generate Destination Page/i }),
+    ).not.toBeInTheDocument();
     // The header CTA is one of (potentially) two "Create Page" buttons —
     // empty-state has a second one, but with populated data it's the only
     // one. Pin via getAllByRole + length >= 1.
@@ -185,7 +198,6 @@ describe('<LandingPages /> — index page surface', () => {
       if (url === '/api/landing-pages') {
         return new Promise((r) => { resolveList = r; });
       }
-      if (url === '/api/landing-pages/templates/list') return Promise.resolve([]);
       return Promise.resolve(null);
     });
     renderPage();
@@ -200,13 +212,12 @@ describe('<LandingPages /> — index page surface', () => {
   it('renders the empty-state card with "No landing pages yet" + an in-card Create Page CTA when the list is []', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/landing-pages') return Promise.resolve([]);
-      if (url === '/api/landing-pages/templates/list') return Promise.resolve([]);
       return Promise.resolve(null);
     });
     renderPage();
     expect(await screen.findByText(/No landing pages yet/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/Create your first landing page from a template/i),
+      screen.getByText(/Create a confirmed-trip landing page to start publishing the trip experience/i),
     ).toBeInTheDocument();
     // Header CTA + empty-state CTA = at least 2 "Create Page" buttons.
     expect(
@@ -362,6 +373,59 @@ describe('<LandingPages /> — index page surface', () => {
     expect(screen.getByRole('button', { name: /^Unpublish$/i })).toBeInTheDocument();
   });
 
+  it('published travel rows expose a copyable /trips/<id> share URL while drafts stay hidden', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    const card = screen.getByText('Spring Launch').closest('.card');
+    expect(card).toBeTruthy();
+
+    const publicUrlInput = card.querySelector('input[readonly]');
+    expect(publicUrlInput).toBeTruthy();
+    expect(publicUrlInput.value).toMatch(/\/trips\/11$/);
+    const copyBtn = card.querySelector('button[title="Copy public URL"]');
+    expect(copyBtn).toBeTruthy();
+    expect(card.querySelector('a[title="Open public page in new tab"]')?.getAttribute('href')).toMatch(/\/trips\/11$/);
+    expect(card.querySelector('button[title="Make this trip the featured /trips page"]')).toBeTruthy();
+
+    fetchApiMock.mockClear();
+    copyBtn && fireEvent.click(copyBtn);
+    await waitFor(() => {
+      expect(clipboardWriteText).toHaveBeenCalledWith(expect.stringMatching(/\/trips\/11$/));
+    });
+  });
+
+  it('restores Copy URL and Edit for the existing explore page without an explore create option', async () => {
+    const explorePage = {
+      id: 99,
+      title: 'Explore destinations',
+      slug: 'explore',
+      templateType: 'travel_destination',
+      status: 'PUBLISHED',
+      visits: 12,
+      submissions: 2,
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/landing-pages' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([explorePage]);
+      }
+      if (url === '/api/explore') return Promise.resolve({ explorePageId: 99 });
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Explore destinations')).toBeInTheDocument());
+
+    const exploreBar = screen.getByText('Explore marketing page').closest('section');
+    expect(exploreBar).toBeTruthy();
+    expect(exploreBar.querySelector('a[href="/landing-pages/explore-builder/99"]')).toBeTruthy();
+    const copyButton = exploreBar.querySelector('button');
+    expect(copyButton).toHaveTextContent(/Copy URL/i);
+    fireEvent.click(copyButton);
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith(`${window.location.origin}/explore`));
+    expect(exploreBar).not.toHaveTextContent(/Create/i);
+  });
+
   it('clicking Unpublish fires POST /api/landing-pages/:id/unpublish', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
@@ -389,7 +453,6 @@ describe('<LandingPages /> — index page surface', () => {
       if (url === '/api/landing-pages' && (!opts || !opts.method || opts.method === 'GET')) {
         return Promise.resolve(allDraftPages);
       }
-      if (url === '/api/landing-pages/templates/list') return Promise.resolve(sampleTemplates);
       if (opts?.method === 'POST') return Promise.resolve({ ok: true });
       return Promise.resolve(null);
     });
@@ -409,77 +472,72 @@ describe('<LandingPages /> — index page surface', () => {
     });
   });
 
-  it('when another page is PUBLISHED the Publish button is disabled (hard-block UX)', async () => {
+  it('when another travel page is PUBLISHED the Publish button stays enabled and still POSTs /publish', async () => {
     // samplePages has id=11 as PUBLISHED and id=12 as DRAFT.
-    // The SUT disables the Publish button — this IS the hard-block. The operator
-    // cannot click it; no API call can ever fire. That is the full contract.
+    // The travel page still publishes even when another travel page is already
+    // live; featuring is now a separate action, so publish only changes the
+    // page's own status and share URL.
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
 
     const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
-    expect(publishBtn).toBeDisabled();
+    expect(publishBtn).not.toBeDisabled();
+    expect(publishBtn.title).toMatch(/make it live at \/p\/winter-promo/i);
 
-    // The tooltip names the currently-live page so the operator knows why.
-    expect(publishBtn.title).toMatch(/Spring Launch/);
-
-    // Confirm no publish API call fires (button is disabled — nothing can fire it).
     fetchApiMock.mockClear();
-    const publishCall = fetchApiMock.mock.calls.find(
-      ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
-    );
-    expect(publishCall).toBeUndefined();
+    fireEvent.click(publishBtn);
+    await waitFor(() => {
+      const publishCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
+      );
+      expect(publishCall).toBeTruthy();
+    });
   });
 
-  it('clicking the header Create Page button opens the template picker with templates + Blank Page tile', async () => {
+  it('clicking the header Create Page button opens the generator dialog', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     // Click the FIRST Create Page button (the header one — only one renders
     // when pages exist, so getByRole works for the populated case).
     fireEvent.click(screen.getByRole('button', { name: /Create Page/i }));
-    // Modal heading.
-    expect(await screen.findByText(/Choose a Template/i)).toBeInTheDocument();
-    // Both fetched templates render.
-    expect(screen.getByText('Lead Gen')).toBeInTheDocument();
-    expect(screen.getByText('Event RSVP')).toBeInTheDocument();
-    expect(screen.getByText(/Capture leads fast/i)).toBeInTheDocument();
-    // Blank Page tile renders alongside the fetched templates (#377 seeded).
-    expect(screen.getByText(/Blank Page/i)).toBeInTheDocument();
-    expect(screen.getByText(/Start from scratch/i)).toBeInTheDocument();
-    // Cancel button is rendered.
+    expect(await screen.findByRole('dialog', { name: /Generate Destination Landing Page/i })).toBeInTheDocument();
+    expect(screen.getByText(/AI never generates/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
   });
 
-  it('clicking a template tile POSTs /api/landing-pages with seed content + navigates to the builder', async () => {
-    fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/landing-pages' && opts?.method === 'POST') {
-        return Promise.resolve({ id: 42, title: 'Lead Gen', status: 'DRAFT' });
-      }
-      return defaultFetchMock(url, opts);
-    });
+  it('clicking Create Page opens the current confirmed-trip generator flow', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Create Page/i }));
-    await screen.findByText(/Choose a Template/i);
-    // Click the "Lead Gen" template tile.
-    fireEvent.click(screen.getByText('Lead Gen'));
+    expect(await screen.findByRole('dialog', { name: /Generate Destination Landing Page/i })).toBeInTheDocument();
+  });
 
-    await waitFor(() => {
-      const postCall = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/landing-pages' && o?.method === 'POST',
-      );
-      expect(postCall).toBeTruthy();
-      const body = JSON.parse(postCall[1].body);
-      expect(body.templateType).toBe('lead-gen');
-      expect(body.title).toBe('Lead Gen');
-      // Seed content is a JSON-stringified array of blocks.
-      const parsedContent = JSON.parse(body.content);
-      expect(Array.isArray(parsedContent)).toBe(true);
-      expect(parsedContent[0].type).toBe('heading');
-    });
-    // Post-create navigation goes to the builder for the returned id.
-    await waitFor(() => {
-      expect(navigateMock.mock.calls.some(([path]) => path === '/landing-pages/builder/42')).toBe(true);
-    });
+  it('clicking the confirmed-trip tile opens the generator modal with trip-prefilled fields', async () => {
+    renderPage('light', [{
+      pathname: '/landing-pages',
+      state: TRIP_PAGE_STATE,
+    }]);
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Create Page/i }));
+    expect(await screen.findByRole('dialog', { name: /Generate Destination Landing Page/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Destination/)).toHaveValue('Andaman');
+    expect(screen.getByLabelText(/Duration/i)).toHaveValue(7);
+    expect(screen.getByLabelText(/Audience/i)).toHaveValue('School students');
+    expect(screen.getByLabelText(/Sub-brand/i)).toHaveValue('tmc');
+  });
+
+  it('clicking the AI-generated template link from the confirmed-trip tile opens the generator modal with trip-prefilled fields', async () => {
+    renderPage('light', [{
+      pathname: '/landing-pages',
+      state: TRIP_PAGE_STATE,
+    }]);
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Create Page/i }));
+    expect(await screen.findByRole('dialog', { name: /Generate Destination Landing Page/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Destination/)).toHaveValue('Andaman');
+    expect(screen.getByLabelText(/Duration/i)).toHaveValue(7);
+    expect(screen.getByLabelText(/Audience/i)).toHaveValue('School students');
+    expect(screen.getByLabelText(/Sub-brand/i)).toHaveValue('tmc');
   });
 
   it('delete confirm dialog (#452) embeds the page title + a stronger warning when PUBLISHED; cancel skips the DELETE', async () => {
@@ -489,12 +547,11 @@ describe('<LandingPages /> — index page surface', () => {
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     // Find the delete button for the PUBLISHED page. The Trash icon button
     // has no accessible name, so locate it by sibling-button position
-    // within the published card. Per the post-merge Publish-also-features
-    // collapse, the page renders Edit (link) + Unpublish + duplicate +
-    // delete; the delete button is the only one styled with red color,
-    // but in the DOM the easiest unique pin is by walking from the
-    // Spring Launch <h3> up to its card ancestor and querying buttons
-    // inside.
+    // within the published card. The page renders Edit (link) + Unpublish
+    // + Feature + Duplicate + Delete; the delete button is the only one
+    // styled with red color, but in the DOM the easiest unique pin is by
+    // walking from the Spring Launch <h3> up to its card ancestor and
+    // querying buttons inside.
     const cardTitle = screen.getByText('Spring Launch');
     const card = cardTitle.closest('.card');
     expect(card).toBeTruthy();
@@ -514,7 +571,7 @@ describe('<LandingPages /> — index page surface', () => {
     const msg = confirmMock.mock.calls[0][0];
     expect(msg).toMatch(/Spring Launch/);
     expect(msg).toMatch(/PUBLISHED/i);
-    expect(msg).toMatch(/\/p\/spring-launch/);
+    expect(msg).toMatch(/\/trips\/11/);
 
     // Cancel path → DELETE never fires.
     const deleteCall = fetchApiMock.mock.calls.find(

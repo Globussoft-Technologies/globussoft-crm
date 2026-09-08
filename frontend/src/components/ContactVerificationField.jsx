@@ -1,12 +1,12 @@
 import { useId, useState } from "react";
 
 /**
- * ContactVerificationField — email OR phone OTP verification, user's choice.
+ * ContactVerificationField — email OTP verification.
  *
- * The user toggles between "Email" and "Phone" tabs. Whichever they verify,
- * the parent receives a short-lived verificationToken via onVerifiedChange().
- * The parent also receives the verified contact value (email or phone) via
- * onContactChange({ type: 'email'|'phone', value }).
+ * Email-only: there is no phone-number login, so the phone tab was
+ * removed. The parent receives a short-lived verificationToken via
+ * onVerifiedChange(). The parent also receives the verified contact
+ * value via onContactChange({ type: 'email', value }).
  *
  * Styling mirrors EmailOtpField — pass inputClassName / inputStyle / labelStyle.
  */
@@ -20,55 +20,23 @@ export default function ContactVerificationField({
   required = true,
   disabled = false,
 }) {
-  const [tab, setTab] = useState("email"); // "email" | "phone"
-
-  // Email state
   const [email, setEmail] = useState("");
   const [emailRequested, setEmailRequested] = useState(false);
   const [emailCode, setEmailCode] = useState("");
   const [emailVerified, setEmailVerified] = useState(false);
 
-  // Phone state
-  const [phone, setPhone] = useState("");
-  const [phoneRequested, setPhoneRequested] = useState(false);
-  const [phoneCode, setPhoneCode] = useState("");
-  const [phoneVerified, setPhoneVerified] = useState(false);
-
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null); // { type: 'error'|'info'|'success', text }
 
   const emailInputId = useId();
-  const phoneInputId = useId();
   const otpInputId = useId();
 
   const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test((email || "").trim());
-  const phoneOk = /^(\+?\d{7,15}|\d{10})$/.test((phone || "").replace(/\s/g, ""));
 
-  const notify = (parent, token, contactType, contactValue) => {
+  const notify = (token, contactValue) => {
     if (onVerifiedChange) onVerifiedChange(token);
-    if (onContactChange) onContactChange(token ? { type: contactType, value: contactValue } : null);
-    if (parent === "email") {
-      setEmailVerified(!!token);
-    } else {
-      setPhoneVerified(!!token);
-    }
-  };
-
-  const switchTab = (next) => {
-    if (next === tab) return;
-    setTab(next);
-    setMsg(null);
-    // Reset the OTHER tab's verification state so parent gets null when switching
-    if (emailVerified || phoneVerified) {
-      if (onVerifiedChange) onVerifiedChange(null);
-      if (onContactChange) onContactChange(null);
-      setEmailVerified(false);
-      setPhoneVerified(false);
-      setEmailRequested(false);
-      setPhoneRequested(false);
-      setEmailCode("");
-      setPhoneCode("");
-    }
+    if (onContactChange) onContactChange(token ? { type: "email", value: contactValue } : null);
+    setEmailVerified(!!token);
   };
 
   // ── Email flow ────────────────────────────────────────────────────────────
@@ -77,6 +45,21 @@ export default function ContactVerificationField({
     if (!emailOk) { setMsg({ type: "error", text: "Enter a valid email address" }); return; }
     setBusy(true); setMsg(null);
     try {
+      // Pre-check: already-registered emails are told to sign in BEFORE any
+      // code is sent, so existing users never go through OTP verification.
+      // Fail-open: if the check itself fails, fall through to the OTP request.
+      try {
+        const c = await fetch("/api/auth/check-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim() }),
+        });
+        const cd = await c.json().catch(() => ({}));
+        if (cd.exists) {
+          setMsg({ type: "error", text: "This email is already registered. Please sign in instead." });
+          return;
+        }
+      } catch { /* fall through to OTP request */ }
       const r = await fetch("/api/auth/email-otp/request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -102,7 +85,7 @@ export default function ContactVerificationField({
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.verificationToken) { setMsg({ type: "error", text: d.error || "Incorrect code — try again" }); return; }
       setMsg({ type: "success", text: "Email verified ✓" });
-      notify("email", d.verificationToken, "email", email.trim());
+      notify(d.verificationToken, email.trim());
     } catch { setMsg({ type: "error", text: "Network error — please try again" }); }
     finally { setBusy(false); }
   };
@@ -111,55 +94,7 @@ export default function ContactVerificationField({
     setEmail(e.target.value);
     if (emailVerified || emailRequested) {
       setEmailVerified(false); setEmailRequested(false); setEmailCode(""); setMsg(null);
-      notify("email", null, "email", "");
-    }
-  };
-
-  // ── Phone flow ────────────────────────────────────────────────────────────
-
-  const requestPhoneOtp = async () => {
-    if (!phoneOk) { setMsg({ type: "error", text: "Enter a valid phone number (10 digits or with country code)" }); return; }
-    setBusy(true); setMsg(null);
-    try {
-      const r = await fetch("/api/auth/phone-otp/request", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone.replace(/\s/g, ""), purpose }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setMsg({ type: "error", text: d.error || "Couldn't send the code — try again" }); return; }
-      setPhoneRequested(true);
-      if (d.sent) {
-        setMsg({ type: "info", text: `We've sent a 6-digit code to ${phone}.` });
-      } else {
-        setMsg({ type: "info", text: "SMS is not configured yet — contact support or use email verification instead." });
-      }
-    } catch { setMsg({ type: "error", text: "Network error — please try again" }); }
-    finally { setBusy(false); }
-  };
-
-  const verifyPhoneOtp = async () => {
-    if (!phoneCode.trim()) { setMsg({ type: "error", text: "Enter the 6-digit code" }); return; }
-    setBusy(true); setMsg(null);
-    try {
-      const r = await fetch("/api/auth/phone-otp/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone.replace(/\s/g, ""), purpose, code: phoneCode.trim() }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d.verificationToken) { setMsg({ type: "error", text: d.error || "Incorrect code — try again" }); return; }
-      setMsg({ type: "success", text: "Phone verified ✓" });
-      notify("phone", d.verificationToken, "phone", phone.replace(/\s/g, ""));
-    } catch { setMsg({ type: "error", text: "Network error — please try again" }); }
-    finally { setBusy(false); }
-  };
-
-  const handlePhoneChange = (e) => {
-    setPhone(e.target.value);
-    if (phoneVerified || phoneRequested) {
-      setPhoneVerified(false); setPhoneRequested(false); setPhoneCode(""); setMsg(null);
-      notify("phone", null, "phone", "");
+      notify(null, "");
     }
   };
 
@@ -175,42 +110,8 @@ export default function ContactVerificationField({
     color: "#fff", fontWeight: 600, fontSize: "0.8rem",
     cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap",
   };
-  const tabBase = {
-    flex: 1, padding: "0.4rem 0.75rem", border: "1px solid var(--border-color, #e5e7eb)",
-    borderRadius: 6, cursor: "pointer", fontSize: "0.8rem", fontWeight: 600,
-    background: "transparent", transition: "all 0.15s",
-  };
-  const tabActive = {
-    ...tabBase,
-    background: "var(--primary-color, var(--accent-color, #6366f1))",
-    color: "#fff", borderColor: "var(--primary-color, var(--accent-color, #6366f1))",
-  };
-
-  const isEmailTab = tab === "email";
-  const verified = isEmailTab ? emailVerified : phoneVerified;
-  const requested = isEmailTab ? emailRequested : phoneRequested;
-
   return (
     <div>
-      {/* Tab toggle */}
-      <div style={{ display: "flex", gap: 6, marginBottom: "0.75rem" }}>
-        <button type="button" onClick={() => switchTab("email")}
-          style={isEmailTab ? tabActive : tabBase}
-          disabled={disabled}
-        >
-          Email
-        </button>
-        <button type="button" onClick={() => switchTab("phone")}
-          style={!isEmailTab ? tabActive : tabBase}
-          disabled={disabled}
-        >
-          Phone
-        </button>
-      </div>
-
-      {/* Email tab */}
-      {isEmailTab && (
-        <>
           <label htmlFor={emailInputId} style={labelSt}>Email Address</label>
           <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
             <input
@@ -222,7 +123,7 @@ export default function ContactVerificationField({
               placeholder="name@company.com"
               value={email}
               onChange={handleEmailChange}
-              required={required && isEmailTab}
+              required={required}
               disabled={disabled || emailVerified}
               autoComplete="email"
             />
@@ -264,66 +165,6 @@ export default function ContactVerificationField({
               </button>
             </div>
           )}
-        </>
-      )}
-
-      {/* Phone tab */}
-      {!isEmailTab && (
-        <>
-          <label htmlFor={phoneInputId} style={labelSt}>Phone Number</label>
-          <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
-            <input
-              id={phoneInputId}
-              type="tel"
-              data-testid="otp-phone"
-              className={inputClassName}
-              style={inputStyle ? { ...inputStyle, flex: 1 } : { flex: 1 }}
-              placeholder="+91 98765 43210"
-              value={phone}
-              onChange={handlePhoneChange}
-              required={required && !isEmailTab}
-              disabled={disabled || phoneVerified}
-              autoComplete="tel"
-            />
-            {phoneVerified ? (
-              <span data-testid="otp-phone-verified" style={{
-                display: "inline-flex", alignItems: "center", gap: 4,
-                padding: "0 0.7rem", color: "#16a34a", fontSize: "0.8rem",
-                fontWeight: 600, whiteSpace: "nowrap",
-              }}>✓ Verified</span>
-            ) : (
-              <button type="button" data-testid="otp-phone-validate" onClick={requestPhoneOtp}
-                disabled={busy || disabled || !phoneOk}
-                style={{ ...actionBtn, opacity: busy || !phoneOk ? 0.6 : 1 }}
-              >
-                {busy && !phoneRequested ? "Sending…" : phoneRequested ? "Resend" : "Send Code"}
-              </button>
-            )}
-          </div>
-          {phoneRequested && !phoneVerified && (
-            <div data-testid="otp-phone-box" style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input
-                type="text"
-                inputMode="numeric"
-                data-testid="otp-phone-code"
-                className={inputClassName}
-                style={inputStyle ? { ...inputStyle, flex: 1 } : { flex: 1 }}
-                placeholder="Enter 6-digit code"
-                value={phoneCode}
-                onChange={(e) => setPhoneCode(e.target.value)}
-                maxLength={6}
-                autoComplete="one-time-code"
-              />
-              <button type="button" data-testid="otp-phone-verify" onClick={verifyPhoneOtp}
-                disabled={busy}
-                style={{ ...actionBtn, opacity: busy ? 0.6 : 1 }}
-              >
-                {busy ? "Verifying…" : "Verify"}
-              </button>
-            </div>
-          )}
-        </>
-      )}
 
       {msg && (
         <div data-testid="otp-msg" style={{

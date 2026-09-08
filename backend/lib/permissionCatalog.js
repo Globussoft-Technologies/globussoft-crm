@@ -123,6 +123,17 @@ const WELLNESS_MODULES = {
   // granted the tenant-wide list without polluting their nav with a
   // "My Appointments" page they'd never use (admins aren't assigned slots).
   my_appointments: ['read'],
+  // `call_history` gates /wellness/call-history (wellness vertical only).
+  //
+  //   read      — open the page at all. Everyone with it sees THEIR OWN calls.
+  //   read_all  — see every staff member's calls, not just your own.
+  //
+  // Split the same way appointments / my_appointments is, and for the same
+  // reason: a telecaller should be able to review their own conversations
+  // without being handed the whole clinic's call log, which is a recording of
+  // real patients discussing real treatment. ADMIN and MANAGER get read_all
+  // implicitly — they already have clinic-wide oversight everywhere else.
+  call_history: ['read', 'read_all'],
   // `book_appointment` gates /wellness/book-appointment — the staff/
   // patient booking form. Telecallers / receptionists need this to
   // create new appointments on behalf of patients; doctors don't (slots
@@ -157,6 +168,24 @@ const WELLNESS_MODULES = {
   // ALSO scopes by `patientId: req.patient.id` so cross-patient access
   // is structurally impossible even if RBAC misconfigures the grant.
   my_prescriptions: ['read'],
+  // `prescription_requests` gates the STAFF side of the renewal workflow —
+  // the Prescription Requests admin page (list + review + accept / reject /
+  // complete). Split out from `prescriptions` on purpose: a renewal request
+  // is inbox work a receptionist or manager triages, whereas
+  // `prescriptions.write` is the medico-legal act of prescribing and stays
+  // doctor-only. A clinic can therefore staff the queue without handing out
+  // prescribing rights.
+  //   .read   — open the page + read a request
+  //   .update — accept / reject / complete a request
+  // There is no `.write`: staff never author a request, patients do.
+  prescription_requests: ['read', 'update'],
+  // `my_prescription_requests` is the PATIENT-portal counterpart — raising
+  // and listing your OWN renewal requests from the Android app. Mirrors the
+  // my_prescriptions / prescriptions split above. Granted to the CUSTOMER
+  // system role by default; the portal handlers ALSO scope every query by
+  // `patientId: req.patient.id`, so cross-patient access stays structurally
+  // impossible even if RBAC misconfigures the grant.
+  my_prescription_requests: ['read', 'write'],
   // `my_bookings` gates /wellness/my-bookings — the patient-facing
   // appointment management page (upcoming / pending / completed /
   // cancelled, with View / Cancel / Reschedule actions). Distinct from
@@ -359,6 +388,8 @@ const WELLNESS_DOMAINS_BODY = [
       'services',
       'prescriptions',
       'my_prescriptions',
+      'prescription_requests',
+      'my_prescription_requests',
       'my_bookings',
       'consents',
       'visits',

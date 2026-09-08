@@ -72,7 +72,7 @@
 // is a multi-day investment tracked separately).
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -80,8 +80,9 @@ import {
   ArrowLeft, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Train, Bus, Car, Camera, Utensils, Package, GripVertical, MapPinned,
   Sparkles, Layers, BookmarkPlus, AlertTriangle, Keyboard, X, Plus,
+  Download, Cloud, Database, ExternalLink,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { geocode } from "../../lib/geocoder";
 import {
@@ -236,7 +237,19 @@ function MapClicks({ onPick }) {
 export default function ItineraryEditor() {
   const { id } = useParams();
   const notify = useNotify();
+  const navigate = useNavigate();
   const [itin, setItin] = useState(null);
+  // Template picker (Step 3) — templates available for this itinerary's
+  // sub-brand, fetched once the itinerary loads.
+  const [templates, setTemplates] = useState([]);
+  const [templatePickerBusy, setTemplatePickerBusy] = useState(false);
+  // "Add to Catalogue" — uploads the generated PDF into the tenant's
+  // GDrive "CRM Itineraries" folder.
+  const [addingToCatalogue, setAddingToCatalogue] = useState(false);
+  // "Add to Diagnostic KB" — AI-drafts a TmcTripCatalogue row from this
+  // itinerary's structured data, then hands off to the existing catalogue
+  // admin edit/promote flow.
+  const [extractingToKb, setExtractingToKb] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [destCenter, setDestCenter] = useState(null); // [lat, lng] geocoded from destination
@@ -443,6 +456,80 @@ export default function ItineraryEditor() {
       .catch(() => { if (!cancelled) setLineageName(null); });
     return () => { cancelled = true; };
   }, [itin?.clonedFromTemplateId]);
+
+  // Template picker (Step 3) — active templates for this itinerary's
+  // sub-brand, so the operator can attach/change a PDF-underprint template
+  // mid-edit (not just at clone time).
+  useEffect(() => {
+    if (!itin?.subBrand) return undefined;
+    let cancelled = false;
+    const qs = new URLSearchParams({ isActive: "true", subBrand: itin.subBrand, limit: "200" });
+    fetchApi(`/api/travel/itinerary-templates?${qs.toString()}`, { silent: true })
+      .then((res) => {
+        if (cancelled) return;
+        setTemplates(Array.isArray(res?.items) ? res.items : []);
+      })
+      .catch(() => { if (!cancelled) setTemplates([]); });
+    return () => { cancelled = true; };
+  }, [itin?.subBrand]);
+
+  const handleTemplatePick = useCallback(async (value) => {
+    setTemplatePickerBusy(true);
+    try {
+      await fetchApi(`/api/travel/itineraries/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ clonedFromTemplateId: value || null }),
+      });
+      await load();
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Failed to update template");
+    } finally {
+      setTemplatePickerBusy(false);
+    }
+  }, [id, load, notify]);
+
+  const handleAddToCatalogue = useCallback(async () => {
+    if (addingToCatalogue) return;
+    setAddingToCatalogue(true);
+    try {
+      const res = await fetchApi(`/api/travel/itineraries/${id}/add-to-catalogue`, { method: "POST" });
+      notify.success("Added to Drive catalogue");
+      setItin((prev) => (prev ? {
+        ...prev,
+        catalogueDriveFileId: res?.driveFileId,
+        catalogueDriveViewLink: res?.driveViewLink,
+        catalogueSyncedAt: res?.syncedAt,
+      } : prev));
+    } catch (e) {
+      if (e?.body?.code === "DRIVE_NOT_CONNECTED") {
+        notify.error("Connect Google Drive in Travel Knowledge Base settings first");
+      } else if (e?.body?.code === "KB_ROOT_NOT_CONFIGURED") {
+        notify.error("Configure the Knowledge Base Drive root folder first (Travel Knowledge Base settings)");
+      } else {
+        notify.error(e?.body?.error || e?.message || "Failed to add to catalogue");
+      }
+    } finally {
+      setAddingToCatalogue(false);
+    }
+  }, [id, notify, addingToCatalogue]);
+
+  const handleExtractToDiagnosticKb = useCallback(async () => {
+    if (extractingToKb) return;
+    setExtractingToKb(true);
+    try {
+      const { draft } = await fetchApi(`/api/travel/itineraries/${id}/extract-to-tmc-catalogue`, { method: "POST" });
+      const created = await fetchApi("/api/travel-tmc-catalogue", {
+        method: "POST",
+        body: JSON.stringify(draft),
+      });
+      notify.success("Added to Diagnostic KB — review before promoting");
+      navigate(`/travel/tmc/catalogue?edit=${created.id}`);
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Failed to extract catalogue fields");
+    } finally {
+      setExtractingToKb(false);
+    }
+  }, [id, notify, navigate, extractingToKb]);
 
   const items = useMemo(() => (itin?.items ? [...itin.items] : []), [itin]);
 
@@ -814,6 +901,7 @@ export default function ItineraryEditor() {
   }
   if (!itin) return null;
 
+  const pdfAuthToken = typeof getAuthToken === "function" ? getAuthToken() : null;
   const dayBuckets = [null, ...Array.from({ length: dayCount }, (_, i) => i + 1)];
   // Default centre when nothing is placed yet = India (broad view); once any
   // pin exists, FitBounds zooms to the actual points.
@@ -919,6 +1007,65 @@ export default function ItineraryEditor() {
           style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 6, background: showRates ? "var(--subtle-bg, rgba(0,0,0,0.04))" : "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.8rem" }}
         >
           <Hotel size={14} /> Hotel rates {showRates ? "▾" : "▸"}
+        </button>
+      </div>
+
+      {/* Step 3 — template picker, PDF generation, and the two GDrive/
+          diagnostic hand-off actions. A separate row so the primary header
+          row above stays uncluttered. */}
+      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+        <select
+          value={itin.clonedFromTemplateId || ""}
+          disabled={templatePickerBusy}
+          onChange={(e) => handleTemplatePick(e.target.value)}
+          aria-label="Itinerary template"
+          style={{ padding: "0.35rem 0.6rem", border: "1px solid var(--border-color)", borderRadius: 6, background: "var(--surface-color)", color: "var(--text-primary)", fontSize: "0.8rem", maxWidth: 260 }}
+        >
+          <option value="">No template</option>
+          {templates.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name} ({t.destinationName}{t.isPdfTemplate ? " · PDF template" : ""})
+            </option>
+          ))}
+        </select>
+
+        <a
+          href={`/api/travel/itineraries/${id}/pdf${pdfAuthToken ? `?_t=${encodeURIComponent(pdfAuthToken)}` : ""}`}
+          target="_blank"
+          rel="noreferrer"
+          style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 6, background: "transparent", color: "var(--text-primary)", textDecoration: "none", fontSize: "0.8rem" }}
+        >
+          <Download size={14} /> Generate PDF
+        </a>
+
+        <button
+          type="button"
+          disabled={addingToCatalogue}
+          onClick={handleAddToCatalogue}
+          style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 6, background: "transparent", color: "var(--text-primary)", cursor: addingToCatalogue ? "wait" : "pointer", fontSize: "0.8rem", opacity: addingToCatalogue ? 0.6 : 1 }}
+          title="Generate the PDF and upload it into the shared Drive CRM Itineraries folder"
+        >
+          <Cloud size={14} /> {addingToCatalogue ? "Adding…" : "Add to Catalogue"}
+        </button>
+        {itin.catalogueDriveFileId && (
+          <a
+            href={itin.catalogueDriveViewLink}
+            target="_blank"
+            rel="noreferrer"
+            style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.76rem", color: "var(--text-secondary)" }}
+          >
+            <ExternalLink size={12} /> View in Drive
+          </a>
+        )}
+
+        <button
+          type="button"
+          disabled={extractingToKb}
+          onClick={handleExtractToDiagnosticKb}
+          style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 6, background: "transparent", color: "var(--text-primary)", cursor: extractingToKb ? "wait" : "pointer", fontSize: "0.8rem", opacity: extractingToKb ? 0.6 : 1 }}
+          title="AI-draft a Diagnostic Knowledge Base entry from this itinerary for review"
+        >
+          <Database size={14} /> {extractingToKb ? "Drafting…" : "Add to Diagnostic KB"}
         </button>
       </div>
 

@@ -5,7 +5,7 @@
  * PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 3).
  *
  * Consumes the slice-2 backend (commit b5042743). The 4 profile-type form
- * shapes are flat_percent / tiered / per_pax_flat / hybrid; the page
+ * shapes are flat_percent / flat_fee / tiered / per_pax_flat / hybrid; the page
  * builds {profileType-specific} JSON at submit time and stringifies it
  * into the profileJson field before POSTing.
  *
@@ -98,6 +98,13 @@ function makeProfile(overrides = {}) {
 
 const PROFILES_DEFAULT = [
   makeProfile({ id: 901, name: 'Flat 5% TMC', subBrand: 'tmc', profileType: 'flat_percent', profileJson: JSON.stringify({ percent: 5 }) }),
+  makeProfile({
+    id: 905,
+    name: 'Flat Fee RFU',
+    subBrand: 'rfu',
+    profileType: 'flat_fee',
+    profileJson: JSON.stringify({ flatFeeAmount: 2500 }),
+  }),
   makeProfile({
     id: 902,
     name: 'RFU Tiered Ladder',
@@ -273,6 +280,7 @@ describe('<CommissionProfilesAdmin /> — rendering', () => {
     expect(screen.getByText('RFU Tiered Ladder')).toBeInTheDocument();
     expect(screen.getByText('Travel Stall Per-Pax')).toBeInTheDocument();
     expect(screen.getByText('Visa Sure Hybrid')).toBeInTheDocument();
+    expect(screen.getByText('Flat Fee RFU')).toBeInTheDocument();
 
     const row901 = screen.getByTestId('commission-profile-row-901');
     expect(within(row901).getByTestId('commission-profile-type-901')).toHaveTextContent(/Flat %/i);
@@ -287,6 +295,9 @@ describe('<CommissionProfilesAdmin /> — rendering', () => {
 
     const row904 = screen.getByTestId('commission-profile-row-904');
     expect(within(row904).getByTestId('commission-profile-type-904')).toHaveTextContent(/Hybrid/i);
+
+    const row905 = screen.getByTestId('commission-profile-row-905');
+    expect(within(row905).getByTestId('commission-profile-type-905')).toHaveTextContent(/Flat fee/i);
   });
 
   it('renders empty-state copy when list is []', async () => {
@@ -355,6 +366,29 @@ describe('<CommissionProfilesAdmin /> — create modal', () => {
       expect(JSON.parse(body.profileJson)).toEqual({ percent: 7.5 });
     });
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Flat 7\.5% RFU.*created/i));
+  });
+
+  it('flat_fee submission builds {flatFeeAmount} + POSTs with stringified profileJson', async () => {
+    renderPage();
+    await screen.findByText('Flat 5% TMC');
+    fireEvent.click(screen.getByRole('button', { name: /New profile/i }));
+    fireEvent.change(screen.getByLabelText(/Profile name/i), { target: { value: '  Flat Fee RFU  ' } });
+    fireEvent.change(screen.getByLabelText(/^Sub-brand$/i), { target: { value: 'rfu' } });
+    fireEvent.change(screen.getByLabelText(/^Profile type$/i), { target: { value: 'flat_fee' } });
+    fireEvent.change(screen.getByLabelText(/Flat fee amount/i), { target: { value: '2500' } });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([u, o]) =>
+        u === '/api/travel/commission-profiles' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.name).toBe('Flat Fee RFU');
+      expect(body.profileType).toBe('flat_fee');
+      expect(JSON.parse(body.profileJson)).toEqual({ flatFeeAmount: 2500 });
+    });
   });
 
   it('tiered submission builds 2 tiers correctly into profileJson.tiers', async () => {
@@ -449,6 +483,16 @@ describe('<CommissionProfilesAdmin /> — edit + delete', () => {
     expect(screen.getByLabelText(/Tier 1 percent/i).value).toBe('3');
     expect(screen.getByLabelText(/Tier 2 upto/i).value).toBe('2000000');
     expect(screen.getByLabelText(/Tier 2 percent/i).value).toBe('5');
+  });
+
+  it('clicking "Edit" on a flat_fee row pre-fills the fixed amount field', async () => {
+    renderPage();
+    await screen.findByText('Flat Fee RFU');
+    fireEvent.click(screen.getByRole('button', { name: /^Edit Flat Fee RFU$/ }));
+
+    expect(screen.getByLabelText(/Profile name/i).value).toBe('Flat Fee RFU');
+    expect(screen.getByLabelText(/^Profile type$/i).value).toBe('flat_fee');
+    expect(screen.getByLabelText(/Flat fee amount/i).value).toBe('2500');
   });
 
   it('Delete fires notify.confirm + DELETE /api/travel/commission-profiles/:id on confirm-yes', async () => {

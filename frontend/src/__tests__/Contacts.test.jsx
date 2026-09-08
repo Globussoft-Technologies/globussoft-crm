@@ -99,6 +99,22 @@ function renderContacts() {
   );
 }
 
+function getScrollableContactRowByName(name) {
+  const frozenRows = Array.from(document.querySelectorAll('.contacts-table-frozen-pane tbody tr'));
+  const rowIndex = frozenRows.findIndex((row) => (row.textContent || '').includes(name));
+  if (rowIndex === -1) {
+    throw new Error(`Unable to find frozen row for contact "${name}"`);
+  }
+
+  const scrollRows = document.querySelectorAll('.contacts-table-scroll-pane tbody tr');
+  const row = scrollRows[rowIndex];
+  if (!row) {
+    throw new Error(`Unable to find scrollable row for contact "${name}"`);
+  }
+
+  return row;
+}
+
 describe('Contacts.jsx — top-level page contract', () => {
   it('shows the loading row before the contacts fetch settles, then renders the rows', async () => {
     // Defer the /api/contacts response so we can assert the loading row.
@@ -124,6 +140,34 @@ describe('Contacts.jsx — top-level page contract', () => {
     expect(screen.getByText('Bloom Spa')).toBeInTheDocument();
     // aiScore renders as "82/100".
     expect(screen.getByText('82/100')).toBeInTheDocument();
+  });
+
+  it('renders the split-table shell with sortable headers and resize handles', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    expect(document.querySelector('.contacts-split-table')).toBeTruthy();
+    expect(document.querySelector('.contacts-table-frozen-pane')).toBeTruthy();
+    expect(document.querySelector('.contacts-table-scroll-pane')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Sort by Name/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Sort by Email/i })).toBeInTheDocument();
+    expect(screen.getByRole('separator', { name: /Resize Name column/i })).toBeInTheDocument();
+    expect(screen.getByRole('separator', { name: /Resize Email column/i })).toBeInTheDocument();
+
+    const bottomScroll = document.querySelector('.contacts-table-scroll-pane .top-scroll-sync__bottom');
+    expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
+  });
+
+  it('sorts contacts from the resizable header controls', async () => {
+    renderContacts();
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Sort by Lead Score/i }));
+
+    await waitFor(() => {
+      const firstVisibleName = document.querySelector('.contacts-table-frozen-pane tbody tr .hover-underline');
+      expect(firstVisibleName).toHaveTextContent('Rohan Mehta');
+    });
   });
 
   it('renders the empty-state copy when /api/contacts returns []', async () => {
@@ -273,7 +317,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     // null, so the rendered value is the empty-string 'Unassigned' option.
     // There are three such selects (one per row); pick the first by tracking
     // the row containing 'Aarav Sharma'.
-    const row = screen.getByText('Aarav Sharma').closest('tr');
+    const row = getScrollableContactRowByName('Aarav Sharma');
     const select = within(row).getByRole('combobox');
     fireEvent.change(select, { target: { value: '8' } });
 
@@ -281,6 +325,53 @@ describe('Contacts.jsx — top-level page contract', () => {
       const putCall = fetchApiMock.mock.calls.find(
         ([url, opts]) => url === '/api/contacts/1/assign' && opts?.method === 'PUT',
       );
+      expect(putCall).toBeTruthy();
+      expect(JSON.parse(putCall[1].body)).toEqual({ assignedToId: '8' });
+    });
+  });
+
+  it('travel agents can reassign contacts and the dropdown excludes admins', async () => {
+    const { AuthContext } = await import('../App');
+    const travelContacts = SEEDED_CONTACTS.map(c =>
+      c.id === 2
+        ? {
+            ...c,
+            subBrand: 'tmc',
+            assignedToId: 7,
+            assignedTo: { name: 'TMC Operator', email: 'operator@travel.test' },
+          }
+        : c,
+    );
+    const travelStaff = [
+      { id: 1, name: 'Yasin Admin', email: 'yasin@travel.test', role: 'ADMIN' },
+      { id: 7, name: 'TMC Operator', email: 'operator@travel.test', role: 'MANAGER' },
+      { id: 8, name: 'Sahil Agent', email: 'sahil@travel.test', role: 'USER' },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(travelContacts);
+      if (url === '/api/staff') return Promise.resolve(travelStaff);
+      return Promise.resolve(null);
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { userId: 7, role: 'MANAGER' }, tenant: { vertical: 'travel' } }}>
+        <MemoryRouter>
+          <Contacts />
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Priya Iyer')).toBeInTheDocument());
+
+    const priyaRow = getScrollableContactRowByName('Priya Iyer');
+    const assignSelect = within(priyaRow).getByRole('combobox');
+    const optionTexts = Array.from(assignSelect.querySelectorAll('option')).map(option => option.textContent || '');
+    expect(optionTexts.some((text) => /Yasin Admin/i.test(text))).toBe(false);
+
+    fireEvent.change(assignSelect, { target: { value: '8' } });
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/contacts/2/assign' && opts?.method === 'PUT');
       expect(putCall).toBeTruthy();
       expect(JSON.parse(putCall[1].body)).toEqual({ assignedToId: '8' });
     });
@@ -384,11 +475,11 @@ describe('Contacts.jsx — top-level page contract', () => {
     expect(tableCombos).toHaveLength(0);
 
     // Aarav is unassigned — the read-only cell should show 'Unassigned'.
-    const row = screen.getByText('Aarav Sharma').closest('tr');
+    const row = getScrollableContactRowByName('Aarav Sharma');
     expect(within(row).getByText('Unassigned')).toBeInTheDocument();
 
     // Priya has assignedTo populated — her cell shows the assignee name.
-    const priyaRow = screen.getByText('Priya Iyer').closest('tr');
+    const priyaRow = getScrollableContactRowByName('Priya Iyer');
     expect(within(priyaRow).getByText('Sneha Manager')).toBeInTheDocument();
 
     unmount();
@@ -556,7 +647,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     renderContacts();
     // Priya Iyer.phone = null (per fixture). The cell should render "—" not "null".
     await waitFor(() => expect(screen.getByText('Priya Iyer')).toBeInTheDocument());
-    const priyaRow = screen.getByText('Priya Iyer').closest('tr');
+    const priyaRow = getScrollableContactRowByName('Priya Iyer');
     // Priya's fixture also omits createdAt, so its cell renders its own "—"
     // (unrelated to this test) — use getAllByText and assert at least one
     // dash renders, rather than getByText which throws on >1 match.
@@ -982,7 +1073,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
     // Rows still render; the assigned-to dropdowns just have no staff options.
     await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
-    const row = screen.getByText('Aarav Sharma').closest('tr');
+    const row = getScrollableContactRowByName('Aarav Sharma');
     const select = within(row).getByRole('combobox');
     // Only the 'Unassigned' option present (staff list empty).
     expect(select.querySelectorAll('option').length).toBe(1);

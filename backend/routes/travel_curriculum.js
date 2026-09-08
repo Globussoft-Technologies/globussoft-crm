@@ -71,6 +71,9 @@ const {
   serializeCsv: serializeCurriculumCsv,
   ALLOWED_CURRICULA: CURRICULUM_CSV_ALLOWED,
 } = require("../lib/curriculumCsvParser");
+const pdfTextExtractor = require("../lib/pdfTextExtractor");
+const curriculumRag = require("../lib/curriculumRag");
+const curriculumDocuments = require("../lib/curriculumDocuments");
 
 // C6 — multer for /import.csv (memory storage, 5 MB cap matches csv_io.js +
 // travel_csv_io.js conventions).
@@ -1510,6 +1513,319 @@ router.post(
       }
       console.error("[travel-curriculum] brochure upload error:", e.message);
       return res.status(500).json({ error: "Failed to upload curriculum brochure" });
+    }
+  },
+);
+
+// ============================================================================
+// AI curriculum-matching document uploads (additive, 2026-08-24).
+//
+// Distinct from the CSV-imported TravelCurriculumMapping rows above: here
+// the admin uploads a raw board curriculum PDF plus an "info plate" of
+// metadata (title, board, gradeBand, subjects). The backend extracts
+// learning objectives from the PDF via the LLM router and indexes them into
+// the shared curriculum_objectives Qdrant collection (see
+// backend/lib/curriculumRag.js + qdrantClient.js) so the diagnostic submit
+// flow can semantically match schools' stated outcomes against BOTH this
+// collection and the existing itinerary knowledge base.
+//
+// Storage: metadata lives in the generic TenantSetting table (see
+// backend/lib/curriculumDocuments.js) — no new Prisma table/migration.
+//
+// Endpoints (all ADMIN, tenant-scoped, mirrors the CSV routes' RBAC):
+//   POST   /api/travel-curriculum/documents            upload + process
+//   GET    /api/travel-curriculum/documents             list
+//   GET    /api/travel-curriculum/documents/:id         single
+//   POST   /api/travel-curriculum/documents/:id/reindex re-embed under the
+//                                                        CURRENT provider
+//                                                        (no re-extraction)
+//   DELETE /api/travel-curriculum/documents/:id         remove + Qdrant cleanup
+//
+// Express route ordering: these literal paths are declared BEFORE the
+// generic /:id family below so "documents" never gets swallowed by
+// :id="documents" -> INVALID_ID, matching the /stats + /by-month convention
+// already established in this file.
+// ============================================================================
+
+const VALID_CURRICULUM_SUB_BRANDS = new Set(["tmc", "rfu", "travelstall", "visasure"]);
+
+function assertValidCurriculumBoard(board) {
+  assertNonEmptyString(board, "board", "MISSING_FIELDS");
+}
+
+function normalizeSubjectsInput(input) {
+  if (Array.isArray(input)) {
+    return input.map((s) => sanitizeText(String(s || "")).trim()).filter(Boolean);
+  }
+  if (typeof input === "string" && input.trim()) {
+    try {
+      const parsed = JSON.parse(input);
+      if (Array.isArray(parsed)) return normalizeSubjectsInput(parsed);
+    } catch {
+      /* not JSON — treat as comma-separated */
+    }
+    return input.split(",").map((s) => sanitizeText(s).trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function serializeCurriculumDocumentForClient(doc) {
+  if (!doc) return null;
+  // extractedObjectivesJson can be large (up to 200 objectives) — the list
+  // view doesn't need full text, just the count; the single-document GET
+  // includes it in full for the admin detail view.
+  return doc;
+}
+
+router.post(
+  "/documents",
+  verifyToken,
+  requirePermission("curriculum", "write"),
+  brochureUpload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded", code: "NO_FILE" });
+      }
+      const mime = String(req.file.mimetype || "").toLowerCase();
+      const original = String(req.file.originalname || "curriculum.pdf");
+      if (mime !== "application/pdf" && !original.toLowerCase().endsWith(".pdf")) {
+        return res.status(400).json({ error: "Only PDF files are supported", code: "INVALID_FILE_TYPE" });
+      }
+
+      const title = sanitizeText(String(req.body?.title || "").trim());
+      const board = sanitizeText(String(req.body?.board || "").trim());
+      const gradeBand = sanitizeText(String(req.body?.gradeBand || "").trim());
+      const subjects = normalizeSubjectsInput(req.body?.subjects);
+      const notes = req.body?.notes ? sanitizeText(String(req.body.notes)) : null;
+      const subBrand = VALID_CURRICULUM_SUB_BRANDS.has(String(req.body?.subBrand || "").toLowerCase())
+        ? String(req.body.subBrand).toLowerCase()
+        : "tmc";
+
+      assertNonEmptyString(title, "title", "MISSING_FIELDS");
+      assertValidCurriculumBoard(board);
+      assertNonEmptyString(gradeBand, "gradeBand", "MISSING_FIELDS");
+      if (!subjects.length) {
+        return res.status(400).json({ error: "At least one subject is required", code: "MISSING_FIELDS" });
+      }
+
+      const tenantId = req.user.tenantId;
+      const documentId = curriculumDocuments.generateDocumentId();
+
+      const safeName = original.toLowerCase().replace(/[^a-z0-9.-]/g, "_").slice(0, 80) || "curriculum.pdf";
+      const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const filename = `${stamp}-${safeName}`;
+      let pdfUrl;
+      if (S3_BUCKET_NAME) {
+        pdfUrl = await uploadFile(
+          req.file.buffer,
+          filename,
+          "application/pdf",
+          `travel-curriculum-documents/${tenantId}`,
+          { contentDisposition: `attachment; filename="${safeName.replace(/"/g, "")}"` },
+        );
+      } else {
+        const targetDir = path.join(CURRICULUM_BROCHURE_UPLOAD_DIR, "documents", String(tenantId));
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.writeFileSync(path.join(targetDir, filename), req.file.buffer);
+        pdfUrl = `/api/uploads/travel-curriculum/documents/${tenantId}/${filename}`;
+      }
+
+      // Save a "processing" row immediately so the admin sees it in the list
+      // even if extraction/embedding below fails partway.
+      let doc = await curriculumDocuments.saveCurriculumDocument({
+        tenantId,
+        documentId,
+        data: {
+          subBrand,
+          title,
+          board,
+          gradeBand,
+          subjects,
+          notes,
+          pdfUrl,
+          fileSizeBytes: req.file.size,
+          status: "processing",
+          errorMessage: null,
+          extractedObjectives: [],
+          objectiveCount: 0,
+          qdrantPointIds: [],
+          embedProviderId: null,
+          indexedAt: null,
+          uploadedById: req.user.userId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      });
+
+      try {
+        const { text } = await pdfTextExtractor.extractText(req.file.buffer);
+        const { objectives, objectiveCount, qdrantPointIds, embedProviderId } =
+          await curriculumRag.indexCurriculumDocument({
+            tenantId,
+            subBrand,
+            documentId,
+            text,
+            title,
+            board,
+            gradeBand,
+            subjects,
+          });
+
+        doc = await curriculumDocuments.saveCurriculumDocument({
+          tenantId,
+          documentId,
+          data: {
+            ...doc,
+            status: objectiveCount ? "indexed" : "failed",
+            errorMessage: objectiveCount ? null : "No learning objectives could be extracted from this PDF.",
+            extractedObjectives: objectives,
+            objectiveCount,
+            qdrantPointIds,
+            embedProviderId,
+            indexedAt: objectiveCount ? new Date().toISOString() : null,
+            updatedAt: new Date().toISOString(),
+          },
+        });
+      } catch (processErr) {
+        console.error("[travel-curriculum] document processing failed:", processErr.message);
+        doc = await curriculumDocuments.saveCurriculumDocument({
+          tenantId,
+          documentId,
+          data: {
+            ...doc,
+            status: "failed",
+            errorMessage: processErr.message,
+            updatedAt: new Date().toISOString(),
+          },
+        });
+      }
+
+      res.status(201).json({ document: serializeCurriculumDocumentForClient(doc) });
+    } catch (e) {
+      if (e instanceof multer.MulterError) {
+        return res.status(400).json({ error: e.message, code: e.code || "UPLOAD_ERROR" });
+      }
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-curriculum] document upload error:", e.message);
+      res.status(500).json({ error: "Failed to upload curriculum document" });
+    }
+  },
+);
+
+router.get(
+  "/documents",
+  verifyToken,
+  requirePermission("curriculum", "read"),
+  async (req, res) => {
+    try {
+      const subBrand = req.query.subBrand ? String(req.query.subBrand) : undefined;
+      const docs = await curriculumDocuments.listCurriculumDocuments({
+        tenantId: req.user.tenantId,
+        subBrand,
+      });
+      // List view: drop the (potentially large) extracted objective text,
+      // keep just the count — full detail is available via GET /:id.
+      const documents = docs.map(({ extractedObjectives, ...rest }) => rest);
+      res.json({ documents });
+    } catch (e) {
+      console.error("[travel-curriculum] documents list error:", e.message);
+      res.status(500).json({ error: "Failed to list curriculum documents" });
+    }
+  },
+);
+
+router.get(
+  "/documents/:documentId",
+  verifyToken,
+  requirePermission("curriculum", "read"),
+  async (req, res) => {
+    try {
+      const doc = await curriculumDocuments.getCurriculumDocument({
+        tenantId: req.user.tenantId,
+        documentId: req.params.documentId,
+      });
+      if (!doc) {
+        return res.status(404).json({ error: "Curriculum document not found", code: "DOCUMENT_NOT_FOUND" });
+      }
+      res.json({ document: doc });
+    } catch (e) {
+      console.error("[travel-curriculum] document get error:", e.message);
+      res.status(500).json({ error: "Failed to get curriculum document" });
+    }
+  },
+);
+
+// Re-embed a document's already-extracted objectives under the tenant's
+// CURRENT embedding provider — no LLM re-extraction, so this is cheap and
+// safe to call after switching AI providers in Settings (the "needs
+// re-index under the new provider" case discussed for this feature).
+router.post(
+  "/documents/:documentId/reindex",
+  verifyToken,
+  requirePermission("curriculum", "write"),
+  async (req, res) => {
+    try {
+      const tenantId = req.user.tenantId;
+      const doc = await curriculumDocuments.getCurriculumDocument({ tenantId, documentId: req.params.documentId });
+      if (!doc) {
+        return res.status(404).json({ error: "Curriculum document not found", code: "DOCUMENT_NOT_FOUND" });
+      }
+      const { qdrantPointIds, embedProviderId } = await curriculumRag.reindexCurriculumDocument({
+        tenantId,
+        subBrand: doc.subBrand,
+        documentId: doc.id,
+        title: doc.title,
+        board: doc.board,
+        gradeBand: doc.gradeBand,
+        subjects: doc.subjects,
+        objectives: doc.extractedObjectives || [],
+      });
+      const updated = await curriculumDocuments.saveCurriculumDocument({
+        tenantId,
+        documentId: doc.id,
+        data: {
+          ...doc,
+          status: qdrantPointIds.length ? "indexed" : "failed",
+          errorMessage: qdrantPointIds.length ? null : "No cached objectives to re-index — re-upload the PDF.",
+          qdrantPointIds,
+          embedProviderId,
+          indexedAt: qdrantPointIds.length ? new Date().toISOString() : doc.indexedAt,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      res.json({ document: updated });
+    } catch (e) {
+      if (e.code === "NO_EMBEDDING_PROVIDER") {
+        return res.status(503).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-curriculum] document reindex error:", e.message);
+      res.status(500).json({ error: "Failed to re-index curriculum document" });
+    }
+  },
+);
+
+router.delete(
+  "/documents/:documentId",
+  verifyToken,
+  requirePermission("curriculum", "write"),
+  async (req, res) => {
+    try {
+      const tenantId = req.user.tenantId;
+      const doc = await curriculumDocuments.getCurriculumDocument({ tenantId, documentId: req.params.documentId });
+      if (!doc) {
+        return res.status(404).json({ error: "Curriculum document not found", code: "DOCUMENT_NOT_FOUND" });
+      }
+      try {
+        await curriculumRag.deindexCurriculumDocument({ tenantId, subBrand: doc.subBrand, documentId: doc.id });
+      } catch (cleanupErr) {
+        console.warn("[travel-curriculum] Qdrant cleanup on delete failed (non-fatal):", cleanupErr.message);
+      }
+      await curriculumDocuments.deleteCurriculumDocument({ tenantId, documentId: doc.id });
+      res.status(204).send();
+    } catch (e) {
+      console.error("[travel-curriculum] document delete error:", e.message);
+      res.status(500).json({ error: "Failed to delete curriculum document" });
     }
   },
 );

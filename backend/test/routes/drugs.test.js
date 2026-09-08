@@ -249,6 +249,10 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
       strengthValue: true,
       strengthUnit: true,
       isActive: true,
+      // Stock joined the slim shape when the prescription typeahead started
+      // showing what's on the shelf at the point of prescribing.
+      quantity: true,
+      lowStockThreshold: true,
     });
   });
 

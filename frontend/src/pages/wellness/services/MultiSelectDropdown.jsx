@@ -1,14 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
+import { anchorDropdown, estimateDropdownHeight, DROPDOWN_MAX_HEIGHT } from './shared';
 
-export default function MultiSelectDropdown({ categories, categoriesLoading, selectedIds, onChange }) {
+export default function MultiSelectDropdown({
+  categories,
+  categoriesLoading,
+  selectedIds,
+  onChange,
+  // Defaulted so the existing category call sites read exactly as before —
+  // the package builder reuses this component for services.
+  placeholder = 'Select categories...',
+}) {
   const [isOpen, setIsOpen] = useState(false);
   // Portal-rendered menu uses fixed positioning anchored to the button's
   // viewport rect — sidesteps the .glass parent's backdrop-filter, which
   // creates a stacking context that trapped the previous absolute-positioned
   // menu behind the sibling service cards.
-  const [menuRect, setMenuRect] = useState({ top: 0, left: 0, width: 0 });
+  const [menuRect, setMenuRect] = useState({ openUp: false, top: 0, bottom: 0, left: 0, width: 0, maxHeight: DROPDOWN_MAX_HEIGHT });
   const buttonRef = useRef(null);
 
   const selectedNames = categories
@@ -24,11 +33,12 @@ export default function MultiSelectDropdown({ categories, categoriesLoading, sel
     }
   };
 
-  const updateRect = () => {
+  const updateRect = useCallback(() => {
     if (!buttonRef.current) return;
-    const r = buttonRef.current.getBoundingClientRect();
-    setMenuRect({ top: r.bottom + 8, left: r.left, width: r.width });
-  };
+    setMenuRect(anchorDropdown(buttonRef.current, {
+      desiredHeight: estimateDropdownHeight(categories.length),
+    }));
+  }, [categories.length]);
 
   const handleOpen = () => {
     updateRect();
@@ -45,7 +55,7 @@ export default function MultiSelectDropdown({ categories, categoriesLoading, sel
       window.removeEventListener('scroll', updateRect, true);
       window.removeEventListener('resize', updateRect);
     };
-  }, [isOpen]);
+  }, [isOpen, updateRect]);
 
   // Close on escape key
   useEffect(() => {
@@ -87,7 +97,7 @@ export default function MultiSelectDropdown({ categories, categoriesLoading, sel
         }}
       >
         <span style={{ textAlign: 'left', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {categoriesLoading ? 'Loading...' : selectedNames || 'Select categories...'}
+          {categoriesLoading ? 'Loading...' : selectedNames || placeholder}
         </span>
         <ChevronDown size={16} style={{ marginLeft: '0.5rem', flexShrink: 0, transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
       </button>
@@ -111,10 +121,10 @@ export default function MultiSelectDropdown({ categories, categoriesLoading, sel
           <div
             style={{
               position: 'fixed',
-              top: menuRect.top,
+              ...(menuRect.openUp ? { bottom: menuRect.bottom } : { top: menuRect.top }),
               left: menuRect.left,
               width: menuRect.width,
-              maxHeight: '340px',
+              maxHeight: menuRect.maxHeight,
               background: 'var(--bg-color)',
               border: '1px solid var(--border-color)',
               borderRadius: '8px',

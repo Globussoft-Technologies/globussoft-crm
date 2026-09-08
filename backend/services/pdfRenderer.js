@@ -106,6 +106,7 @@ function registerTravelRupeeFont(doc) {
 const hsnSacMapper = require("../lib/hsnSacMapper");
 const gstCalculation = require("../lib/gstCalculation");
 const { READINESS_LEVELS, getReadinessLevel } = require("../lib/travelDiagnosticScoring");
+const { MAX_TOP_K: MAX_RECOMMENDATIONS_SAFETY_CAP } = require("../lib/diagnosticRecommendationSettings");
 
 // ── S51 logo-image fetch + in-memory LRU cache ──────────────────────
 // Contract (called from renderTravelInvoicePdf):
@@ -319,6 +320,46 @@ function renderNotesWithBoldLabels(doc, raw, x, width) {
         .text(row.value, x + indent, doc.y, { width: width - indent });
     }
   }
+}
+
+/**
+ * Format a prescribed drug's strength for display.
+ *
+ * A prescription SNAPSHOTS the catalogue strength at issue time, so repairing
+ * a bad Drug row does not retro-fix scripts already written off it. The
+ * catalogue accepted strengthValue "-" with strengthUnit "-gm" before the
+ * write path was validated, and a plain join printed that as "--gm" on the
+ * PDF, the preview and the ledger.
+ *
+ * A value with no digit in it is not a strength, and a unit with no value is
+ * meaningless on its own — both yield "".
+ */
+function formatDrugStrength(d) {
+  const value = d?.strengthValue == null ? "" : String(d.strengthValue).trim();
+  const unit = d?.strengthUnit == null ? "" : String(d.strengthUnit).trim();
+  if (/[0-9]/.test(value)) return [value, unit].filter(Boolean).join("");
+  const legacy = d?.strength == null ? "" : String(d.strength).trim();
+  return /[0-9]/.test(legacy) ? legacy : "";
+}
+
+/**
+ * Merge a prescription's real clinical columns over the values recovered from
+ * its free-text `instructions`.
+ *
+ * Chief Complaint / Diagnosis / Investigations / Advice are Prescription
+ * columns as of the prescription_clinical_fields migration. parseRxInstructions
+ * stays as the fallback reader for Zylu-imported rows, whose narrative lives
+ * inline in `instructions` and whose columns are NULL. Column wins when set,
+ * so a clinician's typed value is never overridden by a stray prefix that
+ * happened to appear in their free text.
+ */
+function withClinicalFields(parsed, prescription) {
+  const merged = { ...parsed };
+  for (const key of ["chiefComplaint", "diagnosis", "investigations", "advice"]) {
+    const column = prescription?.[key];
+    if (column != null && String(column).trim()) merged[key] = String(column).trim();
+  }
+  return merged;
 }
 
 function parseDrugs(drugs) {
@@ -822,7 +863,7 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
   const bufPromise = streamToBuffer(doc);
 
-  const parsed = parseRxInstructions(prescription?.instructions);
+  const parsed = withClinicalFields(parseRxInstructions(prescription?.instructions), prescription);
   const status = parsed.status || "Issued";
   const drugs = parseDrugs(prescription?.drugs);
 
@@ -887,13 +928,32 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
     rightX: pageRight,
   });
 
-  // ── Document meta info-strip (PATIENT / PATIENT ID / ISSUED / Rx #) ─
+  // ── Document meta info-strip (PATIENT / ID / ISSUED / VALID / Rx #) ─
+  // `validUntil` is the stored column; older rows carry only `validityDays`,
+  // so derive from the issue date in that case rather than showing nothing.
+  const rxValidUntil = prescription?.validUntil
+    ? new Date(prescription.validUntil)
+    : (prescription?.validityDays && prescription?.createdAt
+      ? new Date(new Date(prescription.createdAt).getTime()
+        + Number(prescription.validityDays) * 24 * 60 * 60 * 1000)
+      : null);
+  const rxValidUntilText = rxValidUntil && !Number.isNaN(rxValidUntil.getTime())
+    ? formatDate(rxValidUntil)
+    : "—";
+
   const infoStripY = drawInfoStrip(
     doc,
     [
       { label: "Patient", value: patient?.name || "—" },
       { label: "Patient ID", value: patient?.id != null ? String(patient.id) : "—" },
       { label: "Issued", value: formatDate(prescription?.createdAt) },
+      // Validity was captured on the prescription (validUntil / validityDays)
+      // and shown in the on-screen preview, but never reached the PDF — so the
+      // printed artefact a patient or pharmacist actually holds gave no expiry
+      // at all. drawInfoStrip divides the width by pairs.length and ellipsises
+      // each value, so adding a column re-flows the strip rather than
+      // overflowing it.
+      { label: "Valid until", value: rxValidUntilText },
       { label: "Document", value: prescription?.id != null ? `Rx #${prescription.id}` : "Prescription" },
     ],
     { x: leftX, y: 100, w: usableW },
@@ -975,13 +1035,34 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   doc.y += 8;
 
   doc.x = leftX;
-  const cols = [
-    { label: "#",          x: leftX,        w: 36 },
-    { label: "Medication", x: leftX + 36,  w: 175 },
-    { label: "Dosage",     x: leftX + 211, w: 95 },
-    { label: "Frequency",  x: leftX + 306, w: 120 },
-    { label: "Duration",   x: leftX + 426, w: usableW - 426 },
-  ];
+  // Widths are declared once and the x-offsets derived, so the columns cannot
+  // drift out of alignment the way six hand-written `leftX + n` constants
+  // would. The LAST column absorbs whatever remains of usableW, which keeps
+  // the header bar, the zebra stripes and the outline rect exactly flush
+  // regardless of page size.
+  //
+  // Qty is new: the prescribing form has always captured it (and it drives
+  // stock movement), but the printed Rx omitted it entirely — so a pharmacist
+  // could not tell how many units to dispense.
+  // Widths are MEASURED, not guessed. Each header is drawn at 8.5pt
+  // Helvetica-Bold with characterSpacing 1.1 into (w - 16), so the minimum a
+  // column can be is its header width + 16:
+  //   #  21.8 · MEDICATION 80.1 · DOSAGE 59.0
+  //   FREQUENCY 79.2 · DURATION 68.9 · QTY 36.8   (345.7 of usableW 495)
+  // A first cut gave Duration 62 and the header rendered as "DURATIO N" —
+  // wrapped inside its own cell. Every width below clears its header with
+  // ≥9pt to spare, and Medication additionally clears a 113pt drug name.
+  const COL_LABELS = ["#", "Medication", "Dosage", "Frequency", "Duration", "Qty"];
+  const COL_WIDTHS = [30, 155, 73, 90, 82];
+  const cols = [];
+  {
+    let cx = leftX;
+    COL_LABELS.forEach((label, i) => {
+      const w = i < COL_WIDTHS.length ? COL_WIDTHS[i] : usableW - (cx - leftX);
+      cols.push({ label, x: cx, w });
+      cx += w;
+    });
+  }
 
   let tableTop = doc.y;
   if (tableTop + 30 > contentBottom) { doc.addPage(); tableTop = CONTENT_TOP; }
@@ -1007,13 +1088,18 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   } else {
     for (let i = 0; i < drugs.length; i++) {
       const d = drugs[i];
-      const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join("") || d.strength || "";
+      const strength = formatDrugStrength(d);
       const dosageText = [d.dosage, strength].filter(Boolean).join(" ").trim() || "—";
       const subParts = [d.preparation || d.dosageForm, d.route].filter(Boolean);
       const subText = subParts.join(" · ");
       const medName = d.name || d.drug || "—";
       const freq = d.frequency || "—";
-      const duration = d.duration || "—";
+      // Label the unit — a bare "2" in a Duration column reads ambiguously
+      // next to a "2" dosage.
+      const duration = d.duration ? `${d.duration} day${Number(d.duration) === 1 ? "" : "s"}` : "—";
+      // Blank qty dispenses 1 (see the Qty input's title in PrescribeTab),
+      // so print that rather than an em dash the pharmacist has to guess at.
+      const qty = d.qty ? String(d.qty) : "1";
 
       // Row height — taller when there's a Form · Route subline; shorter
       // and tighter when the medication is single-line. Keeps long-list
@@ -1081,6 +1167,11 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
       doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
         .text(duration, cols[4].x + 8, rowY + rowH / 2 - 6, {
           width: cols[4].w - 16, ellipsis: true, lineBreak: false,
+        });
+      // QTY
+      doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+        .text(qty, cols[5].x + 8, rowY + rowH / 2 - 6, {
+          width: cols[5].w - 16, ellipsis: true, lineBreak: false,
         });
       doc.moveTo(leftX, rowY + rowH).lineTo(pageRight, rowY + rowH)
         .lineWidth(0.3).strokeColor(BRAND.borderSoft).stroke();
@@ -1944,7 +2035,7 @@ async function renderPatientSummaryPdf({
     );
     for (let i = 0; i < prescriptions.length; i++) {
       const p = prescriptions[i];
-      const parsed = parseRxInstructions(p.instructions);
+      const parsed = withClinicalFields(parseRxInstructions(p.instructions), p);
       const status = parsed.status || "Issued";
       const drugs = parseDrugs(p.drugs);
       const doctor = p.doctor || null;
@@ -2064,7 +2155,7 @@ async function renderPatientSummaryPdf({
       } else {
         for (let di = 0; di < drugs.length; di++) {
           const d = drugs[di];
-          const strength = [d.strengthValue, d.strengthUnit].filter(Boolean).join("") || d.strength || "";
+          const strength = formatDrugStrength(d);
           // DOSAGE: combine free-text dosage + strength on one line.
           const dosageText = [d.dosage, strength].filter(Boolean).join(" ").trim() || "—";
           // MEDICATION subline: Form · Route (e.g. "Topical · scalp").
@@ -2896,6 +2987,7 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   const accent = "#0B5345";
   const currency = itinerary.currency || "INR";
   const items = Array.isArray(itinerary.items) ? itinerary.items : [];
+  const showPricing = itinerary.moneyEnabled !== false;
   const skipHeader = opts.skipHeader === true;
   const skipFooter = opts.skipFooter === true;
 
@@ -3012,10 +3104,10 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     // so the overlay works when the template leaves a narrower blank area.
     const colW = {
       type: contentWidth * 0.12,
-      desc: contentWidth * 0.46,
-      markup: contentWidth * 0.12,
-      unit: contentWidth * 0.15,
-      total: contentWidth * 0.15,
+      desc: showPricing ? contentWidth * 0.46 : contentWidth * 0.88,
+      markup: showPricing ? contentWidth * 0.12 : 0,
+      unit: showPricing ? contentWidth * 0.15 : 0,
+      total: showPricing ? contentWidth * 0.15 : 0,
     };
     const colX = {
       type: leftX,
@@ -3028,9 +3120,11 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
     doc.text("Type", colX.type, tableTop, { width: colW.type });
     doc.text("Description", colX.desc, tableTop, { width: colW.desc });
-    doc.text("Markup", colX.markup, tableTop, { width: colW.markup, align: "right" });
-    doc.text("Unit cost", colX.unit, tableTop, { width: colW.unit, align: "right" });
-    doc.text("Total", colX.total, tableTop, { width: colW.total, align: "right" });
+    if (showPricing) {
+      doc.text("Markup", colX.markup, tableTop, { width: colW.markup, align: "right" });
+      doc.text("Unit cost", colX.unit, tableTop, { width: colW.unit, align: "right" });
+      doc.text("Total", colX.total, tableTop, { width: colW.total, align: "right" });
+    }
     doc.moveTo(leftX, tableTop + 14)
       .lineTo(rightX, tableTop + 14)
       .lineWidth(0.5).strokeColor(accent).stroke();
@@ -3043,9 +3137,9 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     for (const it of sorted) {
       const typeStr = String(it.itemType || "—");
       const descStr = String(it.description || "");
-      const markupStr = it.markup != null ? formatMoney(Number(it.markup), currency) : "—";
-      const unitStr = it.unitCost != null ? formatMoney(Number(it.unitCost), currency) : "—";
-      const totalStr = it.totalPrice != null ? formatMoney(Number(it.totalPrice), currency) : "—";
+      const markupStr = showPricing && it.markup != null ? formatMoney(Number(it.markup), currency) : "";
+      const unitStr = showPricing && it.unitCost != null ? formatMoney(Number(it.unitCost), currency) : "";
+      const totalStr = showPricing && it.totalPrice != null ? formatMoney(Number(it.totalPrice), currency) : "";
 
       // Measure wrapped text so rows grow to fit multi-line descriptions
       // and long item-type labels instead of colliding with the next row.
@@ -3064,16 +3158,18 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
       }
       doc.text(typeStr, colX.type, y, { width: colW.type });
       doc.text(descStr, colX.desc, y, { width: colW.desc });
-      doc.text(markupStr, colX.markup, y, { width: colW.markup, align: "right" });
-      doc.text(unitStr, colX.unit, y, { width: colW.unit, align: "right" });
-      doc.text(totalStr, colX.total, y, { width: colW.total, align: "right" });
+      if (showPricing) {
+        doc.text(markupStr, colX.markup, y, { width: colW.markup, align: "right" });
+        doc.text(unitStr, colX.unit, y, { width: colW.unit, align: "right" });
+        doc.text(totalStr, colX.total, y, { width: colW.total, align: "right" });
+      }
       y += rowH + rowGap;
     }
     doc.y = y + 6;
   }
 
   // Grand total band
-  if (itinerary.totalAmount != null) {
+  if (showPricing && itinerary.totalAmount != null) {
     doc.moveDown(0.8);
     const totalY = doc.y;
     doc.rect(leftX, totalY, contentWidth, 40).fillAndStroke("#f4f6f8", accent);
@@ -3099,7 +3195,7 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     doc.font("Helvetica").fontSize(8).fillColor("#777")
       .text(
         `${brandLabel} — Itinerary #${itinerary.id || "?"} v${itinerary.version || 1}. ` +
-          `Pricing subject to availability at the time of booking.`,
+          (showPricing ? "Pricing subject to availability at the time of booking." : "Planning itinerary — pricing not included."),
         leftX, footerY + 8, { width: contentWidth, align: "center" },
       );
     const brandFooterText = (opts && opts.branding && typeof opts.branding.footerText === "string")
@@ -3425,7 +3521,12 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     brandKitLogoBuf = await module.exports.fetchLogoBuffer(branding.thumbnailUrl);
   }
 
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  // bufferPages: true — needed so the footer loop below (drawn once per
+  // page via doc.switchToPage) can revisit earlier pages after all content
+  // has flowed. Without it, only the LAST page ever got a footer line
+  // (verified via a rendered-PDF measurement pass) even on multi-page
+  // reports.
+  const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
   const bufPromise = streamToBuffer(doc);
   const rupeeAnswerFont = registerTravelRupeeFont(doc) ? "TravelRupee" : "Helvetica";
 
@@ -3596,6 +3697,13 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
       .slice(0, 4);
     const titleText = `${recIdx + 1}. ${destination}`;
     const fit = rec.fitScore != null ? `Fit ${rec.fitScore}/100` : "";
+    // Measure with the SAME x-offset/width the actual draw call below uses
+    // (pageMargin + 22 + badgeW), not a flat guess — a narrower measurement
+    // width than the real draw width over-estimates wrapped line count and
+    // inflates cardH, leaving dead space inside every card (verified via a
+    // rendered-PDF measurement pass; see PR notes).
+    const badgeW = String(recIdx + 1).length > 1 ? 26 : 20;
+    const textOffset = 22 + badgeW;
     doc.font("Helvetica-Bold").fontSize(10.5);
     const titleH = doc.heightOfString(titleText, { width: contentW - 130, lineGap: 2 });
     const reasonsH = reasons.reduce((acc, reason) => {
@@ -3603,15 +3711,15 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
       const body = reason.learningOutcome || reason.rationale || "";
       const line = `- ${lead}${body}`;
       doc.font("Helvetica").fontSize(9.2);
-      return acc + doc.heightOfString(line, { width: contentW - 70, lineGap: 2 }) + 2;
+      return acc + doc.heightOfString(line, { width: contentW - textOffset - 18, lineGap: 2 }) + 2;
     }, 0);
     const hasBrochure = Boolean(rec.brochurePdfUrl);
     const cardH = Math.max(58, 22 + titleH + (hasBrochure ? 14 : 0) + (reasons.length ? 12 + reasonsH : 0) + 12);
     ensureAnswerSpace(cardH + 10);
     const cardTop = doc.y;
     doc.roundedRect(pageMargin, cardTop, contentW, cardH, 14).fillAndStroke("#FFFFFF", borderSoft);
-    const badgeW = drawNumberBadge(pageMargin + 12, cardTop + 12, recIdx + 1);
-    const textX = pageMargin + 22 + badgeW;
+    drawNumberBadge(pageMargin + 12, cardTop + 12, recIdx + 1);
+    const textX = pageMargin + textOffset;
     doc.font("Helvetica-Bold").fontSize(10.5).fillColor(textDark)
       .text(titleText, textX, cardTop + 13, { width: contentW - (textX - pageMargin) - 110, lineGap: 2 });
     if (fit) {
@@ -3645,7 +3753,11 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     Array.isArray(curriculumFit.recommendations) &&
     curriculumFit.recommendations.length
   ) {
-    ensureAnswerSpace(140);
+    // Reserve only what the section header itself needs (~90pt), not a
+    // guess sized for header+first-card together — over-reserving here
+    // forces an early page break that strands whatever legitimately fits
+    // in the remainder (verified via a rendered-PDF measurement pass).
+    ensureAnswerSpace(90);
     doc.moveDown(0.3);
     doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
       .text("CURRICULUM FIT", pageMargin, doc.y, { characterSpacing: 1.4 });
@@ -3667,7 +3779,9 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     doc.moveDown(0.4);
   }
 
-  doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark).text("Submitted answers");
+  ensureAnswerSpace(40);
+  doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark)
+    .text("Submitted answers", pageMargin, doc.y, { width: contentW });
   doc.y += 8;
   if (questions.length === 0) {
     doc.roundedRect(pageMargin, doc.y, contentW, 48, 14).fillAndStroke(answerBg, borderSoft);
@@ -3727,7 +3841,15 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
 
   if (ragResult && ragResult.recommendations) {
     const recs = ragResult.recommendations;
-    const trips = Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : [];
+    // Fixed safety ceiling (not the live admin-configured topK — see
+    // diagnosticRecommendationSettings.js) at render time too, not just at
+    // generation time in travelRag.js: a diagnostic scored before that cap
+    // existed can still have an already-persisted TravelDiagnosticRagResult
+    // row with more entries than any sane topK, and re-rendering its PDF
+    // must not surface them all. A legitimately larger admin-chosen topK
+    // (up to MAX_TOP_K) must NOT be re-capped down to a hardcoded 10 here.
+    const trips = (Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : [])
+      .slice(0, MAX_RECOMMENDATIONS_SAFETY_CAP);
 
     // Resolve the customer-facing 1-4 readiness level + name. Prefer the
     // explicit RAG fields; fall back to the diagnostic classification or
@@ -3752,6 +3874,10 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     }
 
     if (trips.length || readinessLevel) {
+      // Reserve only the header (+ optional readiness card) height so a
+      // near-bottom cursor doesn't let this block overflow past the footer
+      // reserve uncontrolled — mirrors the curriculum-fit section's guard.
+      ensureAnswerSpace(readinessLevel ? 150 : 90);
       doc.moveDown(0.6);
       doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
         .text("CURRICULUM ALIGNMENT RECOMMENDATIONS", pageMargin, doc.y, { characterSpacing: 1.4 });
@@ -3789,8 +3915,12 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
           .filter((learning) => !isPolicyHighlight(learning))
           .slice(0, 4);
 
+        // Offset MUST match drawTripCard's actual textX formula below
+        // (x + 20 + badgeW) — a mismatched measurement width over- or
+        // under-estimates wrapped line count and skews cardH (verified via
+        // a rendered-PDF measurement pass).
         const estimatedBadgeW = String(tIdx + 1).length > 1 ? 26 : 20;
-        const estimatedTextOffset = 22 + estimatedBadgeW;
+        const estimatedTextOffset = 20 + estimatedBadgeW;
         const bodyW = contentW - estimatedTextOffset - 18;
         const titleW = contentW - estimatedTextOffset - 110;
         doc.font("Helvetica-Bold").fontSize(10);
@@ -3866,13 +3996,75 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     }
   }
 
-  const footerY = doc.page.height - doc.page.margins.bottom - 32;
-  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
-  doc.font("Helvetica").fontSize(8).fillColor("#777")
-    .text(
-      `Generated by ${brandLabel}. This report is informational; pricing and tier recommendations follow on consultation.`,
-      50, footerY + 8, { width: doc.page.width - 100, align: "center" },
-    );
+  // Cancellation policy (additive, 2026-08-24) — admin-controlled show/hide
+  // toggle + policy choice, resolved by the route layer from
+  // TravelDiagnosticPublicForm.stylingConfigJson (see travel_diagnostics_public.js
+  // resolveCancellationPolicyForForm). opts.cancellationPolicy is null
+  // whenever the toggle is off or no policy is selected, so this section is
+  // fully opt-in and invisible by default.
+  const cancellationPolicy = opts?.cancellationPolicy || null;
+  if (cancellationPolicy && Array.isArray(cancellationPolicy.tiers) && cancellationPolicy.tiers.length) {
+    const headerH2 = 22 + (cancellationPolicy.description ? 16 : 0);
+    ensureAnswerSpace(headerH2 + 40);
+    doc.moveDown(0.4);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
+      .text("CANCELLATION POLICY", pageMargin, doc.y, { characterSpacing: 1.4 });
+    doc.y += 8;
+    doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark)
+      .text(cancellationPolicy.name || "Cancellation policy", pageMargin, doc.y, { width: contentW });
+    doc.y += 5;
+    if (cancellationPolicy.description) {
+      doc.font("Helvetica").fontSize(9.5).fillColor(textMuted)
+        .text(cancellationPolicy.description, pageMargin, doc.y, { width: contentW, lineGap: 2 });
+      doc.y += doc.heightOfString(cancellationPolicy.description, { width: contentW, lineGap: 2 }) + 6;
+    } else {
+      doc.y += 4;
+    }
+
+    // Tier shape is { daysBeforeServiceStart: int, refundPercent: 0-100 },
+    // canonically sorted largest daysBeforeServiceStart first (see
+    // travel_cancellation_policies.js assertValidTiers) — render each as a
+    // plain "N+ days before departure -> refund%" row rather than guessing
+    // at a richer shape that doesn't exist on the model.
+    cancellationPolicy.tiers.forEach((tier) => {
+      const days = Number(tier?.daysBeforeServiceStart);
+      const refund = Number(tier?.refundPercent);
+      const label = Number.isFinite(days)
+        ? `${days}+ days before departure`
+        : "Cancellation window";
+      const refundText = Number.isFinite(refund) ? `${refund}% refund` : "";
+      doc.font("Helvetica-Bold").fontSize(9.5);
+      const labelH = doc.heightOfString(label, { width: contentW - 130, lineGap: 2 });
+      const rowH = Math.max(30, 14 + labelH + 10);
+      ensureAnswerSpace(rowH + 6);
+      const rowTop = doc.y;
+      doc.roundedRect(pageMargin, rowTop, contentW, rowH, 10).fillAndStroke(answerBg, borderSoft);
+      doc.font("Helvetica-Bold").fontSize(9.5).fillColor(textDark)
+        .text(label, pageMargin + 12, rowTop + 10, { width: contentW - 130, lineGap: 2 });
+      if (refundText) {
+        doc.font("Helvetica-Bold").fontSize(9).fillColor(accent)
+          .text(refundText, pageMargin + contentW - 106, rowTop + 11, { width: 94, align: "right", lineBreak: false });
+      }
+      doc.y = rowTop + rowH + 6;
+    });
+  }
+
+  // Draw the footer on EVERY page, not just the last one — previously this
+  // ran once after all content, which only ever touched the final buffered
+  // page (pages 1..N-1 shipped with no footer at all on a multi-page
+  // report). bufferPages + switchToPage lets us revisit each page now that
+  // the full page count is known.
+  const pageRange = doc.bufferedPageRange();
+  for (let i = pageRange.start; i < pageRange.start + pageRange.count; i += 1) {
+    doc.switchToPage(i);
+    const footerY = doc.page.height - doc.page.margins.bottom - 32;
+    doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
+    doc.font("Helvetica").fontSize(8).fillColor("#777")
+      .text(
+        `Generated by ${brandLabel}. This report is informational; pricing and tier recommendations follow on consultation.`,
+        50, footerY + 8, { width: doc.page.width - 100, align: "center" },
+      );
+  }
 
   doc.end();
   return bufPromise;

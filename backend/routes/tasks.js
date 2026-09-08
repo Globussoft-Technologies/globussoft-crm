@@ -8,6 +8,8 @@ const { writeAudit, diffFields } = require("../lib/audit");
 const { parseDateTimeLocalInTZ } = require("../lib/datetime");
 const { summarizeMessages } = require("../lib/leadConversationSummary");
 const { notify, notifyMany } = require("../lib/notificationService");
+const { sendEmail } = require("../lib/emailSender");
+const { toE164 } = require("../utils/deduplication");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 
@@ -35,7 +37,8 @@ function parseTenantDateInput(input) {
 }
 // #163: enums used elsewhere in the app — surfaced as strict checks instead of
 // silent coercion to "Pending".
-const ALLOWED_TASK_STATUSES = new Set(["Pending", "In Progress", "Completed", "Cancelled"]);
+const ALLOWED_TASK_STATUSES = new Set(["Pending", "In Progress", "In Process", "Completed", "Cancelled"]);
+const TRAVEL_TASK_STATUSES = new Set(["Pending", "In Process", "Completed"]);
 const ALLOWED_TASK_PRIORITIES = new Set(["Low", "Medium", "High", "Critical"]);
 // Lead Reports cluster: activity kind + visit result. Both columns are
 // nullable, so omitting them keeps the pre-existing task shape verbatim.
@@ -53,6 +56,173 @@ const ALLOWED_TASK_OUTCOMES = new Set([
 const VALID_EXTENSION_SOURCES = new Set(["gmail", "whatsapp"]);
 function canViewAllTasks(req) {
   return ["ADMIN", "MANAGER", "OWNER"].includes(String(req.user?.role || "").toUpperCase());
+}
+
+async function isTravelTenant(req) {
+  if (req.user?.vertical) return req.user.vertical === "travel";
+  if (!req.user?.tenantId) return false;
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: req.user.tenantId },
+    select: { vertical: true },
+  });
+  req.user.vertical = tenant?.vertical || "generic";
+  return req.user.vertical === "travel";
+}
+
+function normalizeTaskStatusForTenant(status, travelTenant) {
+  if (!travelTenant) return status;
+  if (status === "In Progress") return "In Process";
+  return status;
+}
+
+function emailConfigured() {
+  return Boolean(process.env.SENDGRID_API_KEY);
+}
+
+async function getWhatsappReadiness(tenantId) {
+  const config = await prisma.whatsAppConfig.findFirst({
+    where: { tenantId, isActive: true, disconnectedAt: null },
+    select: { id: true, phoneNumberId: true, businessRestricted: true },
+  });
+  if (!config) return { configured: false, reason: "No active WhatsApp provider configured" };
+  if (!config.phoneNumberId) return { configured: false, reason: "WhatsApp phone number ID is missing" };
+  if (config.businessRestricted) return { configured: false, reason: "WhatsApp business account is restricted" };
+  return { configured: true, reason: null, config };
+}
+
+function taskAssignmentText(task, assignee) {
+  const due = task.dueDate ? new Date(task.dueDate).toLocaleString("en-IN", { timeZone: TASKS_TZ }) : "No due date set";
+  const assigneeName = assignee?.name || assignee?.email || "there";
+  return {
+    subject: `New Travel CRM task: ${task.title}`,
+    text: [
+      `Hi ${assigneeName},`,
+      "",
+      `A Travel CRM task has been assigned to you: ${task.title}`,
+      `Status: ${task.status || "Pending"}`,
+      `Priority: ${task.priority || "Medium"}`,
+      `Due: ${due}`,
+      "",
+      "Open your CRM task queue to update it as Pending, In Process, or Completed.",
+    ].join("\n"),
+    whatsapp: `New Travel CRM task assigned: ${task.title}\nPriority: ${task.priority || "Medium"}\nDue: ${due}\nUpdate it in CRM: Pending, In Process, or Completed.`,
+  };
+}
+
+async function queueTravelTaskWhatsapp({ task, assignee, actorId, tenantId }) {
+  const phone = toE164(assignee?.phone);
+  if (!phone) {
+    return { channel: "whatsapp", status: "skipped", configured: null, reason: "Assignee has no valid phone number", recipient: null };
+  }
+
+  const readiness = await getWhatsappReadiness(tenantId);
+  if (!readiness.configured) {
+    return { channel: "whatsapp", status: "skipped", configured: false, reason: readiness.reason, recipient: phone };
+  }
+
+  const optOut = await prisma.whatsAppOptOut.findUnique({
+    where: { tenantId_contactPhone: { tenantId, contactPhone: phone } },
+    select: { capturedAt: true, reason: true },
+  });
+  if (optOut) {
+    return { channel: "whatsapp", status: "skipped", configured: true, reason: "Assignee has opted out of WhatsApp messages", recipient: phone };
+  }
+
+  const content = taskAssignmentText(task, assignee);
+  let thread = await prisma.whatsAppThread.upsert({
+    where: { tenantId_contactPhone: { tenantId, contactPhone: phone } },
+    create: {
+      tenantId,
+      contactPhone: phone,
+      contactName: assignee?.name || assignee?.email || null,
+      status: "OPEN",
+      lastMessageAt: new Date(),
+    },
+    update: { lastMessageAt: new Date() },
+  });
+  if (thread.status === "CLOSED") {
+    thread = await prisma.whatsAppThread.update({
+      where: { id: thread.id },
+      data: { status: "OPEN" },
+    });
+  }
+
+  const message = await prisma.whatsAppMessage.create({
+    data: {
+      to: phone,
+      from: readiness.config.phoneNumberId || "",
+      body: content.whatsapp,
+      direction: "OUTBOUND",
+      status: "QUEUED",
+      userId: actorId || null,
+      tenantId,
+      threadId: thread.id,
+    },
+  });
+
+  try {
+    const { getQueue } = require("../lib/whatsappQueue");
+    await getQueue().enqueueSend({ messageId: message.id, tenantId });
+    return { channel: "whatsapp", status: "queued", configured: true, reason: null, recipient: phone, messageId: message.id };
+  } catch (err) {
+    await prisma.whatsAppMessage.update({
+      where: { id: message.id },
+      data: { status: "FAILED", errorMessage: `enqueue failed: ${err.message}` },
+    }).catch(() => {});
+    return { channel: "whatsapp", status: "failed", configured: true, reason: "WhatsApp queue failed", recipient: phone, messageId: message.id };
+  }
+}
+
+async function notifyTravelTaskAssignment({ task, actorId, tenantId }) {
+  if (!task?.userId) {
+    return {
+      required: true,
+      attempted: false,
+      reason: "Task is not assigned to a member",
+      channels: [],
+    };
+  }
+  if (!task.dueDate) {
+    return {
+      required: true,
+      attempted: false,
+      reason: "Set a due date/time to trigger assignment notifications",
+      channels: [],
+    };
+  }
+
+  const assignee = task.user || await prisma.user.findFirst({
+    where: { id: task.userId, tenantId },
+    select: { id: true, name: true, email: true, phone: true },
+  });
+  if (!assignee) {
+    return { required: true, attempted: false, reason: "Assignee was not found", channels: [] };
+  }
+
+  const content = taskAssignmentText(task, assignee);
+  const channels = [];
+  if (!assignee.email) {
+    channels.push({ channel: "email", status: "skipped", configured: emailConfigured(), reason: "Assignee has no email address", recipient: null });
+  } else if (!emailConfigured()) {
+    channels.push({ channel: "email", status: "skipped", configured: false, reason: "SendGrid is not configured", recipient: assignee.email });
+  } else {
+    const result = await sendEmail({
+      to: assignee.email,
+      subject: content.subject,
+      text: content.text,
+      html: content.text.replace(/\n/g, "<br>"),
+    });
+    channels.push({
+      channel: "email",
+      status: result.sent ? "sent" : "failed",
+      configured: true,
+      reason: result.sent ? null : (result.reason || "Email provider rejected the message"),
+      recipient: assignee.email,
+    });
+  }
+
+  channels.push(await queueTravelTaskWhatsapp({ task, assignee, actorId, tenantId }));
+  return { required: true, attempted: true, reason: null, channels };
 }
 
 async function notifyTaskAssignee({ task, actorId, tenantId, io, reassigned = false }) {
@@ -172,13 +342,14 @@ async function notifyTaskCompletionAdmins({ task, actorId, tenantId, io }) {
   });
 }
 
-function validateTaskInput(body) {
+function validateTaskInput(body, opts = {}) {
   if (body.priority !== undefined && body.priority !== null && body.priority !== "") {
     const e = ensureEnum(body.priority, ALLOWED_TASK_PRIORITIES, { field: "priority", code: "INVALID_PRIORITY" });
     if (e) return e;
   }
   if (body.status !== undefined && body.status !== null && body.status !== "") {
-    const e = ensureEnum(body.status, ALLOWED_TASK_STATUSES, { field: "status", code: "INVALID_STATUS" });
+    const allowed = opts.travelTenant ? TRAVEL_TASK_STATUSES : ALLOWED_TASK_STATUSES;
+    const e = ensureEnum(body.status, allowed, { field: "status", code: "INVALID_STATUS" });
     if (e) return e;
   }
   if (body.dueDate !== undefined && body.dueDate !== null && body.dueDate !== "") {
@@ -223,12 +394,13 @@ function normalizeStatusFilter(raw) {
 router.get("/", verifyToken, async (req, res) => {
   try {
     const { status, priority, contactId, overdue, mine } = req.query;
+    const travelTenant = await isTravelTenant(req);
 
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = normalizeStatusFilter(status);
     if (priority) where.priority = priority;
     if (contactId) where.contactId = parseInt(contactId);
-    if (!canViewAllTasks(req)) where.userId = req.user.userId;
+    if (travelTenant || !canViewAllTasks(req)) where.userId = req.user.userId;
     if (overdue === "true") {
       where.dueDate = { lt: new Date() };
       where.status = "Pending";
@@ -241,7 +413,7 @@ router.get("/", verifyToken, async (req, res) => {
     // self-created queue items are visible — orchestrator-fan-out tasks
     // historically wrote userId=null because `stripDangerous` deleted the
     // assignee field on the create path (see POST handler comment).
-    if (mine === "true") {
+    if (!travelTenant && mine === "true") {
       const me = req.user.userId;
       const isOrgRole = req.user.role === "ADMIN" || req.user.role === "MANAGER";
       where.OR = isOrgRole
@@ -306,6 +478,31 @@ router.get("/", verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/tasks/assignment-readiness - Travel CRM assignment notification setup.
+router.get("/assignment-readiness", verifyToken, async (req, res) => {
+  try {
+    const travelTenant = await isTravelTenant(req);
+    if (!travelTenant) {
+      return res.json({
+        travel: false,
+        email: { configured: emailConfigured(), reason: emailConfigured() ? null : "SendGrid is not configured" },
+        whatsapp: { configured: false, reason: "Travel assignment WhatsApp notifications only run for Travel CRM tenants" },
+      });
+    }
+    const whatsapp = await getWhatsappReadiness(req.user.tenantId);
+    return res.json({
+      travel: true,
+      requiresAssigneeAndDueDate: true,
+      statuses: Array.from(TRAVEL_TASK_STATUSES),
+      email: { configured: emailConfigured(), reason: emailConfigured() ? null : "SendGrid is not configured" },
+      whatsapp: { configured: whatsapp.configured, reason: whatsapp.reason },
+    });
+  } catch (err) {
+    console.error("[tasks] assignment-readiness failed:", err);
+    return res.status(500).json({ error: "Failed to check task notification readiness", code: "TASK_NOTIFICATION_READINESS_FAILED" });
+  }
+});
+
 
 // POST /api/tasks/extension-summary - summarize a browser-extension capture for task notes.
 router.post("/extension-summary", verifyToken, requirePermission("tasks", "write"), async (req, res) => {
@@ -351,18 +548,21 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
     // badge sat at 0. Accept `targetUserId` (renamed surface, never stripped)
     // and fall through to req.strippedFields.userId for back-compat with old
     // clients that still POST `userId`.
+    const travelTenant = await isTravelTenant(req);
     const { title, dueDate, contactId, targetUserId, notes, priority, type, outcome } = req.body;
     const assigneeRaw = (targetUserId !== undefined && targetUserId !== null && targetUserId !== "")
       ? targetUserId
       : (req.strippedFields && req.strippedFields.userId);
     if (!title) return res.status(400).json({ error: "title is required" });
     // #163: reject invalid status / priority instead of silently coercing.
-    const inputErr = validateTaskInput(req.body);
+    const normalizedStatus = normalizeTaskStatusForTenant(req.body.status, travelTenant);
+    const inputErr = validateTaskInput({ ...req.body, status: normalizedStatus }, { travelTenant });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const task = await prisma.task.create({
       data: {
         title,
+        status: normalizedStatus || "Pending",
         priority: priority || "Medium",
         // #313: route datetime-local form input ("2026-05-15T10:30") through
         // the IST parser so the wall-clock the user typed survives storage.
@@ -395,7 +595,16 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
     } catch (notifyErr) {
       console.warn("[tasks] assignee notification skipped:", notifyErr && notifyErr.message);
     }
-    res.status(201).json(task);
+    let notificationResults = null;
+    if (travelTenant) {
+      try {
+        notificationResults = await notifyTravelTaskAssignment({ task, actorId: req.user.userId, tenantId: req.user.tenantId });
+      } catch (deliveryErr) {
+        console.warn("[tasks] travel assignment delivery failed:", deliveryErr && deliveryErr.message);
+        notificationResults = { required: true, attempted: false, reason: "Assignment notification check failed", channels: [] };
+      }
+    }
+    res.status(201).json(notificationResults ? { ...task, notificationResults } : task);
   } catch (err) {
     console.error("[tasks] create failed:", err);
     res.status(500).json({
@@ -411,11 +620,13 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid task ID" });
 
+    const travelTenant = await isTravelTenant(req);
     const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Task not found" });
 
     // #168: same validation on update path.
-    const inputErr = validateTaskInput(req.body);
+    const normalizedStatus = normalizeTaskStatusForTenant(req.body.status, travelTenant);
+    const inputErr = validateTaskInput({ ...req.body, status: normalizedStatus }, { travelTenant });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const { title, notes, dueDate, priority, status, targetUserId, type, outcome } = req.body;
@@ -425,7 +636,7 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
     // #313: same datetime-local-vs-ISO sniffing as POST.
     if (dueDate !== undefined) data.dueDate = dueDate ? parseTenantDateInput(dueDate) : null;
     if (priority !== undefined) data.priority = priority;
-    if (status !== undefined) data.status = status;
+    if (status !== undefined) data.status = normalizedStatus;
     // Lead Reports cluster — only written when the caller sends the key, so an
     // update that omits them leaves the stored values untouched.
     if (type !== undefined) data.type = type || null;
@@ -476,7 +687,17 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
       await writeAudit('Task', 'UPDATE', task.id, req.user.userId, req.user.tenantId, { changedFields: changes });
     }
 
-    res.json(task);
+    let notificationResults = null;
+    if (travelTenant && (existing.userId !== task.userId || existing.dueDate?.getTime?.() !== task.dueDate?.getTime?.())) {
+      try {
+        notificationResults = await notifyTravelTaskAssignment({ task, actorId: req.user.userId, tenantId: req.user.tenantId });
+      } catch (deliveryErr) {
+        console.warn("[tasks] travel reassignment delivery failed:", deliveryErr && deliveryErr.message);
+        notificationResults = { required: true, attempted: false, reason: "Assignment notification check failed", channels: [] };
+      }
+    }
+
+    res.json(notificationResults ? { ...task, notificationResults } : task);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to update Task" });

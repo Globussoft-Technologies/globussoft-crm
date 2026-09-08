@@ -105,6 +105,13 @@ const MANAGER_PERMISSIONS = [
   'curriculum.read', 'curriculum.write',
   'flyer_studio.write',
   'flyer_templates.read', 'flyer_templates.write', 'flyer_templates.update',
+  // Call History — MANAGER oversees the whole clinic's calling, so both
+  // `read` (open the page) and `read_all` (see every staff member's
+  // calls). Wellness-only; the vertical filter drops it on generic/travel.
+  'call_history.read', 'call_history.read_all',
+  // Prescription renewal queue — manager triages and dispositions it.
+  // Wellness-only; the vertical filter drops it on generic/travel.
+  'prescription_requests.read', 'prescription_requests.update',
 ];
 
 const CUSTOMER_PERMISSIONS = [
@@ -128,6 +135,13 @@ const CUSTOMER_PERMISSIONS = [
   // cancelled with Cancel + Reschedule actions). Distinct from staff-
   // facing `my_appointments.read` (practitioner's own schedule).
   'my_bookings.read',
+  // `my_prescription_requests.*` gates the Android app's renewal flow —
+  // raising a request against your OWN prescription and listing your own
+  // request history. The patient-scoped counterpart to staff-wide
+  // `prescription_requests.*`; CUSTOMER never gets the staff grant. The
+  // portal handlers additionally scope every query by
+  // `patientId: req.patient.id`.
+  'my_prescription_requests.read', 'my_prescription_requests.write',
   'consents.read', 'consents.write',
   'visits.read',
 ];
@@ -160,6 +174,10 @@ const USER_PERMISSIONS = [
   // admin via verifyRole in routes/leave.js + routes/attendance.js.
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  // Call History — OWN calls only. `read_all` is a deliberate grant that
+  // stays with ADMIN / MANAGER, because a recording is a real patient
+  // discussing real treatment.
+  'call_history.read',
 ];
 
 // Wellness vertical-specific custom roles. Each one carries the
@@ -193,6 +211,9 @@ const DOCTOR_PERMISSIONS = [
   'calendar.read', 'calendar.write',
   'visits.read', 'visits.write', 'visits.update', 'visits.delete',
   'prescriptions.read', 'prescriptions.write', 'prescriptions.update', 'prescriptions.delete',
+  // The prescribing doctor is notified whenever a patient asks to renew an
+  // Rx they wrote — they need to open that request and action it.
+  'prescription_requests.read', 'prescription_requests.update',
   'consents.read', 'consents.write',
   'services.read',
   // Doctor sees the product catalog (to know what's available to order)
@@ -210,6 +231,10 @@ const DOCTOR_PERMISSIONS = [
   // Approval is manager-tier and stays with verifyRole(ADMIN/MANAGER).
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  // Call History — OWN calls only. `read_all` is a deliberate grant that
+  // stays with ADMIN / MANAGER, because a recording is a real patient
+  // discussing real treatment.
+  'call_history.read',
 ];
 
 const NURSE_PERMISSIONS = [
@@ -237,9 +262,16 @@ const NURSE_PERMISSIONS = [
   // can prep medication ordered by the doctor.
   'consents.read', 'consents.write',
   'prescriptions.read',
+  // Nurse sees the renewal queue (they prep medication) but does not
+  // disposition it — that decision is doctor / manager tier.
+  'prescription_requests.read',
   // Staff self-service.
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  // Call History — OWN calls only. `read_all` is a deliberate grant that
+  // stays with ADMIN / MANAGER, because a recording is a real patient
+  // discussing real treatment.
+  'call_history.read',
 ];
 
 const RECEPTIONIST_PERMISSIONS = [
@@ -272,6 +304,10 @@ const RECEPTIONIST_PERMISSIONS = [
   // export (no .write), so .read is the full grant available.
   'payments.read',
   'pos.read', 'pos.write', 'pos.manage',
+  // Front desk fields renewal requests and rings the patient back; the
+  // accept / reject decision stays with `prescription_requests.update`,
+  // which receptionist does NOT get.
+  'prescription_requests.read',
   'contacts.read', 'contacts.write',
   'leads.read', 'leads.write',
   'communications.read', 'communications.write',
@@ -281,6 +317,10 @@ const RECEPTIONIST_PERMISSIONS = [
   // Staff self-service.
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  // Call History — OWN calls only. `read_all` is a deliberate grant that
+  // stays with ADMIN / MANAGER, because a recording is a real patient
+  // discussing real treatment.
+  'call_history.read',
 ];
 
 const TELECALLER_PERMISSIONS = [
@@ -310,6 +350,10 @@ const TELECALLER_PERMISSIONS = [
   // Staff self-service.
   'attendance.read', 'attendance.write',
   'leave.read', 'leave.write',
+  // Call History — OWN calls only. `read_all` is a deliberate grant that
+  // stays with ADMIN / MANAGER, because a recording is a real patient
+  // discussing real treatment.
+  'call_history.read',
 ];
 
 async function ensureRole(stats, { tenantId, key, name, description, isSystem, userType, landingPath }) {

@@ -5,7 +5,7 @@
  * PUT on save, confirm-on-deactivate) with substantial coverage of the
  * 903-LOC SUT at `pages/wellness/Services.jsx`:
  *
- *   - Tab switching (Catalog vs Packages vs Active Treatments)
+ *   - Tab switching (Catalog vs Packages vs Active Packages)
  *   - Create-service modal: open / form fields visible / POST to
  *     /api/wellness/services
  *   - Validation: blank name + zero price guards the submit button
@@ -36,6 +36,17 @@ vi.mock('../utils/api', () => ({
   getAuthToken: vi.fn(() => 'test-token'),
 }));
 
+const notify = {
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  confirm: vi.fn((input) => Promise.resolve(window.confirm(typeof input === 'string' ? input : input?.message || ''))),
+  prompt: vi.fn(),
+};
+vi.mock('../utils/notify', () => ({
+  useNotify: () => notify,
+}));
+
 // Default to a fully-permissioned viewer so existing assertions on New
 // service / per-card Edit / Deactivate keep passing. The SUT now hides
 // these when the viewer lacks services.write.
@@ -58,6 +69,7 @@ vi.mock('../hooks/usePermissions', () => ({
 }));
 
 import { fetchApi } from '../utils/api';
+import { AuthContext } from '../App';
 import Services from '../pages/wellness/Services';
 
 const services = [
@@ -71,7 +83,7 @@ const services = [
 // handlers don't throw.
 function defaultFetchRouter(url, opts) {
   if (typeof url !== 'string') return Promise.resolve([]);
-  if (url === '/api/wellness/services' && (!opts || !opts.method || opts.method === 'GET')) {
+  if (url.startsWith('/api/wellness/services') && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(services);
   }
   if (url === '/api/wellness/activetreatment') {
@@ -116,8 +128,11 @@ describe('<Services /> — Catalog tab', () => {
 
     fetchApi.mockImplementation((url, opts) => {
       if (typeof url !== 'string') return Promise.resolve([]);
-      if (url === '/api/wellness/services' && (!opts || !opts.method || opts.method === 'GET')) {
-        return Promise.resolve(manyServices);
+      if (url.includes('/api/wellness/services?page=1')) {
+        return Promise.resolve({ data: manyServices.slice(0, 12), total: manyServices.length, page: 1, pageSize: 12 });
+      }
+      if (url.includes('/api/wellness/services?page=2')) {
+        return Promise.resolve({ data: manyServices.slice(12), total: manyServices.length, page: 2, pageSize: 12 });
       }
       if (url === '/api/wellness/service-categories?limit=1000') {
         return Promise.resolve([]);
@@ -142,6 +157,52 @@ describe('<Services /> — Catalog tab', () => {
     expect(
       await screen.findByText('Scrollable Service 13'),
     ).toBeInTheDocument();
+  });
+
+  it('does not request the same next page twice while it is still loading', async () => {
+    const firstPage = Array.from({ length: 24 }, (_, index) => ({
+      ...services[0], id: 200 + index, name: `Paged Service ${index + 1}`,
+    }));
+    const pendingPage = new Promise(() => {});
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('/api/wellness/services?page=1')) {
+        return Promise.resolve({ data: firstPage, total: 48, page: 1, pageSize: 24 });
+      }
+      if (url.includes('/api/wellness/services?page=2')) return pendingPage;
+      return Promise.resolve([]);
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await screen.findByText('Paged Service 1');
+    const scrollContainer = screen.getByTestId('services-catalog-scroll');
+    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
+    scrollContainer.scrollTop = 728;
+    fireEvent.scroll(scrollContainer);
+    fireEvent.scroll(scrollContainer);
+
+    expect(fetchApi.mock.calls.filter(([url]) => url.includes('/api/wellness/services?page=2'))).toHaveLength(1);
+  });
+
+  it('ignores an older response after the service sort changes', async () => {
+    let resolveInitial;
+    const initialRequest = new Promise((resolve) => { resolveInitial = resolve; });
+    fetchApi.mockImplementation((url) => {
+      if (url.includes('sortBy=default')) return initialRequest;
+      if (url.includes('sortBy=newest')) {
+        return Promise.resolve({ data: [{ ...services[0], id: 300, name: 'Newest Service' }], total: 1, page: 1, pageSize: 24 });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Sort services'), { target: { value: 'newest' } });
+    await screen.findByText('Newest Service');
+    resolveInitial({ data: [{ ...services[0], id: 301, name: 'Stale Service' }], total: 1, page: 1, pageSize: 24 });
+    await Promise.resolve();
+
+    expect(screen.getByText('Newest Service')).toBeInTheDocument();
+    expect(screen.queryByText('Stale Service')).not.toBeInTheDocument();
   });
 
   it('clicking the pencil (Edit) button flips the card to edit mode', async () => {
@@ -208,14 +269,14 @@ describe('<Services /> — header + tab navigation', () => {
     expect(screen.getByText(/Each service has a price, duration, and target marketing radius/i)).toBeInTheDocument();
   });
 
-  it('exposes 3 tabs: Catalog, Packages, Active Treatments', async () => {
+  it('exposes 3 tabs: Catalog, Packages, Active Packages', async () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
     // Catalog label appears in both the page subtitle and the tab — use getAllByText.
     expect(screen.getAllByText(/Catalog/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/^Packages$/i)).toBeInTheDocument();
-    expect(screen.getByText(/Active Treatments/i)).toBeInTheDocument();
+    expect(screen.getByText(/Active Packages/i)).toBeInTheDocument();
   });
 
   it('switching to the Packages tab hides the Catalog CTA and renders the package builder', async () => {
@@ -238,12 +299,12 @@ describe('<Services /> — header + tab navigation', () => {
     );
   });
 
-  it('switching to Active Treatments fetches /api/wellness/activetreatment', async () => {
+  it('switching to Active Packages fetches /api/wellness/activetreatment', async () => {
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     await waitFor(() => {
       const treatmentsCall = fetchApi.mock.calls.find(
@@ -253,15 +314,15 @@ describe('<Services /> — header + tab navigation', () => {
     });
   });
 
-  it('Active Treatments tab renders the empty-state copy when no rows', async () => {
+  it('Active Packages tab renders the empty-state copy when no rows', async () => {
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     await waitFor(() =>
-      expect(screen.getByText(/No active treatment plans yet\./i)).toBeInTheDocument()
+      expect(screen.getByText(/No active packages yet\./i)).toBeInTheDocument()
     );
   });
 });
@@ -289,7 +350,25 @@ describe('<Services /> — initial tab from URL search params', () => {
     expect(screen.queryByRole('button', { name: /New service/i })).not.toBeInTheDocument();
   });
 
-  it('?tab=activetreatments lands on the Active Treatments tab', async () => {
+  it('?tab=activepackages falls back to the renamed tab, not a blank page', async () => {
+    // The saved-bundles tab that used to own this key was removed. A stale
+    // bookmark has to land somewhere real.
+    render(
+      <MemoryRouter initialEntries={['/wellness/services?tab=activepackages']}>
+        <Services />
+      </MemoryRouter>
+    );
+    await waitFor(() => {
+      const treatmentsCall = fetchApi.mock.calls.find(
+        ([url]) => url === '/api/wellness/activetreatment'
+      );
+      expect(treatmentsCall).toBeTruthy();
+    });
+
+    expect(screen.getByText(/No active packages yet\./i)).toBeInTheDocument();
+  });
+
+  it('?tab=activetreatments lands on the Active Packages tab', async () => {
     render(
       <MemoryRouter initialEntries={['/wellness/services?tab=activetreatments']}>
         <Services />
@@ -303,7 +382,7 @@ describe('<Services /> — initial tab from URL search params', () => {
       expect(treatmentsCall).toBeTruthy();
     });
 
-    expect(screen.getByText(/No active treatment plans yet\./i)).toBeInTheDocument();
+    expect(screen.getByText(/No active packages yet\./i)).toBeInTheDocument();
   });
 });
 
@@ -525,7 +604,7 @@ describe('<Services /> — Package builder tab', () => {
     fetchApi.mockImplementation(defaultFetchRouter);
   });
 
-  it('builder renders service select + sessions slider + discount slider', async () => {
+  it('builder renders service multi-select + sessions slider + discount slider', async () => {
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
@@ -533,7 +612,10 @@ describe('<Services /> — Package builder tab', () => {
     await user.click(screen.getByRole('button', { name: /^Packages$/i }));
 
     expect(screen.getByText(/Build a package/i)).toBeInTheDocument();
-    expect(screen.getByText(/^Service$/i)).toBeInTheDocument();
+    // Multi-select replaced the single <select>; the label now carries a
+    // selected count alongside it.
+    expect(screen.getByTestId('package-service-select')).toBeInTheDocument();
+    expect(screen.getByText(/^Services/i)).toBeInTheDocument();
     // "Sessions" + "Discount" labels
     expect(screen.getByText(/Sessions:/i)).toBeInTheDocument();
     expect(screen.getByText(/Discount:/i)).toBeInTheDocument();
@@ -666,7 +748,7 @@ describe('<Services /> — Catalog card render details', () => {
 
   it('renders "Unlimited" radius when targetRadiusKm is null/0/missing', async () => {
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') {
+      if (url.startsWith('/api/wellness/services')) {
         return Promise.resolve([
           { id: 99, name: 'Unbounded Service', category: 'aesthetics', ticketTier: 'low', basePrice: 1000, durationMin: 30, targetRadiusKm: null, isActive: true },
         ]);
@@ -830,7 +912,7 @@ describe('<Services /> — PackageBuilder dynamic recompute', () => {
 
   it('package builder shows "No services available" when services list is empty', async () => {
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve([]);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve([]);
       if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
       return Promise.resolve({});
     });
@@ -841,14 +923,676 @@ describe('<Services /> — PackageBuilder dynamic recompute', () => {
     );
     await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
 
-    // The select has the "No services available" option AND the summary
-    // shows the "Pick a service" placeholder.
+    // The picker is replaced by a "No services available" notice AND the
+    // summary shows its empty-selection placeholder.
     expect(screen.getByText(/No services available/i)).toBeInTheDocument();
-    expect(screen.getByText(/Pick a service to see pricing/i)).toBeInTheDocument();
+    expect(screen.getByText(/Pick one or more services to see pricing/i)).toBeInTheDocument();
   });
 });
 
-describe('<Services /> — Active Treatments populated state', () => {
+/**
+ * Multi-service packages.
+ *
+ * `sessions` repeats the WHOLE bundle, so the gross is the summed per-session
+ * price × sessions. A one-service package must still price exactly as it did
+ * before multi-select landed — that back-compat is what the first test pins.
+ */
+describe('<Services /> — PackageBuilder multi-service selection', () => {
+  const TWO_HIGH_TIER = [
+    { id: 21, name: 'Alpha Peel', category: 'aesthetics', ticketTier: 'high', basePrice: 1000, durationMin: 30, targetRadiusKm: 10, isActive: true },
+    { id: 22, name: 'Beta Laser', category: 'aesthetics', ticketTier: 'high', basePrice: 2000, durationMin: 45, targetRadiusKm: 10, isActive: true },
+  ];
+
+  beforeEach(() => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(TWO_HIGH_TIER);
+      if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
+      return Promise.resolve({});
+    });
+  });
+
+  const openPackages = async () => {
+    render(
+      <MemoryRouter initialEntries={['/wellness/services?tab=packages']}>
+        <Services />
+      </MemoryRouter>
+    );
+    // "Build a package" renders before the services fetch resolves, so waiting
+    // on it alone races the default selection. "Package price" only appears
+    // once a service is selected and priced.
+    await screen.findByText(/Build a package/i);
+    await screen.findByText(/Package price/i);
+  };
+
+  it('defaults to the first service and prices it exactly as the single-select did', async () => {
+    await openPackages();
+
+    // 1000 × 6 sessions = 6,000 gross; 15% = 900; net 5,100.
+    expect(screen.getByText(/Per session$/i)).toBeInTheDocument();
+    expect(screen.getByText(/6,000/)).toBeInTheDocument();
+    expect(screen.getByText(/900/)).toBeInTheDocument();
+    expect(screen.getAllByText(/5,100/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('sums the per-session price across every selected service', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+
+    // Open the multi-select and add the second service.
+    // Scope to the dropdown: the selection chip also renders a
+    // 'Remove Alpha Peel' button, so an unscoped name match is ambiguous.
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    expect(checkboxes.length).toBe(2);
+    await user.click(checkboxes[1]);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Per session \(2 services\)/i)).toBeInTheDocument(),
+    );
+    // (1000 + 2000) × 6 = 18,000 gross; 15% = 2,700; net 15,300.
+    expect(screen.getByText(/3,000/)).toBeInTheDocument();
+    expect(screen.getByText(/18,000/)).toBeInTheDocument();
+    expect(screen.getByText(/2,700/)).toBeInTheDocument();
+    expect(screen.getAllByText(/15,300/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('itemises each bundled service and names them all in the pitch', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+
+    // Scope to the dropdown: the selection chip also renders a
+    // 'Remove Alpha Peel' button, so an unscoped name match is ambiguous.
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    await user.click(checkboxes[1]);
+
+    await waitFor(() =>
+      // The pitch now names each service with its own run, because a package
+      // can be 3 of one and 2 of another rather than a flat multiple.
+      expect(screen.getByText(/Alpha Peel × 6 \+ Beta Laser × 6 \(12 sessions\)/i)).toBeInTheDocument(),
+    );
+  });
+
+  it('prices each service on its own run — 3 of one, 2 of the other', async () => {
+    // The point of the split: 5 sessions that are 3 of one treatment and 2 of
+    // another cost 3xA + 2xB, not a flat multiple of the bundle.
+    const user = userEvent.setup();
+    await openPackages();
+
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    await user.click(checkboxes[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+    fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '2' } });
+
+    // 1000x3 + 2000x2 = 7,000 gross; 15% = 1,050; net 5,950.
+    await waitFor(() => expect(screen.getByText(/7,000/)).toBeInTheDocument());
+    expect(screen.getByText(/1,050/)).toBeInTheDocument();
+    expect(screen.getAllByText(/5,950/).length).toBeGreaterThanOrEqual(1);
+    // Five sittings in total, and no single "per session" price to quote.
+    expect(screen.getByText(/Total sessions/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Per session/i)).not.toBeInTheDocument();
+  });
+
+  it('itemises the split with each service run', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+
+    // Exact strings: the pitch line below also contains "Alpha Peel × 3".
+    await waitFor(() => expect(screen.getByText('Alpha Peel × 3')).toBeInTheDocument());
+    expect(screen.getByText('Beta Laser × 6')).toBeInTheDocument();
+    // 1000x3 = 3,000 and 2000x6 = 12,000, priced per service.
+    expect(screen.getByText(/^₹3,000$/)).toBeInTheDocument();
+    expect(screen.getByText(/^₹12,000$/)).toBeInTheDocument();
+  });
+
+  it('the slider still sets every service at once', async () => {
+    // It is the common case, and it is what the single number always meant.
+    const user = userEvent.setup();
+    await openPackages();
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '2' } });
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-21')).toHaveValue(2));
+
+    const sliders = document.querySelectorAll('input[type="range"]');
+    fireEvent.change(sliders[0], { target: { value: '4' } });
+
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-21')).toHaveValue(4));
+    expect(screen.getByTestId('package-service-sessions-22')).toHaveValue(4);
+  });
+
+  it('labels the slider with the slider value, not the total', async () => {
+    // The bug this pins: the label read "Sessions: 16" directly above a thumb
+    // sitting on 8. The label belongs to the slider; the totals get their own
+    // line underneath, where they cannot be misread as the slider's value.
+    const user = userEvent.setup();
+    await openPackages();
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '1' } });
+    fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '7' } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('8'),
+    );
+    // The slider still reads its own value, and says what it does to a split.
+    expect(screen.getByTestId('package-sessions-each')).toHaveTextContent('6');
+    expect(screen.getByText(/Set every service to/i)).toBeInTheDocument();
+    // Both counts, spelled out together.
+    expect(screen.getByTestId('package-sessions-summary')).toHaveTextContent(
+      /1 \+ 7 = 8 sessions across 2 services, booked as 7 visits/,
+    );
+  });
+
+  it('says it plainly when a single service is selected', async () => {
+    await openPackages();
+    // One service: slider, sessions and visits are all 6, so no arithmetic is
+    // spelled out and the label stays "Sessions".
+    expect(screen.getByTestId('package-sessions-each')).toHaveTextContent('6');
+    expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('6');
+    expect(screen.getByTestId('package-visit-count')).toHaveTextContent('6');
+    expect(screen.queryByText(/across .* services/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Set every service to/i)).not.toBeInTheDocument();
+  });
+
+  describe('the hints on the counts', () => {
+    it('explains what dragging the slider does to a split', async () => {
+      const user = userEvent.setup();
+      await openPackages();
+      await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+      await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+      await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+      // Hidden until asked for — it is an explanation, not a warning.
+      expect(screen.queryByTestId('package-sessions-hint-bubble')).not.toBeInTheDocument();
+
+      await user.hover(screen.getByTestId('package-sessions-hint'));
+
+      const bubble = await screen.findByTestId('package-sessions-hint-bubble');
+      expect(bubble).toHaveTextContent(/overwrites a split/i);
+      expect(bubble).toHaveTextContent(/type into the box on its chip/i);
+    });
+
+    it('explains sessions against visits when they differ', async () => {
+      const user = userEvent.setup();
+      await openPackages();
+      await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+      await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+      await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+      fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+      fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '4' } });
+      await waitFor(() => expect(screen.getByTestId('package-visit-count')).toHaveTextContent('4'));
+
+      await user.hover(screen.getByTestId('package-totals-hint'));
+
+      const bubble = await screen.findByTestId('package-totals-hint-bubble');
+      expect(bubble).toHaveTextContent(/7 treatment runs is what the price is built from/i);
+      expect(bubble).toHaveTextContent(/4 appointments/i);
+    });
+
+    it('the hint opens on a tap as well as a hover', async () => {
+      // Hover does not exist on a tablet, which is what the front desk uses.
+      // A tap fires mouseover first, so the click must OPEN rather than
+      // toggle — a toggle would open and close in the same gesture and the
+      // tablet would show nothing at all.
+      const user = userEvent.setup();
+      await openPackages();
+
+      await user.click(screen.getByTestId('package-sessions-hint'));
+      expect(await screen.findByTestId('package-sessions-hint-bubble')).toBeInTheDocument();
+
+      await user.click(screen.getByTestId('package-sessions-hint'));
+      expect(screen.getByTestId('package-sessions-hint-bubble')).toBeInTheDocument();
+    });
+
+    it('the hint closes on Escape and on leaving it', async () => {
+      const user = userEvent.setup();
+      await openPackages();
+
+      await user.hover(screen.getByTestId('package-sessions-hint'));
+      expect(await screen.findByTestId('package-sessions-hint-bubble')).toBeInTheDocument();
+
+      await user.unhover(screen.getByTestId('package-sessions-hint'));
+      await waitFor(() =>
+        expect(screen.queryByTestId('package-sessions-hint-bubble')).not.toBeInTheDocument(),
+      );
+
+      screen.getByTestId('package-sessions-hint').focus();
+      expect(await screen.findByTestId('package-sessions-hint-bubble')).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+      await waitFor(() =>
+        expect(screen.queryByTestId('package-sessions-hint-bubble')).not.toBeInTheDocument(),
+      );
+    });
+
+    it('the hint button never submits the form', async () => {
+      const user = userEvent.setup();
+      await openPackages();
+
+      await user.click(screen.getByTestId('package-sessions-hint'));
+
+      const posts = fetchApi.mock.calls.filter(([, opts]) => opts?.method === 'POST');
+      expect(posts).toHaveLength(0);
+    });
+  });
+
+  /**
+   * 3 runs of one service and 4 of the other is 7 runs however they are
+   * delivered — but the patient attends either 4 appointments (three with both
+   * services, one with the leftover) or 7 (one service each). The clinic
+   * chooses, and the choice is what the session counter counts down.
+   */
+  describe('delivering the runs — together or one per visit', () => {
+    const pickBoth = async (user) => {
+      await openPackages();
+      await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+      await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+      await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+      fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+      fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '4' } });
+      await waitFor(() => expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('7'));
+    };
+
+    it('defaults to sharing a visit — 3 + 4 is four appointments', async () => {
+      const user = userEvent.setup();
+      await pickBoth(user);
+
+      expect(screen.getByTestId('package-session-mode-combined')).toBeChecked();
+      expect(screen.getByTestId('package-visits')).toHaveTextContent('4');
+      // The runs are still seven; only the packing changed.
+      expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('7');
+    });
+
+    it('one service per visit makes the same runs seven appointments', async () => {
+      const user = userEvent.setup();
+      await pickBoth(user);
+
+      await user.click(screen.getByTestId('package-session-mode-separate'));
+
+      await waitFor(() => expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('7'));
+      // Runs and visits agree, so the extra row drops away rather than
+      // printing 7 twice.
+      expect(screen.queryByTestId('package-visits')).not.toBeInTheDocument();
+    });
+
+    it('the price does not move with the packing — only the visit count', async () => {
+      const user = userEvent.setup();
+      await pickBoth(user);
+
+      // 1000x3 + 2000x4 = 11,000 gross; 15% off = 9,350.
+      expect(screen.getByText(/11,000/)).toBeInTheDocument();
+      const before = screen.getAllByText(/9,350/).length;
+
+      await user.click(screen.getByTestId('package-session-mode-separate'));
+
+      await waitFor(() => expect(screen.getByTestId('package-session-mode-separate')).toBeChecked());
+      expect(screen.getByText(/11,000/)).toBeInTheDocument();
+      expect(screen.getAllByText(/9,350/).length).toBe(before);
+    });
+
+    it('sends the chosen packing with the package', async () => {
+      const user = userEvent.setup();
+      await pickBoth(user);
+      await user.click(screen.getByTestId('package-session-mode-separate'));
+      await user.type(screen.getByTestId('package-name-input'), 'Split Bundle');
+      await user.click(screen.getByTestId('package-save'));
+
+      await waitFor(() => {
+        const post = fetchApi.mock.calls.find(
+          ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+        );
+        expect(post).toBeTruthy();
+        const body = JSON.parse(post[1].body);
+        expect(body.sessionMode).toBe('separate');
+        expect(body.serviceSessions).toEqual({ 21: 3, 22: 4 });
+      });
+    });
+
+    it('offers no packing choice for a single service — there is nothing to combine', async () => {
+      await openPackages();
+      expect(screen.queryByTestId('package-session-mode')).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * The count box has to be typeable. Clamping on every keystroke meant
+   * clearing it to type "5" read as 0, clamped back to 1, and you ended up
+   * with 15 — there was no way to reach 5 at all.
+   */
+  describe('typing a session count', () => {
+    const openWithBox = async () => {
+      await openPackages();
+      return screen.getByTestId('package-service-sessions-21');
+    };
+
+    it('clearing the box does not snap it back to 1', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+      expect(box).toHaveValue(null);
+    });
+
+    it('clear then type 5 gives 5, not 15', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.change(box, { target: { value: '5' } });
+
+      expect(box).toHaveValue(5);
+      await waitFor(() =>
+        expect(screen.getByTestId('package-total-sessions')).toHaveTextContent('5'),
+      );
+    });
+
+    it('prices live while a valid number is being typed', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.change(box, { target: { value: '3' } });
+
+      // 1000 x 3 = 3,000 gross.
+      await waitFor(() => expect(screen.getByText(/3,000/)).toBeInTheDocument());
+    });
+
+    it('an emptied box falls back to its last real value on blur', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '4' } });
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.blur(box);
+
+      expect(box).toHaveValue(4);
+    });
+
+    it('clamps an out-of-range number on blur rather than mid-keystroke', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '0' } });
+      // Still shown as typed — clamping here is what broke the field.
+      expect(box).toHaveValue(0);
+
+      fireEvent.blur(box);
+      expect(box).toHaveValue(1);
+    });
+
+    it('caps at 60 on blur', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '999' } });
+      fireEvent.blur(box);
+
+      expect(box).toHaveValue(60);
+    });
+
+    it('the slider follows the number that was typed', async () => {
+      // The bug this pins: the header read "SESSIONS: 3" while the only
+      // service on the package said 1.
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.change(box, { target: { value: '5' } });
+
+      await waitFor(() => expect(screen.getByTestId('package-sessions-each')).toHaveTextContent('5'));
+      expect(document.querySelectorAll('input[type="range"]')[0]).toHaveValue('5');
+    });
+
+    it('dragging the slider clears a half-typed box', async () => {
+      const box = await openWithBox();
+      fireEvent.change(box, { target: { value: '' } });
+
+      fireEvent.change(document.querySelectorAll('input[type="range"]')[0], { target: { value: '9' } });
+
+      await waitFor(() => expect(screen.getByTestId('package-service-sessions-21')).toHaveValue(9));
+    });
+  });
+
+  it('sends the split with the saved package', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    await user.click(document.querySelectorAll('input[type="checkbox"]')[1]);
+    await waitFor(() => expect(screen.getByTestId('package-service-sessions-22')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('package-service-sessions-21'), { target: { value: '3' } });
+    fireEvent.change(screen.getByTestId('package-service-sessions-22'), { target: { value: '2' } });
+    await user.type(screen.getByTestId('package-name-input'), 'Split Bundle');
+    await user.click(screen.getByTestId('package-save'));
+
+    await waitFor(() => {
+      const post = fetchApi.mock.calls.find(
+        ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body).serviceSessions).toEqual({ 21: 3, 22: 2 });
+    });
+  });
+
+  it('a bundled service can be removed from its chip', async () => {
+    const user = userEvent.setup();
+    await openPackages();
+
+    // Scope to the dropdown: the selection chip also renders a
+    // 'Remove Alpha Peel' button, so an unscoped name match is ambiguous.
+    await user.click(within(screen.getByTestId('package-service-select')).getByRole('button'));
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+    await user.click(checkboxes[1]);
+    await waitFor(() =>
+      expect(screen.getByText(/Per session \(2 services\)/i)).toBeInTheDocument(),
+    );
+
+    // Close the portal menu, then drop one service via its chip.
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: /Remove Beta Laser/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Per session \(2 services\)/i)).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Per session$/i)).toBeInTheDocument();
+  });
+});
+
+describe('<Services /> — PackageBuilder tax, validity and sell-by', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-27T12:00:00'));
+    fetchApi.mockReset();
+    fetchApi.mockImplementation(defaultFetchRouter);
+    notify.success.mockReset();
+    notify.error.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const openBuilder = async (user) => {
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /^Packages$/i }));
+    await waitFor(() => expect(screen.getByText(/51,000/)).toBeInTheDocument());
+  };
+
+  const pickFrom = async (user, testId, optionLabel) => {
+    const trigger = within(screen.getByTestId(testId)).getByRole('button');
+    await user.click(trigger);
+    await user.click(await screen.findByRole('option', { name: optionLabel }));
+  };
+
+  it('adds the selected tax on top of the package price rather than inside it', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await openBuilder(user);
+
+    // Default bundle: 8500 × 6 = 51,000 gross, 15% off → 43,350 net.
+    expect(screen.getByText(/Package price$/i)).toBeInTheDocument();
+    await pickFrom(user, 'package-tax-select', 'GST 18%');
+
+    // The stored price stays pre-tax; the customer-facing total is derived.
+    await waitFor(() => expect(screen.getByText(/Package price \(pre-tax\)/i)).toBeInTheDocument());
+    expect(screen.getByText(/Tax \(18%\)/)).toBeInTheDocument();
+    expect(screen.getByText(/7,803/)).toBeInTheDocument(); // 43,350 × 18%
+    // 43,350 + 7,803 shows twice: the "Customer pays" row and the sales pitch,
+    // which has to quote the tax-inclusive figure a customer would hear.
+    expect(screen.getAllByText(/51,153/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/incl\. tax/i)).toBeInTheDocument();
+  });
+
+  it('sends tax, validity and sell-by with the saved package', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await openBuilder(user);
+
+    await user.type(screen.getByTestId('package-name-input'), 'Glow Season Bundle');
+    await pickFrom(user, 'package-tax-select', 'GST 18%');
+    await pickFrom(user, 'package-validity-select', '6 Months');
+    fireEvent.change(screen.getByTestId('package-sell-by-input'), { target: { value: '2026-12-31' } });
+
+    await user.click(screen.getByTestId('package-save'));
+
+    await waitFor(() => {
+      const post = fetchApi.mock.calls.find(
+        ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body).toMatchObject({
+        name: 'Glow Season Bundle',
+        taxPercent: 18,
+        validityDays: 180,      // "6 Months" is stored as a day count
+        sellByDate: '2026-12-31',
+      });
+    });
+  });
+
+  it('omits validity and sell-by when they are left alone', async () => {
+    // No expiry and no sell-by is the default, and has to reach the API as an
+    // explicit null rather than an empty string the validator would reject.
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await openBuilder(user);
+
+    await user.type(screen.getByTestId('package-name-input'), 'Plain Bundle');
+    await user.click(screen.getByTestId('package-save'));
+
+    await waitFor(() => {
+      const post = fetchApi.mock.calls.find(
+        ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.taxPercent).toBe(0);
+      expect(body.validityDays).toBeNull();
+      expect(body.sellByDate).toBeNull();
+    });
+  });
+
+  it('blocks saving a package with a past sell-by date', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await openBuilder(user);
+
+    await user.type(screen.getByTestId('package-name-input'), 'Expired Bundle');
+    fireEvent.change(screen.getByTestId('package-sell-by-input'), { target: { value: '2026-08-26' } });
+
+    await user.click(screen.getByTestId('package-save'));
+
+    expect(notify.error).toHaveBeenCalledWith('Sell-by date cannot be in the past');
+    const packagePosts = fetchApi.mock.calls.filter(
+      ([url, opts]) => url === '/api/wellness/packages' && opts?.method === 'POST',
+    );
+    expect(packagePosts).toHaveLength(0);
+  });
+
+  it('does not offer past dates in the builder sell-by input', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await openBuilder(user);
+
+    expect(screen.getByTestId('package-sell-by-input')).toHaveAttribute('min', '2026-08-27');
+  });
+});
+
+describe('<Services /> — who is offered a package to buy', () => {
+  // Staff are role USER / userType STAFF. Reading role === 'USER' as
+  // "customer" put a Buy button in front of every doctor, nurse and
+  // telecaller — and buying from a staff account would mint a Patient record
+  // named after them.
+  const LIVE_PACKAGE = {
+    id: 3,
+    name: 'Strict removal',
+    serviceIds: [10],
+    services: [{ id: 10, name: 'GFC Hair', basePrice: 8500 }],
+    missingServiceIds: [],
+    sessions: 4,
+    discountPercent: 15,
+    grossPrice: 59992,
+    price: 50993,
+    isActive: true,
+    isPublic: true,
+  };
+
+  const renderAs = async ({ userType, role, canWrite }) => {
+    usePermissionsMock.mockReturnValue({
+      ...FULL_PERMS,
+      userType,
+      hasPermission: () => canWrite,
+    });
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
+      if (url === '/api/wellness/packages') return Promise.resolve({ packages: [LIVE_PACKAGE] });
+      if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    render(
+      <AuthContext.Provider value={{ user: { role }, tenant: { name: 'Clinic' } }}>
+        <MemoryRouter><Services /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /^Packages$/i }));
+    return user;
+  };
+
+  afterEach(() => {
+    usePermissionsMock.mockReturnValue(FULL_PERMS);
+  });
+
+  it('offers a customer the package to buy', async () => {
+    await renderAs({ userType: 'CUSTOMER', role: 'CUSTOMER', canWrite: false });
+
+    await waitFor(() => expect(screen.getByTestId('package-buy-3')).toBeInTheDocument());
+    expect(screen.queryByText(/Build a package/i)).not.toBeInTheDocument();
+  });
+
+  it('offers a doctor nothing to buy — they may look, not purchase', async () => {
+    await renderAs({ userType: 'STAFF', role: 'USER', canWrite: false });
+
+    // The catalog they sell is visible…
+    await waitFor(() => expect(screen.getByText('Strict removal')).toBeInTheDocument());
+    // …without a purchase, and without the builder they cannot save from.
+    expect(screen.queryByTestId('package-buy-3')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Build a package/i)).not.toBeInTheDocument();
+  });
+
+  it('gives a doctor no publish or retire controls either', async () => {
+    await renderAs({ userType: 'STAFF', role: 'USER', canWrite: false });
+
+    await waitFor(() => expect(screen.getByText('Strict removal')).toBeInTheDocument());
+    expect(screen.queryByTestId('package-publish-3')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('package-terms-3')).not.toBeInTheDocument();
+  });
+
+  it('gives someone who can manage the catalog the builder, not a Buy button', async () => {
+    await renderAs({ userType: 'STAFF', role: 'ADMIN', canWrite: true });
+
+    await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
+    expect(screen.queryByTestId('package-buy-3')).not.toBeInTheDocument();
+  });
+});
+
+describe('<Services /> — Active Packages populated state', () => {
   beforeEach(() => {
     fetchApi.mockReset();
   });
@@ -856,7 +1600,7 @@ describe('<Services /> — Active Treatments populated state', () => {
   it('renders treatment cards when /api/wellness/activetreatment returns rows', async () => {
     const user = userEvent.setup();
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
       if (url === '/api/wellness/activetreatment') {
         return Promise.resolve({
           data: [
@@ -880,14 +1624,102 @@ describe('<Services /> — Active Treatments populated state', () => {
 
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     // Treatment heading + patient label + sessions counter
     await waitFor(() => expect(screen.getByText('GFC 6-session course')).toBeInTheDocument());
     expect(screen.getByText(/Asha Iyer/)).toBeInTheDocument();
     expect(screen.getByText(/2\/6 sessions/)).toBeInTheDocument();
     // Active treatments empty-state copy MUST NOT render when rows exist
-    expect(screen.queryByText(/No active treatment plans yet\./i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No active packages yet\./i)).not.toBeInTheDocument();
+  });
+
+  it('a bundle saved on the Packages tab shows up here, above the patient plans', async () => {
+    // The clinic calls both things "packages": a bundle they offer, and a
+    // plan a patient has bought. Building one has to land somewhere visible.
+    const user = userEvent.setup();
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
+      if (url === '/api/wellness/packages') {
+        return Promise.resolve({
+          packages: [
+            {
+              id: 90,
+              name: 'Glow Bundle',
+              serviceIds: [10],
+              services: [{ id: 10, name: 'GFC Hair', basePrice: 8500 }],
+              missingServiceIds: [],
+              sessions: 6,
+              discountPercent: 10,
+              grossPrice: 51000,
+              price: 45900,
+              isActive: true,
+              isPublic: false,
+            },
+          ],
+        });
+      }
+      if (url === '/api/wellness/activetreatment') {
+        return Promise.resolve({
+          data: [{
+            id: 501,
+            name: 'GFC 6-session course',
+            status: 'active',
+            totalSessions: 6,
+            completedSessions: 2,
+            totalPrice: 51000,
+            startedAt: '2026-04-01T00:00:00Z',
+            patient: { name: 'Asha Iyer' },
+            service: { name: 'GFC Hair' },
+          }],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
+
+    // Both halves render, each under its own heading.
+    await waitFor(() => expect(screen.getByText('Glow Bundle')).toBeInTheDocument());
+    expect(screen.getByText(/Packages you offer/i)).toBeInTheDocument();
+    expect(screen.getByText(/Patient packages in progress/i)).toBeInTheDocument();
+    expect(screen.getByText('GFC 6-session course')).toBeInTheDocument();
+  });
+
+  it('omits the bundle section entirely when no bundle has been built', async () => {
+    // A clinic that only tracks what patients bought sees the tab unchanged —
+    // no empty section, no extra headings.
+    const user = userEvent.setup();
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
+      if (url === '/api/wellness/packages') return Promise.resolve({ packages: [] });
+      if (url === '/api/wellness/activetreatment') {
+        return Promise.resolve({
+          data: [{
+            id: 502,
+            name: 'Solo plan',
+            status: 'active',
+            totalSessions: 4,
+            completedSessions: 0,
+            totalPrice: 12000,
+            startedAt: '2026-04-01T00:00:00Z',
+            patient: { name: 'Ravi Menon' },
+            service: { name: 'GFC Hair' },
+          }],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
+
+    await waitFor(() => expect(screen.getByText('Solo plan')).toBeInTheDocument());
+    expect(screen.queryByText(/Packages you offer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Patient packages in progress/i)).not.toBeInTheDocument();
   });
 
   it('loads additional treatment cards when the scroll container reaches the bottom', async () => {
@@ -906,14 +1738,14 @@ describe('<Services /> — Active Treatments populated state', () => {
     }));
 
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
       if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: manyTreatments });
       return Promise.resolve({});
     });
 
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     await waitFor(() => {
       expect(screen.getByText('Scrollable treatment 1')).toBeInTheDocument();
@@ -934,7 +1766,7 @@ describe('<Services /> — Active Treatments populated state', () => {
   it('keeps the cancelled badge inside the treatment card container', async () => {
     const user = userEvent.setup();
     fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url.startsWith('/api/wellness/services')) return Promise.resolve(services);
       if (url === '/api/wellness/activetreatment') {
         return Promise.resolve({
           data: [
@@ -958,7 +1790,7 @@ describe('<Services /> — Active Treatments populated state', () => {
 
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+    await user.click(screen.getByRole('button', { name: /Active Packages/i }));
 
     const card = await screen.findByTestId('treatment-card-502');
     const badge = within(card).getByTestId('treatment-status-502');

@@ -21,11 +21,64 @@ function respondGeminiLimit(res, err) {
   return true;
 }
 
+// Strip common markdown markup a model might emit even when told not to
+// (belt-and-braces for short_answer mode, which is inserted verbatim into
+// plain-text form fields that render no markdown).
+function stripMarkdown(text) {
+  return String(text || "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^[*-]\s+/gm, "")
+    .trim();
+}
+
+// ── AI Short-Answer Draft (non-email form fields, e.g. Brochure Engine) ──
+// A field like "trip summary" or "learning outcomes" is NOT an email — it has
+// no recipient, greeting, or sign-off. Routed separately from the email-draft
+// path below so its prompt/fallback never inherit email framing ("Dear...",
+// "Best regards,"), which previously leaked into brochure form fields
+// whenever this handler shared the generic email prompt.
+async function handleShortAnswerDraft(req, res, { context, maxWords }) {
+  const prompt = `${context}
+
+Output rules:
+- Answer directly and only with the requested content — no greeting, no sign-off, no "Subject:" line, no addressing a recipient, no email structure of any kind.
+- Plain text only: no markdown (no **bold**, no # headings, no bullet dashes) unless the instructions above explicitly ask for a specific structured format such as JSON.
+- ${maxWords ? `Keep the answer under ${maxWords} words.` : "Keep the answer concise and on-topic."}
+- Return ONLY the requested content, nothing else.`;
+
+  try {
+    const resp = await aiGateway.runAiRequest({
+      tenantId: req.user.tenantId,
+      userId: req.user.userId,
+      task: "short-answer-draft",
+      surface: "ai-email-draft",
+      requestedModelLabel: "gemini-flash",
+      messages: [{ role: "user", content: prompt }],
+    });
+    return res.json({ draft: stripMarkdown(resp.text), model: resp.model });
+  } catch (genErr) {
+    if (respondGeminiLimit(res, genErr)) return;
+    if (genErr.friendly) {
+      // No BYOK, no funded CRM subscription. A canned email-shaped fallback
+      // would be worse than no draft here, so surface a clear, actionable
+      // error instead of writing "Dear [Recipient]..." into a form field.
+      return res.status(503).json({ error: "AI drafting isn't available for this account yet.", code: "AI_NOT_CONFIGURED" });
+    }
+    throw genErr;
+  }
+}
+
 // ── AI Email Draft ────────────────────────────────────────────────
 router.post("/draft", verifyToken, llmLimiter, async (req, res) => {
   try {
-    const { context, recipientEmail, tone, contactId } = req.body;
+    const { context, recipientEmail, tone, contactId, mode, maxWords } = req.body;
     if (!context) return res.status(400).json({ error: "Please provide a subject or context." });
+
+    if (mode === "short_answer") {
+      return await handleShortAnswerDraft(req, res, { context, maxWords });
+    }
 
     // Gather CRM context about the recipient if available
     let contactContext = "";
@@ -92,6 +145,11 @@ Requirements:
     }
   } catch (err) {
     console.error("[AI Draft] Error:", err.message);
+    if (req.body.mode === "short_answer") {
+      // Never inject email boilerplate ("Dear...", "Best regards,") into a
+      // non-email form field on an unexpected error.
+      return res.status(500).json({ error: "Failed to generate a draft. Please write this field manually.", code: "AI_DRAFT_FAILED" });
+    }
     // Fallback on any error
     const draft = generateFallbackDraft(req.body.context, req.body.tone);
     res.json({ draft, model: "fallback-on-error" });

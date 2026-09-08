@@ -181,19 +181,27 @@ test.describe('Approvals — deep flow (live dev server)', () => {
       const rule = await createNotificationRule(request, 'Notify on high-value deal');
       const deal = await createDeal(request, { amount: 175000, title: `${FLOW_TAG} Arjun Patel high-value` });
 
-      // Wait briefly for async rule execution + notification create.
-      await new Promise((r) => setTimeout(r, 1500));
-
-      // The rule writes a notification for assigneeUserId. We can confirm it
-      // fired indirectly via /workflows/history (audit log) which the engine
-      // writes on every executeAction.
-      const history = await request.get(`${API}/workflows/history?limit=20`, { headers: auth() });
-      expect(history.status()).toBe(200);
-      const hbody = await history.json();
-      const ours = (hbody.logs || []).find((l) => l.entityId === rule.id);
+      // The rule writes a notification for assigneeUserId. We confirm it fired
+      // indirectly via /workflows/history, which the engine writes on every
+      // executeAction.
+      //
+      // Polled, not slept: the engine retries a failed action three times with
+      // backoff before writing its row, so the wait is variable. And the row is
+      // matched on `workflowId` — /history serves WorkflowExecution now, so the
+      // old `entityId` predicate (an AuditLog column) matched nothing and this
+      // probe would have gone green for the wrong reason.
+      let ours;
+      const deadline = Date.now() + 15000;
+      do {
+        await new Promise((r) => setTimeout(r, 300));
+        const history = await request.get(`${API}/workflows/history?limit=50`, { headers: auth() });
+        expect(history.status()).toBe(200);
+        const hbody = await history.json();
+        ours = (hbody.logs || []).find((l) => l.workflowId === rule.id);
+      } while (!ours && Date.now() < deadline);
       // If null, the engine didn't process our rule — that's a real defect
       // worth surfacing, not masking.
-      expect(ours, `expected workflow audit log for rule ${rule.id}; engine may not have fired`).toBeTruthy();
+      expect(ours, `expected a workflow history row for rule ${rule.id}; engine may not have fired`).toBeTruthy();
 
       // Now manually create the approval (the documented requester flow).
       const ap = await createApproval(request, deal.id, 'discount waiver — high-value');

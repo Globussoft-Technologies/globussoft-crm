@@ -14,6 +14,7 @@
  * -------------
  *   - POST /api/travel/commission-profiles/:id/preview
  *       happy path flat_percent: 100000 sale @ 5% → commission=5000
+ *       happy path flat_fee: fixed payout ignores saleAmount
  *       happy path tiered: slab math matches lib semantics
  *       missing saleAmount → 400 MISSING_FIELDS
  *       negative saleAmount → 400 INVALID_SALE_AMOUNT
@@ -98,6 +99,16 @@ const FLAT_PERCENT_PROFILE = {
   name: 'Standard 5%',
   profileType: 'flat_percent',
   profileJson: JSON.stringify({ type: 'flat_percent', percent: 5 }),
+  subBrand: null,
+  isActive: true,
+};
+
+const FLAT_FEE_PROFILE = {
+  id: 47,
+  tenantId: 1,
+  name: 'Fixed fee',
+  profileType: 'flat_fee',
+  profileJson: JSON.stringify({ type: 'flat_fee', flatFeeAmount: 2500 }),
   subBrand: null,
   isActive: true,
 };
@@ -201,6 +212,24 @@ describe('POST /api/travel/commission-profiles/:id/preview', () => {
     });
     expect(res.body.breakdown).toMatch(/10%/);
     expect(res.body.breakdown).toMatch(/5%/);
+  });
+
+  test('happy path flat_fee: fixed payout ignores saleAmount', async () => {
+    prisma.travelCommissionProfile.findFirst.mockResolvedValue(FLAT_FEE_PROFILE);
+
+    const res = await request(makeApp())
+      .post('/api/travel/commission-profiles/47/preview')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ saleAmount: 100000 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      profileId: 47,
+      profileType: 'flat_fee',
+      saleAmount: 100000,
+      commission: 2500,
+    });
+    expect(res.body.breakdown).toMatch(/flat fee/i);
   });
 
   test('missing saleAmount → 400 MISSING_FIELDS (findFirst NOT called)', async () => {

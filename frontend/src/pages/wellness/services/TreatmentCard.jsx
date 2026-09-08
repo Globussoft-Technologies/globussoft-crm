@@ -30,16 +30,16 @@ export default function TreatmentCard({ treatment, onChanged, onSelect }) {
         method: 'PUT',
         body: JSON.stringify({ status: newStatus }),
       });
-      notify.success(`Treatment plan marked as ${newStatus}`);
+      notify.success(`Package marked as ${newStatus}`);
       onChanged && onChanged();
     } catch (_err) { /* fetchApi already surfaced the message */ }
   };
 
   const handleCancel = async () => {
     if (!await notify.confirm({
-      message: `Cancel this treatment plan for ${treatment.patient?.name}?`,
+      message: `Cancel this package for ${treatment.patient?.name}?`,
       destructive: true,
-      confirmText: 'Cancel Plan'
+      confirmText: 'Cancel Package'
     })) return;
     await updateStatus('cancelled');
   };

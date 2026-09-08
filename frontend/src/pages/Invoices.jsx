@@ -12,6 +12,7 @@ import {
   CreditCard,
   X,
   Filter,
+  CalendarRange,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -19,7 +20,7 @@ import { AuthContext } from "../App";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
 import TopScrollSync from "../components/TopScrollSync";
-
+import SearchableSingleSelect from "./wellness/services/SearchableSingleSelect";
 const STATUS_CONFIG = {
   PAID: { color: "#10b981", bg: "rgba(16,185,129,0.15)", label: "Paid" },
   UNPAID: { color: "#f59e0b", bg: "rgba(245,158,11,0.15)", label: "Unpaid" },
@@ -53,6 +54,68 @@ const formatCurrency = (v) =>
 
 const INVOICE_TABLE_MIN_WIDTH = 940;
 
+/**
+ * Date-range presets for the invoice ledger filter.
+ *
+ * `days: null` means "no lower bound" (All time). Everything else is resolved
+ * against the LOCAL day so the boundaries line up with what the user sees in
+ * the DUE DATE / ISSUED columns; the backend parses bare YYYY-MM-DD in the
+ * server's local timezone for the same reason.
+ */
+const DATE_RANGE_PRESETS = [
+  { value: "ALL", label: "All time" },
+  { value: "7", label: "Last 7 days", days: 7 },
+  { value: "30", label: "Last 30 days", days: 30 },
+  { value: "90", label: "Last 90 days", days: 90 },
+  { value: "MTD", label: "This month" },
+  { value: "YTD", label: "This year" },
+  { value: "CUSTOM", label: "Custom range…" },
+];
+
+/** Which column ?dateField points at. Mirrors INVOICE_DATE_FIELDS server-side. */
+const DATE_FIELD_OPTIONS = [
+  { value: "issuedDate", label: "Issued" },
+  { value: "dueDate", label: "Due" },
+  { value: "paidAt", label: "Paid" },
+];
+
+/** Local-midnight YYYY-MM-DD. `toISOString()` would shift the day in any
+ *  timezone behind UTC and silently offset every preset by one. */
+function toLocalDateInput(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
+ * Turn the preset + custom inputs into the {from, to} the API expects.
+ * Returns an empty object for "All time" so no date params are sent at all.
+ */
+function resolveDateRange(preset, customFrom, customTo) {
+  if (preset === "ALL") return {};
+  if (preset === "CUSTOM") {
+    const range = {};
+    if (customFrom) range.from = customFrom;
+    if (customTo) range.to = customTo;
+    return range;
+  }
+
+  const today = new Date();
+  if (preset === "MTD") {
+    return { from: toLocalDateInput(new Date(today.getFullYear(), today.getMonth(), 1)) };
+  }
+  if (preset === "YTD") {
+    return { from: toLocalDateInput(new Date(today.getFullYear(), 0, 1)) };
+  }
+
+  const days = Number(preset);
+  if (!Number.isFinite(days) || days <= 0) return {};
+  const from = new Date(today);
+  // Inclusive of today: "last 7 days" is today plus the 6 before it, which is
+  // what a 7-day window means to the person reading the ledger.
+  from.setDate(from.getDate() - (days - 1));
+  return { from: toLocalDateInput(from) };
+}
+
 export default function Invoices() {
   const notify = useNotify();
   // Travel vertical only — invoices get tagged + filtered by sub-brand. For
@@ -85,15 +148,34 @@ export default function Invoices() {
   const [recurFreq, setRecurFreq] = useState("monthly");
   const [statusFilter, setStatusFilter] = useState("ALL");
 
+  // Date-range filter. Unlike `statusFilter` (which slices the already-loaded
+  // array), this is applied SERVER-SIDE via ?from/?to/?dateField on
+  // GET /api/billing — the ledger is unbounded (979 invoices on the demo
+  // tenant already) so narrowing it in the browser would keep downloading the
+  // whole table just to hide most of it.
+  const [dateRange, setDateRange] = useState("ALL");
+  const [dateField, setDateField] = useState("issuedDate");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+
+
 
   // Re-fetch when the travel sub-brand filter changes (no-op for other
   // verticals — activeSubBrand stays undefined there).
   const loadData = useCallback(async () => {
     try {
-      const qs =
-        isTravel && activeSubBrand
-          ? `?subBrand=${encodeURIComponent(activeSubBrand)}`
-          : "";
+      // One query string for both filters. URLSearchParams rather than manual
+      // concatenation so adding the date params cannot produce a stray `&`
+      // when the travel sub-brand filter is absent.
+      const params = new URLSearchParams();
+      if (isTravel && activeSubBrand) params.set("subBrand", activeSubBrand);
+      const range = resolveDateRange(dateRange, customFrom, customTo);
+      if (range.from) params.set("from", range.from);
+      if (range.to) params.set("to", range.to);
+      // Only send dateField when a range is actually active — it is
+      // meaningless on its own and would just be noise in the request log.
+      if (range.from || range.to) params.set("dateField", dateField);
+      const qs = params.toString() ? `?${params.toString()}` : "";
       const [invs, c, d] = await Promise.all([
         fetchApi(`/api/billing${qs}`),
         fetchApi("/api/contacts"),
@@ -105,7 +187,7 @@ export default function Invoices() {
     } catch (_err) {
       // Network or auth error handled by fetchApi
     }
-  }, [activeSubBrand, isTravel]);
+  }, [activeSubBrand, isTravel, dateRange, dateField, customFrom, customTo]);
 
   useEffect(() => {
     loadData();
@@ -381,7 +463,11 @@ export default function Invoices() {
             border: "1px solid var(--border-color)",
           }}
         >
-          {invoices.length} total invoices
+          {/* Every KPI chip above is derived from `invoices`, which is now a
+              DATE-FILTERED set. Saying "total invoices" while a range is
+              active would read as a tenant-wide count and quietly misreport
+              the ledger, so the wording follows the filter. */}
+          {invoices.length}{dateRange === "ALL" ? " total invoices" : " invoices in range"}
         </span>
 
         {/* Travel vertical — Sub-brand filter for the ledger. Bound to the
@@ -455,9 +541,124 @@ export default function Invoices() {
           </div>
         )}
 
+        {/* Date-range filter. Applied on the server (?from/?to/?dateField on
+            GET /api/billing) — see loadData. The field selector exists because
+            the ledger shows BOTH an ISSUED and a DUE DATE column, so "filter
+            by date" is ambiguous without saying which one. */}
         <div
           style={{
             marginLeft: isTravel ? "0.5rem" : "auto",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            padding: "0.25rem 0.75rem",
+            borderRadius: "999px",
+            background: "var(--subtle-bg-4)",
+            border: "1px solid var(--border-color)",
+            flexWrap: "wrap",
+          }}
+        >
+          <CalendarRange size={14} color="var(--text-secondary)" />
+          <select
+            id="invoice-date-field"
+            value={dateField}
+            onChange={(e) => setDateField(e.target.value)}
+            aria-label="Choose which invoice date to filter on"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--text-primary)",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              outline: "none",
+              padding: "0.25rem 0.25rem",
+            }}
+          >
+            {DATE_FIELD_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <select
+            id="invoice-date-range"
+            value={dateRange}
+            onChange={(e) => setDateRange(e.target.value)}
+            aria-label="Filter invoices by date range"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--text-primary)",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              outline: "none",
+              padding: "0.25rem 0.25rem",
+            }}
+          >
+            {DATE_RANGE_PRESETS.map((preset) => (
+              <option key={preset.value} value={preset.value}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+          {dateRange === "CUSTOM" && (
+            <>
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo || undefined}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                aria-label="From date"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "0.75rem",
+                  fontWeight: 600,
+                  outline: "none",
+                  padding: "0.2rem 0.35rem",
+                  // NO inline `colorScheme` here. index.css already drives
+                  // `color-scheme` off [data-theme] for every date/time input
+                  // so the browser's native picker indicator stays visible in
+                  // both themes. An inline value beats that stylesheet rule,
+                  // and pinning "dark" rendered a light indicator on light
+                  // mode's light input — an invisible calendar button.
+                }}
+              />
+              <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>to</span>
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom || undefined}
+                onChange={(e) => setCustomTo(e.target.value)}
+                aria-label="To date"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  fontSize: "0.75rem",
+                  fontWeight: 600,
+                  outline: "none",
+                  padding: "0.2rem 0.35rem",
+                  // NO inline `colorScheme` here. index.css already drives
+                  // `color-scheme` off [data-theme] for every date/time input
+                  // so the browser's native picker indicator stays visible in
+                  // both themes. An inline value beats that stylesheet rule,
+                  // and pinning "dark" rendered a light indicator on light
+                  // mode's light input — an invisible calendar button.
+                }}
+              />
+            </>
+          )}
+        </div>
+
+        <div
+          style={{
+            marginLeft: "0.5rem",
             display: "flex",
             alignItems: "center",
             gap: "0.5rem",
@@ -484,8 +685,17 @@ export default function Invoices() {
             onChange={(e) => setStatusFilter(e.target.value)}
             aria-label="Filter invoices by status"
             className="invoice-status-filter-select"
+            ref={(el) => {
+              if (el) {
+                el.style.setProperty(
+                  "background",
+                  "var(--subtle-bg-4)",
+                  "important"
+                );
+              }
+            }}
             style={{
-              background: "transparent",
+              background: "var(--subtle-bg-4)",
               border: "none",
               color: "var(--text-primary)",
               fontSize: "0.75rem",
@@ -556,6 +766,10 @@ export default function Invoices() {
             gap: "0.45rem",
             padding: "0.65rem 1rem",
             whiteSpace: "nowrap",
+            color: "#FFFFFF",
+    opacity: 1,
+        background: "linear-gradient(135deg, #d99f7b 0%, #b98a4d 100%)",
+
           }}
         >
           <Plus size={16} /> Create Invoice
@@ -689,21 +903,17 @@ export default function Invoices() {
                 >
                   Contact
                 </label>
-                <select
-                  className="input-field"
-                  required
-                  value={newInvoice.contactId}
-                  onChange={(e) => handleFieldChange("contactId", e.target.value)}
-                  style={{ background: "var(--input-bg)" }}
-                  aria-label="Contact"
-                >
-                  <option value="">-- Select Contact --</option>
-                  {contacts.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.email})
-                    </option>
-                  ))}
-                </select>
+               <SearchableSingleSelect 
+  value={newInvoice.contactId}
+  onChange={(value) => handleFieldChange("contactId", value)}
+  style={{ background: "var(--input-bg)" }}
+  options={(contacts || []).map((c) => ({
+    value: String(c.id),
+    label: `${c.name} (${c.email})`,
+  }))}
+  placeholder="Search contact..."
+  aria-label="Contact"
+/>
               </div>
 
               {isTravel && (
@@ -857,69 +1067,69 @@ export default function Invoices() {
         </div>
       )}
 
-        {/* Invoice Table */}
-        <div className="card" style={{ padding: "1.5rem" }}>
-          <h3
+      {/* Invoice Table */}
+      <div className="card" style={{ padding: "1.5rem" }}>
+        <h3
+          style={{
+            fontSize: "1.15rem",
+            fontWeight: "600",
+            marginBottom: "1rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+          }}
+        >
+          <Receipt size={20} color="var(--success-color)" /> Invoice Ledger
+        </h3>
+
+        {invoices.length === 0 ? (
+          <div
             style={{
-              fontSize: "1.15rem",
-              fontWeight: "600",
-              marginBottom: "1rem",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
+              textAlign: "center",
+              padding: "2.5rem 1.5rem",
+              background: "var(--subtle-bg-2)",
+              border: "1px dashed var(--border-color)",
+              borderRadius: "8px",
             }}
           >
-            <Receipt size={20} color="var(--success-color)" /> Invoice Ledger
-          </h3>
-
-          {invoices.length === 0 ? (
-            <div
+            <Receipt
+              size={48}
               style={{
-                textAlign: "center",
-                padding: "2.5rem 1.5rem",
-                background: "var(--subtle-bg-2)",
-                border: "1px dashed var(--border-color)",
-                borderRadius: "8px",
+                opacity: 0.2,
+                margin: "0 auto 1rem",
+                color: "var(--accent-color)",
               }}
-            >
-              <Receipt
-                size={48}
-                style={{
-                  opacity: 0.2,
-                  margin: "0 auto 1rem",
-                  color: "var(--accent-color)",
-                }}
-              />
-              <p style={{ color: "var(--text-secondary)" }}>
-                No invoices yet. Create one to get started.
-              </p>
-            </div>
-          ) : filteredInvoices.length === 0 ? (
-            <div
+            />
+            <p style={{ color: "var(--text-secondary)" }}>
+              No invoices yet. Create one to get started.
+            </p>
+          </div>
+        ) : filteredInvoices.length === 0 ? (
+          <div
+            style={{
+              textAlign: "center",
+              padding: "2.5rem 1.5rem",
+              background: "var(--subtle-bg-2)",
+              border: "1px dashed var(--border-color)",
+              borderRadius: "8px",
+            }}
+          >
+            <Filter
+              size={48}
               style={{
-                textAlign: "center",
-                padding: "2.5rem 1.5rem",
-                background: "var(--subtle-bg-2)",
-                border: "1px dashed var(--border-color)",
-                borderRadius: "8px",
+                opacity: 0.2,
+                margin: "0 auto 1rem",
+                color: "var(--accent-color)",
               }}
-            >
-              <Filter
-                size={48}
-                style={{
-                  opacity: 0.2,
-                  margin: "0 auto 1rem",
-                  color: "var(--accent-color)",
-                }}
-              />
-              <p style={{ color: "var(--text-secondary)" }}>
-                No invoices match the “
-                {STATUS_CONFIG[statusFilter]?.label || statusFilter}” filter.
-              </p>
-            </div>
-          ) : (
-            <div className="invoice-table-scroll">
-              <TopScrollSync scrollWidth={`${INVOICE_TABLE_MIN_WIDTH}px`}>
+            />
+            <p style={{ color: "var(--text-secondary)" }}>
+              No invoices match the “
+              {STATUS_CONFIG[statusFilter]?.label || statusFilter}” filter.
+            </p>
+          </div>
+        ) : (
+          <div className="invoice-table-scroll">
+            <TopScrollSync scrollWidth={`${INVOICE_TABLE_MIN_WIDTH}px`}>
               {/* #243: table-layout fixed + per-column widths so the Contact
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
@@ -1178,8 +1388,8 @@ export default function Invoices() {
                               (e.currentTarget.style.color = "#3b82f6")
                             }
                             onMouseOut={(e) =>
-                              (e.currentTarget.style.color =
-                                "var(--text-secondary)")
+                            (e.currentTarget.style.color =
+                              "var(--text-secondary)")
                             }
                             aria-label={`Download PDF for invoice ${inv.invoiceNum}`}
                           >
@@ -1280,8 +1490,8 @@ export default function Invoices() {
                                 (e.currentTarget.style.color = "#ef4444")
                               }
                               onMouseOut={(e) =>
-                                (e.currentTarget.style.color =
-                                  "var(--text-secondary)")
+                              (e.currentTarget.style.color =
+                                "var(--text-secondary)")
                               }
                               aria-label={`Void invoice ${inv.invoiceNum}`}
                             >
@@ -1294,10 +1504,10 @@ export default function Invoices() {
                   ))}
                 </tbody>
               </table>
-              </TopScrollSync>
-            </div>
-          )}
-        </div>
+            </TopScrollSync>
+          </div>
+        )}
+      </div>
 
       {/* #124: Recur modal — replaces the old prompt(). */}
       {recurInvoice && (

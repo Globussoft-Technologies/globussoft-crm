@@ -15,6 +15,9 @@ const {
 } = require("../lib/travelDiagnosticCurriculumFit");
 const travelRag = require("../lib/travelRag");
 const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
+const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
+const { resolveCancellationPolicyForForm } = require("../lib/travelDiagnosticCancellationPolicy");
+const diagnosticNotifications = require("../lib/diagnosticNotifications");
 const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
@@ -470,13 +473,125 @@ async function requireTravelPortalTenant(req, res, next) {
 // GET /api/portal/travel/itineraries — accepted itineraries for this contact
 router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
   try {
-    const itineraries = await prisma.itinerary.findMany({
-      where: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
-      orderBy: { startDate: "desc" },
-      include: {
-        items: { orderBy: { position: "asc" } },
-      },
+    // Customer bookings are sourced exclusively from TMC trips. The generic
+    // Itinerary model has a different pricing/payment lifecycle and caused
+    // the portal total to diverge from the admin installment ledger.
+    const itineraries = [];
+    // Landing-page TMC registrations are stored as participants/pending
+    // registrations, not advisor itineraries. Include those booked trips in
+    // the portal so a newly-created customer can see the trip immediately.
+    const portalContact = await prisma.contact.findFirst({ where: { id: req.portal.contactId, tenantId: req.portal.tenantId }, select: { email: true } });
+    const [participants, pending] = await Promise.all([
+      prisma.tripParticipant.findMany({
+        where: { trip: { tenantId: req.portal.tenantId } },
+        include: { trip: { include: { paymentPlan: true } } },
+      }),
+      prisma.pendingTripRegistration.findMany({
+        where: { tenantId: req.portal.tenantId, status: { not: "REJECTED" } },
+        include: { trip: { include: { paymentPlan: true } }, convertedToParticipant: true },
+      }),
+    ]);
+    const contactEmail = String(portalContact?.email || "").trim().toLowerCase();
+    const ownedParticipants = participants.filter((row) => String(row.parentEmail || "").trim().toLowerCase() === contactEmail);
+    const ownedPending = pending.filter((row) => String(row.parentEmail || "").trim().toLowerCase() === contactEmail);
+    const pendingTripIds = ownedPending.map((row) => row.tripId);
+    const pendingParticipants = pendingTripIds.length
+      ? await prisma.tripParticipant.findMany({
+          where: { tripId: { in: pendingTripIds }, trip: { tenantId: req.portal.tenantId } },
+          orderBy: { id: "asc" },
+          select: { id: true, tripId: true },
+        })
+      : [];
+    const participantByTrip = new Map();
+    pendingParticipants.forEach((row) => {
+      if (!participantByTrip.has(row.tripId)) participantByTrip.set(row.tripId, row.id);
     });
+    const ownedTripIds = [...new Set([
+      ...ownedParticipants.map((row) => row.tripId),
+      ...ownedPending.map((row) => row.tripId),
+    ])];
+    const participantIds = [
+      ...ownedParticipants.map((row) => row.id),
+      ...ownedPending.map((row) => row.convertedToParticipantId).filter(Boolean),
+      ...pendingParticipants.map((row) => row.id),
+    ];
+    const instalments = participantIds.length
+      ? await prisma.tripInstalmentPayment.findMany({
+          // Participant IDs were loaded above through tenant-scoped trips, so
+          // this model does not need a nonexistent direct trip relation here.
+          where: { tripId: { in: ownedTripIds } },
+          orderBy: [{ participantId: "asc" }, { instalmentIndex: "asc" }],
+          select: {
+            id: true, tripId: true, participantId: true, instalmentIndex: true,
+            dueDate: true, amount: true, paidAmount: true, paidAt: true,
+            status: true, paymentLinkUrl: true,
+          },
+        })
+      : [];
+    const instalmentsByParticipant = new Map();
+    instalments.forEach((row) => {
+      const rows = instalmentsByParticipant.get(row.participantId) || [];
+      rows.push(row);
+      instalmentsByParticipant.set(row.participantId, rows);
+    });
+    const instalmentsByTrip = new Map();
+    instalments.forEach((row) => {
+      const rows = instalmentsByTrip.get(row.tripId) || [];
+      rows.push(row);
+      instalmentsByTrip.set(row.tripId, rows);
+    });
+    const planRows = (trip) => {
+      try {
+        const rows = JSON.parse(trip?.paymentPlan?.instalmentsJson || "[]");
+        return Array.isArray(rows) ? rows.map((row, index) => ({
+          id: `plan-${trip.id}-${index}`,
+          instalmentIndex: index,
+          amount: row.amount,
+          paidAmount: 0,
+          status: "pending",
+          dueDate: row.dueDate,
+          paymentLinkUrl: null,
+        })) : [];
+      } catch (_err) { return []; }
+    };
+    const paidTotal = (rows) => rows.reduce((sum, row) => {
+      // Older webhook records could mark a fully paid row without persisting
+      // paidAmount. The paid status is authoritative for the portal total.
+      const paid = Number(row.paidAmount || 0);
+      return sum + (String(row.status).toLowerCase() === "paid" && paid <= 0 ? Number(row.amount || 0) : paid);
+    }, 0);
+    const portalInstalments = (rows) => rows.map((row) => ({
+      ...row,
+      paidAmount: String(row.status).toLowerCase() === "paid" && Number(row.paidAmount || 0) <= 0
+        ? Number(row.amount || 0)
+        : row.paidAmount,
+    }));
+    const registeredTripIds = new Set(ownedParticipants.map((row) => row.tripId));
+    const registeredBookings = [...ownedParticipants.map((row) => ({
+      id: `registration-participant-${row.id}`,
+      destination: row.trip.destination,
+      startDate: row.trip.departDate,
+      endDate: row.trip.returnDate,
+      status: "confirmed",
+      currency: "INR",
+      totalAmount: row.trip.pricePerStudent || planRows(row.trip).reduce((sum, item) => sum + Number(item.amount || 0), 0),
+      advancePaidAmount: paidTotal(instalmentsByParticipant.get(row.id) || []),
+      instalments: portalInstalments(instalmentsByParticipant.get(row.id) || instalmentsByTrip.get(row.tripId) || planRows(row.trip)),
+      registrationBacked: true,
+      tripId: row.tripId,
+    })), ...ownedPending.filter((row) => !registeredTripIds.has(row.tripId)).map((row) => ({
+      id: `registration-pending-${row.id}`,
+      destination: row.trip.destination,
+      startDate: row.trip.departDate,
+      endDate: row.trip.returnDate,
+      status: "awaiting_review",
+      currency: "INR",
+      totalAmount: row.trip.pricePerStudent || planRows(row.trip).reduce((sum, item) => sum + Number(item.amount || 0), 0),
+      advancePaidAmount: paidTotal(instalmentsByParticipant.get(row.convertedToParticipantId) || []),
+      instalments: portalInstalments(instalmentsByParticipant.get(row.convertedToParticipantId) || instalmentsByTrip.get(row.tripId) || planRows(row.trip)),
+      registrationBacked: true,
+      tripId: row.tripId,
+    }))];
     // Attach a web-check-in "due" flag per trip: any pending WebCheckin row
     // whose flight departs within the next 36h. Drives the portal's
     // "Have you checked in? Yes/No" banner (2026-06-16). The Yes action flips
@@ -518,7 +633,10 @@ router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, 
       if (ended && committed && i.subBrand !== "visasure") return "available";
       return "none";
     };
-    res.json(itineraries.map((i) => ({ ...i, webCheckinDue: Boolean(dueByItin[i.id]), reviewState: reviewState(i) })));
+    res.json([
+      ...itineraries.map((i) => ({ ...i, webCheckinDue: Boolean(dueByItin[i.id]), reviewState: reviewState(i) })),
+      ...registeredBookings,
+    ]);
   } catch (err) {
     console.error("[Portal][travel/itineraries]", err);
     res.status(500).json({ error: "Failed to fetch itineraries" });
@@ -1479,6 +1597,7 @@ router.get("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant, 
         classificationLabel: true,
         recommendedTier: true,
         reportPdfUrl: true,
+        curriculumFitJson: true,
         createdAt: true,
       },
     });
@@ -1509,7 +1628,45 @@ router.get("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant, 
       }
     }
 
-    res.json(rows.map((d) => ({ ...d, ragResult: ragMap[d.id] || null })));
+    // Cancellation policy is a per-(tenant, subBrand) admin toggle, not
+    // per-diagnostic — resolve it once per distinct subBrand in this page
+    // of history rather than once per row.
+    const cancellationPolicyBySubBrand = {};
+    for (const subBrand of new Set(rows.map((d) => d.subBrand))) {
+      cancellationPolicyBySubBrand[subBrand] = await resolveCancellationPolicyForForm({
+        tenantId: req.portal.tenantId,
+        subBrand,
+      });
+    }
+
+    // Chosen itinerary interests the customer checked off (2026-08-27) —
+    // parity with the public report page. Null for rows never submitted.
+    const chosenInterestsById = {};
+    await Promise.all(
+      diagnosticIds.map(async (id) => {
+        chosenInterestsById[id] = await diagnosticChosenInterests.getChosenInterests({
+          tenantId: req.portal.tenantId,
+          diagnosticId: id,
+        });
+      }),
+    );
+
+    res.json(rows.map((d) => {
+      let curriculumFit = null;
+      try {
+        curriculumFit = d.curriculumFitJson ? JSON.parse(d.curriculumFitJson) : null;
+      } catch {
+        curriculumFit = null;
+      }
+      const { curriculumFitJson: _omit, ...rest } = d;
+      return {
+        ...rest,
+        ragResult: ragMap[d.id] || null,
+        curriculumFit,
+        cancellationPolicy: cancellationPolicyBySubBrand[d.subBrand] || null,
+        chosenInterests: chosenInterestsById[d.id] || null,
+      };
+    }));
   } catch (err) {
     console.error("[Portal][travel/diagnostics]", err);
     res.status(500).json({ error: "Failed to load diagnostics" });
@@ -1528,6 +1685,15 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
     const subBrand = bodySubBrand ? String(bodySubBrand) : (await getPortalContactSubBrand(req.portal.contactId));
     if (!subBrand) {
       return res.status(409).json({ error: "No sub-brand on your profile — please contact your advisor", code: "NO_SUB_BRAND" });
+    }
+    const portalContact = answers.contact && typeof answers.contact === "object" ? answers.contact : {};
+    const portalEmail = typeof portalContact.email === "string" ? portalContact.email.trim() : "";
+    const portalPhone = typeof portalContact.phone === "string" ? portalContact.phone.trim() : "";
+    if (portalEmail && (portalEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(portalEmail))) {
+      return res.status(400).json({ error: "Please enter a valid email address", code: "EMAIL_INVALID" });
+    }
+    if (portalPhone && (!/^\+?[0-9\s().-]+$/.test(portalPhone) || portalPhone.replace(/\D/g, "").length < 10 || portalPhone.replace(/\D/g, "").length > 15)) {
+      return res.status(400).json({ error: "Please enter a valid phone number", code: "PHONE_INVALID" });
     }
     const bank = await loadActiveBank(req.portal.tenantId, subBrand);
     if (!bank) {
@@ -1573,6 +1739,28 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       },
     });
 
+    // Notify whoever the admin configured in the Notifications tab
+    // (2026-08-28) — falls back to every ADMIN/MANAGER, in-app only, when
+    // nothing's configured yet. Portal submissions had NO notification at
+    // all before this.
+    try {
+      const submitter = await prisma.contact.findUnique({
+        where: { id: req.portal.contactId },
+        select: { name: true, email: true },
+      }).catch(() => null);
+      await diagnosticNotifications.notifyDiagnosticSubmitted({
+        tenantId: req.portal.tenantId,
+        subBrand: bank.subBrand,
+        diagnosticId: diag.id,
+        contactLabel: submitter?.name || submitter?.email || `Diagnostic #${diag.id}`,
+        score: result.score,
+        classificationLabel: result.classificationLabel,
+        recommendedTier: result.recommendedTier,
+      });
+    } catch (notifyErr) {
+      console.warn("[Portal][travel/diagnostics POST] notification failed (non-fatal):", notifyErr.message);
+    }
+
     // RAG knowledge-base recommendations: best-effort for any travel sub-brand
     // that has indexed PDFs. Runs only when Qdrant + OpenAI embeddings are
     // configured. Never blocks the diagnostic submission; a failure simply omits
@@ -1590,9 +1778,23 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       console.warn("[Portal][travel/diagnostics POST] RAG generation failed (non-fatal):", ragErr.message);
     }
 
+    // Cancellation policy is the same per-(tenant, subBrand) admin toggle
+    // the public report/PDF already use (2026-08-27 parity pass) — baked
+    // into the PDF and returned so the portal can show it alongside the
+    // result, same as the public diagnostic report page.
+    let cancellationPolicy = null;
+    try {
+      cancellationPolicy = await resolveCancellationPolicyForForm({
+        tenantId: req.portal.tenantId,
+        subBrand: bank.subBrand,
+      });
+    } catch (cpErr) {
+      console.warn("[Portal][travel/diagnostics POST] cancellation-policy resolve failed (non-fatal):", cpErr.message);
+    }
+
     // Best-effort branded PDF; if it fails the diagnostic row is still returned
     // and the customer can retry via the report-pdf/regen staff endpoint.
-    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, { ragResult });
+    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, { ragResult, cancellationPolicy });
 
     res.status(201).json({
       id: diag.id,
@@ -1604,12 +1806,52 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       reportPdfUrl: reportPdfUrl || diag.reportPdfUrl,
       createdAt: diag.createdAt,
       recommendations: curriculumFit?.recommendations || [],
+      curriculumFit,
+      cancellationPolicy,
+      chosenInterests: null,
       ragResult,
     });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("[Portal][travel/diagnostics POST]", err);
     res.status(500).json({ error: "Failed to submit diagnostic" });
+  }
+});
+
+// POST /api/portal/travel/diagnostics/:id/interests (2026-08-27)
+//
+// Parity with the public diagnostic report page's "Submit chosen
+// interests" — the logged-in customer checks off which recommended trips
+// they're actually interested in. Scoped to a diagnostic that belongs to
+// THIS customer (contactId + tenantId match), unlike the public route
+// which authorizes via the report-slug token instead. Resubmitting simply
+// overwrites the prior selection (see diagnosticChosenInterests.js).
+router.post("/travel/diagnostics/:id/interests", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id, contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+      select: { id: true, tenantId: true },
+    });
+    if (!diag) {
+      return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+    }
+
+    const interests = Array.isArray(req.body?.interests) ? req.body.interests : [];
+    const saved = await diagnosticChosenInterests.saveChosenInterests({
+      tenantId: diag.tenantId,
+      diagnosticId: diag.id,
+      interests,
+    });
+
+    res.json({ ok: true, ...saved });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    console.error("[Portal][travel/diagnostics/:id/interests POST]", err);
+    res.status(500).json({ error: "Failed to save chosen interests" });
   }
 });
 

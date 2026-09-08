@@ -438,7 +438,7 @@ test.describe.serial('Wellness deep — Real browser UI flows', () => {
     await page.waitForURL(/\/wellness\/patients\/\d+/, { timeout: 10000 });
 
     // Verify the 7 tab buttons render
-    for (const tabLabel of ['Case history', 'New prescription', 'Consent form', 'Treatment plans', 'Log visit', 'Photos', 'Inventory used']) {
+    for (const tabLabel of ['Case history', 'New prescription', 'Consent form', 'Packages', 'Log visit', 'Photos', 'Inventory used']) {
       await expect(page.getByRole('button', { name: new RegExp(tabLabel, 'i') })).toBeVisible({ timeout: 5000 });
     }
   });

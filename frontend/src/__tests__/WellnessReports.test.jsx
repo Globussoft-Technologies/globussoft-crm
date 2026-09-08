@@ -15,12 +15,12 @@
  *     parallel /api/travel/visa/analytics/* GETs + recharts cards).
  *
  * Scope — pins the page-surface invariants for the Wellness-vertical
- * Reports surface (4 tabs, each its own one-shot GET, debounced):
+ * Reports surface (5 tabs, each its own one-shot GET, debounced):
  *
- *   1. Page chrome: heading "Reports" + tab strip with four tabs
- *      (P&L by Service / Per Professional / Per Location / Marketing
- *      Attribution) + two `type=date` inputs (from / to) render
- *      synchronously.
+ *   1. Page chrome: heading "Reports" + tab strip with five tabs
+ *      (P&L by Service / Per Professional / Per Location / Per Product /
+ *      Marketing Attribution) + two `type=date` inputs (from / to)
+ *      render synchronously.
  *   2. Loading state: literal "Loading…" surfaces while the active-tab
  *      GET is in flight.
  *   3. GET on mount (debounced): after the 350ms debounce window,
@@ -34,6 +34,8 @@
  *      /api/wellness/reports/per-location.
  *   6. Switching to Marketing Attribution tab: fires GET
  *      /api/wellness/reports/attribution.
+ *   6b. Switching to Per Product tab: fires GET
+ *      /api/wellness/reports/per-product.
  *   7. P&L tab populated: KPI tile labels (Visits / Revenue / Product
  *      cost / Contribution / Services) + per-row Service / Category /
  *      Tier badge + numeric cells render.
@@ -53,6 +55,19 @@
  *  14. INR ₹-formatted money: tenant.defaultCurrency=INR in
  *      localStorage → tiles render the ₹ symbol via formatMoney's
  *      Intl.NumberFormat('en-IN') output.
+ *  15. Per Product tab populated: per-product rows with HSN (or "--")
+ *      + the gross → discount → net → tax → total column set + the
+ *      Products / Units sold KPI tiles.
+ *  16. Per Product source badge: 'live' → "Live — POS sales"; 'mixed' →
+ *      "POS + imported snapshot" for a window straddling the POS cutover;
+ *      'import' → "Imported snapshot" plus the source filename. The
+ *      tab reads POS when POS has sales in the window and falls back
+ *      to an imported snapshot otherwise, so which source produced a
+ *      figure is stated on the page rather than inferred.
+ *  17. Per Product empty: zero rows → "No product sales in this
+ *      window." plus an inline Import action.
+ *  18. The "Import sales data" toolbar button is Per-Product-only —
+ *      absent on the other four tabs.
  *
  * Backend contract pinned (per the four endpoints under
  * /api/wellness/reports/*):
@@ -70,6 +85,16 @@
  *       totals: { visits, revenue },
  *       rows: [{ id, name, city, state, patients, visits, revenue,
  *               isActive }]
+ *     }
+ *   GET /api/wellness/reports/per-product?from&to&source → {
+ *       source: 'live' | 'import' | 'mixed' | 'none',
+ *       posCutoverAt: <ISO ts of the first COMPLETED POS product sale>,
+ *       totals: { products, productCount, grossSales, discount,
+ *                 netSales, tax, totalSales },
+ *       importBatches: [{ id, fileName, periodStart, periodEnd }],
+ *       rows: [{ key, productId, name, hsnCode, productCount,
+ *               grossSales, discount, netSales, tax, totalSales,
+ *               revenue }]
  *     }
  *   GET /api/wellness/reports/attribution?from&to → {
  *       totals: { leads, junk, qualified, revenue },
@@ -201,10 +226,73 @@ const ATT_EMPTY_ROWS = {
   rows: [],
 };
 
+// Per Product carries a `source` discriminator the other four tabs don't:
+// 'live' (POS sales) / 'import' (a snapshot loaded from the clinic's previous
+// system) / 'none'. The badge that surfaces it is part of the contract — the
+// same tab changes source on its own as a clinic onboards.
+const PROD_LIVE = {
+  source: 'live',
+  requestedSource: 'auto',
+  totals: {
+    products: 2, productCount: 125, grossSales: 228515, discount: 1417.4,
+    netSales: 216394.71, tax: 10702.89, totalSales: 227097.6,
+  },
+  importBatches: [],
+  rows: [
+    { key: 'p:1', productId: 1, name: 'Hair Fact - Gold Veg (M)', hsnCode: '3305', productCount: 88, grossSales: 228515, discount: 1417.4, netSales: 216394.71, tax: 10702.89, totalSales: 227097.6, revenue: 227097.6 },
+    { key: 'p:2', productId: 2, name: 'GLYCURA MARINE COLLAGEN', hsnCode: null, productCount: 37, grossSales: 99533, discount: 215.92, netSales: 94587.69, tax: 4729.39, totalSales: 99317.08, revenue: 99317.08 },
+  ],
+};
+
+// An imported batch whose period sits INSIDE the report window — the totals
+// really are the window's, so no caution is warranted.
+const PROD_IMPORTED = {
+  ...PROD_LIVE,
+  source: 'import',
+  window: { from: '2025-12-01T00:00:00.000Z', to: '2026-06-30T23:59:59.999Z' },
+  importBatches: [
+    { id: 7, fileName: 'zenoti-fy25-q1.csv', periodStart: '2026-01-01T00:00:00.000Z', periodEnd: '2026-03-31T23:59:59.999Z' },
+  ],
+};
+
+// The realistic case: an 8-month export viewed under a "Last 30 days" filter.
+// A snapshot has no day-level detail, so it is reported whole — the page must
+// say so rather than let the totals read as 30 days of sales.
+const PROD_IMPORTED_WIDER_THAN_WINDOW = {
+  ...PROD_LIVE,
+  source: 'import',
+  window: { from: '2026-07-27T00:00:00.000Z', to: '2026-08-26T23:59:59.999Z' },
+  importBatches: [
+    { id: 9, fileName: 'sales-by-product_2025-12-01_to_2026-08-18.csv', periodStart: '2025-12-01T00:00:00.000Z', periodEnd: '2026-08-18T23:59:59.999Z' },
+  ],
+};
+
+const PROD_EMPTY_ROWS = {
+  source: 'none',
+  requestedSource: 'auto',
+  totals: { products: 0, productCount: 0, grossSales: 0, discount: 0, netSales: 0, tax: 0, totalSales: 0 },
+  importBatches: [],
+  rows: [],
+};
+
+// A window straddling the POS cutover: the snapshot's period (which ends
+// before POS went live) PLUS live POS rows, added. The page must not present
+// this as purely live or purely imported.
+const PROD_MIXED = {
+  ...PROD_LIVE,
+  source: 'mixed',
+  window: { from: '2026-08-01T00:00:00.000Z', to: '2026-09-30T23:59:59.999Z' },
+  posCutoverAt: '2026-09-05T10:00:00.000Z',
+  importBatches: [
+    { id: 2, fileName: 'snapshot.csv', periodStart: '2025-12-01T00:00:00.000Z', periodEnd: '2026-08-18T23:59:59.999Z' },
+  ],
+};
+
 function installFetchMock({
   pnl = PNL_POPULATED,
   pro = PRO_POPULATED,
   loc = LOC_POPULATED,
+  prod = PROD_LIVE,
   att = ATT_POPULATED,
 } = {}) {
   fetchApiMock.mockImplementation((url) => {
@@ -216,6 +304,14 @@ function installFetchMock({
     }
     if (url.startsWith('/api/wellness/reports/per-location')) {
       return loc instanceof Error ? Promise.reject(loc) : Promise.resolve(loc);
+    }
+    // The importer's own list endpoint lives under the same prefix as the
+    // report — match it FIRST or the report fixture answers it.
+    if (url.startsWith('/api/wellness/reports/per-product/imports')) {
+      return Promise.resolve({ rows: [], total: 0 });
+    }
+    if (url.startsWith('/api/wellness/reports/per-product')) {
+      return prod instanceof Error ? Promise.reject(prod) : Promise.resolve(prod);
     }
     if (url.startsWith('/api/wellness/reports/attribution')) {
       return att instanceof Error ? Promise.reject(att) : Promise.resolve(att);
@@ -253,7 +349,7 @@ afterEach(() => {
 });
 
 describe('<WellnessReports /> — page chrome + tab strip', () => {
-  it('renders heading + four tab buttons synchronously', async () => {
+  it('renders heading + five tab buttons synchronously', async () => {
     renderWithRouter();
     expect(
       screen.getByRole('heading', { name: /^Reports$/i }),
@@ -266,6 +362,9 @@ describe('<WellnessReports /> — page chrome + tab strip', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Per Location/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Per Product/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Marketing Attribution/i }),
@@ -328,6 +427,16 @@ describe('<WellnessReports /> — lazy-per-tab fetching', () => {
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
       expect(urls.some((u) => u.startsWith('/api/wellness/reports/per-location'))).toBe(true);
+    }, WAIT_OPTS);
+  });
+
+  it('switching to Per Product tab fires GET /api/wellness/reports/per-product', async () => {
+    renderWithRouter();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
+    fireEvent.click(screen.getByRole('button', { name: /Per Product/i }));
+    await waitFor(() => {
+      const urls = fetchApiMock.mock.calls.map(([u]) => u);
+      expect(urls.some((u) => u.startsWith('/api/wellness/reports/per-product'))).toBe(true);
     }, WAIT_OPTS);
   });
 
@@ -415,6 +524,141 @@ describe('<WellnessReports /> — Per Location tab content', () => {
     // Status emoji — active rows show 🟢, inactive shows ⚪.
     expect(screen.getAllByText(/🟢 Active/).length).toBe(2);
     expect(screen.getByText(/⚪ Inactive/)).toBeInTheDocument();
+  });
+});
+
+describe('<WellnessReports /> — Per Product tab content', () => {
+  const openProductTab = async () => {
+    renderWithRouter();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
+    fireEvent.click(screen.getByRole('button', { name: /Per Product/i }));
+  };
+
+  it('renders per-product rows with HSN + the full gross → discount → net → tax → total column set', async () => {
+    await openProductTab();
+    expect(
+      await screen.findByText('Hair Fact - Gold Veg (M)', {}, WAIT_OPTS),
+    ).toBeInTheDocument();
+    expect(screen.getByText('GLYCURA MARINE COLLAGEN')).toBeInTheDocument();
+    // Column headers — the same set the imported vendor export carries.
+    expect(screen.getByRole('columnheader', { name: /^HSN$/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Gross sales/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Net sales/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /^Tax$/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Total sales/i })).toBeInTheDocument();
+    // HSN present on row 1, absent (→ "--") on row 2.
+    expect(screen.getByText('3305')).toBeInTheDocument();
+    expect(screen.getByText('--')).toBeInTheDocument();
+    // KPI tiles.
+    expect(screen.getByText(/^Units sold$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Products$/i)).toBeInTheDocument();
+  });
+
+  it('badges a live POS response as "Live — POS sales"', async () => {
+    await openProductTab();
+    expect(
+      await screen.findByText(/Live — POS sales/i, {}, WAIT_OPTS),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Imported snapshot/i)).toBeNull();
+  });
+
+  it('badges an import-sourced response and names the file + period it came from', async () => {
+    installFetchMock({ prod: PROD_IMPORTED });
+    await openProductTab();
+    expect(
+      await screen.findByText(/Imported snapshot/i, {}, WAIT_OPTS),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/zenoti-fy25-q1\.csv \(2026-01-01 → 2026-03-31\)/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Live — POS sales/i)).toBeNull();
+  });
+
+  it('warns when the snapshot covers more than the selected window (it cannot be sliced)', async () => {
+    installFetchMock({ prod: PROD_IMPORTED_WIDER_THAN_WINDOW });
+    await openProductTab();
+    expect(
+      await screen.findByText(
+        /The imported part of these totals covers its whole period, not the date range selected above\./i,
+        {},
+        WAIT_OPTS,
+      ),
+    ).toBeInTheDocument();
+    // The period the figures ACTUALLY cover is named next to the filename.
+    expect(
+      screen.getByText(/sales-by-product_2025-12-01_to_2026-08-18\.csv \(2025-12-01 → 2026-08-18\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it('does NOT warn when the snapshot sits inside the selected window', async () => {
+    installFetchMock({ prod: PROD_IMPORTED });
+    await openProductTab();
+    await screen.findByText(/Imported snapshot/i, {}, WAIT_OPTS);
+    expect(
+      screen.queryByText(/The imported part of these totals covers its whole period/i),
+    ).toBeNull();
+  });
+
+  it('badges a cutover-straddling window as POS + snapshot, naming both', async () => {
+    installFetchMock({ prod: PROD_MIXED });
+    await openProductTab();
+    expect(
+      await screen.findByText(/POS \+ imported snapshot/i, {}, WAIT_OPTS),
+    ).toBeInTheDocument();
+    // Says it is POS *plus* the snapshot, and names the snapshot's period —
+    // otherwise the reader cannot tell which part of the money came from where.
+    expect(
+      screen.getByText(/POS sales, plus snapshot\.csv \(2025-12-01 → 2026-08-18\)/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Live — POS sales$/i)).toBeNull();
+  });
+
+  it('still warns on a mixed response whose snapshot half reaches outside the window', async () => {
+    installFetchMock({ prod: PROD_MIXED });
+    await openProductTab();
+    expect(
+      await screen.findByText(
+        /The imported part of these totals covers its whole period/i,
+        {},
+        WAIT_OPTS,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('never warns on a live-POS response — POS rows really are window-filtered', async () => {
+    await openProductTab();
+    await screen.findByText(/Live — POS sales/i, {}, WAIT_OPTS);
+    expect(
+      screen.queryByText(/The imported part of these totals covers its whole period/i),
+    ).toBeNull();
+  });
+
+  it('renders the empty-state copy + an Import action when rows=[]', async () => {
+    installFetchMock({ prod: PROD_EMPTY_ROWS });
+    await openProductTab();
+    expect(
+      await screen.findByText(/No product sales in this window\./i, {}, WAIT_OPTS),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /^Import sales data$/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the "Import sales data" toolbar button only on the Per Product tab', async () => {
+    renderWithRouter();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(1), WAIT_OPTS);
+    // Default tab is P&L — no importer.
+    expect(
+      screen.queryByRole('button', { name: /Import product sales from a CSV or Excel file/i }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Per Product/i }));
+    expect(
+      await screen.findByRole(
+        'button',
+        { name: /Import product sales from a CSV or Excel file/i },
+        WAIT_OPTS,
+      ),
+    ).toBeInTheDocument();
   });
 });
 

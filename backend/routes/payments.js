@@ -18,6 +18,7 @@ const {
   NOT_CONFIGURED_MESSAGE,
 } = require("../lib/tenantPaymentGateway");
 const { fulfillSubscriptionOrder } = require("../lib/subscriptionFulfillment");
+const { applyLandingPagePaymentToTrip } = require("../lib/landingPagePayments");
 
 const router = express.Router();
 
@@ -429,8 +430,8 @@ router.post(
           const payment = await prisma.payment.findFirst({
             where: { gateway: "stripe", gatewayId: session.id },
           });
-          if (payment && payment.status !== "SUCCESS") {
-            const updated = await prisma.payment.update({
+          if (payment) {
+            const updated = payment.status === "SUCCESS" ? payment : await prisma.payment.update({
               where: { id: payment.id },
               data: { status: "SUCCESS", paidAt: new Date() },
             });
@@ -831,17 +832,51 @@ router.post(
           const payment = await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: plinkId },
           });
-          if (payment && payment.status !== "SUCCESS") {
-            const updated = await prisma.payment.update({
-              where: { id: payment.id },
-              data: {
-                status: "SUCCESS",
-                paidAt: new Date(),
-                gatewayId: paymentId || plinkId,
-              },
-            });
-            await markInvoicePaid(payment.invoiceId, payment.tenantId);
-            emitPaymentCollected(updated);
+          if (payment) {
+            let updated = payment;
+            if (payment.status !== "SUCCESS") {
+              updated = await prisma.payment.update({
+                where: { id: payment.id },
+                data: {
+                  status: "SUCCESS",
+                  paidAt: new Date(),
+                  gatewayId: paymentId || plinkId,
+                },
+              });
+              await markInvoicePaid(payment.invoiceId, payment.tenantId);
+              emitPaymentCollected(updated);
+            }
+
+            const paymentMeta = (() => {
+              try { return JSON.parse(payment.metadata || "{}"); } catch (_err) { return {}; }
+            })();
+            if (paymentMeta.kind === "landing-page-registration" && paymentMeta.draftToken) {
+              const draft = await prisma.pendingTripRegistration.findUnique({ where: { draftToken: paymentMeta.draftToken } });
+              const participantId = draft?.convertedToParticipantId || null;
+              if (participantId && paymentMeta.tripId) {
+                try {
+                  await applyLandingPagePaymentToTrip({
+                    db: prisma,
+                    tripId: paymentMeta.tripId,
+                    participantId,
+                    amountMajor: payment.amount,
+                    mode: paymentMeta.paymentMode === "complete" ? "complete" : "installment",
+                    installmentIndex: Number.isFinite(Number(paymentMeta.installmentIndex)) ? Number(paymentMeta.installmentIndex) : 0,
+                    capturedAt: new Date(),
+                  });
+                } catch (allocationError) {
+                  console.error('[Payments] landing registration allocation failed:', allocationError.message);
+                }
+              }
+              if (draft && draft.status === "DRAFT") {
+                await prisma.pendingTripRegistration.update({
+                  where: { id: draft.id },
+                  data: {
+                    reviewNotes: `Payment received via Razorpay (${payment.amount} ${payment.currency}). Ready for admin review.`,
+                  },
+                });
+              }
+            }
           }
         }
       } else if (eventName === "refund.processed" || eventName === "refund.created") {
@@ -983,7 +1018,7 @@ router.get("/", async (req, res) => {
     if (invoiceIds.length > 0) {
       const invoices = await prisma.invoice.findMany({
         where: { id: { in: invoiceIds }, tenantId },
-        select: { id: true, visitId: true },
+        select: { id: true, visitId: true, invoiceNum: true },
       });
       invoices.forEach((inv) => { invoiceMap[inv.id] = inv; });
     }
@@ -1028,6 +1063,48 @@ router.get("/", async (req, res) => {
       if (visitId) paymentVisitMap[p.id] = visitId;
     }
 
+    const posInvoiceNums = [
+      ...new Set(
+        payments
+          .map((p) => (p.invoiceId ? invoiceMap[p.invoiceId]?.invoiceNum : null))
+          .filter(Boolean),
+      ),
+    ];
+    const saleByInvoiceNum = {};
+    const cashierIds = [];
+    if (posInvoiceNums.length > 0 && prisma.sale?.findMany) {
+      const sales = await prisma.sale.findMany({
+        where: { tenantId, invoiceNumber: { in: posInvoiceNums } },
+        select: {
+          id: true,
+          invoiceNumber: true,
+          cashierId: true,
+          lineItems: {
+            select: {
+              id: true,
+              lineType: true,
+              name: true,
+            },
+            orderBy: { id: "asc" },
+          },
+        },
+      });
+      sales.forEach((sale) => {
+        saleByInvoiceNum[sale.invoiceNumber] = sale;
+        if (Number.isFinite(sale.cashierId)) cashierIds.push(sale.cashierId);
+      });
+    }
+
+    const cashierMap = {};
+    const uniqueCashierIds = [...new Set(cashierIds.filter(Number.isFinite))];
+    if (uniqueCashierIds.length > 0 && prisma.user?.findMany) {
+      const cashiers = await prisma.user.findMany({
+        where: { id: { in: uniqueCashierIds }, tenantId },
+        select: { id: true, name: true },
+      });
+      cashiers.forEach((u) => { cashierMap[u.id] = u; });
+    }
+
     res.json(payments.map((p) => {
       let contact = p.contactId ? (contactMap[p.contactId] || null) : null;
       let travelInvoiceNum = null;
@@ -1045,8 +1122,26 @@ router.get("/", async (req, res) => {
         itineraryId = Number(parsedMetaMap[p.id].itineraryId) || null;
       }
       const visitId = paymentVisitMap[p.id];
-      const service = visitId ? (visitServiceMap[visitId] || null) : null;
-      const staff = visitId ? (visitStaffMap[visitId] || null) : null;
+      let service = visitId ? (visitServiceMap[visitId] || null) : null;
+      let staff = visitId ? (visitStaffMap[visitId] || null) : null;
+      if (!service || !staff) {
+        const invoiceNum = p.invoiceId ? invoiceMap[p.invoiceId]?.invoiceNum : null;
+        const sale = invoiceNum ? saleByInvoiceNum[invoiceNum] : null;
+        if (sale) {
+          if (!service) {
+            const preferredLine =
+              sale.lineItems.find((line) =>
+                ["SERVICE", "PACKAGE", "MEMBERSHIP"].includes(String(line.lineType || "").toUpperCase()),
+              ) || sale.lineItems[0] || null;
+            if (preferredLine?.name) {
+              service = { id: preferredLine.id, name: preferredLine.name };
+            }
+          }
+          if (!staff && sale.cashierId) {
+            staff = cashierMap[sale.cashierId] || null;
+          }
+        }
+      }
       return { ...serialize(p), contact, travelInvoiceNum, itineraryId, service, staff };
     }));
   } catch (err) {

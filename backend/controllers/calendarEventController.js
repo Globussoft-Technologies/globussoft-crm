@@ -14,9 +14,9 @@ function buildGoogleOAuthClient(clientId, clientSecret, redirectUri) {
 }
 
 // Helper to get authorized Google Calendar client
-async function getAuthorizedGoogleClient(userId) {
+async function getAuthorizedGoogleClient(userId, tenantId) {
   const integration = await prisma.calendarIntegration.findUnique({
-    where: { userId_provider: { userId, provider: "google" } },
+    where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
   });
   if (!integration) {
     throw { status: 404, message: "Google Calendar not connected" };
@@ -41,7 +41,7 @@ async function getAuthorizedGoogleClient(userId) {
       if (tokens.expiry_date) data.expiresAt = new Date(tokens.expiry_date);
       if (Object.keys(data).length) {
         await prisma.calendarIntegration.update({
-          where: { userId_provider: { userId, provider: "google" } },
+          where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
           data,
         });
       }
@@ -143,7 +143,7 @@ exports.updateCalendarEvent = async (req, res) => {
 
     // Update in external calendar first
     if (provider === "google") {
-      const { client, integration } = await getAuthorizedGoogleClient(userId);
+      const { client, integration } = await getAuthorizedGoogleClient(userId, tenantId);
       const calendar = google.calendar({ version: "v3", auth: client });
 
       const updateBody = {
@@ -171,7 +171,7 @@ exports.updateCalendarEvent = async (req, res) => {
       });
     } else if (provider === "microsoft") {
       let integration = await prisma.calendarIntegration.findUnique({
-        where: { userId_provider: { userId, provider: "microsoft" } },
+        where: { tenantId_userId_provider: { tenantId, userId, provider: "microsoft" } },
       });
       if (!integration) {
         return res.status(404).json({ error: "Outlook calendar not connected" });
@@ -273,7 +273,7 @@ exports.deleteCalendarEvent = async (req, res) => {
 
     // Delete from external calendar first
     if (provider === "google") {
-      const { client, integration } = await getAuthorizedGoogleClient(userId);
+      const { client, integration } = await getAuthorizedGoogleClient(userId, tenantId);
       const calendar = google.calendar({ version: "v3", auth: client });
 
       try {
@@ -287,7 +287,7 @@ exports.deleteCalendarEvent = async (req, res) => {
       }
     } else if (provider === "microsoft") {
       let integration = await prisma.calendarIntegration.findUnique({
-        where: { userId_provider: { userId, provider: "microsoft" } },
+        where: { tenantId_userId_provider: { tenantId, userId, provider: "microsoft" } },
       });
 
       if (integration) {

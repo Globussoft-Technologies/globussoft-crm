@@ -1,10 +1,12 @@
-import { useEffect, useState, useContext } from "react";
+import { useEffect, useMemo, useState, useContext } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Calendar, Clock, Stethoscope, Info, Sparkles } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { loadRazorpaySdk } from "../../utils/razorpay";
 import { AuthContext } from "../../App";
 import PageHeader from "../../components/PageHeader";
+import SearchableSelect from "../../components/ui/SearchableSelect";
 
 // Half-hour slots from 09:00 to 19:00 — used when the patient hasn't picked a
 // preferred doctor. Once a doctor IS chosen we use that doctor's actual
@@ -18,6 +20,23 @@ const GENERIC_SLOTS = (() => {
   }
   return out;
 })();
+
+// Shared chrome for every control in the booking form. Previously each
+// field hardcoded rgba(255,255,255,0.05)/0.1 — invisible in light mode,
+// and it only looked right because the wellness theme overrides
+// `input, select, textarea` with `!important`. Theme tokens instead, so
+// the form renders correctly in light AND dark, wellness or not.
+const FIELD_STYLE = {
+  width: "100%",
+  padding: "0.7rem",
+  background: "var(--input-bg)",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "var(--border-color)",
+  borderRadius: 8,
+  color: "var(--text-primary)",
+  fontSize: "0.9rem",
+};
 
 const BOOKING_PANEL_STYLE = {
   padding: "1.5rem",
@@ -188,7 +207,7 @@ export default function BookAppointment() {
         await Promise.all([
           fetchApi(
             "/api/wellness/doctors/availability?date=" +
-              formData.appointmentDate,
+            formData.appointmentDate,
           ).catch(() => []),
           fetchApi("/api/wellness/services").catch(() => []),
           fetchApi("/api/wellness/appointments/my").catch(() => []),
@@ -214,6 +233,18 @@ export default function BookAppointment() {
   };
 
   const handleDateChange = async (date) => {
+    // Real-time today validation
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const selectedDate = new Date(date);
+    selectedDate.setHours(0, 0, 0, 0);
+
+    // Prevent selecting a past date
+    if (selectedDate < today) {
+      notify.error("Please select a future date and time for your appointment");
+      return;
+    }
     setFormData({ ...formData, appointmentDate: date, appointmentTime: "" });
     try {
       const doctorsData = await fetchApi(
@@ -268,6 +299,53 @@ export default function BookAppointment() {
     }
   };
 
+  // ── Combobox options ────────────────────────────────────────────────
+  // Both catalogues grow with the tenant (this clinic ships ~300 services
+  // and ~20 practitioners), so the dropdowns are searchable comboboxes
+  // rather than native <select>s. The empty-value row stays first so
+  // "no preference" / "no service" is still one click away.
+  //
+  // `keywords` carries text that is searchable but not shown in the label:
+  // the doctor's specialty and their raw (un-prefixed) name, so typing
+  // "derma" or "arjun" both land on Dr. ARJUN KUMAR.
+  const doctorOptions = useMemo(
+    () => [
+      { value: "", label: "— No preference (admin will assign) —" },
+      ...doctors.map((doc) => {
+        const name = (doc.name || "").trim();
+        const isDoctor = (doc.wellnessRole || "").toLowerCase() === "doctor";
+        const displayName = /^(dr\.?|doctor)\s/i.test(name)
+          ? name
+          : isDoctor
+            ? `Dr. ${name}`
+            : name;
+        return {
+          value: String(doc.id),
+          label: doc.specialty
+            ? `${displayName} — ${doc.specialty}`
+            : displayName,
+          hint: doc.available ? "" : "(On Leave)",
+          keywords: `${name} ${doc.specialty || ""}`,
+          disabled: !doc.available,
+        };
+      }),
+    ],
+    [doctors],
+  );
+
+  const serviceOptions = useMemo(
+    () => [
+      { value: "", label: "— Select a Service —" },
+      ...services.map((svc) => ({
+        value: String(svc.id),
+        label: svc.name,
+        hint: svc.basePrice ? `(₹${svc.basePrice})` : "",
+        keywords: svc.category || "",
+      })),
+    ],
+    [services],
+  );
+
   // Look up the currently-selected service (used for price display and to
   // decide whether the "Pay now" option is enabled).
   const selectedService = formData.serviceId
@@ -279,23 +357,11 @@ export default function BookAppointment() {
       : null;
   const paymentBreakdown = serviceBase
     ? (() => {
-        const tax = Math.round(serviceBase * 0.18 * 100) / 100;
-        const total = Math.round((serviceBase + tax + 49) * 100) / 100;
-        return { base: serviceBase, tax, fee: 49, total };
-      })()
+      const tax = Math.round(serviceBase * 0.18 * 100) / 100;
+      const total = Math.round((serviceBase + tax + 49) * 100) / 100;
+      return { base: serviceBase, tax, fee: 49, total };
+    })()
     : null;
-
-  // Lazy-load the Razorpay Checkout SDK on demand. Called when the user
-  // picks "Pay now" so we don't ship the SDK to users who don't need it.
-  const loadRazorpaySdk = () =>
-    new Promise((resolve, reject) => {
-      if (typeof window !== "undefined" && window.Razorpay) return resolve();
-      const script = document.createElement("script");
-      script.src = "https://checkout.razorpay.com/v1/checkout.js";
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error("Could not load Razorpay SDK"));
-      document.body.appendChild(script);
-    });
 
   const resetFormAfterSuccess = () => {
     setFormData({
@@ -408,8 +474,8 @@ export default function BookAppointment() {
           } catch (err) {
             notify.error(
               err.message ||
-                "Payment captured but confirmation failed. Keep the payment id: " +
-                  resp.razorpay_payment_id,
+              "Payment captured but confirmation failed. Keep the payment id: " +
+              resp.razorpay_payment_id,
             );
           } finally {
             setSubmitting(false);
@@ -552,13 +618,7 @@ export default function BookAppointment() {
                 maxLength={1000}
                 required
                 style={{
-                  width: "100%",
-                  padding: "0.7rem",
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: 8,
-                  color: "var(--text-primary)",
-                  fontSize: "0.9rem",
+                  ...FIELD_STYLE,
                   resize: "vertical",
                   fontFamily: "inherit",
                   boxSizing: "border-box",
@@ -580,43 +640,14 @@ export default function BookAppointment() {
               >
                 Preferred Doctor (Optional)
               </label>
-              <select
+              <SearchableSelect
                 value={formData.doctorId}
-                onChange={(e) => handleDoctorChange(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "0.7rem",
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: 8,
-                  color: "var(--text-primary)",
-                  fontSize: "0.9rem",
-                  cursor: "pointer",
-                }}
-              >
-                <option value="">— No preference (admin will assign) —</option>
-                {doctors.map((doc) => {
-                  const name = (doc.name || "").trim();
-                  const isDoctor =
-                    (doc.wellnessRole || "").toLowerCase() === "doctor";
-                  const displayName = /^(dr\.?|doctor)\s/i.test(name)
-                    ? name
-                    : isDoctor
-                      ? `Dr. ${name}`
-                      : name;
-                  const specialty = doc.specialty ? ` — ${doc.specialty}` : "";
-                  return (
-                    <option
-                      key={doc.id}
-                      value={doc.id}
-                      disabled={!doc.available}
-                    >
-                      {displayName}
-                      {specialty} {!doc.available ? "(On Leave)" : ""}
-                    </option>
-                  );
-                })}
-              </select>
+                onChange={handleDoctorChange}
+                options={doctorOptions}
+                placeholder="Search doctors, or leave blank for no preference"
+                emptyLabel="No doctor matches that search"
+                ariaLabel="Preferred doctor"
+              />
               {!formData.doctorId && (
                 <div style={INFO_CALLOUT_STYLE}>
                   <Info size={13} style={{ marginTop: 2, flexShrink: 0 }} />
@@ -641,29 +672,16 @@ export default function BookAppointment() {
               >
                 Service (Optional)
               </label>
-              <select
+              <SearchableSelect
                 value={formData.serviceId}
-                onChange={(e) =>
-                  setFormData({ ...formData, serviceId: e.target.value })
+                onChange={(serviceId) =>
+                  setFormData({ ...formData, serviceId })
                 }
-                style={{
-                  width: "100%",
-                  padding: "0.7rem",
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: 8,
-                  color: "var(--text-primary)",
-                  fontSize: "0.9rem",
-                  cursor: "pointer",
-                }}
-              >
-                <option value="">— Select a Service —</option>
-                {services.map((svc) => (
-                  <option key={svc.id} value={svc.id}>
-                    {svc.name} {svc.basePrice ? `(₹${svc.basePrice})` : ""}
-                  </option>
-                ))}
-              </select>
+                options={serviceOptions}
+                placeholder="Search services by name…"
+                emptyLabel="No service matches that search"
+                ariaLabel="Service"
+              />
             </div>
 
             {/* Membership — optional. Loaded from /appointments/my-memberships, which
@@ -707,16 +725,8 @@ export default function BookAppointment() {
                 }
                 disabled={memberships.length === 0}
                 style={{
-                  width: "100%",
-                  padding: "0.7rem",
-                  background:
-                    memberships.length === 0
-                      ? "rgba(255,255,255,0.02)"
-                      : "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: 8,
-                  color: "var(--text-primary)",
-                  fontSize: "0.9rem",
+                  ...FIELD_STYLE,
+                  opacity: memberships.length === 0 ? 0.6 : 1,
                   cursor: memberships.length === 0 ? "not-allowed" : "pointer",
                 }}
               >
@@ -759,15 +769,7 @@ export default function BookAppointment() {
                   value={formData.appointmentDate}
                   onChange={(e) => handleDateChange(e.target.value)}
                   min={todayLocalDate()}
-                  style={{
-                    width: "100%",
-                    padding: "0.7rem",
-                    background: "rgba(255,255,255,0.05)",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    borderRadius: 8,
-                    color: "var(--text-primary)",
-                    fontSize: "0.9rem",
-                  }}
+                  style={FIELD_STYLE}
                 />
               </div>
               <div>
@@ -797,16 +799,8 @@ export default function BookAppointment() {
                   }
                   disabled={availableSlots.length === 0}
                   style={{
-                    width: "100%",
-                    padding: "0.7rem",
-                    background:
-                      availableSlots.length === 0
-                        ? "rgba(255,255,255,0.02)"
-                        : "rgba(255,255,255,0.05)",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    borderRadius: 8,
-                    color: "var(--text-primary)",
-                    fontSize: "0.9rem",
+                    ...FIELD_STYLE,
+                    opacity: availableSlots.length === 0 ? 0.6 : 1,
                     cursor:
                       availableSlots.length === 0 ? "not-allowed" : "pointer",
                   }}
@@ -1013,19 +1007,30 @@ export default function BookAppointment() {
               return (
                 <button
                   type="submit"
+                  // .btn-primary carries the per-vertical CTA fill (generic
+                  // blue gradient, wellness peach->gold). The old inline
+                  // `background: var(--primary-color)` overrode it, and in
+                  // the wellness theme --primary-color is #1F2220 (the dark
+                  // charcoal used for the hero/sidebar), so on the dark
+                  // portal the button rendered black-on-black. No inline
+                  // background here at all: the theme owns the fill, which
+                  // is what makes it legible in light AND dark mode.
+                  className="btn-primary"
                   disabled={!canSubmit}
                   style={{
+                    width: "100%",
                     padding: "0.85rem 1.5rem",
-                    background: canSubmit
-                      ? "var(--primary-color, var(--accent-color, #6366f1))"
-                      : "#999",
-                    color: "#fff",
-                    border: "none",
                     borderRadius: 8,
-                    cursor: canSubmit ? "pointer" : "not-allowed",
                     fontWeight: 600,
                     fontSize: "0.95rem",
-                    transition: "all 0.2s",
+                    cursor: canSubmit ? "pointer" : "not-allowed",
+                    // Disabled = the same fill de-saturated, rather than a
+                    // hardcoded #999 that read as "dark grey" on light mode
+                    // and "light grey" on dark.
+                    opacity: canSubmit ? 1 : 0.5,
+                    filter: canSubmit ? "none" : "grayscale(1)",
+                    boxShadow: canSubmit ? undefined : "none",
+                    transform: canSubmit ? undefined : "none",
                   }}
                 >
                   {submitting ? busyLabel : idleLabel}

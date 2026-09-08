@@ -22,8 +22,17 @@
  *   - invalid input is DROPPED (→ undefined), never rejected — a bad logo falls
  *     back to the text wordmark; the run never fails on branding.
  *
- * Returns `undefined` when nothing is usable, so the engine path is byte-identical
- * to "no brand".
+ * TMC school extension:
+ *   - Accepts the extended brand shape used by the TMC school brochure flow
+ *     (school name, school logo URL, school brand colours) alongside the legacy
+ *     agency-brand fields.
+ *   - Emits soft warnings about the school logo (missing, non-PNG format,
+ *     undersized dimensions, large byte size) but NEVER blocks generation.
+ *   - Returns { kit, warnings } so the route can surface warnings in the
+ *     start-run response while passing only the sanitized kit to the engine.
+ *
+ * Returns { kit: undefined, warnings: [] } when nothing is usable, so the engine
+ * path is byte-identical to "no brand".
  */
 'use strict';
 
@@ -33,11 +42,15 @@ const path = require('node:path');
 const s3Service = require('../services/s3Service');
 
 const MAX_LOGO_BYTES = 10 * 1024 * 1024; // 10MB inlined cap (large logos bloat the PDF — keep reasonable)
+const SCHOOL_LOGO_SOFT_MAX_BYTES = 500 * 1024; // 500KB — soft warning only
+const SCHOOL_LOGO_MIN_DIMENSION = 800; // px — soft warning only (TMC print spec)
+const SCHOOL_LOGO_MAX_DIMENSION = 2000; // px — soft warning only (TMC print spec)
 const NAME_MAX = 80;
 const TAGLINE_MAX = 140;
 const CONTACT_MAX = 120;
 const MAX_CONTACT_LINES = 4;
 const MAX_SOCIALS = 6;
+const SCHOOL_NAME_MAX = 120;
 
 /** Sniff the real image type from the decoded bytes (don't trust the declared mime). */
 function sniffImage(b) {
@@ -183,6 +196,31 @@ function analyzeLogoTreatment(bytes, mime) {
   }
 }
 
+/**
+ * Read PNG pixel dimensions from the IHDR chunk without full decode.
+ * Returns { width, height } or null for non-PNG / truncated input.
+ */
+function readPngDimensions(bytes) {
+  if (bytes.length < 24) return null;
+  if (bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47) return null;
+  let off = 8; // past signature
+  const len = bytes.length;
+  while (off + 8 <= len) {
+    const clen = bytes.readUInt32BE(off);
+    const type = bytes.toString('ascii', off + 4, off + 8);
+    if (type === 'IHDR' && clen >= 13 && off + 24 <= len) {
+      const dStart = off + 8;
+      return {
+        width: bytes.readUInt32BE(dStart),
+        height: bytes.readUInt32BE(dStart + 4),
+      };
+    }
+    if (type === 'IEND') break;
+    off += 8 + clen + 4; // length + type + data + CRC
+  }
+  return null;
+}
+
 function isOwnS3ImageUrl(input) {
   // Only accept URLs inside this app's brand-kits prefix. The upload endpoint
   // already validated MIME type / magic bytes, so the key prefix is enough.
@@ -307,6 +345,22 @@ const LOGO_CORNERS = [
 // lock-step with the placer sliders + the engine so what's dragged is what renders.
 const COVER_SCALE = { lo: 0.06, hi: 0.6, dflt: 0.24 };
 const INNER_SCALE = { lo: 0.06, hi: 0.3, dflt: 0.12 };
+// TMC-school cover logo placement (Brochure Engine's own logo-size/position
+// preview — a DIFFERENT slider semantics from COVER_SCALE above: this scale
+// is a plain multiplier on the logo's default size (1 = default), not a
+// fraction of page width, so it gets its own bounds.
+const TMC_LOGO_SCALE = { lo: 0.5, hi: 2, dflt: 1 };
+
+/** Validate an optional {x,y,scale} TMC-school logo placement into pure
+ *  clamped numbers. Returns undefined when nothing usable was supplied. */
+function sanitizeTmcLogoPlacement(raw) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  return {
+    x: clampNum(raw.x, 0, 1, 0.5),
+    y: clampNum(raw.y, 0, 1, 0.12),
+    scale: clampNum(raw.scale, TMC_LOGO_SCALE.lo, TMC_LOGO_SCALE.hi, TMC_LOGO_SCALE.dflt),
+  };
+}
 
 /**
  * Validate the OPTIONAL custom (visual-placer) logo placement into pure clamped
@@ -345,11 +399,21 @@ function sanitizeBacking(v) {
 }
 
 /**
- * Build a trusted BrandKit from raw client input, or undefined if nothing usable.
+ * Build a trusted BrandKit from raw client input.
+ *
+ * Returns { kit, warnings } where:
+ *   - kit is the sanitized engine-ready BrandKit, or undefined when nothing
+ *     is usable (engine path identical to "no brand").
+ *   - warnings is an array of soft advisory strings (never blocking) so the
+ *     route can return them in the start-run response.
+ *
  * See the file header for the security guarantees.
  */
 function sanitizeBrandKit(raw) {
-  if (!raw || typeof raw !== 'object') return undefined;
+  const warnings = [];
+  if (!raw || typeof raw !== 'object') {
+    return { kit: undefined, warnings };
+  }
   const r = raw;
 
   const logo = sanitizeLogo(r.logoUrl != null ? r.logoUrl : r.logo);
@@ -445,6 +509,62 @@ function sanitizeBrandKit(raw) {
     }
   }
 
+  // User-uploaded destination/student photos (Brochure Engine "Images" step).
+  // Same trust boundary as coverLogos — each entry validated as a raster
+  // image (S3 URL from this tenant's own bucket, a local /uploads path, or a
+  // data: URI); anything else is dropped. Without this the frontend's upload
+  // control had nowhere real to land — images went into brand.imagePool but
+  // were never forwarded past this sanitizer, so nothing uploaded ever
+  // reached the rendered brochure.
+  const imagePoolRaw = Array.isArray(r.imagePool) ? r.imagePool : [];
+  const imagePool = imagePoolRaw
+    .map((u) => sanitizeLogo(u).url)
+    .filter(Boolean)
+    .slice(0, 12);
+
+  // ─── TMC school identity (soft-warned, never blocking) ───────────────────
+  const schoolName = capStr(r.schoolName, SCHOOL_NAME_MAX);
+  const schoolLogo = sanitizeLogo(r.schoolLogoUrl);
+  const schoolLogoUrl = schoolLogo.url;
+  // Operator-set exact position/size for each cover logo (Brochure Engine's
+  // logo placement preview). Only kept when the corresponding logo actually
+  // exists — a placement with no logo to place is meaningless.
+  const tmcLogoPlacement = logoUrl ? sanitizeTmcLogoPlacement(r.tmcLogoPlacement) : undefined;
+  const schoolLogoPlacement = schoolLogoUrl ? sanitizeTmcLogoPlacement(r.schoolLogoPlacement) : undefined;
+
+  if (!schoolLogoUrl) {
+    if (typeof r.schoolLogoUrl === 'string' && r.schoolLogoUrl.trim()) {
+      warnings.push('School logo was provided but is not a valid raster image (PNG/JPEG/WebP/GIF); it will be omitted.');
+    } else if (schoolName) {
+      warnings.push('School logo is missing; the cover will show TMC branding only.');
+    }
+  } else {
+    // Soft format warning: PNG is preferred for transparency on the co-branding cover.
+    if (!schoolLogoUrl.startsWith('data:image/png;')) {
+      warnings.push('School logo is not a PNG; transparency may not render correctly on the cover.');
+    }
+    // Byte-size warning (soft only).
+    try {
+      const b64 = schoolLogoUrl.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
+      const bytes = Buffer.from(b64, 'base64');
+      if (bytes.length > SCHOOL_LOGO_SOFT_MAX_BYTES) {
+        warnings.push('School logo file is large; PDF generation may take longer.');
+      }
+      // Dimension warning for PNG only (cheap, no extra decode).
+      if (schoolLogoUrl.startsWith('data:image/png;')) {
+        const dims = readPngDimensions(bytes);
+        if (dims && (dims.width < SCHOOL_LOGO_MIN_DIMENSION || dims.height < SCHOOL_LOGO_MIN_DIMENSION)) {
+          warnings.push('School logo dimensions are small (ideally 800-1600 px); it may appear pixelated in print.');
+        }
+        if (dims && (dims.width > SCHOOL_LOGO_MAX_DIMENSION || dims.height > SCHOOL_LOGO_MAX_DIMENSION)) {
+          warnings.push('School logo is larger than 2000 px; consider resizing for optimal print quality.');
+        }
+      }
+    } catch {
+      /* ignore dimension/size read failures — never block */
+    }
+  }
+
   const kit = {
     ...(logoUrl ? { logoUrl } : {}),
     ...(name ? { name } : {}),
@@ -457,9 +577,14 @@ function sanitizeBrandKit(raw) {
     ...(custom ? { custom } : {}),
     ...(coverLogos.length ? { coverLogos } : {}),
     ...(interiorLogos ? { interiorLogos } : {}),
+    ...(schoolName ? { schoolName } : {}),
+    ...(schoolLogoUrl ? { schoolLogoUrl } : {}),
+    ...(imagePool.length ? { imagePool } : {}),
+    ...(tmcLogoPlacement ? { tmcLogoPlacement } : {}),
+    ...(schoolLogoPlacement ? { schoolLogoPlacement } : {}),
   };
   // Nothing usable → undefined so the engine path is identical to "no brand".
-  return Object.keys(kit).length ? kit : undefined;
+  return { kit: Object.keys(kit).length ? kit : undefined, warnings };
 }
 
 module.exports = { sanitizeBrandKit };

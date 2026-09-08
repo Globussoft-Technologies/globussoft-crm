@@ -1,4 +1,10 @@
 const prisma = require("./prisma");
+const { getRecommendationTopK, DEFAULT_TOP_K } = require("./diagnosticRecommendationSettings");
+
+// Historical default (bumped 5 -> 10 on 2026-08-24), now the fallback used
+// when no admin-configured value exists — see diagnosticRecommendationSettings.js.
+// Exported for anything still importing it directly.
+const MAX_CURRICULUM_RECOMMENDATIONS = DEFAULT_TOP_K;
 
 async function buildCurriculumFitForDiagnostic({
   tenantId,
@@ -9,6 +15,7 @@ async function buildCurriculumFitForDiagnostic({
   if (String(subBrand || "").toLowerCase() !== "tmc") return null;
   const profile = extractLearningProfile(answers, questions);
   if (!profile.curriculum || !profile.grade) return null;
+  const topK = await getRecommendationTopK({ tenantId, subBrand });
 
   const where = {
     tenantId,
@@ -63,7 +70,7 @@ async function buildCurriculumFitForDiagnostic({
       reasons: bucket.reasons.slice(0, 4),
     }))
     .sort((a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0))
-    .slice(0, 5);
+    .slice(0, topK);
 
   return { ...profile, recommendations };
 }
@@ -74,6 +81,9 @@ function extractLearningProfile(answers, questions) {
     curriculum: pickDirect(direct, ["curriculum", "board", "schoolBoard", "school_board"]),
     grade: pickDirect(direct, ["grade", "class", "studentGrade", "student_grade"]),
     subject: pickDirect(direct, ["subject", "subjects", "learningSubject", "learning_subject"]),
+    // Additive (2026-08-24) — feeds the AI curriculum-matching path in
+    // curriculumRag.js; the exact-match path below ignores it.
+    outcomes: pickDirect(direct, ["outcomes", "desiredOutcomes", "desired_outcomes", "learningGoals", "learning_goals"]),
   };
 
   for (const question of questions || []) {
@@ -83,12 +93,14 @@ function extractLearningProfile(answers, questions) {
     if (!profile.curriculum && /\b(curriculum|board)\b/.test(text)) profile.curriculum = answer;
     if (!profile.grade && /\b(grade|class|standard|year group)\b/.test(text)) profile.grade = answer;
     if (!profile.subject && /\b(subject|discipline)\b/.test(text)) profile.subject = answer;
+    if (!profile.outcomes && /\b(outcome|learning goal|objective)s?\b/.test(text)) profile.outcomes = answer;
   }
 
   return {
     curriculum: normalizeProfileValue(profile.curriculum),
     grade: normalizeProfileValue(profile.grade),
     subject: normalizeProfileValue(profile.subject),
+    outcomes: normalizeProfileValue(profile.outcomes),
   };
 }
 
@@ -145,4 +157,5 @@ module.exports = {
   buildCurriculumFitForDiagnostic,
   extractLearningProfile,
   resolveQuestionAnswerLabel,
+  MAX_CURRICULUM_RECOMMENDATIONS,
 };

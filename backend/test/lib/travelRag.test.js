@@ -65,4 +65,21 @@ describe('travelRag — parseRagResponse', () => {
     });
     expect(travelRag.parseRagResponse(text).recommendedTrips).toHaveLength(1);
   });
+
+  test('caps recommendedTrips at 10 by default (no topK argument)', () => {
+    const text = JSON.stringify({
+      readinessScore: 7,
+      recommendedTrips: Array.from({ length: 15 }, (_, i) => ({ name: `Trip ${i}`, driveLink: '', places: [] })),
+    });
+    expect(travelRag.parseRagResponse(text).recommendedTrips).toHaveLength(10);
+  });
+
+  test('caps recommendedTrips at a custom topK when provided', () => {
+    const text = JSON.stringify({
+      readinessScore: 7,
+      recommendedTrips: Array.from({ length: 15 }, (_, i) => ({ name: `Trip ${i}`, driveLink: '', places: [] })),
+    });
+    expect(travelRag.parseRagResponse(text, 3).recommendedTrips).toHaveLength(3);
+    expect(travelRag.parseRagResponse(text, 15).recommendedTrips).toHaveLength(15);
+  });
 });

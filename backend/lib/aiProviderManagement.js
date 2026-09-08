@@ -378,7 +378,17 @@ function toOpenAIMessages(messages) {
         if (p.type === "image") {
           return {
             type: "image_url",
-            image_url: { url: `data:${p.mimeType};base64,${p.data}` },
+            image_url: {
+              url: `data:${p.mimeType};base64,${p.data}`,
+              // Optional per-image fidelity hint. Omitted unless the caller
+              // asks for one, so every existing call site keeps OpenAI's
+              // default ("auto") behaviour untouched. Worth setting to "low"
+              // for whole-page document scans: gpt-4o-mini in particular
+              // counts image tokens at ~33x the gpt-4o rate, so a handful of
+              // full-page images can run to six figures of prompt tokens and
+              // trip a key's per-minute rate limit on a single request.
+              ...(p.detail === "low" || p.detail === "high" ? { detail: p.detail } : {}),
+            },
           };
         }
         return { type: "text", text: p.text || "" };

@@ -91,6 +91,16 @@ prisma.contact.upsert = vi.fn();
 prisma.contact.update = vi.fn();
 prisma.deal = prisma.deal || {};
 prisma.deal.create = vi.fn().mockResolvedValue({ id: 1 });
+prisma.payment = prisma.payment || {};
+prisma.payment.findFirst = vi.fn();
+prisma.payment.create = vi.fn();
+prisma.payment.update = vi.fn();
+// PR #1399 — the submit path materialises trip instalments via
+// travelTripInstalments (allowMissingPlan: true). No payment plan exists in
+// these tests, so findUnique returns null and the call early-returns.
+prisma.tripPaymentPlan = prisma.tripPaymentPlan || {};
+prisma.tripPaymentPlan.findUnique = vi.fn().mockResolvedValue(null);
+prisma.tripPaymentPlan.findMany = vi.fn().mockResolvedValue([]);
 prisma.leadRoutingRule = prisma.leadRoutingRule || {};
 prisma.leadRoutingRule.findFirst = vi.fn().mockResolvedValue(null);
 prisma.user = prisma.user || {};
@@ -102,6 +112,8 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 // the lead-capture path leaves them untouched (assert with not.toHaveBeenCalled).
 prisma.pendingTripRegistration = prisma.pendingTripRegistration || {};
 prisma.pendingTripRegistration.create = vi.fn();
+// PR #1399 — payment-linked submits mark the draft converted/OTP-verified.
+prisma.pendingTripRegistration.update = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripParticipant = prisma.tripParticipant || {};
 prisma.tripParticipant.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
@@ -118,10 +130,27 @@ prisma.tmcTrip.findFirst = vi.fn();
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
+const KEY_SECRET = 'test_key_secret_123';
+const landingPageGeneratorLLM = requireCJS('../../services/landingPageGeneratorLLM');
+const destinationImageProvider = requireCJS('../../services/destinationImageProvider');
+const pexelsVideoProvider = requireCJS('../../services/imageProviders/pexelsVideoProvider');
+const generateLandingPageContentSpy = vi.spyOn(landingPageGeneratorLLM, 'generateLandingPageContent');
+const fetchStrategySpy = vi.spyOn(destinationImageProvider, 'fetchStrategy');
+const isAvailableSpy = vi.spyOn(pexelsVideoProvider, 'isAvailable');
+const fetchOneSpy = vi.spyOn(pexelsVideoProvider, 'fetchOne');
+const getTenantRazorpayClientMock = vi.fn();
+const getTenantRazorpayCredsMock = vi.fn();
+const applyLandingPagePaymentToTripMock = vi.fn();
+const ordersCreateMock = vi.fn();
+const paymentLinksCreateMock = vi.fn();
+requireCJS('../../lib/tenantPaymentGateway').getTenantRazorpayClient = getTenantRazorpayClientMock;
+requireCJS('../../lib/tenantPaymentGateway').getTenantRazorpayCreds = getTenantRazorpayCredsMock;
+requireCJS('../../lib/landingPagePayments').applyLandingPagePaymentToTrip = applyLandingPagePaymentToTripMock;
 const { router: authedRouter, publicRouter } = requireCJS('../../routes/landing_pages');
 
 function makeApp() {
@@ -140,6 +169,71 @@ function tokenFor({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
   );
 }
 
+function wanderluxBlocks() {
+  return [
+    { type: 'destinationHero', props: { headline: 'Andaman Escape', ctaText: 'Reserve Your Spot' } },
+    { type: 'highlightsGrid', props: { items: [
+      { title: 'Coral Waters', body: 'Clear seas and island air.' },
+      { title: 'Island Hopping', body: 'Move between calm bays.' },
+      { title: 'Slow Travel', body: 'Unhurried days with room to breathe.' },
+    ] } },
+    { type: 'cityCards', props: { cards: [
+      { title: 'Port Blair' },
+      { title: 'Havelock' },
+      { title: 'Neil' },
+    ] } },
+    { type: 'safetyFeatures', props: { items: [
+      { title: 'Guide' },
+      { title: 'Transfers' },
+      { title: 'Support' },
+    ] } },
+    { type: 'inclusionsGrid', props: { items: ['Flights', 'Hotels', 'Transfers'] } },
+    { type: 'itineraryTimeline', props: { days: [
+      { day: 1, title: 'Arrival', bullets: ['Check in'] },
+    ] } },
+    { type: 'tierPricing', props: { tiers: [
+      { step: 1, label: 'Deposit', amount: '25000' },
+    ] } },
+    { type: 'faqAccordion', props: { categories: [{ id: 'all', label: 'All' }], faqs: [
+      { cat: 'tour', q: 'Q1?', a: 'A1.' },
+      { cat: 'tour', q: 'Q2?', a: 'A2.' },
+      { cat: 'safety', q: 'Q3?', a: 'A3.' },
+      { cat: 'safety', q: 'Q4?', a: 'A4.' },
+    ] } },
+  ];
+}
+
+function wanderluxPaymentContent() {
+  return JSON.stringify({
+    investment: {
+      payment: {
+        enabled: true,
+        allowCompletePayment: true,
+        defaultMode: 'installment',
+        currency: 'INR',
+      },
+      installments: [
+        { tag: 'A. Instalment', title: 'Booking Fee', amount: '5000', dueDate: '2026-03-13' },
+        { tag: 'B. Instalment', title: 'Final Payment', amount: '4500', dueDate: '2026-04-12' },
+      ],
+    },
+  });
+}
+
+function wanderluxPaymentPage(overrides = {}) {
+  return {
+    id: 51,
+    slug: 'australia-2026',
+    status: 'PUBLISHED',
+    title: 'Australia 7-Day Tour',
+    templateType: 'wanderlux-v1',
+    tenantId: 1,
+    tripId: 7,
+    content: wanderluxPaymentContent(),
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   prisma.landingPage.findMany.mockReset();
   prisma.landingPage.findFirst.mockReset();
@@ -154,6 +248,9 @@ beforeEach(() => {
   prisma.contact.upsert.mockReset().mockResolvedValue({ id: 1 });
   prisma.contact.update.mockReset();
   prisma.deal.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.payment.findFirst.mockReset();
+  prisma.payment.create.mockReset();
+  prisma.payment.update.mockReset();
   prisma.leadRoutingRule.findFirst.mockReset().mockResolvedValue(null);
   prisma.user.findFirst.mockReset().mockResolvedValue(null);
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
@@ -164,6 +261,28 @@ beforeEach(() => {
   prisma.tripMicrosite.findUnique.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.tmcTrip.findFirst.mockReset();
+  generateLandingPageContentSpy.mockReset();
+  fetchStrategySpy.mockReset();
+  isAvailableSpy.mockReset().mockReturnValue(false);
+  fetchOneSpy.mockReset();
+  ordersCreateMock.mockReset().mockResolvedValue({ id: 'order_test_1' });
+  paymentLinksCreateMock.mockReset().mockResolvedValue({ id: 'plink_test_1', short_url: 'https://rzp.io/i/test', currency: 'INR' });
+  getTenantRazorpayClientMock
+    .mockReset()
+    .mockResolvedValue({
+      client: { orders: { create: ordersCreateMock }, paymentLink: { create: paymentLinksCreateMock } },
+      keyId: 'rzp_test_key',
+      keySecret: KEY_SECRET,
+    });
+  getTenantRazorpayCredsMock.mockReset().mockResolvedValue({ keySecret: KEY_SECRET });
+  applyLandingPagePaymentToTripMock.mockReset().mockResolvedValue({
+    tripId: 100,
+    participantId: 77,
+    paidMajor: 0,
+    allocations: [],
+    mode: 'installment',
+    installmentIndex: 0,
+  });
 });
 
 // ─── Authentication gate ──────────────────────────────────────────────
@@ -242,6 +361,66 @@ describe('GET /api/landing-pages (list)', () => {
 });
 
 // ─── GET /:id ─────────────────────────────────────────────────────────
+
+describe('POST /api/landing-pages/generate-from-destination', () => {
+  test('autoCreate persists the chosen palette inside the Wanderlux config', async () => {
+    landingPageGeneratorLLM.generateLandingPageContent.mockResolvedValue({
+      suggestedSlug: 'andaman-7d',
+      suggestedTitle: 'Andaman Escape',
+      seoMeta: { metaTitle: 'Andaman Escape', metaDescription: 'Andaman trip' },
+      blocks: wanderluxBlocks(),
+      source: 'gemini',
+      model: 'gemini-2.5-flash',
+      stub: false,
+      verdict: 'passed',
+      guardrailIssues: [],
+    });
+    destinationImageProvider.fetchStrategy.mockResolvedValue({
+      hero: {},
+      marquee: [],
+      cultural: [],
+    });
+    prisma.landingPage.findFirst.mockResolvedValue(null);
+    prisma.landingPage.create.mockImplementation(async (args) => ({ id: 321, ...args.data }));
+    prisma.landingPage.findUnique.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/generate-from-destination')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({
+        destination: 'Andaman',
+        durationDays: 7,
+        audience: 'School students',
+        subBrand: 'tmc',
+        themeId: 'coastal-sand',
+        themeOverrides: {
+          brandColor: '#1d4ed8',
+          accentColor: '#f97316',
+        },
+        autoCreate: true,
+        style: 'premium',
+      });
+
+    expect(res.status).toBe(201);
+    expect(landingPageGeneratorLLM.generateLandingPageContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: 'Andaman',
+        durationDays: 7,
+        audience: 'School students',
+        subBrand: 'tmc',
+        __surface: 'landing-pages-generate',
+      }),
+    );
+    expect(destinationImageProvider.fetchStrategy).toHaveBeenCalled();
+    const createArgs = prisma.landingPage.create.mock.calls[0][0];
+    const persistedContent = JSON.parse(createArgs.data.content);
+    expect(createArgs.data.templateType).toBe('wanderlux-v1');
+    expect(persistedContent.theme.id).toBe('coastal-sand');
+    expect(persistedContent.theme.brandColor).toBe('#1D4ED8');
+    expect(persistedContent.theme.accentColor).toBe('#F97316');
+    expect(res.body.page.id).toBe(321);
+  });
+});
 
 describe('GET /api/landing-pages/:id', () => {
   test('happy path: tenant-scoped fetch returns the row', async () => {
@@ -610,6 +789,32 @@ describe('POST /api/landing-pages/:id/publish | /unpublish | /duplicate', () => 
     expect(res.body.publishedAt).toBeTruthy();
   });
 
+  test('publish travel page keeps featuring separate from publish', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50,
+      tenantId: 1,
+      status: 'DRAFT',
+      title: 'Umrah Launch',
+      slug: 'umrah-launch',
+      templateType: 'travel_destination',
+      subBrand: 'rfu',
+      content: JSON.stringify([{ type: 'heading', props: { text: 'Hi' } }]),
+    });
+    prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data }));
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/publish?force=true')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('PUBLISHED');
+    expect(prisma.landingPage.updateMany).not.toHaveBeenCalled();
+    const updateArgs = prisma.landingPage.update.mock.calls[0]?.[0];
+    expect(updateArgs?.where).toEqual({ id: 50 });
+    expect(updateArgs?.data).toMatchObject({
+      status: 'PUBLISHED',
+    });
+    expect(updateArgs?.data).not.toHaveProperty('isFeatured');
+  });
+
   test('publish: blocks a second generic landing site while one is already published', async () => {
     prisma.landingPage.findFirst.mockImplementation(async (args) => {
       if (args.where?.id === 50) {
@@ -710,12 +915,12 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  test('feature on PUBLISHED page → demotes siblings + sets isFeatured + returns the updated row', async () => {
+  test('feature on PUBLISHED page → demotes travel siblings + sets isFeatured + returns the updated row', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
-      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: false, subBrand: 'tmc',
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: false, subBrand: 'rfu',
     });
     prisma.landingPage.findUnique.mockResolvedValue({
-      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true, featuredAt: new Date(), subBrand: 'tmc',
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true, featuredAt: new Date(), subBrand: 'rfu',
     });
     const res = await request(makeApp())
       .post('/api/landing-pages/50/feature')
@@ -724,10 +929,13 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
     expect(res.body.isFeatured).toBe(true);
     // Transaction is what enforces the invariant — must have been called.
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    // updateMany should target the same scope EXCLUDING the target row.
+    // updateMany should target the travel bucket EXCLUDING the target row.
     const updateManyArgs = prisma.landingPage.updateMany.mock.calls[0]?.[0];
     expect(updateManyArgs?.where?.tenantId).toBe(1);
-    expect(updateManyArgs?.where?.subBrand).toBe('tmc');
+    expect(updateManyArgs?.where?.OR).toEqual([
+      { subBrand: { in: ['tmc', 'rfu', 'travelstall', 'visasure'] } },
+      { templateType: { in: ['travel_destination', 'wanderlux-v1', 'educational-trip-v1', 'religious-tour-v1', 'family-trip-v1', 'luxury-tour-v1', 'travel-premium-v1'] } },
+    ]);
     expect(updateManyArgs?.where?.isFeatured).toBe(true);
     expect(updateManyArgs?.where?.NOT?.id).toBe(50);
   });
@@ -735,7 +943,7 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
   test('feature is idempotent — already-featured page is a no-op (no transaction)', async () => {
     const existing = {
       id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true,
-      featuredAt: new Date('2026-06-01T00:00:00Z'), subBrand: 'tmc',
+      featuredAt: new Date('2026-06-01T00:00:00Z'), subBrand: 'travelstall',
     };
     prisma.landingPage.findFirst.mockResolvedValue(existing);
     const res = await request(makeApp())
@@ -821,6 +1029,31 @@ describe('GET /api/landing-pages/public/featured-full (no auth, full published p
     const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
     expect(findArgs.where.subBrand).toBe('tmc');
     expect(findArgs.orderBy).toEqual({ featuredAt: 'desc' });
+  });
+
+  test('GET /public/featured-html applies the Wanderlux CSP for rendered HTML', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50,
+      slug: 'europe-2026',
+      title: 'Europe 2026',
+      status: 'PUBLISHED',
+      templateType: 'wanderlux-v1',
+      destination: 'Europe',
+      subBrand: 'tmc',
+      metaTitle: 'Europe 2026',
+      metaDescription: 'Trip page',
+      featuredAt: new Date('2026-08-01T10:00:00Z'),
+      publishedAt: new Date('2026-08-01T10:00:00Z'),
+      updatedAt: new Date('2026-08-02T10:00:00Z'),
+      content: JSON.stringify({ theme: { brandColor: '#0F1B3D' }, brand: { subBrand: 'TMC' } }),
+    });
+
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured-html?subBrand=tmc');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.headers['content-security-policy']).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
+    expect(res.text.length).toBeGreaterThan(0);
   });
 
   test('500 when featured page content is malformed JSON', async () => {
@@ -1349,6 +1582,200 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
   });
 });
 
+describe('POST /p/:slug/payment-order + payment submit', () => {
+  test('payment-order creates a Razorpay order for the selected complete payment flow', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage());
+    prisma.payment.create.mockResolvedValue({ id: 901 });
+    paymentLinksCreateMock.mockResolvedValue({ id: 'plink_complete_1', short_url: 'https://rzp.io/i/complete', currency: 'INR' });
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/payment-order')
+      .send({
+        mode: 'complete',
+        installmentIndex: 1,
+        fields: {
+          name: 'Ravi Iyer',
+          email: 'parent@example.com',
+          phone: '+919876543210',
+        },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      paymentId: 901,
+      orderId: 'plink_complete_1',
+      paymentUrl: 'https://rzp.io/i/complete',
+      amount: 950000,
+      amountMajor: 9500,
+      paymentMode: 'complete',
+      installmentIndex: 1,
+      installmentIndexes: [0, 1],
+      paymentTitle: 'Complete payment',
+      buttonLabel: 'Complete payment',
+      prefill: {
+        name: 'Ravi Iyer',
+        email: 'parent@example.com',
+        contact: '+919876543210',
+      },
+    });
+    expect(getTenantRazorpayClientMock).toHaveBeenCalledWith(1);
+    expect(paymentLinksCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 950000,
+        currency: 'INR',
+        accept_partial: false,
+        notes: expect.objectContaining({
+          kind: 'landing-page-registration',
+          pageId: '51',
+          tripId: '7',
+          paymentMode: 'complete',
+          installmentIndex: '1',
+          installmentIndexes: '[0,1]',
+        }),
+      }),
+    );
+    const paymentCreateArgs = prisma.payment.create.mock.calls[0][0];
+    expect(paymentCreateArgs.data).toMatchObject({
+      tenantId: 1,
+      gateway: 'razorpay',
+      gatewayId: 'plink_complete_1',
+      amount: 9500,
+      currency: 'INR',
+      status: 'PENDING',
+    });
+    expect(JSON.parse(paymentCreateArgs.data.metadata)).toMatchObject({
+      kind: 'landing-page-registration',
+      pageId: 51,
+      tripId: 7,
+      paymentMode: 'complete',
+      installmentIndexes: [0, 1],
+      amountMajor: 9500,
+      amountPaise: 950000,
+      orderId: 'plink_complete_1',
+    });
+  });
+
+  test('payment submit verifies Razorpay, creates the participant, and marks the payment complete', async () => {
+    const paymentPage = wanderluxPaymentPage();
+    prisma.landingPage.findFirst.mockResolvedValue(paymentPage);
+    prisma.payment.findFirst.mockResolvedValue({
+      id: 902,
+      tenantId: 1,
+      status: 'PENDING',
+      amount: 4500,
+      gatewayId: 'order_installment_1',
+      metadata: JSON.stringify({
+        kind: 'landing-page-registration',
+        pageId: 51,
+        pageSlug: 'australia-2026',
+        pageTitle: 'Australia 7-Day Tour',
+        tripId: 7,
+        tenantId: 1,
+        paymentMode: 'installment',
+        installmentIndex: 1,
+        installmentIndexes: [1],
+        amountMajor: 4500,
+        amountPaise: 450000,
+        currency: 'INR',
+        receipt: 'lp_51_installment_1_123456',
+        orderId: 'order_installment_1',
+        paymentTitle: 'Booking Fee',
+      }),
+    });
+    applyLandingPagePaymentToTripMock.mockResolvedValue({
+      tripId: 7,
+      participantId: 1,
+      paidMajor: 4500,
+      allocations: [{ id: 4001, instalmentIndex: 1, amountMajor: 4500, paidMajor: 4500, appliedMajor: 4500, status: 'paid' }],
+      mode: 'installment',
+      installmentIndex: 1,
+    });
+
+    const paymentId = 'pay_installment_1';
+    const orderId = 'order_installment_1';
+    const signature = crypto
+      .createHmac('sha256', KEY_SECRET)
+      .update(`${orderId}|${paymentId}`)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/submit')
+      .send({
+        fields: {
+          student_name: 'Aarav Iyer',
+          name: 'Ravi Iyer',
+          email: 'parent@example.com',
+          phone: '+919876543210',
+        },
+        payment: {
+          paymentId: '902',
+          orderId,
+          razorpay_order_id: orderId,
+          razorpay_payment_id: paymentId,
+          razorpay_signature: signature,
+          mode: 'installment',
+          installmentIndex: 1,
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true });
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+    expect(prisma.contact.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { email_tenantId: { email: 'parent@example.com', tenantId: 1 } },
+      }),
+    );
+    expect(prisma.tripParticipant.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tripId: 7,
+          fullName: 'Aarav Iyer',
+          parentName: 'Ravi Iyer',
+          parentEmail: 'parent@example.com',
+          parentPhone: '+919876543210',
+          applicationStatus: 'pending',
+        }),
+      }),
+    );
+    expect(applyLandingPagePaymentToTripMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        db: prisma,
+        tripId: 7,
+        participantId: 1,
+        amountMajor: 4500,
+        mode: 'installment',
+        installmentIndex: 1,
+        capturedAt: expect.any(Date),
+      }),
+    );
+    expect(prisma.payment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 902 },
+        data: expect.objectContaining({
+          status: 'SUCCESS',
+          paidAt: expect.any(Date),
+        }),
+      }),
+    );
+    const paymentUpdateArgs = prisma.payment.update.mock.calls[0][0];
+    expect(JSON.parse(paymentUpdateArgs.data.metadata)).toMatchObject({
+      landingPageRegistrationCompleted: true,
+      participantId: 1,
+      contactId: 1,
+      paymentMode: 'installment',
+      installmentIndex: 1,
+      amountMajor: 4500,
+      razorpayOrderId: orderId,
+      razorpayPaymentId: paymentId,
+    });
+    expect(prisma.landingPage.update).toHaveBeenCalledWith({
+      where: { id: 51 },
+      data: { submissions: { increment: 1 } },
+    });
+  });
+});
+
 // ─── PUBLIC POST /:slug/submit — Phase 3 hybrid registration-draft branch ─
 
 describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode)', () => {
@@ -1359,7 +1786,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     register: { mode: 'registration-draft', steps: [{ id: 'student' }] },
   });
 
-  test('happy path: trip-linked Wanderlux page creates PendingTripRegistration + returns microsite redirect with opaque token', async () => {
+  test('happy path: trip-linked Wanderlux page creates a portal-registration redirect', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1',
@@ -1390,29 +1817,11 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     expect(res.body).toMatchObject({
       ok: true,
       draftId: 7001,
-      redirect: {
-        type: 'microsite',
-        // URL must carry the opaque draftToken plus the customer-register bridge.
-        url: expect.stringMatching(/^\/p\/tripmicrosite\/[0-9a-f-]+\?draftToken=[0-9a-f]{64}&portalRedirect=.*/),
-      },
+      redirect: { type: 'customer-registration', url: expect.stringContaining('/customer/register') },
     });
-    const redirectUrl = new URL(`http://localhost${res.body.redirect.url}`);
-    expect(redirectUrl.searchParams.get('draftToken')).toMatch(/^[0-9a-f]{64}$/);
-    const portalRedirect = redirectUrl.searchParams.get('portalRedirect');
-    expect(portalRedirect).toContain('/customer/register?tenantSlug=travel-stall');
-    expect(portalRedirect).toContain('next=');
-    // #1307: PII (name/email/phone/passport) must not appear in the
-    // customer-portal bridge URL. The portal can resolve the draft via the
-    // opaque draftToken using /api/travel/microsites/public/:uuid/draft-summary.
-    expect(portalRedirect).not.toContain('name=');
-    expect(portalRedirect).not.toContain('Rohan');
-    expect(portalRedirect).not.toContain('email=');
-    expect(portalRedirect).not.toContain('rohan%40example.com');
-    // PII must not appear in the microsite URL directly.
-    expect(res.body.redirect.url).not.toContain('Aarav');
-    expect(res.body.redirect.url).not.toContain('rohan@example.com');
-    expect(res.body.redirect.url).not.toContain('919876543210');
-    expect(res.body.redirect.url).not.toContain('M1234567');
+    expect(res.body.message).toContain('registration has been received');
+    expect(prisma.tripMicrosite.findUnique).not.toHaveBeenCalled();
+    expect(prisma.tenant.findUnique).toHaveBeenCalled();
 
     // PendingTripRegistration row was created with the right shape
     expect(prisma.pendingTripRegistration.create).toHaveBeenCalledWith({
@@ -1461,7 +1870,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     );
   });
 
-  test('falls back to thank-you (no redirect) when trip has no published microsite', async () => {
+  test('redirects to customer portal (regardless of microsite) when trip has no published microsite', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1',
@@ -1483,13 +1892,13 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     expect(res.body).toMatchObject({
       ok: true,
       draftId: 7002,
-      redirect: { type: 'thanks' },
+      redirect: { type: 'customer-registration', url: expect.stringContaining('/customer/register') },
     });
     // Draft still created — the microsite-less state doesn't block onboarding
     expect(prisma.pendingTripRegistration.create).toHaveBeenCalled();
   });
 
-  test('falls back to thank-you when microsite is unpublished (publishedAt null)', async () => {
+  test('redirects to customer portal when microsite is unpublished (publishedAt null)', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1', tenantId: 1, tripId: 100,
@@ -1507,10 +1916,13 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
         parent: { name: 'Y', email: 'y@e.com', phone: '+911234567890' },
       });
     expect(res.status).toBe(201);
-    expect(res.body.redirect).toMatchObject({ type: 'thanks' });
+    expect(res.body.redirect).toMatchObject({
+      type: 'customer-registration',
+      url: expect.stringContaining('/customer/register'),
+    });
   });
 
-  test('falls back to thank-you when microsite has expired', async () => {
+  test('redirects to customer portal when microsite has expired', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
       content: wanderluxContent, templateType: 'wanderlux-v1', tenantId: 1, tripId: 100,
@@ -1528,7 +1940,10 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
         parent: { name: 'Y', email: 'y@e.com', phone: '+911234567890' },
       });
     expect(res.status).toBe(201);
-    expect(res.body.redirect).toMatchObject({ type: 'thanks' });
+    expect(res.body.redirect).toMatchObject({
+      type: 'customer-registration',
+      url: expect.stringContaining('/customer/register'),
+    });
   });
 
   test('missing required fields returns 400 MISSING_FIELDS, no draft created', async () => {
@@ -1825,6 +2240,8 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     // generatedAt) so the list grid can render sub-brand chips + "AI
     // draft" badges, plus 2 featured fields (isFeatured / featuredAt) so
     // it can render the "★ Featured" badge + Feature / Unfeature button.
+    // PR #1399 adds content + tripId so trip-linked rows can carry their
+    // registration context without a second fetch.
     expect(arg.select).toEqual({
       id: true,
       title: true,
@@ -1833,6 +2250,8 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
       visits: true,
       submissions: true,
       templateType: true,
+      content: true,
+      tripId: true,
       createdAt: true,
       updatedAt: true,
       destination: true,

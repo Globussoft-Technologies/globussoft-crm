@@ -351,6 +351,25 @@ beforeAll(() => {
   // send_webhook now resolves the tenant's signing secret via
   // lib/webhookEntitlement.resolveTenantWebhookSecret → webhookCredential.findFirst.
   prisma.webhookCredential = { findFirst: vi.fn() };
+  // Parity wave: every action now writes a WorkflowExecution row (the
+  // operational log the history panel and the "run once per record" dedupe
+  // read) alongside the existing AuditLog row (the compliance trail).
+  prisma.workflowExecution = { create: vi.fn(), findFirst: vi.fn() };
+  // The send_email specs below assumed SENDGRID_API_KEY was unset in the test
+  // env. It is not: lib/eventBus.js loads backend/.env with `override: true`,
+  // so a developer machine (or any CI runner) holding a live key made these
+  // specs POST to api.sendgrid.com and genuinely send mail. Stub fetch so the
+  // suite is hermetic and the assertions test OUR error handling rather than
+  // whatever SendGrid happened to answer.
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 401,
+    headers: { get: () => null },
+    text: async () => 'stubbed: no live SendGrid call in unit tests',
+  });
+  prisma.workflowScheduledAction = { create: vi.fn() };
+  prisma.automationRule.update = vi.fn();
+  prisma.user.findMany = vi.fn();
 });
 
 beforeEach(() => {
@@ -366,6 +385,11 @@ beforeEach(() => {
   prisma.ticket.findFirst.mockReset().mockImplementation(({ where }) => Promise.resolve({ id: where.id }));
   prisma.ticket.update.mockReset().mockResolvedValue({});
   prisma.user.findFirst.mockReset().mockImplementation(({ where }) => Promise.resolve({ id: where.id }));
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
+  prisma.workflowExecution.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.workflowExecution.findFirst.mockReset().mockResolvedValue(null);
+  prisma.workflowScheduledAction.create.mockReset().mockResolvedValue({ id: 1, runAt: new Date() });
+  prisma.automationRule.update.mockReset().mockResolvedValue({ id: 1, isActive: true, consecutiveFailures: 0 });
   prisma.approvalRequest.create.mockReset().mockResolvedValue({
     id: 999, entity: 'Deal', entityId: 7, reason: null,
   });
@@ -452,13 +476,18 @@ describe('emitEvent — prisma async tail (rule fan-out + webhook delivery)', ()
         condition: null,
       },
     ]);
-    prisma.auditLog.findMany.mockResolvedValueOnce([
-      { details: JSON.stringify({ recordKey: 'contactId:12' }) },
-    ]);
+    // The dedupe is an indexed WorkflowExecution lookup now. It used to load
+    // the 500 most recent AuditLog rows for the rule and JSON.parse each one
+    // hunting for a matching recordKey — O(n) on every event, and a rule
+    // silently began re-firing once it had more than 500 executions behind it.
+    prisma.workflowExecution.findFirst.mockResolvedValueOnce({ id: 900 });
 
     await emitEvent('contact.created', { contactId: 12, userId: 5 }, 42);
 
     expect(prisma.task.create).not.toHaveBeenCalled();
+    expect(prisma.workflowExecution.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 42, ruleId: 31, recordKey: 'contactId:12' }),
+    }));
   });
 
   test('rule that throws inside executeAction is logged but does NOT abort siblings', async () => {
@@ -521,9 +550,12 @@ describe('executeAction — send_notification', () => {
     });
   });
 
-  test('skips notification when no userId resolvable', async () => {
+  test('FAILS when no userId is resolvable (was: silently skipped, still logged success)', async () => {
+    // Previously this fell out of the switch having done nothing and then
+    // wrote a "WORKFLOW" success audit row, so a rule that never delivered a
+    // single notification looked perfectly healthy in the history panel.
     const rule = { id: 1, name: 'r', actionType: 'send_notification', targetState: null };
-    await executeAction(rule, {}, 42);
+    await expect(executeAction(rule, {}, 42)).rejects.toThrow(/recipient/i);
     expect(prisma.notification.create).not.toHaveBeenCalled();
   });
 
@@ -706,7 +738,7 @@ describe('executeAction — assign_agent', () => {
       { id: 3, actionType: 'assign_agent', targetState: JSON.stringify({ entity: 'contact', userId: 88 }) },
       { contactId: 7 },
       42
-    )).rejects.toThrow(/Assignee not found in this tenant/);
+    )).rejects.toThrow(/assignee not found in this tenant/i);
     expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 });
@@ -803,48 +835,57 @@ describe('executeAction — create_approval', () => {
     expect(arg.data.reason).toBe('Discount on Big');
   });
 
-  test('skips when entity is missing', async () => {
+  // Every misconfiguration below used to console.warn, fall out of the switch,
+  // and STILL write a successful WORKFLOW audit row — so a create_approval rule
+  // that had never created a single approval request reported a clean run
+  // history. They throw now, which surfaces as a FAILED execution the author
+  // can actually see and fix.
+  test('FAILS when entity is missing', async () => {
     const rule = {
       id: 1, actionType: 'create_approval',
       targetState: JSON.stringify({}),
     };
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await executeAction(rule, { dealId: 1, userId: 5 }, 42);
-    warnSpy.mockRestore();
+    await expect(executeAction(rule, { dealId: 1, userId: 5 }, 42)).rejects.toThrow(/entity/i);
     expect(prisma.approvalRequest.create).not.toHaveBeenCalled();
   });
 
-  test('skips when entity is not a string', async () => {
+  test('FAILS when entity is not a string', async () => {
     const rule = {
       id: 1, actionType: 'create_approval',
       targetState: JSON.stringify({ entity: 42 }),
     };
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await executeAction(rule, { dealId: 1, userId: 5 }, 42);
-    warnSpy.mockRestore();
+    await expect(executeAction(rule, { dealId: 1, userId: 5 }, 42)).rejects.toThrow(/entity/i);
     expect(prisma.approvalRequest.create).not.toHaveBeenCalled();
   });
 
-  test('skips when payload.<entityLower>Id missing', async () => {
+  test('FAILS when payload.<entityLower>Id missing', async () => {
     const rule = {
       id: 1, actionType: 'create_approval',
       targetState: JSON.stringify({ entity: 'Deal' }),
     };
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await executeAction(rule, { userId: 5 }, 42);
-    warnSpy.mockRestore();
+    await expect(executeAction(rule, { userId: 5 }, 42)).rejects.toThrow(/dealId/i);
     expect(prisma.approvalRequest.create).not.toHaveBeenCalled();
   });
 
-  test('skips when no requesterId resolvable (no userId / actorId / createdById)', async () => {
+  test('FAILS when no requesterId resolvable (no userId / actorId / createdById)', async () => {
     const rule = {
       id: 1, actionType: 'create_approval',
       targetState: JSON.stringify({ entity: 'Deal' }),
     };
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(executeAction(rule, { dealId: 1 }, 42)).rejects.toThrow(/requester/i);
+    expect(prisma.approvalRequest.create).not.toHaveBeenCalled();
+  });
+
+  test('falls back to the rule author when the payload carries no actor', async () => {
+    // `rule.createdById` was referenced by this action long before the column
+    // existed on AutomationRule, so the fallback was always undefined. The
+    // parity migration adds it; this pins that it is actually used.
+    const rule = {
+      id: 1, actionType: 'create_approval', createdById: 77,
+      targetState: JSON.stringify({ entity: 'Deal' }),
+    };
     await executeAction(rule, { dealId: 1 }, 42);
-    warnSpy.mockRestore();
-    expect(prisma.approvalRequest.create).not.toHaveBeenCalled();
+    expect(prisma.approvalRequest.create.mock.calls[0][0].data.requestedBy).toBe(77);
   });
 
   test('falls back to actorId when userId absent', async () => {
@@ -869,14 +910,12 @@ describe('executeAction — create_approval', () => {
     });
   });
 
-  test('coerces NaN entityId to skip (Number-coercion guard)', async () => {
+  test('FAILS on a non-numeric entityId (Number-coercion guard)', async () => {
     const rule = {
       id: 1, actionType: 'create_approval',
       targetState: JSON.stringify({ entity: 'Deal' }),
     };
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await executeAction(rule, { dealId: 'not-a-number', userId: 5 }, 42);
-    warnSpy.mockRestore();
+    await expect(executeAction(rule, { dealId: 'not-a-number', userId: 5 }, 42)).rejects.toThrow(/dealId/i);
     expect(prisma.approvalRequest.create).not.toHaveBeenCalled();
   });
 
@@ -925,15 +964,14 @@ describe('executeAction — malformed targetState', () => {
 });
 
 describe('executeAction — unknown actionType', () => {
-  test('warns but still writes the audit log', async () => {
+  test('FAILS instead of logging a successful no-op', async () => {
+    // The old branch warned to the console and then wrote a success row, so a
+    // rule whose actionType the engine did not recognise reported healthy runs
+    // forever while doing nothing at all.
     const rule = {
       id: 1, name: 'r', actionType: 'something_unsupported', targetState: null,
     };
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await executeAction(rule, { userId: 5 }, 42);
-    warnSpy.mockRestore();
-    // No model.create called for an unknown actionType, but auditLog still fires.
-    expect(prisma.auditLog.create).toHaveBeenCalled();
+    await expect(executeAction(rule, { userId: 5 }, 42)).rejects.toThrow(/Unknown actionType/i);
     expect(prisma.notification.create).not.toHaveBeenCalled();
     expect(prisma.task.create).not.toHaveBeenCalled();
     expect(prisma.contact.update).not.toHaveBeenCalled();

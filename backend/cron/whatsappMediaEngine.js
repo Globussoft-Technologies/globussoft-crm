@@ -54,7 +54,7 @@ async function pickJobs() {
 }
 
 async function processJob(job) {
-  if (!s3Service || !process.env.AWS_S3_BUCKET_NAME) {
+  if (!s3Service || !s3Service.BUCKET_NAME) {
     return { ok: false, error: "S3 not configured", retryable: false };
   }
   const cfg = await prisma.whatsAppConfig.findFirst({

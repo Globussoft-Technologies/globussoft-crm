@@ -1,27 +1,18 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, Search, Filter, RefreshCw, UserPlus, Phone } from 'lucide-react';
+import { Calendar, Search, Filter, RefreshCw, UserPlus, Phone, Package, ChevronLeft, ChevronRight } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
 import { useNotify } from '../../utils/notify';
 import { AssignDoctorModal, displayStatus } from './Calendar';
 import CallifiedCallDialog from '../../components/CallifiedCallDialog';
-import CallifiedCallDetailsDrawer from '../../components/CallifiedCallDetailsDrawer';
 
-/**
- * Appointments - tenant-wide list view.
- *
- * Backend: GET /api/wellness/visits?from=&to=&doctorId=&status=&limit=&offset=
- * - For ADMIN / MANAGER: returns all visits in the tenant matching the query.
- * - For wellnessRole=doctor: the server overrides doctorId to req.user.userId.
- *
- * The table loads a page at a time and fetches more rows as the user scrolls
- * toward the bottom of the table container.
- */
 const STATUS_OPTIONS = [
   { value: '', label: 'Any status' },
   { value: 'booked', label: 'Booked' },
   { value: 'pending', label: 'Pending (unassigned)', clientOnly: true },
+  { value: 'requested', label: 'Requested (package)' },
+  { value: 'package', label: 'From a package', clientOnly: true },
   { value: 'confirmed', label: 'Confirmed' },
   { value: 'arrived', label: 'Arrived' },
   { value: 'in-treatment', label: 'In treatment' },
@@ -30,27 +21,30 @@ const STATUS_OPTIONS = [
   { value: 'no-show', label: 'No-show' },
 ];
 
-const PAGE_SIZE = 100;
+const CLIENT_ONLY_STATUSES = new Set(
+  STATUS_OPTIONS.filter((o) => o.clientOnly).map((o) => o.value),
+);
+
+const PAGE_SIZE = 25;
+const EMPTY_PAGINATION = {
+  total: 0,
+  page: 1,
+  limit: PAGE_SIZE,
+  offset: 0,
+  pages: 1,
+  hasPrev: false,
+  hasNext: false,
+};
 
 export default function Appointments() {
   const { user } = useContext(AuthContext) || {};
   const isOrg = user?.role === 'ADMIN' || user?.role === 'MANAGER';
   const notify = useNotify();
-
-  const tableScrollRef = useRef(null);
   const requestSeqRef = useRef(0);
-  const requestInFlightRef = useRef(false);
-  const hasMoreRef = useRef(true);
-  const visitsRef = useRef([]);
 
   const [assignTarget, setAssignTarget] = useState(null);
-
-  // Callified calling. `null` while we are still asking whether the tenant has
-  // the integration configured — the Call action stays hidden until we know,
-  // so nobody is offered a button that can only fail.
   const [callifiedReady, setCallifiedReady] = useState(null);
   const [callTarget, setCallTarget] = useState(null);
-  const [historyContact, setHistoryContact] = useState(null);
 
   const today = useMemo(() => todayLocalDate(), []);
   const oneWeekFromToday = useMemo(() => addDaysLocal(today, 7), [today]);
@@ -58,80 +52,75 @@ export default function Appointments() {
   const [to, setTo] = useState(oneWeekFromToday);
   const [doctorId, setDoctorId] = useState('');
   const [status, setStatus] = useState('');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(
+    () => sessionStorage.getItem('appointments-search') || ''
+  );
+  const [page, setPage] = useState(1);
   const [reloadTick, setReloadTick] = useState(0);
 
   const [visits, setVisits] = useState([]);
   const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [pagination, setPagination] = useState(EMPTY_PAGINATION);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    visitsRef.current = visits;
-  }, [visits]);
+  const loadVisits = useCallback(async () => {
+    const requestId = ++requestSeqRef.current;
+    setLoading(true);
+    setError(null);
 
-  useEffect(() => {
-    hasMoreRef.current = hasMore;
-  }, [hasMore]);
-
-  const loadVisits = useCallback(
-    async ({ reset = false } = {}) => {
-      if (!reset && (requestInFlightRef.current || !hasMoreRef.current)) return;
-
-      const requestId = ++requestSeqRef.current;
-      const nextOffset = reset ? 0 : visitsRef.current.length;
-      requestInFlightRef.current = true;
-
-      if (reset) {
-        setLoading(true);
-        setError(null);
-        setVisits([]);
-        visitsRef.current = [];
-        setHasMore(true);
-        hasMoreRef.current = true;
-        tableScrollRef.current?.scrollTo({ top: 0 });
-      } else {
-        setLoadingMore(true);
+    try {
+      const qs = new URLSearchParams();
+      // An empty date box means "no bound", not "midnight on nothing".
+      // Sending it unconditionally produced `from=T00:00:00+05:30`, which the
+      // route fed straight to `new Date()` — an Invalid Date that Prisma threw
+      // on, so clearing the filter answered with a 500 instead of the
+      // unfiltered list.
+      if (from) qs.set('from', `${from}T00:00:00${localTzOffset()}`);
+      if (to) qs.set('to', `${to}T23:59:59${localTzOffset()}`);
+      qs.set('paginate', 'true');
+      qs.set('page', String(page));
+      qs.set('limit', String(PAGE_SIZE));
+      if (doctorId) qs.set('doctorId', doctorId);
+      if (status === 'pending' || status === 'booked') {
+        qs.set('displayStatus', status);
+      } else if (status === 'package') {
+        qs.set('fromPackage', 'true');
+      } else if (status && !CLIENT_ONLY_STATUSES.has(status)) {
+        qs.set('status', status);
       }
+      if (search.trim()) qs.set('q', search.trim());
 
-      try {
-        const qs = new URLSearchParams();
-        qs.set('from', `${from}T00:00:00${localTzOffset()}`);
-        qs.set('to', `${to}T23:59:59${localTzOffset()}`);
-        qs.set('limit', String(PAGE_SIZE));
-        qs.set('offset', String(nextOffset));
-        if (doctorId) qs.set('doctorId', doctorId);
-        if (status && status !== 'pending') qs.set('status', status);
+      const res = await fetchApi(`/api/wellness/visits?${qs.toString()}`, { silent: true });
+      if (requestSeqRef.current !== requestId) return;
 
-        const res = await fetchApi(`/api/wellness/visits?${qs.toString()}`, { silent: true });
-        const nextRows = Array.isArray(res) ? res : Array.isArray(res?.visits) ? res.visits : [];
-        if (requestSeqRef.current !== requestId) return;
+      const nextRows = Array.isArray(res) ? res : Array.isArray(res?.visits) ? res.visits : [];
+      const nextPagination = res?.pagination || {
+        total: nextRows.length,
+        page,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+        pages: Math.max(1, Math.ceil(nextRows.length / PAGE_SIZE)),
+        hasPrev: page > 1,
+        hasNext: nextRows.length === PAGE_SIZE,
+      };
 
-        const combined = reset ? nextRows : [...visitsRef.current, ...nextRows];
-        const nextHasMore = nextRows.length === PAGE_SIZE;
-
-        visitsRef.current = combined;
-        setVisits(combined);
-        setHasMore(nextHasMore);
-        hasMoreRef.current = nextHasMore;
-      } catch (err) {
-        if (requestSeqRef.current !== requestId) return;
-        setError(err?.message || 'Failed to load appointments');
-      } finally {
-        if (requestSeqRef.current === requestId) {
-          requestInFlightRef.current = false;
-          setLoading(false);
-          setLoadingMore(false);
-        }
+      setVisits(nextRows);
+      setPagination(nextPagination);
+    } catch (err) {
+      if (requestSeqRef.current !== requestId) return;
+      setError(err?.message || 'Failed to load appointments');
+      setVisits([]);
+      setPagination(EMPTY_PAGINATION);
+    } finally {
+      if (requestSeqRef.current === requestId) {
+        setLoading(false);
       }
-    },
-    [from, to, doctorId, status],
-  );
+    }
+  }, [from, to, doctorId, status, search, page]);
 
   useEffect(() => {
-    loadVisits({ reset: true });
+    loadVisits();
   }, [loadVisits, reloadTick]);
 
   useEffect(() => {
@@ -165,8 +154,6 @@ export default function Appointments() {
         if (cancelled) return;
         setCallifiedReady(Boolean(res?.configured && res?.enabled));
       })
-      // A 403 here just means this role may not place calls; a 503 means the
-      // tenant has no Callified credentials. Either way: no call action.
       .catch(() => {
         if (!cancelled) setCallifiedReady(false);
       });
@@ -175,47 +162,16 @@ export default function Appointments() {
     };
   }, []);
 
-  const visibleRows = useMemo(() => {
-    let rows = visits;
-    if (status === 'pending') {
-      rows = rows.filter((v) => v.status === 'booked' && !v.doctorId);
-    }
-
-    const term = search.trim().toLowerCase();
-    if (term) {
-      rows = rows.filter((v) => {
-        const blob = `${v.patient?.name || ''} ${v.service?.name || ''} ${v.doctor?.name || ''}`.toLowerCase();
-        return blob.includes(term);
-      });
-    }
-
-    return rows;
-  }, [visits, status, search]);
-
-  useEffect(() => {
-    if (!tableScrollRef.current || loading || loadingMore || !hasMore) return;
-    const el = tableScrollRef.current;
-    if (el.scrollHeight <= el.clientHeight + 24) {
-      loadVisits({ reset: false });
-    }
-  }, [visibleRows, loading, loadingMore, hasMore, loadVisits]);
-
-  const handleTableScroll = useCallback(
-    (e) => {
-      const el = e.currentTarget;
-      if (!el || requestInFlightRef.current || !hasMoreRef.current) return;
-      const threshold = 96;
-      if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
-        loadVisits({ reset: false });
-      }
-    },
-    [loadVisits],
-  );
-
   const handleRefresh = () => {
-    tableScrollRef.current?.scrollTo({ top: 0 });
     setReloadTick((n) => n + 1);
   };
+
+  const totalPages = Math.max(1, pagination.pages || 1);
+  const pageStart = pagination.total === 0 ? 0 : ((pagination.page - 1) * pagination.limit) + 1;
+  const pageEnd = pagination.total === 0
+    ? 0
+    : Math.min(pagination.total, ((pagination.page - 1) * pagination.limit) + visits.length);
+  const pageButtons = buildPageButtons(pagination.page, totalPages);
 
   return (
     <div style={{ padding: '1.5rem', width: '100%' }}>
@@ -268,7 +224,10 @@ export default function Appointments() {
             type="date"
             className="input-field"
             value={from}
-            onChange={(e) => setFrom(e.target.value)}
+            onChange={(e) => {
+              setFrom(e.target.value);
+              setPage(1);
+            }}
             style={{ width: '100%' }}
           />
         </label>
@@ -278,7 +237,10 @@ export default function Appointments() {
             type="date"
             className="input-field"
             value={to}
-            onChange={(e) => setTo(e.target.value)}
+            onChange={(e) => {
+              setTo(e.target.value);
+              setPage(1);
+            }}
             style={{ width: '100%' }}
           />
         </label>
@@ -288,7 +250,10 @@ export default function Appointments() {
             <select
               className="input-field"
               value={doctorId}
-              onChange={(e) => setDoctorId(e.target.value)}
+              onChange={(e) => {
+                setDoctorId(e.target.value);
+                setPage(1);
+              }}
               style={{ width: '100%' }}
             >
               <option value="">All doctors</option>
@@ -305,7 +270,10 @@ export default function Appointments() {
           <select
             className="input-field"
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(e) => {
+              setStatus(e.target.value);
+              setPage(1);
+            }}
             style={{ width: '100%' }}
           >
             {STATUS_OPTIONS.map((opt) => (
@@ -333,7 +301,12 @@ export default function Appointments() {
               type="search"
               className="input-field"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setSearch(value);
+                sessionStorage.setItem('appointments-search', value);
+                setPage(1);
+              }}
               placeholder="Patient or service..."
               style={{ width: '100%', paddingLeft: 28 }}
             />
@@ -357,8 +330,6 @@ export default function Appointments() {
       )}
 
       <div
-        ref={tableScrollRef}
-        onScroll={handleTableScroll}
         style={{
           border: '1px solid var(--border-color)',
           borderRadius: 12,
@@ -395,7 +366,7 @@ export default function Appointments() {
                 </Td>
               </tr>
             )}
-            {!loading && visibleRows.length === 0 && (
+            {!loading && visits.length === 0 && (
               <tr>
                 <Td colSpan={isOrg ? 6 : 5} center>
                   <Filter size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />
@@ -404,23 +375,23 @@ export default function Appointments() {
               </tr>
             )}
             {!loading &&
-              visibleRows.map((v) => (
+              visits.map((v) => (
                 <tr key={v.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                   <Td>
                     <div style={{ fontWeight: 600 }}>
                       {v.visitDate
                         ? new Date(v.visitDate).toLocaleDateString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                          })
+                          month: 'short',
+                          day: 'numeric',
+                        })
                         : '-'}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                       {v.visitDate
                         ? new Date(v.visitDate).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
                         : ''}
                     </div>
                   </Td>
@@ -451,6 +422,29 @@ export default function Appointments() {
                   <Td>
                     {v.service?.name || (
                       <span style={{ color: 'var(--text-secondary)' }}>-</span>
+                    )}
+                    {v.treatmentPlan && (
+                      <div
+                        data-testid={`appointments-package-${v.id}`}
+                        title={`Session from the package "${v.treatmentPlan.name}" — already paid for`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          marginTop: '0.25rem',
+                          padding: '0.1rem 0.45rem',
+                          borderRadius: 999,
+                          fontSize: '0.68rem',
+                          fontWeight: 600,
+                          background: 'rgba(16,185,129,0.12)',
+                          color: '#10b981',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        <Package size={11} />
+                        Package · session {Math.min(v.treatmentPlan.completedSessions + 1, v.treatmentPlan.totalSessions)} of{' '}
+                        {v.treatmentPlan.totalSessions}
+                      </div>
                     )}
                   </Td>
                   <Td>
@@ -486,17 +480,24 @@ export default function Appointments() {
                           onCall={() => setCallTarget(v)}
                         />
                       )}
+                      {v.status === 'requested' && (
+                        <Link
+                          to="/wellness/services?tab=activetreatments"
+                          data-testid={`appointments-review-request-${v.id}`}
+                          style={{
+                            fontSize: '0.8rem',
+                            color: 'var(--text-primary)',
+                            textDecoration: 'underline',
+                            textUnderlineOffset: '2px',
+                          }}
+                        >
+                          Review request
+                        </Link>
+                      )}
                       <Link
                         to={`/wellness/calendar?focus=${v.id}${v.visitDate ? `&date=${isoLocalDate(v.visitDate)}` : ''}`}
                         style={{
                           fontSize: '0.8rem',
-                          // Was --primary-color, which is #1F2220 charcoal in
-                          // BOTH wellness modes — 1.2:1 on the dark surface,
-                          // i.e. invisible. --accent-color fixes dark (8.7:1)
-                          // but drops light to 2.1:1, so for TEXT we use
-                          // --text-primary instead: 17:1 dark, 12:1 light.
-                          // Underline carries the link affordance that the
-                          // colour cue no longer does.
                           color: 'var(--text-primary)',
                           textDecoration: 'underline',
                           textUnderlineOffset: '2px',
@@ -508,34 +509,56 @@ export default function Appointments() {
                   </Td>
                 </tr>
               ))}
-            {loadingMore && (
-              <tr>
-                <Td colSpan={isOrg ? 6 : 5} center>
-                  Loading more appointments...
-                </Td>
-              </tr>
-            )}
-            {!loading && !loadingMore && hasMore && visibleRows.length > 0 && (
-              <tr>
-                <Td colSpan={isOrg ? 6 : 5} center>
-                  Scroll to load more appointments.
-                </Td>
-              </tr>
-            )}
           </tbody>
         </table>
       </div>
 
       {!loading && (
-        <div
-          style={{
-            marginTop: '0.75rem',
-            fontSize: '0.75rem',
-            color: 'var(--text-secondary)',
-          }}
-        >
-          {visibleRows.length} shown from {visits.length} loaded appointments
-          {hasMore ? ' - more available below' : ''}
+        <div style={paginationBar}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+            {pageStart}-{pageEnd} of {pagination.total} appointments
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setPage((n) => Math.max(1, n - 1))}
+              disabled={!pagination.hasPrev}
+              aria-label="Previous page"
+              style={pagerBtnStyle}
+            >
+              <ChevronLeft size={14} /> Previous
+            </button>
+            {pageButtons.map((token, idx) => (
+              token === '…' ? (
+                <span key={`ellipsis-${idx}`} style={{ color: 'var(--text-secondary)', padding: '0 0.15rem' }}>…</span>
+              ) : (
+                <button
+                  key={token}
+                  type="button"
+                  onClick={() => setPage(token)}
+                  aria-current={token === pagination.page ? 'page' : undefined}
+                  className={token === pagination.page ? '' : 'btn-secondary'}
+                  style={{
+                    ...pageNumberBtnStyle,
+                    ...(token === pagination.page ? activePageBtnStyle : null),
+                  }}
+                >
+                  {token}
+                </button>
+              )
+            ))}
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setPage((n) => Math.min(totalPages, n + 1))}
+              disabled={!pagination.hasNext}
+              aria-label="Next page"
+              style={pagerBtnStyle}
+            >
+              Next <ChevronRight size={14} />
+            </button>
+          </div>
         </div>
       )}
 
@@ -565,34 +588,12 @@ export default function Appointments() {
             manualCall: `/api/wellness/callified/visits/${callTarget.id}/manual-call`,
           }}
           onClose={() => setCallTarget(null)}
-          onViewHistory={(contactId) => {
-            setHistoryContact({
-              id: contactId,
-              name: callTarget.patient?.name,
-              phone: callTarget.patient?.phone,
-            });
-            setCallTarget(null);
-          }}
-        />
-      )}
-
-      {historyContact && (
-        <CallifiedCallDetailsDrawer
-          lead={historyContact}
-          onClose={() => setHistoryContact(null)}
         />
       )}
     </div>
   );
 }
 
-/**
- * Per-row call action.
- *
- * A patient with no dialable number still gets the control, disabled with a
- * reason — silently hiding it reads as a missing feature, and the operator
- * needs to know WHY they cannot call so they can go fix the phone number.
- */
 function CallAction({ visit, onCall }) {
   const phone = visit.patient?.phone || '';
   const dialable = phone.replace(/\D/g, '').length >= 10;
@@ -600,10 +601,6 @@ function CallAction({ visit, onCall }) {
   return (
     <button
       type="button"
-      // btn-secondary carries the theme-aware pairing: --surface-color fill
-      // with --text-primary label, both redefined per light/dark. Only the
-      // sizing is overridden here — hand-picking colours is what made this
-      // button invisible on dark (see the accent note below).
       className="btn-secondary"
       onClick={onCall}
       disabled={!dialable}
@@ -620,11 +617,6 @@ function CallAction({ visit, onCall }) {
         opacity: dialable ? 1 : 0.55,
       }}
     >
-      {/* --accent-color, NOT --primary-color: in the wellness theme
-          --primary-color is #1F2220 charcoal in BOTH modes (it is the
-          sidebar/hero background), so using it as a foreground renders
-          charcoal-on-black. --accent-color is a true accent and IS
-          redefined per mode (gold #C9A063 light / #D9A468 dark). */}
       <Phone size={13} style={{ color: 'var(--accent-color)' }} /> Call
     </button>
   );
@@ -667,6 +659,7 @@ function isoLocalDate(input) {
 function StatusBadge({ status }) {
   const palette = {
     pending: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+    requested: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
     booked: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
     scheduled: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
     'checked-in': { fg: '#0ea5e9', bg: 'rgba(14,165,233,0.1)' },
@@ -703,6 +696,42 @@ const fieldLabel = {
   display: 'flex',
   flexDirection: 'column',
   gap: '0.25rem',
+};
+
+const paginationBar = {
+  marginTop: '0.85rem',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '0.8rem',
+  flexWrap: 'wrap',
+};
+
+const pagerBtnStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '0.35rem',
+  padding: '0.42rem 0.75rem',
+  fontSize: '0.78rem',
+};
+
+const pageNumberBtnStyle = {
+  minWidth: 34,
+  height: 34,
+  borderRadius: 8,
+  border: '1px solid var(--border-color)',
+  background: 'var(--surface-color)',
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
+  fontSize: '0.78rem',
+  fontWeight: 600,
+};
+
+const activePageBtnStyle = {
+  background: 'var(--accent-color)',
+  border: '1px solid var(--accent-color)',
+  color: '#fff',
+  boxShadow: '0 8px 20px rgba(0,0,0,0.18)',
 };
 
 function Th({ children }) {
@@ -743,4 +772,11 @@ function Td({ children, colSpan, center }) {
       {children}
     </td>
   );
+}
+
+function buildPageButtons(currentPage, totalPages) {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+  if (currentPage <= 4) return [1, 2, 3, 4, 5, '…', totalPages];
+  if (currentPage >= totalPages - 3) return [1, '…', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  return [1, '…', currentPage - 1, currentPage, currentPage + 1, '…', totalPages];
 }

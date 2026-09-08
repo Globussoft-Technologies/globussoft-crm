@@ -164,7 +164,10 @@ function QuestionBlock({ question, value, onChange, onToggleMulti, theme, stylin
   return (
     <fieldset style={cardStyle}>
       <legend style={legend(theme, styling)}>
-        <span style={{ display: "block", padding: "0 4px" }}>{q.text}</span>
+        <span style={{ display: "block", padding: "0 4px" }}>
+          {q.text}
+          {q.required && <span aria-hidden="true"> *</span>}
+        </span>
       </legend>
       {q.type === "multi-select" ? (
         <div style={optionsGrid}>
@@ -405,9 +408,10 @@ function questionCard(styling, theme) {
         ? "none"
         : `1px solid ${withOpacity(styling.questionBorderColor || theme.primaryColor || DEFAULT_PRIMARY, borderOpacity)}`,
     borderRadius: styling.questionBorderRadius ?? 12,
-    padding: "22px 18px 20px",
-    margin: "0 0 16px",
-    background: style === "filled" ? withOpacity(fillColor, fillOpacity) : "transparent",
+    padding: "26px 22px 24px",
+    margin: "0 0 20px",
+    background: style === "filled" ? withOpacity(fillColor, fillOpacity) : "#fff",
+    boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
   };
 }
 
@@ -444,7 +448,7 @@ function normalizeImageUrl(value) {
 function legend(theme) {
   return {
     fontWeight: 600,
-    fontSize: 15,
+    fontSize: 16,
     color: theme.textColor || DEFAULT_TEXT,
     padding: "0 8px",
     marginLeft: 4,
@@ -463,12 +467,12 @@ function optionRow(theme, checked) {
   return {
     display: "flex",
     alignItems: "center",
-    padding: "12px 14px",
+    padding: "14px 16px",
     borderRadius: 8,
     border: `1px solid ${checked ? primary : "#dadfe8"}`,
     background: checked ? `${primary}10` : "#fff",
     cursor: "pointer",
-    fontSize: 14,
+    fontSize: 15,
     transition: "border-color 0.15s, background 0.15s",
     color: theme.textColor || DEFAULT_TEXT,
   };

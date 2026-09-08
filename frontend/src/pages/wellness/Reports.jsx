@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart3, TrendingUp, Stethoscope, MapPin, Upload, Loader2 } from 'lucide-react';
+import { BarChart3, TrendingUp, Stethoscope, MapPin, Package, Upload, Loader2, Database, AlertTriangle } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 import { formatPercent } from '../../utils/percent';
 import Avatar from '../../components/Avatar';
 import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
+import ProductSalesImportModal from '../../components/wellness/ProductSalesImportModal';
 
 const TABS = [
   { key: 'pnl', label: 'P&L by Service', icon: BarChart3 },
   { key: 'pro', label: 'Per Professional', icon: Stethoscope },
   { key: 'loc', label: 'Per Location', icon: MapPin },
+  { key: 'prod', label: 'Per Product', icon: Package },
   { key: 'att', label: 'Marketing Attribution', icon: TrendingUp },
 ];
 
@@ -18,6 +20,7 @@ const ENDPOINTS = {
   pnl: '/api/wellness/reports/pnl-by-service',
   pro: '/api/wellness/reports/per-professional',
   loc: '/api/wellness/reports/per-location',
+  prod: '/api/wellness/reports/per-product',
   att: '/api/wellness/reports/attribution',
 };
 
@@ -28,13 +31,28 @@ const EXPORT_BASENAMES = {
   pnl: 'pnl-by-service',
   pro: 'per-professional',
   loc: 'per-location',
+  prod: 'per-product',
   att: 'attribution',
 };
 
 const REPORT_PAGE_SIZE = 10;
 
+// YYYY-MM-DD from an ISO timestamp, for naming an imported snapshot's period.
+const ymdLabel = (value) => {
+  if (!value) return '?';
+  try {
+    return new Date(value).toISOString().slice(0, 10);
+  } catch {
+    return '?';
+  }
+};
+
 function getRowKey(tab, row) {
   if (tab === 'att') return row?.source || JSON.stringify(row);
+  // Per-product rows are keyed on a synthetic `key` ("p:<productId>" or
+  // "n:<name>") because an imported snapshot can name a product the
+  // catalogue has never heard of — there is no id to dedupe on.
+  if (tab === 'prod') return row?.key || row?.name || JSON.stringify(row);
   return row?.id ?? JSON.stringify(row);
 }
 
@@ -98,6 +116,9 @@ export default function Reports() {
   // the prescription-PDF button in PatientDetail.jsx.
   const [exporting, setExporting] = useState(null); // 'csv' | 'xlsx' | 'pdf' | null
   const [exportError, setExportError] = useState(null);
+  // Per Product only — the snapshot importer that backfills product sales
+  // from the clinic's previous system until POS has history of its own.
+  const [importOpen, setImportOpen] = useState(false);
   const scrollContainerRef = useRef(null);
   const sentinelRef = useRef(null);
   const requestSeqRef = useRef(0);
@@ -295,6 +316,16 @@ export default function Reports() {
             {exportError}
           </div>
         )}
+        {tab === 'prod' && (
+          <button
+            type="button"
+            onClick={() => setImportOpen(true)}
+            aria-label="Import product sales from a CSV or Excel file"
+            style={exportBtn(false)}
+          >
+            <Database size={14} /> Import sales data
+          </button>
+        )}
         <button
           type="button"
           onClick={() => downloadExport('csv')}
@@ -362,6 +393,16 @@ export default function Reports() {
           hasMore={hasMore}
         />
       )}
+      {!loading && data && tab === 'prod' && (
+        <ProdTable
+          data={data}
+          onImport={() => setImportOpen(true)}
+          scrollRef={scrollContainerRef}
+          sentinelRef={sentinelRef}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+        />
+      )}
       {!loading && data && tab === 'att' && (
         <AttTable
           data={data}
@@ -372,6 +413,16 @@ export default function Reports() {
         />
       )}
       {!loading && !data && <div className="glass" style={{ padding: '2rem', textAlign: 'center' }}>No data.</div>}
+      {importOpen && (
+        <ProductSalesImportModal
+          defaultFrom={from}
+          defaultTo={to}
+          onClose={() => setImportOpen(false)}
+          // An upload (or delete) changes what the window resolves to, so
+          // re-run the report rather than leaving stale rows on screen.
+          onImported={() => load({ reset: true })}
+        />
+      )}
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
@@ -557,6 +608,133 @@ function LocTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
   );
 }
 
+// Per Product — product sales for the window, from POS or from an imported
+// snapshot. Which one produced these numbers is stated on the page (the
+// `source` badge) rather than left to be inferred: the same tab silently
+// changes source as a clinic onboards, and a figure whose provenance is
+// invisible is a figure nobody trusts.
+function ProdTable({ data, onImport, scrollRef, sentinelRef, loadingMore, hasMore }) {
+  const colWidths = ['26%', '10%', '9%', '13%', '11%', '13%', '9%', '13%'];
+  const headers = ['Product', 'HSN', 'Count', 'Gross sales', 'Discount', 'Net sales', 'Tax', 'Total sales'];
+  const totals = data?.totals || {
+    productCount: 0, grossSales: 0, discount: 0, netSales: 0, tax: 0, totalSales: 0, products: 0,
+  };
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const source = data?.source || 'none';
+  const productsCount = Number.isFinite(data?.pagination?.total)
+    ? data.pagination.total
+    : (totals.products || rows.length);
+  const batches = Array.isArray(data?.importBatches) ? data.importBatches : [];
+  // An imported snapshot is a single pre-aggregated total for its whole
+  // period — it carries no per-day breakdown, so it cannot be sliced to the
+  // selected window and is reported whole whenever the two overlap. When the
+  // snapshot's period reaches outside the window (e.g. an 8-month export
+  // shown under a "Last 30 days" filter) the figures are NOT what the filter
+  // says, so the page states the period the numbers actually cover instead of
+  // leaving the reader to assume the filter applied.
+  const spillsOutsideWindow = batches.some((b) => {
+    const winFrom = data?.window?.from ? new Date(data.window.from).getTime() : null;
+    const winTo = data?.window?.to ? new Date(data.window.to).getTime() : null;
+    if (winFrom === null || winTo === null) return false;
+    return new Date(b.periodStart).getTime() < winFrom || new Date(b.periodEnd).getTime() > winTo;
+  });
+
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+        <span style={sourceBadge(source)}>
+          {source === 'live' && 'Live — POS sales'}
+          {source === 'import' && 'Imported snapshot'}
+          {source === 'mixed' && 'POS + imported snapshot'}
+          {source === 'none' && 'No data for this window'}
+        </span>
+        {(source === 'import' || source === 'mixed') && batches.length > 0 && (
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+            {source === 'mixed' ? 'POS sales, plus ' : 'from '}
+            {batches.map((b) => `${b.fileName || `import #${b.id}`} (${ymdLabel(b.periodStart)} → ${ymdLabel(b.periodEnd)})`).join(', ')}
+          </span>
+        )}
+        {source === 'live' && (
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+            Counted from completed POS sales in this window.
+          </span>
+        )}
+      </div>
+      {(source === 'import' || source === 'mixed') && spillsOutsideWindow && (
+        <div
+          role="note"
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: '0.5rem',
+            border: '1px solid rgba(245,158,11,0.45)', borderRadius: 8,
+            padding: '0.6rem 0.8rem', marginBottom: '0.75rem',
+            fontSize: '0.8rem', color: 'var(--text-secondary)',
+          }}
+        >
+          <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 2, color: 'rgba(245,158,11,1)' }} />
+          <span>
+            The imported part of these totals covers its whole period, not the date range
+            selected above. A snapshot is one pre-aggregated figure per product, so it has
+            no day-level detail to filter by. Sales rung through POS here are filtered by
+            the date range normally.
+          </span>
+        </div>
+      )}
+      <Totals items={[
+        { label: 'Products', value: (productsCount || 0).toLocaleString('en-IN') },
+        { label: 'Units sold', value: (totals.productCount || 0).toLocaleString('en-IN') },
+        { label: 'Gross sales', value: formatMoney(totals.grossSales || 0) },
+        { label: 'Discount', value: formatMoney(totals.discount || 0) },
+        { label: 'Tax', value: formatMoney(totals.tax || 0) },
+        { label: 'Total sales', value: formatMoney(totals.totalSales || 0) },
+      ]} />
+      <ReportTableShell scrollRef={scrollRef} sentinelRef={sentinelRef} loadingMore={loadingMore} hasMore={hasMore}>
+        <table style={tableStyle}>
+          <colgroup>
+            {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
+          </colgroup>
+          <thead>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: i > 1 ? 'right' : 'left' }}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key || r.name}>
+                <td style={{ ...td, width: colWidths[0] }}>{r.name}</td>
+                <td style={{ ...td, width: colWidths[1], color: r.hsnCode ? 'inherit' : 'var(--text-secondary)' }}>{r.hsnCode || '--'}</td>
+                <td style={{ ...tdR, width: colWidths[2] }}>{r.productCount}</td>
+                <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(r.grossSales)}</td>
+                <td style={{ ...tdR, width: colWidths[4], color: r.discount > 0 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>{formatMoney(r.discount)}</td>
+                <td style={{ ...tdR, width: colWidths[5] }}>{formatMoney(r.netSales)}</td>
+                <td style={{ ...tdR, width: colWidths[6] }}>{formatMoney(r.tax)}</td>
+                <td style={{ ...tdR, width: colWidths[7], color: 'var(--success-color)', fontWeight: 600 }}>{formatMoney(r.totalSales)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={8} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 1rem' }}>
+                  No product sales in this window.
+                  {onImport && (
+                    <>
+                      {' '}
+                      <button
+                        type="button"
+                        onClick={onImport}
+                        style={{ background: 'transparent', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', textDecoration: 'underline', padding: 0, font: 'inherit' }}
+                      >
+                        Import sales data
+                      </button>
+                      {' '}from your previous system, or ring product sales through POS.
+                    </>
+                  )}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </ReportTableShell>
+    </>
+  );
+}
+
 function AttTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
   // #156: defensive defaults — if the API ever returns a partial response (e.g.
   // missing totals or rows), render "No data" instead of crashing the whole page
@@ -603,6 +781,23 @@ function AttTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
 }
 
 const tierBg = (t) => ({ high: 'rgba(239,68,68,0.2)', medium: 'rgba(245,158,11,0.2)', low: 'rgba(100,116,139,0.2)' }[t] || 'rgba(100,116,139,0.2)');
+// Per Product source badge — green for live POS, amber for an imported
+// snapshot, blue while the window spans both sides of the POS cutover, grey
+// when neither covers the window.
+const sourceBadge = (source) => ({
+  background: {
+    live: 'rgba(34,197,94,0.18)',
+    import: 'rgba(245,158,11,0.18)',
+    mixed: 'rgba(59,130,246,0.18)',
+  }[source] || 'rgba(100,116,139,0.18)',
+  color: 'var(--text-primary)',
+  padding: '0.2rem 0.6rem',
+  borderRadius: 999,
+  fontSize: '0.7rem',
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+});
 const tableStyle = { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' };
 const th = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', textOverflow: 'ellipsis' };
 const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden', textOverflow: 'ellipsis', wordBreak: 'break-word' };

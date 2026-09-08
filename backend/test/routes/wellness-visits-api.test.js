@@ -74,6 +74,12 @@ prisma.tenant = prisma.tenant || {
 prisma.holiday = { findMany: vi.fn().mockResolvedValue([]) };
 prisma.workingHours = { findMany: vi.fn().mockResolvedValue([]) };
 prisma.visit.findFirst = vi.fn().mockResolvedValue(null);
+// The DOCTOR_DOUBLE_BOOKED class now reads the doctor's surrounding visits as a
+// list and compares real [start, start+duration) intervals, so findMany must
+// answer and `service` must be able to supply the duration.
+prisma.visit.findMany = vi.fn().mockResolvedValue([]);
+prisma.service = prisma.service || {};
+prisma.service.findUnique = vi.fn().mockResolvedValue({ durationMin: 30 });
 // AutomationRule + Webhook are touched by the eventBus emit tail.
 prisma.automationRule = { findMany: vi.fn().mockResolvedValue([]) };
 prisma.webhook = { findMany: vi.fn().mockResolvedValue([]) };

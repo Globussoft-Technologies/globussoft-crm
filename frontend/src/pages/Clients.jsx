@@ -1,37 +1,71 @@
 import { fetchApi } from '../utils/api';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Building2, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatDateMedium as formatDate } from '../utils/date';
 import TopScrollSync from '../components/TopScrollSync';
 
+const SEARCH_DEBOUNCE_MS = 300;
+
 const Clients = () => {
+  // `clients` holds ONLY the current page's rows — paging is server-driven
+  // via ?limit=&offset=, and the header/footer totals come from the
+  // backend ?count=1 (same status filter), not from a full download.
   const [clients, setClients] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedTerm, setDebouncedTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const requestIdRef = useRef(0);
 
-  const fetchClients = () => {
-    setLoading(true);
-    fetchApi('/api/contacts?status=Customer')
-      .then(data => {
-        setClients(data);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  };
+  // Debounce search so typing doesn't fire a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedTerm(searchTerm.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
 
   useEffect(() => {
-    fetchClients();
-  }, []);
+    const myId = ++requestIdRef.current;
+    const isCurrent = () => myId === requestIdRef.current;
+    const term = debouncedTerm.trim();
+    setLoading(true);
+    const load = async () => {
+      try {
+        const offset = (currentPage - 1) * pageSize;
+        const search = term ? `&q=${encodeURIComponent(term)}` : '';
+        const [rows, countRes] = await Promise.all([
+          fetchApi(`/api/contacts?status=Customer&limit=${pageSize}&offset=${offset}${search}`),
+          fetchApi(`/api/contacts?status=Customer&count=1${search}`),
+        ]);
+        if (!isCurrent()) return;
+        const list = Array.isArray(rows) ? rows : [];
+        setClients(list);
+        const serverTotal = countRes && typeof countRes.total === 'number' ? countRes.total : null;
+        setTotal(serverTotal != null ? serverTotal : offset + list.length);
+      } catch {
+        if (!isCurrent()) return;
+        setClients([]);
+        setTotal(0);
+      } finally {
+        if (isCurrent()) setLoading(false);
+      }
+    };
+    load();
+  }, [currentPage, pageSize, debouncedTerm]);
 
-  const filteredClients = clients.filter(client => {
-    const term = searchTerm.toLowerCase();
-    return (
-      client.name.toLowerCase().includes(term) ||
-      (client.email && client.email.toLowerCase().includes(term)) ||
-      (client.company && client.company.toLowerCase().includes(term))
-    );
-  });
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const startItem = total === 0 ? 0 : startIndex + 1;
+  const endItem = Math.min(startIndex + pageSize, total);
+
+  // If the total shrinks under the current page (records deleted elsewhere),
+  // step back to the last valid page (refetch converges: totalPages >= 1).
+  useEffect(() => {
+    if (!loading && currentPage > totalPages) setCurrentPage(totalPages);
+  }, [loading, currentPage, totalPages]);
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
@@ -41,7 +75,7 @@ const Clients = () => {
           <div>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Clients</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-              {clients.length} active client{clients.length !== 1 ? 's' : ''}
+              {total} active client{total !== 1 ? 's' : ''}
             </p>
           </div>
         </div>
@@ -56,7 +90,7 @@ const Clients = () => {
               className="input-field"
               placeholder="Search clients..."
               value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
+              onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }}
               style={{ paddingLeft: '2.5rem', backgroundColor: 'var(--surface-hover)' }}
             />
           </div>
@@ -76,11 +110,11 @@ const Clients = () => {
             </tr>
           </thead>
           <tbody>
-            {loading ? (
+            {loading && clients.length === 0 ? (
               <tr><td colSpan="6" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading clients...</td></tr>
-            ) : filteredClients.length === 0 ? (
+            ) : clients.length === 0 ? (
               <tr><td colSpan="6" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No clients found</td></tr>
-            ) : filteredClients.map(client => (
+            ) : clients.map(client => (
               <tr key={client.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                 <td style={{ padding: '1rem' }}>
                   <div style={{ fontWeight: '500' }}>
@@ -123,6 +157,52 @@ const Clients = () => {
           </tbody>
         </table>
         </TopScrollSync>
+
+        {!loading && total > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', padding: '1rem', borderTop: '1px solid var(--border-color)' }}>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
+              Showing {startItem}-{endItem} of {total} client{total !== 1 ? 's' : ''}
+            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                <span>Rows per page</span>
+                <select
+                  aria-label="Rows per page"
+                  value={String(pageSize)}
+                  onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                  style={{ padding: '0.5rem 0.6rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--input-bg, var(--surface-hover))', color: 'var(--text-primary)' }}
+                >
+                  {[10, 15, 25, 50].map(size => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCurrentPage(prev => Math.max(1, Math.min(prev, totalPages) - 1))}
+                disabled={safePage <= 1}
+                aria-label="Previous page"
+                style={{ padding: '0.6rem 1rem', opacity: safePage <= 1 ? 0.6 : 1, cursor: safePage <= 1 ? 'not-allowed' : 'pointer' }}
+              >
+                Previous
+              </button>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                Page {safePage} of {totalPages}
+              </span>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCurrentPage(prev => Math.min(totalPages, Math.min(prev, totalPages) + 1))}
+                disabled={safePage >= totalPages}
+                aria-label="Next page"
+                style={{ padding: '0.6rem 1rem', opacity: safePage >= totalPages ? 0.6 : 1, cursor: safePage >= totalPages ? 'not-allowed' : 'pointer' }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

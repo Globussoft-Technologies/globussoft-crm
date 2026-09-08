@@ -32,7 +32,7 @@ const notifyObj = {
   error: vi.fn(),
   info: vi.fn(),
   success: vi.fn(),
-  confirm: () => Promise.resolve(true),
+  confirm: vi.fn(() => Promise.resolve(true)),
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -118,8 +118,12 @@ const ADMIN_ROLE = {
   ],
 };
 
-function renderPage(roles = [ADMIN_ROLE]) {
+function renderPage(roles = [ADMIN_ROLE], extraResponses = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
+    if (Object.prototype.hasOwnProperty.call(extraResponses, url)) {
+      const value = extraResponses[url];
+      return Promise.resolve(typeof value === 'function' ? value(opts) : value);
+    }
     if (url === '/api/roles' && (!opts || !opts.method || opts.method === 'GET')) {
       return Promise.resolve({ roles, tenantId: 11 });
     }
@@ -148,6 +152,8 @@ beforeEach(() => {
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
   notifyObj.info.mockReset();
+  notifyObj.confirm.mockReset();
+  notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
 });
 
 // ─────────── Phase 3 — Critical permission warning ───────────
@@ -245,6 +251,46 @@ describe('Phase 3 — critical permission removal warning', () => {
 });
 
 // ─────────── Scenario 1 — lockout error banner ───────────
+
+describe('Member delete — destructive removal from the role modal', () => {
+  it('opens the delete confirmation and DELETEs the member account endpoint', async () => {
+    renderPage([ADMIN_ROLE], {
+      [`/api/roles/${ADMIN_ROLE.id}/users`]: {
+        users: [
+          {
+            id: 7,
+            name: 'Demo User',
+            email: 'user@acme.test',
+            userType: 'STAFF',
+          },
+        ],
+      },
+    });
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: /View 1 users in Administrator/i }),
+    );
+
+    const modal = await screen.findByRole('dialog', { name: /Members of Administrator/i });
+    fireEvent.click(within(modal).getByRole('button', { name: /^Delete$/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Delete user account',
+          message: expect.stringContaining('permanently deletes the user account'),
+          confirmText: 'Delete',
+          destructive: true,
+        }),
+      );
+      const delCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === `/api/roles/${ADMIN_ROLE.id}/members/7` && opts?.method === 'DELETE',
+      );
+      expect(delCall).toBeTruthy();
+      expect(notifyObj.success).toHaveBeenCalledWith('User deleted');
+    });
+  });
+});
 
 describe('Scenario 1 — 409 LOCKOUT_PREVENTED surfaces the error banner with recovery link', () => {
   it('renders the lockout banner when PUT returns 409 with the spec body', async () => {

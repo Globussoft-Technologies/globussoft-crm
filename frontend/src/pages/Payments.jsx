@@ -129,6 +129,15 @@ function GatewayBadge({ gateway }) {
   );
 }
 
+function paymentSubjectLabel(payment) {
+  if (!payment) return null;
+  if (payment.description) return payment.description;
+  if (payment.service?.name) return payment.service.name;
+  if (payment.product?.name) return payment.product.name;
+  if (payment.invoiceId) return `Invoice #${payment.invoiceId}`;
+  return payment.travelInvoiceNum || null;
+}
+
 // Always render in the tenant's default currency (INR for wellness tenants).
 // Per-row currency stamps were previously honored, which surfaced "$" rows on
 // INR tenants when historical payments were captured in USD — now display is
@@ -786,11 +795,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                     }}
                   >
                     {(() => {
-                      const label = p.description
-                        ? p.description
-                        : p.invoiceId
-                          ? `Invoice #${p.invoiceId}`
-                          : p.travelInvoiceNum || null;
+                      const label = paymentSubjectLabel(p);
                       if (!label)
                         return (
                           <span style={{ color: "var(--text-secondary)" }}>
@@ -1475,7 +1480,7 @@ function DetailModal({ payment, onClose }) {
           </div>
         )}
 
-        {payment.description && (
+        {paymentSubjectLabel(payment) && (
           <div
             style={{
               marginTop: "0.75rem",
@@ -1496,7 +1501,7 @@ function DetailModal({ payment, onClose }) {
             >
               Payment for
             </div>
-            <div style={{ fontWeight: 500 }}>{payment.description}</div>
+            <div style={{ fontWeight: 500 }}>{paymentSubjectLabel(payment)}</div>
           </div>
         )}
 

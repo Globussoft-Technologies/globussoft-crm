@@ -275,9 +275,14 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
       try {
         const name = String(getSpreadsheetValue(row, ["name", "Name"])).trim();
         const email = String(getSpreadsheetValue(row, ["email", "Email"])).trim();
-        const rawStatus = getSpreadsheetValue(row, ["status", "Status"]);
-        const status = String(rawStatus || "Lead").trim();
+        const rawStatus = String(
+          getSpreadsheetValue(row, ["status", "Status"]) || "Lead",
+        ).trim();
 
+        const status = [...ALLOWED_CONTACT_STATUSES].find(
+          (allowedStatus) =>
+            allowedStatus.toLowerCase() === rawStatus.toLowerCase(),
+        );
         if (!email) {
           errors.push({ rowNumber, reason: "missing email" });
           skipped++;
@@ -288,8 +293,8 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           skipped++;
           continue;
         }
-        if (!ALLOWED_CONTACT_STATUSES.has(status)) {
-          errors.push({ rowNumber, reason: `invalid status "${status}"` });
+        if (!status) {
+          errors.push({ rowNumber, reason: `invalid status "${rawStatus}"` });
           skipped++;
           continue;
         }

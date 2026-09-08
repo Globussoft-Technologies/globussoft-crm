@@ -164,7 +164,7 @@ export function useNotify() {
 
 const TOAST_COLORS = {
   success: { bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.4)', text: '#10b981', icon: '✓' },
-  error: { bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.4)', text: '#ef4444', icon: '✕' },
+  error: { bg: 'var(--toast-error-bg, #451a1d)', border: 'var(--toast-error-border, #fb7185)', text: 'var(--toast-error-text, #ffe4e6)', iconColor: 'var(--toast-error-border, #fb7185)', icon: '✕' },
   info: { bg: 'rgba(59,130,246,0.12)', border: 'rgba(59,130,246,0.4)', text: '#3b82f6', icon: 'i' },
 };
 
@@ -179,7 +179,7 @@ function ToastStack({ toasts, onDismiss }) {
       role="region"
       aria-label="Notifications"
       style={{
-        position: 'fixed', top: 80, right: 24, zIndex: 10000,
+        position: 'fixed', top: 80, right: 24, zIndex: 20000,
         display: 'flex', flexDirection: 'column', gap: 10,
         maxWidth: 420, pointerEvents: 'none',
       }}
@@ -195,7 +195,7 @@ function ToastStack({ toasts, onDismiss }) {
               pointerEvents: 'auto',
               background: c.bg,
               border: `1px solid ${c.border}`,
-              color: 'var(--text-primary, #1f2937)',
+              color: t.kind === 'error' ? c.text : 'var(--text-primary, #1f2937)',
               padding: '0.75rem 1rem',
               borderRadius: 10,
               boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
@@ -208,7 +208,7 @@ function ToastStack({ toasts, onDismiss }) {
               aria-hidden="true"
               style={{
                 width: 22, height: 22, borderRadius: '50%',
-                background: c.text, color: '#fff', fontSize: '0.75rem', fontWeight: 700,
+                background: c.iconColor || c.text, color: '#fff', fontSize: '0.75rem', fontWeight: 700,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 flexShrink: 0, marginTop: 1,
               }}
@@ -284,20 +284,27 @@ function ModalSlot({ modal, close }) {
           borderRadius: 12,
           minWidth: 360,
           maxWidth: 480,
+          maxHeight: '85vh',
           width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
           boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
           border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
         }}
       >
         <h3
           id="notify-modal-title"
-          style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, marginBottom: '0.5rem' }}
+          style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, marginBottom: '0.5rem', flexShrink: 0 }}
         >{modal.title}</h3>
         {modal.message && (
+          // maxHeight + scroll — an unbounded message (e.g. a long list built
+          // by a caller) must never push the confirm/cancel buttons below the
+          // fold; this box has no outer scroll of its own to fall back on.
           <p style={{
             margin: 0, marginBottom: '1rem',
             color: 'var(--text-secondary, #6b7280)',
             fontSize: '0.9rem', lineHeight: 1.45, whiteSpace: 'pre-wrap',
+            maxHeight: '50vh', overflowY: 'auto',
           }}>{modal.message}</p>
         )}
 
@@ -322,7 +329,7 @@ function ModalSlot({ modal, close }) {
           />
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexShrink: 0 }}>
           <button
             type="button"
             onClick={() => close(cancelValue)}

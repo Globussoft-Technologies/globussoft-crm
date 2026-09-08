@@ -75,6 +75,18 @@ prisma.tenant = {
   findMany: vi.fn().mockResolvedValue([]),
   create: vi.fn(),
 };
+prisma.contact = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  findUnique: vi.fn().mockResolvedValue(null),
+  create: vi.fn(),
+  update: vi.fn(),
+  upsert: vi.fn(),
+};
+prisma.patient = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  create: vi.fn(),
+  update: vi.fn(),
+};
 prisma.auditLog = {
   findFirst: vi.fn().mockResolvedValue(null),
   create: vi.fn().mockResolvedValue({}),
@@ -167,11 +179,20 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset().mockResolvedValue(null);
   prisma.tenant.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.create.mockReset();
+  prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findUnique.mockReset().mockResolvedValue(null);
+  prisma.contact.create.mockReset();
+  prisma.contact.update.mockReset();
+  prisma.contact.upsert.mockReset();
+  prisma.patient.findFirst.mockReset().mockResolvedValue(null);
+  prisma.patient.create.mockReset();
+  prisma.patient.update.mockReset();
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({});
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.revokedToken.upsert.mockReset().mockResolvedValue({});
   prisma.smsConfig.findFirst.mockReset().mockResolvedValue(null);
+  emailOtp.enforceRegistrationOtp.mockReset().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
   // T37 / Class B6 — keep self-heal seam permissive across tests.
   prisma.userRole.count.mockReset().mockResolvedValue(1);
   prisma.userRole.findUnique.mockReset().mockResolvedValue(null);
@@ -206,6 +227,7 @@ describe('POST /api/auth/login', () => {
       password: hashed,
       role: 'ADMIN',
       wellnessRole: null,
+      themePreference: 'dark',
       twoFactorEnabled: false,
       tenantId: 1,
       tenant: { id: 1, name: 'Globussoft', slug: 'globussoft', plan: 'PRO', vertical: 'generic', country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null, themeColor: '#C9A063' },
@@ -218,6 +240,7 @@ describe('POST /api/auth/login', () => {
     expect(res.status).toBe(200);
     expect(res.body.token).toMatch(/^eyJ/);
     expect(res.body.user).toMatchObject({ id: 7, email: 'admin@globussoft.com', role: 'ADMIN' });
+    expect(res.body.user.themePreference).toBe('dark');
     expect(res.body.tenant).toMatchObject({ id: 1, slug: 'globussoft', plan: 'PRO' });
     expect(res.body.tenant.themeColor).toBe('#C9A063');
 
@@ -425,6 +448,80 @@ describe('POST /api/auth/register', () => {
   });
 });
 
+// ── POST /api/auth/customer/register ─────────────────────────────────
+
+describe('POST /api/auth/customer/register', () => {
+  test('existing non-lead contact email in the selected tenant → 409 before OTP or create', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'wellness' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue({ id: 77, status: 'Customer', portalPasswordHash: null });
+    prisma.patient.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/auth/customer/register')
+      .send({
+        email: 'dupe@example.com',
+        password: 'Secret123',
+        name: 'Dupe Person',
+        registrationTenantId: 45,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error: 'This email already exists. Sign in to your account.',
+      code: 'EMAIL_ALREADY_EXISTS',
+    });
+    expect(emailOtp.enforceRegistrationOtp).not.toHaveBeenCalled();
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.user.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'dupe@example.com',
+          tenantId: 45,
+          deactivatedAt: null,
+        }),
+      }),
+    );
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'dupe@example.com',
+          tenantId: 45,
+          deletedAt: null,
+        }),
+      }),
+    );
+  });
+
+  test('lead contact without portal credentials → creates customer profile and preserves the lead', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 45, vertical: 'wellness', name: 'Wellness', slug: 'wellness' });
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue({ id: 77, status: 'Lead', portalPasswordHash: null });
+    prisma.patient.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({
+      id: 101,
+      email: 'lead@example.com',
+      name: 'Lead Person',
+      tenantId: 45,
+      userType: 'CUSTOMER',
+      role: 'CUSTOMER',
+      sessionVersion: 0,
+      tenant: { id: 45, name: 'Wellness', slug: 'wellness', vertical: 'wellness' },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/customer/register')
+      .send({ email: 'lead@example.com', password: 'Secret123', name: 'Lead Person', registrationTenantId: 45 });
+
+    expect(res.status).toBe(201);
+    expect(prisma.user.create).toHaveBeenCalled();
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ email: 'lead@example.com', tenantId: 45 }),
+    }));
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+});
+
 // ── POST /api/auth/check-email ───────────────────────────────────────
 
 describe('POST /api/auth/check-email', () => {
@@ -439,6 +536,66 @@ describe('POST /api/auth/check-email', () => {
     expect(res.body).toEqual({ exists: true });
     expect(prisma.user.count).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ email: 'known@example.com', deactivatedAt: null }) })
+    );
+  });
+
+  test('known active email within a tenant → 200 { exists: true } scoped by registrationTenantId', async () => {
+    prisma.user.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'known@example.com', registrationTenantId: 42 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+    expect(prisma.user.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'known@example.com',
+          tenantId: 42,
+          deactivatedAt: null,
+        })
+      })
+    );
+  });
+
+  test('known patient email within a tenant → 200 { exists: true } scoped by registrationTenantId', async () => {
+    prisma.user.count.mockResolvedValue(0);
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.patient.findFirst.mockResolvedValue({ id: 501 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'duke@tafmail.com', registrationTenantId: 42 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+    expect(prisma.user.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'duke@tafmail.com',
+          tenantId: 42,
+          deactivatedAt: null,
+        })
+      })
+    );
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'duke@tafmail.com',
+          tenantId: 42,
+          deletedAt: null,
+        })
+      })
+    );
+    expect(prisma.patient.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: 'duke@tafmail.com',
+          tenantId: 42,
+          deletedAt: null,
+        })
+      })
     );
   });
 
@@ -478,6 +635,7 @@ describe('GET /api/auth/me', () => {
     prisma.user.findUnique.mockResolvedValue({
       id: 7, name: 'Admin', email: 'admin@globussoft.com', role: 'ADMIN',
       wellnessRole: null, createdAt: new Date('2026-01-01T00:00:00Z'),
+      themePreference: 'dark',
       tenant: { id: 1, name: 'Globussoft', slug: 'globussoft', plan: 'PRO', vertical: 'generic', country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null },
     });
     prisma.tenant.findUnique.mockResolvedValue({ themeColor: '#C9A063' });
@@ -489,6 +647,7 @@ describe('GET /api/auth/me', () => {
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(7);
     expect(res.body.email).toBe('admin@globussoft.com');
+    expect(res.body.themePreference).toBe('dark');
     expect(res.body.tenant.slug).toBe('globussoft');
     expect(res.body.tenant.themeColor).toBe('#C9A063');
     // T1.2 feature flag — features.smsConfigured surfaced for the FE to gate

@@ -14,7 +14,7 @@
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 
 vi.mock("../utils/lazyWithRetry", () => ({
   lazyWithRetry: () => () => <div data-testid="lazy-route">route loaded</div>,
@@ -23,23 +23,31 @@ vi.mock("../utils/lazyWithRetry", () => ({
 import App from "../App";
 
 function setupFetch(mockImpl) {
-  const fetchMock = vi.fn((url) => {
-    if (typeof mockImpl === "function") return mockImpl(url);
+  const fetchMock = vi.fn((url, options) => {
+    if (typeof mockImpl === "function") return mockImpl(url, options || {});
     return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
+function createMatchMedia(matches) {
+  return function matchMedia() {
+    return {
+      matches,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    };
+  };
+}
+
 beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
   // jsdom does not implement matchMedia; App uses it for theme detection.
-  window.matchMedia =
-    window.matchMedia ||
-    function () {
-      return { matches: false, addEventListener: () => {}, removeEventListener: () => {} };
-    };
+  window.matchMedia = createMatchMedia(false);
 });
 
 afterEach(() => {
@@ -55,6 +63,147 @@ describe("<App /> — auth-sync on mount", () => {
     render(<App />);
     await waitFor(() =>
       expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument(),
+    );
+  });
+
+  it("defaults the login page to light mode when no theme is stored even if the OS prefers dark", async () => {
+    setupFetch();
+    window.matchMedia = createMatchMedia(true);
+    window.history.pushState({}, "login", "/login");
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument(),
+    );
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(localStorage.getItem("theme")).toBe("light");
+    expect(sessionStorage.getItem("theme")).toBe("light");
+  });
+
+  it("restores the saved theme from sessionStorage when localStorage was cleared", async () => {
+    setupFetch();
+    localStorage.removeItem("theme");
+    sessionStorage.setItem("theme", "light");
+    window.history.pushState({}, "login", "/login");
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(document.documentElement.getAttribute("data-theme")).toBe("light"),
+    );
+    expect(sessionStorage.getItem("theme")).toBe("light");
+    expect(localStorage.getItem("theme")).toBe("light");
+  });
+
+  it("hydrates the theme from the authenticated profile when browser storage is empty", async () => {
+    const token = "travel-token";
+    sessionStorage.setItem("token", token);
+    window.matchMedia = createMatchMedia(true);
+    window.history.pushState({}, "travel", "/travel");
+
+    setupFetch((url) => {
+      if (url === "/api/auth/me") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              id: 30,
+              name: "Yasin (Owner)",
+              email: "yasin@travelstall.in",
+              role: "ADMIN",
+              themePreference: "light",
+              tenant: {
+                id: 3,
+                name: "Travel Stall",
+                slug: "travel-stall",
+                vertical: "travel",
+              },
+            }),
+        });
+      }
+      if (url === "/api/subscriptions/status") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ daysRemaining: 30, status: "active" }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+    });
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(document.documentElement.getAttribute("data-theme")).toBe("light"),
+    );
+    expect(localStorage.getItem("theme")).toBe("light");
+    expect(sessionStorage.getItem("theme")).toBe("light");
+  });
+
+  it("keeps a locally saved light theme when the server still says system", async () => {
+    const token = "travel-token";
+    sessionStorage.setItem("token", token);
+    localStorage.setItem("theme", "light");
+    sessionStorage.setItem("theme", "light");
+    window.matchMedia = createMatchMedia(true);
+    window.history.pushState({}, "travel", "/travel");
+    const fetchMock = setupFetch((url) => {
+      if (url === "/api/auth/me") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              id: 30,
+              name: "Yasin (Owner)",
+              email: "yasin@travelstall.in",
+              role: "ADMIN",
+              themePreference: "system",
+              tenant: {
+                id: 3,
+                name: "Travel Stall",
+                slug: "travel-stall",
+                vertical: "travel",
+              },
+            }),
+        });
+      }
+      if (url === "/api/user/theme") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ theme: "light" }),
+        });
+      }
+      if (url === "/api/subscriptions/status") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ daysRemaining: 30, status: "active" }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+    });
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(document.documentElement.getAttribute("data-theme")).toBe("light"),
+    );
+    expect(localStorage.getItem("theme")).toBe("light");
+    expect(sessionStorage.getItem("theme")).toBe("light");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/user/theme",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ theme: "light" }),
+      }),
     );
   });
 
@@ -228,6 +377,72 @@ describe("<App /> — auth-sync on mount", () => {
     render(<App />);
     // The app should redirect to /travel, which renders our lazy marker.
     await waitFor(() => expect(screen.getByTestId("lazy-route")).toBeInTheDocument());
+  });
+
+  it("persists a theme toggle back into both storages", async () => {
+    const token = "travel-token";
+    sessionStorage.setItem("token", token);
+    localStorage.setItem("theme", "light");
+    sessionStorage.setItem("theme", "light");
+    window.history.pushState({}, "dashboard", "/dashboard");
+    const fetchMock = setupFetch((url, options) => {
+      if (url === "/api/auth/me") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              id: 30,
+              name: "Yasin (Owner)",
+              email: "yasin@travelstall.in",
+              role: "ADMIN",
+              tenant: {
+                id: 3,
+                name: "Travel Stall",
+                slug: "travel-stall",
+                vertical: "travel",
+              },
+            }),
+        });
+      }
+      if (url === "/api/user/theme") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ theme: "dark" }),
+        });
+      }
+      if (url === "/api/subscriptions/status") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ daysRemaining: 30, status: "active" }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("lazy-route")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText(/Switch theme \(currently light\)/i));
+
+    await waitFor(() => {
+      expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    });
+    expect(localStorage.getItem("theme")).toBe("dark");
+    expect(sessionStorage.getItem("theme")).toBe("dark");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/user/theme",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        }),
+        body: JSON.stringify({ theme: "dark" }),
+      }),
+    );
   });
 
   it("clears session and returns to login when the token is rejected", async () => {

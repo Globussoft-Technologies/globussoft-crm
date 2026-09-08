@@ -327,7 +327,9 @@ async function runWebCheckinAutomationTick(now = new Date(), deps = {}) {
 
   for (const row of rows) {
     const itin = itinById[row.itineraryId];
-    if (!itin || !PAID_STATUSES.includes(itin.status) || itin.subBrand === "visasure") {
+    // TMC does not use Web Check-in; keep existing automation code intact
+    // while commenting out processing and notifications for TMC rows.
+    if (!itin || !PAID_STATUSES.includes(itin.status) || itin.subBrand === "visasure" || itin.subBrand === "tmc") {
       summary.skipped += 1;
       continue;
     }

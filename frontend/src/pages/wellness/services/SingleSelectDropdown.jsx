@@ -1,23 +1,27 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
+import { anchorDropdown, estimateDropdownHeight, DROPDOWN_MAX_HEIGHT } from './shared';
 
 // Single-select variant of MultiSelectDropdown — same portal anchoring + theme
 // vars so light/dark and wellness/generic all render consistently. Replaces the
 // native <select> which leaks browser-default chrome on the ticket-tier field.
 export default function SingleSelectDropdown({ value, onChange, options }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [menuRect, setMenuRect] = useState({ top: 0, left: 0, width: 0 });
+  const [menuRect, setMenuRect] = useState({ openUp: false, top: 0, bottom: 0, left: 0, width: 0, maxHeight: DROPDOWN_MAX_HEIGHT });
   const buttonRef = useRef(null);
 
   const selected = options.find((o) => o.value === value);
   const selectedLabel = selected ? selected.label : '';
 
-  const updateRect = () => {
+  const updateRect = useCallback(() => {
     if (!buttonRef.current) return;
-    const r = buttonRef.current.getBoundingClientRect();
-    setMenuRect({ top: r.bottom + 8, left: r.left, width: r.width });
-  };
+    // Pass the menu's own appetite so a short list is not treated as if it
+    // needed the full 340px and flipped over the trigger for no reason.
+    setMenuRect(anchorDropdown(buttonRef.current, {
+      desiredHeight: estimateDropdownHeight(options.length),
+    }));
+  }, [options.length]);
 
   const handleOpen = () => {
     updateRect();
@@ -33,7 +37,7 @@ export default function SingleSelectDropdown({ value, onChange, options }) {
       window.removeEventListener('scroll', updateRect, true);
       window.removeEventListener('resize', updateRect);
     };
-  }, [isOpen]);
+  }, [isOpen, updateRect]);
 
   useEffect(() => {
     const handleEscape = (e) => {
@@ -84,10 +88,12 @@ export default function SingleSelectDropdown({ value, onChange, options }) {
             role="listbox"
             style={{
               position: 'fixed',
-              top: menuRect.top,
+              // Upward menus are pinned by their bottom edge so they hug the
+              // trigger whatever their rendered height turns out to be.
+              ...(menuRect.openUp ? { bottom: menuRect.bottom } : { top: menuRect.top }),
               left: menuRect.left,
               width: menuRect.width,
-              maxHeight: '340px',
+              maxHeight: menuRect.maxHeight,
               background: 'var(--bg-color)',
               border: '1px solid var(--border-color)',
               borderRadius: '8px',

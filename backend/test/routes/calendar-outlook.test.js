@@ -620,10 +620,19 @@ describe('POST /api/calendar/outlook/events', () => {
   });
 
   test('409 when conflicting event exists in the same window', async () => {
-    prisma.calendarEvent.findFirst.mockResolvedValueOnce({
-      id: 42,
-      title: 'Pre-existing',
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
     });
+    prisma.calendarEvent.findMany.mockResolvedValueOnce([
+      {
+        id: 42,
+        title: 'Pre-existing',
+        description: 'Busy',
+      },
+    ]);
     const app = makeApp();
     const res = await request(app)
       .post('/api/calendar/outlook/events')

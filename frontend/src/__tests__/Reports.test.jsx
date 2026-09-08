@@ -101,7 +101,16 @@ beforeEach(() => {
   }
 });
 
-import Reports from '../pages/Reports';
+import { MemoryRouter } from 'react-router-dom';
+import ReportsPage from '../pages/Reports';
+
+// Reports renders <Link> (clickable navigation); give every render(<Reports />)
+// call site a Router context without touching the 20+ call sites.
+const Reports = (props) => (
+  <MemoryRouter>
+    <ReportsPage {...props} />
+  </MemoryRouter>
+);
 
 const sampleData = [
   { name: 'Lead', value: 35000 },

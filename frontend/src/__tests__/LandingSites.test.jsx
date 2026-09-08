@@ -226,6 +226,35 @@ describe('<LandingSites /> wellness generate modal', () => {
     expect(notifyError).toHaveBeenCalledWith('Gemini limit has been exhausted. Please try again later.');
   });
 
+  it('AI_NOT_CONFIGURED failure keeps the modal open with a proper message', async () => {
+    const blockedErr = new Error('Your organization has not configured an AI provider yet.');
+    blockedErr.status = 503;
+    blockedErr.code = 'AI_NOT_CONFIGURED';
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-sites/generate' && method === 'POST') {
+        return Promise.reject(blockedErr);
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    const user = userEvent.setup();
+    renderPage('wellness');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate Landing Site/i })).toBeInTheDocument());
+    await user.click(screen.getAllByRole('button', { name: /Generate Landing Site/i })[0]);
+    await user.type(screen.getByLabelText(/Campaign name/i), 'Rooted Wellness Camp');
+    await user.type(screen.getByLabelText(/Campaign goal/i), 'collect registrations');
+    await user.type(screen.getByLabelText(/Audience/i), 'members');
+    await user.click(screen.getByRole('button', { name: /^Generate$/i }));
+
+    // Proper in-modal message — not a toast, not a silent stub draft.
+    await waitFor(() => expect(screen.getByText(/AI is not configured for this workspace/i)).toBeInTheDocument());
+    expect(navigateMock).not.toHaveBeenCalled();
+    // Modal stays open: the Generate button is still rendered.
+    expect(screen.getByRole('button', { name: /^Generate$/i })).toBeInTheDocument();
+  });
+
   it('still shows the dropdown for non-wellness tenants', async () => {
     const user = userEvent.setup();
     renderPage('generic');

@@ -142,16 +142,40 @@ export class OpenAICompatibleProvider implements LLMProvider {
       // didn't recognise) rejects `max_tokens` (wants `max_completion_tokens`) or a
       // non-default `temperature`. Swap/strip the offending param and retry once.
       const b = (body && typeof body === 'object' ? (body as Record<string, unknown>) : {}) as Record<string, unknown>;
-      const maxTokReject = res.status === 400 && 'max_tokens' in b && /max_tokens|max_completion_tokens/i.test(text);
+      // Token-CAP self-heal (distinct from the param-NAME swap below): the caller
+      // asked for more completion tokens than this model allows, e.g. the brochure
+      // design step's 24000 against gpt-4o-mini's 16384 ceiling →
+      // "max_tokens is too large: 24000. This model supports at most 16384…".
+      // Renaming the parameter (the old behaviour) kept the oversized VALUE, so the
+      // retry failed identically and the second pass — with max_tokens now deleted —
+      // no longer matched, turning a trivially recoverable 400 into a hard throw.
+      // For the brochure that meant every AI art-direction attempt died before
+      // reaching the model and every run silently shipped the fallback template.
+      const tokenKey = 'max_tokens' in b ? 'max_tokens' : 'max_completion_tokens' in b ? 'max_completion_tokens' : '';
+      const tokenCapReject =
+        res.status === 400 &&
+        !!tokenKey &&
+        /max_tokens|max_completion_tokens/i.test(text) &&
+        /too large|at most|maximum|less than or equal|exceed/i.test(text);
+      const maxTokReject =
+        res.status === 400 && !tokenCapReject && 'max_tokens' in b && /max_tokens|max_completion_tokens/i.test(text);
       const tempReject =
         res.status === 400 &&
         'temperature' in b &&
         /temperature.*(unsupported|not\s*support|does not support|only.*default)|unsupported.*temperature/i.test(text);
-      const paramFix = maxTokReject || tempReject;
+      const paramFix = maxTokReject || tempReject || tokenCapReject;
       const retryable = res.status === 429 || res.status >= 500 || toolGlitch || schemaReject || paramFix;
       if (!retryable || attempt === maxAttempts - 1) break;
 
       if (paramFix) {
+        if (tokenCapReject && tokenKey) {
+          // Prefer the ceiling the provider named; otherwise back off geometrically
+          // so this converges on any provider whose wording we don't recognise.
+          const current = Number(b[tokenKey]) || 4096;
+          const stated = text.match(/(?:at most|maximum(?:\s+value)?(?:\s+is)?|less than or equal to|supports?)\D{0,24}?(\d{3,7})/i);
+          const allowed = stated?.[1] ? parseInt(stated[1], 10) : 0;
+          b[tokenKey] = allowed > 0 && allowed < current ? allowed : Math.max(1024, Math.floor(current / 2));
+        }
         if (maxTokReject) {
           b.max_completion_tokens = b.max_tokens;
           delete b.max_tokens;

@@ -209,11 +209,9 @@ router.delete("/file/:fileKey", verifyToken, async (req, res) => {
     // If fileKey is URL-encoded, decode it
     fileKey = decodeURIComponent(fileKey);
 
-    // If full S3 URL provided, extract the key
-    if (fileKey.includes("s3")) {
-      const extracted = extractKeyFromUrl(fileKey);
-      if (extracted) fileKey = extracted;
-    }
+    // Accept a full URL from either the active OCS backend or a legacy S3 row.
+    const extracted = extractKeyFromUrl(fileKey);
+    if (extracted) fileKey = extracted;
 
     await deleteFile(fileKey);
 

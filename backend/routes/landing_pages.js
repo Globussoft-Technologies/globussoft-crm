@@ -11,6 +11,13 @@ const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
 
 const { renderPage } = require("../services/landingPageRenderer");
+const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE } = require("../lib/tenantPaymentGateway");
+const {
+  applyLandingPagePaymentToTrip,
+  getLandingPagePaymentConfig,
+  resolveLandingPagePaymentSelection,
+} = require("../lib/landingPagePayments");
+const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
 function publicFeaturedVerticalWhere(vertical) {
   const key = String(vertical || "").trim().toLowerCase();
   if (key !== "travel") return {};
@@ -31,12 +38,22 @@ const { snapshotSafe, VERSION_SOURCES } = require("../lib/landingPageVersions");
 const { isValidPhoneOrEmpty } = require("../lib/validators");
 
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+const visaDocStore = require("../lib/visaDocStore");
 
 
 
 const router = express.Router();
 
 const publicRouter = express.Router();
+
+const landingRegistrationDocUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/^(image\/(png|jpe?g)|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document)$/i.test(file.mimetype || "")) return cb(null, true);
+    return cb(new Error("Only JPEG, PNG, PDF, DOC or DOCX files are allowed"));
+  },
+});
 
 const prisma = require("../lib/prisma");
 
@@ -494,7 +511,7 @@ router.get("/", verifyToken, async (req, res) => {
 
       ? { id: true, title: true, slug: true, status: true }
 
-      : { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, createdAt: true, updatedAt: true, destination: true, subBrand: true, generatedByAi: true, generatedAt: true, isFeatured: true, featuredAt: true };
+      : { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, content: true, tripId: true, createdAt: true, updatedAt: true, destination: true, subBrand: true, generatedByAi: true, generatedAt: true, isFeatured: true, featuredAt: true };
 
 
 
@@ -1309,6 +1326,7 @@ function decoratePublishedPublicPayload(page, parsedContent) {
 
   const publicUrl = `/p/${encodeURIComponent(page.slug)}`;
   const submitUrl = `${publicUrl}/submit`;
+  const paymentOrderUrl = `${publicUrl}/payment-order`;
 
   let decoratedContent = parsedContent;
 
@@ -1317,10 +1335,16 @@ function decoratePublishedPublicPayload(page, parsedContent) {
 
     if (decoratedContent.register && typeof decoratedContent.register === "object") {
       decoratedContent.register.endpoint = submitUrl;
+      decoratedContent.register.paymentOrderEndpoint = paymentOrderUrl;
     }
 
     if (decoratedContent.brochure && typeof decoratedContent.brochure === "object") {
       decoratedContent.brochure.endpoint = submitUrl;
+    }
+
+    if (decoratedContent.investment && typeof decoratedContent.investment === "object" && decoratedContent.investment.payment && typeof decoratedContent.investment.payment === "object") {
+      decoratedContent.investment.payment.orderEndpoint = paymentOrderUrl;
+      decoratedContent.investment.payment.submitEndpoint = submitUrl;
     }
   }
 
@@ -1329,6 +1353,7 @@ function decoratePublishedPublicPayload(page, parsedContent) {
     content: decoratedContent,
     publicUrl,
     submitUrl,
+    paymentOrderUrl,
   };
 }
 
@@ -1784,6 +1809,26 @@ router.get("/public/featured-html", async (req, res) => {
 
     res.set("Content-Type", "text/html");
 
+    if (page && page.templateType === "wanderlux-v1") {
+      res.set(
+        "Content-Security-Policy",
+        [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net https://checkout.razorpay.com",
+          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+          "font-src 'self' data: https://fonts.gstatic.com",
+          "img-src 'self' data: blob: https:",
+          "media-src 'self' https: blob:",
+          "connect-src 'self' https://image.pollinations.ai https://unpkg.com https://api.razorpay.com https://checkout.razorpay.com",
+          "frame-src 'self' https://*.wistia.net https://*.wistia.com https://fast.wistia.net https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.loom.com https://checkout.razorpay.com",
+          "frame-ancestors 'self' https://themodernclassroom.in https://www.themodernclassroom.in http://localhost:8000 http://127.0.0.1:8000",
+          "base-uri 'self'",
+          "object-src 'none'",
+        ].join("; "),
+      );
+      res.removeHeader("Content-Security-Policy-Report-Only");
+    }
+
     return res.send(html);
 
   } catch (err) {
@@ -1882,7 +1927,11 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
   try {
 
-    const { destination, durationDays, audience, subBrand, autoCreate, style } = req.body || {};
+    const { destination, durationDays, audience, tripType, subBrand, themeId, themeOverrides, autoCreate, style } = req.body || {};
+    const normalizedTripType = String(tripType || "international").trim().toLowerCase();
+    if (!['domestic', 'international'].includes(normalizedTripType)) {
+      return res.status(400).json({ error: "tripType must be domestic or international", code: "INVALID_TRIP_TYPE" });
+    }
 
     // Default to premium so new AI-generated pages get the better
 
@@ -1962,6 +2011,10 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
     } catch (genErr) {
 
+      if (genErr.code === "AI_NOT_CONFIGURED") {
+        return res.status(503).json({ error: "AI provider is not configured. Configure an AI provider to generate this landing page.", code: "AI_NOT_CONFIGURED" });
+      }
+
       if (genErr.code === "LANDING_PAGE_GENERATE_BUDGET_EXCEEDED") {
 
         return res.status(429).json({
@@ -1980,6 +2033,10 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
       throw genErr;
 
+    }
+
+    if (result.stub) {
+      return res.status(503).json({ error: "AI provider is not configured. Configure an AI provider to generate this landing page.", code: "AI_NOT_CONFIGURED" });
     }
 
 
@@ -2055,8 +2112,13 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
           durationDays: days,
 
           audience: audience || "travellers",
+          tripType: normalizedTripType,
 
           subBrand: subBrand || null,
+
+          themeId: themeId || null,
+
+          themeOverrides: themeOverrides && typeof themeOverrides === "object" ? themeOverrides : null,
 
           suggestedTitle: result.suggestedTitle || "",
 
@@ -2558,6 +2620,11 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
 
     } = req.body || {};
 
+    // ponytail: TEE accepts free-form tripType vocabulary (luxury, family,
+    // educational, honeymoon, …) — no whitelist here; only the legacy
+    // /generate-from-destination endpoint restricts to domestic/international.
+    const normalizedTripType = String(tripType || "international").trim().toLowerCase();
+
 
 
     // -- Input validation (mirrors the legacy generate endpoint) --
@@ -2635,10 +2702,9 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
           durationDays: days,
 
           audience: audience || "travellers",
+          tripType: normalizedTripType,
 
           travelMonth: travelMonth || null,
-
-          tripType: tripType || null,
 
           subBrand: subBrand || null,
 
@@ -2973,6 +3039,31 @@ router.get("/:id", verifyToken, async (req, res) => {
 // silently storing the wrong bucket.
 
 const VALID_TRAVEL_SUB_BRANDS = new Set(["tmc", "rfu", "travelstall", "visasure"]);
+const TRAVEL_TEMPLATE_TYPES = new Set([
+  "travel_destination",
+  "wanderlux-v1",
+  "educational-trip-v1",
+  "religious-tour-v1",
+  "family-trip-v1",
+  "luxury-tour-v1",
+  "travel-premium-v1",
+]);
+
+function isTravelLandingPage(page) {
+  const subBrand = typeof page?.subBrand === "string" ? page.subBrand.toLowerCase() : "";
+  const templateType = typeof page?.templateType === "string" ? page.templateType.toLowerCase() : "";
+  return VALID_TRAVEL_SUB_BRANDS.has(subBrand) || TRAVEL_TEMPLATE_TYPES.has(templateType);
+}
+
+function travelFeaturedScope(tenantId) {
+  return {
+    tenantId,
+    OR: [
+      { subBrand: { in: [...VALID_TRAVEL_SUB_BRANDS] } },
+      { templateType: { in: [...TRAVEL_TEMPLATE_TYPES] } },
+    ],
+  };
+}
 
 
 
@@ -4972,65 +5063,14 @@ router.post("/:id/publish", verifyToken, async (req, res) => {
 
 
 
-    // Single-page-live workflow: publishing ALSO features the page so
-
-    // /trips resolves to it. Any sibling (same tenantId + subBrand)
-
-    // currently featured gets demoted in the same transaction � the
-
-    // invariant "at most ONE featured page per (tenant, subBrand)"
-
-    // still holds. Pre-merge this required two button clicks (Publish
-
-    // then Feature); the user opted to collapse the workflow because
-
-    // they only ever want one landing page live at a time.
-
-    const scope = {
-
-      tenantId: req.user.tenantId,
-
-      subBrand: existing.subBrand,
-
-    };
-
     const now = new Date();
-
-    const [, published] = await prisma.$transaction([
-
-      prisma.landingPage.updateMany({
-
-        where: { ...scope, isFeatured: true, NOT: { id: existing.id } },
-
-        data: { isFeatured: false, featuredAt: null },
-
-      }),
-
-      prisma.landingPage.update({
-
-        where: { id: existing.id },
-
-        data: {
-
-          status: "PUBLISHED",
-
-          publishedAt: now,
-
-          isFeatured: true,
-
-          // Preserve the original featuredAt on re-publish so admin can
-
-          // see WHEN this page first became the /trips destination; only
-
-          // set it now if it was never featured before.
-
-          featuredAt: existing.featuredAt || now,
-
-        },
-
-      }),
-
-    ]);
+    const published = await prisma.landingPage.update({
+      where: { id: existing.id },
+      data: {
+        status: "PUBLISHED",
+        publishedAt: now,
+      },
+    });
 
     await snapshotSafe(prisma, published, VERSION_SOURCES.PUBLISH, req.user);
 
@@ -5158,13 +5198,12 @@ router.post("/:id/feature", verifyToken, async (req, res) => {
 
     // treats `null` correctly in updateMany WHERE clauses.
 
-    const scope = {
-
-      tenantId: req.user.tenantId,
-
-      subBrand: existing.subBrand,
-
-    };
+    const scope = isTravelLandingPage(existing)
+      ? travelFeaturedScope(req.user.tenantId)
+      : {
+          tenantId: req.user.tenantId,
+          subBrand: existing.subBrand,
+        };
 
 
 
@@ -5733,6 +5772,285 @@ publicRouter.get("/:slug/json", async (req, res) => {
 
 });
 
+publicRouter.post("/:slug/registration-draft", express.json(), async (req, res) => {
+  try {
+    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" } });
+    const fields = req.body?.fields && typeof req.body.fields === "object" ? req.body.fields : {};
+    if (!page || !page.tripId) return res.status(404).json({ error: "Trip landing page not found", code: "NOT_FOUND" });
+    if (String(fields.passport_status || "").toLowerCase() !== "valid passport") {
+      return res.status(400).json({ error: "A valid passport is required for document upload", code: "PASSPORT_REQUIRED" });
+    }
+    const draftToken = crypto.randomBytes(24).toString("hex");
+    const draft = await prisma.pendingTripRegistration.create({
+      data: {
+        tenantId: page.tenantId || 1,
+        tripId: page.tripId,
+        landingPageId: page.id,
+        studentName: String(fields.student_name || "").trim(),
+        studentSchool: fields.school || null,
+        studentClass: fields.grade || null,
+        parentName: String(fields.parent_name || "").trim(),
+        parentEmail: String(fields.parent_email || "").trim(),
+        parentPhone: String(fields.parent_phone || "").trim(),
+        extrasJson: JSON.stringify({ landingPage: true, documents: {} }),
+        status: "DRAFT",
+        draftToken,
+        draftTokenExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
+      },
+    });
+    return res.status(201).json({ draftToken, draftId: draft.id });
+  } catch (err) {
+    console.error("[LandingPage] registration draft error:", err);
+    return res.status(500).json({ error: "Could not start document collection", code: "DRAFT_CREATE_FAILED" });
+  }
+});
+
+publicRouter.post("/:slug/registration-documents", (req, res, next) => {
+  landingRegistrationDocUpload.fields([
+    { name: "passport", maxCount: 1 },
+    { name: "aadhaar", maxCount: 1 },
+    { name: "parentConsent", maxCount: 1 },
+    { name: "medicalConsent", maxCount: 1 },
+  ])(req, res, (err) => {
+    if (!err) return next();
+    return res.status(400).json({ error: err.message || "Invalid document upload", code: "INVALID_FILE" });
+  });
+}, async (req, res) => {
+  try {
+    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug, status: "PUBLISHED" }, select: { id: true, tripId: true, tenantId: true, content: true } });
+    const token = String(req.body?.draftToken || "").trim();
+    const fields = safeJsonParse(req.body?.fields, {});
+    let draft = token ? await prisma.pendingTripRegistration.findUnique({ where: { draftToken: token } }) : null;
+    if (!draft) {
+      const draftToken = crypto.randomBytes(24).toString("hex");
+      draft = await prisma.pendingTripRegistration.create({
+        data: {
+          tenantId: page.tenantId || 1, tripId: page.tripId, landingPageId: page.id,
+          studentName: String(fields.student_name || "").trim(), studentSchool: fields.school || null, studentClass: fields.grade || null,
+          parentName: String(fields.parent_name || "").trim(), parentEmail: String(fields.parent_email || "").trim(), parentPhone: String(fields.parent_phone || "").trim(),
+          extrasJson: JSON.stringify({ landingPage: true, documents: {} }), status: "DRAFT", draftToken,
+          draftTokenExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
+        },
+      });
+    }
+    if (!page || !draft || draft.tripId !== page.tripId || draft.draftTokenExpiresAt < new Date()) return res.status(400).json({ error: "Registration draft is invalid or expired", code: "INVALID_DRAFT" });
+    const files = req.files || {};
+    const pageConfig = safeJsonParse(page.content, {});
+    const configuredTripType = pageConfig.register?.tripType || pageConfig.meta?.tripType || "";
+    const isDomesticTrip = String(configuredTripType).trim().toLowerCase() === "domestic";
+    const required = [
+      ...(isDomesticTrip ? [] : ["passport"]),
+      "aadhaar", "parentConsent", "medicalConsent",
+    ];
+    if (required.some((name) => !files[name]?.[0])) {
+      return res.status(400).json({
+        error: isDomesticTrip ? "All three documents are required" : "All four documents are required",
+        code: "MISSING_FILES",
+      });
+    }
+    const current = safeJsonParse(draft.extrasJson, {});
+    const documents = current.documents && typeof current.documents === "object" ? current.documents : {};
+    for (const name of required) {
+      const stored = await visaDocStore.storeDoc(files[name][0].buffer, files[name][0].mimetype);
+      documents[name] = { ...stored, uploadedAt: new Date().toISOString() };
+    }
+    documents.completedAt = new Date().toISOString();
+    await prisma.pendingTripRegistration.update({ where: { id: draft.id }, data: { extrasJson: JSON.stringify({ ...current, documents }) } });
+    return res.json({ ok: true, draftToken: draft.draftToken, documents: required.reduce((out, name) => ({ ...out, [name]: true }), {}) });
+  } catch (err) {
+    console.error("[LandingPage] registration document error:", err);
+    return res.status(500).json({ error: "Could not upload registration documents", code: "DOCUMENT_UPLOAD_FAILED" });
+  }
+});
+
+publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
+  try {
+    const slug = String(req.params.slug || "").trim();
+    const page = await prisma.landingPage.findFirst({
+      where: { slug, status: "PUBLISHED" },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        status: true,
+        templateType: true,
+        tripId: true,
+        tenantId: true,
+        content: true,
+      },
+    });
+
+    if (!page) {
+      return res.status(404).json({ error: "Page not found", code: "NOT_FOUND" });
+    }
+
+    const paymentConfig = getLandingPagePaymentConfig(page);
+    if (!paymentConfig.enabled) {
+      return res.status(409).json({ error: "Payment is disabled for this landing page", code: "PAYMENT_DISABLED" });
+    }
+    if (!page.tripId) {
+      return res.status(409).json({ error: "Payment can only be used on trip-linked landing pages", code: "NO_TRIP_LINK" });
+    }
+
+    const selection = resolveLandingPagePaymentSelection(page, req.body || {});
+    const tenantId = page.tenantId || 1;
+    const rp = await getTenantRazorpayClient(tenantId);
+    if (!rp) {
+      return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+    }
+
+    const receipt = `lp_${page.id}_${selection.mode}_${selection.installmentIndex}_${Date.now()}`;
+    const notes = {
+      tenantId: String(tenantId),
+      kind: "landing-page-registration",
+      pageId: String(page.id),
+      pageSlug: page.slug,
+      tripId: String(page.tripId),
+      paymentMode: selection.mode,
+      installmentIndex: String(selection.installmentIndex),
+      installmentIndexes: JSON.stringify(selection.installmentIndexes),
+      draftToken: String(req.body?.draftToken || ""),
+    };
+
+    const paymentLink = await rp.client.paymentLink.create({
+      amount: selection.amountPaise,
+      currency: selection.currency,
+      accept_partial: false,
+      description: `${page.title || "Landing page"} registration payment${selection.mode === "complete" ? " (full)" : ""}`,
+      customer: {
+        name: req.body?.name || undefined,
+        email: req.body?.email || undefined,
+        contact: req.body?.phone || undefined,
+      },
+      notify: { sms: false, email: false },
+      reminder_enable: false,
+      callback_url: `${process.env.FRONTEND_URL || "http://localhost:5173"}/p/${encodeURIComponent(page.slug)}?payment=success&draftToken=${encodeURIComponent(String(req.body?.draftToken || ""))}&regStep=${encodeURIComponent(String(req.body?.regStep || ""))}`,
+      callback_method: "get",
+      notes,
+    });
+    if (!paymentLink || !paymentLink.short_url) {
+      return res.status(502).json({ error: "Razorpay did not return a hosted payment URL", code: "GATEWAY_LINK_URL_MISSING" });
+    }
+
+    const payment = await prisma.payment.create({
+      data: {
+        tenantId,
+        invoiceId: null,
+        contactId: null,
+        description: `${page.title || "Landing page"} registration payment${selection.mode === "complete" ? " (full)" : ""}`,
+        amount: selection.amountMajor,
+        currency: selection.currency,
+        gateway: "razorpay",
+        gatewayId: paymentLink.id,
+        status: "PENDING",
+        metadata: JSON.stringify({
+          kind: "landing-page-registration",
+          pageId: page.id,
+          pageSlug: page.slug,
+          pageTitle: page.title || null,
+          tripId: page.tripId,
+          tenantId,
+          paymentMode: selection.mode,
+          installmentIndex: selection.installmentIndex,
+          installmentIndexes: selection.installmentIndexes,
+          amountMajor: selection.amountMajor,
+          amountPaise: selection.amountPaise,
+          currency: selection.currency,
+          receipt,
+          orderId: paymentLink.id,
+          hostedPaymentLink: true,
+          hostedPaymentUrl: paymentLink.short_url,
+          paymentTitle: selection.paymentTitle,
+          draftToken: String(req.body?.draftToken || ""),
+        }),
+      },
+    });
+
+    const prefillSource = req.body && typeof req.body.fields === "object" && req.body.fields ? req.body.fields : req.body || {};
+    const pickPrefill = (...keys) => {
+      for (const key of keys) {
+        const value = prefillSource && prefillSource[key];
+        if (value !== undefined && value !== null && String(value).trim()) {
+          return String(value).trim();
+        }
+      }
+      return "";
+    };
+
+    return res.status(201).json({
+      paymentId: payment.id,
+      orderId: paymentLink.id,
+      paymentUrl: paymentLink.short_url,
+      hostedPaymentLink: true,
+      amount: selection.amountPaise,
+      amountMajor: selection.amountMajor,
+      currency: paymentLink.currency || selection.currency,
+      keyId: rp.keyId,
+      paymentMode: selection.mode,
+      installmentIndex: selection.installmentIndex,
+      installmentIndexes: selection.installmentIndexes,
+      paymentTitle: selection.paymentTitle,
+      buttonLabel: selection.buttonLabel,
+      receipt,
+      prefill: {
+        name: pickPrefill("name", "fullName", "studentName", "student_name", "parentName", "parent_name"),
+        email: pickPrefill("email", "parent_email", "parentEmail"),
+        contact: pickPrefill("phone", "parent_phone", "parentPhone"),
+      },
+      page: {
+        id: page.id,
+        slug: page.slug,
+        title: page.title,
+        tripId: page.tripId,
+      },
+    });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    console.error("[LandingPage] payment-order error:", err);
+    return res.status(500).json({ error: "Failed to start payment" });
+  }
+});
+
+
+// Public payment-state lookup used to resume a registration after a browser
+// or server restart. The draft token is opaque and the response contains no
+// participant data.
+publicRouter.get("/:slug/payment-status", async (req, res) => {
+  try {
+    const slug = String(req.params.slug || "").trim();
+    const draftToken = typeof req.query.draftToken === "string" ? req.query.draftToken.trim() : "";
+    if (!draftToken) return res.json({ paid: false });
+    const page = await prisma.landingPage.findFirst({ where: { slug, status: "PUBLISHED" }, select: { id: true, tenantId: true } });
+    if (!page) return res.status(404).json({ error: "Page not found", code: "NOT_FOUND" });
+    const draft = await prisma.pendingTripRegistration.findUnique({ where: { draftToken } });
+    if (!draft || Number(draft.landingPageId) !== Number(page.id)) return res.json({ paid: false });
+    const payments = await prisma.payment.findMany({ where: { tenantId: page.tenantId || 1 }, select: { id: true, gatewayId: true, status: true, metadata: true } });
+    const matchingPayments = payments.filter((payment) => {
+      const metadata = safeJsonParse(payment.metadata, {});
+      return metadata.kind === "landing-page-registration" && Number(metadata.pageId) === Number(page.id) && metadata.draftToken === draftToken;
+    });
+    const refreshedPayments = await Promise.all(matchingPayments.map((payment) => refreshHostedPaymentStatus(payment, payment.gatewayId, page.tenantId || 1)));
+    const paid = refreshedPayments.some((payment) => ["SUCCESS", "CAPTURED", "PAID"].includes(String(payment.status || "").toUpperCase()));
+    const extras = safeJsonParse(draft.extrasJson, {});
+    return res.json({
+      paid,
+      documentsUploaded: Boolean(extras.documents && extras.documents.completedAt),
+      fields: {
+        student_name: draft.studentName || "",
+        school: draft.studentSchool || "",
+        grade: draft.studentClass || "",
+        parent_name: draft.parentName || "",
+        parent_email: draft.parentEmail || "",
+        parent_phone: draft.parentPhone || "",
+      },
+    });
+  } catch (err) {
+    console.error("[LandingPage] payment-status error:", err.message);
+    return res.status(500).json({ error: "Could not load payment status", code: "PAYMENT_STATUS_FAILED" });
+  }
+});
 
 publicRouter.get("/:slug", async (req, res) => {
 
@@ -5750,7 +6068,7 @@ publicRouter.get("/:slug", async (req, res) => {
 
     prisma.landingPageAnalytics.create({
 
-      data: { landingPageId: page.id, eventType: "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"], referrer: req.headers["referer"], tenantId: page.tenantId || 1 },
+      data: { landingPageId: page.id, eventType: "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"], referrer: String(req.headers["referer"] || "").slice(0, 191) || null, tenantId: page.tenantId || 1 },
 
     }).catch((e) => console.warn("[LandingPage] analytics write skipped:", e.message));
 
@@ -6456,6 +6774,69 @@ function extractLeadFieldsFromSubmission(req, page) {
 
 }
 
+function safeJsonParse(value, fallback = {}) {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function verifyRazorpayCheckoutSignature({ orderId, paymentId, signature, keySecret }) {
+  if (!orderId || !paymentId || !signature || !keySecret) return false;
+  const expected = crypto
+    .createHmac("sha256", keySecret)
+    .update(`${orderId}|${paymentId}`)
+    .digest("hex");
+  const actual = String(signature);
+  if (expected.length !== actual.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
+  } catch (_err) {
+    return false;
+  }
+}
+
+function extractLandingPagePaymentSubmission(body = {}) {
+  const payment = body && typeof body.payment === "object" && body.payment ? body.payment : {};
+  const paymentId = payment.paymentId ?? body.paymentId ?? null;
+  const paymentLinkId = payment.paymentLinkId ?? body.paymentLinkId ?? body.razorpay_payment_link_id ?? null;
+  const paymentLinkStatus = String(payment.paymentLinkStatus ?? body.paymentLinkStatus ?? body.razorpay_payment_link_status ?? "").toUpperCase();
+  const orderId = payment.orderId ?? payment.razorpay_order_id ?? body.orderId ?? body.razorpay_order_id ?? null;
+  const razorpayOrderId = payment.razorpay_order_id ?? body.razorpay_order_id ?? orderId;
+  const razorpayPaymentId = payment.razorpay_payment_id ?? body.razorpay_payment_id ?? null;
+  const razorpaySignature = payment.razorpay_signature ?? body.razorpay_signature ?? null;
+  const mode = String(payment.mode || payment.paymentMode || body.mode || body.paymentMode || "installment").trim().toLowerCase();
+  const installmentIndex = payment.installmentIndex ?? payment.instalmentIndex ?? body.installmentIndex ?? body.instalmentIndex ?? null;
+  return {
+    paymentId,
+    paymentLinkId,
+    paymentLinkStatus,
+    hostedPaymentLink: payment.hostedPaymentLink === true || body.hostedPaymentLink === true,
+    orderId,
+    razorpayOrderId,
+    razorpayPaymentId,
+    razorpaySignature,
+    mode: mode === "complete" ? "complete" : "installment",
+    installmentIndex,
+  };
+}
+
+async function refreshHostedPaymentStatus(paymentRecord, paymentLinkId, tenantId) {
+  if (!paymentRecord || !paymentLinkId || ["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase())) return paymentRecord;
+  const gateway = await getTenantRazorpayClient(tenantId);
+  if (!gateway?.client?.paymentLink?.fetch) return paymentRecord;
+  let remote;
+  try { remote = await gateway.client.paymentLink.fetch(paymentLinkId); } catch (err) {
+    console.warn("[LandingPage] hosted payment refresh skipped:", err.message);
+    return paymentRecord;
+  }
+  const status = String(remote?.status || "").toUpperCase();
+  if (!["PAID", "PARTIALLY_PAID"].includes(status)) return paymentRecord;
+  return prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: status === "PAID" ? "PAID" : "SUCCESS" } });
+}
+
 
 
 // Resolves the registration-mode marker for the form block being
@@ -6551,6 +6932,7 @@ function resolveRegistrationMode(page, formProps) {
 async function handleRegistrationDraft(req, res, page, formProps) {
 
   const tenantId = page.tenantId || 1;
+  const paymentConfig = getLandingPagePaymentConfig(page);
 
   // The wizard's per-step values arrive flattened under `fields`
 
@@ -6584,9 +6966,32 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
   const parentPhone = parent.phone || flat.parent_phone || flat.parentPhone || flat.phone || null;
 
+  // Payment-enabled registrations already created this draft while uploading
+  // documents. Resume it instead of trying to reconstruct required parent
+  // fields from the final payment submit payload.
+  const existingDraftToken = typeof req.body?.draftToken === "string" ? req.body.draftToken.trim() : "";
+  const existingDraft = existingDraftToken
+    ? await prisma.pendingTripRegistration.findUnique({ where: { draftToken: existingDraftToken } })
+    : null;
+  const isResumedDraft = existingDraft && Number(existingDraft.landingPageId) === Number(page.id) && Number(existingDraft.tripId) === Number(page.tripId);
+  if (isResumedDraft) {
+    // Reuse the server-side draft and feed its saved values through the normal
+    // lead, analytics, redirect, and completion flow below.
+    flat.student_name = flat.student_name || existingDraft.studentName;
+    flat.parent_name = flat.parent_name || existingDraft.parentName;
+    flat.parent_email = flat.parent_email || existingDraft.parentEmail;
+    flat.parent_phone = flat.parent_phone || existingDraft.parentPhone;
+    flat.student_school = flat.student_school || existingDraft.studentSchool;
+    flat.student_class = flat.student_class || existingDraft.studentClass;
+  }
 
 
-  if (!studentName || !parentName || !parentEmail || !parentPhone) {
+
+  const resolvedStudentName = studentName || (isResumedDraft && existingDraft.studentName);
+  const resolvedParentName = parentName || (isResumedDraft && existingDraft.parentName);
+  const resolvedParentEmail = parentEmail || (isResumedDraft && existingDraft.parentEmail);
+  const resolvedParentPhone = parentPhone || (isResumedDraft && existingDraft.parentPhone);
+  if (!resolvedStudentName || !resolvedParentName || !resolvedParentEmail || !resolvedParentPhone) {
 
     return res.status(400).json({
 
@@ -6606,7 +7011,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
 
 
-  const draft = await prisma.pendingTripRegistration.create({
+  const draft = isResumedDraft ? existingDraft : await prisma.pendingTripRegistration.create({
 
     data: {
 
@@ -6616,7 +7021,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
       landingPageId: page.id,
 
-      studentName,
+      studentName: resolvedStudentName,
 
       studentDob: parseDateOrNull(student.dob || flat.student_dob),
 
@@ -6626,11 +7031,11 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
       studentGender: student.gender || flat.student_gender || null,
 
-      parentName,
+      parentName: resolvedParentName,
 
-      parentEmail,
+      parentEmail: resolvedParentEmail,
 
-      parentPhone,
+      parentPhone: resolvedParentPhone,
 
       parentRelation: parent.relation || flat.parent_relation || null,
 
@@ -6690,11 +7095,11 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
       create: {
 
-        name: parentName,
+        name: resolvedParentName,
 
-        email: parentEmail,
+        email: resolvedParentEmail,
 
-        phone: parentPhone || null,
+        phone: resolvedParentPhone || null,
 
         company: studentSchool,
 
@@ -6727,6 +7132,31 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
   }
 
+  // Registration-draft submissions no longer wait for an operator decision.
+  // Convert the staging row immediately so the participant and its payment
+  // schedule are available to CRM and portal users without approval.
+  if (!draft.convertedToParticipantId) {
+    const participant = await createParticipantFromLeadSubmission(
+      page.tripId,
+      tenantId,
+      {
+        ...flat,
+        student_name: flat.student_name || resolvedStudentName,
+        parent_name: flat.parent_name || resolvedParentName,
+        parent_email: flat.parent_email || resolvedParentEmail,
+        parent_phone: flat.parent_phone || resolvedParentPhone,
+      },
+      req.body,
+    );
+    if (participant) {
+      await materializeTripInstalmentsFromPlan({ db: prisma, tripId: page.tripId, participantIds: [participant.id], allowMissingPlan: true });
+      await prisma.pendingTripRegistration.update({
+        where: { id: draft.id },
+        data: { status: "CONVERTED", convertedToParticipantId: participant.id },
+      });
+    }
+  }
+
 
 
   // Bump LandingPage.submissions + drop a FORM_SUBMIT analytics row so
@@ -6757,66 +7187,15 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
   // approval queue.
 
-  const microsite = await prisma.tripMicrosite.findUnique({
-
-    where: { tripId: page.tripId },
-
-    select: { publicUuid: true, publishedAt: true, expiresAt: true },
-
-  });
-
-  const now = Date.now();
-
-  const micrositeLive = microsite
-
-    && microsite.publicUuid
-
-    && microsite.publishedAt
-
-    && (!microsite.expiresAt || microsite.expiresAt.getTime() > now);
-
-
-
-  if (micrositeLive) {
-
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { slug: true },
-    });
-
-    const customerRegisterParams = new URLSearchParams();
-    if (tenant?.slug) customerRegisterParams.set("tenantSlug", tenant.slug);
-    // #1307: do not put PII (name/email/phone/passport) in the redirect URL.
-    // The customer portal can look up the draft via the opaque draftToken
-    // using /api/travel/microsites/public/:publicUuid/draft-summary?token=...
-    customerRegisterParams.set("next", "/travel/portal");
-    const customerRegisterUrl = `/customer/register?${customerRegisterParams.toString()}`;
-
-    return res.status(201).json({
-
-      ok: true,
-
-      draftId: draft.id,
-
-      redirect: {
-
-        type: "microsite",
-
-        url: `/p/tripmicrosite/${microsite.publicUuid}?draftToken=${draftToken}&portalRedirect=${encodeURIComponent(customerRegisterUrl)}`,
-
-      },
-
-    });
-
-  }
-
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+  const portalRedirect = `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || '')}&name=${encodeURIComponent(resolvedParentName)}&email=${encodeURIComponent(resolvedParentEmail)}&next=${encodeURIComponent('/travel/portal')}`;
   return res.status(201).json({
 
     ok: true,
 
     draftId: draft.id,
 
-    redirect: { type: "thanks" },
+    redirect: { type: "customer-registration", url: portalRedirect },
 
     message: "Thank you � your registration has been received. We'll be in touch shortly.",
 
@@ -7013,12 +7392,56 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
     const formComp = await pickFormFromContent(page.content, submittedAudience, isBrochureRequest);
 
     const formProps = (formComp && formComp.props) || {};
+    const paymentConfig = getLandingPagePaymentConfig(page);
+    const paymentSubmission = paymentConfig.enabled && page.tripId && !isBrochureRequest
+      ? extractLandingPagePaymentSubmission(req.body || {})
+      : null;
+    let paymentRecord = null;
+    let paymentMeta = {};
+    let paymentCapturedAt = null;
+    let paymentAmountMajor = 0;
+    let paymentMode = "installment";
+    let paymentInstallmentIndex = 0;
+
+    if (paymentSubmission) {
+      const parsedPaymentId = parseInt(paymentSubmission.paymentId, 10);
+      const hostedLink = paymentSubmission.paymentLinkId && paymentSubmission.hostedPaymentLink;
+      if ((!Number.isFinite(parsedPaymentId) && !hostedLink) || (!hostedLink && (!paymentSubmission.razorpayOrderId || !paymentSubmission.razorpayPaymentId || !paymentSubmission.razorpaySignature))) {
+        return res.status(400).json({ error: "Payment details are incomplete", code: "MISSING_FIELDS" });
+      }
+      paymentRecord = await prisma.payment.findFirst({ where: hostedLink ? { gatewayId: paymentSubmission.paymentLinkId, tenantId } : { id: parsedPaymentId, tenantId } });
+      if (!paymentRecord) return res.status(404).json({ error: "Payment not found", code: "PAYMENT_NOT_FOUND" });
+      paymentMeta = safeJsonParse(paymentRecord.metadata, {});
+      if (paymentMeta.kind !== "landing-page-registration" || Number(paymentMeta.pageId) !== Number(page.id)) {
+        return res.status(409).json({ error: "Payment does not belong to this landing page", code: "PAYMENT_PAGE_MISMATCH" });
+      }
+      if (hostedLink) {
+        paymentRecord = await refreshHostedPaymentStatus(paymentRecord, paymentSubmission.paymentLinkId, tenantId);
+        if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase()) && ["PAID", "PARTIALLY_PAID"].includes(paymentSubmission.paymentLinkStatus)) {
+          paymentRecord = await prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "PAID" } });
+        }
+        if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase())) {
+          return res.status(409).json({ error: "Payment is not yet confirmed. Please wait a moment and try again.", code: "PAYMENT_NOT_CONFIRMED" });
+        }
+      } else {
+        const creds = await getTenantRazorpayCreds(tenantId);
+        if (!creds || !creds.keySecret) return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+        if (!verifyRazorpayCheckoutSignature({ orderId: paymentSubmission.razorpayOrderId, paymentId: paymentSubmission.razorpayPaymentId, signature: paymentSubmission.razorpaySignature, keySecret: creds.keySecret })) {
+          return res.status(400).json({ error: "Signature verification failed", code: "BAD_SIGNATURE" });
+        }
+      }
+      paymentMode = paymentMeta.paymentMode === "complete" ? "complete" : "installment";
+      paymentInstallmentIndex = Number.isFinite(Number(paymentMeta.installmentIndex)) ? Number(paymentMeta.installmentIndex) : 0;
+      paymentAmountMajor = Number(paymentRecord.amount || paymentMeta.amountMajor || 0);
+      paymentCapturedAt = new Date();
+    }
 
 
 
     // Registration-draft handling for trip-linked pages
-
-    if (page.tripId && !isBrochureRequest && resolveRegistrationMode(page, formProps) === "registration-draft") {
+    // Payment-enabled pages bypass this branch so the normal lead/participant
+    // flow can capture the paid registration and update trip instalments.
+    if (page.tripId && !isBrochureRequest && !paymentConfig.enabled && resolveRegistrationMode(page, formProps) === "registration-draft") {
 
       if (formProps.enableCaptcha) {
 
@@ -7154,11 +7577,12 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
 
     // Create trip participant if trip-linked
 
+    let participant = null;
     if (page.tripId && !isBrochureRequest) {
 
       try {
 
-        await createParticipantFromLeadSubmission(page.tripId, tenantId, formFields, req.body);
+        participant = await createParticipantFromLeadSubmission(page.tripId, tenantId, formFields, req.body);
 
       } catch (err) {
 
@@ -7166,6 +7590,47 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
 
       }
 
+    }
+
+    if (paymentSubmission && page.tripId && !participant) {
+      return res.status(400).json({ error: "Participant details are required before payment can be captured", code: "MISSING_PARTICIPANT" });
+    }
+
+    if (paymentSubmission && paymentRecord && participant) {
+      const paymentResult = await applyLandingPagePaymentToTrip({
+        db: prisma,
+        tripId: page.tripId,
+        participantId: participant.id,
+        amountMajor: paymentAmountMajor,
+        mode: paymentMode,
+        installmentIndex: paymentInstallmentIndex,
+        capturedAt: paymentCapturedAt || new Date(),
+      });
+
+      const updatedPaymentMeta = {
+        ...paymentMeta,
+        landingPageRegistrationCompleted: true,
+        landingPageRegistrationCompletedAt: (paymentCapturedAt || new Date()).toISOString(),
+        participantId: participant.id,
+        contactId: contact.id,
+        paymentMode,
+        installmentIndex: paymentInstallmentIndex,
+        installmentIndexes: paymentMeta.installmentIndexes || paymentResult.allocations.map((row) => row.instalmentIndex),
+        amountMajor: paymentAmountMajor,
+        amountPaise: Math.round(paymentAmountMajor * 100),
+        razorpayOrderId: paymentSubmission.razorpayOrderId,
+        razorpayPaymentId: paymentSubmission.razorpayPaymentId,
+        paymentAllocations: paymentResult.allocations,
+      };
+
+      await prisma.payment.update({
+        where: { id: paymentRecord.id },
+        data: {
+          status: "SUCCESS",
+          paidAt: paymentCapturedAt || new Date(),
+          metadata: JSON.stringify(updatedPaymentMeta),
+        },
+      });
     }
 
 
@@ -7189,6 +7654,17 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
     // Return success with redirect URL if configured
 
     const response = { success: true, message: "Thank you for your submission!" };
+    if (page.tripId && contactEmail && !isBrochureRequest) {
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+      response.redirect = {
+        type: "customer-registration",
+        url: `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || '')}&name=${encodeURIComponent(contactName)}&email=${encodeURIComponent(contactEmail)}&next=${encodeURIComponent('/travel/portal')}`,
+      };
+    }
+
+    if (participant && page.tripId) {
+      await materializeTripInstalmentsFromPlan({ db: prisma, tripId: page.tripId, participantIds: [participant.id], allowMissingPlan: true });
+    }
 
     if (formProps.successRedirectUrl) {
 
@@ -7243,6 +7719,45 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     const formComp = await pickFormFromContent(page.content, submittedAudience, isBrochureRequest);
 
     const formProps = (formComp && formComp.props) || {};
+    const paymentConfig = getLandingPagePaymentConfig(page);
+    const paymentSubmission = paymentConfig.enabled && page.tripId && !isBrochureRequest
+      ? extractLandingPagePaymentSubmission(req.body || {})
+      : null;
+    let paymentRecord = null;
+    let paymentMeta = {};
+    let paymentCapturedAt = null;
+    let paymentAmountMajor = 0;
+    let paymentMode = "installment";
+    let paymentInstallmentIndex = 0;
+    if (paymentSubmission) {
+      const paymentId = parseInt(paymentSubmission.paymentId, 10);
+      const hostedLink = paymentSubmission.paymentLinkId && paymentSubmission.hostedPaymentLink;
+      if ((!Number.isFinite(paymentId) && !hostedLink) || (!hostedLink && (!paymentSubmission.razorpayOrderId || !paymentSubmission.razorpayPaymentId || !paymentSubmission.razorpaySignature))) {
+        return res.status(400).json({ error: "Payment details are incomplete", code: "MISSING_FIELDS" });
+      }
+      paymentRecord = await prisma.payment.findFirst({ where: hostedLink ? { gatewayId: paymentSubmission.paymentLinkId, tenantId } : { id: paymentId, tenantId } });
+      if (!paymentRecord) return res.status(404).json({ error: "Payment not found", code: "PAYMENT_NOT_FOUND" });
+      paymentMeta = safeJsonParse(paymentRecord.metadata, {});
+      if (hostedLink) {
+        paymentRecord = await refreshHostedPaymentStatus(paymentRecord, paymentSubmission.paymentLinkId, tenantId);
+        if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase()) && ["PAID", "PARTIALLY_PAID"].includes(paymentSubmission.paymentLinkStatus)) {
+          paymentRecord = await prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "PAID" } });
+        }
+        if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase())) {
+          return res.status(409).json({ error: "Payment is not yet confirmed. Please wait a moment and try again.", code: "PAYMENT_NOT_CONFIRMED" });
+        }
+      } else {
+        const creds = await getTenantRazorpayCreds(tenantId);
+        if (!creds || !creds.keySecret) return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+        if (!verifyRazorpayCheckoutSignature({ orderId: paymentSubmission.razorpayOrderId, paymentId: paymentSubmission.razorpayPaymentId, signature: paymentSubmission.razorpaySignature, keySecret: creds.keySecret })) {
+          return res.status(400).json({ error: "Signature verification failed", code: "BAD_SIGNATURE" });
+        }
+      }
+      paymentMode = paymentMeta.paymentMode === "complete" ? "complete" : "installment";
+      paymentInstallmentIndex = Number(paymentMeta.installmentIndex || 0);
+      paymentAmountMajor = Number(paymentRecord.amount || paymentMeta.amountMajor || 0);
+      paymentCapturedAt = new Date();
+    }
 
 
 
@@ -7446,11 +7961,12 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
     // capture lead details, so they should not create participants.
 
+    let participant = null;
     if (page.tripId && !isBrochureRequest) {
 
       try {
 
-        await createParticipantFromLeadSubmission(page.tripId, tenantId, formFields, req.body);
+        participant = await createParticipantFromLeadSubmission(page.tripId, tenantId, formFields, req.body);
 
       } catch (err) {
 
@@ -7458,6 +7974,44 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
       }
 
+    }
+
+    if (participant && page.tripId) {
+      await materializeTripInstalmentsFromPlan({ db: prisma, tripId: page.tripId, participantIds: [participant.id], allowMissingPlan: true });
+    }
+
+    if (paymentSubmission && (!participant || !paymentRecord)) {
+      return res.status(400).json({ error: "Participant details are required before payment can be captured", code: "MISSING_PARTICIPANT" });
+    }
+    if (paymentSubmission) {
+      const paymentResult = await applyLandingPagePaymentToTrip({
+        db: prisma,
+        tripId: page.tripId,
+        participantId: participant.id,
+        amountMajor: paymentAmountMajor,
+        mode: paymentMode,
+        installmentIndex: paymentInstallmentIndex,
+        capturedAt: paymentCapturedAt,
+      });
+      await prisma.payment.update({
+        where: { id: paymentRecord.id },
+        data: {
+          status: "SUCCESS",
+          paidAt: paymentCapturedAt,
+          metadata: JSON.stringify({
+            ...paymentMeta,
+            landingPageRegistrationCompleted: true,
+            contactId: contact.id,
+            participantId: participant.id,
+            paymentMode,
+            installmentIndex: paymentInstallmentIndex,
+            amountMajor: paymentAmountMajor,
+            razorpayOrderId: paymentSubmission.razorpayOrderId,
+            razorpayPaymentId: paymentSubmission.razorpayPaymentId,
+            paymentAllocations: paymentResult.allocations,
+          }),
+        },
+      });
     }
 
 

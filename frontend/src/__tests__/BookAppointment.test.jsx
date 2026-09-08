@@ -29,7 +29,7 @@
  * Path: flat __tests__/BookAppointment.test.jsx — matches sibling convention.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // ── Stable notify reference ──────────────────────────────────────────────────
@@ -212,12 +212,12 @@ describe('<BookAppointment /> — filterPastSlots: time dropdown for today', () 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('<BookAppointment /> — submit-time past date+time guard', () => {
-  it('calls notify.error and does NOT call the booking API for a past date+time', async () => {
+describe('<BookAppointment /> — past date+time guard', () => {
+  it('rejects a past date immediately and does NOT call the booking API', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-07-07T14:00:00'));
     installDefaultMock();
-    const { container, getDateInput, getTimeSelect } = renderPage();
+    const { getDateInput, getTimeSelect } = renderPage();
 
     await screen.findByRole('heading', { name: /Book an Appointment/i });
 
@@ -227,32 +227,17 @@ describe('<BookAppointment /> — submit-time past date+time guard', () => {
       { target: { value: 'Routine checkup' } }
     );
 
-    // Change date to yesterday — fireEvent bypasses the `min` native constraint.
-    // For a non-today date filterPastSlots returns all slots so the select fills.
+    // Change date to yesterday — fireEvent bypasses the `min` native constraint,
+    // so the component's change-time guard must still reject it.
     fireEvent.change(getDateInput(), { target: { value: '2026-07-06' } });
-
-    await waitFor(() => {
-      const nonEmpty = Array.from(getTimeSelect().options).filter(o => o.value !== '');
-      expect(nonEmpty.length).toBeGreaterThan(0);
-    });
-
-    // Select any available slot — combined with yesterday's date it is past.
-    const firstSlot = Array.from(getTimeSelect().options).find(o => o.value !== '');
-    fireEvent.change(getTimeSelect(), { target: { value: firstSlot.value } });
-
-    // Wait for React to re-render and enable the submit button, then submit.
-    // Using fireEvent.submit on the form rather than clicking the button so we
-    // don't race with the re-render that enables the button.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Confirm Appointment/i })).not.toBeDisabled();
-    });
-    fireEvent.submit(container.querySelector('form'));
 
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith(
         'Please select a future date and time for your appointment'
       );
     });
+    expect(getDateInput()).toHaveValue('2026-07-07');
+    expect(getTimeSelect()).toHaveValue('');
 
     // The booking API must NOT have been called.
     const bookingCall = fetchApiMock.mock.calls.find(
@@ -374,5 +359,141 @@ describe('<BookAppointment /> — theme-aware card surfaces', () => {
     expect(await screen.findByTestId('book-appointment-item-101')).toHaveStyle(
       'background: var(--subtle-bg); border-style: solid; border-left-width: 4px; border-left-style: solid;',
     );
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe('<BookAppointment /> — searchable doctor + service comboboxes', () => {
+  const DOCTORS = [
+    { id: 11, name: 'Anjali', wellnessRole: 'doctor', specialty: 'Dermatology', available: true },
+    { id: 12, name: 'ARJUN KUMAR', wellnessRole: 'doctor', specialty: '', available: true },
+    { id: 13, name: 'Balveer Bairwa', wellnessRole: 'doctor', specialty: '', available: false },
+  ];
+  const SERVICES = [
+    { id: 21, name: 'Abdomen - Stretch Marks', basePrice: 9999 },
+    { id: 22, name: 'Advanced Acne Facial', basePrice: 6999 },
+    { id: 23, name: 'ACRYLIC EXTENSION', basePrice: 1999 },
+  ];
+
+  const openCombobox = (name) => {
+    const input = screen.getByRole('combobox', { name });
+    fireEvent.mouseDown(input);
+    fireEvent.focus(input);
+    return input;
+  };
+  // Scoped to the combobox's own listbox — the page still renders native
+  // <select>s (membership, time) whose <option>s would otherwise be swept
+  // up by an unscoped getAllByRole('option').
+  const listbox = (name) => screen.getByRole('listbox', { name });
+  const options = (name) => within(listbox(name)).getAllByRole('option');
+  const optionLabels = (name) => options(name).map((o) => o.textContent);
+
+  const primeToday = () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-07T10:00:00'));
+  };
+
+  it('filters the doctor list as the patient types, matching on name', async () => {
+    primeToday();
+    installDefaultMock({ doctors: DOCTORS });
+    renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    const input = openCombobox(/Preferred doctor/i);
+    expect(optionLabels(/Preferred doctor/i).length).toBe(4); // 3 doctors + "No preference"
+
+    fireEvent.change(input, { target: { value: 'arjun' } });
+    expect(optionLabels(/Preferred doctor/i)).toEqual(['Dr. ARJUN KUMAR']);
+  });
+
+  it('matches a doctor on specialty, which is not part of the visible label', async () => {
+    primeToday();
+    installDefaultMock({ doctors: DOCTORS });
+    renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    const input = openCombobox(/Preferred doctor/i);
+    fireEvent.change(input, { target: { value: 'dermat' } });
+    expect(optionLabels(/Preferred doctor/i)).toEqual([
+      'Dr. Anjali — Dermatology',
+    ]);
+  });
+
+  it('keeps unavailable doctors visible but unselectable', async () => {
+    primeToday();
+    installDefaultMock({ doctors: DOCTORS });
+    renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    const input = openCombobox(/Preferred doctor/i);
+    fireEvent.change(input, { target: { value: 'balveer' } });
+
+    const [onLeave] = options(/Preferred doctor/i);
+    expect(onLeave.textContent).toMatch(/On Leave/);
+    expect(onLeave).toBeDisabled();
+  });
+
+  it('filters services on multi-word queries regardless of word order', async () => {
+    primeToday();
+    installDefaultMock({ services: SERVICES });
+    renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    const input = openCombobox(/^Service$/i);
+    fireEvent.change(input, { target: { value: 'facial acne' } });
+    expect(optionLabels(/^Service$/i)).toEqual(['Advanced Acne Facial(₹6999)']);
+  });
+
+  it('selecting a service writes the id into form state and closes the list', async () => {
+    primeToday();
+    installDefaultMock({ services: SERVICES });
+    renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    const input = openCombobox(/^Service$/i);
+    fireEvent.change(input, { target: { value: 'acrylic' } });
+    fireEvent.click(options(/^Service$/i)[0]);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: /^Service$/i })).toBeNull(),
+    );
+    expect(screen.getByRole('combobox', { name: /^Service$/i })).toHaveValue(
+      'ACRYLIC EXTENSION',
+    );
+  });
+
+  it('shows an empty-state row rather than a blank list when nothing matches', async () => {
+    primeToday();
+    installDefaultMock({ services: SERVICES });
+    renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    const input = openCombobox(/^Service$/i);
+    fireEvent.change(input, { target: { value: 'zzzz' } });
+
+    expect(
+      within(listbox(/^Service$/i)).queryAllByRole('option'),
+    ).toHaveLength(0);
+    expect(screen.getByText('No service matches that search')).toBeInTheDocument();
+  });
+
+  it('Enter picks the highlighted option instead of submitting the form', async () => {
+    primeToday();
+    installDefaultMock({ services: SERVICES });
+    renderPage();
+    await screen.findByRole('heading', { name: /Book an Appointment/i });
+
+    const input = openCombobox(/^Service$/i);
+    fireEvent.change(input, { target: { value: 'stretch' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(input).toHaveValue('Abdomen - Stretch Marks');
+    // No booking POST was fired by the Enter keypress.
+    expect(
+      fetchApiMock.mock.calls.some(([url]) =>
+        String(url).includes('/appointments/book'),
+      ),
+    ).toBe(false);
   });
 });

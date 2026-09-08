@@ -88,6 +88,8 @@ export default function CallifiedManualCallPanel({
 
   const status = useMemo(() => STATUS_COPY[state] || STATUS_COPY[BRIDGE_STATE.IDLE], [state]);
   const finished = state === BRIDGE_STATE.ENDED || state === BRIDGE_STATE.ERROR;
+  // LIVE is the only state in which Callified accepts the agent's audio.
+  const micLive = state === BRIDGE_STATE.LIVE;
   const busy =
     state === BRIDGE_STATE.REQUESTING_MIC ||
     state === BRIDGE_STATE.CONNECTING ||
@@ -148,6 +150,36 @@ export default function CallifiedManualCallPanel({
         {customerPhone && (
           <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{customerPhone}</div>
         )}
+
+        {/* Whether the agent can actually be heard right now. Callified gates
+            the agent's microphone server-side until it confirms the customer
+            answered, and that can lag their first words by several seconds —
+            so "can they hear me?" needs an unambiguous answer on screen. */}
+        {!finished && (
+          <div
+            data-testid="callified-manual-call-mic-state"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              marginTop: '0.55rem',
+              padding: '0.2rem 0.55rem',
+              borderRadius: 999,
+              fontSize: '0.72rem',
+              fontWeight: 600,
+              background: micLive ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)',
+              color: micLive ? '#10b981' : '#f59e0b',
+              border: `1px solid ${micLive ? '#10b981' : '#f59e0b'}33`,
+            }}
+          >
+            {micLive ? <Mic size={12} /> : <MicOff size={12} />}
+            {micLive
+              ? muted
+                ? 'You are muted'
+                : 'Customer can hear you'
+              : 'Mic opens when they answer'}
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
@@ -204,8 +236,14 @@ const STATUS_COPY = {
     color: '#f59e0b',
   },
   [BRIDGE_STATE.RINGING]: {
-    label: 'Dialing customer…',
-    hint: 'Callified is placing the call. Stay on this screen.',
+    // Callified forwards the line's audio from the moment it dials, so the
+    // agent hears ringback — and often the customer's first "hello" — several
+    // seconds before the server confirms the call is answered. Their mic is
+    // genuinely muted until then (bridge.go drops agent frames while
+    // !customerAudioReady), so this copy has to set that expectation or the
+    // screen looks frozen while someone talks into a dead microphone.
+    label: 'Ringing customer…',
+    hint: 'You may hear the line before your mic opens — wait for "Call connected" before speaking.',
     color: '#3b82f6',
   },
   [BRIDGE_STATE.LIVE]: {

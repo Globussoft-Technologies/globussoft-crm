@@ -49,6 +49,9 @@ const mocks = vi.hoisted(() => {
     },
     leaveRequest: { findFirst: vi.fn() },
     membership: { findFirst: vi.fn() },
+    // The double-booking guard reads the booked service's durationMin to work
+    // out how long the doctor is occupied.
+    service: { findUnique: vi.fn(), findFirst: vi.fn() },
     // user.findFirst is hit by assignDoctor to validate the new doctor's
     // tenant + role + active status.
     user: { findFirst: vi.fn() },
@@ -87,6 +90,10 @@ beforeEach(() => {
   mocks.prisma.membership.findFirst.mockResolvedValue(null);
   mocks.eventBus.emitEvent.mockReset();
   mocks.prisma.visit.findFirst.mockResolvedValue(null);
+  // Conflict detection reads the doctor's surrounding visits as a LIST now
+  // (interval overlap), not a single hour-bucket row.
+  mocks.prisma.visit.findMany.mockResolvedValue([]);
+  mocks.prisma.service.findUnique.mockResolvedValue({ durationMin: 30 });
   mocks.audit.writeAudit.mockResolvedValue(undefined);
 });
 
@@ -332,12 +339,22 @@ describe('appointmentService.rescheduleAppointment', () => {
     ).rejects.toMatchObject({ status: 409, code: 'DOCTOR_UNAVAILABLE' });
   });
 
-  test('same-doctor slot conflict at new hour → 409 SLOT_TAKEN', async () => {
+  test('same-doctor slot conflict at the new time → 409 SLOT_TAKEN', async () => {
     mocks.prisma.visit.findUnique.mockResolvedValue({
       id: 555, tenantId: 1, patientId: 100, doctorId: 50, status: 'booked',
       visitDate: new Date(),
     });
-    mocks.prisma.visit.findFirst.mockResolvedValue({ id: 777, doctorId: 50 }); // collision
+    // The doctor already holds 10:00–10:30 IST that day. Conflict detection is
+    // interval overlap over a LIST of surrounding visits, not a single
+    // hour-bucket row, so the collision is seeded through findMany.
+    mocks.prisma.visit.findMany.mockResolvedValue([
+      {
+        id: 777,
+        doctorId: 50,
+        visitDate: new Date(`${futureDateStr()}T10:00:00+05:30`),
+        service: { name: 'Consult', durationMin: 30 },
+      },
+    ]);
     await expect(
       svc.rescheduleAppointment({
         tenantId: 1, patientId: 100, visitId: 555,
@@ -345,6 +362,30 @@ describe('appointmentService.rescheduleAppointment', () => {
         actor: { type: 'patient', id: 100 },
       }),
     ).rejects.toMatchObject({ status: 409, code: 'SLOT_TAKEN' });
+  });
+
+  test('reschedule into a free time succeeds even when the doctor is busy elsewhere', async () => {
+    mocks.prisma.visit.findUnique.mockResolvedValue({
+      id: 555, tenantId: 1, patientId: 100, doctorId: 50, status: 'booked',
+      visitDate: new Date(),
+    });
+    // Busy 09:00–09:30 — a 10:00 move must be allowed.
+    mocks.prisma.visit.findMany.mockResolvedValue([
+      {
+        id: 777,
+        doctorId: 50,
+        visitDate: new Date(`${futureDateStr()}T09:00:00+05:30`),
+        service: { durationMin: 30 },
+      },
+    ]);
+    mocks.prisma.visit.update.mockResolvedValue({ id: 555, status: 'booked' });
+    await expect(
+      svc.rescheduleAppointment({
+        tenantId: 1, patientId: 100, visitId: 555,
+        newAppointmentDate: futureDateStr(), newAppointmentTime: '10:00',
+        actor: { type: 'patient', id: 100 },
+      }),
+    ).resolves.toBeTruthy();
   });
 });
 
@@ -555,15 +596,42 @@ describe('appointmentService.assignDoctor', () => {
     ).rejects.toMatchObject({ status: 409, code: 'DOCTOR_UNAVAILABLE' });
   });
 
-  test('slot conflict at visit hour → 409 SLOT_TAKEN', async () => {
+  test('assigning a doctor who is already booked at that time → 409 SLOT_TAKEN', async () => {
+    const visitAt = new Date();
     mocks.prisma.visit.findUnique.mockResolvedValue({
       id: 555, tenantId: 1, patientId: 100, doctorId: null, status: 'booked',
-      visitDate: new Date(),
+      visitDate: visitAt,
     });
     mocks.prisma.user.findFirst.mockResolvedValue(validDoctor);
-    mocks.prisma.visit.findFirst.mockResolvedValue({ id: 777, doctorId: 50 });
+    // The candidate doctor already holds the exact same slot.
+    mocks.prisma.visit.findMany.mockResolvedValue([
+      { id: 777, doctorId: 50, visitDate: visitAt, service: { durationMin: 30 } },
+    ]);
     await expect(
       svc.assignDoctor({ tenantId: 1, visitId: 555, doctorId: 50, actor: { type: 'user', id: 999 } }),
     ).rejects.toMatchObject({ status: 409, code: 'SLOT_TAKEN' });
+  });
+
+  test('assigning a doctor who is free at that time succeeds', async () => {
+    const visitAt = new Date('2026-09-10T10:00:00+05:30');
+    mocks.prisma.visit.findUnique.mockResolvedValue({
+      id: 555, tenantId: 1, patientId: 100, doctorId: null, status: 'booked',
+      visitDate: visitAt,
+    });
+    mocks.prisma.user.findFirst.mockResolvedValue(validDoctor);
+    // Their other appointment ends exactly when this one starts — back-to-back
+    // is legitimate and must NOT be treated as a clash.
+    mocks.prisma.visit.findMany.mockResolvedValue([
+      {
+        id: 777,
+        doctorId: 50,
+        visitDate: new Date('2026-09-10T09:30:00+05:30'),
+        service: { durationMin: 30 },
+      },
+    ]);
+    mocks.prisma.visit.update.mockResolvedValue({ id: 555, doctorId: 50 });
+    await expect(
+      svc.assignDoctor({ tenantId: 1, visitId: 555, doctorId: 50, actor: { type: 'user', id: 999 } }),
+    ).resolves.toBeTruthy();
   });
 });

@@ -299,7 +299,7 @@ describe('POST /api/portal/travel/travellers/:id/passport-upload', () => {
     expect(res.status).toBe(201);
     // The new scan was uploaded AND the old one removed from S3.
     expect(s3Service.uploadFile).toHaveBeenCalled();
-    expect(s3Service.deleteFile).toHaveBeenCalledWith('passport-ocr/OLD.png');
+    expect(s3Service.deleteFile).toHaveBeenCalledWith('passport-ocr/OLD.png', { provider: 'aws' });
   });
 
   test('lost race (updateMany 0) removes the just-uploaded S3 object', async () => {

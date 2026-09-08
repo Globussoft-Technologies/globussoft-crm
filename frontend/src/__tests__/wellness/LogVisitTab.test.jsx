@@ -398,7 +398,7 @@ describe('<wellness/LogVisitTab />  payment link surface', () => {
     expect(screen.getByText(/Balance due:/)).toBeInTheDocument();
   });
 
-  it('shows a Paid badge and disables Copy for a paid completed visit', () => {
+  it('shows a Paid badge and keeps Copy enabled for a paid completed visit', () => {
     const patient = {
       id: 1,
       visits: [
@@ -420,7 +420,7 @@ describe('<wellness/LogVisitTab />  payment link surface', () => {
 
     expect(screen.getByText(/Paid/i)).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://rzp.io/l/visit-12')).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Copy/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Copy/i })).toBeEnabled();
     expect(screen.queryByRole('button', { name: /Generate payment link/i })).not.toBeInTheDocument();
   });
 

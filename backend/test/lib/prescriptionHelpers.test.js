@@ -16,6 +16,9 @@ import { describe, test, expect } from "vitest";
 import {
   normalizePrescriptionDrugs,
   normalizePrescriptionList,
+  parseValidityDays,
+  computeValidUntil,
+  MAX_VALIDITY_DAYS,
 } from "../../lib/prescriptionHelpers";
 
 describe("normalizePrescriptionDrugs", () => {
@@ -174,5 +177,115 @@ describe("normalizePrescriptionList", () => {
 
   test("returns an empty array unchanged", () => {
     expect(normalizePrescriptionList([])).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Prescription validity — how long the course runs.
+//
+// Pinned here because two routes (create + amend) and, later, the renewal
+// reminder sweep all depend on the same two rules: what counts as a usable
+// value, and that the lapse date is anchored to the ISSUE date rather than
+// to "now".
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("parseValidityDays", () => {
+  test("blank means 'no stated validity', not zero", () => {
+    expect(parseValidityDays(undefined)).toBeNull();
+    expect(parseValidityDays(null)).toBeNull();
+    expect(parseValidityDays("")).toBeNull();
+  });
+
+  test("accepts a positive whole number of days, as string or number", () => {
+    expect(parseValidityDays(30)).toBe(30);
+    expect(parseValidityDays("30")).toBe(30);
+    expect(parseValidityDays(1)).toBe(1);
+    expect(parseValidityDays(MAX_VALIDITY_DAYS)).toBe(MAX_VALIDITY_DAYS);
+  });
+
+  test("rejects zero, negatives, fractions and junk rather than dropping them", () => {
+    // Silently coercing these would lose what the clinician typed, so each
+    // must surface as a 400-mappable error.
+    for (const bad of [0, -5, 1.5, "soon", "30 days", {}]) {
+      expect(() => parseValidityDays(bad)).toThrow(/whole number of days/);
+    }
+  });
+
+  test("caps at one year and tags the error for the route layer", () => {
+    try {
+      parseValidityDays(MAX_VALIDITY_DAYS + 1);
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err.code).toBe("INVALID_VALIDITY_DAYS");
+    }
+  });
+});
+
+describe("computeValidUntil", () => {
+  test("no validity means no lapse date", () => {
+    expect(computeValidUntil(new Date(), null)).toBeNull();
+    expect(computeValidUntil(new Date(), 0)).toBeNull();
+  });
+
+  test("adds the days to the ISSUE date, not to now", () => {
+    const issued = new Date("2026-06-01T09:00:00.000Z");
+    expect(computeValidUntil(issued, 30).toISOString()).toBe(
+      "2026-07-01T09:00:00.000Z",
+    );
+  });
+
+  test("an amendment re-anchors to the original issue date", () => {
+    // A 30-day course written on 1 June still lapses on 1 July when the
+    // validity is edited weeks later — amending must not restart the clock.
+    const issued = new Date("2026-06-01T09:00:00.000Z");
+    const amendedLater = computeValidUntil(issued, 30);
+    expect(amendedLater.toISOString()).toBe("2026-07-01T09:00:00.000Z");
+  });
+
+  test("accepts an ISO string issue date", () => {
+    expect(computeValidUntil("2026-06-01T00:00:00.000Z", 7).toISOString()).toBe(
+      "2026-06-08T00:00:00.000Z",
+    );
+  });
+
+  test("an unparseable issue date yields null rather than an Invalid Date", () => {
+    expect(computeValidUntil("not a date", 30)).toBeNull();
+  });
+});
+
+// ── Junk strength must never be welded onto the drug name ──────────
+//
+// The Drug catalogue accepted strengthValue "-" with strengthUnit "-gm"
+// before its write path was validated. buildDisplayName joined those blind
+// into "---gm" and appended it to the drug NAME, so the junk travelled with
+// the prescription onto the patient portal, the ledger and the PDF as part
+// of the name itself — where no downstream display guard could strip it.
+describe('buildDisplayName — junk strength', () => {
+  test('a strength value with no digit is not appended to the name', () => {
+    const [drug] = normalizePrescriptionDrugs({
+      drugs: [{ name: '360 Block Sunscreen', strengthValue: '-', strengthUnit: '-gm' }],
+    }).drugs;
+    expect(drug.name).toBe('360 Block Sunscreen');
+  });
+
+  test('the "----" case from the reported portal screenshot', () => {
+    const [drug] = normalizePrescriptionDrugs({
+      drugs: [{ name: 'Anti acne face wash', strengthValue: '--', strengthUnit: '--' }],
+    }).drugs;
+    expect(drug.name).toBe('Anti acne face wash');
+  });
+
+  test('a real strength is still appended', () => {
+    const [drug] = normalizePrescriptionDrugs({
+      drugs: [{ name: 'Amoxicillin', strengthValue: '500', strengthUnit: 'mg' }],
+    }).drugs;
+    expect(drug.name).toBe('Amoxicillin 500mg');
+  });
+
+  test('a strength already inside the name is not duplicated', () => {
+    const [drug] = normalizePrescriptionDrugs({
+      drugs: [{ name: 'Amoxicillin 500mg', strengthValue: '500', strengthUnit: 'mg' }],
+    }).drugs;
+    expect(drug.name).toBe('Amoxicillin 500mg');
   });
 });

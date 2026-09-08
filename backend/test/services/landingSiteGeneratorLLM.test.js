@@ -229,4 +229,30 @@ describe("generateLandingSiteContent", () => {
     expect(body).toContain("patients and families");
     expect(body).not.toContain("Blood Donation");
   });
+
+  test("surfaces aiBlockedCode when AI is not configured instead of a silent stub", async () => {
+    // No BYOK seeded + no subscription/wallet in the prisma mocks above,
+    // so aiGateway.assertAccessOrThrow throws the friendly
+    // AI_NOT_CONFIGURED error — the generator must surface it
+    // machine-readably (the route turns it into a 503; the UI shows a
+    // proper "AI is not configured" message instead of a stub draft).
+    const client = loadClient();
+
+    const result = await client.generateLandingSiteContent({
+      tenantId: 1,
+      sectorKey: "wellness",
+      sectorLabel: "Wellness",
+      campaignName: "Hair Treatment Consultation",
+      businessName: "Glow Studio",
+      campaignGoal: "collect enquiries",
+      audience: "people exploring hair treatment options",
+      location: "Koramangala",
+    });
+
+    expect(result.stub).toBe(true);
+    expect(result.aiBlockedCode).toBe("AI_NOT_CONFIGURED");
+    expect(typeof result.aiBlockedMessage).toBe("string");
+    expect(result.aiBlockedMessage.length).toBeGreaterThan(0);
+    expect(result.realModeError).toBeNull();
+  });
 });

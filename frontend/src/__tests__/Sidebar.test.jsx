@@ -39,12 +39,14 @@ import { render, screen, within, fireEvent, waitFor } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import { AuthContext } from '../App';
+import { ActiveSubBrandProvider } from '../utils/subBrand';
 
 // Stable mock object references (2026-05-23 RTL rule: hook-returned objects
 // used in useCallback deps must be referentially stable across renders or
 // the consumer infinite-renders).
 const notifyObj = { error: vi.fn(), success: vi.fn(), info: vi.fn(), confirm: vi.fn() };
 const socketObj = { on: vi.fn(), disconnect: vi.fn() };
+const ACTIVE_SUB_BRAND_STORAGE_KEY = 'travel.activeSubBrand';
 
 vi.mock('../utils/adsgpt', () => ({
   launchAdsGptAs: vi.fn(),
@@ -189,8 +191,11 @@ function renderSidebar({
   logoUrl = null,
   brandColor = null,
   subBrandAccess = null,
+  activeSubBrand = null,
   accessiblePages = null, // null → empty catalog (back-compat default)
   permissions = null,     // null → default per-role set; pass array of "module.action" strings to override
+  userType = null,        // 'STAFF' | 'CUSTOMER' — what separates a doctor from a patient
+  expandTravelGroups = true, // legacy fixture convenience; production defaults collapsed
 } = {}) {
   // Capture the catalog into a closure variable read by the default
   // mock impl set in beforeEach. This lets per-test overrides (e.g.
@@ -201,16 +206,21 @@ function renderSidebar({
   // usePermissions().hasPermission. Capture the per-render permission
   // set so the closure-backed mock returns role-appropriate grants.
   currentPermissionSet = permissions ? new Set(permissions) : permsForRole(role);
+  if (activeSubBrand == null) window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
+  else window.sessionStorage.setItem(ACTIVE_SUB_BRAND_STORAGE_KEY, activeSubBrand);
 
   const user = {
     name: 'Maya Iyer',
     email: 'maya@acme.test',
     role,
+    userType,
     wellnessRole,
     subBrandAccess: subBrandAccess === null ? null : JSON.stringify(subBrandAccess),
   };
   const tenant = { name: tenantName, vertical, logoUrl, brandColor };
-  return render(
+  if (activeSubBrand) window.sessionStorage.setItem('travel.activeSubBrand', activeSubBrand);
+  else window.sessionStorage.removeItem('travel.activeSubBrand');
+  const rendered = render(
     <MemoryRouter initialEntries={[path]}>
       <AuthContext.Provider
         value={{
@@ -222,10 +232,18 @@ function renderSidebar({
           setTenant: vi.fn(),
         }}
       >
-        <Sidebar />
+        <ActiveSubBrandProvider>
+          <Sidebar />
+        </ActiveSubBrandProvider>
       </AuthContext.Provider>
     </MemoryRouter>,
   );
+  if (vertical === 'travel' && expandTravelGroups) {
+    rendered.container.querySelectorAll('.travel-nav-section-trigger[aria-expanded="false"]').forEach((button) => {
+      fireEvent.click(button);
+    });
+  }
+  return rendered;
 }
 
 beforeEach(() => {
@@ -255,6 +273,7 @@ beforeEach(() => {
   currentAccessiblePages = [];
   window.sessionStorage.removeItem('travel.itineraries.lastListUrl');
   window.sessionStorage.removeItem('travel.diagnostics.lastListUrl');
+  window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (url === '/api/pages/me') {
@@ -267,6 +286,7 @@ beforeEach(() => {
 afterEach(() => {
   window.sessionStorage.removeItem('travel.itineraries.lastListUrl');
   window.sessionStorage.removeItem('travel.diagnostics.lastListUrl');
+  window.sessionStorage.removeItem(ACTIVE_SUB_BRAND_STORAGE_KEY);
   consoleErrorSpy?.mockRestore();
 });
 
@@ -297,6 +317,12 @@ describe('Sidebar — load-bearing render surface', () => {
       // Pin lower bound at 40 (allow for future trimming).
       const navLinks = container.querySelectorAll('a.nav-link');
       expect(navLinks.length).toBeGreaterThanOrEqual(40);
+    });
+
+    it('hides Sightseeing Master for TMC', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', activeSubBrand: 'tmc' });
+      expect(screen.queryByText('Sightseeing Master')).toBeNull();
+      expect(screen.queryByText('Web Check-ins')).toBeNull();
     });
   });
 
@@ -339,6 +365,29 @@ describe('Sidebar — load-bearing render surface', () => {
       });
       await screen.findByText('Landing Sites');
       expect(document.querySelector('a[href="/landing-sites"]')).toBeTruthy();
+    });
+
+    it('Marketing section keeps only SMS / Email Blasts + Landing Sites', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          { category: 'Marketing', path: '/marketing', label: 'SMS / Email Blasts' },
+          { category: 'Marketing', path: '/landing-sites', label: 'Landing Sites' },
+          { category: 'Marketing', path: '/social', label: 'Social Media' },
+          { category: 'Marketing', path: '/ab-tests', label: 'A/B Tests' },
+          { category: 'Marketing', path: '/booking-pages', label: 'Booking Pages' },
+        ],
+      });
+      await screen.findByText('Landing Sites');
+      expect(screen.getByText('SMS / Email Blasts')).toBeTruthy();
+      // Hidden by request (routes stay mounted/deep-linkable).
+      expect(screen.queryByText('Social Media')).toBeNull();
+      expect(screen.queryByText('A/B Tests')).toBeNull();
+      expect(screen.queryByText('Booking Pages')).toBeNull();
+      expect(document.querySelector('a[href="/social"]')).toBeNull();
+      expect(document.querySelector('a[href="/ab-tests"]')).toBeNull();
+      expect(document.querySelector('a[href="/booking-pages"]')).toBeNull();
     });
 
     it('shows wellness submodules only while their module is hovered', async () => {
@@ -456,6 +505,17 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getAllByText('Visa Sure').length).toBeGreaterThanOrEqual(1);
     });
 
+    it('hides Gmail when TMC is the active sub-brand', () => {
+      renderSidebar({
+        vertical: 'travel',
+        role: 'MANAGER',
+        subBrandAccess: ['tmc', 'rfu'],
+        activeSubBrand: 'tmc',
+      });
+      expect(screen.queryByText('Gmail')).toBeNull();
+      expect(document.querySelector('a[href="/gmail"]')).toBeNull();
+    });
+
     it('renders Landing Pages only for travel tenants', () => {
       renderSidebar({ vertical: 'travel', role: 'MANAGER', permissions: ['marketing.read'] });
       const link = screen.getByText('Landing Pages').closest('a');
@@ -463,7 +523,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/landing-pages');
     });
 
-    it('renders the Leads link under Sales pipeline', () => {
+    it('renders the Leads link under Sales', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN' });
       const leadsLink = document.querySelector('a[href="/leads"]');
       expect(leadsLink).toBeTruthy();
@@ -471,6 +531,52 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Leads')).toBeTruthy();
       // /travel/leads (All Leads) has been removed — only the revamped /leads page remains
       expect(document.querySelector('a[href="/travel/leads"]')).toBeNull();
+    });
+
+    it('collapses and expands travel navigation groups with an accessible toggle', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', expandTravelGroups: false });
+      const salesToggle = screen.getByRole('button', { name: 'Sales' });
+      expect(salesToggle).toHaveAttribute('aria-expanded', 'false');
+      expect(document.querySelector('a[href="/leads"]')).toBeNull();
+
+      fireEvent.click(salesToggle);
+      expect(salesToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(document.querySelector('a[href="/leads"]')).toBeTruthy();
+
+      fireEvent.click(salesToggle);
+      expect(salesToggle).toHaveAttribute('aria-expanded', 'false');
+      expect(document.querySelector('a[href="/leads"]')).toBeNull();
+    });
+
+    it('supports collapsing the travel sidebar chrome', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      const sidebar = document.querySelector('#app-sidebar');
+      const collapse = screen.getByRole('button', { name: 'Collapse sidebar' });
+      fireEvent.click(collapse);
+      expect(sidebar).toHaveClass('travel-sidebar-collapsed');
+      expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+      expect(sidebar).not.toHaveClass('travel-sidebar-collapsed');
+    });
+
+    it('highlights only the current travel page, not Dashboard on child routes', () => {
+      renderSidebar({
+        vertical: 'travel',
+        role: 'ADMIN',
+        path: '/travel/trip-knowledge',
+        permissions: ['reports.read', 'diagnostics.write'],
+      });
+      const dashboard = document.querySelector('a[href="/travel"]');
+      const knowledge = document.querySelector('a[href="/travel/trip-knowledge"]');
+      expect(dashboard).toHaveClass('travel-dashboard-link');
+      expect(dashboard).not.toHaveClass('active');
+      expect(knowledge).toHaveClass('active');
+    });
+
+    it('uses the same active-state class for Settings as Dashboard', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', path: '/settings' });
+      expect(document.querySelector('a[href="/settings"]')).toHaveClass('travel-settings-link', 'active');
+      expect(document.querySelector('a[href="/travel"]')).not.toHaveClass('travel-dashboard-link', 'active');
     });
 
     it('renders the sub-brand switcher when user has ≥2 sub-brand access', () => {
@@ -1075,7 +1181,7 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Embassy Rules')).toBeNull();
     });
 
-    it('renders manager-only travel items (Quote Builder / Travel Stall) for MANAGER', () => {
+    it('renders manager-only travel items (Quote Builder) for MANAGER', () => {
       renderSidebar({ vertical: 'travel', role: 'MANAGER' });
       expect(screen.getByText('Quote Builder')).toBeTruthy();
       expect(screen.queryByText('Marketing Flyer Studio')).toBeNull();
@@ -1092,12 +1198,7 @@ describe('Sidebar — load-bearing render surface', () => {
       // single- or duplicate-render shape without re-pinning the count.
       const tmcCatalogueMatches = screen.getAllByText('TMC Catalogue');
       expect(tmcCatalogueMatches.length).toBeGreaterThanOrEqual(1);
-      // Travel Stall section label is `isManager` gated. The string also
-      // appears as an <option> in the sub-brand switcher — filter to the
-      // section-label DIV node (not the OPTION).
-      const travelStallMatches = screen.getAllByText('Travel Stall');
-      const nonOption = travelStallMatches.filter((m) => m.tagName !== 'OPTION');
-      expect(nonOption.length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText('Travel Stall')).toBeNull();
     });
 
     it('hides manager-only travel items for USER role', () => {
@@ -1121,7 +1222,9 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(travelStallDashboard).toBeUndefined();
     });
 
-    it('renders POI Approvals nav entry for ADMIN under travel (S99)', () => {
+    // Skipped 2026-08-28 — POI Approvals is temporarily hidden from the
+    // sidebar while the feature code is preserved for future re-enable.
+    it.skip('renders POI Approvals nav entry for ADMIN under travel (S99)', () => {
       // S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested approval queue is
       // ADMIN-only. Backend RBAC on /api/travel/pois/pending + approve +
       // reject enforces; sidebar entry mirrors that gate so non-ADMINs do
@@ -1132,7 +1235,8 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/travel/pois/pending');
     });
 
-    it('hides POI Approvals nav entry for MANAGER + USER under travel (S99)', () => {
+    // Skipped 2026-08-28 — mirrors the skip above; POI Approvals is hidden.
+    it.skip('hides POI Approvals nav entry for MANAGER + USER under travel (S99)', () => {
       // Manager + User MUST NOT see the entry — backend rejects with 403
       // and the page renders an access-denied surface; UX is to not even
       // surface the link to non-ADMINs.
@@ -1143,36 +1247,37 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('POI Approvals')).toBeNull();
     });
 
-    it('hides Sales pipeline / Customer comms / Financial / Reports section headers when the user has no grants beneath them', () => {
+    it('hides travel section headers when the user has no grants beneath them', () => {
       // <Section> collapses the entire group (label + children) when
       // every child Link is gated out. USER default perms carry no travel
       // grants, so none of the four section headers
       // should render — only the "User" footer (notification-settings
       // has no requiredPermission and always renders) survives.
       renderSidebar({ vertical: 'travel', role: 'USER' });
-      expect(screen.queryByText('Sales pipeline')).toBeNull();
-      expect(screen.queryByText('Customer comms')).toBeNull();
-      expect(screen.queryByText('Financial')).toBeNull();
+      expect(screen.queryByText('Sales')).toBeNull();
+      // Gmail is a personal integration and keeps Communication visible.
+      expect(screen.getByText('Communication')).toBeTruthy();
+      expect(screen.getByText('Gmail')).toBeTruthy();
+      expect(screen.queryByText('Finance')).toBeNull();
       // "Reports" must not appear AT ALL — neither as the section
       // header (gated by reports.read) nor as the nav-link inside.
       expect(screen.queryByText('Reports')).toBeNull();
-      // Travel-vertical "User" footer section for USER role.
-      expect(screen.getByText('User')).toBeTruthy();
+      // No empty footer section is rendered in the reorganized travel nav.
+      expect(screen.queryByText('User')).toBeNull();
     });
 
     it('renders a travel section header only when at least one child link is grantable', () => {
-      // Granting `leads.read` alone makes the "Sales pipeline" header
-      // appear (Leads link visible); the other three section headers
-      // (Customer comms / Financial / Reports) stay hidden because
+      // Granting `leads.read` alone makes the "Sales" header
+      // appear (Leads link visible); Finance stays hidden because
       // their child links require different perms.
       renderSidebar({
         vertical: 'travel',
         role: 'USER',
         permissions: ['leads.read'],
       });
-      expect(screen.getByText('Sales pipeline')).toBeTruthy();
-      expect(screen.queryByText('Customer comms')).toBeNull();
-      expect(screen.queryByText('Financial')).toBeNull();
+      expect(screen.getByText('Sales')).toBeTruthy();
+      expect(screen.getByText('Communication')).toBeTruthy();
+      expect(screen.queryByText('Finance')).toBeNull();
       expect(screen.queryByText('Reports')).toBeNull();
     });
   });
@@ -1396,21 +1501,21 @@ describe('Sidebar — load-bearing render surface', () => {
 
     it('preserves nav structure when switching sub-brand value (no nav-link unmount)', () => {
       // Pin that changing the switcher does not blow away the rest of the
-      // travel nav — the value-change is local UI state, not a vertical
-      // remount. Sales pipeline / Customer comms section labels stay
+       // travel nav — the value-change is local UI state, not a vertical
+       // remount. Sales / Communication section labels stay
       // present before AND after change.
       renderSidebar({
         vertical: 'travel',
         role: 'ADMIN',
       });
       // Pre-change.
-      expect(screen.getByText('Sales pipeline')).toBeTruthy();
+       expect(screen.getByText('Sales')).toBeTruthy();
       const switcher = screen.getByLabelText('Switch active sub-brand');
       fireEvent.click(switcher);
       fireEvent.click(screen.getByRole('option', { name: /^RFU$/ }));
       // Post-change.
-      expect(screen.getByText('Sales pipeline')).toBeTruthy();
-      expect(screen.getByText('Customer comms')).toBeTruthy();
+       expect(screen.getByText('Sales')).toBeTruthy();
+       expect(screen.getByText('Communication')).toBeTruthy();
     });
   });
 
@@ -1657,10 +1762,13 @@ describe('Sidebar — load-bearing render surface', () => {
       { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
     ];
 
-    it('shows customerOnly pages for a customer-tier USER', async () => {
+    it('shows customerOnly pages for a USER-role account stamped CUSTOMER', async () => {
+      // A legacy customer carries role USER with the customer userType — the
+      // userType is what makes them a customer, not the role.
       renderSidebar({
         vertical: 'wellness',
         role: 'USER',
+        userType: 'CUSTOMER',
         accessiblePages: CUSTOMER_PAGES,
       });
       await screen.findByText('My Transactions');
@@ -1668,10 +1776,28 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Point of Sale')).toBeTruthy();
     });
 
+    it('hides customerOnly pages from a doctor, who is also role USER', async () => {
+      // Every staff account is role USER / userType STAFF. Reading the role
+      // alone put the patient storefront in the nav of every doctor, nurse
+      // and telecaller.
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'USER',
+        userType: 'STAFF',
+        wellnessRole: 'doctor',
+        accessiblePages: CUSTOMER_PAGES,
+      });
+      // The ordinary Finance sibling still renders, so the catalog resolved…
+      await screen.findByText('Point of Sale');
+      // …and only the customer storefront entry is gone.
+      expect(screen.queryByText('My Transactions')).toBeNull();
+    });
+
     it('shows customerOnly pages for a CUSTOMER role', async () => {
       renderSidebar({
         vertical: 'wellness',
         role: 'CUSTOMER',
+        userType: 'CUSTOMER',
         accessiblePages: CUSTOMER_PAGES,
       });
       await screen.findByText('My Transactions');

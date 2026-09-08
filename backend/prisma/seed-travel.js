@@ -127,6 +127,7 @@ async function main() {
         tenantId: tenant.id,
         role: u.role,
         name: u.name,
+        password: pw,
         subBrandAccess: JSON.stringify(u.subBrandAccess),
       },
       create: {

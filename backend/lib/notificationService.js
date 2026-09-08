@@ -135,7 +135,7 @@ async function sendSendGrid(to, subject, body) {
  * @param {Object} [opts.io]         - Socket.io server instance
  * @returns {Promise<Object|null>}   - The created Notification record or null if deduped/blocked by prefs
  */
-async function notify({ userId, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours = 24, channels, io }) {
+async function notify({ userId, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours = 24, channels, io, ignorePreferences = false }) {
   const requestedChannels = channels || ["db", "socket"];
 
   // Fetch user preferences
@@ -153,19 +153,19 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
 
   // Check if category is enabled (map type to category if category not provided)
   const notifCategory = category || type || 'info';
-  if (prefs.categoryToggles[notifCategory] === false) {
+  if (!ignorePreferences && prefs.categoryToggles[notifCategory] === false) {
     console.log(`[notificationService] Category "${notifCategory}" is disabled for user ${userId}`);
     return null;
   }
 
   // Check if in quiet hours
-  if (isInQuietHours(prefs.timezone, prefs.quietHoursStart, prefs.quietHoursEnd)) {
+  if (!ignorePreferences && isInQuietHours(prefs.timezone, prefs.quietHoursStart, prefs.quietHoursEnd)) {
     console.log(`[notificationService] User ${userId} is in quiet hours; suppressing notification`);
     return null;
   }
 
   // Determine active channels based on preferences
-  const activeChannels = requestedChannels.filter(ch => {
+  const activeChannels = ignorePreferences ? requestedChannels : requestedChannels.filter(ch => {
     const allowed = prefs.channels[ch];
     if (allowed === false) {
       console.log(`[notificationService] Channel "${ch}" is disabled for user ${userId}`);
@@ -259,10 +259,10 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
 /**
  * Notify multiple users.
  */
-async function notifyMany({ userIds, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours, channels, io }) {
+async function notifyMany({ userIds, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours, channels, io, ignorePreferences = false }) {
   const results = [];
   for (const uid of userIds) {
-    const n = await notify({ userId: uid, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours, channels, io });
+    const n = await notify({ userId: uid, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours, channels, io, ignorePreferences });
     results.push(n);
   }
   return results;

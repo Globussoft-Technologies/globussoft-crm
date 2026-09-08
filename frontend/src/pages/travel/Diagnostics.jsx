@@ -8,6 +8,7 @@ import {
   ChevronUp,
   ClipboardCheck,
   Compass,
+  Eye,
   Filter,
   Plus,
   Trash2,
@@ -678,6 +679,7 @@ export default function Diagnostics() {
                   <col style={{ width: "140px" }} />
                   <col style={{ width: "100px" }} />
                   <col style={{ width: "80px" }} />
+                  <col style={{ width: "60px" }} />
                 </colgroup>
                 <thead>
                   <tr>
@@ -697,6 +699,9 @@ export default function Diagnostics() {
                     <th style={th} aria-sort={sortKey === "classification" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("classification", "Classification")}</th>
                     <th style={th} aria-sort={sortKey === "tier" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("tier", "Tier")}</th>
                     <th style={th} aria-sort={sortKey === "score" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("score", "Score")}</th>
+                    <th style={{ ...th, textAlign: "center" }}>
+                      <span style={visuallyHidden}>Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -751,6 +756,17 @@ export default function Diagnostics() {
                         </td>
                         <td style={td}>
                           {d.score !== null ? Number(d.score).toFixed(2) : "—"}
+                        </td>
+                        <td style={{ ...td, textAlign: "center" }}>
+                          <Link
+                            to={`/travel/diagnostics/${d.id}`}
+                            className="diagnostics-view-btn"
+                            style={viewIconBtn}
+                            title="View diagnostic"
+                            aria-label={`View diagnostic #${d.id}`}
+                          >
+                            <Eye size={16} aria-hidden />
+                          </Link>
                         </td>
                       </tr>
                     );
@@ -1231,6 +1247,31 @@ const rowLink = {
   color: "var(--primary-color, var(--accent-color))",
   textDecoration: "none",
   fontWeight: 500,
+};
+
+const visuallyHidden = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0, 0, 0, 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
+const viewIconBtn = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 28,
+  height: 28,
+  borderRadius: 6,
+  color: "var(--text-secondary)",
+  background: "transparent",
+  border: "1px solid var(--border-color)",
+  textDecoration: "none",
 };
 
 const contactLinkStyle = {

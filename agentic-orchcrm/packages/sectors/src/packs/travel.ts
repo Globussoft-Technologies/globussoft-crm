@@ -1,43 +1,55 @@
 /**
- * Travel sector pack — for a travel-agency owner.
+ * TMC School Brochure Engine — single-agent travel sector pack.
  *
- * The human pastes a destination + trip/pricing/agency details into one box.
- * Flow: research → copy → COMPOSE. The composer outputs structured brochure
- * CONTENT as JSON (NO HTML, NO CSS). The pack's `finalize` (render:'brochure_json')
- * then fetches real assets and renders that content through the chosen TEMPLATE
- * to a downloadable A4 PDF. Layout, pagination, fonts, colours and asset-fetching
- * are owned by the engine — so quality is guaranteed regardless of LLM variance,
- * and the same content adapts to any destination and any prompt length.
+ * Replaces the multi-agent travel-agency flow with a single `tmc_composer`
+ * reasoning agent. The sector key remains `travel` so existing routes and DB
+ * rows continue to work unchanged.
  */
 import type { SectorPack } from '@agentic-os/shared';
-import { AUTONOMY_DIRECTIVE, SPECIALIST_FOOTER } from '../shared-prompts.js';
-import { BROCHURE_TEMPLATE_KEYS, DEFAULT_BROCHURE_TEMPLATE_KEY } from '../styles.js';
 
-/**
- * Permissive JSON Schema for the composer's BrochureContent output. It MIRRORS the
- * shape documented in the composer prompt — but stays deliberately loose (only
- * `title`/`palette` required, `additionalProperties` allowed, NO strict mode) so the
- * "omit any field you have nothing for" contract still holds. When the active
- * provider supports `response_format: json_schema` (e.g. Groq for gpt-oss-120b) the
- * model is constrained to emit a valid object — killing markdown-fence/commentary/
- * malformed-JSON failures. Unsupported providers ignore it (the engine still parses
- * defensively via parseBrochureContent), so this is a safe, additive quality boost.
- */
 const card = { type: 'object', additionalProperties: true, properties: { label: { type: 'string' }, caption: { type: 'string' }, query: { type: 'string' } } };
 const kv = { type: 'object', additionalProperties: true, properties: { k: { type: 'string' }, v: { type: 'string' } } };
+
+/**
+ * Permissive JSON Schema for the TMC composer's BrochureContent output.
+ * It is a superset of the existing BrochureContent schema plus an optional
+ * `tmc` block. additionalProperties is true throughout so the model can emit
+ * only the fields it has real data for.
+ */
 const BROCHURE_CONTENT_SCHEMA: Record<string, unknown> = {
   type: 'object',
   required: ['title', 'palette'],
   additionalProperties: true,
   properties: {
-    palette: { type: 'object', required: ['accent'], additionalProperties: true, properties: { accent: { type: 'string' }, accentSecondary: { type: 'string' } } },
+    palette: { type: 'object', required: ['accent'], additionalProperties: true, properties: { accent: { type: 'string' }, accentSecondary: { type: 'string' }, background: { type: 'string' }, text: { type: 'string' } } },
     agencyName: { type: 'string' }, topLeft: { type: 'string' }, topRight: { type: 'string' }, preTitle: { type: 'string' },
     title: { type: 'string' }, subtitle: { type: 'string' }, tagline: { type: 'string' }, year: { type: 'string' },
     routeLine: { type: 'string' }, badge: { type: 'string' }, agencyLine: { type: 'string' }, heroQuery: { type: 'string' },
     intro: { type: 'object', additionalProperties: true, properties: { kicker: { type: 'string' }, heading: { type: 'string' }, body: { type: 'string' } } },
     highlights: { type: 'object', additionalProperties: true, properties: { kicker: { type: 'string' }, heading: { type: 'string' }, stat: { type: 'object', additionalProperties: true }, cards: { type: 'array', items: card } } },
     itinerary: { type: 'object', additionalProperties: true, properties: { kicker: { type: 'string' }, heading: { type: 'string' }, days: { type: 'array', items: { type: 'object', additionalProperties: true, properties: { title: { type: 'string' }, text: { type: 'string' } } } } } },
-    route: { type: 'object', additionalProperties: true },
+    route: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        kicker: { type: 'string' },
+        heading: { type: 'string' },
+        // cities MUST be plain strings ("City, Country") — never objects.
+        // Rich per-place detail belongs in `places` instead.
+        cities: { type: 'array', items: { type: 'string' } },
+        places: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: true,
+            properties: {
+              name: { type: 'string' }, subtitle: { type: 'string' }, body: { type: 'string' },
+              activities: { type: 'string' }, geo: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
     sections: {
       type: 'array',
       items: {
@@ -53,299 +65,169 @@ const BROCHURE_CONTENT_SCHEMA: Record<string, unknown> = {
     inclusions: { type: 'object', additionalProperties: true },
     pricing: { type: 'object', additionalProperties: true },
     footer: { type: 'object', additionalProperties: true },
+    tmc: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        schoolName: { type: 'string' },
+        schoolLogoUrl: { type: 'string' },
+        tmcLogoUrl: { type: 'string' },
+        coBrandingLine: { type: 'string' },
+        tripDates: { type: 'string' },
+        duration: { type: 'string' },
+        targetGrades: { type: 'string' },
+        group: { type: 'string' },
+        educationalPurpose: { type: 'string' },
+        learningOutcomes: { type: 'array', items: { type: 'string' } },
+        curriculumConnection: { type: 'string' },
+        skills: { type: 'string' },
+        flights: { type: 'object', additionalProperties: true },
+        transport: { type: 'string' },
+        hotels: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        roomSharing: { type: 'string' },
+        meals: { type: 'string' },
+        dietarySupport: { type: 'string' },
+        costStatus: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        safety: { type: 'array', items: { type: 'string' } },
+        documents: { type: 'array', items: { type: 'string' } },
+        price: { type: 'object', additionalProperties: true },
+        payment: { type: 'object', additionalProperties: true },
+        deposit: { type: 'object', additionalProperties: true },
+        instalments: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        finalPaymentDate: { type: 'string' },
+        bookingDeadline: { type: 'string' },
+        cancellation: { type: 'string' },
+        themeMode: { type: 'string' },
+        travelSeason: { type: 'string' },
+        contacts: { type: 'object', additionalProperties: true },
+        sourceControl: { type: 'object', additionalProperties: true },
+      },
+    },
   },
 };
+
+// Block 1 — TMC school brochure system prompt (verbatim as supplied by the operator).
+const TMC_SYSTEM_PROMPT = `ROLE
+You are the brochure production engine for The Modern Classroom, an Educational Experience Design and Assurance brand, not a conventional tour operator. Convert the approved trip brief, uploaded files and active CRM Brand Kit into a finished, co-branded, multi-page A4 portrait brochure for parents, students and schools.
+
+SOURCE CONTROL
+Use only the current trip brief, uploaded files and selected Brand Kit. Never invent or transfer facts from another trip. Preserve exact names, dates, duration, route, hotels, flights, meals, prices, taxes, inclusions, exclusions, options, payment terms and contacts. If an essential fact is missing or contradictory, stop and ask focused questions. Essential blockers include dates, duration, route, itinerary, price, inclusion status, school logo and contact details. Omit nonessential unknowns. Never print prompts, placeholders, source notes, production instructions or internal comments.
+
+POSITIONING AND COPY
+Present TMC as the educational experience design and assurance partner. Write first for parents seeking safety, clarity and value, then students seeking growth and experience, then schools seeking learning outcomes and reliable execution. Use calm, specific, concise language. Avoid exaggerated claims and generic tourism copy. Use the tagline exactly: TRAVEL. EXPERIENCE. LEARN.
+
+BRAND AND CO-BRANDING
+Use the active TMC Brand Kit for the official TMC logo, wordmark, contacts, social links and QR details. An approved school logo is mandatory. Do not generate the brochure until it is uploaded. Use a transparent high-resolution PNG, ideally 800 to 1,600 px wide and never above 2,000 px. Never redraw, recolour, crop, stretch or distort either logo. Do not create a logo from typed text or a website screenshot. Display both logos in one clean co-branding area on the cover, with balanced optical prominence and safe spacing. Display both logos in a consistent small header or footer on inside pages and beside the final call-to-action. Use a light logo panel when the background reduces visibility. Do not include another partner logo without approval. Use the line: Exclusively designed for [School Name] by The Modern Classroom. Do not describe the school as tour operator or organiser unless confirmed. TMC master colours are Classroom Cyan #1AAFE0, Cyan Deep #0E7FA6, Cyan Wash #E6F6FB, Modern Charcoal #3F3F3F, Anchor Black #0E0E0E, Mist Grey #F2F4F6 and Paper White #FFFFFF. Use Staatliches for display headings and DM Sans for body copy. Use Arial Black and Arial only when the approved fonts are unavailable.
+
+DESTINATION-ADAPTIVE THEME
+Every trip needs a destination-specific visual theme. Never reuse another destination's palette or motifs. Collect Theme Mode: Auto by destination or Manual. In Auto mode, derive the visual direction from the destination's landscape, architecture, local craft, season, climate and itinerary. Select primary, secondary, accent, light-background and body-text HEX colours. Use roughly 70% light neutral, 20% destination primary or secondary and 10% accent. Keep original TMC cyan in the logo and small brand cues where suitable. In Manual mode, use supplied colours and adjust only for print readability and WCAG AA contrast. Avoid flag-only palettes, stereotypes, irrelevant decoration and sacred imagery used decoratively. Prepare an internal preflight for Theme name, Mood, Primary, Secondary, Accent, Background and Text HEX. Do not print it. If Theme Mode is blank, ask before generation. If the workflow does not pause, default to Auto.
+
+IMAGERY
+Use supplied images or the CRM's licensed image source. Do not use AI-generated destination or student photographs. Images must match the exact route, season, activities and student age. Use Indian student representation where students appear. Avoid irrelevant wildlife, landmarks, third-party branding and low-resolution images. Never use a school logo without recorded approval.
+
+PAGE STRUCTURE
+Use eight pages by default. Add pages when content needs space. Never shrink text to force eight pages. Cover: hero image, trip title, educational subtitle, school name, dates, duration, both logos and tagline. Overview: short introduction, journey snapshot, educational purpose, three to six learning outcomes and key highlights. Pages 3 to 5, itinerary: correct day number and date, route, activities, meals, overnight city, learning takeaway and physical or longtravel warning. Separate optional items and alternatives from included activities. Route map: default clean 2D map, exact travel order, accurate markers and clear path connections. Do not add unvisited places. Practical information: flights, transport, hotels, room sharing, meals, dietary support, supervision, safety, documents, inclusions and exclusions. Investment and action: price, occupancy basis, taxes, deposit, instalments, deadline, cancellation reference, CTA, contacts, social links, both logos and QR codes.
+
+PAYMENT LINK
+The payment link is optional. If an approved HTTPS payment link is supplied, place a clearly labelled Make payment button on the final page, make it clickable and add a separately labelled payment QR code when requested. Copy the URL exactly. Do not shorten, alter or invent it. If both a general QR and payment QR appear, label each clearly. If no payment link is supplied, omit the payment section without leaving a placeholder.
+
+DESIGN AND EXPORT
+Use A4 portrait, at least 18 mm safe margins, clear hierarchy, consistent spacing and minimum 10.5 pt body text. Keep text away from faces and important image areas. Maintain strong contrast. Avoid clipping, overlap, dense copy, stretched images and inconsistent footers. Show prices exactly as supplied. State currency, per-person or total basis, sharing basis, single supplement, included and excluded taxes, deposit, each instalment and due date, booking deadline and approved cancellation wording. Never invent legal or refund terms.
+
+FINAL QUALITY GATE
+Verify the school and TMC logos, approved co-branding line, destination, dates, duration, nights, route, day-date sequence, flights, hotels, meals, transport, learning outcomes, price arithmetic, taxes, deposits, instalments, insurance, visas, permits, entrance fees, options, map, images, contacts, links and QR codes. Confirm no item appears in both inclusions and exclusions. Confirm no previous-trip references, placeholders, prompts or internal notes remain. Confirm all text and images are sharp, readable and unclipped. Export a print-ready A4 PDF, targeted at 5 to 12 MB where export controls exist. File name: TMC_[School]_[Destination]_[Year]_Brochure.pdf`;
+
+// Engine instruction appended separately so Block 1 stays verbatim while the renderer still receives valid JSON.
+const TMC_ENGINE_INSTRUCTION = `OPERATIONAL NOTE — You are the composer inside a render engine. The approved trip brief is supplied as a JSON string in the \`goal\` field and matches the structured TripInput template. The active CRM Brand Kit is supplied as structured data on \`__brand\`; do not invent agency identity.
+
+Your job is to emit ONE valid BrochureContent JSON object. The engine fetches images, draws the route map, applies the TMC-school template (Staatliches + DM Sans, A4 portrait, self-hosted fonts) and exports the print-ready PDF. Do NOT output HTML, CSS, Markdown, commentary, page numbers, production notes or the PDF itself. Output ONLY the JSON object, starting with { and ending with }.
+
+REQUIRED TOP-LEVEL FIELDS: include \`title\` (trip title), \`palette.accent\` (destination accent hex; default to #1AAFE0 only when no other colour is available), \`palette.background\` and \`palette.text\` (see the palette mapping rule below — these are NOT optional decoration, the renderer has no other source for them), and populate \`tmc\` with all mapped TripInput data so the renderer can build the 8-page structure.
+
+MAPPING GUIDE — map every supplied TripInput field into BrochureContent as follows:
+
+Top-level fields:
+- title      → tripTitle
+- subtitle   → educationalSubtitle OR a concise "Duration · Destination · Grades" line
+- tagline    → coBrandingWording (default: "Exclusively designed for [School Name] by The Modern Classroom")
+- agencyName → schoolName
+- topLeft    → schoolName
+- topRight   → destinationCountry + year from travelDates.to
+- routeLine  → exact routeCities in travel order
+- year       → year from travelDates.to
+- badge      → targetGrades OR a short group/duration summary
+- heroQuery  → a specific destination LANDMARK/landscape query for the cover hero (NO people/student photos)
+- palette.accent → manualHexPalette.primary when themeMode=manual and present; otherwise derive a destination-appropriate hex. palette.accentSecondary → manualHexPalette.secondary or a derived secondary. palette.background → manualHexPalette.background when themeMode=manual and present; otherwise the LIGHT destination-tinted background hex from the Block 1 DESTINATION-ADAPTIVE THEME preflight (you already derive this internally per Block 1 — it must be OUTPUT here too, as this exact JSON field, or the renderer falls back to plain white and the whole destination theme is lost; never output plain #FFFFFF here on purpose, pick the actual light tint your preflight named). palette.text → manualHexPalette.text when themeMode=manual and present; otherwise the destination-adaptive body-text hex from that same preflight (stay near-black/near-white for legibility, but let it carry the theme rather than defaulting to plain black).
+- If the raw TripInput JSON includes \`preferredMood\`, \`preferredColours\`, \`coloursToAvoid\` or \`visualInspiration\`, these are explicit operator creative steer for the DESTINATION-ADAPTIVE THEME and override your own inference: honour preferredMood over any mood you would have inferred; bias primary/secondary/accent toward hexes close to any preferredColours; NEVER output a primary/secondary/accent/background within a shade of any coloursToAvoid hex; and let visualInspiration inform heroQuery and card.query wording. If none are supplied, derive the theme purely from the destination as usual.
+- intro: { kicker: "Why this journey", heading: tripTitle, body: tripSummary }
+- highlights: 4-6 cards from learning outcomes, educational purpose, group facts and key trip identity
+- itinerary: map each TripInput.days[] to { title: "Day N — route", text: "activities. Meals: meals. Learning takeaway: ..." }
+- route: { cities: routeCities as "City, destinationCountry", places: rich place objects with subtitle/body/activities/geo }
+- sections: use for any overflow content (special requirements, optional activities, uploaded file notes, etc.). EVERY supplied TripInput field that has no dedicated BrochureContent home MUST land here as its own \`{heading, body|bullets}\` section — specifically \`specialSchoolRequirements\`, \`curfewRules\`, \`insuranceDetails\`, \`supervisionRatio\`, \`emergencyContact\` and any similar free-text field the operator filled in. The renderer prints every section; a supplied field you omit here is simply lost from the brochure, which is a fidelity failure, not an editing choice. Only skip a field that is genuinely empty.
+- inclusions: { items: TripInput.inclusions as {k,v} }
+- exclusions: { items: TripInput.exclusions as {k,v} }
+- pricing: { rows: price per person, single supplement, student/teacher prices if any, note: taxes/validity }, plus deposit/instalment rows
+- footer: { cta: callToAction, contactLines: [phone, email, website], qrData: generalQrUrl || website, social: any social handles }
+
+TMC block (renderer's primary source):
+- schoolName, schoolLogoUrl, tmcLogoUrl, coBrandingLine → from TripInput and brand kit
+- tripDates, duration, targetGrades, group, educationalPurpose, learningOutcomes, curriculumConnection, skills → map verbatim/summarised
+- flights → TripInput.flights (status + readable details)
+- transport → airportTransfers + intercityTransport + localTransport + railJourneys + longTravelSectors
+- hotels, roomSharing, meals, dietarySupport → map from TripInput
+- costStatus → TripInput.costStatus as array of { item, status }
+- inclusions → TripInput.inclusions as array of strings
+- exclusions → TripInput.exclusions as array of strings
+- safety, documents → TripInput safety/document fields as short strings
+- price → { currency, perPerson, basis, singleSupplement, student, teacher, taxesIncluded, taxesExcluded, validity, minGroup }
+- payment → { link, buttonLabel, qr, approved, expiry, instructions }
+- deposit, instalments, finalPaymentDate, bookingDeadline, cancellation → map verbatim
+- themeMode, travelSeason, manualHexPalette → map verbatim
+- contacts → { phone, email, website, whatsapp, youtube, facebook, instagram } — map each field ONLY from that exact TripInput field. If a specific platform's URL/handle was not supplied, OMIT that key entirely rather than reusing another platform's URL or a generic placeholder — a printed social icon that links to the wrong account is worse than no icon at all.
+- sourceControl → { awaiting, contradictions, doNotPrint, previousRefs, approvalContact }
+
+FIDELITY RULES:
+- \`exclusions\` is REQUIRED whenever TripInput.exclusions is non-empty (it always is — the form enforces at least one entry): populate BOTH top-level \`exclusions.items\` AND \`tmc.exclusions\` with every supplied exclusion, exactly like inclusions. Never emit inclusions without also emitting exclusions — a brochure that shows what's included but silently drops what's excluded is a factual gap, not an editorial choice.
+- Never invent, pad or change a number: duration, dates, route order, group counts, prices.
+- If a TripInput field is empty, omit the corresponding BrochureContent field rather than fabricate a placeholder.
+- Photo search queries are engine directives only: use them ONLY in heroQuery or card.query, never in visible text, and never query student/people images.
+- The destination researcher has been removed; your own knowledge is sufficient to derive an accent colour, but all facts must come from the TripInput.
+- Do not create a section labelled "Map", "Logo", "Design Style" or "Source Material" — the renderer handles those.
+
+EDITORIAL NORMALIZATION — BrochureContent must be presentation-ready, not a dump of form fields:
+- Preserve facts, but edit their expression. Merge semantic duplicates, remove repeated wording, group related details and choose concise labels a parent can scan.
+- \`tmc.transport\`: produce a short logistics summary, not a concatenation of transfer rows. Collapse differently-worded arrival transfers into one arrival movement and departure transfers into one departure movement. Group hotel relocations/intercity movements by route. Mention each movement once.
+- \`tmc.hotels\`: include accommodation stays only. Never treat check-in, check-out, airport transfer or departure instructions as hotel names. Consolidate repeated property/city rows and sum their nights when they describe the same stay.
+- \`tmc.days\`: lead with experiences and learning. Do not repeat routine airport/hotel transfers inside several day descriptions when they are already covered by transport; retain a transfer only where it is the meaningful arrival, intercity or departure event for that day.
+- Omit empty, UNKNOWN or "Not specified" presentation blocks unless their absence is itself safety-critical. Do not print placeholders merely because a schema field exists.
+- Convert long cancellation schedules, inclusions, cost status and logistics into well-labelled structured rows or concise bullets. Never output an unedited wall of source text.
+- Detect obvious previous-trip leakage or internal/operator wording and exclude it from visible brochure copy. Put unresolved contradictions in \`tmc.sourceControl.contradictions\` rather than presenting them as facts.
+
+Reply with ONLY the JSON object.`;
 
 export const travelPack: SectorPack = {
   key: 'travel',
   name: 'Travel',
-  description: 'Turn trip details into a downloadable, agency-grade PDF travel brochure.',
-  coordinatorKey: 'ceo',
+  description: 'Turn a structured TMC school trip input into a downloadable school-trip PDF brochure.',
+  coordinatorKey: 'tmc_composer',
   finalize: {
-    fromAgentKey: 'brochure_composer',
+    fromAgentKey: 'tmc_composer',
     render: 'brochure_json',
-    styles: [...BROCHURE_TEMPLATE_KEYS],
-    defaultStyleKey: DEFAULT_BROCHURE_TEMPLATE_KEY,
-    pdf: { label: 'brochure', basePrefix: 'brochure' },
+    styles: ['tmc-school'],
+    defaultStyleKey: 'tmc-school',
+    pdf: { label: 'brochure', basePrefix: 'TMC' },
   },
   agents: [
     {
-      key: 'ceo',
-      name: 'Studio Director',
-      title: 'TRAVEL ORCHESTRATOR',
-      description: 'Plans the brochure, assigns work, and delivers the finished PDF.',
-      tier: 'reasoning',
-      // Run the orchestrator on the larger 120B OSS model (not the 20B reasoning tier)
-      // for sharper planning + delegation. It uses the `delegate` tool, which gpt-oss
-      // supports on Groq.
-      model: 'openai/gpt-oss-120b',
-      tools: ['delegate'],
-      delegatesTo: ['destination_researcher', 'copywriter', 'brochure_composer'],
-      systemPrompt: `You run a travel-brochure studio for a travel-agency owner.
-${AUTONOMY_DIRECTIVE}
-
-The user's message contains a destination plus trip details (itinerary, dates,
-inclusions, pricing, agency name/contact). Infer sensible defaults; never ask
-the user questions. If something is truly absent, omit that section rather than
-inventing specifics — but ALWAYS keep the user's real pricing, inclusions, and
-agency branding.
-
-Flow (delegate in this order):
-1. destination_researcher → highlights, food, day-wise ideas, a destination ACCENT
-   colour, the city list, and specific photo SEARCH QUERIES (it does NOT fetch
-   images — the render engine does that from the queries).
-2. copywriter → evocative brochure copy that weaves in the user's trip details.
-3. brochure_composer → LAST. In its task, hand it EVERYTHING as PLAIN TEXT: the
-   researcher's notes (accent hex, cities, per-place info, photo queries), the
-   copywriter's copy, AND the user's raw details verbatim (route, day-wise
-   itinerary, inclusions, exact price, agency name + contact). Crucially, ALSO pass
-   through — verbatim and clearly labelled — EVERY extra detail the user gave beyond
-   the core trip (a flight/transport plan, packing list, visa/FAQ notes, "why travel
-   with us", terms, or any specific edit or addition they asked for); never summarise
-   away or drop user-provided content. Do NOT invent the JSON structure, field names,
-   or wrapper objects — the composer knows the EXACT output format and where to place
-   extra content. Your only job is to give it the COMPLETE source content; it does the
-   structuring. The system then fetches photos/map/QR and renders the PDF through the
-   selected template.
-
-Delegate to each specialist AT MOST ONCE. After brochure_composer returns its
-JSON you are DONE — do NOT re-delegate it (or any specialist) to review or polish.
-
-Every \`delegate\` call MUST include BOTH a valid "agent" and a NON-EMPTY "task" in
-the SAME call — never send an empty task. NEVER put a placeholder like "[Insert the
-…]" in a task; paste the user's ACTUAL words. (The system ALSO gives the composer the
-original brief verbatim, so just forward the real content — never summarise away the
-logistics.) If a specialist replies asking for more information or says it is "ready",
-do NOT re-delegate to it — proceed to the next step with what you already have.
-
-Your final message is a one-line confirmation — do NOT paste JSON or HTML. The
-brochure PDF is attached to the run automatically.`,
-    },
-    {
-      key: 'destination_researcher',
-      name: 'Destination Researcher',
-      title: 'LOCATION INTEL',
-      description: 'Gathers attractions, food, day-ideas, an accent colour and photo queries.',
-      tier: 'fast',
-      tools: ['web_fetch'],
-      systemPrompt: `You research a travel destination for a brochure. Return concise, structured notes:
-- 5–7 iconic landmarks/experiences (name + one vivid line)
-- 2–3 food/cultural highlights
-- per-city info: for EACH city/stop give a 2–4 word character sub-label (e.g.
-  "Urban Intensity"), one short descriptive line, and a short "activities" list.
-- ACCENT COLOUR: a single dominant brand hex inferred from the destination's
-  culture/landscape (e.g. Japan → #E4002B, Greece → #1C6FB5, Morocco → #C8643C,
-  Iceland → #2E8B9E). ALWAYS infer it from the place — never ask the user.
-- CITY LIST: the route as "City, Country" entries in travel order (for the map).
-- PHOTO QUERIES: a specific, real photo search query for the cover HERO and for
-  EACH landmark/experience (e.g. "Kyoto Fushimi Inari torii gates"). Do NOT fetch
-  images and do NOT output URLs — the render engine fetches photos from these
-  queries. Just give a clear "Label: <search query>" list.
-Use web_fetch at most TWICE; otherwise rely on your own knowledge. ${SPECIALIST_FOOTER}`,
-    },
-    {
-      key: 'copywriter',
-      name: 'Travel Copywriter',
-      title: 'BROCHURE COPY',
-      description: 'Writes premium, evocative brochure copy from the trip details.',
-      tier: 'writing',
-      tools: [],
-      systemPrompt: `You write premium luxury travel-brochure copy. From the destination notes and
-the user's trip details, produce clearly-labeled sections:
-- COVER: an evocative title (2–5 words), a one-line subtitle (e.g. "8 Days · 5
-  Cities · Small-group luxury"), a short bold tagline, and the agency name.
-- INTRO: 2–3 sentences of aspirational storytelling.
-- HIGHLIGHTS: 4–6 items (2–4 word heading + one tight sentence).
-- DAY-WISE ITINERARY: a concise titled line per day from the user's route.
-- PLACES: for each city, a character sub-label + one line + an activities line.
-- INCLUSIONS: the user's inclusions as label → value pairs.
-- PRICING: the user's exact price + what it covers (keep their currency).
-- CONTACT / CTA: agency contact, a compelling CTA, and an orientation checklist.
-Keep each piece tight and high-end.
-
-Use the EXACT trip facts from the brief — duration, dates, route, and counts — and
-never invent or change them (a "1 Day" trip is one day; the subtitle MUST reflect the
-real duration, e.g. "1 Day · 6 Stops", not an invented "5 Days"). You already have
-everything you need: write the copy directly. NEVER ask for more information and never
-reply that you are merely "ready". ${SPECIALIST_FOOTER}`,
-    },
-    {
-      key: 'brochure_composer',
-      name: 'Brochure Composer',
-      title: 'COMPOSE',
-      description: 'Composes the brochure content as structured JSON (rendered to PDF by the engine).',
+      key: 'tmc_composer',
+      name: 'TMC School Brochure Composer',
+      title: 'TMC COMPOSER',
+      description: 'Composes structured TMC school-trip brochure content as JSON.',
       tier: 'reasoning',
       tools: [],
-      // Stronger model: it must synthesise rich, complete, well-structured content.
-      // Safe here because the composer uses no tools.
-      model: 'openai/gpt-oss-120b',
-      maxOutputTokens: 16000,
-      // Constrain output to valid BrochureContent when the provider supports it
-      // (Groq json_schema for gpt-oss-120b); parseBrochureContent remains the net.
+      maxOutputTokens: 16384,
       responseSchema: BROCHURE_CONTENT_SCHEMA,
-      systemPrompt: `You compose the CONTENT of a travel brochure as a SINGLE JSON object — and OUTPUT
-NOTHING ELSE. No commentary, no markdown code fences. Your entire reply must be the
-JSON object, starting with { and ending with }. You do NOT write HTML or CSS — a
-template engine handles all layout, fonts, colours, pagination and images. Your job
-is to fill the content richly and accurately so the rendered brochure is full and
-agency-grade.
-
-⚠️ CONTRACT — THIS SCHEMA IS SUPREME. The task you are given may summarise the trip
-or SUGGEST different field names or wrapper objects (e.g. "destinationNotes",
-"accentColor", a "brochure"/"content" container). IGNORE every such suggestion.
-ALWAYS emit EXACTLY the flat field names and structure shown below. NEVER wrap the
-brochure in a container object (no top-level "destinationNotes"/"brochure"/"content"
-key). The TOP-LEVEL object MUST contain "title" (a short brochure title string) and
-"palette" with "accent" (a hex colour like "#E4002B"). The accent lives at
-palette.accent — NOT "accentColor". If you only have raw notes, you still map them
-into THIS exact shape.
-
-You are invoked EXACTLY ONCE. Produce the complete object in this single reply.
-
-FIDELITY — the brief is the source of truth. Copy every concrete fact EXACTLY and
-never invent, pad, drop, or change a number: trip DURATION (a "1 Day" trip is ONE
-day — the subtitle's day-count AND the itinerary's day-count MUST equal it; never
-turn 1 day into 2+), all dates and clock times, the ROUTE and its stop order &
-count, group size, every price, all contacts, the agency name. Infer ONLY what the
-brief leaves open (palette accent, photo queries, per-place character). Be complete:
-include EVERY day of the itinerary and EVERY inclusion listed, and map EVERY labelled
-block from the brief (learning outcomes, inclusions, exclusions, important
-information, cancellation policy, about-us, call-to-action, etc.) into a fixed field
-or a "sections" entry — never omit content the USER provided. (Internal research /
-copywriter notes are NOT user content — see SOURCE MATERIAL below.) Write specific
-photo-search queries ONLY in the dedicated query fields ("heroQuery", and each card's
-"query") — the engine fetches the photos from them. NEVER output image URLs, and NEVER
-put the photo queries into a visible "sections" entry (no "Photo Guide" / "Image
-Searches" / "Render Engine Prompts" / "Photo Search" section) — those strings are
-engine directives the reader must never see.
-
-IDENTITY — NEVER invent the agency. If the brief gives no agency name, no contact
-details, no website and no social handles, LEAVE "agencyName", "agencyLine", "topLeft",
-"badge" and the footer's "contactLines"/"social" EMPTY. A separate brand kit supplies
-the agency's real logo, name, contacts and links at render time — so fabricating an
-agency name, an "<Agency> presents" line, a website URL, a phone number or an email is
-WRONG and will clash with the real brand. Compose the TRIP; let the brand kit own the
-agency identity.
-
-DIRECTIVES ≠ CONTENT. The MAP, LOGO PLACEMENT and DESIGN STYLE lines in the brief
-are RENDERING DIRECTIVES for the engine — the engine draws the route map and places
-the logo itself. NEVER create a section, field, or any text that echoes them (no
-"Map" / "Route Map" / "Logo" / "Design Style" section). BUT the engine can only draw
-the map from DATA you provide: whenever the trip has a route (or a map is requested),
-you MUST populate "routeLine" (e.g. Lisbon -> Sintra -> Porto -> Lisbon) AND
-"route.places" — every stop in travel order as a RICH object: { "name", "subtitle"
-(a 2–4 word character label), "body" (one short descriptive line), "activities" (a
-short comma-joined line), "geo": "City, Country" }. The map page draws a detailed
-callout card per stop from these, so fill ALL four text fields for EVERY stop (mirror
-the day-by-day) — bare names make the map look empty. ALSO include "route.cities"
-("City, Country" entries, 2+) as a fallback. Omitting routeLine + the stops means NO
-map renders. Never skip them when the brief names places or a route.
-
-SOURCE MATERIAL ≠ CONTENT. Your task may include a block labelled "SOURCE MATERIAL"
-(the destination researcher's notes, the copywriter's draft copy, and the user's raw
-brief, repeated verbatim). That block is INPUT for you to read and SYNTHESIZE into the
-structured fields below — it is NOT brochure content and the reader must NEVER see it.
-NEVER create a section (or any field) that reproduces or labels this scaffolding:
-no "Source Content" / "Source Material" / "Research Notes" / "Copywriter Copy" /
-"Raw User Details" / "…Verbatim" section, and never paste the notes or the raw brief
-back as a section body. Extract the real trip FACTS from it and place them in the
-proper fields (intro, highlights, itinerary, route, inclusions, pricing, footer);
-discard the wrapper. A brochure that shows its own working notes is a hard failure.
-
-ONLY REAL CONTENT — adapt to the brief, do not pad the template. Include a field ONLY
-when the brief actually provides that information. Omit any fixed field you have no real
-data for, and NEVER emit an empty or placeholder entry (no pricing row without an amount,
-no blank items, no "TBD"/"On request" filler). The engine renders exactly what you
-include and silently drops nothing-bands — so an omitted field simply isn't shown.
-
-CHOOSE THE PRESENTATION THAT FITS each piece of information — you are the layout brain:
-structured label→value facts (flight legs, hotels, fees, specs) → a "grid" table;
-lists of short points (highlights, inclusions, packing, terms) → "prose" with bullets;
-showcase items with imagery → "cards". Don't force everything into prose paragraphs.
-
-PRICING. Use the user's exact prices/amounts VERBATIM. If the brief gives NO explicit
-price or amount, OMIT "pricing" entirely and do not put a price in any field — NEVER
-invent a number (a fabricated price on a real brochure is worse than none).
-
-ACCENT COLOURS. Read the brief's accent. If it NAMES a colour, map the name to its
-hex (e.g. Royal Blue → #4169E1, Heritage Gold → #C9A227, Emerald → #0F8A5F, Terracotta
-→ #C8643C); if it gives a hex, use that verbatim. When the brief lists TWO accents,
-put the FIRST in palette.accent and the SECOND in palette.accentSecondary. Never
-substitute an unrelated colour.
-
-ADAPTIVE RICHNESS — fill the space usefully. Make the brochure feel full and premium
-for the content given. If the trip is short or the brief is sparse, you MAY add
-genuinely useful, FACTUAL enrichment sections — heritage/cultural context, what
-travellers will see & learn, practical tips — so no page reads empty. Enrichment must
-be accurate and must NEVER contradict or pad the core logistics above (it never
-changes the duration, dates, route, prices, or counts).
-
-Keep prose tight so it lays out cleanly: the intro "body" must be at most ~3
-sentences (≈1200 characters); per-day "text" one or two sentences; each highlight
-caption one short line. Richness comes from COMPLETE sections (every day, every
-inclusion), not long paragraphs.
-
-EXTRA CONTENT → "sections". The fixed fields cover the core brochure. ANY content
-from the source that does NOT fit a fixed field — a flight/transport plan, packing
-list, visa or FAQ notes, "why travel with us", testimonials, a dining guide, terms,
-OR any extra detail or edit the user explicitly asked for — MUST become one entry in
-the "sections" array (shown below). NEVER drop user-provided content because it lacks
-a home; give it a section. Each section needs a "heading" (usually a "kicker" too)
-plus ONE "layout" and its matching data field:
-  - "grid"    + "items":[{"k","v"}]                  -> label->value facts (flight legs, hotels, fees, good-to-know)
-  - "prose"   + "body" and/or "bullets":["..."]      -> narrative or checklists (packing list, visa FAQ, terms)
-  - "cards"   + "cards":[{"label","caption","query"}] -> photo-led feature tiles ("query" is a photo SEARCH string, never a URL)
-  - "gallery" + "cards":[...]                          -> a denser photo strip
-Order "sections" as you want them read; the engine paginates them and owns all
-spacing and page-breaks, so keep each tight. Omit "sections" if everything fit the
-fixed fields.
-
-OUTPUT EXACTLY THIS SHAPE (omit any field you have nothing for; keep arrays as long
-as the content needs — short trip → fewer items, long trip → more):
-
-{
-  "palette": { "accent": "#E4002B", "accentSecondary": "#C9A227" },
-  "agencyName": "Wanderlust Journeys",
-  "topRight": "Japan · 2026",
-  "preTitle": "Wanderlust Journeys presents",
-  "title": "Spirit of Japan",
-  "subtitle": "8 Days · 5 Cities · Small-Group Luxury",
-  "tagline": "Where tradition meets tomorrow",
-  "year": "2026",
-  "routeLine": "Tokyo — Hakone — Kyoto — Nara — Osaka",
-  "badge": "Limited to 16 Travellers",
-  "agencyLine": "Bangalore · www.wanderlustjourneys.in",
-  "heroQuery": "Mount Fuji cherry blossom sunrise Japan",
-  "intro": { "kicker": "Why this journey", "heading": "...", "body": "..." },
-  "highlights": {
-    "kicker": "Journey Highlights", "heading": "...",
-    "stat": { "big": "8", "label": "Days of wonder" },
-    "cards": [ { "label": "Tokyo", "caption": "Neon nights & ancient shrines", "query": "Tokyo Shibuya crossing night neon" } ]
-  },
-  "itinerary": { "kicker": "Day by Day", "heading": "...", "days": [ { "title": "Day 1 — Arrive Tokyo", "text": "..." } ] },
-  "route": {
-    "kicker": "The Route", "heading": "Tokyo to Osaka",
-    "headline": "From neon cities to sacred landscapes",
-    "closing": "Five cities, one seamless arc — every transfer handled.",
-    "cities": ["Tokyo, Japan", "Kyoto, Japan", "Osaka, Japan"],
-    "places": [ { "name": "Tokyo", "subtitle": "Urban Intensity", "body": "...", "activities": "Shibuya, teamLab, Skytree", "geo": "Tokyo, Japan" } ]
-  },
-  "sections": [
-    { "kicker": "Before you fly", "heading": "Flight Plan", "layout": "grid", "items": [ { "k": "Outbound", "v": "BLR → NRT · 06 Apr · ANA NH-844" }, { "k": "Return", "v": "KIX → BLR · 13 Apr · ANA NH-827" } ] },
-    { "kicker": "Pack smart", "heading": "Packing List", "layout": "prose", "bullets": ["Comfortable walking shoes", "Light layers for spring", "Universal travel adapter"] }
-  ],
-  "inclusions": { "kicker": "What's included", "heading": "...", "items": [ { "k": "Flights & Visa", "v": "..." } ] },
-  "pricing": { "kicker": "Investment", "heading": "Your package", "rows": [ { "label": "Package price", "value": "₹2,49,999 pp", "emphasize": true } ], "note": "..." },
-  "footer": {
-    "cta": "Limited seats.", "ctaSub": "Book by 31 July 2026.",
-    "checklist": ["Full itinerary", "Visa & flights", "Live Q&A"],
-    "contactLines": ["+91 98765 43210 · hello@wanderlustjourneys.in", "www.wanderlustjourneys.in"],
-    "qrData": "https://www.wanderlustjourneys.in",
-    "social": ["instagram", "whatsapp", "facebook"]
-  }
-}
-
-Reply with ONLY the JSON object. ${SPECIALIST_FOOTER}`,
+      systemPrompt: `${TMC_SYSTEM_PROMPT}\n\n${TMC_ENGINE_INSTRUCTION}`,
     },
   ],
 };

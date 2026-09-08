@@ -149,7 +149,7 @@ describe('verifyPatientToken — Path B step 1 (linked Patient.userId)', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
     expect(prisma.patient.findFirst).toHaveBeenCalledWith({
-      where: { userId: 100, tenantId: 7 },
+      where: { userId: 100, tenantId: 7, deletedAt: null },
       select: { id: true, phone: true, tenantId: true },
     });
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
@@ -179,7 +179,7 @@ describe('verifyPatientToken — Path B step 2 (claim by email)', () => {
 
     expect(res.status).toBe(200);
     expect(prisma.patient.findFirst).toHaveBeenNthCalledWith(1, {
-      where: { userId: 100, tenantId: 7 },
+      where: { userId: 100, tenantId: 7, deletedAt: null },
       select: { id: true, phone: true, tenantId: true },
     });
     expect(prisma.patient.findFirst).toHaveBeenNthCalledWith(2, {
@@ -187,6 +187,7 @@ describe('verifyPatientToken — Path B step 2 (claim by email)', () => {
         tenantId: 7,
         email: 'narendra@example.com',
         userId: null,
+        deletedAt: null,
       },
       select: { id: true, phone: true, tenantId: true },
     });

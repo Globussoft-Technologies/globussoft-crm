@@ -159,7 +159,7 @@ async function listFolderChildren(drive, folderId) {
   do {
     const res = await drive.files.list({
       q: `'${folderId}' in parents and trashed = false`,
-      fields: "nextPageToken, files(id, name, mimeType, size, md5Checksum, modifiedTime)",
+      fields: "nextPageToken, files(id, name, mimeType, size, md5Checksum, modifiedTime, thumbnailLink, webViewLink)",
       pageSize: 1000,
       pageToken: pageToken || undefined,
     });
@@ -588,6 +588,7 @@ module.exports = {
   getStats,
   normaliseSubBrand,
   chunkText,
+  listFolderChildren,
   SUB_BRAND_ALIASES,
   CHUNK_SIZE,
   CHUNK_OVERLAP,

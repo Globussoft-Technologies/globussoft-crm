@@ -242,6 +242,66 @@ describe('<TmcCatalogueAdmin /> — tab switching', () => {
   });
 });
 
+describe('<TmcCatalogueAdmin /> — refresh control', () => {
+  it('clicking Refresh clears the list, shows Loading, and re-fires GET for the current tab', async () => {
+    let resolveRefresh;
+    let activeCalls = 0;
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      const parsed = new URL(String(url), 'http://localhost');
+
+      if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'active') {
+        activeCalls += 1;
+        if (activeCalls === 1) {
+          return Promise.resolve({
+            catalogue: ACTIVE_ROWS,
+            total: ACTIVE_ROWS.length,
+            limit: 10,
+            offset: 0,
+          });
+        }
+        return new Promise((resolve) => {
+          resolveRefresh = resolve;
+        });
+      }
+
+      if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'archived') {
+        return Promise.resolve({
+          catalogue: ARCHIVED_ROWS,
+          total: ARCHIVED_ROWS.length,
+          limit: 10,
+          offset: 0,
+        });
+      }
+
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText('Golden Triangle Heritage Trail');
+    expect(screen.getByText('Madhya Pradesh Wildlife Trail')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Refresh list/i }));
+    expect(screen.getByText('Golden Triangle Heritage Trail')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.filter(([u]) => String(u).includes('status=active&limit=10&offset=0'))).toHaveLength(2);
+    });
+
+    resolveRefresh({
+      catalogue: ACTIVE_ROWS,
+      total: ACTIVE_ROWS.length,
+      limit: 10,
+      offset: 0,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Golden Triangle Heritage Trail')).toBeInTheDocument();
+    });
+  });
+});
+
 describe('<TmcCatalogueAdmin /> — empty states', () => {
   it('Active tab renders empty-state copy when API returns []', async () => {
     installFetchMock({ active: { catalogue: [], total: 0, limit: 10, offset: 0 } });
@@ -262,8 +322,8 @@ describe('<TmcCatalogueAdmin /> — empty states', () => {
   });
 });
 
-describe('<TmcCatalogueAdmin /> — infinite scroll', () => {
-  it('requests the next slice when the list container scrolls to the bottom', async () => {
+describe('<TmcCatalogueAdmin /> — pagination', () => {
+  it('shows the pager and requests the next page when Next is clicked', async () => {
     const activePage1 = Array.from({ length: 10 }, (_, idx) =>
       makeRow({
         id: 100 + idx,
@@ -321,13 +381,13 @@ describe('<TmcCatalogueAdmin /> — infinite scroll', () => {
     renderPage();
     expect(await screen.findByText('Active Trip 1')).toBeInTheDocument();
 
-    const list = screen.getByRole('list', { name: /active catalogue entries/i });
-    Object.defineProperties(list, {
-      scrollTop: { value: 1000, writable: true, configurable: true },
-      clientHeight: { value: 500, writable: true, configurable: true },
-      scrollHeight: { value: 1400, writable: true, configurable: true },
-    });
-    fireEvent.scroll(list);
+    expect(screen.getByRole('button', { name: /Previous page/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Next page/i })).toBeEnabled();
+    expect(screen.getByRole('navigation', { name: /Pagination/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/Showing 1[\u2013-]10 of 12/i)).toHaveLength(2);
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -337,6 +397,7 @@ describe('<TmcCatalogueAdmin /> — infinite scroll', () => {
     });
     expect(await screen.findByText('Active Trip 11')).toBeInTheDocument();
     expect(screen.getByText('Active Trip 12')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Previous page/i })).toBeEnabled();
   });
 });
 

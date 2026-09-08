@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { DateRangeFilter, resolveDateRangeYmd, EMPTY_DATE_FILTER } from "../../../components/wellness/DateRangeFilter";
 import MultiSelectDropdown from "../../../components/MultiSelectDropdown";
-import ModalShell from "./ModalShell";
+import ModalShell from "../../../components/wellness/ModalShell";
 import { iconBtnSmall, primaryTealBtn, filterLabelStyle } from "./styles";
 import { SOURCE_OPTIONS, GENDER_OPTIONS, tagColour } from "./constants";
 

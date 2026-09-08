@@ -149,6 +149,52 @@ function isConfigured() {
   return !!getClientConfig();
 }
 
+// Idempotent find-or-create of a named subfolder directly under parentId.
+// Searches first (exact name + parent + not-trashed) so repeated calls never
+// create duplicate folders. Used to create/reuse the "CRM Itineraries"
+// output folder nested under the tenant's knowledge-base Drive root.
+async function findOrCreateFolder(drive, parentId, folderName) {
+  const escaped = String(folderName).replace(/'/g, "\\'");
+  const res = await drive.files.list({
+    q: `'${parentId}' in parents and name = '${escaped}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    fields: "files(id, name)",
+    pageSize: 1,
+  });
+  if (res.data.files && res.data.files.length > 0) {
+    return res.data.files[0].id;
+  }
+  const created = await drive.files.create({
+    requestBody: {
+      name: folderName,
+      mimeType: "application/vnd.google-apps.folder",
+      parents: [parentId],
+    },
+    fields: "id",
+  });
+  return created.data.id;
+}
+
+// Uploads a buffer as a new file into a Drive folder. Always creates a new
+// file (Drive allows duplicate names in the same folder — caller controls
+// uniqueness via fileName). Returns the file id + a viewable link.
+async function uploadFileToDrive(drive, parentId, fileName, mimeType, buffer) {
+  const { Readable } = require("stream");
+  const created = await drive.files.create({
+    requestBody: { name: fileName, parents: [parentId] },
+    media: { mimeType, body: Readable.from(buffer) },
+    fields: "id, webViewLink",
+  });
+  return {
+    fileId: created.data.id,
+    webViewLink: created.data.webViewLink || `https://drive.google.com/file/d/${created.data.id}/view`,
+  };
+}
+
+async function deleteFileFromDrive(drive, fileId) {
+  await drive.files.delete({ fileId });
+  return true;
+}
+
 module.exports = {
   isConfigured,
   createOAuthClient,
@@ -162,4 +208,7 @@ module.exports = {
   getUserInfo,
   listFolders,
   getFolderById,
+  findOrCreateFolder,
+  uploadFileToDrive,
+  deleteFileFromDrive,
 };

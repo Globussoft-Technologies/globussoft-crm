@@ -10,6 +10,10 @@ import { useId, useState } from "react";
  * Editing the email after verifying resets verification (onVerifiedChange(null))
  * so the parent can keep its "Create" button disabled until re-verified.
  *
+ * Optional beforeRequest() lets a parent veto the Validate action before the
+ * OTP request is sent. Use it for preflight checks like "email already exists"
+ * when the validation scope depends on other form fields.
+ *
  * Styling is form-agnostic: pass `inputClassName` (class-based forms) and/or
  * `inputStyle` (inline-styled forms).
  */
@@ -18,6 +22,7 @@ export default function EmailOtpField({
   onChange,
   purpose, // "signup" | "customer-register"
   onVerifiedChange, // (token | null) => void
+  beforeRequest, // async () => boolean | void
   label = "Email Address",
   placeholder = "name@company.com",
   inputClassName,
@@ -55,6 +60,18 @@ export default function EmailOtpField({
     if (!emailOk) {
       setMsg({ type: "error", text: "Enter a valid email first" });
       return;
+    }
+    if (beforeRequest) {
+      try {
+        const canProceed = await beforeRequest({
+          email: (value || "").trim(),
+          purpose,
+        });
+        if (canProceed === false) return;
+      } catch {
+        setMsg({ type: "error", text: "Network error - please try again" });
+        return;
+      }
     }
     setBusy(true);
     setMsg(null);

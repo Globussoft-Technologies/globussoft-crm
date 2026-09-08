@@ -78,6 +78,7 @@ const requireCJS = createRequire(import.meta.url);
 // router is require'd (the route binds `prisma` at module-load time).
 prisma.contract = {
   findMany: vi.fn(),
+  count: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -103,6 +104,8 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   prisma.contract.findMany.mockReset();
+  prisma.contract.count.mockReset();
+  prisma.contract.count.mockResolvedValue(0);
   prisma.contract.findFirst.mockReset();
   prisma.contract.create.mockReset();
   prisma.contract.update.mockReset();
@@ -131,7 +134,7 @@ describe('GET /api/contracts — list', () => {
     const findArgs = prisma.contract.findMany.mock.calls[0][0];
     expect(findArgs.where).toEqual({ tenantId: 1 });
     expect(findArgs.include).toEqual({ contact: true, deal: true });
-    expect(findArgs.orderBy).toEqual({ createdAt: 'desc' });
+    expect(findArgs.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('?status=Active forwards to Prisma where clause alongside tenantId', async () => {
@@ -148,6 +151,26 @@ describe('GET /api/contracts — list', () => {
     await request(app).get('/api/contracts');
     const findArgs = prisma.contract.findMany.mock.calls[0][0];
     expect(findArgs.where.tenantId).toBe(99);
+  });
+
+  test('?limit/&offset page deterministically and ?count=1 uses the same tenant/status scope', async () => {
+    prisma.contract.findMany.mockResolvedValue([]);
+    prisma.contract.count.mockResolvedValue(37);
+    const app = makeApp({ tenantId: 42 });
+
+    await request(app).get('/api/contracts?status=Active&limit=10&offset=20');
+    expect(prisma.contract.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 42, status: 'Active' },
+      take: 10,
+      skip: 20,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    }));
+
+    const countRes = await request(app).get('/api/contracts?status=Active&count=1');
+    expect(countRes.body).toEqual({ total: 37 });
+    expect(prisma.contract.count).toHaveBeenCalledWith({
+      where: { tenantId: 42, status: 'Active' },
+    });
   });
 });
 
@@ -416,7 +439,7 @@ describe('GET /api/contracts?fields=summary — slim-shape opt-in (#920)', () =>
     await request(app).get('/api/contracts?fields=summary');
     const findArgs = prisma.contract.findMany.mock.calls[0][0];
     expect(findArgs.where).toEqual({ tenantId: 42 });
-    expect(findArgs.orderBy).toEqual({ createdAt: 'desc' });
+    expect(findArgs.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('?fields=summary&status=Active layers the status filter on top of the slim shape', async () => {

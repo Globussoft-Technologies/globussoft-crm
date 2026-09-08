@@ -30,6 +30,17 @@ const AVAILABLE_VARS = [
 
 const EMPTY_TMPL = { name: '', type: 'PROPOSAL', content: '' };
 
+const emptySampleData = () => Object.fromEntries(AVAILABLE_VARS.map(v => [v.key, '']));
+
+const nonEmptyVariables = (sample) => {
+  const out = {};
+  if (!sample || typeof sample !== 'object') return out;
+  for (const [k, v] of Object.entries(sample)) {
+    if (typeof v === 'string' ? v.trim() !== '' : v != null && v !== '') out[k] = typeof v === 'string' ? v : String(v);
+  }
+  return out;
+};
+
 export default function DocumentTemplates() {
   const notify = useNotify();
   const [templates, setTemplates] = useState([]);
@@ -117,13 +128,43 @@ export default function DocumentTemplates() {
     } catch { notify.error('Delete failed'); }
   };
 
-  const openPreview = (t) => setPreviewState({ template: t, html: '', contactId: '' });
+  const openPreview = (t) => setPreviewState({ template: t, html: '', contactId: '', sample: emptySampleData() });
+
+  const setSampleVar = (key, value) => {
+    setPreviewState(p => (p ? { ...p, html: '', sample: { ...(p.sample || {}), [key]: value } } : p));
+  };
+
+  const fillSampleFromContact = () => {
+    setPreviewState(p => {
+      if (!p) return p;
+      const c = contacts.find(x => String(x.id) === String(p.contactId));
+      if (!c) { notify.error('Pick a contact first'); return p; }
+      return {
+        ...p,
+        html: '',
+        sample: {
+          ...(p.sample || {}),
+          'contact.name': c.name || '',
+          'contact.email': c.email || '',
+          'contact.company': c.company || '',
+          'contact.phone': c.phone || '',
+          'contact.title': c.title || '',
+        },
+      };
+    });
+  };
+
+  const clearSample = () => {
+    setPreviewState(p => (p ? { ...p, html: '', sample: emptySampleData() } : p));
+  };
 
   const runPreview = async () => {
     if (!previewState) return;
     setBusy(true);
     try {
       const body = previewState.contactId ? { contactId: parseInt(previewState.contactId) } : {};
+      const variables = nonEmptyVariables(previewState.sample);
+      if (Object.keys(variables).length > 0) body.variables = variables;
       const data = await fetchApi(`/api/document-templates/${previewState.template.id}/render`, {
         method: 'POST', body: JSON.stringify(body)
       });
@@ -138,6 +179,7 @@ export default function DocumentTemplates() {
       templateId: previewState.template.id,
       contactId: previewState.contactId || '',
       subject: previewState.template.name,
+      variables: nonEmptyVariables(previewState.sample),
     });
   };
 
@@ -146,9 +188,11 @@ export default function DocumentTemplates() {
     if (!sendForm.subject?.trim()) { notify.error('Subject is required'); return; }
     setBusy(true);
     try {
+      const payload = { contactId: parseInt(sendForm.contactId), subject: sendForm.subject };
+      if (sendForm.variables && Object.keys(sendForm.variables).length > 0) payload.variables = sendForm.variables;
       const result = await fetchApi(`/api/document-templates/${sendForm.templateId}/send-email`, {
         method: 'POST',
-        body: JSON.stringify({ contactId: parseInt(sendForm.contactId), subject: sendForm.subject }),
+        body: JSON.stringify(payload),
       });
       if (result.delivered) {
         notify.success('Email delivered.');
@@ -319,7 +363,7 @@ export default function DocumentTemplates() {
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <select
               value={previewState.contactId}
-              onChange={e => setPreviewState(p => ({ ...p, contactId: e.target.value }))}
+              onChange={e => setPreviewState(p => ({ ...p, html: '', contactId: e.target.value }))}
               style={{ ...inputStyle, maxWidth: '280px' }}
             >
               <option value="">— Pick a contact for merge data —</option>
@@ -331,6 +375,51 @@ export default function DocumentTemplates() {
             <button className="btn-primary" onClick={openSend} disabled={!previewState.html} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <Send size={16} /> Send Email
             </button>
+          </div>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.75rem', marginBottom: '0.75rem', background: 'rgba(255,255,255,0.02)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.25rem' }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Sample data — no JSON needed</div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={fillSampleFromContact}
+                  disabled={!previewState.contactId}
+                  title="Copy the selected contact's details into the fields below"
+                  style={{ padding: '0.35rem 0.7rem', fontSize: '0.78rem' }}
+                >
+                  Fill from contact
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={clearSample}
+                  title="Clear all sample fields"
+                  style={{ padding: '0.35rem 0.7rem', fontSize: '0.78rem' }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 0.6rem' }}>
+              Type values into plain fields instead of writing JSON. Filled fields are sent as merge overrides — they win over the contact above. Leave a field blank to fall back to real record data.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.6rem' }}>
+              {AVAILABLE_VARS.map(v => (
+                <label key={v.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.75rem', color: 'var(--text-secondary)', minWidth: 0 }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {v.label} <code style={{ color: 'var(--accent-color)' }}>{`{{${v.key}}}`}</code>
+                  </span>
+                  <input
+                    value={(previewState.sample && previewState.sample[v.key]) || ''}
+                    onChange={e => setSampleVar(v.key, e.target.value)}
+                    placeholder={v.label}
+                    aria-label={`Sample ${v.key}`}
+                    style={{ ...inputStyle, flex: 'none', width: '100%', fontSize: '0.85rem' }}
+                  />
+                </label>
+              ))}
+            </div>
           </div>
           <div style={{ border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden', background: 'var(--surface-color)', minHeight: '400px' }}>
             {previewState.html ? (
@@ -368,6 +457,11 @@ export default function DocumentTemplates() {
               style={inputStyle}
               placeholder="Hello {{contact.name}}"
             />
+            {sendForm.variables && Object.keys(sendForm.variables).length > 0 && (
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
+                {Object.keys(sendForm.variables).length} sample field{Object.keys(sendForm.variables).length !== 1 ? 's' : ''} from Preview will override merge data on send.
+              </p>
+            )}
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
             <button className="btn-secondary" onClick={() => setSendForm(null)}>Cancel</button>

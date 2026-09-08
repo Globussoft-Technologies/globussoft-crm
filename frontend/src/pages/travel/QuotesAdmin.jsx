@@ -889,7 +889,7 @@ const sortButtonStyle = {
 };
 const sortButtonActiveStyle = {
   color: "var(--primary-color)",
-  background: "var(--accent-bg)",
+  background: "transparent",
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };

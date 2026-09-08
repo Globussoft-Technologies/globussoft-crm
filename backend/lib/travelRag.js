@@ -21,8 +21,12 @@ const embedClient = require("./embedClient");
 const llmRouter = require("./llmRouter");
 const { sanitizeJsonForStringColumn } = require("./sanitizeJson");
 const { READINESS_LEVELS, readinessLevelFromScore } = require("./travelDiagnosticScoring");
+const { getRecommendationTopK, DEFAULT_TOP_K } = require("./diagnosticRecommendationSettings");
 
-const RAG_TOP_K = 15;
+const RAG_TOP_K = 15; // Qdrant retrieval depth — how many brochure chunks to fetch
+// Historical default (bumped 5 -> 10 on 2026-08-24), now the fallback used
+// when no admin-configured value exists — see diagnosticRecommendationSettings.js.
+const MAX_RAG_RECOMMENDATIONS = DEFAULT_TOP_K; // how many trips are actually shown/rendered
 const RAG_SUB_BRAND = "tmc";
 const RAG_TASK = "travel-knowledge-rag";
 
@@ -84,6 +88,8 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     return null;
   }
 
+  const topK = await getRecommendationTopK({ tenantId, subBrand });
+
   const embedConfig = await embedClient.resolveEmbedConfig(tenantId);
   if (!embedConfig) {
     console.log("[travelRag] No supported embedding provider configured; skipping RAG");
@@ -133,18 +139,20 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     return null;
   }
 
-  const parsed = parseRagResponse(llmResult?.text || "");
+  const parsed = parseRagResponse(llmResult?.text || "", topK);
   if (!parsed) {
     console.warn("[travelRag] LLM response did not contain valid RAG JSON");
     return null;
   }
 
-  // Ensure at least 5 recommendations by padding with the next-best retrieved
-  // brochure entries when the LLM returns fewer. Never exceed the retrieved set.
-  if (Array.isArray(parsed.recommendedTrips) && parsed.recommendedTrips.length < 5) {
+  // Ensure at least `topK` recommendations (admin-configurable, defaults to
+  // 10 — see diagnosticRecommendationSettings.js) by padding with the
+  // next-best retrieved brochure entries when the LLM returns fewer. Never
+  // exceed the retrieved set.
+  if (Array.isArray(parsed.recommendedTrips) && parsed.recommendedTrips.length < topK) {
     const seen = new Set(parsed.recommendedTrips.map((t) => String(t.name || "").trim().toLowerCase()));
     for (const c of context) {
-      if (parsed.recommendedTrips.length >= 5) break;
+      if (parsed.recommendedTrips.length >= topK) break;
       const tripName = String(c.fileName || "").replace(/\.pdf$/i, "").trim();
       if (!tripName) continue;
       const key = tripName.toLowerCase();
@@ -200,7 +208,7 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
   };
 }
 
-function parseRagResponse(text) {
+function parseRagResponse(text, topK = DEFAULT_TOP_K) {
   if (!text) return null;
   const raw = text.trim();
   // Try to extract a JSON object from a fenced block or raw text.
@@ -215,7 +223,7 @@ function parseRagResponse(text) {
   }
   try {
     const parsed = JSON.parse(jsonCandidate.slice(start, end + 1));
-    return validateAndNormalise(parsed);
+    return validateAndNormalise(parsed, topK);
   } catch (e) {
     console.warn("[travelRag] parseRagResponse: JSON.parse failed:", e.message, "candidate:", jsonCandidate.slice(start, end + 1).slice(0, 500));
     return null;
@@ -227,7 +235,7 @@ function isPolicyOrAdminText(text) {
   return /\b(cancellation|cancel|refund|non-refundable|payment|policy|policies|disclaimer|insurance|booking conditions?)\b/.test(t);
 }
 
-function validateAndNormalise(parsed) {
+function validateAndNormalise(parsed, topK = DEFAULT_TOP_K) {
   if (!parsed || typeof parsed !== "object") return null;
   const out = {
     readinessScore: null,
@@ -298,7 +306,12 @@ function validateAndNormalise(parsed) {
       return { name, driveLink, summary, learnings: learnings.filter((l) => !isPolicyOrAdminText(l)).slice(0, 4) };
     })
     .filter(Boolean)
-    .slice(0, RAG_TOP_K); // cap at the retrieved chunk count so the PDF stays bounded
+    // Was `.slice(0, RAG_TOP_K)` (15) — that's the Qdrant retrieval depth,
+    // not the intended display cap. The LLM can legitimately return more
+    // trips than the retrieval count in some responses, which let the PDF
+    // render an 11th+ recommendation despite recommendations being capped
+    // at `topK` everywhere else (curriculum fit, DiagnosticBuilder, etc.).
+    .slice(0, topK);
 
   return out;
 }
@@ -326,4 +339,5 @@ module.exports = {
   RAG_SUB_BRAND,
   RAG_TASK,
   RAG_TOP_K,
+  MAX_RAG_RECOMMENDATIONS,
 };

@@ -26,6 +26,12 @@ const { writeAudit } = require('../lib/audit');
 
 // Visit statuses considered "active"  these block slot conflicts and
 // cannot be cancelled (except 'booked' which IS cancellable + reschedulable).
+const {
+  findDoctorConflict,
+  conflictMessage,
+  DEFAULT_DURATION_MIN,
+} = require('../lib/doctorAvailability');
+
 const ACTIVE_VISIT_STATUSES = ['booked', 'confirmed', 'arrived', 'in-treatment'];
 const TERMINAL_VISIT_STATUSES = ['completed', 'cancelled', 'no-show'];
 
@@ -106,20 +112,46 @@ function mapVisitToAppointment(v) {
 // Slot-conflict probe  returns the colliding visit (if any) for the
 // given (doctorId, hour) window. Used by book + reschedule to enforce
 // the "one doctor, one patient per hour" guard.
-async function findSlotConflict({ tenantId, doctorId, visitDate, excludeVisitId = null }) {
+/**
+ * Does this doctor already hold something overlapping the requested slot?
+ *
+ * Delegates to lib/doctorAvailability so booking, reschedule, assign-doctor and
+ * the calendar gate all apply the SAME rule. The previous implementation
+ * bucketed by clock hour via `setMinutes(0, 0, 0)`, which truncates in the
+ * server's timezone — on a UTC server serving IST clinics the buckets fell on
+ * :30 boundaries, so 14:00 and 14:30 landed in different buckets and never
+ * registered as a conflict even for a 50-minute service.
+ */
+async function findSlotConflict({ tenantId, doctorId, visitDate, durationMin = null, excludeVisitId = null }) {
   if (!doctorId) return null;
-  const hourStart = new Date(visitDate);
-  hourStart.setMinutes(0, 0, 0);
-  const hourEnd = new Date(hourStart);
-  hourEnd.setHours(hourEnd.getHours() + 1);
-  const where = {
+  const minutes = durationMin || (await resolveServiceDuration(null));
+  return findDoctorConflict({
     tenantId,
     doctorId,
-    status: { in: ACTIVE_VISIT_STATUSES },
-    visitDate: { gte: hourStart, lt: hourEnd },
-  };
-  if (excludeVisitId) where.id = { not: excludeVisitId };
-  return prisma.visit.findFirst({ where });
+    startsAt: visitDate,
+    durationMin: minutes,
+    excludeVisitId,
+  });
+}
+
+/** How long a service runs; the schema default when it is unset or absent. */
+async function resolveServiceDuration(serviceId) {
+  if (!serviceId) return DEFAULT_DURATION_MIN;
+  // try/catch, not `.catch()` — a missing/!unavailable prisma delegate throws
+  // SYNCHRONOUSLY, before there is a promise to attach a handler to. Duration
+  // is an optimisation for the conflict window; failing to read it must never
+  // take down a booking.
+  let svc = null;
+  try {
+    svc = await prisma.service.findUnique({
+      where: { id: Number(serviceId) },
+      select: { durationMin: true },
+    });
+  } catch {
+    svc = null;
+  }
+  const n = Number(svc?.durationMin);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_DURATION_MIN;
 }
 
 async function findResourceConflict({ tenantId, resourceId, visitDate, excludeVisitId = null }) {
@@ -187,6 +219,31 @@ async function bookAppointment({
     const leave = await findApprovedLeave({ tenantId, doctorId: parsedDoctorId, visitDate });
     if (leave) {
       throw new AppointmentError({ status: 409, code: 'DOCTOR_UNAVAILABLE', message: 'Doctor is not available on this date' });
+    }
+
+    // The double-booking guard. This is the FRONT DOOR — both the staff
+    // booking form and the patient app land here — and it previously checked
+    // only leave, never whether the doctor was already busy. Reschedule and
+    // assign-doctor were guarded; booking straight into an occupied slot was
+    // not, which is how the same doctor ended up with two appointments at the
+    // same time.
+    //
+    // UI filtering (greyed-out slots) is a courtesy, not a guarantee: two
+    // patients can load the same slot list and both submit. This server-side
+    // check is what actually makes double-booking impossible.
+    const durationMin = await resolveServiceDuration(serviceId);
+    const clash = await findSlotConflict({
+      tenantId,
+      doctorId: parsedDoctorId,
+      visitDate,
+      durationMin,
+    });
+    if (clash) {
+      throw new AppointmentError({
+        status: 409,
+        code: 'SLOT_TAKEN',
+        message: conflictMessage(clash),
+      });
     }
   }
 
@@ -314,7 +371,13 @@ async function rescheduleAppointment({ tenantId, patientId, visitId, newAppointm
     if (leave) {
       throw new AppointmentError({ status: 409, code: 'DOCTOR_UNAVAILABLE', message: 'Doctor is not available on this date' });
     }
-    const slotConflict = await findSlotConflict({ tenantId, doctorId: visit.doctorId, visitDate: newVisitDate, excludeVisitId: id });
+    const slotConflict = await findSlotConflict({
+      tenantId,
+      doctorId: visit.doctorId,
+      visitDate: newVisitDate,
+      durationMin: await resolveServiceDuration(visit.serviceId),
+      excludeVisitId: id,
+    });
     if (slotConflict) {
       throw new AppointmentError({ status: 409, code: 'SLOT_TAKEN', message: 'Doctor is already booked at this time' });
     }
@@ -395,7 +458,13 @@ async function assignDoctor({ tenantId, visitId, doctorId, actor }) {
   if (leave) {
     throw new AppointmentError({ status: 409, code: 'DOCTOR_UNAVAILABLE', message: 'Doctor is on leave at this time' });
   }
-  const slotConflict = await findSlotConflict({ tenantId, doctorId: newDoctorId, visitDate: visit.visitDate, excludeVisitId: id });
+  const slotConflict = await findSlotConflict({
+    tenantId,
+    doctorId: newDoctorId,
+    visitDate: visit.visitDate,
+    durationMin: await resolveServiceDuration(visit.serviceId),
+    excludeVisitId: id,
+  });
   if (slotConflict) {
     throw new AppointmentError({ status: 409, code: 'SLOT_TAKEN', message: 'Doctor is already booked at this time' });
   }

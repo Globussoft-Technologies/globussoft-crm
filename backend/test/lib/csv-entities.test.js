@@ -247,6 +247,68 @@ describe('productCategories.parseRow', () => {
   });
 });
 
+describe('serviceCategories.parseRow', () => {
+  const serviceCategories = getEntity('service-categories');
+
+  const ctx = {
+    lookups: {
+      findServiceCategory: (name) => (String(name || '').trim().toLowerCase() === 'hair restoration' ? 501 : null),
+      serviceCategoriesById: new Map([[501, { id: 501, name: 'Hair Restoration' }]]),
+    },
+  };
+
+  test('happy path resolves parentName to parentId', async () => {
+    const { data, errors } = await serviceCategories.parseRow({
+      name: 'PRP Therapy',
+      parentName: 'Hair Restoration',
+      displayOrder: '2',
+      imageUrl: 'https://cdn.example.com/prp.png',
+      active: 'true',
+    }, ctx);
+    expect(errors).toEqual([]);
+    expect(data).toMatchObject({
+      name: 'PRP Therapy',
+      parentId: 501,
+      displayOrder: 2,
+      imageUrl: 'https://cdn.example.com/prp.png',
+      isActive: true,
+    });
+  });
+
+  test('rejects parentName that matches the category name', async () => {
+    const { errors } = await serviceCategories.parseRow({
+      name: 'Hair Restoration',
+      parentName: 'Hair Restoration',
+      active: 'true',
+    }, ctx);
+    expect(errors.find((e) => e.column === 'parentName')).toBeTruthy();
+  });
+
+  test('rejects non-integer displayOrder', async () => {
+    const { errors } = await serviceCategories.parseRow({
+      name: 'PRP Therapy',
+      displayOrder: '2.5',
+      active: 'true',
+    }, ctx);
+    expect(errors.find((e) => e.column === 'displayOrder')).toBeTruthy();
+  });
+
+  test('serialize maps parentId back to parentName', () => {
+    const cells = serviceCategories.serialize({
+      name: 'PRP Therapy',
+      parentId: 501,
+      displayOrder: 2,
+      imageUrl: null,
+      isActive: false,
+    }, ctx);
+    expect(cells).toEqual(['PRP Therapy', 'Hair Restoration', 2, '', 'false']);
+  });
+
+  test('naturalKey lowercases the name', () => {
+    expect(serviceCategories.naturalKey({ name: 'PRP Therapy' })).toBe('prp therapy');
+  });
+});
+
 describe('inventoryProducts.parseRow', () => {
   const inventoryProducts = getEntity('inventory-products');
 

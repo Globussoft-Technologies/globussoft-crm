@@ -27,6 +27,7 @@ import {
   Layout,
   Monitor,
   Info,
+  ShieldCheck,
   Upload,
   X,
   Plus,
@@ -55,20 +56,25 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
   const [toggling, setToggling] = useState(false);
   const [brandKits, setBrandKits] = useState([]);
   const [selectedKit, setSelectedKit] = useState(null);
+  const [cancellationPolicies, setCancellationPolicies] = useState([]);
   const [form, setForm] = useState(buildDefaultForm());
   const [showPreview, setShowPreview] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [formRes, kitsRes] = await Promise.all([
+      const [formRes, kitsRes, policiesRes] = await Promise.all([
         fetchApi(`/api/travel/diagnostic-public-forms/${encodeURIComponent(subBrand)}`).catch(() => null),
         fetchApi(`/api/brand-kits?subBrand=${encodeURIComponent(subBrand)}`).catch(() => null),
+        fetchApi(`/api/travel/cancellation-policies?active=true`).catch(() => null),
       ]);
 
       const kits = Array.isArray(kitsRes?.brandKits) ? kitsRes.brandKits : [];
       const activeKits = kits.filter((k) => k.isActive);
       setBrandKits(activeKits.length ? activeKits : kits);
+
+      const policies = Array.isArray(policiesRes?.policies) ? policiesRes.policies : [];
+      setCancellationPolicies(policies.filter((p) => p.isActive !== false));
 
       if (formRes?.form) {
         const normalized = normalizeForm(formRes.form);
@@ -326,6 +332,9 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
 
         <section style={card}>
           <h2 style={cardTitle}>Form copy</h2>
+          <p style={sectionHint}>
+            The headline, supporting text and button label shown to public visitors.
+          </p>
           <div style={fieldGrid}>
             <Field label="Title" tooltip="Main heading shown at the top of the public form.">
               <input
@@ -422,6 +431,70 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
         </section>
 
         <section style={card}>
+          <h2 style={cardTitle}>
+            <ShieldCheck size={18} style={{ verticalAlign: -3, marginRight: 8 }} />
+            Cancellation policy
+          </h2>
+          <p style={sectionHint}>
+            Optionally surface the refund tiers of a cancellation policy on the diagnostic result page.
+          </p>
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 14px", borderRadius: 8, background: "var(--bg-color, rgba(255,255,255,0.03))", border: "1px solid var(--border-color)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600 }}>
+              Show on diagnostic result page
+              <Tooltip>
+                When on, the selected cancellation policy's refund tiers are shown on the diagnostic result page and included in the downloaded PDF. When off, nothing is shown, regardless of which policy is selected below.
+              </Tooltip>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: styling.showCancellationPolicy ? "var(--success-color, #3ecf7e)" : "var(--text-secondary)" }}>
+                {styling.showCancellationPolicy ? "On" : "Off"}
+              </span>
+              <PillToggle
+                active={Boolean(styling.showCancellationPolicy)}
+                onChange={() => updateStyling({ showCancellationPolicy: !styling.showCancellationPolicy })}
+                label="Show cancellation policy on diagnostic result page"
+              />
+            </div>
+          </div>
+
+          {styling.showCancellationPolicy && (
+            <div style={{ marginTop: 10, marginLeft: 4, paddingLeft: 14, borderLeft: "2px solid var(--border-color)" }}>
+              <Field
+                label="Which policy to show"
+                tooltip="Only active cancellation policies are listed here."
+              >
+                <select
+                  value={styling.cancellationPolicyId || ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    updateStyling({ cancellationPolicyId: v ? parseInt(v, 10) : null });
+                  }}
+                  style={input}
+                >
+                  <option value="">Select a policy…</option>
+                  {cancellationPolicies.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                {cancellationPolicies.length === 0 && (
+                  <p style={{ fontSize: 12, color: "var(--warning-color, #c98400)", margin: "6px 0 0" }}>
+                    No active cancellation policies found. Create one under Cancellation Policies first.
+                  </p>
+                )}
+                {cancellationPolicies.length > 0 && !styling.cancellationPolicyId && (
+                  <p style={{ fontSize: 12, color: "var(--warning-color, #c98400)", margin: "6px 0 0" }}>
+                    Pick a policy above — nothing shows on the result page until one is selected.
+                  </p>
+                )}
+              </Field>
+            </div>
+          )}
+        </section>
+
+        <section style={card}>
           <div style={sectionHeader}>
             <h2 style={cardTitle}>
               <Palette size={18} style={{ verticalAlign: -3, marginRight: 8 }} />
@@ -448,6 +521,10 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
               </div>
             )}
           </div>
+          <p style={sectionHint}>
+            Colors, logo and font used across the public form. Linking a brand kit fills these in automatically;
+            anything you set below overrides it.
+          </p>
 
           <div style={fieldGrid}>
             <Field label="Brand kit" tooltip="Link an active brand kit. Its colors, logo and font become the base layer.">
@@ -543,6 +620,9 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
             <Image size={18} style={{ verticalAlign: -3, marginRight: 8 }} />
             Background & layout
           </h2>
+          <p style={sectionHint}>
+            Controls the page background and the size, shape and depth of the white form card sitting on top of it.
+          </p>
           <div style={fieldGrid}>
             <UploadableUrlField
               label="Background image"
@@ -652,6 +732,9 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
             <Type size={18} style={{ verticalAlign: -3, marginRight: 8 }} />
             Typography & buttons
           </h2>
+          <p style={sectionHint}>
+            Text sizing for the title and subtitle, plus the shape of the submit button and logo size.
+          </p>
           <div style={fieldGrid}>
             <NumberField
               label="Title font size (px)"
@@ -714,6 +797,9 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
             <Layout size={18} style={{ verticalAlign: -3, marginRight: 8 }} />
             Question cards
           </h2>
+          <p style={sectionHint}>
+            How each question is visually framed — border, fill and corner rounding.
+          </p>
           <div style={fieldGrid}>
             <Field label="Card style" tooltip="Visual treatment of each question block.">
               <select
@@ -811,8 +897,10 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
             width: "100%",
             minWidth: 0,
             padding: 14,
-            height: "calc(100vh - 120px)",
-            maxHeight: "calc(100vh - 120px)",
+            position: "sticky",
+            top: 16,
+            height: "calc(100vh - 32px)",
+            maxHeight: "calc(100vh - 32px)",
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
@@ -823,6 +911,9 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
               <Eye size={18} style={{ verticalAlign: -3, marginRight: 8 }} />
               Live preview
             </h2>
+            <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+              Updates instantly as you edit
+            </span>
           </div>
           <div
             style={{
@@ -861,6 +952,35 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
   );
 }
 
+// Standard pill toggle switch — matches the same component already used in
+// travel/CostMaster.jsx, kept locally so this panel stays self-contained
+// (no shared toggle component exists yet in this codebase).
+function PillToggle({ active, onChange, label }) {
+  return (
+    <button
+      type="button"
+      onClick={onChange}
+      role="switch"
+      aria-checked={active}
+      aria-label={label}
+      style={{
+        position: "relative", width: 40, height: 22, borderRadius: 999,
+        border: active ? "1px solid var(--success-color, #3ecf7e)" : "1px solid var(--border-color)",
+        background: active ? "rgba(62,207,126,0.18)" : "var(--surface-color)",
+        cursor: "pointer", padding: 0, flexShrink: 0,
+        transition: "background .15s ease, border-color .15s ease",
+      }}
+    >
+      <span style={{
+        position: "absolute", top: 2, left: active ? 20 : 2,
+        width: 16, height: 16, borderRadius: "50%",
+        background: active ? "var(--success-color, #3ecf7e)" : "var(--text-secondary)",
+        transition: "left .15s ease, background .15s ease",
+      }} />
+    </button>
+  );
+}
+
 function Tooltip({ children }) {
   const [show, setShow] = useState(false);
   return (
@@ -880,13 +1000,16 @@ function Tooltip({ children }) {
             transform: "translateX(-50%)",
             width: 240,
             padding: 8,
-            background: "var(--surface-color)",
+            // Opaque background required — var(--surface-color) has alpha
+            // transparency baked in, which let text behind the tooltip
+            // bleed through. var(--modal-bg) is the app's solid popover color.
+            background: "var(--modal-bg, var(--bg-color))",
             border: "1px solid var(--border-color)",
             borderRadius: 6,
             fontSize: 12,
             fontWeight: 400,
             color: "var(--text-secondary)",
-            boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.24)",
             zIndex: 10,
             marginBottom: 6,
           }}
@@ -1506,6 +1629,12 @@ const sectionHeader = {
   alignItems: "center",
   flexWrap: "wrap",
   gap: 10,
+};
+
+const sectionHint = {
+  color: "var(--text-secondary)",
+  fontSize: 13,
+  margin: "-8px 0 14px",
 };
 
 const fieldGrid = {

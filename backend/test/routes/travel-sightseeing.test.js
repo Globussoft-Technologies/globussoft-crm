@@ -315,6 +315,21 @@ describe('POST /api/travel/sightseeing — create', () => {
   });
 });
 
+  test('subBrand=tmc is rejected with TMC_SIGHTSEEING_DISABLED', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/sightseeing')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        destinationName: 'Bangalore',
+        name: 'Lalbagh',
+        subBrand: 'tmc',
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('TMC_SIGHTSEEING_DISABLED');
+    expect(prisma.travelSightseeing.create).not.toHaveBeenCalled();
+  });
+
 describe('GET /api/travel/sightseeing/:id', () => {
   test('found → 200 + row', async () => {
     prisma.travelSightseeing.findFirst.mockResolvedValue(sampleRows[0]);

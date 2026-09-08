@@ -121,12 +121,16 @@ function lookupById(map, id) {
 // pick whichever is relevant.
 
 async function buildLookupContext(prisma, tenantId) {
-  const [services, categories, inventoryProducts, drugs, patients, staff, contacts] = await Promise.all([
+  const [services, categories, serviceCategories, inventoryProducts, drugs, patients, staff, contacts] = await Promise.all([
     prisma.service.findMany({
       where: { tenantId },
       select: { id: true, name: true },
     }),
     prisma.productCategory.findMany({
+      where: { tenantId },
+      select: { id: true, name: true, parentId: true },
+    }),
+    prisma.serviceCategory.findMany({
       where: { tenantId },
       select: { id: true, name: true, parentId: true },
     }),
@@ -162,6 +166,8 @@ async function buildLookupContext(prisma, tenantId) {
   const servicesByName = new Map(services.map((s) => [norm(s.name), s.id]));
   const categoriesById = new Map(categories.map((c) => [c.id, c]));
   const categoriesByName = new Map(categories.map((c) => [norm(c.name), c.id]));
+  const serviceCategoriesById = new Map(serviceCategories.map((c) => [c.id, c]));
+  const serviceCategoriesByName = new Map(serviceCategories.map((c) => [norm(c.name), c.id]));
   const inventoryProductsById = new Map(inventoryProducts.map((p) => [p.id, p]));
   const inventoryProductsByName = new Map(inventoryProducts.map((p) => [norm(p.name), p.id]));
   const inventoryProductsBySku = new Map(
@@ -194,6 +200,8 @@ async function buildLookupContext(prisma, tenantId) {
     servicesByName,
     categoriesById,
     categoriesByName,
+    serviceCategoriesById,
+    serviceCategoriesByName,
     inventoryProductsById,
     inventoryProductsByName,
     inventoryProductsBySku,
@@ -208,6 +216,7 @@ async function buildLookupContext(prisma, tenantId) {
     contactsByName,
     findService: (name) => servicesByName.get(norm(name)) || null,
     findCategory: (name) => categoriesByName.get(norm(name)) || null,
+    findServiceCategory: (name) => serviceCategoriesByName.get(norm(name)) || null,
     findProductBySku: (sku) => inventoryProductsBySku.get(norm(sku)) || null,
     findProductByName: (name) => inventoryProductsByName.get(norm(name)) || null,
     findProduct: (skuOrName) => inventoryProductsBySku.get(norm(skuOrName)) || inventoryProductsByName.get(norm(skuOrName)) || null,
@@ -662,6 +671,105 @@ const productCategories = {
     }
     if (lookups.categoriesById) lookups.categoriesById.set(record.id, record);
     if (lookups.categoriesByName) lookups.categoriesByName.set(record.name.toLowerCase(), record.id);
+  },
+};
+
+const serviceCategories = {
+  model: "serviceCategory",
+  headers: ["name", "parentName", "displayOrder", "imageUrl", "active"],
+  sample: {
+    name: "Hair Restoration",
+    parentName: "",
+    displayOrder: "1",
+    imageUrl: "",
+    active: "true",
+  },
+  readGate: ["admin", "manager"],
+  readPermissions: [{ module: "services", action: "read" }],
+  writeGate: ["admin", "manager"],
+  writePermissions: [{ module: "services", action: "write" }],
+  buildWhere: (req) => {
+    const where = { tenantId: req.user.tenantId };
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { parent: { is: { name: { contains: q } } } },
+      ];
+    }
+    return where;
+  },
+  orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+  serialize: (cat, ctx) => [
+    cat.name || "",
+    lookupById(ctx?.lookups?.serviceCategoriesById, cat.parentId)?.name || "",
+    cat.displayOrder ?? 0,
+    cat.imageUrl || "",
+    cat.isActive === false ? "false" : "true",
+  ],
+  async parseRow(raw, ctx = {}) {
+    const errors = [];
+    const nameErr = requireString(raw.name, "name");
+    if (nameErr) errors.push(nameErr);
+
+    const name = String(raw.name || "").trim();
+    const parentName = trimOrNull(raw.parentName);
+    let parentId = null;
+    if (parentName) {
+      if (name && parentName.toLowerCase() === name.toLowerCase()) {
+        errors.push({ column: "parentName", value: parentName, message: "parentName cannot match name" });
+      } else {
+        parentId = ctx?.lookups?.findServiceCategory ? ctx.lookups.findServiceCategory(parentName) : null;
+        if (!parentId) {
+          errors.push({ column: "parentName", value: parentName, message: "no parent service category with this name exists in your tenant" });
+        }
+      }
+    }
+
+    const displayOrder = parseInteger(raw.displayOrder);
+    if (displayOrder !== null && Number.isNaN(displayOrder)) {
+      errors.push({ column: "displayOrder", value: String(raw.displayOrder), message: "displayOrder must be a whole number" });
+    }
+
+    const active = parseBool(raw.active ?? raw.isActive);
+    if (active === undefined) {
+      errors.push({ column: "active", value: String(raw.active ?? raw.isActive), message: "active must be true/false/yes/no/1/0" });
+    }
+
+    if (errors.length) return { data: null, errors };
+
+    return {
+      data: {
+        name,
+        parentId,
+        displayOrder: displayOrder ?? 0,
+        imageUrl: trimOrNull(raw.imageUrl),
+        isActive: active === null ? true : active,
+      },
+      errors: [],
+    };
+  },
+  naturalKey: (data) => data.name.toLowerCase(),
+  async naturalKeyMatch(prisma, tenantId, data) {
+    return prisma.serviceCategory.findFirst({
+      where: { tenantId, name: data.name },
+    });
+  },
+  async persist(prisma, tenantId, data, existing) {
+    if (existing) {
+      const record = await prisma.serviceCategory.update({ where: { id: existing.id }, data });
+      return { action: "updated", record };
+    }
+    const record = await prisma.serviceCategory.create({ data: { ...data, tenantId } });
+    return { action: "inserted", record };
+  },
+  registerLookup(lookups, data, record, existing) {
+    if (!lookups) return;
+    if (lookups.serviceCategoriesByName && existing?.name && existing.name.toLowerCase() !== record.name.toLowerCase()) {
+      lookups.serviceCategoriesByName.delete(existing.name.toLowerCase());
+    }
+    if (lookups.serviceCategoriesById) lookups.serviceCategoriesById.set(record.id, record);
+    if (lookups.serviceCategoriesByName) lookups.serviceCategoriesByName.set(record.name.toLowerCase(), record.id);
   },
 };
 
@@ -1442,6 +1550,7 @@ const ENTITIES = {
   packages,
   products,
   productCategories,
+  serviceCategories,
   inventoryProducts,
   autoConsumptionRules,
   customers,
@@ -1451,6 +1560,7 @@ const ENTITIES = {
 
 const ENTITY_ALIASES = {
   "product-categories": "productCategories",
+  "service-categories": "serviceCategories",
   "inventory-products": "inventoryProducts",
   "auto-consumption-rules": "autoConsumptionRules",
 };

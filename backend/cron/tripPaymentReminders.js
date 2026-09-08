@@ -81,7 +81,6 @@ async function runPaymentRemindersForTenant(tenantId) {
             parentName: true,
             parentEmail: true,
             fullName: true,
-            applicationStatus: true,
           },
         })
       : [];
@@ -142,8 +141,9 @@ async function runPaymentRemindersForTenant(tenantId) {
       : `Trip instalment #${inst.instalmentIndex + 1} (₹${amountStr}) is due ${dueIso} (in ${Math.max(0, Math.ceil((dueAt - now) / 86400_000))} days).`;
 
     const participant = inst.participantId ? participantById[inst.participantId] : null;
-    if (participant && participant.applicationStatus !== "approved") continue;
-    const portalLink = `${PORTAL_BASE}/pay/trip/${inst.tripId}/installment/${inst.instalmentIndex + 1}`;
+    // Approval is no longer a prerequisite for payment. A registration can
+    // be payable as soon as its participant/installment rows exist.
+    const portalLink = `${PORTAL_BASE}/pay/trip/${inst.tripId}/installment/${inst.id}`;
 
     try {
       await prisma.notification.create({

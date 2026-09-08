@@ -105,6 +105,26 @@ prisma.contract = {
 prisma.slaPolicy = {
   findFirst: vi.fn().mockResolvedValue(null),
 };
+prisma.tripParticipant = {
+  findMany: vi.fn().mockResolvedValue([]),
+  findFirst: vi.fn().mockResolvedValue(null),
+};
+prisma.pendingTripRegistration = {
+  findMany: vi.fn().mockResolvedValue([]),
+  findUnique: vi.fn().mockResolvedValue(null),
+};
+prisma.tripInstalmentPayment = {
+  findMany: vi.fn().mockResolvedValue([]),
+  findFirst: vi.fn().mockResolvedValue(null),
+  update: vi.fn().mockResolvedValue({}),
+};
+prisma.payment = {
+  findMany: vi.fn().mockResolvedValue([]),
+  update: vi.fn().mockResolvedValue({}),
+};
+prisma.paymentGatewayConfig = {
+  findFirst: vi.fn().mockResolvedValue(null),
+};
 
 import express from 'express';
 import request from 'supertest';
@@ -159,6 +179,16 @@ beforeEach(() => {
   prisma.invoice.findMany.mockReset().mockResolvedValue([]);
   prisma.contract.findMany.mockReset().mockResolvedValue([]);
   prisma.slaPolicy.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripParticipant.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
+  prisma.pendingTripRegistration.findMany.mockReset().mockResolvedValue([]);
+  prisma.pendingTripRegistration.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripInstalmentPayment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripInstalmentPayment.update.mockReset().mockResolvedValue({});
+  prisma.payment.findMany.mockReset().mockResolvedValue([]);
+  prisma.payment.update.mockReset().mockResolvedValue({});
+  prisma.paymentGatewayConfig.findFirst.mockReset().mockResolvedValue(null);
 });
 
 // ── POST /api/portal/login ─────────────────────────────────────────────
@@ -575,5 +605,195 @@ describe('POST /register — travel customer self-service sign-up', () => {
     const updArg = prisma.contact.update.mock.calls[0][0];
     expect(updArg.where).toEqual({ id: 88 });
     expect(typeof updArg.data.portalPasswordHash).toBe('string');
+  });
+});
+
+// ── GET /api/portal/travel/itineraries — TMC payment parity ────────────
+
+describe('GET /travel/itineraries — parent payment ledger parity', () => {
+  const trip = {
+    id: 501,
+    destination: 'Hampi',
+    departDate: new Date('2026-11-07'),
+    returnDate: new Date('2026-11-11'),
+    pricePerStudent: 20000,
+    paymentPlan: {
+      instalmentsJson: JSON.stringify([
+        { amount: 5000, dueDate: '2026-08-31' },
+        { amount: 5000, dueDate: '2026-09-06' },
+        { amount: 10000, dueDate: '2026-09-30' },
+      ]),
+    },
+  };
+
+  function seedOwnedParticipant() {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    prisma.contact.findFirst.mockResolvedValue({ email: 'parent@example.com' });
+    prisma.tripParticipant.findMany.mockResolvedValue([{
+      id: 701,
+      tripId: trip.id,
+      parentEmail: 'Parent@Example.com',
+      fullName: 'Kapil Sharma',
+      trip,
+    }]);
+    prisma.pendingTripRegistration.findMany.mockResolvedValue([]);
+  }
+
+  test('uses the same paid installment row as admin and reconciles a successful gateway payment', async () => {
+    seedOwnedParticipant();
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 9001,
+      tenantId: 3,
+      contactId: 42,
+      amount: 5000,
+      gateway: 'razorpay',
+      status: 'SUCCESS',
+      metadata: JSON.stringify({
+        kind: 'travel-trip-installment',
+        tripId: trip.id,
+        participantId: 701,
+        instalmentId: 801,
+      }),
+    }]);
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 801,
+      tripId: trip.id,
+      participantId: 701,
+      instalmentIndex: 0,
+      amount: 5000,
+      paidAmount: 0,
+      status: 'pending',
+    });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({
+      id: 801,
+      tripId: trip.id,
+      participantId: 701,
+      instalmentIndex: 0,
+      amount: 5000,
+      paidAmount: 5000,
+      status: 'paid',
+    });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValueOnce([{
+      id: 801,
+      tripId: trip.id,
+      participantId: 701,
+      instalmentIndex: 0,
+      amount: 5000,
+      paidAmount: 5000,
+      status: 'paid',
+      dueDate: new Date('2026-08-31'),
+      paymentLinkUrl: null,
+    }]);
+
+    const res = await request(makeApp())
+      .get('/api/portal/travel/itineraries')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 3 }));
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      tripId: trip.id,
+      advancePaidAmount: 5000,
+      instalments: [{ paidAmount: 5000, status: 'paid' }],
+    });
+    expect(prisma.tripInstalmentPayment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tripId: { in: [trip.id] }, participantId: { in: [701] } },
+    }));
+  });
+
+  test('treats a paid ledger status as paid even when a legacy row has zero paidAmount', async () => {
+    seedOwnedParticipant();
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([{
+      id: 801,
+      tripId: trip.id,
+      participantId: 701,
+      instalmentIndex: 0,
+      amount: 5000,
+      paidAmount: 0,
+      status: 'paid',
+      dueDate: new Date('2026-08-31'),
+      paymentLinkUrl: null,
+    }]);
+
+    const res = await request(makeApp())
+      .get('/api/portal/travel/itineraries')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 3 }));
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].advancePaidAmount).toBe(5000);
+    expect(res.body[0].instalments[0].paidAmount).toBe(5000);
+  });
+
+  test('keeps participants linked by normalized portal email when phone differs', async () => {
+    seedOwnedParticipant();
+    prisma.contact.findFirst.mockResolvedValue({
+      email: 'parent@example.com',
+      phone: '+91 98765 43210',
+    });
+    prisma.tripParticipant.findMany.mockResolvedValue([{
+      id: 701,
+      tripId: trip.id,
+      parentEmail: ' Parent@Example.com ',
+      parentPhone: '0000000000',
+      fullName: 'Kapil Sharma',
+      trip,
+    }]);
+
+    const res = await request(makeApp())
+      .get('/api/portal/travel/itineraries')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 3 }));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ tripId: trip.id, destination: 'Hampi' });
+  });
+
+  test('does not hide an email-owned booking when stale payment reconciliation fails', async () => {
+    seedOwnedParticipant();
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 9002,
+      tenantId: 3,
+      contactId: 42,
+      amount: 5000,
+      gateway: 'razorpay',
+      status: 'SUCCESS',
+      metadata: JSON.stringify({
+        kind: 'landing-page-registration',
+        tripId: trip.id,
+        participantId: 701,
+        installmentIndex: 9,
+      }),
+    }]);
+
+    const res = await request(makeApp())
+      .get('/api/portal/travel/bookings')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 3 }));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ tripId: trip.id, destination: 'Hampi' });
+    expect(res.body[0].instalments).toHaveLength(3);
+  });
+
+  test('does not link a participant by phone when the booking email differs', async () => {
+    seedOwnedParticipant();
+    prisma.contact.findFirst.mockResolvedValue({
+      email: 'parent@example.com',
+      phone: '+91 98765 43210',
+    });
+    prisma.tripParticipant.findMany.mockResolvedValue([{
+      id: 701,
+      tripId: trip.id,
+      parentEmail: 'different-parent@example.com',
+      parentPhone: '9876543210',
+      fullName: 'Kapil Sharma',
+      trip,
+    }]);
+
+    const res = await request(makeApp())
+      .get('/api/portal/travel/bookings')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 3 }));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
   });
 });

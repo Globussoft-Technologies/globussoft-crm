@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { fetchApi, getAuthToken } from "../../utils/api";
+import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import { AlertTriangle, Download, FileText, Plus, Save, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, FileText, Plus, Save, Trash2, Upload } from "lucide-react";
+import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
 
 function emptyProfile() {
   return {
@@ -171,13 +172,11 @@ export default function TravelContactProfilePanel({ contactId }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [importing, setImporting] = useState(false);
   const [data, setData] = useState(null);
   const [profile, setProfile] = useState(emptyProfile());
   const [documents, setDocuments] = useState([]);
   const [uploadForm, setUploadForm] = useState({ label: "", category: "general", documentType: "", expiresAt: "" });
   const [files, setFiles] = useState([]);
-  const [importFile, setImportFile] = useState(null);
   const [travelHistoryPage, setTravelHistoryPage] = useState(0);
 
   const load = async () => {
@@ -213,47 +212,6 @@ export default function TravelContactProfilePanel({ contactId }) {
   const setPayment = (key, value) => setProfile((prev) => ({ ...prev, paymentReferences: { ...(prev.paymentReferences || {}), [key]: value } }));
   const setEmergency = (key, value) => setProfile((prev) => ({ ...prev, emergencyContact: { ...(prev.emergencyContact || {}), [key]: value } }));
   const setConsent = (key, value) => setProfile((prev) => ({ ...prev, consents: { ...(prev.consents || {}), [key]: value } }));
-
-  const downloadTemplate = async (format) => {
-    try {
-      const token = getAuthToken();
-      const response = await fetch('/api/travel/contact-profiles/template?format=' + format, {
-        headers: token ? { Authorization: 'Bearer ' + token } : {},
-      });
-      if (!response.ok) throw new Error('Failed to download template');
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = format === 'xlsx' ? 'travel-contact-profiles-template.xlsx' : 'travel-contact-profiles-template.csv';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (e) {
-      notify.error(e?.message || 'Failed to download template');
-    }
-  };
-
-  const importProfiles = async () => {
-    if (!importFile) {
-      notify.error('Choose a CSV or Excel file to import');
-      return;
-    }
-    setImporting(true);
-    try {
-      const form = new FormData();
-      form.append('file', importFile);
-      const res = await fetchApi('/api/travel/contact-profiles/import', { method: 'POST', body: form });
-      notify.success('Imported ' + (res?.imported || 0) + ' profile row(s)');
-      setImportFile(null);
-      await load();
-    } catch (e) {
-      notify.error(e?.body?.error || e?.message || 'Failed to import profile file');
-    } finally {
-      setImporting(false);
-    }
-  };
 
   const saveProfile = async () => {
     setSaving(true);
@@ -332,18 +290,27 @@ export default function TravelContactProfilePanel({ contactId }) {
           <p style={subtitle}>Travel-only traveller schema, documents, expiry watch, and import-ready fields.</p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button type="button" style={linkBtn} onClick={() => downloadTemplate("csv")}><Download size={14} /> CSV template</button>
-          <button type="button" style={linkBtn} onClick={() => downloadTemplate("xlsx")}><Download size={14} /> Excel template</button>
+          <CsvImportExportToolbar
+            entity="travel-contact-profiles"
+            label="travel contact profiles"
+            formats={["csv", "xlsx"]}
+            showExport={false}
+            forceSync
+            skipMeta
+            expectedHeaders={[
+              "contactId", "email", "phone", "fullName", "aka", "dob", "gender",
+              "nationality", "address", "languages", "passportJson", "visasJson",
+              "travelHistoryJson", "preferencesJson", "frequentFlyerJson",
+              "paymentReferencesJson", "emergencyContactJson", "familyLinksJson",
+              "consentsJson", "segments", "notes",
+            ]}
+            endpoints={{
+              template: "/api/travel/contact-profiles/template",
+              import: "/api/travel/contact-profiles/import",
+            }}
+            onImported={load}
+          />
           <button type="button" style={primaryBtn} onClick={saveProfile} disabled={saving}><Save size={14} /> {saving ? "Saving..." : "Save profile"}</button>
-        </div>
-      </div>
-
-      <div style={card}>
-        <h3 style={subTitle}>Import master profile file</h3>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => setImportFile(e.target.files?.[0] || null)} />
-          <button type="button" style={primaryBtn} onClick={importProfiles} disabled={importing}><Download size={14} /> {importing ? "Importing..." : "Import CSV/Excel"}</button>
-          <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>{importFile ? importFile.name : "No import file selected"}</span>
         </div>
       </div>
 

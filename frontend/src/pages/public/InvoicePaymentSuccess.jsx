@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, Download, Loader2 } from "lucide-react";
+import { publishTravelPaymentSync } from "../../utils/travelPaymentSync";
 
 export default function InvoicePaymentSuccess() {
   const [confirming, setConfirming] = useState(true);
@@ -37,7 +38,10 @@ export default function InvoicePaymentSuccess() {
       .then((r) => r.json())
       .then((data) => {
         if (data.error) setError(data.error);
-        else setSummary(data);
+        else {
+          publishTravelPaymentSync({ paymentLinkId: plink });
+          setSummary(data);
+        }
       })
       .catch(() => {})
       .finally(() => setConfirming(false));

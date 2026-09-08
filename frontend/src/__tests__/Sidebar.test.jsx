@@ -1835,6 +1835,14 @@ describe('Sidebar — load-bearing render surface', () => {
   //    future App.jsx rename would be caught here in addition to in the
   //    page-specific test files.
   describe('Travel vertical — S49 + S55 admin entries (QuoteTemplates + CancellationPolicies)', () => {
+    it('hides quote tools for the TMC sub-brand while keeping them available to other brands', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', activeSubBrand: 'tmc' });
+      expect(screen.queryByText('Quotes')).toBeNull();
+      expect(screen.queryByText('Flight Quick-quote')).toBeNull();
+      expect(screen.queryByText('Quote Builder')).toBeNull();
+      expect(screen.queryByText('Quote Templates')).toBeNull();
+    });
+
     it('renders Quote Templates nav entry with href /travel/quote-templates for ADMIN', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN' });
       const link = screen.getByText('Quote Templates').closest('a');

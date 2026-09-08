@@ -2005,9 +2005,20 @@ function PaymentTab({ trip, notify }) {
   useEffect(load, [load]);
 
 
-  const buildInstalmentPortalUrl = (instalmentNumber) => (
-    `${window.location.origin}/pay/trip/${trip.id}/installment/${instalmentNumber}`
-  );
+  const buildInstalmentPortalUrl = (instalmentId) => {
+    const id = Number(instalmentId);
+    return Number.isInteger(id) && id > 0
+      ? `${window.location.origin}/pay/trip/${trip.id}/installment/${id}`
+      : null;
+  };
+
+  // A trip can have several participants with the same payment-plan index.
+  // Only expose a plan-level link when that index maps to exactly one ledger
+  // row; participant-level rows below provide unambiguous links for groups.
+  const getUniquePlanInstalment = (index) => {
+    const matches = instalments.filter((item) => Number(item.instalmentIndex) === Number(index));
+    return matches.length === 1 ? matches[0] : null;
+  };
 
   const onCopyPortalLink = (url) => {
     navigator.clipboard?.writeText(url)
@@ -2193,8 +2204,10 @@ function PaymentTab({ trip, notify }) {
                 <span style={{ textAlign: "center" }}>Payment link</span>
                 <span style={{ textAlign: "right" }}>Actions</span>
               </div>
-              {editInstalments.map((ins, idx) => (
-                <div key={idx} style={{
+              {editInstalments.map((ins, idx) => {
+                const planInstalment = getUniquePlanInstalment(idx);
+                const portalUrl = buildInstalmentPortalUrl(planInstalment?.id);
+                return <div key={idx} style={{
                   display: "grid",
                   gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 84px 90px",
                   gap: 8,
@@ -2233,9 +2246,10 @@ function PaymentTab({ trip, notify }) {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minWidth: 0 }}>
                     <button
                       type="button"
-                      onClick={() => onCopyPortalLink(buildInstalmentPortalUrl(idx + 1))}
-                      style={{ ...secondaryBtn, padding: "5px 8px", fontSize: 11, flexShrink: 0, minWidth: 58, justifyContent: "center" }}
-                      title={buildInstalmentPortalUrl(idx + 1)}
+                      onClick={() => portalUrl && onCopyPortalLink(portalUrl)}
+                      disabled={!portalUrl}
+                      style={{ ...secondaryBtn, padding: "5px 8px", fontSize: 11, flexShrink: 0, minWidth: 58, justifyContent: "center", opacity: portalUrl ? 1 : 0.45, cursor: portalUrl ? "pointer" : "not-allowed" }}
+                      title={portalUrl || "Generate per-participant instalments to create a payment link"}
                       aria-label={`Copy instalment ${idx + 1} payment link`}
                     >
                       <Link2 size={12} aria-hidden /> Link
@@ -2272,8 +2286,8 @@ function PaymentTab({ trip, notify }) {
                       <Trash2 size={14} aria-hidden />
                     </button>
                   </div>
-                </div>
-              ))}
+                </div>;
+              })}
             </>
           )}
         </div>
@@ -2500,7 +2514,17 @@ function PaymentTab({ trip, notify }) {
                                   }}
                                 >
                                   {i.status}
-                                </span>                                <button
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => onCopyPortalLink(buildInstalmentPortalUrl(i.id))}
+                                  style={{ ...iconBtn, padding: "4px" }}
+                                  title="Copy parent payment portal link"
+                                  aria-label="Copy parent payment portal link"
+                                >
+                                  <Link2 size={12} aria-hidden />
+                                </button>
+                                <button
                                   type="button"
                                   onClick={() => onEditInstalment(i)}
                                   style={{ ...iconBtn, padding: "4px" }}

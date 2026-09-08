@@ -571,7 +571,7 @@ export default function Omnibar() {
         // logout) keep their natural flex-end alignment.
         width: "min(420px, 38vw)",
         minWidth: 220,
-        marginRight: "auto",
+        marginRight: 0,
       }}
     >
       <div

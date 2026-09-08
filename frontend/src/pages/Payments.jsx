@@ -81,7 +81,10 @@ const GATEWAY_CONFIG = {
 };
 
 function StatusBadge({ status }) {
-  const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.PENDING;
+  const normalizedStatus = ["PAID", "CAPTURED"].includes(String(status || "").toUpperCase())
+    ? "SUCCESS"
+    : status;
+  const cfg = STATUS_CONFIG[normalizedStatus] || STATUS_CONFIG.PENDING;
   const Icon = cfg.Icon;
   return (
     <span

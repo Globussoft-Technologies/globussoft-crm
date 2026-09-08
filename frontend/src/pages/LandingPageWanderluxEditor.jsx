@@ -170,6 +170,37 @@ function TextField({ label, value, onChange, placeholder }) {
   );
 }
 
+function toDateTimeLocalValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (part) => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function DateTimeField({ label, value, onChange }) {
+  const localValue = toDateTimeLocalValue(value);
+  return (
+    <div>
+      <label style={labelStyle}>{label}</label>
+      <input
+        type="datetime-local"
+        style={inputStyle}
+        value={localValue}
+        onChange={(e) => {
+          const nextValue = e.target.value;
+          onChange(nextValue ? new Date(nextValue).toISOString() : '');
+        }}
+        step="60"
+        aria-label={label}
+      />
+      <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0.3rem 0 0' }}>
+        Choose a date and time using your local timezone. It will be saved automatically in ISO format.
+      </p>
+    </div>
+  );
+}
+
 function TextArea({ label, value, onChange, placeholder, rows = 3 }) {
   return (
     <div>
@@ -1742,7 +1773,7 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
       <Section id="countdown" title="Countdown timer" open={open} setOpen={setOpen}>
         <CheckboxField label="Show countdown" value={cfg.countdown && cfg.countdown.enabled} onChange={(v) => setPath(['countdown', 'enabled'], v)} />
         <TextField label="Label" value={cfg.countdown && cfg.countdown.label} onChange={(v) => setPath(['countdown', 'label'], v)} placeholder="Registration Closes In" />
-        <TextField label="Deadline (ISO date)" value={cfg.countdown && cfg.countdown.deadline} onChange={(v) => setPath(['countdown', 'deadline'], v)} placeholder="2026-12-31T23:59:00" />
+        <DateTimeField label="Deadline" value={cfg.countdown && cfg.countdown.deadline} onChange={(v) => setPath(['countdown', 'deadline'], v)} />
         <TextField label="CTA label" value={cfg.countdown && cfg.countdown.ctaLabel} onChange={(v) => setPath(['countdown', 'ctaLabel'], v)} placeholder="Explore Now" />
       </Section>
 
@@ -2011,7 +2042,7 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
         <TextArea label="Intro copy" value={cfg.register && cfg.register.intro} onChange={(v) => setPath(['register', 'intro'], v)} rows={2} />
         <NumberField label="Capacity (seats)" value={cfg.register && cfg.register.capacity} onChange={(v) => setPath(['register', 'capacity'], v)} min={1} max={9999} />
         <NumberField label="Registered (already-booked count)" value={cfg.register && cfg.register.registered} onChange={(v) => setPath(['register', 'registered'], v)} min={0} max={9999} />
-        <TextField label="Deadline (ISO date)" value={cfg.register && cfg.register.deadline} onChange={(v) => setPath(['register', 'deadline'], v)} placeholder="2026-12-31T23:59:00" />
+        <DateTimeField label="Registration deadline" value={cfg.register && cfg.register.deadline} onChange={(v) => setPath(['register', 'deadline'], v)} />
         <TextField label="Submit button label" value={cfg.register && cfg.register.submitLabel} onChange={(v) => setPath(['register', 'submitLabel'], v)} placeholder="Submit Registration" />
       </Section>
 

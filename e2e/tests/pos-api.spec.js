@@ -814,13 +814,16 @@ test.describe('POS — POST /shifts/:id/close', () => {
 // — lands its row ~1.5-2s after the shift mutation returns. emitEvent is also
 // fire-and-forget, so none of that starts until after the 201. A fixed 350ms
 // gap read the table while the engine was still on attempt 2.
-async function historyAfter(request, beforeTotal, timeoutMs = 15000) {
+async function historyAfter(request, beforeTotal, workflowId, timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   let body;
   do {
     await new Promise((r) => setTimeout(r, 250));
     body = await (await authGet(request, '/api/workflows/history?limit=200')).json();
-  } while (body.total <= beforeTotal && Date.now() < deadline);
+  } while (
+    (body.total <= beforeTotal || !body.logs.some((l) => l.workflowId === workflowId)) &&
+    Date.now() < deadline
+  );
   return body;
 }
 
@@ -859,7 +862,7 @@ test.describe('POS — shift.opened / shift.closed event emission', () => {
     const shift = await openRes.json();
     createdShiftIds.push(shift.id);
 
-    const afterBody = await historyAfter(request, beforeTotal);
+    const afterBody = await historyAfter(request, beforeTotal, rule.id);
     expect(
       afterBody.total,
       `history total should grow by ≥1 after shift.opened fired; delta ${afterBody.total - beforeTotal}`
@@ -920,7 +923,7 @@ test.describe('POS — shift.opened / shift.closed event emission', () => {
     expect(closed.variance).toBeCloseTo(1234 - 1000, 2);
     expect(closed.status).toBe('CLOSED');
 
-    const afterBody = await historyAfter(request, beforeTotal);
+    const afterBody = await historyAfter(request, beforeTotal, rule.id);
     expect(
       afterBody.total,
       `history total should grow by ≥1 after shift.closed fired; delta ${afterBody.total - beforeTotal}`

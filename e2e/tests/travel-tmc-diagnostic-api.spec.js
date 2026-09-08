@@ -72,7 +72,12 @@ test.describe.configure({ mode: 'serial', timeout: 120_000 });
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60_000;
-const RUN_TAG = `E2E_TMC_DIAG_${Date.now()}`;
+const RUN_ID = String(Date.now());
+// The lead-quality junk-string rule intentionally flags any character repeated
+// four or more times. Group timestamp digits so unlucky values such as
+// 1788888755000 cannot make otherwise-realistic fixture names look like junk.
+const RUN_TAG = `E2E_TMC_DIAG_${RUN_ID.match(/.{1,3}/g).join('-')}`;
+const RUN_PHONE = `9${RUN_ID.slice(-9)}`;
 const TENANT_SLUG = 'travel-stall';
 
 // ── Dual-token auth ────────────────────────────────────────────────────
@@ -184,10 +189,6 @@ async function getPublic(request, path) {
 //   - school_profile: branches:2, student_strength:"1000-2000", fee_band:"1l-plus" → `breadwinning`
 //   - contact email: school domain (`.edu.in`) → leadQuality:"clean"
 function ac12HappyPayload(emailOverride) {
-  // Keep the phone unique across CI runs. Repeat-submitter detection matches
-  // on email OR phone within 24 hours, so a static number makes an otherwise
-  // clean fixture turn suspect after several workflow runs.
-  const runPhone = `9${String(RUN_TAG.match(/\d+$/)?.[0] || Date.now()).slice(-9)}`;
   return {
     tenantSlug: TENANT_SLUG,
     answers: {
@@ -213,7 +214,9 @@ function ac12HappyPayload(emailOverride) {
         contact_name: `${RUN_TAG} Principal Mehra`,
         contact_role: 'Principal',
         email: emailOverride || `principal+${RUN_TAG}@stxavierintl.edu.in`,
-        phone: runPhone,
+        // Repeat-submitter detection matches email OR phone within 24 hours,
+        // so the number must also be unique per run.
+        phone: RUN_PHONE,
       },
     },
   };

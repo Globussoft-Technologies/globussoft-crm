@@ -184,6 +184,10 @@ async function getPublic(request, path) {
 //   - school_profile: branches:2, student_strength:"1000-2000", fee_band:"1l-plus" → `breadwinning`
 //   - contact email: school domain (`.edu.in`) → leadQuality:"clean"
 function ac12HappyPayload(emailOverride) {
+  // Keep the phone unique across CI runs. Repeat-submitter detection matches
+  // on email OR phone within 24 hours, so a static number makes an otherwise
+  // clean fixture turn suspect after several workflow runs.
+  const runPhone = `9${String(RUN_TAG.match(/\d+$/)?.[0] || Date.now()).slice(-9)}`;
   return {
     tenantSlug: TENANT_SLUG,
     answers: {
@@ -209,7 +213,7 @@ function ac12HappyPayload(emailOverride) {
         contact_name: `${RUN_TAG} Principal Mehra`,
         contact_role: 'Principal',
         email: emailOverride || `principal+${RUN_TAG}@stxavierintl.edu.in`,
-        phone: '9876543210',
+        phone: runPhone,
       },
     },
   };

@@ -247,7 +247,9 @@ describe('<Leave /> — balance summary cards', () => {
 describe('<Leave /> — request form', () => {
   it('renders policy / start date / end date / reason / submit', async () => {
     renderLeave({ user: { id: REQUESTER_ID, role: 'USER' } });
-    await waitFor(() => expect(screen.getByText('Request Leave')).toBeInTheDocument());
+    await waitFor(() => expect(
+      within(screen.getByLabelText(/Leave policy/i)).getByRole('option', { name: /Casual Leave \(CASUAL\)/i })
+    ).toBeInTheDocument());
 
     expect(screen.getByLabelText(/Leave policy/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Start date/i)).toBeInTheDocument();
@@ -266,7 +268,9 @@ describe('<Leave /> — request form', () => {
   it('happy path → POSTs /api/leave/requests with the correct body shape', async () => {
     const user = userEvent.setup();
     renderLeave({ user: { id: REQUESTER_ID, role: 'USER' } });
-    await waitFor(() => expect(screen.getByText('Request Leave')).toBeInTheDocument());
+    await waitFor(() => expect(
+      within(screen.getByLabelText(/Leave policy/i)).getByRole('option', { name: /Casual Leave \(CASUAL\)/i })
+    ).toBeInTheDocument());
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation(fakeFetchApi);
 
@@ -297,7 +301,9 @@ describe('<Leave /> — request form', () => {
   it('happy path with empty reason → posts reason: null (not undefined)', async () => {
     const user = userEvent.setup();
     renderLeave({ user: { id: REQUESTER_ID, role: 'USER' } });
-    await waitFor(() => expect(screen.getByText('Request Leave')).toBeInTheDocument());
+    await waitFor(() => expect(
+      within(screen.getByLabelText(/Leave policy/i)).getByRole('option', { name: /Sick Leave \(SICK\)/i })
+    ).toBeInTheDocument());
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation(fakeFetchApi);
 
@@ -320,7 +326,9 @@ describe('<Leave /> — request form', () => {
   it('rejects empty required fields and never POSTs', async () => {
     const user = userEvent.setup();
     renderLeave({ user: { id: REQUESTER_ID, role: 'USER' } });
-    await waitFor(() => expect(screen.getByText('Request Leave')).toBeInTheDocument());
+    await waitFor(() => expect(
+      within(screen.getByLabelText(/Leave policy/i)).getByRole('option', { name: /Casual Leave \(CASUAL\)/i })
+    ).toBeInTheDocument());
     fetchApiMock.mockClear();
 
     // Submit with nothing filled — page validates policyId, startDate, endDate
@@ -357,7 +365,9 @@ describe('<Leave /> — request form', () => {
 
     const user = userEvent.setup();
     renderLeave({ user: { id: REQUESTER_ID, role: 'USER' } });
-    await waitFor(() => expect(screen.getByText('Request Leave')).toBeInTheDocument());
+    await waitFor(() => expect(
+      within(screen.getByLabelText(/Leave policy/i)).getByRole('option', { name: /Casual Leave \(CASUAL\)/i })
+    ).toBeInTheDocument());
 
     await user.selectOptions(screen.getByLabelText(/Leave policy/i), '1');
     fireEvent.change(screen.getByLabelText(/Start date/i), { target: { value: '2026-06-15' } });

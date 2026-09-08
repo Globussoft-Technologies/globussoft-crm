@@ -14,21 +14,24 @@
 
     *,*::before,*::after{box-sizing:border-box}
 
-    html,body{margin:0;padding:0;background:#fff;color:#111827;font-family:var(--gbs-font,Inter,system-ui,sans-serif)}
+    html,body{margin:0;padding:0;background:radial-gradient(circle at 10% 0%,rgba(99,102,241,.14),transparent 42%),linear-gradient(145deg,#f8f9ff 0%,#eef1ff 100%);color:#10132d;font-family:var(--gbs-font,Inter,system-ui,sans-serif)}
 
-    body{padding:16px}
+    body{padding:20px}
 
-    .wrap{max-width:720px;margin:0 auto}
+    .wrap{max-width:620px;margin:0 auto}
 
-    .panel{background:var(--gbs-form,#fff);border:1px solid rgba(148,163,184,.25);border-radius:18px;padding:24px;box-shadow:0 16px 48px rgba(15,23,42,.08)}
+    .panel{background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.28);border-radius:24px;padding:30px;box-shadow:0 24px 70px rgba(30,41,96,.14);backdrop-filter:blur(12px)}
 
-    .logo{max-height:52px;max-width:220px;object-fit:contain;display:block;margin-bottom:12px}
+    .logo{max-height:48px;max-width:210px;object-fit:contain;display:block;margin-bottom:16px}
 
-    h1{margin:0 0 8px;color:var(--gbs-title,#000);font-size:1.6rem;line-height:1.2}
+    .form-header{margin-bottom:24px}
 
-    p.desc{margin:0 0 18px;color:var(--gbs-text,#111827);opacity:.9;line-height:1.6}
 
-    .field{margin-bottom:14px}
+    h1{margin:0 0 10px;color:var(--gbs-title,#10132d);font-size:clamp(1.55rem,4vw,2.15rem);font-weight:800;letter-spacing:-.035em;line-height:1.12}
+
+    p.desc{margin:0;color:var(--gbs-text,#52607a);font-size:.92rem;line-height:1.6}
+
+    .field{margin-bottom:16px}
 
     .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 
@@ -36,13 +39,13 @@
 
     .full{grid-column:1/-1}
 
-    label{display:block;font-size:.82rem;color:var(--gbs-label,#666);font-weight:600;margin-bottom:6px}
+    label{display:block;font-size:.78rem;color:var(--gbs-label,#34405e);font-weight:700;margin-bottom:7px}
 
-    input,select,textarea{width:100%;border:1px solid rgba(148,163,184,.35);border-radius:10px;padding:.72rem .8rem;font:inherit;background:#fff;color:#111827}
+    input,select,textarea{width:100%;border:1px solid #d8ddec;border-radius:12px;padding:.82rem .9rem;font:inherit;background:#fff;color:#111827;transition:border-color .2s,box-shadow .2s,transform .2s}
 
     textarea{min-height:104px;resize:vertical}
 
-    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--gbs-accent,#12344D);box-shadow:0 0 0 3px rgba(18,52,77,.12)}
+    input:focus,select:focus,textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 4px rgba(99,102,241,.13);transform:translateY(-1px)}
 
     .check{display:inline-flex;align-items:flex-start;gap:8px;color:var(--gbs-text,#111827);font-size:.95rem;cursor:pointer;text-align:left;margin-bottom:0;width:fit-content;max-width:100%}
 
@@ -54,29 +57,35 @@
 
     .optin a{color:var(--gbs-accent,#12344D);text-decoration:underline}
 
-    .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
+    .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:22px}
 
-    button{border:0;border-radius:10px;padding:.8rem 1rem;font:inherit;font-weight:700;cursor:pointer}
+    button{border:0;border-radius:12px;padding:.86rem 1.1rem;font:inherit;font-weight:750;cursor:pointer;transition:transform .2s,box-shadow .2s,opacity .2s}
 
-    .primary{background:var(--gbs-button,#12344D);color:#fff;min-width:140px}
+    .primary{background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;min-width:150px;box-shadow:0 10px 22px rgba(79,70,229,.25)}
 
-    .note{margin-top:14px;font-size:.82rem;color:var(--gbs-text,#111827);opacity:.75}
+    .primary:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 14px 26px rgba(79,70,229,.32)}
+
+    button:disabled{cursor:wait;opacity:.72}
+
+    .note{margin-top:22px;padding-top:16px;border-top:1px solid #edf0f7;font-size:.78rem;color:var(--gbs-text,#52607a);opacity:.85}
 
     .note a{color:inherit;text-decoration:none}
 
     .note a:hover,.note a:focus-visible{text-decoration:underline}
 
-    .error,.success{border-radius:12px;padding:12px 14px;margin-bottom:14px}
+    .error,.success{border-radius:16px;padding:18px 18px;margin-bottom:18px;line-height:1.55}
 
     .error{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
 
-    .success{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+    .success{background:linear-gradient(135deg,#ecfdf5,#f0fdf4);color:#065f46;border:1px solid #a7f3d0;text-align:center;font-weight:700}
+
+    .success::before{content:'✓';display:flex;align-items:center;justify-content:center;width:36px;height:36px;margin:0 auto 10px;border-radius:50%;background:#10b981;color:#fff;font-size:1.1rem}
 
     .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:8px}
 
     @keyframes spin{to{transform:rotate(360deg)}}
 
-    @media (max-width:640px){body{padding:12px}.panel{padding:18px}.grid{grid-template-columns:1fr}.half,.full{grid-column:1/-1}}
+    @media (max-width:640px){body{padding:12px}.panel{padding:22px 18px;border-radius:20px}.grid{grid-template-columns:1fr}.half,.full{grid-column:1/-1}}
 
   </style>
 
@@ -218,7 +227,9 @@
 
       function setMessage(kind, text){
 
-        root.innerHTML = '<div class="panel"><div class="' + kind + '">' + esc(text) + '</div></div>';
+        var message = String(text == null ? '' : text).trim() || 'Thank you! Your information has been received. We will be in touch shortly.';
+
+        root.innerHTML = '<div class="panel"><div class="' + kind + '">' + esc(message) + '</div></div>';
 
         scheduleSize();
 
@@ -238,7 +249,8 @@
 
         var fields = Array.isArray(formData.fields) ? formData.fields : [];
 
-        var title = esc(formData.name || 'Web form');
+        var titleOverride = new URLSearchParams(window.location.search).get('title');
+        var title = esc(titleOverride || formData.name || 'Web form');
 
         var desc = esc(formData.description || '');
 
@@ -261,7 +273,7 @@
 
         var footerLink = '<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>';
 
-        root.innerHTML = '<div class="panel">' + logo + '<h1>' + title + '</h1>' + (desc ? '<p class="desc">' + desc + '</p>' : '') + '<div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(fieldHtml).join('') + '</div>' + optIn + '<div class="actions"><button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form><div class="note">' + footerLink + '</div></div>';
+        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header"><h1>' + title + '</h1>' + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div><div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(fieldHtml).join('') + '</div>' + optIn + '<div class="actions"><button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form><div class="note">' + footerLink + '</div></div>';
 
         scheduleSize();
 

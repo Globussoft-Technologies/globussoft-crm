@@ -5837,7 +5837,8 @@ publicRouter.post("/:slug/registration-documents", (req, res, next) => {
     const files = req.files || {};
     const pageConfig = safeJsonParse(page.content, {});
     const configuredTripType = pageConfig.register?.tripType || pageConfig.meta?.tripType || "";
-    const isDomesticTrip = String(configuredTripType).trim().toLowerCase() === "domestic";
+    const normalizedTripType = String(configuredTripType).trim().toLowerCase().replace(/[- ]/g, "_");
+    const isDomesticTrip = normalizedTripType === "domestic" || normalizedTripType === "day_trip";
     const required = [
       ...(isDomesticTrip ? [] : ["passport"]),
       "aadhaar", "parentConsent", "medicalConsent",
@@ -5936,7 +5937,10 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       data: {
         tenantId,
         invoiceId: null,
-        contactId: null,
+        contactId: (await prisma.contact.findFirst({
+          where: { tenantId, email: String(req.body?.email || req.body?.parent_email || req.body?.fields?.email || req.body?.fields?.parent_email || "").trim().toLowerCase() },
+          select: { id: true },
+        }))?.id || null,
         description: `${page.title || "Landing page"} registration payment${selection.mode === "complete" ? " (full)" : ""}`,
         amount: selection.amountMajor,
         currency: selection.currency,
@@ -6031,7 +6035,27 @@ publicRouter.get("/:slug/payment-status", async (req, res) => {
       const metadata = safeJsonParse(payment.metadata, {});
       return metadata.kind === "landing-page-registration" && Number(metadata.pageId) === Number(page.id) && metadata.draftToken === draftToken;
     });
-    const refreshedPayments = await Promise.all(matchingPayments.map((payment) => refreshHostedPaymentStatus(payment, payment.gatewayId, page.tenantId || 1)));
+    const refreshedPayments = await Promise.all(matchingPayments.map(async (payment) => {
+      const refreshed = await refreshHostedPaymentStatus(payment, payment.gatewayId, page.tenantId || 1);
+      const metadata = safeJsonParse(refreshed.metadata || payment.metadata, {});
+      const participantId = draft.convertedToParticipantId || metadata.participantId;
+      if (participantId && ["SUCCESS", "CAPTURED", "PAID"].includes(String(refreshed.status || "").toUpperCase())) {
+        try {
+          await applyLandingPagePaymentToTrip({
+            db: prisma,
+            tripId: metadata.tripId,
+            participantId,
+            amountMajor: refreshed.amount || metadata.amountMajor,
+            mode: metadata.paymentMode === "complete" ? "complete" : "installment",
+            installmentIndex: Number.isFinite(Number(metadata.installmentIndex)) ? Number(metadata.installmentIndex) : 0,
+            capturedAt: refreshed.paidAt || new Date(),
+          });
+        } catch (allocationError) {
+          console.error("[LandingPage] payment-status trip allocation failed:", allocationError.message);
+        }
+      }
+      return refreshed;
+    }));
     const paid = refreshedPayments.some((payment) => ["SUCCESS", "CAPTURED", "PAID"].includes(String(payment.status || "").toUpperCase()));
     const extras = safeJsonParse(draft.extrasJson, {});
     return res.json({
@@ -6834,7 +6858,7 @@ async function refreshHostedPaymentStatus(paymentRecord, paymentLinkId, tenantId
   }
   const status = String(remote?.status || "").toUpperCase();
   if (!["PAID", "PARTIALLY_PAID"].includes(status)) return paymentRecord;
-  return prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: status === "PAID" ? "PAID" : "SUCCESS" } });
+  return prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "SUCCESS", paidAt: new Date() } });
 }
 
 
@@ -7418,7 +7442,7 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
       if (hostedLink) {
         paymentRecord = await refreshHostedPaymentStatus(paymentRecord, paymentSubmission.paymentLinkId, tenantId);
         if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase()) && ["PAID", "PARTIALLY_PAID"].includes(paymentSubmission.paymentLinkStatus)) {
-          paymentRecord = await prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "PAID" } });
+          paymentRecord = await prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "SUCCESS", paidAt: new Date() } });
         }
         if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase())) {
           return res.status(409).json({ error: "Payment is not yet confirmed. Please wait a moment and try again.", code: "PAYMENT_NOT_CONFIRMED" });
@@ -7628,6 +7652,7 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
         data: {
           status: "SUCCESS",
           paidAt: paymentCapturedAt || new Date(),
+          contactId: contact.id,
           metadata: JSON.stringify(updatedPaymentMeta),
         },
       });
@@ -7741,7 +7766,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
       if (hostedLink) {
         paymentRecord = await refreshHostedPaymentStatus(paymentRecord, paymentSubmission.paymentLinkId, tenantId);
         if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase()) && ["PAID", "PARTIALLY_PAID"].includes(paymentSubmission.paymentLinkStatus)) {
-          paymentRecord = await prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "PAID" } });
+          paymentRecord = await prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "SUCCESS", paidAt: new Date() } });
         }
         if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase())) {
           return res.status(409).json({ error: "Payment is not yet confirmed. Please wait a moment and try again.", code: "PAYMENT_NOT_CONFIRMED" });
@@ -7998,6 +8023,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
         data: {
           status: "SUCCESS",
           paidAt: paymentCapturedAt,
+          contactId: contact.id,
           metadata: JSON.stringify({
             ...paymentMeta,
             landingPageRegistrationCompleted: true,

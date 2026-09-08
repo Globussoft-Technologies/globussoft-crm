@@ -19,6 +19,7 @@ const {
 } = require("../lib/tenantPaymentGateway");
 const { fulfillSubscriptionOrder } = require("../lib/subscriptionFulfillment");
 const { applyLandingPagePaymentToTrip } = require("../lib/landingPagePayments");
+const { reconcileTripInstalmentPayment } = require("../lib/tripPaymentReconciliation");
 
 const router = express.Router();
 
@@ -437,6 +438,29 @@ router.post(
             });
             await markInvoicePaid(payment.invoiceId, payment.tenantId);
             emitPaymentCollected(updated);
+
+            // Dynamic TMC checkout payments arrive as payment.captured. The
+            // generic Payment row is updated above, but the installment ledger
+            // and parent-facing booking aggregate must also be reconciled.
+            const paymentMeta = (() => {
+              try { return JSON.parse(payment.metadata || "{}"); } catch (_err) { return {}; }
+            })();
+            if (paymentMeta.kind === "travel-trip-installment" && paymentMeta.instalmentId) {
+              const instalment = await prisma.tripInstalmentPayment.findFirst({
+                where: {
+                  id: Number(paymentMeta.instalmentId),
+                  tripId: Number(paymentMeta.tripId),
+                  participantId: Number(paymentMeta.participantId),
+                },
+              });
+              await reconcileTripInstalmentPayment({
+                db: prisma,
+                instalment,
+                amountMajor: payment.amount,
+                capturedAt: new Date(),
+                tenantId: payment.tenantId,
+              });
+            }
           }
         }
       }
@@ -526,9 +550,17 @@ router.post(
         }
 
         if (orderId) {
-          const payment = await prisma.payment.findFirst({
+          let payment = await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: orderId },
           });
+          if (!payment) {
+            payment = await prisma.payment.findFirst({
+              where: {
+                gateway: "razorpay",
+                metadata: { contains: `\"orderId\":\"${orderId}\"` },
+              },
+            });
+          }
           if (payment) {
             const updated = await prisma.payment.update({
               where: { id: payment.id },
@@ -540,6 +572,34 @@ router.post(
             });
             await markInvoicePaid(payment.invoiceId, payment.tenantId);
             emitPaymentCollected(updated);
+
+            // Razorpay order payments used by the customer portal are not
+            // payment links, so they never reach the payment_link.paid branch
+            // below. Reconcile the participant's ledger here from the stored
+            // payment metadata so every trip/participant follows the same
+            // payment lifecycle.
+            const paymentMeta = (() => {
+              try { return JSON.parse(payment.metadata || "{}"); } catch (_err) { return {}; }
+            })();
+            if (paymentMeta.kind === "travel-trip-installment" && paymentMeta.instalmentId) {
+              const instalment = await prisma.tripInstalmentPayment.findFirst({
+                where: {
+                  id: Number(paymentMeta.instalmentId),
+                  tripId: Number(paymentMeta.tripId),
+                  participantId: Number(paymentMeta.participantId),
+                },
+              });
+              const capturedAt = ent && ent.captured_at
+                ? new Date(ent.captured_at * 1000)
+                : new Date();
+              await reconcileTripInstalmentPayment({
+                db: prisma,
+                instalment,
+                amountMajor: payment.amount,
+                capturedAt,
+                tenantId: payment.tenantId,
+              });
+            }
           }
         }
       } else if (eventName === "payment.failed") {
@@ -780,13 +840,16 @@ router.post(
                 where: { paymentLinkUrl: plinkEnt.short_url },
               });
             }
-            if (instalment && instalment.status !== 'paid') {
-              const paidAmount = paidMajor != null ? paidMajor : Number(instalment.amount);
-              const instalmentAmount = Number(instalment.amount);
-              const newStatus = paidAmount >= instalmentAmount ? 'paid' : 'partial';
-              await prisma.tripInstalmentPayment.update({
-                where: { id: instalment.id },
-                data: { status: newStatus, paidAmount, paidAt: capturedAt },
+            if (instalment) {
+              // Keep hosted-link, dynamic-order, and portal recovery payments
+              // on the same cumulative ledger update. In particular, a retry
+              // or a partial payment must never replace an earlier amount.
+              await reconcileTripInstalmentPayment({
+                db: prisma,
+                instalment,
+                amountMajor: paidMajor,
+                capturedAt,
+                tenantId: notes.tenantId ? Number(notes.tenantId) : null,
               });
               const webhookTenantId = notes.tenantId ? Number(notes.tenantId) : null;
               try {
@@ -811,7 +874,7 @@ router.post(
                     });
                     const trueTotal = paidRows.reduce(
                       (s, r) => s + (Number(r.paidAmount) || Number(r.amount) || 0), 0,
-                    ) + paidAmount; // include this instalment (not yet marked paid)
+                    );
                     await prisma.itinerary.update({
                       where: { id: itinerary.id },
                       data: {
@@ -960,6 +1023,58 @@ router.get("/", async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
 
+    // Webhooks are a notification mechanism, not the source of truth for the
+    // Payments Received screen. Refresh pending Razorpay hosted links directly
+    // so a delayed/missing webhook cannot leave a completed payment displayed
+    // as pending. Metadata then drives the same participant reconciliation for
+    // every trip and payer.
+    const pendingHostedPayments = payments.filter((payment) => {
+      if (String(payment.gateway || "").toLowerCase() !== "razorpay") return false;
+      if (["SUCCESS", "PAID", "CAPTURED"].includes(String(payment.status || "").toUpperCase())) return false;
+      try {
+        const metadata = JSON.parse(payment.metadata || "{}");
+        return Boolean(metadata.plinkId || String(payment.gatewayId || "").startsWith("plink_"));
+      } catch (_err) { return String(payment.gatewayId || "").startsWith("plink_"); }
+    });
+    if (pendingHostedPayments.length) {
+      try {
+        const razorpay = await getTenantRazorpayClient(tenantId);
+        if (razorpay?.client?.paymentLink?.fetch) {
+          for (const payment of pendingHostedPayments) {
+            let metadata = {};
+            try { metadata = JSON.parse(payment.metadata || "{}"); } catch (_err) {}
+            const linkId = metadata.plinkId || payment.gatewayId;
+            let remote;
+            try { remote = await razorpay.client.paymentLink.fetch(linkId); } catch (_err) { continue; }
+            const remoteStatus = String(remote?.status || "").toUpperCase();
+            if (!["PAID", "PARTIALLY_PAID"].includes(remoteStatus)) continue;
+            const paidAt = remote?.updated_at ? new Date(remote.updated_at * 1000) : new Date();
+            const updatedPayment = await prisma.payment.update({
+              where: { id: payment.id },
+              data: { status: "SUCCESS", paidAt },
+            });
+            const index = payments.findIndex((row) => row.id === payment.id);
+            if (index >= 0) payments[index] = updatedPayment;
+            const participantId = Number(metadata.participantId);
+            const instalmentId = Number(metadata.instalmentId);
+            if (metadata.kind === "tmc-instalment" && Number.isFinite(participantId) && Number.isFinite(instalmentId)) {
+              const instalment = await prisma.tripInstalmentPayment.findFirst({
+                where: { id: instalmentId, participantId },
+              });
+              await reconcileTripInstalmentPayment({
+                db: prisma,
+                instalment,
+                amountMajor: updatedPayment.amount,
+                capturedAt: paidAt,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[Payments] hosted Razorpay status refresh skipped:", err.message);
+      }
+    }
+
     // Batch-fetch contact names for all contactIds in this result set.
     const contactIds = [...new Set(payments.map((p) => p.contactId).filter(Boolean))];
     const contactMap = {};
@@ -978,6 +1093,70 @@ router.get("/", async (req, res) => {
       let meta = {};
       try { meta = JSON.parse(p.metadata || "{}"); } catch (_) {}
       parsedMetaMap[p.id] = meta;
+    }
+
+    // TMC installment payments predate the generic Contact relation and some
+    // were created with contactId=null. Resolve the payer from the participant
+    // metadata so Payments Received can still display the parent/customer.
+    const tmcParticipantIds = [...new Set(payments
+      .map((p) => Number(parsedMetaMap[p.id]?.participantId))
+      .filter(Number.isFinite))];
+    const tmcParticipantMap = {};
+    if (tmcParticipantIds.length > 0) {
+      const participants = await prisma.tripParticipant.findMany({
+        where: { id: { in: tmcParticipantIds }, trip: { tenantId } },
+        select: { id: true, parentName: true, parentEmail: true, parentPhone: true, fullName: true },
+      });
+      const parentEmails = [...new Set(participants.map((p) => p.parentEmail).filter(Boolean))];
+      const parentContacts = parentEmails.length > 0
+        ? await prisma.contact.findMany({
+            where: { tenantId, email: { in: parentEmails } },
+            select: { id: true, name: true, email: true, phone: true },
+          })
+        : [];
+      const parentContactByEmail = {};
+      parentContacts.forEach((c) => { parentContactByEmail[String(c.email).trim().toLowerCase()] = c; });
+      participants.forEach((p) => {
+        const contact = parentContactByEmail[String(p.parentEmail || "").trim().toLowerCase()] || null;
+        tmcParticipantMap[p.id] = {
+          id: contact?.id || null,
+          name: contact?.name || p.parentName || p.fullName || null,
+          email: contact?.email || p.parentEmail || null,
+          phone: contact?.phone || p.parentPhone || null,
+        };
+      });
+    }
+
+    // Landing-page payment links can be created before the registration is
+    // converted into a TripParticipant. In that window the only payer key is
+    // the draftToken, so resolve the draft's parent email as well.
+    const draftTokens = [...new Set(payments
+      .map((p) => parsedMetaMap[p.id]?.draftToken)
+      .filter(Boolean))];
+    const registrationDraftMap = {};
+    if (draftTokens.length > 0 && prisma.pendingTripRegistration?.findMany) {
+      const drafts = await prisma.pendingTripRegistration.findMany({
+        where: { tenantId, draftToken: { in: draftTokens } },
+        select: { draftToken: true, parentName: true, parentEmail: true, studentName: true, convertedToParticipantId: true },
+      });
+      const draftEmails = [...new Set(drafts.map((d) => d.parentEmail).filter(Boolean))];
+      const draftContacts = draftEmails.length > 0
+        ? await prisma.contact.findMany({
+            where: { tenantId, email: { in: draftEmails } },
+            select: { id: true, name: true, email: true, phone: true },
+          })
+        : [];
+      const draftContactByEmail = {};
+      draftContacts.forEach((c) => { draftContactByEmail[String(c.email).trim().toLowerCase()] = c; });
+      drafts.forEach((d) => {
+        const contact = draftContactByEmail[String(d.parentEmail || "").trim().toLowerCase()] || null;
+        registrationDraftMap[d.draftToken] = {
+          id: contact?.id || null,
+          name: contact?.name || d.parentName || d.studentName || null,
+          email: contact?.email || d.parentEmail || null,
+          phone: contact?.phone || null,
+        };
+      });
     }
 
     // For travel payments (invoiceId=null, contactId=null), resolve customer +
@@ -1116,6 +1295,12 @@ router.get("/", async (req, res) => {
           if (ti.contactId) contact = contactMap[ti.contactId] || null;
           if (ti.itineraryId) itineraryId = ti.itineraryId;
         }
+      }
+      if (!contact) {
+        contact = tmcParticipantMap[Number(parsedMetaMap[p.id]?.participantId)] || null;
+      }
+      if (!contact) {
+        contact = registrationDraftMap[parsedMetaMap[p.id]?.draftToken] || null;
       }
       // Also pick up itineraryId stored directly in payment metadata (advance/quote flows)
       if (!itineraryId && parsedMetaMap[p.id] && parsedMetaMap[p.id].itineraryId) {

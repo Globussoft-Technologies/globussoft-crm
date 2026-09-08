@@ -165,11 +165,10 @@ const Layout = () => {
     location.pathname === "/travel/whatsapp" ||
     location.pathname === "/gmail" ||
     location.pathname === "/inbox";
-  const isTravelShortcutPath =
-    location.pathname === "/travel" ||
-    location.pathname.startsWith("/travel/") ||
-    location.pathname === "/travel-stall" ||
-    location.pathname.startsWith("/travel-stall/");
+  // Travel navigation also opens shared top-level routes (for example
+  // /leads, /invoices, and /tasks). Use the active tenant rather than the
+  // URL prefix so travel shortcuts remain available on every travel page.
+  const isTravelShortcutPath = isTravel;
   // T2.1 (extends #228): drawer state for the mobile sidebar (<900px). Desktop
   // (>=900px) ignores this — CSS keeps the sidebar statically positioned.
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -426,8 +425,17 @@ const Layout = () => {
               Sits between the hamburger and the tenant chip, fluidly
               consuming the available header width. Ctrl/Cmd+K focuses it
               and a dropdown panel surfaces beneath as the user types. */}
-          <Omnibar />
-          {isTravelShortcutPath && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              marginRight: "auto",
+              minWidth: 0,
+            }}
+          >
+            <Omnibar />
+            {isTravelShortcutPath && (
             <button
               type="button"
               onClick={() => {
@@ -441,6 +449,7 @@ const Layout = () => {
                 justifyContent: "center",
                 background: "none",
                 border: "none",
+                flexShrink: 0,
                 cursor: "pointer",
                 color: "var(--text-secondary)",
                 padding: "6px 8px",
@@ -458,7 +467,8 @@ const Layout = () => {
             >
               <Info size={16} aria-hidden />
             </button>
-          )}
+            )}
+          </div>
           <TenantChip tenant={tenant} />
           <NotificationBell />
           <button
@@ -582,7 +592,7 @@ const Layout = () => {
             backgroundColor: "transparent",
           }}
         >
-          <TravelKeyboardShortcuts />
+          <TravelKeyboardShortcuts enabled={isTravelShortcutPath} />
           <Outlet />
         </main>
         {/* Hard subscription paywall — renders a non-dismissable overlay

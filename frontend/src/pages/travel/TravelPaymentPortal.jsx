@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, CreditCard, Loader2, Mail, KeyRound, ReceiptText, RefreshCw } from "lucide-react";
+import { publishTravelPaymentSync } from "../../utils/travelPaymentSync";
 
 const RAZORPAY_SDK_SRC = "https://checkout.razorpay.com/v1/checkout.js";
 
@@ -90,7 +91,11 @@ export default function TravelPaymentPortal() {
     try {
       await portalFetch("/payment-portal/request-otp", {
         method: "POST",
-        body: { tripId, email },
+        body: {
+          tripId,
+          email,
+          installmentId: Number.isFinite(installmentId) && installmentId > 0 ? installmentId : undefined,
+        },
       });
       setOtpSent(true);
     } catch (e) {
@@ -157,6 +162,7 @@ export default function TravelPaymentPortal() {
           handler: async (resp) => {
             try {
               await confirmPayment(resp);
+              publishTravelPaymentSync({ tripId, installmentId: instalment.id });
               resolve();
             } catch (err) {
               reject(err);

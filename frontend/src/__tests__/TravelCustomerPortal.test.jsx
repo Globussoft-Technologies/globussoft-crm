@@ -606,6 +606,28 @@ describe('TravelCustomerPortal — sidebar navigation + avatar', () => {
     expect(await screen.findByText(/Makkah \+ Madinah/i)).toBeInTheDocument();
   });
 
+  test('payment completion signal refreshes the portal without waiting for the polling interval', async () => {
+    setupLoggedIn();
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub' });
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      return mockJsonResponse({});
+    });
+    renderPortal();
+    await screen.findByRole('navigation', { name: /portal sections/i });
+    const itineraryCallsBeforeSignal = globalThis.fetch.mock.calls.filter(([url]) => url.includes('/portal/travel/itineraries')).length;
+
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: window.location.origin,
+      data: { type: 'globus:travel-payment-complete' },
+    }));
+
+    await waitFor(() => {
+      const itineraryCalls = globalThis.fetch.mock.calls.filter(([url]) => url.includes('/portal/travel/itineraries')).length;
+      expect(itineraryCalls).toBeGreaterThan(itineraryCallsBeforeSignal);
+    });
+  });
+
   test('clicking a booking opens its detail view; Back returns to the list', async () => {
     setupLoggedIn();
     mockBase({
@@ -614,7 +636,9 @@ describe('TravelCustomerPortal — sidebar navigation + avatar', () => {
         startDate: '2026-07-11', endDate: '2026-07-21',
         totalAmount: 185000, advancePaidAmount: 92500, currency: 'INR',
         installments: [
-          { id: 21, instalmentIndex: 0, amount: 92500, paidAmount: 92500, status: 'paid', dueDate: '2026-06-01', paymentLinkUrl: 'https://pay.test/paid' },
+          // Legacy/admin payment records can be fully paid while paidAmount
+          // is still zero; the paid status must remain authoritative.
+          { id: 21, instalmentIndex: 0, amount: 92500, paidAmount: 0, status: 'paid', dueDate: '2026-06-01', paymentLinkUrl: 'https://pay.test/paid' },
           { id: 22, instalmentIndex: 1, amount: 92500, paidAmount: 0, status: 'pending', dueDate: '2026-07-01', paymentLinkUrl: 'https://pay.test/pending' },
         ],
         items: [

@@ -293,7 +293,8 @@ function isStudentAudience(audience) {
  */
 function buildRegisterFlow(audience, tripType = 'international') {
   const isStudent = isStudentAudience(audience);
-  const isDomestic = String(tripType).toLowerCase() === 'domestic';
+  const normalizedTripType = String(tripType).toLowerCase().trim().replace(/[- ]/g, '_');
+  const isDomestic = normalizedTripType === 'domestic' || normalizedTripType === 'day_trip';
 
   // Universal Passport step — same shape for every audience. The
   // question wording shifts subtly (child vs traveller) but the field

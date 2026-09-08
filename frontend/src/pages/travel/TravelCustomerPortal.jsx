@@ -69,6 +69,11 @@ import {
   Send,
 } from "lucide-react";
 import TravelReviewForm from "../../components/TravelReviewForm";
+import {
+  TRAVEL_PAYMENT_SYNC_CHANNEL,
+  TRAVEL_PAYMENT_SYNC_EVENT,
+} from "../../utils/travelPaymentSync";
+import { readableForegroundColor } from "../../utils/colorContrast";
 
 const PORTAL_TOKEN_KEY = "portalToken";
 const PORTAL_CONTACT_KEY = "portalContact";
@@ -567,11 +572,13 @@ function Dashboard({
     setView(PORTAL_VIEWS.includes(link) ? link : "bookings");
   };
 
-  const loadAll = useCallback(async () => {
-    setLoading(true);
+  const loadAll = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const [kycRes, itinRes, profileRes] = await Promise.all([
         portalFetch("/kyc/status", { token }),
+        // Legacy URL kept for compatibility; the backend handler reads only
+        // TmcTrip/TripParticipant bookings and never the generic Itinerary model.
         portalFetch("/travel/itineraries", { token }).catch(() => []),
         // G092 — fetch the customer's full profile (incl. subBrand) so
         // we can resolve the brand kit. Best-effort: any error leaves
@@ -584,12 +591,76 @@ function Dashboard({
     } catch (err) {
       if (err.status === 401) onLogout();
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [token, onLogout]);
 
   useEffect(() => {
     loadAll();
+  }, [loadAll]);
+
+  // Payments are completed on an external Razorpay page/new tab. The success
+  // page broadcasts immediately; focus/visibility and a short retry burst
+  // cover browsers that do not support BroadcastChannel or delayed webhook
+  // persistence. The slower interval is only a final safety net.
+  useEffect(() => {
+    let burstTimer = null;
+    const stopBurst = () => {
+      if (burstTimer !== null) {
+        window.clearInterval(burstTimer);
+        burstTimer = null;
+      }
+    };
+    const refresh = () => {
+      if (document.visibilityState === "visible") loadAll({ silent: true });
+    };
+    const refreshBurst = () => {
+      stopBurst();
+      refresh();
+      let attempts = 0;
+      burstTimer = window.setInterval(() => {
+        attempts += 1;
+        if (document.visibilityState !== "visible" || attempts >= 8) {
+          stopBurst();
+          return;
+        }
+        refresh();
+      }, 1000);
+    };
+    const handleMessage = (event) => {
+      if (event.origin !== window.location.origin || event.data?.type !== TRAVEL_PAYMENT_SYNC_EVENT) return;
+      refreshBurst();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshBurst();
+    };
+    const handleChannelMessage = (event) => {
+      if (event.data?.type === TRAVEL_PAYMENT_SYNC_EVENT) refreshBurst();
+    };
+    let channel = null;
+    try {
+      if (typeof window.BroadcastChannel === "function") {
+        channel = new window.BroadcastChannel(TRAVEL_PAYMENT_SYNC_CHANNEL);
+        channel.addEventListener("message", handleChannelMessage);
+      }
+    } catch (_err) {
+      channel = null;
+    }
+    const interval = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refreshBurst);
+    window.addEventListener("pageshow", refreshBurst);
+    window.addEventListener("message", handleMessage);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      stopBurst();
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshBurst);
+      window.removeEventListener("pageshow", refreshBurst);
+      window.removeEventListener("message", handleMessage);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      channel?.removeEventListener("message", handleChannelMessage);
+      channel?.close();
+    };
   }, [loadAll]);
 
   // G092 — fetch the brand kit for the customer's sub-brand. Public
@@ -647,6 +718,7 @@ function Dashboard({
     const prev = {
       primary: root.style.getPropertyValue("--primary-color"),
       accent: root.style.getPropertyValue("--accent-color"),
+      accentForeground: root.style.getPropertyValue("--accent-foreground-color"),
       bg: root.style.getPropertyValue("--bg-color"),
       text: root.style.getPropertyValue("--text-primary"),
     };
@@ -654,6 +726,11 @@ function Dashboard({
       root.style.setProperty("--primary-color", brandKit.primaryColor);
     if (brandKit.accentColor)
       root.style.setProperty("--accent-color", brandKit.accentColor);
+    if (brandKit.accentColor)
+      root.style.setProperty(
+        "--accent-foreground-color",
+        readableForegroundColor(brandKit.accentColor),
+      );
     if (theme === "light") {
       if (brandKit.bgColor)
         root.style.setProperty("--bg-color", brandKit.bgColor);
@@ -665,6 +742,7 @@ function Dashboard({
       // so the cascaded default reasserts).
       root.style.setProperty("--primary-color", prev.primary);
       root.style.setProperty("--accent-color", prev.accent);
+      root.style.setProperty("--accent-foreground-color", prev.accentForeground);
       root.style.setProperty("--bg-color", prev.bg);
       root.style.setProperty("--text-primary", prev.text);
     };
@@ -4039,11 +4117,20 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
     : Array.isArray(itinerary.installments)
       ? itinerary.installments
       : [];
+  // The ledger status is authoritative when older rows have status="paid"
+  // but a zero/null paidAmount. This keeps the portal display compatible with
+  // the admin ledger while newer rows continue to use their exact amount.
+  const paidForInstallment = (row) => {
+    const amount = Math.max(0, Number(row?.amount || 0));
+    const recorded = Math.max(0, Number(row?.paidAmount || 0));
+    if (recorded > 0) return Math.min(amount, recorded);
+    return String(row?.status || "").toLowerCase() === "paid" ? amount : 0;
+  };
   const paymentTotal = installments.length
     ? installments.reduce((sum, row) => sum + Number(row.amount || 0), 0)
     : total;
   const paymentPaid = installments.length
-    ? installments.reduce((sum, row) => sum + Number(row.paidAmount || 0), 0)
+    ? installments.reduce((sum, row) => sum + paidForInstallment(row), 0)
     : paid;
   const paymentPending = Math.max(0, paymentTotal - paymentPaid);
   const tripNights = itinerary.startDate && itinerary.endDate
@@ -4191,7 +4278,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 58, height: 58, borderRadius: "50%", display: "grid", placeItems: "center", background: "var(--accent-color, #C8EF24)", color: "var(--primary-color, #122647)", boxShadow: "0 8px 20px rgba(18, 38, 71, 0.14)" }}><Plane size={28} aria-hidden /></div>
+          <div style={{ width: 58, height: 58, borderRadius: "50%", display: "grid", placeItems: "center", background: "var(--accent-color, #C8EF24)", color: "var(--accent-foreground-color, #122647)", boxShadow: "0 8px 20px rgba(18, 38, 71, 0.14)" }}><Plane size={28} aria-hidden /></div>
           <h2
             id="booking-detail-heading"
             style={{ display: "flex", alignItems: "center", gap: 8, margin: 0 }}
@@ -5141,16 +5228,16 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
           </div>
           {installments.map((row) => {
             const amount = Number(row.amount || 0);
-            const rowPaid = Number(row.paidAmount || 0);
-            const isPaid = row.status === "paid" || rowPaid >= amount;
-            const paymentUrl = row.paymentLinkUrl || (itinerary.tripId
-              ? `${window.location.origin}/pay/trip/${itinerary.tripId}/installment/${row.instalmentIndex + 1}`
+            const rowPaid = paidForInstallment(row);
+            const isPaid = String(row.status || "").toLowerCase() === "paid" || rowPaid >= amount;
+            const paymentUrl = row.paymentLinkUrl || (itinerary.tripId && Number(row.id) > 0
+              ? `${window.location.origin}/pay/trip/${itinerary.tripId}/installment/${row.id}`
               : null);
             return <div key={row.id || row.instalmentIndex} style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) 170px 190px 120px", alignItems: "center", gap: 18, padding: "16px 18px", marginTop: 10, border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))", borderLeft: `3px solid ${isPaid ? "var(--success-color, #2F7A4D)" : "var(--accent-color, #C8EF24)"}`, borderRadius: 10, backgroundColor: isPaid ? "rgba(47, 122, 77, 0.06)" : "rgba(255,255,255,0.55)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}><span style={{ width: 34, height: 34, borderRadius: "50%", display: "grid", placeItems: "center", backgroundColor: isPaid ? "rgba(47, 122, 77, 0.12)" : "rgba(200, 239, 36, 0.25)", color: isPaid ? "var(--success-color, #2F7A4D)" : "var(--primary-color, #122647)", fontWeight: 800, fontSize: 13 }}>{isPaid ? "✓" : String(row.instalmentIndex + 1).padStart(2, "0")}</span><div><strong style={{ display: "block", marginBottom: 4 }}>Installment {row.instalmentIndex + 1}</strong><span style={{ fontSize: 12, fontWeight: 700, color: isPaid ? "var(--success-color, #2F7A4D)" : "var(--primary-color, #122647)" }}>{isPaid ? "Paid" : "Upcoming"}</span></div></div>
               <div><span style={{ display: "block", fontSize: 11, color: "var(--text-secondary)" }}>Amount</span><strong>{fmtMoney(amount, itinerary.currency)}</strong><span style={{ display: "block", marginTop: 3, fontSize: 11, color: "var(--text-secondary)" }}>Paid {fmtMoney(rowPaid, itinerary.currency)}</span></div>
               <div><span style={{ display: "block", fontSize: 11, color: "var(--text-secondary)" }}>{isPaid ? "Paid on" : "Due before trip"}</span><strong style={{ fontWeight: 500 }}>{row.dueDate ? new Date(row.dueDate).toLocaleDateString() : "Date to be confirmed"}</strong></div>
-              {!isPaid && paymentUrl ? <a href={paymentUrl} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 104, padding: "9px 14px", border: "1px solid var(--accent-color, #C8EF24)", borderRadius: 7, backgroundColor: "var(--accent-color, #C8EF24)", color: "var(--primary-color, #122647)", fontSize: 12, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>Pay now <span aria-hidden="true">›</span></a> : <span />}
+              {!isPaid && paymentUrl ? <a href={paymentUrl} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, minWidth: 104, padding: "9px 14px", border: "1px solid var(--accent-color, #C8EF24)", borderRadius: 7, backgroundColor: "var(--accent-color, #C8EF24)", color: "var(--accent-foreground-color, #122647)", fontSize: 12, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>Pay now <span aria-hidden="true">›</span></a> : <span />}
             </div>;
           })}
         </div>
@@ -5165,8 +5252,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
         <p>Pending: <strong>{fmtMoney(paymentPending, itinerary.currency)}</strong></p>
         {installments.map((row) => {
           const amount = Number(row.amount || 0);
-          const paidAmount = Number(row.paidAmount || 0);
-          const isPaid = row.status === "paid" || paidAmount >= amount;
+          const isPaid = String(row.status || "").toLowerCase() === "paid" || paidForInstallment(row) >= amount;
           return <div key={row.id || row.instalmentIndex}><strong>Installment {row.instalmentIndex + 1}: {isPaid ? "Paid" : "Pending"}</strong><div>{fmtMoney(amount, itinerary.currency)} {row.dueDate && `· Due ${new Date(row.dueDate).toLocaleDateString()}`}</div>{!isPaid && row.paymentLinkUrl && <a href={row.paymentLinkUrl} target="_blank" rel="noreferrer">Pay installment</a>}</div>;
         })}
       </section>

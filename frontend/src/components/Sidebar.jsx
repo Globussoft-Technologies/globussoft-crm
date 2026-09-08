@@ -2203,10 +2203,10 @@ function renderTravelNav({
         <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/travel/pipeline" icon={Plane} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />
-        <Link to="/travel/flights/quote" icon={Plane} label="Flight Quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />
-        <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" requiredPermission={{ module: "quotes", action: "write" }} />
-        <Link to="/travel/quote-templates" icon={FileStack} label="Quote Templates" requiredPermission={{ module: "quote_templates", action: "read" }} />
+        {activeSubBrand !== "tmc" && <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />}
+        {activeSubBrand !== "tmc" && <Link to="/travel/flights/quote" icon={Plane} label="Flight Quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />}
+        {activeSubBrand !== "tmc" && <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" requiredPermission={{ module: "quotes", action: "write" }} />}
+        {activeSubBrand !== "tmc" && <Link to="/travel/quote-templates" icon={FileStack} label="Quote Templates" requiredPermission={{ module: "quote_templates", action: "read" }} />}
       </>)}
 
       {group("Operations", ["/travel/passport-verification", "/travel/suppliers-admin", "/travel/suppliers", "/travel/commission-profiles", "/travel/cancellation-policies", "/travel/web-checkins"], <>
@@ -2371,12 +2371,12 @@ function renderTravelNavLegacy({
       {/* <Link to="/admin/ratehawk-search" icon={Hotel} label="RateHawk Search" requiredPermission={{ module: "suppliers", action: "read" }} /> */}
       {/* <Link to="/admin/booking-expedia-search" icon={BedDouble} label="Booking / Expedia" requiredPermission={{ module: "suppliers", action: "read" }} /> */}
       <Link to="/travel/commission-profiles" icon={Award} label="Commission Profiles" requiredPermission={{ module: "commission_profiles", action: "read" }} />
-      <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />
-      <Link to="/travel/flights/quote" icon={Plane} label="Flight quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />
+      {activeSubBrand !== "tmc" && <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />}
+      {activeSubBrand !== "tmc" && <Link to="/travel/flights/quote" icon={Plane} label="Flight quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />}
       {/* Flight Offer Image page is intentionally hidden from the sidebar.
           The route stays active and is reused by Flight quick-quote. */}
-      <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" requiredPermission={{ module: "quotes", action: "write" }} />
-      <Link to="/travel/quote-templates" icon={FileStack} label="Quote Templates" requiredPermission={{ module: "quote_templates", action: "read" }} />
+      {activeSubBrand !== "tmc" && <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" requiredPermission={{ module: "quotes", action: "write" }} />}
+      {activeSubBrand !== "tmc" && <Link to="/travel/quote-templates" icon={FileStack} label="Quote Templates" requiredPermission={{ module: "quote_templates", action: "read" }} />}
       <Link to="/travel/cancellation-policies" icon={Ban} label="Cancellation Policies" requiredPermission={{ module: "cancellation_policies", action: "read" }} />
       {/* TMC does not use Supplier credentials. Keep it visible for other brands and All (4). */}
       {activeSubBrand !== "tmc" && (

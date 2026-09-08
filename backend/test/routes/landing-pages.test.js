@@ -87,6 +87,7 @@ prisma.landingPageAnalytics = {
   create: vi.fn().mockResolvedValue({ id: 1 }),
 };
 prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
 prisma.contact.upsert = vi.fn();
 prisma.contact.update = vi.fn();
 prisma.deal = prisma.deal || {};
@@ -245,6 +246,7 @@ beforeEach(() => {
   prisma.$transaction.mockClear();
   prisma.landingPageAnalytics.findMany.mockReset().mockResolvedValue([]);
   prisma.landingPageAnalytics.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.upsert.mockReset().mockResolvedValue({ id: 1 });
   prisma.contact.update.mockReset();
   prisma.deal.create.mockReset().mockResolvedValue({ id: 1 });

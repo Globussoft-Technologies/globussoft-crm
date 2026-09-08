@@ -166,7 +166,7 @@ function hasPageOwnedShortcutHelp(pathname) {
   return /^\/travel\/itineraries\/[^/]+\/edit$/.test(pathname);
 }
 
-export default function TravelKeyboardShortcuts() {
+export default function TravelKeyboardShortcuts({ enabled: enabledOverride }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [helpOpen, setHelpOpen] = useState(false);
@@ -174,7 +174,7 @@ export default function TravelKeyboardShortcuts() {
   const [darkTheme, setDarkTheme] = useState(() => isDarkTheme());
   const isMac = useMemo(() => isMacPlatform(), []);
   const modLabel = isMac ? "Cmd" : "Ctrl";
-  const enabled = isTravelShortcutPath(location.pathname);
+  const enabled = enabledOverride ?? isTravelShortcutPath(location.pathname);
   const panelBg = darkTheme ? "#111317" : "#ffffff";
   const panelBorder = darkTheme ? "#303641" : "#d8dee8";
   const panelMuted = darkTheme ? "#c4cad4" : "#4b5563";
@@ -364,8 +364,9 @@ export default function TravelKeyboardShortcuts() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 16,
-        background: "rgba(0,0,0,0.42)",
+        padding: 24,
+        background: darkTheme ? "rgba(2, 5, 10, 0.72)" : "rgba(15, 23, 42, 0.42)",
+        backdropFilter: "blur(5px)",
       }}
     >
       <section
@@ -374,14 +375,16 @@ export default function TravelKeyboardShortcuts() {
         aria-label="Travel keyboard shortcuts"
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: "min(760px, 100%)",
-          maxHeight: "min(760px, calc(100vh - 32px))",
+          width: "min(700px, 100%)",
+          maxHeight: "min(760px, calc(100vh - 48px))",
           overflow: "auto",
-          borderRadius: 8,
+          borderRadius: 16,
           border: `1px solid ${panelBorder}`,
           background: panelBg,
           color: "var(--text-primary)",
-          boxShadow: "0 18px 52px rgba(0,0,0,0.32)",
+          boxShadow: darkTheme
+            ? "0 24px 80px rgba(0,0,0,0.55)"
+            : "0 24px 80px rgba(15,23,42,0.24), 0 4px 16px rgba(15,23,42,0.1)",
         }}
       >
         <header
@@ -390,26 +393,50 @@ export default function TravelKeyboardShortcuts() {
             top: 0,
             display: "flex",
             alignItems: "center",
-            gap: 10,
-            padding: "14px 16px",
+            gap: 12,
+            padding: "18px 22px",
             borderBottom: `1px solid ${panelBorder}`,
-            background: panelBg,
+            background: darkTheme
+              ? "linear-gradient(135deg, #171b22 0%, #111317 100%)"
+              : "linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
             zIndex: 1,
           }}
         >
-          <Keyboard size={18} aria-hidden />
-          <strong style={{ fontSize: 15 }}>Travel keyboard shortcuts</strong>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: darkTheme ? "rgba(192, 38, 137, 0.2)" : "#f8e9f3",
+              color: "var(--accent-color, #8b0a5b)",
+              flexShrink: 0,
+            }}
+          >
+            <Keyboard size={19} aria-hidden />
+          </span>
+          <div style={{ display: "grid", gap: 3 }}>
+            <strong style={{ fontSize: 16, letterSpacing: "-0.01em" }}>Travel keyboard shortcuts</strong>
+            <span style={{ fontSize: 12, color: panelMuted }}>Navigate faster with simple key combinations</span>
+          </div>
           <button
             type="button"
             aria-label="Close keyboard shortcuts"
             onClick={() => setHelpOpen(false)}
             style={{
               marginLeft: "auto",
-              border: "none",
-              background: "transparent",
+              border: `1px solid ${panelBorder}`,
+              background: darkTheme ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.8)",
               color: panelMuted,
               cursor: "pointer",
-              padding: 4,
+              width: 32,
+              height: 32,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 8,
             }}
           >
             <X size={18} aria-hidden />
@@ -443,44 +470,60 @@ function ShortcutSection({ title, items, renderKey, darkTheme }) {
   const panelBorder = darkTheme ? "#303641" : "#d8dee8";
   const panelMuted = darkTheme ? "#c4cad4" : "#4b5563";
   const kbdBg = darkTheme ? "#1b2028" : "#f1f5f9";
+  const sectionBg = darkTheme ? "rgba(255,255,255,0.025)" : "#f8fafc";
 
   return (
-    <div style={{ padding: "14px 16px 4px" }}>
-      <h2 style={{ margin: "0 0 8px", fontSize: 13, color: panelMuted }}>
+    <div style={{ padding: "18px 22px 0" }}>
+      <div
+        style={{
+          padding: "14px 16px 16px",
+          border: `1px solid ${panelBorder}`,
+          borderRadius: 12,
+          background: sectionBg,
+        }}
+      >
+      <h2 style={{ margin: "0 0 12px", fontSize: 12, color: panelMuted, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
         {title}
       </h2>
-      <div style={{ display: "grid", gap: 6 }}>
+      <div style={{ display: "grid", gap: 2 }}>
         {items.map((item) => (
           <div
             key={`${title}-${item.key}`}
             style={{
               display: "grid",
               gridTemplateColumns: "140px minmax(0, 1fr)",
-              gap: 12,
+              gap: 16,
               alignItems: "center",
-              minHeight: 30,
+              minHeight: 34,
+              borderRadius: 7,
+              padding: "2px 6px",
             }}
           >
             <kbd
               style={{
                 justifySelf: "start",
-                padding: "3px 7px",
-                borderRadius: 5,
+                minWidth: 32,
+                padding: "5px 8px",
+                borderRadius: 6,
                 border: `1px solid ${panelBorder}`,
                 background: kbdBg,
                 color: "var(--text-primary)",
                 fontFamily: "monospace",
-                fontSize: 12,
+                fontSize: 11,
+                fontWeight: 600,
                 lineHeight: 1.3,
+                textAlign: "center",
+                boxShadow: darkTheme ? "inset 0 1px 0 rgba(255,255,255,0.05)" : "0 1px 1px rgba(15,23,42,0.06)",
               }}
             >
               {renderKey(item.key)}
             </kbd>
-            <span style={{ color: panelMuted, fontSize: 13 }}>
+            <span style={{ color: panelMuted, fontSize: 13, lineHeight: 1.45 }}>
               {item.label}
             </span>
           </div>
         ))}
+      </div>
       </div>
     </div>
   );

@@ -450,6 +450,11 @@ describe('Layout', () => {
     expect(screen.getByText(/Show keyboard shortcuts/i)).toBeInTheDocument();
   });
 
+  it('renders travel shortcuts on shared top-level pages inside the travel sidepanel', () => {
+    renderTravelLayout({ initialRoute: '/leads' });
+    expect(screen.getByRole('button', { name: /Show travel keyboard shortcuts/i })).toBeInTheDocument();
+  });
+
   it('does not render the travel keyboard-shortcuts info button on generic routes', () => {
     renderLayout({ tenant: { id: 1, name: 'Default Org', vertical: 'generic' } });
     expect(screen.queryByRole('button', { name: /Show travel keyboard shortcuts/i })).not.toBeInTheDocument();

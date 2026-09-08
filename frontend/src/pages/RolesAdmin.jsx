@@ -764,16 +764,26 @@ export default function RolesAdmin() {
                       const visible = typeof r.visiblePermissionCount === 'number'
                         ? r.visiblePermissionCount
                         : raw;
-                      const title = `${visible} permission${visible === 1 ? '' : 's'}`;
+                      const hidden = typeof r.hiddenPermissionCount === 'number'
+                        ? r.hiddenPermissionCount
+                        : Math.max(0, (r.permissionCount ?? raw) - visible);
+                      const title = hidden > 0
+                        ? `${visible} visible permission${visible === 1 ? '' : 's'}; ${hidden} hidden legacy permission${hidden === 1 ? '' : 's'} (outside this vertical's catalog)`
+                        : `${visible} permission${visible === 1 ? '' : 's'}`;
                       return (
                         <button
                           type="button"
                           onClick={() => setPermRole(r)}
                           style={linkBtn}
-                          aria-label={`View permissions for ${r.name}`}
+                          aria-label={`View permissions for ${r.name}${hidden > 0 ? ` (${visible} visible, ${hidden} hidden legacy)` : ''}`}
                           title={title}
                         >
                           <Shield size={14} /> {visible}
+                          {hidden > 0 && (
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                              +{hidden} hidden
+                            </span>
+                          )}
                         </button>
                       );
                     })()}
@@ -1402,6 +1412,15 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
     return visible;
   }, [role, catalogKeys]);
 
+  const hiddenPermissions = useMemo(() => {
+    const hidden = [];
+    (role.permissions || []).forEach((p) => {
+      const key = p?.module && p?.action ? `${p.module}.${p.action}` : '';
+      if (key && !catalogKeys.has(key)) hidden.push(key);
+    });
+    return hidden;
+  }, [role, catalogKeys]);
+
   const [selected, setSelected] = useState(initial);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1689,6 +1708,30 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
           )}
         </div>
       </div>
+
+      {hiddenPermissions.length > 0 && (
+        <div
+          role="status"
+          data-testid="hidden-permissions-banner"
+          style={{
+            margin: '0 0 0.85rem',
+            padding: '0.75rem 0.9rem',
+            borderRadius: 8,
+            background: 'rgba(245, 158, 11, 0.1)',
+            border: '1px solid rgba(245, 158, 11, 0.45)',
+            color: 'var(--text-primary)',
+            fontSize: '0.82rem',
+          }}
+        >
+          <strong>{hiddenPermissions.length} hidden legacy permission{hiddenPermissions.length === 1 ? '' : 's'} detected.</strong>
+          <div style={{ marginTop: '0.3rem', color: 'var(--text-secondary)' }}>
+            These grants are stored on the role but are outside this tenant&apos;s active {vertical} catalog, so they have no checkbox in the matrix. Saving this role will remove them from the role.
+          </div>
+          <code style={{ display: 'block', marginTop: '0.45rem', wordBreak: 'break-word' }}>
+            {hiddenPermissions.join(', ')}
+          </code>
+        </div>
+      )}
 
       <div
         style={{

@@ -96,6 +96,7 @@ beforeEach(() => {
   prisma.user.findMany.mockReset();
   prisma.user.update.mockReset();
   prisma.user.delete.mockReset();
+  prisma.tenant.findUnique.mockReset();
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({});
   // Clear in-memory token stores between tests so cardinality assertions
@@ -209,6 +210,7 @@ describe('PUT /:id — edit', () => {
     const res = await request(makeApp()).put('/api/staff/9999').send({ name: 'whatever' });
     expect(res.status).toBe(404);
   });
+
 });
 
 // ── PATCH /:id — deactivate / reactivate (#618) ────────────────────
@@ -413,6 +415,36 @@ describe('GET /api/staff?fields=summary — opt-in slim shape (#920 slice 15)', 
     expect(args.select.password).toBeUndefined();
     expect(args.select.twoFactorSecret).toBeUndefined();
     expect(args.select.backupCodes).toBeUndefined();
+  });
+
+  test('travel tenant omits the wellness-only field from full and summary staff shapes', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 1, vertical: 'travel' });
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 33,
+        email: 'advisor@travel.test',
+        name: 'RFU Advisor',
+        role: 'MANAGER',
+        wellnessRole: null,
+        subBrandAccess: '["rfu"]',
+        commissionProfileId: null,
+        createdAt: new Date('2026-07-10'),
+        deactivatedAt: null,
+        userRoles: [],
+      },
+    ]);
+
+    const full = await request(makeApp()).get('/api/staff');
+    expect(full.status).toBe(200);
+    expect(full.body[0]).not.toHaveProperty('wellnessRole');
+    expect(full.body[0]).toHaveProperty('subBrandAccess', '["rfu"]');
+    expect(prisma.user.findMany.mock.calls[0][0].select).not.toHaveProperty('wellnessRole');
+
+    prisma.user.findMany.mockClear();
+    const summary = await request(makeApp()).get('/api/staff?fields=summary');
+    expect(summary.status).toBe(200);
+    expect(summary.body[0]).not.toHaveProperty('wellnessRole');
+    expect(prisma.user.findMany.mock.calls[0][0].select).not.toHaveProperty('wellnessRole');
   });
 
   test('?fields=summary → prisma.user.findMany called with SLIM select (commissionProfileId DROPPED)', async () => {

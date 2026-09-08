@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { Fragment, lazy, Suspense } from "react";
 import { Link } from "react-router-dom";
 import {
   Users,
@@ -131,6 +131,38 @@ const SCREENSHOTS = [
   {
     src: "/screenshots/feature-auto-email-schedule.png",
     label: "Schedule Email Reports",
+  },
+  {
+    src: "/screenshots/Wellness Dashboard.jpg",
+    label: "Wellness Dashboard",
+  },
+  {
+    src: "/screenshots/Patients Management.jpg",
+    label: "Patient Management",
+  },
+  {
+    src: "/screenshots/Product Categories.jpg",
+    label: "Product Categories",
+  },
+  {
+    src: "/screenshots/Service Management.jpg",
+    label: "Service Management",
+  },
+  {
+    src: "/screenshots/Travel CRM Dashboard.jpg",
+    label: "Travel CRM Dashboard",
+  },
+  {
+    src: "/screenshots/Travel Diagonestics.jpg",
+    label: "Travel Diagnostics",
+  },
+  {
+    src: "/screenshots/Travel Landing Page.jpg",
+    label: "Travel Landing Page",
+  },
+  {
+    src: "/screenshots/Travel Itinerary Template Library.jpg",
+    label: "Travel Itinerary Template Library",
   },
 ];
 
@@ -620,42 +652,85 @@ export default function Landing() {
               gap: 24,
             }}
           >
-            {SCREENSHOTS.map((s, i) => (
-              <div
-                key={i}
-                style={{
-                  borderRadius: 16,
-                  overflow: "hidden",
-                  border: `1px solid ${C.border}`,
-                  background: C.card,
-                  position: "relative",
-                  boxShadow: C.shadowLg,
-                }}
-              >
-                <img
-                  src={s.src}
-                  alt={s.label}
-                  style={{ width: "100%", display: "block" }}
-                  loading="lazy"
-                />
-                <div
-                  style={{
-                    position: "absolute",
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    background:
-                      "linear-gradient(transparent, rgba(0,0,0,0.75))",
-                    padding: "40px 20px 16px",
-                    fontWeight: 600,
-                    fontSize: "0.9rem",
-                    color: "#fff",
-                  }}
-                >
-                  {s.label}
-                </div>
-              </div>
-            ))}
+            {SCREENSHOTS.map((s, i) => {
+              const sectionHeading =
+                i === 0
+                  ? "Generic CRM"
+                  : i === 6
+                    ? "Wellness CRM"
+                    : i === 10
+                      ? "Travel CRM"
+                      : null;
+
+              return (
+                <Fragment key={s.src}>
+                  {sectionHeading && (
+                    <div
+                      style={{
+                        gridColumn: "1 / -1",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 16,
+                        marginTop: i === 0 ? 0 : 28,
+                        marginBottom: -4,
+                      }}
+                    >
+                      <h3
+                        style={{
+                          margin: 0,
+                          color: C.text,
+                          fontSize: "1.35rem",
+                          fontWeight: 750,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {sectionHeading}
+                      </h3>
+                      <div
+                        style={{
+                          height: 1,
+                          flex: 1,
+                          background: C.border,
+                        }}
+                      />
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      borderRadius: 16,
+                      overflow: "hidden",
+                      border: `1px solid ${C.border}`,
+                      background: C.card,
+                      position: "relative",
+                      boxShadow: C.shadowLg,
+                    }}
+                  >
+                    <img
+                      src={s.src}
+                      alt={s.label}
+                      style={{ width: "100%", display: "block" }}
+                      loading="lazy"
+                    />
+                    <div
+                      style={{
+                        position: "absolute",
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        background:
+                          "linear-gradient(transparent, rgba(0,0,0,0.75))",
+                        padding: "40px 20px 16px",
+                        fontWeight: 600,
+                        fontSize: "0.9rem",
+                        color: "#fff",
+                      }}
+                    >
+                      {s.label}
+                    </div>
+                  </div>
+                </Fragment>
+              );
+            })}
           </div>
         </div>
       </section>

@@ -4,6 +4,7 @@ import {
   Copy, X, Power, PowerOff, Target, ListChecks,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 
 const STAGES = [
@@ -118,7 +119,7 @@ export default function Playbooks() {
 
   const loadDeals = async () => {
     try {
-      const data = await fetchApi('/api/deals');
+      const data = await fetchAllPages('/api/deals');
       setDeals(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('loadDeals', err);

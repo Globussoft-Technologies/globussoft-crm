@@ -3,6 +3,7 @@ import { Search, FileText, User, ArrowRight, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNavigate } from 'react-router-dom';
 import { formatMoney } from '../utils/money';
+import { SEARCH_DEBOUNCE_MS } from '../utils/timing';
 
 const CommandPalette = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -32,13 +33,35 @@ const CommandPalette = () => {
   useEffect(() => {
     if (isOpen && inputRef.current) {
       inputRef.current.focus();
-      // Fetch data for searching
-      fetchApi('/api/deals').then(setDeals).catch(() => {});
-      fetchApi('/api/contacts').then(setContacts).catch(() => {});
     } else {
       setQuery('');
     }
   }, [isOpen]);
+
+  // Search at the database instead of preloading the first 100 contacts and
+  // deals. Abort obsolete requests so rapid typing cannot restore stale rows.
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!isOpen || query.trim().length < 2) {
+      setDeals([]);
+      setContacts([]);
+      return () => controller.abort();
+    }
+    const timer = setTimeout(() => {
+      fetchApi(`/api/search?q=${encodeURIComponent(query.trim())}`, {
+        signal: controller.signal,
+        silent: true,
+      }).then((result) => {
+        if (controller.signal.aborted) return;
+        setDeals(Array.isArray(result?.deals) ? result.deals : []);
+        setContacts(Array.isArray(result?.contacts) ? result.contacts : []);
+      }).catch(() => {});
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [isOpen, query]);
 
   if (!isOpen) return null;
 

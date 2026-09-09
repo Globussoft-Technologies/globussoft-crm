@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FileText, Plus, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
@@ -59,8 +60,8 @@ export default function Contracts() {
   const loadStatic = async () => {
     try {
       const [co, dl, sc] = await Promise.all([
-        fetchApi('/api/contacts'),
-        fetchApi('/api/deals'),
+        fetchAllPages('/api/contacts'),
+        fetchAllPages('/api/deals'),
         fetchApi('/api/contracts?fields=summary').catch(() => null),
       ]);
       setContacts(Array.isArray(co) ? co : []);

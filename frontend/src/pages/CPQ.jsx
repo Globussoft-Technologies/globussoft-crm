@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { Briefcase, ArrowRight, PlusCircle } from 'lucide-react';
 import CPQBuilder from '../components/CPQBuilder';
 
@@ -12,7 +12,7 @@ export default function CPQ() {
   useEffect(() => {
     const loadDeals = async () => {
       try {
-        const data = await fetchApi('/api/deals');
+        const data = await fetchAllPages('/api/deals');
         setDeals(Array.isArray(data) ? data : []);
       } catch (err) {
         setError('Unable to load deals.');

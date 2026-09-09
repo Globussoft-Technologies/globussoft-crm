@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CreditCard, Plus, CheckCircle2, Clock, Trash2, FileText, IndianRupee } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { formatDate } from '../utils/date';
@@ -22,10 +23,10 @@ export default function Billing() {
       const invs = await fetchApi('/api/billing');
       setInvoices(Array.isArray(invs) ? invs : []);
       
-      const c = await fetchApi('/api/contacts');
+      const c = await fetchAllPages('/api/contacts');
       setContacts(Array.isArray(c) ? c : []);
       
-      const d = await fetchApi('/api/deals');
+      const d = await fetchAllPages('/api/deals');
       setDeals(Array.isArray(d) ? d : []);
     } catch (err) {
       console.error(err);

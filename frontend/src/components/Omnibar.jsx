@@ -307,7 +307,6 @@ function scorePageMatch(page, q) {
   }
   return best;
 }
-
 function resultKey(sectionKey, row, idx) {
   return `${sectionKey}-${row.id ?? row.path ?? idx}`;
 }
@@ -323,6 +322,7 @@ export default function Omnibar() {
   const inputRef = useRef(null);
   const containerRef = useRef(null);
   const optionRefs = useRef([]);
+  const searchRequestRef = useRef(0);
   const navigate = useNavigate();
   const { user, tenant } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
@@ -411,24 +411,31 @@ export default function Omnibar() {
   // are client-side and update synchronously on every keystroke (so the
   // user sees their sidebar results without waiting on the network).
   useEffect(() => {
+    const requestId = ++searchRequestRef.current;
+    const controller = new AbortController();
     const fetchOmni = async () => {
       if (query.length < 2) {
         setResults({});
+        setIsLoading(false);
         return;
       }
       setIsLoading(true);
       try {
         const data = await fetchApi(
           `/api/search?q=${encodeURIComponent(query)}`,
+          { signal: controller.signal, silent: true },
         );
-        setResults(data || {});
+        if (requestId === searchRequestRef.current) setResults(data || {});
       } catch (err) {
-        console.error(err);
+        if (!controller.signal.aborted) console.error(err);
       }
-      setIsLoading(false);
+      if (requestId === searchRequestRef.current) setIsLoading(false);
     };
     const debounce = setTimeout(fetchOmni, SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(debounce);
+    return () => {
+      clearTimeout(debounce);
+      controller.abort();
+    };
   }, [query]);
 
   // Client-side page match. The catalog is small (~70 entries) so a linear
@@ -880,5 +887,3 @@ export default function Omnibar() {
     </div>
   );
 }
-
-

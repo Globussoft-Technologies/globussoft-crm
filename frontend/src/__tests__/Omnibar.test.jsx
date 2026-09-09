@@ -175,7 +175,10 @@ describe('Omnibar (inline top-bar)', () => {
     input.focus();
     fireEvent.change(input, { target: { value: 'acme' } });
     await waitFor(
-      () => expect(fetchApi).toHaveBeenCalledWith('/api/search?q=acme'),
+      () => expect(fetchApi).toHaveBeenCalledWith(
+        '/api/search?q=acme',
+        expect.objectContaining({ signal: expect.any(AbortSignal), silent: true }),
+      ),
       { timeout: 2000 },
     );
   });
@@ -186,9 +189,42 @@ describe('Omnibar (inline top-bar)', () => {
     input.focus();
     fireEvent.change(input, { target: { value: 'a&b #c' } });
     await waitFor(
-      () => expect(fetchApi).toHaveBeenCalledWith('/api/search?q=a%26b%20%23c'),
+      () => expect(fetchApi).toHaveBeenCalledWith(
+        '/api/search?q=a%26b%20%23c',
+        expect.objectContaining({ signal: expect.any(AbortSignal), silent: true }),
+      ),
       { timeout: 2000 },
     );
+  });
+
+  it('ignores an older search response after the query changes', async () => {
+    let resolveOld;
+    let resolveNew;
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') return Promise.resolve({ pages: [] });
+      if (url === '/api/search?q=old') {
+        return new Promise((resolve) => { resolveOld = resolve; });
+      }
+      if (url === '/api/search?q=new') {
+        return new Promise((resolve) => { resolveNew = resolve; });
+      }
+      return Promise.resolve({});
+    });
+    await renderOmnibarAndWaitForPages();
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    fireEvent.change(input, { target: { value: 'old' } });
+    await waitFor(() => expect(resolveOld).toBeTypeOf('function'), { timeout: 2000 });
+    fireEvent.change(input, { target: { value: 'new' } });
+    await waitFor(() => expect(resolveNew).toBeTypeOf('function'), { timeout: 2000 });
+
+    await act(async () => {
+      resolveNew({ contacts: [{ id: 2, name: 'New Result', email: 'new@example.com' }] });
+    });
+    expect(await screen.findByText('New Result')).toBeInTheDocument();
+    await act(async () => {
+      resolveOld({ contacts: [{ id: 1, name: 'Old Result', email: 'old@example.com' }] });
+    });
+    expect(screen.queryByText('Old Result')).not.toBeInTheDocument();
   });
 
   it('shows the empty-state message when no results match (no pages, no entities)', async () => {

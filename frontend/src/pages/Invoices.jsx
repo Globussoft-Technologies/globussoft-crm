@@ -15,6 +15,7 @@ import {
   CalendarRange,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
+import { fetchAllPages } from "../utils/fetchAllPages";
 import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
 import { useActiveSubBrand } from "../utils/subBrand";
@@ -178,8 +179,8 @@ export default function Invoices() {
       const qs = params.toString() ? `?${params.toString()}` : "";
       const [invs, c, d] = await Promise.all([
         fetchApi(`/api/billing${qs}`),
-        fetchApi("/api/contacts"),
-        fetchApi("/api/deals"),
+        fetchAllPages("/api/contacts"),
+        fetchAllPages("/api/deals"),
       ]);
       setInvoices(Array.isArray(invs) ? invs : []);
       setContacts(Array.isArray(c) ? c : []);

@@ -42,18 +42,20 @@ test.describe('payments API smoke', () => {
     expect([401, 403]).toContain(res.status());
   });
 
-  test('GET / returns array of payments', async ({ request }) => {
+  test('GET / returns a bounded pagination envelope', async ({ request }) => {
     const res = await request.get(`${API}/payments`, { headers: auth() });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(Array.isArray(body)).toBe(true);
+    expect(Array.isArray(body.payments)).toBe(true);
+    expect(body).toMatchObject({ limit: 25, offset: 0 });
+    expect(typeof body.total).toBe('number');
   });
 
   test('GET / honors status/gateway/invoiceId filters', async ({ request }) => {
     const res = await request.get(`${API}/payments?gateway=stripe&status=PENDING`, { headers: auth() });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(Array.isArray(body)).toBe(true);
+    expect(Array.isArray(body.payments)).toBe(true);
   });
 
   // ── #846 — date-range filter ────────────────────────────────────
@@ -66,11 +68,11 @@ test.describe('payments API smoke', () => {
     const res = await request.get(`${API}/payments?from=2026-01-01&to=2026-03-31`, { headers: auth() });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(Array.isArray(body)).toBe(true);
+    expect(Array.isArray(body.payments)).toBe(true);
     // Every returned row's createdAt must fall inside the window. (If the
     // window has zero matching rows for the demo seed, an empty array is
     // a valid + correct response — the filter applied, no row qualified.)
-    for (const p of body) {
+    for (const p of body.payments) {
       const ts = new Date(p.createdAt).getTime();
       expect(ts).toBeGreaterThanOrEqual(new Date('2026-01-01').getTime());
       expect(ts).toBeLessThanOrEqual(new Date('2026-03-31T23:59:59.999').getTime());

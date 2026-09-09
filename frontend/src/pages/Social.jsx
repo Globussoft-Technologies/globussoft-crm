@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Send, Calendar, AtSign, Link as LinkIcon, Settings, Hash, Globe, Share2, Trash2, Plus, RefreshCw, Check, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
 
@@ -52,7 +53,7 @@ export default function Social() {
     fetchApi('/api/social/posts').then(d => setPosts(Array.isArray(d) ? d : [])).catch(() => setPosts([]));
     fetchApi('/api/social/mentions').then(d => setMentions(Array.isArray(d) ? d : [])).catch(() => setMentions([]));
     fetchApi('/api/social/accounts').then(d => setAccounts(Array.isArray(d) ? d : [])).catch(() => setAccounts([]));
-    fetchApi('/api/contacts').then(d => setContacts(Array.isArray(d) ? d : (d?.contacts || []))).catch(() => setContacts([]));
+    fetchAllPages('/api/contacts').then(d => setContacts(Array.isArray(d) ? d : [])).catch(() => setContacts([]));
   };
 
   useEffect(() => { loadAll(); }, []);

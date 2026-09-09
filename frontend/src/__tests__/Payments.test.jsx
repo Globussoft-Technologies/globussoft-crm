@@ -13,7 +13,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -98,7 +98,7 @@ const samplePayments = [
 ];
 
 function defaultFetchMock(url) {
-  if (url === '/api/payments') return Promise.resolve(samplePayments);
+  if (url.startsWith('/api/payments?')) return Promise.resolve(samplePayments);
   if (url === '/api/payments/config') {
     return Promise.resolve({
       stripe: { configured: true, webhookConfigured: true },
@@ -166,7 +166,7 @@ describe('<Payments /> — page surface', () => {
 
   it('shows enriched service labels in the "For" column when description is absent', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/payments') {
+      if (url.startsWith('/api/payments?')) {
         return Promise.resolve([
           {
             id: 11,
@@ -201,7 +201,7 @@ describe('<Payments /> — page surface', () => {
 
   it('shows the empty-state "No payments yet" CTA when /api/payments returns []', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/payments') return Promise.resolve([]);
+      if (url.startsWith('/api/payments?')) return Promise.resolve([]);
       if (url === '/api/payments/config') {
         return Promise.resolve({
           stripe: { configured: true },
@@ -220,7 +220,7 @@ describe('<Payments /> — page surface', () => {
   it('shows a loading message before the first fetch resolves', async () => {
     let resolvePayments;
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/payments') {
+      if (url.startsWith('/api/payments?')) {
         return new Promise((r) => { resolvePayments = r; });
       }
       if (url === '/api/payments/config') {
@@ -267,7 +267,7 @@ describe('<Payments /> — page surface', () => {
 
   it('renders the configuration warning when both gateways are unconfigured', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/payments') return Promise.resolve([]);
+      if (url.startsWith('/api/payments?')) return Promise.resolve([]);
       if (url === '/api/payments/config') {
         return Promise.resolve({
           stripe: { configured: false },
@@ -301,7 +301,7 @@ describe('<Payments /> — page surface', () => {
       },
     ];
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/payments') return Promise.resolve(withRefunded);
+      if (url.startsWith('/api/payments?')) return Promise.resolve(withRefunded);
       if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
       return Promise.resolve(null);
     });
@@ -364,12 +364,12 @@ describe('<Payments /> — page surface', () => {
     renderPayments();
     await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
     const initialPaymentsCalls = fetchApiMock.mock.calls.filter(
-      ([url]) => url === '/api/payments'
+      ([url]) => url.startsWith('/api/payments?')
     ).length;
     fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }));
     await waitFor(() => {
       const newPaymentsCalls = fetchApiMock.mock.calls.filter(
-        ([url]) => url === '/api/payments'
+        ([url]) => url.startsWith('/api/payments?')
       ).length;
       expect(newPaymentsCalls).toBeGreaterThan(initialPaymentsCalls);
     });
@@ -406,7 +406,7 @@ describe('<Payments /> — page surface', () => {
       },
     ];
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/payments') return Promise.resolve(withUnknown);
+      if (url.startsWith('/api/payments?')) return Promise.resolve(withUnknown);
       if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
       return Promise.resolve(null);
     });
@@ -417,7 +417,7 @@ describe('<Payments /> — page surface', () => {
 
   it('admin Gateway Configuration cards reflect partial-config state via per-extra checkmarks', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/payments') return Promise.resolve([]);
+      if (url.startsWith('/api/payments?')) return Promise.resolve([]);
       if (url === '/api/payments/config') {
         return Promise.resolve({
           stripe: { configured: true, webhookConfigured: false },
@@ -446,7 +446,7 @@ describe('<Payments /> — page surface', () => {
       { id: 23, invoiceId: 123, amount: 7777, currency: 'USD', gateway: 'stripe', status: 'FAILED', gatewayId: 'pi_C', paidAt: null, createdAt: oneDayAgo, metadata: {} },
     ];
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/payments') return Promise.resolve(rows);
+      if (url.startsWith('/api/payments?')) return Promise.resolve(rows);
       if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
       return Promise.resolve(null);
     });
@@ -464,7 +464,7 @@ describe('<Payments /> — pagination', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/payments') return Promise.resolve(generatePayments(25));
+      if (url.startsWith('/api/payments?')) return Promise.resolve(generatePayments(25));
       if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
       return Promise.resolve(null);
     });
@@ -476,6 +476,70 @@ describe('<Payments /> — pagination', () => {
     expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 1 of 3/);
     expect(screen.getAllByText(/Invoice #/).length).toBe(10);
     expect(screen.queryByText('Invoice #111')).not.toBeInTheDocument();
+  });
+
+  it('uses the server total and requests the next offset for envelope responses', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments/config') {
+        return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
+      }
+      if (url.startsWith('/api/payments/stats?')) return Promise.resolve(null);
+      if (url.includes('offset=10')) {
+        return Promise.resolve({ payments: generatePayments(10).map((row) => ({ ...row, id: row.id + 10, invoiceId: row.invoiceId + 10 })), total: 35, limit: 10, offset: 10 });
+      }
+      if (url.startsWith('/api/payments?')) {
+        return Promise.resolve({ payments: generatePayments(10), total: 35, limit: 10, offset: 0 });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPayments();
+    await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 1 of 4/));
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        typeof url === 'string' && url.includes('/api/payments?') && url.includes('offset=10'),
+      )).toBe(true);
+      expect(screen.getByText('Invoice #111')).toBeInTheDocument();
+    });
+  });
+
+  it('does not let an older filtered request overwrite the latest gateway results', async () => {
+    let resolveStripe;
+    let resolveRazorpay;
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
+      if (url.startsWith('/api/payments/stats?')) return Promise.resolve(null);
+      if (url.includes('gateway=stripe')) {
+        return new Promise((resolve) => { resolveStripe = resolve; });
+      }
+      if (url.includes('gateway=razorpay')) {
+        return new Promise((resolve) => { resolveRazorpay = resolve; });
+      }
+      if (url.startsWith('/api/payments?')) {
+        return Promise.resolve({ payments: generatePayments(10), total: 10, limit: 10, offset: 0 });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /^Stripe$/i }));
+    await waitFor(() => expect(resolveStripe).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: /^Razorpay$/i }));
+    await waitFor(() => expect(resolveRazorpay).toBeTypeOf('function'));
+
+    await act(async () => {
+      resolveRazorpay({ payments: [{ ...samplePayments[0], id: 80, invoiceId: 880 }], total: 1, limit: 10, offset: 0 });
+    });
+    expect(await screen.findByText('Invoice #880')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveStripe({ payments: [{ ...samplePayments[1], id: 90, invoiceId: 990 }], total: 1, limit: 10, offset: 0 });
+    });
+    expect(screen.queryByText('Invoice #990')).not.toBeInTheDocument();
+    expect(screen.getByText('Invoice #880')).toBeInTheDocument();
   });
 
   it('navigates to the next and previous pages', async () => {

@@ -170,8 +170,8 @@ export default function PointOfSale() {
   const loadPaymentHistory = useCallback(async () => {
     setPaymentLoading(true);
     try {
-      const list = await fetchApi('/api/payments');
-      setPaymentHistory(Array.isArray(list) ? list : []);
+      const list = await fetchApi('/api/payments?limit=100');
+      setPaymentHistory(Array.isArray(list) ? list : (list?.payments || []));
     } catch (e) {
       // Fail silently — this is a convenience panel, not a blocking flow.
       setPaymentHistory([]);
@@ -1420,5 +1420,4 @@ const tdStyle = {
   fontSize: '0.95rem',
   color: 'var(--text-primary)',
 };
-
 

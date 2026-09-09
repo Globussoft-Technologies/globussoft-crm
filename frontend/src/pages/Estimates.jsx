@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { FileSpreadsheet, Plus, Trash2, IndianRupee, ArrowRightLeft, X, Download, Mail } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 
 const STATUS_CONFIG = {
@@ -117,8 +118,8 @@ export default function Estimates() {
   const loadContactsAndDeals = useCallback(async () => {
     try {
       const [c, d] = await Promise.all([
-        fetchApi('/api/contacts'),
-        fetchApi('/api/deals'),
+        fetchAllPages('/api/contacts'),
+        fetchAllPages('/api/deals'),
       ]);
       setContacts(Array.isArray(c) ? c : []);
       setDeals(Array.isArray(d) ? d : []);

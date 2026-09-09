@@ -13,6 +13,7 @@ import {
 import MultiSelectDropdown from "../components/MultiSelectDropdown";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
+import { fetchAllPages } from "../utils/fetchAllPages";
 import { useNotify } from "../utils/notify";
 
 function getInboxPageSize() {
@@ -372,7 +373,7 @@ export default function Inbox() {
         if (canAssignMeetingStaff) setStaffLoading(true);
         const [emailRows, contactData, patientData, staffData] = await Promise.all([
           loadEmailsPage({ page: 1, reset: true }),
-          fetchApi("/api/contacts"),
+          fetchAllPages("/api/contacts"),
           fetchApi("/api/wellness/patients", { silent: true }).catch(() => ({ patients: [] })),
           canAssignMeetingStaff
             ? fetchApi("/api/staff?fields=summary", { silent: true }).catch(() => [])

@@ -52,7 +52,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -146,6 +146,12 @@ function buildProspects(count) {
 // of the 5 lifecycle statuses; default to non-empty Prospect, empty others.
 function defaultFetchMock(url, opts) {
   if (typeof url === 'string') {
+    if (url.startsWith('/api/contacts?status=Prospect&count=1')) {
+      return Promise.resolve({ total: sampleProspects.length });
+    }
+    if (url.startsWith('/api/contacts?status=') && url.includes('&count=1')) {
+      return Promise.resolve({ total: 0 });
+    }
     if (url.startsWith('/api/contacts/by-status?status=Prospect')) {
       return Promise.resolve({ success: true, count: sampleProspects.length, data: sampleProspects });
     }
@@ -225,6 +231,53 @@ describe('<ConvertedLeads /> — multi-status contact lifecycle page', () => {
     expect(screen.getByRole('button', { name: /^Customer \(0\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Churned \(0\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Junk \(0\)$/ })).toBeInTheDocument();
+  });
+
+  it('uses count-only requests for status chips instead of downloading five datasets', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      const countCalls = fetchApiMock.mock.calls.filter(
+        ([url]) => typeof url === 'string' && url.includes('&count=1'),
+      );
+      expect(countCalls).toHaveLength(5);
+    });
+    const listCalls = fetchApiMock.mock.calls.filter(
+      ([url]) => typeof url === 'string' && url.startsWith('/api/contacts/by-status?'),
+    );
+    expect(listCalls).toHaveLength(1);
+  });
+
+  it('does not let an older status response overwrite the latest selection', async () => {
+    let resolveCustomer;
+    let resolveChurned;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/by-status?status=Customer') {
+        return new Promise((resolve) => { resolveCustomer = resolve; });
+      }
+      if (url === '/api/contacts/by-status?status=Churned') {
+        return new Promise((resolve) => { resolveChurned = resolve; });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderPage();
+    await screen.findByText(/3 leads in Prospect/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Customer \(0\)$/ }));
+    await waitFor(() => expect(resolveCustomer).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: /^Churned \(0\)$/ }));
+    await waitFor(() => expect(resolveChurned).toBeTypeOf('function'));
+
+    await act(async () => {
+      resolveChurned({ data: [{ ...sampleProspects[0], id: 801, name: 'Latest Churned Lead', status: 'Churned' }] });
+    });
+    expect(await screen.findByText('Latest Churned Lead')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveCustomer({ data: [{ ...sampleProspects[1], id: 901, name: 'Stale Customer Lead', status: 'Customer' }] });
+    });
+    expect(screen.queryByText('Stale Customer Lead')).not.toBeInTheDocument();
+    expect(screen.getByText('Latest Churned Lead')).toBeInTheDocument();
   });
 
   it('accepts {success, count, data:[]} envelope AND raw arrays AND {contacts:[]} shape (#251)', async () => {
@@ -467,6 +520,10 @@ describe('<ConvertedLeads /> — multi-status contact lifecycle page', () => {
     const statusStore = buildProspects(3);
     fetchApiMock.mockImplementation((url, opts) => {
       if (typeof url === 'string') {
+        if (url.startsWith('/api/contacts?') && url.includes('count=1')) {
+          const status = new URL(url, 'http://localhost').searchParams.get('status');
+          return Promise.resolve({ total: statusStore.filter((row) => row.status === status).length });
+        }
         if (url.startsWith('/api/contacts/by-status?status=')) {
           const status = decodeURIComponent(url.split('status=')[1] || '');
           const rows = statusStore.filter((row) => row.status === status);

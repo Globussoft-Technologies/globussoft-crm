@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { FolderKanban, Plus, Trash2, IndianRupee, CheckCircle2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { formatDate } from '../utils/date';
@@ -89,8 +90,8 @@ export default function Projects() {
   const loadStatic = async () => {
     try {
       const [c, d, sc] = await Promise.all([
-        fetchApi('/api/contacts'),
-        fetchApi('/api/deals'),
+        fetchAllPages('/api/contacts'),
+        fetchAllPages('/api/deals'),
         fetchApi('/api/projects?fields=summary').catch(() => null),
       ]);
       setContacts(Array.isArray(c) ? c : []);

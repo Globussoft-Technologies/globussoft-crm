@@ -1063,62 +1063,21 @@ router.get("/", async (req, res) => {
       where.createdAt = createdAt;
     }
 
-    const payments = await prisma.payment.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-    });
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 25, 100));
+    const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+    const [payments, total] = await Promise.all([
+      prisma.payment.findMany({
+        where,
+        take: limit,
+        skip: offset,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      }),
+      prisma.payment.count({ where }),
+    ]);
 
-    // Webhooks are a notification mechanism, not the source of truth for the
-    // Payments Received screen. Refresh pending Razorpay hosted links directly
-    // so a delayed/missing webhook cannot leave a completed payment displayed
-    // as pending. Metadata then drives the same participant reconciliation for
-    // every trip and payer.
-    const pendingHostedPayments = payments.filter((payment) => {
-      if (String(payment.gateway || "").toLowerCase() !== "razorpay") return false;
-      if (["SUCCESS", "PAID", "CAPTURED"].includes(String(payment.status || "").toUpperCase())) return false;
-      try {
-        const metadata = JSON.parse(payment.metadata || "{}");
-        return Boolean(metadata.plinkId || String(payment.gatewayId || "").startsWith("plink_"));
-      } catch (_err) { return String(payment.gatewayId || "").startsWith("plink_"); }
-    });
-    if (pendingHostedPayments.length) {
-      try {
-        const razorpay = await getTenantRazorpayClient(tenantId);
-        if (razorpay?.client?.paymentLink?.fetch) {
-          for (const payment of pendingHostedPayments) {
-            let metadata = {};
-            try { metadata = JSON.parse(payment.metadata || "{}"); } catch (_err) {}
-            const linkId = metadata.plinkId || payment.gatewayId;
-            let remote;
-            try { remote = await razorpay.client.paymentLink.fetch(linkId); } catch (_err) { continue; }
-            const remoteStatus = String(remote?.status || "").toUpperCase();
-            if (!["PAID", "PARTIALLY_PAID"].includes(remoteStatus)) continue;
-            const paidAt = remote?.updated_at ? new Date(remote.updated_at * 1000) : new Date();
-            const updatedPayment = await prisma.payment.update({
-              where: { id: payment.id },
-              data: { status: "SUCCESS", paidAt },
-            });
-            const index = payments.findIndex((row) => row.id === payment.id);
-            if (index >= 0) payments[index] = updatedPayment;
-            const participantId = Number(metadata.participantId);
-            const instalmentId = Number(metadata.instalmentId);
-            if (metadata.kind === "tmc-instalment" && Number.isFinite(participantId) && Number.isFinite(instalmentId)) {
-              const instalment = await prisma.tripInstalmentPayment.findFirst({
-                where: { id: instalmentId, participantId },
-              });
-              await reconcileTripInstalmentPayment({
-                db: prisma,
-                instalment,
-                amountMajor: updatedPayment.amount,
-                capturedAt: paidAt,
-              });
-            }
-          }
-        }
-      } catch (err) {
-        console.warn("[Payments] hosted Razorpay status refresh skipped:", err.message);
-      }
-    }
+    // Listing is intentionally database-only. Gateway reconciliation belongs
+    // to webhook/explicit sync paths; performing one remote Razorpay request
+    // per pending row made a normal page view slow and failure-prone.
 
     // Older landing-page payments may already be successful but still carry
     // only a draft token. Once that draft has been converted, reconcile it so
@@ -1380,7 +1339,7 @@ router.get("/", async (req, res) => {
       cashiers.forEach((u) => { cashierMap[u.id] = u; });
     }
 
-    res.json(payments.map((p) => {
+    const rows = payments.map((p) => {
       let contact = p.contactId ? (contactMap[p.contactId] || null) : null;
       if (!contact && p.invoiceId) {
         const invoiceContactId = invoiceMap[p.invoiceId]?.contactId;
@@ -1429,7 +1388,8 @@ router.get("/", async (req, res) => {
         }
       }
       return { ...serialize(p), contact, travelInvoiceNum, itineraryId, service, staff };
-    }));
+    });
+    res.json({ payments: rows, total, limit, offset });
   } catch (err) {
     console.error("[Payments] list error:", err);
     res.status(500).json({ error: err.message });

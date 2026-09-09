@@ -90,6 +90,7 @@ import prisma from '../../lib/prisma.js';
 
 prisma.payment = prisma.payment || {};
 prisma.payment.findMany = vi.fn();
+prisma.payment.count = vi.fn();
 prisma.payment.findFirst = vi.fn();
 prisma.payment.create = vi.fn();
 prisma.payment.update = vi.fn();
@@ -181,6 +182,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   prisma.payment.findMany.mockReset();
+  prisma.payment.count.mockReset().mockResolvedValue(0);
   prisma.payment.findFirst.mockReset();
   prisma.payment.create.mockReset();
   prisma.payment.update.mockReset();
@@ -261,16 +263,20 @@ describe('GET / — list payments under tenant scope', () => {
         createdAt: new Date('2026-05-02'),
       },
     ]);
+    prisma.payment.count.mockResolvedValue(2);
 
     const res = await request(makeApp({ tenantId: 1 })).get('/api/payments');
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
-    expect(res.body[0].metadata).toEqual({ clientSecret: 'cs_x' });
-    expect(res.body[1].metadata).toEqual({}); // null → {} fallback
+    expect(res.body).toMatchObject({ total: 2, limit: 25, offset: 0 });
+    expect(res.body.payments).toHaveLength(2);
+    expect(res.body.payments[0].metadata).toEqual({ clientSecret: 'cs_x' });
+    expect(res.body.payments[1].metadata).toEqual({}); // null → {} fallback
     expect(prisma.payment.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
-      orderBy: { createdAt: 'desc' },
+      take: 25,
+      skip: 0,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   });
 
@@ -287,8 +293,29 @@ describe('GET / — list payments under tenant scope', () => {
         gateway: 'stripe',       // lowercased
         invoiceId: 42,           // parsed int
       },
-      orderBy: { createdAt: 'desc' },
+      take: 25,
+      skip: 0,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
+  });
+
+  test('bounds list work with pagination and returns the tenant-scoped total', async () => {
+    prisma.payment.findMany.mockResolvedValue([]);
+    prisma.payment.count.mockResolvedValue(240);
+
+    const res = await request(makeApp({ tenantId: 9 }))
+      .get('/api/payments?limit=9999&offset=100');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ payments: [], total: 240, limit: 100, offset: 100 });
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 9 },
+      take: 100,
+      skip: 100,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    }));
+    expect(prisma.payment.count).toHaveBeenCalledWith({ where: { tenantId: 9 } });
+    expect(prisma.paymentGatewayConfig.findFirst).not.toHaveBeenCalled();
   });
 
   test('?from + ?to flows into where.createdAt with gte/lte, date-only `to` pushed to end-of-day (#846)', async () => {
@@ -353,10 +380,10 @@ describe('GET / — list payments under tenant scope', () => {
     const res = await request(makeApp({ tenantId: 1 })).get('/api/payments');
 
     expect(res.status).toBe(200);
-    expect(res.body[0].service).toEqual({ id: 200, name: 'Hair Botox' });
-    expect(res.body[0].staff).toEqual({ id: 5, name: 'Dr. Anita Das' });
-    expect(res.body[1].service).toEqual({ id: 201, name: 'Acne Peel' });
-    expect(res.body[1].staff).toEqual({ id: 6, name: 'Dr. Harsh' });
+    expect(res.body.payments[0].service).toEqual({ id: 200, name: 'Hair Botox' });
+    expect(res.body.payments[0].staff).toEqual({ id: 5, name: 'Dr. Anita Das' });
+    expect(res.body.payments[1].service).toEqual({ id: 201, name: 'Acne Peel' });
+    expect(res.body.payments[1].staff).toEqual({ id: 6, name: 'Dr. Harsh' });
   });
 
   test('falls back to POS sale line items and cashier when a payment has no visit linkage', async () => {
@@ -394,8 +421,8 @@ describe('GET / — list payments under tenant scope', () => {
     const res = await request(makeApp({ tenantId: 1 })).get('/api/payments');
 
     expect(res.status).toBe(200);
-    expect(res.body[0].service).toEqual({ id: 501, name: 'Advance Manicure female' });
-    expect(res.body[0].staff).toEqual({ id: 77, name: 'Ganesh Sharma' });
+    expect(res.body.payments[0].service).toEqual({ id: 501, name: 'Advance Manicure female' });
+    expect(res.body.payments[0].staff).toEqual({ id: 77, name: 'Ganesh Sharma' });
   });
 });
 

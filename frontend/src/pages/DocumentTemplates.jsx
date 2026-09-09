@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { FileText, Plus, Edit, Eye, Send, Copy, Trash2, X, Save, Code } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
 
@@ -63,7 +64,7 @@ export default function DocumentTemplates() {
 
   useEffect(() => { load();   }, [filterType]);
   useEffect(() => {
-    fetchApi('/api/contacts').then(d => setContacts(Array.isArray(d) ? d : [])).catch(() => setContacts([]));
+    fetchAllPages('/api/contacts').then(d => setContacts(Array.isArray(d) ? d : [])).catch(() => setContacts([]));
   }, []);
 
   const openCreate = () => setEditor({ ...EMPTY_TMPL });

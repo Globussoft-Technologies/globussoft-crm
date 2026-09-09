@@ -12,19 +12,19 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('../utils/api', () => ({
   fetchApi: vi.fn((url) => {
-    if (url === '/api/deals') {
-      return Promise.resolve([
+    if (url.startsWith('/api/search?')) {
+      return Promise.resolve({
+        deals: [
         { id: 1, title: 'Acme renewal', company: 'Acme', amount: 10000, stage: 'proposal' },
         { id: 2, title: 'Globus pilot', company: 'Globus', amount: 5000, stage: 'discovery' },
-      ]);
-    }
-    if (url === '/api/contacts') {
-      return Promise.resolve([
+        ],
+        contacts: [
         { id: 1, name: 'Alice', email: 'alice@acme.test', role: 'CEO' },
         { id: 2, name: 'Bob', email: 'bob@globus.test', role: 'CTO' },
-      ]);
+        ],
+      });
     }
-    return Promise.resolve([]);
+    return Promise.resolve({});
   }),
 }));
 

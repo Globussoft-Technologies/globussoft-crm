@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 import { ClipboardList, Send, Plus, BarChart3, X, ArrowLeft, MessageSquare, Users, Upload, ListChecks, Trash2, GripVertical } from 'lucide-react';
 import {
@@ -282,7 +283,7 @@ export default function Surveys() {
     // pass should wire the search to the backend `?q=` instead of
     // filtering client-side.
     const [contactsResult, patientsResult] = await Promise.allSettled([
-      fetchApi('/api/contacts?limit=500'),
+      fetchAllPages('/api/contacts?limit=500'),
       fetchApi('/api/wellness/patients?limit=200'),
     ]);
 

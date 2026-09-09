@@ -458,7 +458,7 @@ describe('<PointOfSale /> — payment history panel', () => {
 
   it('fetches /api/payments and renders a compact paginated list', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/payments') return Promise.resolve(samplePayments);
+      if (url.startsWith('/api/payments?')) return Promise.resolve(samplePayments);
       return defaultOpenShiftMock(url, opts);
     });
     renderPos();
@@ -496,7 +496,7 @@ describe('<PointOfSale /> — payment history panel', () => {
   it('Refresh button re-fetches /api/payments', async () => {
     let callCount = 0;
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/payments') {
+      if (url.startsWith('/api/payments?')) {
         callCount += 1;
         return Promise.resolve(callCount === 1 ? [samplePayments[0]] : samplePayments.slice(0, 2));
       }
@@ -510,7 +510,7 @@ describe('<PointOfSale /> — payment history panel', () => {
     fireEvent.click(screen.getByTestId('pos-payment-history-refresh'));
 
     await waitFor(() => expect(screen.getByTestId('pos-payment-row-802')).toBeInTheDocument());
-    const paymentCalls = fetchApiMock.mock.calls.filter(([url]) => url === '/api/payments');
+    const paymentCalls = fetchApiMock.mock.calls.filter(([url]) => url.startsWith('/api/payments?'));
     expect(paymentCalls.length).toBeGreaterThanOrEqual(2);
   });
 });

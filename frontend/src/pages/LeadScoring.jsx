@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { AuthContext } from '../App';
 import { useNotify } from '../utils/notify';
 import { TrendingUp, TrendingDown, Zap, Users, Target, RefreshCw, AlertCircle } from 'lucide-react';
@@ -40,7 +41,7 @@ export default function LeadScoring() {
 
   const loadContacts = async () => {
     try {
-      const data = await fetchApi('/api/contacts');
+      const data = await fetchAllPages('/api/contacts');
       setContacts(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);

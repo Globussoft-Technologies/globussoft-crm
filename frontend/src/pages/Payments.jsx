@@ -3,6 +3,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
@@ -175,6 +176,9 @@ export default function Payments() {
   const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
+  const [totalPayments, setTotalPayments] = useState(0);
+  const [serverPaginated, setServerPaginated] = useState(false);
+  const [serverStats, setServerStats] = useState(null);
   const [config, setConfig] = useState(null);
   const [tab, setTab] = useState("all");
   const [loading, setLoading] = useState(true);
@@ -192,32 +196,62 @@ export default function Payments() {
     start: "",
     end: "",
   });
-  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+  const [rangeStart, rangeEnd] = useMemo(
+    () => resolveDateRange(dateFilter),
+    [dateFilter],
+  );
+  const requestRef = useRef(0);
   const filterLabel = useMemo(() => {
     const o = DATE_FILTER_OPTIONS.find((x) => x.value === dateFilter.preset);
     return o ? o.label : "All time";
   }, [dateFilter.preset]);
 
-  useEffect(() => {
-    loadAll();
-  }, []);
-
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError("");
     try {
-      const [list, cfg] = await Promise.all([
-        fetchApi("/api/payments").catch(() => []),
-        fetchApi("/api/payments/config").catch(() => null),
+      const params = new URLSearchParams({
+        limit: String(pageSize),
+        offset: String((page - 1) * pageSize),
+      });
+      if (tab !== "all") params.set("gateway", tab);
+      if (rangeStart) params.set("from", rangeStart.toISOString());
+      if (rangeEnd) params.set("to", rangeEnd.toISOString());
+      const statsParams = new URLSearchParams();
+      if (rangeStart) statsParams.set("from", rangeStart.toISOString());
+      if (rangeEnd) statsParams.set("to", rangeEnd.toISOString());
+
+      const [list, statsResult] = await Promise.all([
+        fetchApi(`/api/payments?${params.toString()}`).catch(() => []),
+        fetchApi(`/api/payments/stats?${statsParams.toString()}`, { silent: true }).catch(() => null),
       ]);
-      setPayments(Array.isArray(list) ? list : []);
-      setConfig(cfg);
+      if (requestId !== requestRef.current) return;
+      const rows = Array.isArray(list)
+        ? list
+        : (Array.isArray(list?.payments) ? list.payments : []);
+      setPayments(rows);
+      setServerPaginated(!Array.isArray(list) && Array.isArray(list?.payments));
+      setTotalPayments(Number(list?.total) || rows.length);
+      setServerStats(statsResult && typeof statsResult === "object" ? statsResult : null);
     } catch (err) {
-      setError(err.message || "Failed to load payments");
+      if (requestId === requestRef.current) {
+        setError(err.message || "Failed to load payments");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
-  }
+  }, [page, pageSize, tab, rangeStart, rangeEnd]);
+
+  useEffect(() => {
+    fetchApi("/api/payments/config")
+      .then(setConfig)
+      .catch(() => setConfig(null));
+  }, []);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
 
   // A travel BOOKING collection (advance / milestone / full-invoice link). These
   // refund through the booking's CANCELLATION flow so the retention policy
@@ -339,23 +373,25 @@ export default function Payments() {
     });
   }, [payments, tab, inDateRange]);
 
-  // Reset to the first page whenever the filter changes so the user does not
-  // land on an empty page after narrowing the result set.
-  useEffect(() => {
-    setPage(1);
-  }, [tab, dateFilter]);
-
   const totalPages = useMemo(
-    () => Math.max(1, Math.ceil(filtered.length / pageSize)),
-    [filtered.length, pageSize],
+    () => Math.max(1, Math.ceil((serverPaginated ? totalPayments : filtered.length) / pageSize)),
+    [serverPaginated, totalPayments, filtered.length, pageSize],
   );
   const safePage = Math.min(page, totalPages);
   const paginated = useMemo(() => {
+    if (serverPaginated) return filtered;
     const start = (safePage - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
-  }, [filtered, safePage, pageSize]);
+  }, [serverPaginated, filtered, safePage, pageSize]);
 
   const stats = useMemo(() => {
+    if (serverStats) {
+      return {
+        collected: Number(serverStats.successfulAmount) || 0,
+        pending: Number(serverStats.byStatus?.PENDING) || 0,
+        failed: Number(serverStats.byStatus?.FAILED) || 0,
+      };
+    }
     let collected = 0,
       pending = 0,
       failed = 0;
@@ -368,7 +404,7 @@ export default function Payments() {
       else if (p.status === "FAILED") failed += 1;
     }
     return { collected, pending, failed };
-  }, [payments, inDateRange]);
+  }, [serverStats, payments, inDateRange]);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
@@ -640,7 +676,10 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
         {["all", "stripe", "razorpay"].map((t) => (
           <button
             key={t}
-            onClick={() => setTab(t)}
+            onClick={() => {
+              setPage(1);
+              setTab(t);
+            }}
             style={{
               padding: "0.5rem 1.1rem",
               borderRadius: "8px",
@@ -670,7 +709,13 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
             flexWrap: "wrap",
           }}
         >
-          <DateRangeFilter value={dateFilter} onChange={setDateFilter} />
+          <DateRangeFilter
+            value={dateFilter}
+            onChange={(next) => {
+              setPage(1);
+              setDateFilter(next);
+            }}
+          />
         </div>
       </div>
 
@@ -941,7 +986,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
               <strong style={{ color: "var(--text-primary)" }}>
                 {totalPages}
               </strong>{" "}
-              · {filtered.length.toLocaleString()} payments
+              · {(serverPaginated ? totalPayments : filtered.length).toLocaleString()} payments
             </div>
             <div
               style={{

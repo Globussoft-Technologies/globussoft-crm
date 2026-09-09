@@ -1,5 +1,5 @@
 import { fetchApi } from '../utils/api';
-import { useState, useEffect, useContext } from 'react';
+import { useState, useEffect, useContext, useRef } from 'react';
 import { UserPlus, Search, Users, Filter, MoreVertical } from 'lucide-react';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
@@ -178,11 +178,14 @@ const ConvertedLeads = () => {
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
   // #366: per-status counts powering the chip labels, e.g. "Prospect (12)".
   const [statusCounts, setStatusCounts] = useState({});
+  const leadsRequestRef = useRef(0);
 
   const fetchLeads = (status) => {
+    const requestId = ++leadsRequestRef.current;
     setLoading(true);
     fetchApi(`/api/contacts/by-status?status=${encodeURIComponent(status)}`)
       .then(response => {
+        if (requestId !== leadsRequestRef.current) return;
         // #251: backend response shape is { success, count, data: [...] }, but
         // some sister endpoints return the raw array. Be defensive and handle
         // both  the previous code only read `response.data` and silently
@@ -196,7 +199,9 @@ const ConvertedLeads = () => {
         setLeads(rows);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        if (requestId === leadsRequestRef.current) setLoading(false);
+      });
   };
 
   const fetchStaff = () => {
@@ -205,20 +210,14 @@ const ConvertedLeads = () => {
       .catch(() => {});
   };
 
-  // #366: fetch counts for every chip in parallel so the labels stay live.
-  // Each /by-status response is normalised the same way the main fetcher does.
+  // Fetch lightweight database counts for the lifecycle chips. The previous
+  // implementation downloaded every row for all five statuses just to read
+  // array.length, duplicating the active status request on every chip change.
   const fetchStatusCounts = () => {
     Promise.all(
       STATUSES.map(status =>
-        fetchApi(`/api/contacts/by-status?status=${encodeURIComponent(status)}`)
-          .then(response => {
-            const rows = Array.isArray(response)
-              ? response
-              : (Array.isArray(response?.data) ? response.data
-                : (Array.isArray(response?.data?.data) ? response.data.data
-                  : (Array.isArray(response?.contacts) ? response.contacts : [])));
-            return [status, rows.length];
-          })
+        fetchApi(`/api/contacts?status=${encodeURIComponent(status)}&count=1`, { silent: true })
+          .then(response => [status, Number(response?.total) || 0])
           .catch(() => [status, 0])
       )
     ).then(pairs => {
@@ -228,9 +227,15 @@ const ConvertedLeads = () => {
 
   useEffect(() => {
     fetchLeads(selectedStatus);
+  }, [selectedStatus]);
+
+  useEffect(() => {
     fetchStaff();
     fetchStatusCounts();
-  }, [selectedStatus]);
+    return () => {
+      leadsRequestRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     if (isWellness || isTravel) return;
@@ -330,9 +335,15 @@ const ConvertedLeads = () => {
         return;
       }
       notify.success?.(`Updated ${selectedLeads.length} lead${selectedLeads.length === 1 ? '' : 's'} to ${nextStatus}`);
+      setStatusCounts((previous) => ({
+        ...previous,
+        [selectedStatus]: Math.max(0, (Number(previous[selectedStatus]) || 0) - selectedLeads.length),
+        [nextStatus]: (Number(previous[nextStatus]) || 0) + selectedLeads.length,
+      }));
       setSelectedLeads([]);
       setBulkAgent('');
       setPage(1);
+      fetchStatusCounts();
       setSelectedStatus(nextStatus);
     } catch (err) {
       notify.error?.(`Failed to update status: ${err.message || err}`);

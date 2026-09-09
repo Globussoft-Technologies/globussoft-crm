@@ -121,50 +121,43 @@ router.get("/stats", async (req, res) => {
       where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
     }
 
-    const projects = await prisma.project.findMany({ where });
+    const closedStatuses = ["Completed", "Cancelled"];
+    const now = new Date();
+    const [groups, overdueCount] = await Promise.all([
+      prisma.project.groupBy({
+        by: ["status"],
+        where,
+        _count: { _all: true },
+        _sum: { budget: true },
+        _max: { createdAt: true },
+      }),
+      prisma.project.count({
+        where: {
+          ...where,
+          status: { notIn: closedStatuses },
+          endDate: { lt: now },
+        },
+      }),
+    ]);
 
-    const total = projects.length;
-
-    // Closed/terminal states per schema enum comment on Project.status.
-    const CLOSED = new Set(["Completed", "Cancelled"]);
-
-    // byStatus rollup — bucket key = exact enum value; empty buckets omitted.
-    const byStatus = {};
-    for (const p of projects) {
-      const s = p.status || "Planning";
-      byStatus[s] = (byStatus[s] || 0) + 1;
-    }
-
-    // activeCount = NOT terminal.
-    const activeCount = projects.reduce(
-      (n, p) => n + (CLOSED.has(p.status) ? 0 : 1),
-      0,
-    );
-
-    // totalBudget — defensive null→0, half-up 2dp.
-    const rawBudget = projects.reduce((s, p) => s + (p.budget || 0), 0);
-    const totalBudget =
-      Math.round((rawBudget + Number.EPSILON) * 100) / 100;
-
-    // overdueCount — endDate < now AND not terminal.
-    const now = Date.now();
-    const overdueCount = projects.reduce((n, p) => {
-      if (!p.endDate) return n;
-      if (CLOSED.has(p.status)) return n;
-      const t = p.endDate instanceof Date ? p.endDate.getTime() : new Date(p.endDate).getTime();
-      return Number.isFinite(t) && t < now ? n + 1 : n;
-    }, 0);
-
-    // lastCreatedAt — max(createdAt) ISO, or null on empty.
+    let total = 0;
+    let activeCount = 0;
+    let rawBudget = 0;
     let lastCreatedAt = null;
-    for (const p of projects) {
-      if (!p.createdAt) continue;
-      const t = p.createdAt instanceof Date ? p.createdAt : new Date(p.createdAt);
-      if (Number.isNaN(t.getTime())) continue;
-      if (lastCreatedAt === null || t.getTime() > lastCreatedAt.getTime()) {
-        lastCreatedAt = t;
+    const byStatus = {};
+    for (const group of groups) {
+      const status = group.status || "Planning";
+      const count = Number(group._count?._all) || 0;
+      byStatus[status] = count;
+      total += count;
+      rawBudget += Number(group._sum?.budget) || 0;
+      if (!closedStatuses.includes(status)) activeCount += count;
+      const newest = group._max?.createdAt ? new Date(group._max.createdAt) : null;
+      if (newest && !Number.isNaN(newest.getTime()) && (!lastCreatedAt || newest > lastCreatedAt)) {
+        lastCreatedAt = newest;
       }
     }
+    const totalBudget = Math.round((rawBudget + Number.EPSILON) * 100) / 100;
 
     res.json({
       total,

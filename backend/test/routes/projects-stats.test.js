@@ -47,12 +47,43 @@ import prisma from '../../lib/prisma.js';
 // Patch prisma BEFORE requiring the router.
 prisma.project = {
   findMany: vi.fn(),
+  groupBy: vi.fn(),
   findFirst: vi.fn(),
   findUnique: vi.fn(),
   count: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
+};
+
+function configureProjectStats(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const status = row.status || 'Planning';
+    const group = groups.get(status) || {
+      status,
+      _count: { _all: 0 },
+      _sum: { budget: 0 },
+      _max: { createdAt: null },
+    };
+    group._count._all += 1;
+    group._sum.budget += Number(row.budget) || 0;
+    if (row.createdAt && (!group._max.createdAt || row.createdAt > group._max.createdAt)) {
+      group._max.createdAt = row.createdAt;
+    }
+    groups.set(status, group);
+  }
+  prisma.project.groupBy.mockResolvedValue([...groups.values()]);
+  prisma.project.count.mockResolvedValue(rows.filter((row) => (
+    row.endDate && new Date(row.endDate) < new Date() && !['Completed', 'Cancelled'].includes(row.status)
+  )).length);
+}
+
+// Keep the semantic fixtures below compact while asserting that production
+// now calls groupBy/count instead of materialising rows with findMany.
+prisma.project.findMany.mockResolvedValue = (rows) => {
+  configureProjectStats(rows);
+  return prisma.project.findMany;
 };
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
@@ -107,6 +138,7 @@ function daysFromNow(n) {
 
 beforeEach(() => {
   prisma.project.findMany.mockReset();
+  prisma.project.groupBy.mockReset();
   prisma.project.findFirst.mockReset();
   prisma.project.count.mockReset();
   prisma.project.create.mockReset();
@@ -126,7 +158,7 @@ describe('GET /api/projects/stats — auth gate', () => {
     const res = await request(makeApp()).get('/api/projects/stats');
     expect(res.status).toBe(401);
     // findMany must not have been called — the auth gate fires first.
-    expect(prisma.project.findMany).not.toHaveBeenCalled();
+    expect(prisma.project.groupBy).not.toHaveBeenCalled();
   });
 });
 
@@ -137,7 +169,7 @@ describe('GET /api/projects/stats — date-bound validation', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_DATE' });
-    expect(prisma.project.findMany).not.toHaveBeenCalled();
+    expect(prisma.project.groupBy).not.toHaveBeenCalled();
   });
 
   test('returns 400 INVALID_DATE on a malformed ?to', async () => {
@@ -146,7 +178,7 @@ describe('GET /api/projects/stats — date-bound validation', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_DATE' });
-    expect(prisma.project.findMany).not.toHaveBeenCalled();
+    expect(prisma.project.groupBy).not.toHaveBeenCalled();
   });
 });
 
@@ -164,6 +196,14 @@ describe('GET /api/projects/stats — aggregation', () => {
       totalBudget: 0,
       overdueCount: 0,
       lastCreatedAt: null,
+    });
+    expect(prisma.project.findMany).not.toHaveBeenCalled();
+    expect(prisma.project.groupBy).toHaveBeenCalledWith({
+      by: ['status'],
+      where: { tenantId: 1 },
+      _count: { _all: true },
+      _sum: { budget: true },
+      _max: { createdAt: true },
     });
   });
 
@@ -267,8 +307,8 @@ describe('GET /api/projects/stats — tenant isolation', () => {
       .get('/api/projects/stats')
       .set('Authorization', `Bearer ${tokenFor('ADMIN', { tenantId: 42 })}`);
     expect(res.status).toBe(200);
-    expect(prisma.project.findMany).toHaveBeenCalledTimes(1);
-    const call = prisma.project.findMany.mock.calls[0][0];
+    expect(prisma.project.groupBy).toHaveBeenCalledTimes(1);
+    const call = prisma.project.groupBy.mock.calls[0][0];
     expect(call.where).toEqual(expect.objectContaining({ tenantId: 42 }));
     // Sanity: the where should NOT have leaked from any other tenant id.
     expect(call.where.tenantId).not.toBe(1);
@@ -281,7 +321,7 @@ describe('GET /api/projects/stats — tenant isolation', () => {
     await request(makeApp())
       .get('/api/projects/stats?tenantId=1')
       .set('Authorization', `Bearer ${tokenFor('ADMIN', { tenantId: 99 })}`);
-    const call = prisma.project.findMany.mock.calls[0][0];
+    const call = prisma.project.groupBy.mock.calls[0][0];
     expect(call.where.tenantId).toBe(99);
   });
 });
@@ -292,7 +332,7 @@ describe('GET /api/projects/stats — date-range window', () => {
     await request(makeApp())
       .get('/api/projects/stats?from=2026-01-01T00:00:00Z')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    const call = prisma.project.findMany.mock.calls[0][0];
+    const call = prisma.project.groupBy.mock.calls[0][0];
     expect(call.where.createdAt).toBeDefined();
     expect(call.where.createdAt.gte).toBeInstanceOf(Date);
     expect(call.where.createdAt.gte.toISOString()).toBe('2026-01-01T00:00:00.000Z');
@@ -303,7 +343,7 @@ describe('GET /api/projects/stats — date-range window', () => {
     await request(makeApp())
       .get('/api/projects/stats?to=2026-06-30T23:59:59Z')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    const call = prisma.project.findMany.mock.calls[0][0];
+    const call = prisma.project.groupBy.mock.calls[0][0];
     expect(call.where.createdAt).toBeDefined();
     expect(call.where.createdAt.lte).toBeInstanceOf(Date);
     expect(call.where.createdAt.lte.toISOString()).toBe('2026-06-30T23:59:59.000Z');
@@ -314,7 +354,7 @@ describe('GET /api/projects/stats — date-range window', () => {
     await request(makeApp())
       .get('/api/projects/stats?from=2026-01-01T00:00:00Z&to=2026-12-31T23:59:59Z')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    const call = prisma.project.findMany.mock.calls[0][0];
+    const call = prisma.project.groupBy.mock.calls[0][0];
     expect(call.where.createdAt.gte).toBeInstanceOf(Date);
     expect(call.where.createdAt.lte).toBeInstanceOf(Date);
   });

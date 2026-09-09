@@ -41,6 +41,38 @@ import prisma from '../../lib/prisma.js';
 // `require('../lib/prisma')` resolves to the patched singleton.
 prisma.contract = prisma.contract || {};
 prisma.contract.findMany = vi.fn();
+prisma.contract.groupBy = vi.fn();
+prisma.contract.count = vi.fn();
+
+function configureContractStats(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const status = row.status || 'Draft';
+    const group = groups.get(status) || {
+      status,
+      _count: { _all: 0 },
+      _sum: { value: 0 },
+      _max: { createdAt: null },
+    };
+    group._count._all += 1;
+    group._sum.value += Number(row.value) || 0;
+    if (row.createdAt && (!group._max.createdAt || row.createdAt > group._max.createdAt)) {
+      group._max.createdAt = row.createdAt;
+    }
+    groups.set(status, group);
+  }
+  const now = new Date();
+  const thirtyDaysOut = new Date(now.getTime() + 30 * 86400000);
+  const active = rows.filter((row) => row.status === 'Active' && (!row.endDate || new Date(row.endDate) >= now)).length;
+  const expiring = rows.filter((row) => row.status === 'Active' && row.endDate && new Date(row.endDate) >= now && new Date(row.endDate) <= thirtyDaysOut).length;
+  prisma.contract.groupBy.mockResolvedValue([...groups.values()]);
+  prisma.contract.count.mockResolvedValueOnce(active).mockResolvedValueOnce(expiring);
+}
+
+prisma.contract.findMany.mockResolvedValue = (rows) => {
+  configureContractStats(rows);
+  return prisma.contract.findMany;
+};
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   create: vi.fn().mockResolvedValue({ id: 1 }),
@@ -77,6 +109,8 @@ function tokenFor(role = 'ADMIN', { userId = 7, tenantId = 1 } = {}) {
 
 beforeEach(() => {
   prisma.contract.findMany.mockReset();
+  prisma.contract.groupBy.mockReset();
+  prisma.contract.count.mockReset();
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
 });
 
@@ -85,7 +119,7 @@ describe('GET /api/contracts/stats', () => {
     const app = makeApp();
     const res = await request(app).get('/api/contracts/stats');
     expect(res.status).toBe(401);
-    expect(prisma.contract.findMany).not.toHaveBeenCalled();
+    expect(prisma.contract.groupBy).not.toHaveBeenCalled();
   });
 
   test('400 INVALID_DATE on bad ?from', async () => {
@@ -96,7 +130,7 @@ describe('GET /api/contracts/stats', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_DATE');
-    expect(prisma.contract.findMany).not.toHaveBeenCalled();
+    expect(prisma.contract.groupBy).not.toHaveBeenCalled();
   });
 
   test('400 INVALID_DATE on bad ?to', async () => {
@@ -107,7 +141,7 @@ describe('GET /api/contracts/stats', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_DATE');
-    expect(prisma.contract.findMany).not.toHaveBeenCalled();
+    expect(prisma.contract.groupBy).not.toHaveBeenCalled();
   });
 
   test('empty tenant: zeroed envelope with byStatus={} + lastCreatedAt=null', async () => {
@@ -127,6 +161,14 @@ describe('GET /api/contracts/stats', () => {
       activeCount: 0,
       expiringSoonCount: 0,
       lastCreatedAt: null,
+    });
+    expect(prisma.contract.findMany).not.toHaveBeenCalled();
+    expect(prisma.contract.groupBy).toHaveBeenCalledWith({
+      by: ['status'],
+      where: { tenantId: 1 },
+      _count: { _all: true },
+      _sum: { value: true },
+      _max: { createdAt: true },
     });
   });
 
@@ -264,7 +306,7 @@ describe('GET /api/contracts/stats', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN', { tenantId: 42 })}`);
 
     expect(res.status).toBe(200);
-    const whereArg = prisma.contract.findMany.mock.calls[0][0].where;
+    const whereArg = prisma.contract.groupBy.mock.calls[0][0].where;
     expect(whereArg.tenantId).toBe(42);
   });
 
@@ -279,7 +321,7 @@ describe('GET /api/contracts/stats', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
 
     expect(res.status).toBe(200);
-    const whereArg = prisma.contract.findMany.mock.calls[0][0].where;
+    const whereArg = prisma.contract.groupBy.mock.calls[0][0].where;
     expect(whereArg.createdAt.gte).toEqual(new Date(fromIso));
     expect(whereArg.createdAt.lte).toEqual(new Date(toIso));
   });

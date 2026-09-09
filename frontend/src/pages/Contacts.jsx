@@ -16,27 +16,19 @@ import InlineCellEditor from '../components/InlineCellEditor';
 import EditContactModal from '../components/EditContactModal';
 import { AuthContext } from '../App';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
+import { parseCsvTable } from '../utils/csv';
 
 const parseCSV = (text) => {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
-  return lines.slice(1).map(line => {
-    // Handle quoted values with commas
-    const values = [];
-    let current = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      if (line[i] === '"') { inQuotes = !inQuotes; continue; }
-      if (line[i] === ',' && !inQuotes) { values.push(current.trim()); current = ''; continue; }
-      current += line[i];
-    }
-    values.push(current.trim());
+  const { headers, records } = parseCsvTable(text);
+  if (headers.length === 0 || records.length === 0) return [];
+  return records.map(values => {
     const row = {};
     // #154: track column-count mismatch so the preview can flag short/long rows
     row.__columnCount = values.length;
     row.__expectedCount = headers.length;
-    headers.forEach((h, i) => { row[h] = normalizeSpreadsheetValue(values[i] ?? ''); });
+    headers.forEach((h, i) => {
+      if (h) row[h] = normalizeSpreadsheetValue(values[i] ?? '');
+    });
     return row;
   });
 };

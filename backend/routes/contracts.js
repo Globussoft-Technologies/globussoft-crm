@@ -121,50 +121,54 @@ router.get("/stats", verifyToken, async (req, res) => {
       where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
     }
 
-    const rows = await prisma.contract.findMany({
-      where,
-      select: { status: true, value: true, endDate: true, createdAt: true },
-    });
-
     const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     const now = new Date();
     const thirtyDaysOut = new Date(now.getTime() + 30 * 86400000);
+    const [groups, activeCount, expiringSoonCount] = await Promise.all([
+      prisma.contract.groupBy({
+        by: ["status"],
+        where,
+        _count: { _all: true },
+        _sum: { value: true },
+        _max: { createdAt: true },
+      }),
+      prisma.contract.count({
+        where: {
+          ...where,
+          status: "Active",
+          OR: [{ endDate: null }, { endDate: { gte: now } }],
+        },
+      }),
+      prisma.contract.count({
+        where: {
+          ...where,
+          status: "Active",
+          endDate: { gte: now, lte: thirtyDaysOut },
+        },
+      }),
+    ]);
 
     const byStatus = {};
+    let total = 0;
     let totalValue = 0;
     let signedValue = 0;
-    let activeCount = 0;
-    let expiringSoonCount = 0;
     let lastCreatedAt = null;
-
-    for (const r of rows) {
-      const st = r.status || "Draft";
-      byStatus[st] = (byStatus[st] || 0) + 1;
-      const amt = Number(r.value) || 0;
-      totalValue += amt;
-
-      if (st === "Active") {
-        signedValue += amt;
-        // Open-ended (endDate null) OR not-yet-past endDate → active.
-        const ed = r.endDate ? new Date(r.endDate) : null;
-        if (!ed || ed >= now) {
-          activeCount += 1;
-        }
-        // Expiring within next 30 days: must have an endDate, must be in
-        // the [now, now+30d] window.
-        if (ed && ed >= now && ed <= thirtyDaysOut) {
-          expiringSoonCount += 1;
-        }
-      }
-
-      if (r.createdAt) {
-        const ca = r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
-        if (!lastCreatedAt || ca > lastCreatedAt) lastCreatedAt = ca;
+    for (const group of groups) {
+      const status = group.status || "Draft";
+      const count = Number(group._count?._all) || 0;
+      const value = Number(group._sum?.value) || 0;
+      byStatus[status] = count;
+      total += count;
+      totalValue += value;
+      if (status === "Active") signedValue = value;
+      const newest = group._max?.createdAt ? new Date(group._max.createdAt) : null;
+      if (newest && !Number.isNaN(newest.getTime()) && (!lastCreatedAt || newest > lastCreatedAt)) {
+        lastCreatedAt = newest;
       }
     }
 
     res.json({
-      total: rows.length,
+      total,
       byStatus,
       totalValue: round2(totalValue),
       signedValue: round2(signedValue),

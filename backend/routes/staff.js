@@ -246,6 +246,8 @@ async function sendEmail(toEmail, subject, plainText, html) {
 // (they need to identify peers for referrals / handovers).
 router.get("/", async (req, res) => {
   try {
+    const vertical = await getCallerVertical(req);
+    const isTravel = vertical === "travel";
     // #920 slice 15 — PII reduction via opt-in slim shape. When the caller
     // passes ?fields=summary, GET /api/staff returns only the minimal set
     // needed by dropdown / picker UIs (id, name, email, role, wellnessRole,
@@ -273,7 +275,9 @@ router.get("/", async (req, res) => {
       // professionals, telecallers, helpers. The Log Visit form's Doctor
       // dropdown was empty because this field wasn't returned and the
       // frontend filter `u.wellnessRole === 'doctor'` matched nothing.
-      wellnessRole: true,
+      // Wellness-only. Travel staff use RBAC roles and sub-brand access;
+      // don't leak the shared clinic field into their staff records.
+      ...(isTravel ? {} : { wellnessRole: true }),
       // Travel-only (Q25): which sub-brand(s) this staff member is scoped to.
       // null = all brands. Frontend Staff modal reads this to pre-fill the
       // sub-brand picker (travel tenants only); harmless null for others.
@@ -307,7 +311,7 @@ router.get("/", async (req, res) => {
       email: true,
       name: true,
       role: true,
-      wellnessRole: true,
+      ...(isTravel ? {} : { wellnessRole: true }),
       tenantId: true,
       createdAt: true,
       deactivatedAt: true,
@@ -341,6 +345,7 @@ router.get("/", async (req, res) => {
             }
           : null;
       delete u.userRoles;
+      if (isTravel) delete u.wellnessRole;
     }
     // #682: apply PII masking + audit emission.
     const mustMask = shouldMaskForViewer(req);

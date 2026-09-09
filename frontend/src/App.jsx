@@ -19,7 +19,6 @@ import {
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
-import Landing from "./pages/Landing";
 import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
@@ -33,11 +32,14 @@ import {
   clearAuthToken,
   markAuthReady,
 } from "./utils/api";
+
 import {
   VALID_THEME_VALUES,
   resolveThemePreference,
 } from "./utils/themePreference";
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
+
+const Landing = lazy(() => import("./pages/Landing"));
 
 const THEME_STORAGE_KEY = "theme";
 const PUBLIC_LIGHT_THEME_ROUTES = new Set([
@@ -3693,8 +3695,6 @@ export default function App() {
     </ThemeContext.Provider>
   );
 }
-
-
 
 
 

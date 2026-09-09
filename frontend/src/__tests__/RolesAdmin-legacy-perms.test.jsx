@@ -309,10 +309,12 @@ describe('Bug 5 / Step-6 — Table badge count matches editor count', () => {
     // dropped along with the legacy-perms modal (no surface for the
     // admin to act on the hidden count, so naming it just confused
     // testers into thinking it was cross-tenant leakage).
-    expect(badge.textContent).not.toMatch(/hidden/i);
-    expect(badge.getAttribute('title')).not.toMatch(/hidden/i);
-    // Tooltip just shows the effective count.
-    expect(badge.getAttribute('title')).toMatch(/3 permissions/i);
+    expect(badge.textContent).toMatch(/3\s*\+3 hidden/i);
+    expect(badge.getAttribute('title')).toMatch(/3 visible permissions; 3 hidden legacy permissions/i);
+    fireEvent.click(badge);
+    expect(await screen.findByTestId('hidden-permissions-banner')).toHaveTextContent(
+      'patients.read, appointments.write, consents.delete',
+    );
   });
 });
 

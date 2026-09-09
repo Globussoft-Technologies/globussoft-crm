@@ -5,8 +5,9 @@
  *
  * SUT: frontend/src/pages/Landing.jsx
  *
- * Scope — pure static-surface pin. Landing.jsx is presentational only:
- *   - No `useEffect` / no API calls / no state.
+ * Scope — static-surface and lifecycle coverage. Landing.jsx:
+ *   - Uses an effect for its template interactions and public-page theme.
+ *   - Makes no API calls and owns no React state.
  *   - No `useNotify` / `fetchApi` / `useNavigate` consumption.
  *   - Just `<Link>` from react-router-dom + fixed FEATURES / MODULES arrays.
  *
@@ -30,7 +31,7 @@
  *      doesn't throw and still shows the hero headline.
  */
 import React from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Landing from '../pages/Landing';
@@ -166,5 +167,60 @@ describe('Landing (public marketing page)', () => {
     renderLanding();
     expect(screen.getByText(/Close more deals\./i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Start Free Trial/i })).toBeInTheDocument();
+  });
+
+  it('forces light theme while mounted and restores the saved theme on exit', () => {
+    const originalTheme = document.documentElement.getAttribute('data-theme');
+
+    try {
+      document.documentElement.setAttribute('data-theme', 'dark');
+
+      const { unmount } = renderLanding();
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light');
+
+      unmount();
+      expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
+    } finally {
+      if (originalTheme === null) {
+        document.documentElement.removeAttribute('data-theme');
+      } else {
+        document.documentElement.setAttribute('data-theme', originalTheme);
+      }
+    }
+  });
+
+  it('removes global listeners and disconnects observers on unmount', () => {
+    const originalIntersectionObserver = window.IntersectionObserver;
+    const observers = [];
+    window.IntersectionObserver = class {
+      constructor() {
+        this.disconnect = vi.fn();
+        this.observe = vi.fn();
+        this.unobserve = vi.fn();
+        observers.push(this);
+      }
+    };
+    const addSpy = vi.spyOn(window, 'addEventListener');
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+
+    try {
+      const { unmount } = renderLanding();
+      const messageHandler = addSpy.mock.calls.find(([type]) => type === 'message')?.[1];
+      const scrollHandler = addSpy.mock.calls.find(([type]) => type === 'scroll')?.[1];
+
+      expect(messageHandler).toEqual(expect.any(Function));
+      expect(scrollHandler).toEqual(expect.any(Function));
+      expect(observers).toHaveLength(2);
+
+      unmount();
+
+      expect(removeSpy).toHaveBeenCalledWith('message', messageHandler);
+      expect(removeSpy).toHaveBeenCalledWith('scroll', scrollHandler);
+      observers.forEach((observer) => expect(observer.disconnect).toHaveBeenCalledOnce());
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+      window.IntersectionObserver = originalIntersectionObserver;
+    }
   });
 });

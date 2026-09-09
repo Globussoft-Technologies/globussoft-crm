@@ -72,7 +72,12 @@ test.describe.configure({ mode: 'serial', timeout: 120_000 });
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60_000;
-const RUN_TAG = `E2E_TMC_DIAG_${Date.now()}`;
+const RUN_ID = String(Date.now());
+// The lead-quality junk-string rule intentionally flags any character repeated
+// four or more times. Group timestamp digits so unlucky values such as
+// 1788888755000 cannot make otherwise-realistic fixture names look like junk.
+const RUN_TAG = `E2E_TMC_DIAG_${RUN_ID.match(/.{1,3}/g).join('-')}`;
+const RUN_PHONE = `9${RUN_ID.slice(-9)}`;
 const TENANT_SLUG = 'travel-stall';
 
 // ── Dual-token auth ────────────────────────────────────────────────────
@@ -209,7 +214,9 @@ function ac12HappyPayload(emailOverride) {
         contact_name: `${RUN_TAG} Principal Mehra`,
         contact_role: 'Principal',
         email: emailOverride || `principal+${RUN_TAG}@stxavierintl.edu.in`,
-        phone: '9876543210',
+        // Repeat-submitter detection matches email OR phone within 24 hours,
+        // so the number must also be unique per run.
+        phone: RUN_PHONE,
       },
     },
   };

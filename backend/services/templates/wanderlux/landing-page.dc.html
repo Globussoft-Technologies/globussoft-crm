@@ -1229,7 +1229,7 @@ class Component extends DCLogic {
 
   /* generic input/select setter for a given state bag + field name */
   setField(bag, name){
-    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = {}; patch[bag] = next; if(bag === 'regValues') this.saveRegistrationDraft({ regValues: next, regStep: st.regStep, regDraftToken: st.regDraftToken, regDocumentsUploaded: st.regDocumentsUploaded, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return patch; }); };
+    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = { regError: bag === 'regValues' ? '' : st.regError }; patch[bag] = next; if(bag === 'regValues') this.saveRegistrationDraft({ regValues: next, regStep: st.regStep, regDraftToken: st.regDraftToken, regDocumentsUploaded: st.regDocumentsUploaded, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return patch; }); };
   }
 
   showToast(message, tone){
@@ -1546,11 +1546,12 @@ class Component extends DCLogic {
       const title = String(step && step.title || '').toLowerCase();
       return !title.includes('documents and payment') && !title.includes('documents & payment');
     });
-    const isDomesticTrip = String(reg.tripType || (cfg.meta && cfg.meta.tripType) || '').toLowerCase() === 'domestic';
+    const normalizedTripType = String(reg.tripType || (cfg.meta && cfg.meta.tripType) || '').toLowerCase().replace(/[- ]/g, '_');
+    const isDomesticTrip = normalizedTripType === 'domestic' || normalizedTripType === 'day_trip';
     const passportValue = String(this.state.regValues.passport_status || '').toLowerCase();
     const passportValid = isDomesticTrip || passportValue === 'valid passport' || passportValue === 'yes, passport is valid for 6+ months';
     const rsteps = passportValid && baseSteps.length
-      ? baseSteps.concat([{ title:'Step 4: Payment', fields:[] }])
+      ? baseSteps.concat([{ title:'Step 3: Documents', fields:[] }, { title:'Step 4: Payment', fields:[] }])
       : baseSteps;
     out.regMultiStep = rsteps.length > 1;
     const stepIdx = Math.min(this.state.regStep, Math.max(0, rsteps.length - 1));
@@ -1562,8 +1563,7 @@ class Component extends DCLogic {
       reqMark: f.required ? ' *' : '', isSelect: f.type === 'select', isInput: f.type !== 'select',
       options: f.options || [], value: this.state.regValues[f.name] || '', onInput: this.setField('regValues', f.name)
     }));
-    out.regIsDocuments = passportValid && stepIdx === baseSteps.length - 1;
-    if (out.regIsDocuments) out.regStepTitle = 'Step 3: Documents';
+    out.regIsDocuments = passportValid && stepIdx === baseSteps.length;
     out.regDocumentFields = [
       ...(isDomesticTrip ? [] : [{ name:'passport', label:'Passport' }]),
       { name:'aadhaar', label:'Aadhaar card' }, { name:'parentConsent', label:'Parent consent form' }, { name:'medicalConsent', label:'Medical consent form' }
@@ -1607,7 +1607,7 @@ class Component extends DCLogic {
     out.regPrimaryLabel = out.regIsLast ? (out.regPaymentCompleted ? (reg.submitLabel || 'Register') : (out.regPaymentEnabled ? paymentButtonLabel : (reg.submitLabel || 'Submit'))) : 'Next';
     out.regPrimaryButtonLabel = this.state.regPaymentLoading ? 'Opening Razorpay...' : out.regPrimaryLabel;
     out.regPrimaryButtonOpacity = this.state.regPaymentLoading ? 0.78 : 1;
-    out.regError = this.state.regError;
+    out.regError = out.regIsDocuments ? this.state.regError : '';
     out.hpSetter = this.setField('regValues', '_hp');
     out.regPrev = () => this.setState(st => { const regStep = Math.max(0, st.regStep - 1); this.saveRegistrationDraft({ regStep, regValues: st.regValues, regDraftToken: st.regDraftToken, regDocumentsUploaded: st.regDocumentsUploaded, regPaymentMode: st.regPaymentMode, regPaymentInstallmentIndex: st.regPaymentInstallmentIndex }); return { regStep, regError:'' }; });
     out.regChoosePaymentInstallment = () => { this.saveRegistrationDraft({ regStep: stepIdx, regValues: this.state.regValues, regDraftToken: this.state.regDraftToken, regDocumentsUploaded: this.state.regDocumentsUploaded, regPaymentMode:'installment', regPaymentInstallmentIndex: this.state.regPaymentInstallmentIndex }); this.setState({ regPaymentMode: 'installment', regPaymentError: '' }); };
@@ -1620,7 +1620,7 @@ class Component extends DCLogic {
         const fields = (steps[idx] && steps[idx].fields) || [];
         for(const f of fields){ const err = validateField(f, this.state.regValues[f.name]); if(err){ this.setState({ regError: err }); return; } }
         this.setState({ regError:'' });
-        if(idx === baseSteps.length - 1 && passportValid && !this.state.regDocumentsUploaded){
+        if(out.regIsDocuments && !this.state.regDocumentsUploaded){
           const files = this.state.regFiles || {};
           const requiredDocuments = isDomesticTrip ? ['aadhaar','parentConsent','medicalConsent'] : ['passport','aadhaar','parentConsent','medicalConsent'];
           if(requiredDocuments.some((name) => !files[name])){ this.setState({ regError: isDomesticTrip ? 'Please upload all three required documents.' : 'Please upload all four required documents.' }); return; }
@@ -1634,7 +1634,7 @@ class Component extends DCLogic {
             .catch((err) => this.setState({ regPaymentLoading:false, regError:err.message || 'Document upload failed.' }));
           return;
         }
-        if(idx < steps.length - 1){ this.setState(st => ({ regStep: st.regStep + 1 })); return; }
+        if(idx < steps.length - 1){ this.setState(st => ({ regStep: st.regStep + 1, regError:'' })); return; }
         if(out.regPaymentCompleted){
           this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, payment:{ hostedPaymentLink:true, paymentLinkId:out.regPaymentLinkId }, doneKey:'regSubmitted', sendingKey:'regSending' });
           return;

@@ -5,6 +5,13 @@ const prisma = require("../lib/prisma");
 const { sendEmail } = require("../lib/emailSender");
 const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE } = require("../lib/tenantPaymentGateway");
 const { mintPaymentPortalToken, verifyPaymentPortalToken } = require("../lib/travelPaymentPortalToken");
+const {
+  TRIP_PAYMENT_KINDS,
+  isSuccessfulPayment,
+  parseMetadata,
+  reconcileTripInstalmentPayment,
+  reconcileTripPaymentRecord,
+} = require("../lib/tripPaymentReconciliation");
 
 const router = express.Router();
 
@@ -24,6 +31,16 @@ function bankTransferDetails() {
 
 function normaliseEmail(email) {
   return String(email || "").trim().toLowerCase();
+}
+
+async function findParentContactId(tenantId, parentEmail) {
+  const email = normaliseEmail(parentEmail);
+  if (!email) return null;
+  const contact = await prisma.contact.findFirst({
+    where: { tenantId, email },
+    select: { id: true },
+  });
+  return contact?.id || null;
 }
 
 function generateOtpCode() {
@@ -74,8 +91,13 @@ async function loadParticipant(tripId, participantId) {
   return participant;
 }
 
-async function loadInstalments(tripId, participantId) {
-  return prisma.tripInstalmentPayment.findMany({
+async function loadInstalments(tripId, participantId, tenantId) {
+  // TripInstalmentPayment has no tenantId; tripId comes from loadTrip and
+  // participantId is resolved from that same trip.
+  const rows = await prisma.tripInstalmentPayment.findMany({
+    // TripInstalmentPayment has no tenantId; tripId and participantId are
+    // already scoped through the tenant-owned trip and participant.
+    // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
     where: { tripId, participantId },
     orderBy: { instalmentIndex: "asc" },
     select: {
@@ -93,16 +115,103 @@ async function loadInstalments(tripId, participantId) {
       paymentLinkGeneratedAt: true,
     },
   });
+
+  // Use the same reconciliation path as the logged-in parent portal. This
+  // makes hosted links/orders converge even if the browser callback was
+  // closed and a Razorpay webhook was delayed or unavailable.
+  try {
+    if (prisma.payment?.findMany) {
+      const payments = await prisma.payment.findMany({
+        where: {
+          tenantId,
+          OR: [
+            { metadata: { contains: `"participantId":${participantId}` } },
+            { metadata: { contains: `"participantId":"${participantId}"` } },
+            { metadata: { contains: `"tripId":${tripId}` } },
+            { metadata: { contains: `"tripId":"${tripId}"` } },
+          ],
+        },
+      });
+      const relevantPayments = payments.filter((payment) => {
+        const metadata = parseMetadata(payment);
+        return TRIP_PAYMENT_KINDS.has(String(metadata.kind || "")) &&
+          Number(metadata.tripId) === Number(tripId) &&
+          (Number(metadata.participantId) === Number(participantId) || metadata.kind === "landing-page-registration");
+      });
+      const needsGatewayRefresh = relevantPayments.some((payment) =>
+        String(payment.gateway || "").toLowerCase() === "razorpay" && !isSuccessfulPayment(payment),
+      );
+      const gateway = needsGatewayRefresh ? await getTenantRazorpayClient(tenantId) : null;
+      for (const payment of relevantPayments) {
+        await reconcileTripPaymentRecord({
+          db: prisma,
+          payment,
+          tenantId,
+          gateway: String(payment.gateway || "").toLowerCase() === "razorpay" ? gateway : null,
+        });
+      }
+      return prisma.tripInstalmentPayment.findMany({
+        // TripInstalmentPayment has no tenantId; tripId and participantId are
+        // already scoped through the tenant-owned trip and participant.
+        // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+        where: { tripId, participantId },
+        orderBy: { instalmentIndex: "asc" },
+        select: {
+          id: true, tripId: true, participantId: true, instalmentIndex: true,
+          dueDate: true, amount: true, paidAmount: true, paidAt: true,
+          status: true, invoiceId: true, paymentLinkUrl: true, paymentLinkGeneratedAt: true,
+        },
+      });
+    }
+  } catch (err) {
+    console.error("[travel-payment-portal] hosted payment refresh failed:", err.message);
+  }
+  return rows;
 }
 
-async function resolveParticipantByEmail(tripId, email) {
+async function resolveParticipantByEmail(tripId, email, installmentId = null) {
   const em = normaliseEmail(email);
+  const participantWhere = {
+    tripId,
+    parentEmail: em,
+  };
+  if (Number.isInteger(installmentId) && installmentId > 0) {
+    // A parent can have multiple participants on the same trip. The selected
+    // installment is the authoritative way to identify which participant's
+    // payment is being opened; email remains the ownership check.
+    const installment = await prisma.tripInstalmentPayment.findFirst({
+      where: { id: installmentId, tripId },
+      select: { participantId: true },
+    });
+    if (!installment) {
+      const err = new Error("Participant not found for this email");
+      err.status = 404;
+      err.code = "PARTICIPANT_NOT_FOUND";
+      throw err;
+    }
+    const participant = await prisma.tripParticipant.findFirst({
+      where: { ...participantWhere, id: installment.participantId },
+      select: {
+        id: true,
+        tripId: true,
+        fullName: true,
+        parentName: true,
+        parentEmail: true,
+        parentPhone: true,
+        applicationStatus: true,
+      },
+    });
+    if (!participant) {
+      const err = new Error("Participant not found for this email");
+      err.status = 404;
+      err.code = "PARTICIPANT_NOT_FOUND";
+      throw err;
+    }
+    return participant;
+  }
+
   const participants = await prisma.tripParticipant.findMany({
-    where: {
-      tripId,
-      parentEmail: em,
-      applicationStatus: "approved",
-    },
+    where: participantWhere,
     select: {
       id: true,
       tripId: true,
@@ -120,7 +229,7 @@ async function resolveParticipantByEmail(tripId, email) {
     throw err;
   }
   if (participants.length > 1) {
-    const err = new Error("More than one approved participant uses this email");
+    const err = new Error("More than one participant uses this email; use the payment link for the selected instalment");
     err.status = 409;
     err.code = "AMBIGUOUS_PARTICIPANT";
     throw err;
@@ -211,54 +320,14 @@ async function verifyPortalOtp({ email, code }) {
   });
 }
 
-async function reconcilePaidInstalment({ trip, participant, instalment, payment, capturedAt }) {
-  const amountPaid = Number(payment?.amount || instalment.amount);
-  const dueAmount = Number(instalment.amount) - Number(instalment.paidAmount || 0);
-  const paidAmount = Number.isFinite(amountPaid) && amountPaid > 0 ? amountPaid : Math.max(dueAmount, 0);
-  const newStatus = paidAmount >= Number(dueAmount || instalment.amount) ? "paid" : "partial";
-
-  const updated = await prisma.tripInstalmentPayment.update({
-    where: { id: instalment.id },
-    data: {
-      status: newStatus,
-      paidAmount,
-      paidAt: capturedAt || new Date(),
-    },
+async function reconcilePaidInstalment({ trip, _participant, instalment, payment, capturedAt }) {
+  return reconcileTripInstalmentPayment({
+    db: prisma,
+    instalment,
+    amountMajor: payment?.amount,
+    capturedAt: capturedAt || new Date(),
+    tenantId: trip.tenantId,
   });
-
-  try {
-    const parentEmail = participant?.parentEmail || null;
-    if (parentEmail) {
-      const itinerary = await prisma.itinerary.findFirst({
-        where: {
-          tenantId: trip.tenantId,
-          contact: { email: parentEmail },
-        },
-        select: { id: true, advancePaidAmount: true },
-      });
-      if (itinerary) {
-        const paidRows = await prisma.tripInstalmentPayment.findMany({
-          where: { participantId: participant.id, status: "paid" },
-          select: { paidAmount: true, amount: true },
-        });
-        const totalPaid = paidRows.reduce(
-          (sum, row) => sum + (Number(row.paidAmount) || Number(row.amount) || 0),
-          0,
-        );
-        await prisma.itinerary.update({
-          where: { id: itinerary.id },
-          data: {
-            status: "advance_paid",
-            advancePaidAmount: totalPaid,
-          },
-        });
-      }
-    }
-  } catch (_err) {
-    // Non-fatal: the payment record itself is the source of truth.
-  }
-
-  return updated;
 }
 
 router.get("/payment-portal/session/:token", async (req, res) => {
@@ -269,7 +338,7 @@ router.get("/payment-portal/session/:token", async (req, res) => {
       return res.status(403).json({ error: "Token scoped to a different tenant", code: "TOKEN_SCOPE" });
     }
     const participant = await loadParticipant(trip.id, claims.participantId);
-    const instalments = await loadInstalments(trip.id, participant.id);
+    const instalments = await loadInstalments(trip.id, participant.id, trip.tenantId);
     res.json({
       token: req.params.token,
       trip,
@@ -298,8 +367,15 @@ router.post("/payment-portal/request-otp", async (req, res) => {
     if (!email) {
       return res.status(400).json({ error: "email is required", code: "MISSING_FIELDS" });
     }
+    const rawInstallmentId = req.body?.installmentId;
+    const installmentId = rawInstallmentId == null || rawInstallmentId === ""
+      ? null
+      : Number(rawInstallmentId);
+    if (installmentId !== null && (!Number.isInteger(installmentId) || installmentId <= 0)) {
+      return res.status(400).json({ error: "installmentId must be a positive number", code: "INVALID_ID" });
+    }
     const trip = await loadTrip(tripId);
-    const participant = await resolveParticipantByEmail(trip.id, email);
+    const participant = await resolveParticipantByEmail(trip.id, email, installmentId);
     await createPortalOtp({ email, trip, participant });
     res.json({ sent: true });
   } catch (err) {
@@ -314,16 +390,22 @@ router.post("/payment-portal/verify-otp", async (req, res) => {
     const tripId = parseInt(req.body?.tripId, 10);
     const email = normaliseEmail(req.body?.email);
     const code = String(req.body?.code || "").trim();
-    const installmentId = Number.isFinite(Number(req.body?.installmentId)) ? Number(req.body.installmentId) : null;
+    const rawInstallmentId = req.body?.installmentId;
+    const installmentId = rawInstallmentId == null || rawInstallmentId === ""
+      ? null
+      : Number(rawInstallmentId);
     if (!Number.isFinite(tripId)) {
       return res.status(400).json({ error: "tripId must be a number", code: "INVALID_TRIP_ID" });
     }
     if (!email || !code) {
       return res.status(400).json({ error: "email and code are required", code: "MISSING_FIELDS" });
     }
+    if (installmentId !== null && (!Number.isInteger(installmentId) || installmentId <= 0)) {
+      return res.status(400).json({ error: "installmentId must be a positive number", code: "INVALID_ID" });
+    }
     const trip = await loadTrip(tripId);
     await verifyPortalOtp({ email, code });
-    const participant = await resolveParticipantByEmail(trip.id, email);
+    const participant = await resolveParticipantByEmail(trip.id, email, installmentId);
     const sessionToken = mintPaymentPortalToken({
       tenantId: trip.tenantId,
       tripId: trip.id,
@@ -332,7 +414,7 @@ router.post("/payment-portal/verify-otp", async (req, res) => {
       installmentId,
       expiresInDays: 30,
     });
-    const instalments = await loadInstalments(trip.id, participant.id);
+    const instalments = await loadInstalments(trip.id, participant.id, trip.tenantId);
     res.json({
       token: sessionToken,
       trip,
@@ -392,11 +474,12 @@ router.post("/payment-portal/create-order", async (req, res) => {
       receipt,
       notes,
     });
+    const contactId = await findParentContactId(trip.tenantId, participant.parentEmail);
     const payment = await prisma.payment.create({
       data: {
         tenantId: trip.tenantId,
         invoiceId: null,
-        contactId: null,
+        contactId,
         description: `${trip.tripCode || "Trip"} instalment #${instalment.instalmentIndex + 1} payment`,
         amount: amountDue,
         currency: "INR",
@@ -471,11 +554,12 @@ router.post("/payment-portal/submit-bank-transfer", async (req, res) => {
       return res.status(409).json({ error: "Bank transfer proof is already pending verification", code: "PENDING_VERIFICATION" });
     }
     const amountDue = Math.max(0, Number(instalment.amount) - Number(instalment.paidAmount || 0));
+    const contactId = await findParentContactId(trip.tenantId, participant.parentEmail);
     const payment = await prisma.payment.create({
       data: {
         tenantId: trip.tenantId,
         invoiceId: null,
-        contactId: null,
+        contactId,
         description: `${trip.tripCode || "Trip"} instalment #${instalment.instalmentIndex + 1} bank transfer proof`,
         amount: amountDue,
         currency: "INR",
@@ -521,7 +605,10 @@ router.post("/payment-portal/confirm-razorpay", async (req, res) => {
       where: {
         tenantId: trip.tenantId,
         gateway: "razorpay",
-        gatewayId: razorpayOrderId,
+        OR: [
+          { gatewayId: razorpayOrderId },
+          { metadata: { contains: `"orderId":"${razorpayOrderId}"` } },
+        ],
       },
     });
     if (!payment) {

@@ -62,6 +62,12 @@ export default function CsvImportExportToolbar({
   // the source/gender/tags/dates filters; other entities stay on the
   // generic /api/wellness/csv/:entity/{export,template} pipeline.
   endpoints = null,
+  // Some vertical-specific import routes do not expose the wellness metadata
+  // endpoint. The modal can still use the shared file/template flow without
+  // making that optional metadata request.
+  skipMeta = false,
+  expectedHeaders = [],
+  showExport = true,
   // Set false to render an export-only toolbar. Attendance uses this: the
   // dashboard is visible to MANAGERs, but the import endpoint is ADMIN-only
   // (it can overwrite existing rows), so managers must not see a button that
@@ -157,7 +163,7 @@ export default function CsvImportExportToolbar({
           flexWrap: "wrap",
         }}
       >
-        {multiFormat ? (
+        {showExport && multiFormat ? (
           <div ref={exportMenuRef} style={{ position: "relative" }}>
             <button
               type="button"
@@ -191,7 +197,7 @@ export default function CsvImportExportToolbar({
               </div>
             )}
           </div>
-        ) : (
+        ) : showExport ? (
           <button
             type="button"
             onClick={() => doExport("csv")}
@@ -201,7 +207,7 @@ export default function CsvImportExportToolbar({
           >
             <Upload size={14} /> {exporting ? "Exporting..." : "Export CSV"}
           </button>
-        )}
+        ) : null}
         {allowImport && (
           <button
             type="button"
@@ -225,6 +231,8 @@ export default function CsvImportExportToolbar({
           importUrl={importUrl}
           importAsyncUrl={importAsyncUrl}
           jobUrl={jobUrl}
+          skipMeta={skipMeta}
+          initialExpectedHeaders={expectedHeaders}
           onClose={() => setShowImport(false)}
           onImported={(result) => {
             // Only refresh the parent's list if at least one row landed.
@@ -250,6 +258,8 @@ function ImportModal({
   importUrl = null,
   importAsyncUrl = null,
   jobUrl = null,
+  skipMeta = false,
+  initialExpectedHeaders = [],
 }) {
   const notify = useNotify();
   const fileInputRef = useRef(null);
@@ -258,7 +268,7 @@ function ImportModal({
   const [previewHeaders, setPreviewHeaders] = useState([]);
   const [previewError, setPreviewError] = useState(null);
   const [thresholds, setThresholds] = useState({ rows: 5000, bytes: 5 * 1024 * 1024 });
-  const [expectedHeaders, setExpectedHeaders] = useState([]);
+  const [expectedHeaders, setExpectedHeaders] = useState(initialExpectedHeaders);
   // Columns the server accepts but doesn't require. Kept separate so the
   // preview only warns about genuinely missing columns.
   const [optionalHeaders, setOptionalHeaders] = useState([]);
@@ -269,6 +279,7 @@ function ImportModal({
   // Pull entity meta so we can show the column list pre-upload + know the
   // async thresholds.
   useEffect(() => {
+    if (skipMeta) return undefined;
     fetchApi(metaUrl || `/api/wellness/csv/${entity}`, { silent: true })
       .then((meta) => {
         setExpectedHeaders(meta.headers || []);
@@ -276,7 +287,7 @@ function ImportModal({
         if (meta.thresholds) setThresholds(meta.thresholds);
       })
       .catch(() => { /* gate denied - submit will show the real error */ });
-  }, [entity, metaUrl]);
+  }, [entity, metaUrl, skipMeta]);
 
   const downloadTemplate = async (format = "csv") => {
     try {
@@ -380,18 +391,25 @@ function ImportModal({
         setJobId(body.jobId);
         notify.info("Large file queued - you'll be emailed when it finishes.");
       } else {
-        setResult(normalizedBody);
+        const normalizedResult = {
+          ...normalizedBody,
+          inserted: normalizedBody.inserted ?? normalizedBody.imported ?? 0,
+          updated: normalizedBody.updated ?? 0,
+          skipped: normalizedBody.skipped ?? 0,
+          errors: normalizedBody.errors || [],
+        };
+        setResult(normalizedResult);
 
-        if (normalizedBody.inserted || normalizedBody.updated) {
+        if (normalizedResult.inserted || normalizedResult.updated) {
           notify.success(
-            `Imported: ${normalizedBody.inserted} new, ${normalizedBody.updated} updated${normalizedBody.errors.length
-              ? `, ${normalizedBody.errors.length} errors`
+            `Imported: ${normalizedResult.inserted} new, ${normalizedResult.updated} updated${normalizedResult.errors.length
+              ? `, ${normalizedResult.errors.length} errors`
               : ""
             }`,
           );
-          onImported(normalizedBody);
-        } else if (normalizedBody.errors.length) {
-          notify.error(`Import had ${normalizedBody.errors.length} row error(s).`);
+          onImported(normalizedResult);
+        } else if (normalizedResult.errors.length) {
+          notify.error(`Import had ${normalizedResult.errors.length} row error(s).`);
         }
       }
     } catch (e) {

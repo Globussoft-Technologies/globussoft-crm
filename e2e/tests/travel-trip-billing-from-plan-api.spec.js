@@ -11,7 +11,8 @@
  *   - 404 NO_PLAN when the trip has no payment plan
  *   - 400 EMPTY_ROSTER when the trip has no participants
  *   - re-run idempotency — second call on unchanged state creates 0;
- *     adding a participant + re-run only creates the new participant's rows
+ *     adding a participant + recreating its missing rows only affects that
+ *     participant
  *   - 401 without an Authorization header
  *
  * Auth gates match the sibling per-trip endpoints in travel_trip_billing.js
@@ -109,6 +110,22 @@ async function del(request, token, path) {
   );
 }
 
+async function deleteInstalments(request, token, trip, predicate = () => true) {
+  const list = await get(request, token, `/api/travel/trips/${trip}/instalments`);
+  if (!list.ok()) {
+    throw new Error(`Unable to list instalments for cleanup: HTTP ${list.status()}`);
+  }
+  const rows = (await list.json()).instalments || [];
+  const selected = rows.filter(predicate);
+  for (const row of selected) {
+    const response = await del(request, token, `/api/travel/trips/${trip}/instalments/${row.id}`);
+    if (!response.ok()) {
+      throw new Error(`Unable to delete instalment ${row.id}: HTTP ${response.status()}`);
+    }
+  }
+  return selected.length;
+}
+
 // Build a 4-instalment plan that's accepted by PUT /payment-plan (non-empty
 // array, valid dueDate, numeric amount).
 function buildPlan() {
@@ -156,6 +173,11 @@ test.beforeAll(async ({ request }) => {
     instalmentsJson: buildPlan(),
     graceDays: 5,
   });
+
+  // Saving a plan for an existing roster now creates the instalments
+  // automatically. Remove them so this spec can independently exercise the
+  // explicit recovery/backfill endpoint below.
+  expect(await deleteInstalments(request, token, tripId)).toBe(12);
 
   // Trip B — has 1 participant, NO plan. For 404 NO_PLAN.
   const tB = await post(request, token, "/api/travel/trips", {
@@ -273,7 +295,7 @@ test.describe("Travel trip billing — POST /instalments/from-plan", () => {
     expect(((await list.json()).instalments || []).length).toBe(12);
   });
 
-  test("adding a participant + re-run creates only the new participant's 4 rows", async ({ request }) => {
+  test("re-run restores only a new participant's missing 4 rows", async ({ request }) => {
     const token = await getTravelAdmin(request);
     test.skip(!token || !tripId, "setup incomplete");
 
@@ -283,6 +305,17 @@ test.describe("Travel trip billing — POST /instalments/from-plan", () => {
     expect(newP.ok()).toBeTruthy();
     const newParticipantId = (await newP.json()).id;
     participantIds.push(newParticipantId);
+
+    // Participant creation now materialises its plan rows automatically.
+    // Delete only those rows to model a partial/missing ledger and verify the
+    // explicit endpoint backfills the new participant without duplicating the
+    // existing roster.
+    expect(await deleteInstalments(
+      request,
+      token,
+      tripId,
+      (row) => row.participantId === newParticipantId,
+    )).toBe(4);
 
     const r = await post(request, token, `/api/travel/trips/${tripId}/instalments/from-plan`);
     expect(r.status()).toBe(201);

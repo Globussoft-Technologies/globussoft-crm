@@ -203,7 +203,6 @@ beforeEach(() => {
   prisma.webForm.upsert.mockReset();
   prisma.webFormSubmission.create.mockReset();
   delete process.env.PUBLIC_LEAD_TENANT_ID;
-  delete process.env.PUBLIC_LEAD_TENANT_SLUG;
   emailOtp.enforceRegistrationOtp.mockReset().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
   // T37 / Class B6 — keep self-heal seam permissive across tests.
   prisma.userRole.count.mockReset().mockResolvedValue(1);
@@ -250,8 +249,8 @@ describe('POST /api/auth/public/lead-inquiry', () => {
   });
 
   test('routes the inquiry only to the configured active generic tenant', async () => {
-    process.env.PUBLIC_LEAD_TENANT_SLUG = 'globussoft';
-    prisma.tenant.findFirst.mockResolvedValue({ id: 42, slug: 'globussoft' });
+    process.env.PUBLIC_LEAD_TENANT_ID = '42';
+    prisma.tenant.findFirst.mockResolvedValue({ id: 42 });
     prisma.webForm.upsert.mockResolvedValue({ id: 70, tenantId: 42 });
     prisma.contact.create.mockResolvedValue({ id: 80 });
     prisma.webFormSubmission.create.mockResolvedValue({ id: 90 });
@@ -262,8 +261,8 @@ describe('POST /api/auth/public/lead-inquiry', () => {
 
     expect(res.status).toBe(201);
     expect(prisma.tenant.findFirst).toHaveBeenCalledWith({
-      where: { vertical: 'generic', isActive: true, slug: 'globussoft' },
-      select: { id: true, slug: true },
+      where: { id: 42, vertical: 'generic', isActive: true },
+      select: { id: true },
     });
     expect(prisma.webForm.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { slug: 'globus-crm-landing-42' },
@@ -280,31 +279,21 @@ describe('POST /api/auth/public/lead-inquiry', () => {
     });
   });
 
-  test('requires configured id and slug to identify the same tenant', async () => {
-    process.env.PUBLIC_LEAD_TENANT_ID = '42';
-    process.env.PUBLIC_LEAD_TENANT_SLUG = 'globussoft';
-    prisma.tenant.findFirst.mockResolvedValue(null);
+  test('503 when PUBLIC_LEAD_TENANT_ID is not a positive integer', async () => {
+    process.env.PUBLIC_LEAD_TENANT_ID = 'not-an-id';
 
     const res = await request(makeApp())
       .post('/api/auth/public/lead-inquiry')
       .send(payload);
 
     expect(res.status).toBe(503);
-    expect(prisma.tenant.findFirst).toHaveBeenCalledWith({
-      where: {
-        vertical: 'generic',
-        isActive: true,
-        id: 42,
-        slug: 'globussoft',
-      },
-      select: { id: true, slug: true },
-    });
+    expect(prisma.tenant.findFirst).not.toHaveBeenCalled();
     expect(prisma.webForm.upsert).not.toHaveBeenCalled();
   });
 
   test('fails closed if the resolved landing form belongs to another tenant', async () => {
     process.env.PUBLIC_LEAD_TENANT_ID = '42';
-    prisma.tenant.findFirst.mockResolvedValue({ id: 42, slug: 'globussoft' });
+    prisma.tenant.findFirst.mockResolvedValue({ id: 42 });
     prisma.webForm.upsert.mockResolvedValue({ id: 70, tenantId: 99 });
 
     const res = await request(makeApp())

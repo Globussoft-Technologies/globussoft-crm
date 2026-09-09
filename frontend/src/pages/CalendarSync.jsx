@@ -17,6 +17,7 @@ import { fetchApi } from "../utils/api";
 import { fetchAllPages } from "../utils/fetchAllPages";
 import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
+import GenericCalendarViews from "../components/GenericCalendarViews";
 
 const PROVIDERS = [
   {
@@ -1570,13 +1571,13 @@ export default function CalendarSync() {
   };
 
   const summaryCards = [
-    {
+    ...(isTravelTenant ? [{
       key: "trips",
       label: "Confirmed trips",
       value: travelTripRows.length,
       hint: "All confirmed travel-brand trips",
       newCount: unreadAlerts.filter((alert) => alert.kind === "Trip").length,
-    },
+    }] : []),
     {
       key: "birthdays",
       label: "Birthdays this month",
@@ -2283,7 +2284,7 @@ export default function CalendarSync() {
         <Calendar size={26} style={{ color: "var(--accent-color)" }} />
         <div>
           <h2 style={{ fontSize: "1.5rem", fontWeight: "bold", margin: 0 }}>
-            Calendar Sync
+            {isTravelTenant ? "Calendar Sync" : "Calendar"}
           </h2>
           <p
             style={{
@@ -2294,7 +2295,7 @@ export default function CalendarSync() {
           >
             {tenantVertical === "travel"
               ? "Connect your Google Calendar to sync meetings into the CRM"
-              : "Connect your Google and Outlook calendars to sync meetings into the CRM"}
+              : "View CRM events by day, week, month, agenda, or list and manage calendar synchronization"}
           </p>
         </div>
       </header>
@@ -2693,7 +2694,9 @@ export default function CalendarSync() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", marginBottom: "1rem" }}>
             <div>
               <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 600 }}>
-                {activeTab === "trips"
+                {!isTravelTenant && activeTab === "meetings"
+                  ? "Calendar events"
+                  : activeTab === "trips"
                   ? "Travel trips"
                   : activeTab === "birthdays"
                     ? "Birthdays"
@@ -2702,7 +2705,9 @@ export default function CalendarSync() {
                       : "Upcoming meetings"}
               </h3>
               <div style={{ marginTop: 4, fontSize: "0.8rem", color: "var(--text-secondary)" }}>
-                {activeTab === "trips"
+                {!isTravelTenant && activeTab === "meetings"
+                  ? `${events.length} event${events.length === 1 ? "" : "s"} synchronized`
+                  : activeTab === "trips"
                   ? `${travelTripRows.length} confirmed trip${travelTripRows.length === 1 ? "" : "s"}`
                   : activeTab === "birthdays"
                     ? `${filteredBirthdayRows.length} contact birthday${filteredBirthdayRows.length === 1 ? "" : "s"} · ${selectedBirthdayMonthLabel}`
@@ -2762,7 +2767,7 @@ export default function CalendarSync() {
                 </button>
               </div>
             )}
-            {activeTab === "meetings" && (
+            {isTravelTenant && activeTab === "meetings" && (
               <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
                   <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", fontWeight: 600 }}>Status</span>
@@ -2830,6 +2835,8 @@ export default function CalendarSync() {
             <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-secondary)" }}>
               Loading events...
             </div>
+          ) : !isTravelTenant && activeTab === "meetings" ? (
+            <GenericCalendarViews events={events} onEventClick={handleOpenEventDetail} />
           ) : activeTab === "trips" ? (
             travelTripRows.length === 0 ? (
               <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-secondary)" }}>
@@ -4159,6 +4166,7 @@ export default function CalendarSync() {
                 </label>
                 {contactOptions.length > 0 && (
                   <select
+                    aria-label="Add attendee from contacts"
                     value=""
                     onChange={(e) => {
                       addAttendeeEmail(e.target.value);

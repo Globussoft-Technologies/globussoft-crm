@@ -985,8 +985,8 @@ function HomeForNonAdmin({ children }) {
 
 // #303: bare /calendar used to render a blank <main> because the route table
 // had no entry for it. Wellness tenants are bounced to their themed calendar
-// (/wellness/calendar); generic tenants land on /calendar-sync which is the
-// closest analog (Google/Outlook calendar binding management).
+// (/wellness/calendar); generic tenants land on the shared calendar screen,
+// which includes event views plus Google/Outlook connection management.
 //
 // Patient-experience separation (Path B): a CUSTOMER user (the patient
 // cohort) lands on /wellness/my-bookings instead of the operational
@@ -3064,8 +3064,8 @@ export default function App() {
                         by sister product Callified.ai (CRM ingests calls via
                         /api/v1/external/calls but does not render live-monitoring UI). */}
                       {/* #303: bare /calendar previously rendered a blank <main>. Wellness
-                  tenants get bounced to their themed calendar; everyone else sees
-                  the calendar-sync page (which is the closest generic equivalent). */}
+                  tenants get their themed calendar; generic/travel tenants use the
+                  shared calendar and provider-sync screen. */}
                       <Route path="calendar" element={<CalendarRedirect />} />
 
                       {/* Travel vertical — Day 1 scaffolding. Gated by TravelOnly
@@ -3852,7 +3852,6 @@ export default function App() {
     </ThemeContext.Provider>
   );
 }
-
 
 
 

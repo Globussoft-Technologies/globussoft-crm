@@ -24,7 +24,7 @@
  *   DELETE /api/calendar/events/<id>           (delete-event)
  *
  * Contracts pinned here:
- *   1. Page mount: heading "Calendar Sync" + both provider labels (Google
+ *   1. Page mount: heading "Calendar" + both provider labels (Google
  *      Calendar / Microsoft Outlook) render. Initial mount fires GET
  *      /api/calendar/google/events AND GET /api/calendar/outlook/events as
  *      the connection-status probe (Promise.all over PROVIDERS).
@@ -84,6 +84,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import CalendarSync from '../pages/CalendarSync';
+import { AuthContext } from '../appContexts';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -127,15 +128,6 @@ function isoDateTime({ daysFromNow = 1, hour = 10, minute = 0 } = {}) {
   date.setHours(hour, minute, 0, 0);
   date.setMilliseconds(0);
   return date.toISOString();
-}
-
-function dateKey(daysFromNow = 0) {
-  const date = new Date();
-  date.setDate(date.getDate() + daysFromNow);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
 }
 
 const sampleGoogleEvents = [
@@ -223,7 +215,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     render(<CalendarSync />);
 
     expect(
-      screen.getByRole('heading', { name: /Calendar Sync/i }),
+      screen.getByRole('heading', { name: /^Calendar$/i }),
     ).toBeInTheDocument();
     expect(screen.getByText('Google Calendar')).toBeInTheDocument();
     expect(screen.getByText('Microsoft Outlook')).toBeInTheDocument();
@@ -239,6 +231,24 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
         ([u, o]) => u === '/api/calendar/outlook/events' && (!o || !o.method || o.method === 'GET'),
       );
       expect(outlookGet).toBeTruthy();
+    });
+  });
+
+  it('keeps the travel calendar experience unchanged', async () => {
+    fetchApiMock.mockImplementation(makeOfflineMock());
+    render(
+      <AuthContext.Provider value={{ user: { tenant: { vertical: 'travel' } } }}>
+        <CalendarSync />
+      </AuthContext.Provider>,
+    );
+
+    expect(screen.getByRole('heading', { name: /Calendar Sync/i })).toBeInTheDocument();
+    expect(screen.getByText('Google Calendar')).toBeInTheDocument();
+    expect(screen.queryByText('Microsoft Outlook')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /Calendar view/i })).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/itineraries?limit=150&fields=summary', { silent: true });
     });
   });
 
@@ -428,11 +438,11 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     // The provider label "Google Calendar" appears at least twice — once in
     // the provider card header and once in the row's provider-badge. Use
     // getAllByText per the CLAUDE.md standing rule for duplicate labels.
-    const labels = screen.getAllByText('Google Calendar');
+    const labels = screen.getAllByText(/Google Calendar/);
     expect(labels.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('events list: completed meetings are hidden while future meetings remain visible', async () => {
+  it('calendar views retain both completed and upcoming synchronized meetings', async () => {
     const mixedEvents = [
       {
         id: 'past-event',
@@ -452,12 +462,13 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     fetchApiMock.mockImplementation(makeGoogleOnlineMock(mixedEvents));
     render(<CalendarSync />);
 
-    expect(await screen.findByText(/^Upcoming meeting$/i, { selector: 'div' })).toBeInTheDocument();
-    expect(screen.queryByText(/Completed meeting/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/1 event\b/i)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /^List$/i }));
+    expect(screen.getByText(/^Upcoming meeting$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Completed meeting$/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 events synchronized/i)).toBeInTheDocument();
   });
 
-  it('meetings panel: status and date filters switch between upcoming and completed meetings', async () => {
+  it('meetings panel provides day, week, month, agenda, and list views', async () => {
     const mixedEvents = [
       {
         id: 'past-event',
@@ -477,25 +488,13 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     fetchApiMock.mockImplementation(makeGoogleOnlineMock(mixedEvents));
     render(<CalendarSync />);
 
-    expect(await screen.findByRole('heading', { name: /Upcoming meetings/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Calendar events/i })).toBeInTheDocument();
     const meetingsCard = screen.getByRole('button', { name: /Upcoming meetings/i });
     expect(within(meetingsCard).getByText(/^1$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Upcoming meeting$/i, { selector: 'div' })).toBeInTheDocument();
-    expect(screen.queryByText(/Completed meeting/i)).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText(/^Status$/i), {
-      target: { value: 'completed' },
+    const viewControls = screen.getByRole('group', { name: /Calendar view/i });
+    ['Day', 'Week', 'Month', 'Agenda', 'List'].forEach((label) => {
+      expect(within(viewControls).getByRole('button', { name: label })).toBeInTheDocument();
     });
-    expect(await screen.findByText(/Completed meetings/i)).toBeInTheDocument();
-    expect(screen.getByText(/^Completed meeting$/i, { selector: 'div' })).toBeInTheDocument();
-    expect(screen.queryByText(/^Upcoming meeting$/i, { selector: 'div' })).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText(/^Date$/i), {
-      target: { value: dateKey(-1) },
-    });
-    expect(
-      await screen.findByText(/No meetings found for the selected filters/i),
-    ).toBeInTheDocument();
   });
 
   it('Create-Event modal: clicking the "+" on a connected card opens the modal with provider-scoped heading', async () => {
@@ -708,7 +707,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     ).toBeInTheDocument();
 
     // Selecting it appends the email to the attendees text input.
-    const dropdown = screen.getAllByRole('combobox')[1];
+    const dropdown = screen.getByRole('combobox', { name: /Add attendee from contacts/i });
     fireEvent.change(dropdown, { target: { value: 'anita@example.com' } });
     const attendeesInput = screen.getByPlaceholderText(/email@example.com, another@example.com/i);
     expect(attendeesInput.value).toContain('anita@example.com');
@@ -1341,10 +1340,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     await screen.findByText(/Quarterly client review/i);
     // The attendee-count badge renders the number 2 in the row (next to a
     // Users icon). The badge is rendered as text inside the row.
-    const eventRow = screen.getByText(/Quarterly client review/i).closest('div').parentElement;
-    expect(eventRow).toBeTruthy();
-    // The number appears within the row alongside the Users icon.
-    expect(within(eventRow.parentElement).getByText(/^2$/)).toBeInTheDocument();
+    expect(screen.getByText(/2 attendees/i)).toBeInTheDocument();
   });
 
   it('?error=<msg> on mount (no provider connect): clears URL even when no providers online', async () => {

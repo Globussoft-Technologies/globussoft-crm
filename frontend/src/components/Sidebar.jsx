@@ -2585,14 +2585,9 @@ function renderGenericNav({
         label="Tickets"
         count={counts.tickets}
       />
-      {/* #474: label was "Calendar" pointing at /calendar-sync  the integration
-          settings page (Google/Outlook bindings), not an event calendar. Users
-          clicked expecting a day/week agenda view. There IS no generic event
-          calendar in this CRM (wellness has /wellness/calendar; generic does
-          not yet). Rename to match the destination so the affordance matches
-          reality; a future event-list /calendar route can be added separately
-          and re-promoted to the bare "Calendar" label then. */}
-      <Link to="/calendar-sync" icon={Calendar} label="Calendar Sync" />
+      {/* The shared screen includes generic day/week/month/agenda/list views;
+          provider connection controls remain on the same page. */}
+      <Link to="/calendar-sync" icon={Calendar} label="Calendar" />
       <Link to="/live-chat" icon={MessageSquare} label="Live Chat" />
 
       <Link to="/deal-insights" icon={Eye} label="Deal Insights" />
@@ -2890,7 +2885,6 @@ const badgeStyle = {
 };
 
 export default Sidebar;
-
 
 
 

@@ -58,6 +58,10 @@ prisma.project.findFirst = vi.fn();
 prisma.project.create = vi.fn();
 prisma.project.update = vi.fn();
 prisma.project.delete = vi.fn();
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
+prisma.deal = prisma.deal || {};
+prisma.deal.findFirst = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -87,6 +91,8 @@ beforeEach(() => {
   prisma.project.create.mockReset();
   prisma.project.update.mockReset();
   prisma.project.delete.mockReset();
+  prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 11 });
+  prisma.deal.findFirst.mockReset().mockResolvedValue({ id: 22 });
 
   prisma.project.findMany.mockResolvedValue([]);
   prisma.project.findFirst.mockResolvedValue(null);
@@ -219,6 +225,22 @@ describe('GET /:id — single project', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('POST / — create project', () => {
+  test('returns 404 when a related contact is outside the caller tenant', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp({ tenantId: 9 }))
+      .post('/api/projects')
+      .send({ name: 'Isolated project', contactId: 77 });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Contact not found', code: 'REFERENCE_NOT_FOUND' });
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { id: 77, tenantId: 9 },
+      select: { id: true },
+    });
+    expect(prisma.project.create).not.toHaveBeenCalled();
+  });
+
   test('201, tenantId + ownerId stamped from JWT, defaults applied', async () => {
     prisma.project.create.mockResolvedValue({
       id: 50, name: 'Phase 2 Build-out', tenantId: 1, ownerId: 7,

@@ -59,7 +59,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 // socket.io-client — return a stable spy-bag so we can assert
-// connect/join_room/disconnect were wired even though no real socket exists.
+// subscriptions and disconnect cleanup are wired even though no real socket exists.
 const socketBag = {
   handlers: {},
   on: vi.fn((evt, cb) => { socketBag.handlers[evt] = cb; }),
@@ -391,11 +391,11 @@ describe('<LiveChat /> — socket.io wiring', () => {
     await waitFor(() => expect(screen.getByText('Aanya Sharma')).toBeInTheDocument());
 
     const events = socketBag.on.mock.calls.map(([evt]) => evt);
-    expect(events).toContain('connect');
     expect(events).toContain('chat_new_session');
     expect(events).toContain('chat_assigned');
     expect(events).toContain('chat_message');
     expect(events).toContain('chat_closed');
+    expect(socketBag.emit).not.toHaveBeenCalledWith('join_room', expect.anything());
   });
 
   it('unmount disconnects the socket (cleanup)', async () => {

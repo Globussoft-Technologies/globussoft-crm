@@ -9,6 +9,7 @@ const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { httpFromPrismaError } = require("../lib/validators");
+const { requireTenantReferences, sendTenantReferenceError } = require("../lib/tenantReferences");
 
 // Lightweight currency formatter for inline PDF rendering. Mirrors the
 // pattern at backend/routes/billing.js (invoice PDF) — Intl.NumberFormat
@@ -349,6 +350,10 @@ router.post("/", async (req, res) => {
       (sum, item) => sum + (Number(item.quantity) || 1) * (Number(item.unitPrice) || 0),
       0
     );
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+      { key: "dealId", model: "deal", value: dealId, label: "Deal" },
+    ]);
 
     const estimate = await prisma.estimate.create({
       data: {
@@ -357,8 +362,8 @@ router.post("/", async (req, res) => {
         totalAmount,
         validUntil: validUntil ? new Date(validUntil) : null,
         notes: notes || null,
-        contactId: contactId ? parseInt(contactId) : null,
-        dealId: dealId ? parseInt(dealId) : null,
+        contactId: refs.contactId,
+        dealId: refs.dealId,
         tenantId: req.user.tenantId,
         lineItems: {
           create: parsedLineItems.map((item) => ({
@@ -379,6 +384,7 @@ router.post("/", async (req, res) => {
     });
     res.status(201).json(estimate);
   } catch (err) {
+    if (sendTenantReferenceError(res, err)) return;
     console.error(err);
     // #165: surface Prisma validation errors as 400, not 500.
     const mapped = httpFromPrismaError(err);
@@ -403,13 +409,17 @@ router.put("/:id", async (req, res) => {
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const { title, status, validUntil, notes, contactId, dealId } = req.body;
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+      { key: "dealId", model: "deal", value: dealId, label: "Deal" },
+    ]);
     const data = {};
     if (title !== undefined) data.title = title;
     if (status !== undefined) data.status = status;
     if (validUntil !== undefined) data.validUntil = validUntil ? new Date(validUntil) : null;
     if (notes !== undefined) data.notes = notes;
-    if (contactId !== undefined) data.contactId = contactId ? parseInt(contactId) : null;
-    if (dealId !== undefined) data.dealId = dealId ? parseInt(dealId) : null;
+    if (contactId !== undefined) data.contactId = refs.contactId;
+    if (dealId !== undefined) data.dealId = refs.dealId;
 
     const estimate = await prisma.estimate.update({
       where: { id: existing.id },
@@ -423,6 +433,7 @@ router.put("/:id", async (req, res) => {
     }
     res.json(estimate);
   } catch (err) {
+    if (sendTenantReferenceError(res, err)) return;
     console.error(err);
     // #168 #165: bad input through PUT now returns 400 with a clear code.
     const mapped = httpFromPrismaError(err);

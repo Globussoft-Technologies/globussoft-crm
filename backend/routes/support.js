@@ -1,6 +1,7 @@
 const express = require('express');
 const { verifyToken } = require('../middleware/auth');
 const prisma = require('../lib/prisma');
+const { emitToTenant } = require('../lib/socketRooms');
 
 const router = express.Router();
 
@@ -74,7 +75,7 @@ router.post('/', verifyToken, async (req, res) => {
       }
     } catch (_e) { /* SLA is non-critical */ }
 
-    if (req.io) req.io.emit('ticket_created', ticket);
+    emitToTenant(req.io, req.user.tenantId, 'ticket_created', ticket);
     try {
       require("../lib/eventBus").emitEvent(
         "ticket.created",
@@ -119,7 +120,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     }
 
     const ticket = await prisma.ticket.update({ where: { id: existing.id }, data });
-    if (req.io) req.io.emit('ticket_updated', ticket);
+    emitToTenant(req.io, req.user.tenantId, 'ticket_updated', ticket);
     require('../lib/eventBus').safeEmitEvent(
       'ticket.updated',
       {

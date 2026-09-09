@@ -132,7 +132,8 @@ beforeEach(() => {
 describe('POST /api/email/inbound (public Mailgun webhook)', () => {
   test('happy path: matched contact → tenant inherited, contactId set, activity logged', async () => {
     prisma.contact.findUnique.mockResolvedValueOnce(contactRow);
-    const io = { emit: vi.fn() };
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) };
     const res = await request(makeApp({ io }))
       .post('/api/email/inbound')
       .type('form')
@@ -169,7 +170,8 @@ describe('POST /api/email/inbound (public Mailgun webhook)', () => {
         description: expect.stringContaining('Need help with onboarding'),
       }),
     });
-    expect(io.emit).toHaveBeenCalledWith('email_received', {
+    expect(io.to).toHaveBeenCalledWith('tenant:9');
+    expect(emit).toHaveBeenCalledWith('email_received', {
       emailId: 1234,
       contactId: 42,
       tenantId: 9,

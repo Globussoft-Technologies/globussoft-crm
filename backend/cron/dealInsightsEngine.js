@@ -4,6 +4,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 
 const prisma = require("../lib/prisma");
 const { runHeuristicRules, persistInsights } = require("../routes/deal_insights");
+const { emitToTenant } = require("../lib/socketRooms");
 
 /**
  * Single tick — scan every tenant's open deals, run the heuristic rule engine,
@@ -25,6 +26,8 @@ async function tickDealInsightsEngine(io) {
     });
 
     for (const { tenantId } of tenantRows) {
+      let tenantDealsScanned = 0;
+      let tenantInsightsCreated = 0;
       try {
         const openDeals = await prisma.deal.findMany({
           where: {
@@ -45,11 +48,13 @@ async function tickDealInsightsEngine(io) {
 
         for (const deal of openDeals) {
           totalDealsScanned++;
+          tenantDealsScanned++;
           try {
             const candidates = await runHeuristicRules(deal);
             // persistInsights already dedupes by (dealId, type, insight) when unresolved
             const saved = await persistInsights(deal.id, tenantId, candidates);
             totalInsightsCreated += saved.length;
+            tenantInsightsCreated += saved.length;
           } catch (dealErr) {
             console.warn(`[DealInsightsEngine] Deal ${deal.id} failed:`, dealErr.message);
           }
@@ -57,20 +62,17 @@ async function tickDealInsightsEngine(io) {
       } catch (tenantErr) {
         console.warn(`[DealInsightsEngine] Tenant ${tenantId} failed:`, tenantErr.message);
       }
+      emitToTenant(io, tenantId, "deal_insights_updated", {
+        scanned: tenantDealsScanned,
+        created: tenantInsightsCreated,
+        ts: new Date(),
+      });
     }
 
     const ms = Date.now() - startedAt;
     console.log(
       `[DealInsightsEngine] Scanned ${totalDealsScanned} open deal(s) across ${tenantRows.length} tenant(s); created ${totalInsightsCreated} new insight(s) in ${ms}ms.`
     );
-
-    if (io) {
-      io.emit("deal_insights_updated", {
-        scanned: totalDealsScanned,
-        created: totalInsightsCreated,
-        ts: new Date(),
-      });
-    }
 
     return { scanned: totalDealsScanned, created: totalInsightsCreated };
   } catch (err) {

@@ -148,7 +148,7 @@ describe('lib/notificationService — notify', () => {
     const ioTo = vi.fn(() => ({ emit: ioEmit }));
     const io = { to: ioTo, emit: vi.fn() };
     await notify({ userId: 1, tenantId: 1, title: 'T', message: 'M', io });
-    expect(ioTo).toHaveBeenCalledWith('user:1');
+    expect(ioTo).toHaveBeenCalledWith('tenant:1:user:1');
     expect(ioEmit).toHaveBeenCalledWith('notification_new', expect.objectContaining({ userId: 1 }));
   });
 

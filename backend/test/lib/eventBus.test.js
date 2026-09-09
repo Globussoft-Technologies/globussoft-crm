@@ -561,9 +561,11 @@ describe('executeAction — send_notification', () => {
 
   test('emits notification_new socket.io event when io provided', async () => {
     const rule = { id: 1, name: 'r', actionType: 'send_notification', targetState: null };
-    const io = { emit: vi.fn() };
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) };
     await executeAction(rule, { userId: 5 }, 42, io);
-    expect(io.emit).toHaveBeenCalledWith('notification_new', { userId: 5 });
+    expect(io.to).toHaveBeenCalledWith('tenant:42:user:5');
+    expect(emit).toHaveBeenCalledWith('notification_new', { userId: 5 });
   });
 
   test('skips io.emit when no io passed', async () => {

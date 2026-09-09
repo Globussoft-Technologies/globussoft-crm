@@ -271,6 +271,7 @@ beforeEach(() => {
 describe('billing.js — invoice.created event', () => {
   test('POST /api/billing fires invoice.created with flat payload', async () => {
     const tomorrow = new Date(Date.now() + 86400000).toISOString();
+    prisma.contact.findFirst.mockResolvedValue({ id: 5 });
     prisma.invoice.create.mockResolvedValue({
       id: 101, invoiceNum: 'INV-ABCDEF', amount: 500, contactId: 5,
       dealId: null, dueDate: new Date(tomorrow), status: 'UNPAID',

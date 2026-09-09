@@ -5,6 +5,7 @@ const { findDuplicateContact, findDuplicateMarketplaceLead } = require("../utils
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const listProjection = require("../lib/listProjection");
+const { emitToTenant } = require("../lib/socketRooms");
 
 // ── Authenticated routes ──────────────────────────────────────────
 
@@ -146,8 +147,8 @@ router.post("/import/:id", verifyToken, async (req, res) => {
     });
 
     if (req.io) {
-      req.io.emit("marketplace_lead_imported", { leadId: lead.id, contactId: contact.id });
-      req.io.emit("deal_updated", {});
+      emitToTenant(req.io, req.user.tenantId, "marketplace_lead_imported", { leadId: lead.id, contactId: contact.id });
+      emitToTenant(req.io, req.user.tenantId, "deal_updated", {});
     }
 
     res.json({ imported: true, contactId: contact.id });
@@ -211,7 +212,7 @@ router.post("/import-bulk", verifyToken, async (req, res) => {
       }
     }
 
-    if (req.io) req.io.emit("marketplace_lead_imported", { bulk: true, ...results });
+    emitToTenant(req.io, req.user.tenantId, "marketplace_lead_imported", { bulk: true, ...results });
     res.json(results);
   } catch (err) {
     console.error("[MarketplaceLeads] Bulk import error:", err);
@@ -324,7 +325,7 @@ router.post("/webhook/indiamart", async (req, res) => {
     }
 
     if (created > 0 && req.io) {
-      req.io.emit("marketplace_lead_new", { provider: "indiamart", count: created });
+      emitToTenant(req.io, 1, "marketplace_lead_new", { provider: "indiamart", count: created });
     }
 
     res.json({ success: true, created });
@@ -367,7 +368,7 @@ router.post("/webhook/justdial", async (req, res) => {
     }
 
     if (created > 0 && req.io) {
-      req.io.emit("marketplace_lead_new", { provider: "justdial", count: created });
+      emitToTenant(req.io, 1, "marketplace_lead_new", { provider: "justdial", count: created });
     }
 
     res.json({ success: true, created });
@@ -410,7 +411,7 @@ router.post("/webhook/tradeindia", async (req, res) => {
     }
 
     if (created > 0 && req.io) {
-      req.io.emit("marketplace_lead_new", { provider: "tradeindia", count: created });
+      emitToTenant(req.io, 1, "marketplace_lead_new", { provider: "tradeindia", count: created });
     }
 
     res.json({ success: true, created });

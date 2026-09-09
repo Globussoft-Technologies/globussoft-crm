@@ -4,6 +4,7 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: false });
 require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true });
 const prisma = require("./prisma");
+const { emitToUser } = require("./socketRooms");
 const { sendSms, resolveProviderConfig } = require("../services/smsProvider");
 // Shared vocabulary (triggers / actions / operators / mutable entities) and the
 // implementations for the actions added in the parity wave. Neither module
@@ -918,7 +919,7 @@ async function runSingleAction(rule, actionType, config, payload, tenantId, io, 
           type: "info",
         },
       });
-      if (io) io.emit("notification_new", { userId });
+      emitToUser(io, tenantId, userId, "notification_new", { userId });
       executionDetails = { notification: { userId } };
       break;
     }

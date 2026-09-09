@@ -12,7 +12,7 @@ import {
 } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
-import { io } from "socket.io-client";
+import { createAuthenticatedSocket } from "../utils/socket";
 import {
   Users,
   LayoutDashboard,
@@ -410,7 +410,7 @@ const Sidebar = ({
     // NotificationBell. Failures are silent so the polling fallback owns
     // correctness. (v3.7.16: socket events are now debounced to reduce
     // re-renders from rapid bulk imports).
-    const socket = io("/", { reconnection: false, timeout: 5000 });
+    const socket = createAuthenticatedSocket("/", { reconnection: false, timeout: 5000 });
     socket.on("connect_error", () => { });
     socket.on("error", () => { });
     socket.on("marketplace_lead_imported", () =>
@@ -2890,7 +2890,6 @@ const badgeStyle = {
 };
 
 export default Sidebar;
-
 
 
 

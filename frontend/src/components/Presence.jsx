@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { io } from 'socket.io-client';
+import { createAuthenticatedSocket } from '../utils/socket';
 import { AuthContext } from '../App';
 
 let socket;
@@ -12,7 +12,7 @@ export default function Presence() {
     if (!user) return;
     
     // Connect to global WS multiplex
-    socket = io('/', {
+    socket = createAuthenticatedSocket('/', {
       reconnection: false, // prevent spamming reconnect errors
       timeout: 5000,
     });

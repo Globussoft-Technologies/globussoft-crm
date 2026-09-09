@@ -1,6 +1,7 @@
 const cronRegistry = require("../lib/cronRegistry");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
+const { emitToTenant } = require("../lib/socketRooms");
 
 function addInterval(date, frequency) {
   const d = new Date(date);
@@ -36,6 +37,7 @@ async function processRecurringInvoices(io) {
     });
 
     let created = 0;
+    const createdByTenant = new Map();
     for (const inv of due) {
       let generated = [];
       try {
@@ -96,6 +98,8 @@ async function processRecurringInvoices(io) {
         if (generated.length > 0) {
           console.log(`[RecurringInvoice] Generated ${generated.length} invoice(s) from ${inv.invoiceNum} for ${inv.contact?.name}: ${generated.join(", ")}`);
           created += generated.length;
+          const tenantId = inv.tenantId || 1;
+          createdByTenant.set(tenantId, (createdByTenant.get(tenantId) || 0) + generated.length);
         }
       } catch (err) {
         console.error(`[RecurringInvoice] Failed for invoice ${inv.id}:`, err.message);
@@ -104,7 +108,9 @@ async function processRecurringInvoices(io) {
 
     if (created > 0) {
       console.log(`[RecurringInvoice] Created ${created} invoices`);
-      if (io) io.emit("invoice_created", { count: created });
+      for (const [tenantId, count] of createdByTenant) {
+        emitToTenant(io, tenantId, "invoice_created", { count });
+      }
     }
   } catch (err) {
     console.error("[RecurringInvoice] Engine error:", err.message);

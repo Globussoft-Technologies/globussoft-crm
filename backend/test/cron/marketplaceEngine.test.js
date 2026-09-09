@@ -122,7 +122,7 @@ function fakeResponse({ ok = true, status = 200, body = {} } = {}) {
 // The post-214017c1 engine is tenant-scoped: syncMarketplace(tenantId, provider, io)
 // and the MarketplaceConfig lookup/update keys on the composite unique
 // { tenantId_provider: { tenantId, provider } }. Tests pass this fixed tenant.
-const TENANT = 'tenant-A';
+const TENANT = 7;
 
 describe('cron/marketplaceEngine — config gating', () => {
   test('inactive config → { skipped: true, reason }', async () => {
@@ -291,11 +291,13 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
     fetchMock.mockResolvedValue(
       fakeResponse({ body: [{ UNIQUE_QUERY_ID: 'IM-emit' }] })
     );
-    const ioMock = { emit: vi.fn() };
+    const emit = vi.fn();
+    const ioMock = { to: vi.fn(() => ({ emit })) };
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', ioMock);
     logSpy.mockRestore();
-    expect(ioMock.emit).toHaveBeenCalledWith('marketplace_lead_new', {
+    expect(ioMock.to).toHaveBeenCalledWith(`tenant:${TENANT}`);
+    expect(emit).toHaveBeenCalledWith('marketplace_lead_new', {
       provider: 'indiamart',
       count: 1,
     });
@@ -309,11 +311,11 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
       lastSyncAt: null,
     });
     fetchMock.mockResolvedValue(fakeResponse({ body: [] }));
-    const ioMock = { emit: vi.fn() };
+    const ioMock = { to: vi.fn() };
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', ioMock);
     logSpy.mockRestore();
-    expect(ioMock.emit).not.toHaveBeenCalled();
+    expect(ioMock.to).not.toHaveBeenCalled();
   });
 
   test('lastSyncAt drives the start_time query param when present', async () => {

@@ -105,6 +105,10 @@ prisma.auditLog = {
 };
 prisma.emailMessage = { create: vi.fn() };
 prisma.activity = { create: vi.fn() };
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
+prisma.deal = prisma.deal || {};
+prisma.deal.findFirst = vi.fn();
 // $transaction: route hands a callback that returns { estimate, invoice }.
 // Run the callback against a tx-like surface that proxies to the patched
 // prisma. Real Prisma's transaction semantics aren't under test here; what
@@ -142,6 +146,8 @@ beforeEach(() => {
   prisma.auditLog.create.mockReset();
   prisma.emailMessage.create.mockReset();
   prisma.activity.create.mockReset();
+  prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 42 });
+  prisma.deal.findFirst.mockReset().mockResolvedValue({ id: 22 });
   // Sensible defaults — happy-path resolves.
   prisma.auditLog.findFirst.mockResolvedValue(null);
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
@@ -156,6 +162,25 @@ beforeEach(() => {
 // ─── POST / — Estimate creation (validation contract) ──────────────
 
 describe('POST /api/estimates — create estimate (#164 #174 #178 #199)', () => {
+  test('foreign-tenant contact reference → 404 and no estimate is written', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/estimates')
+      .send({
+        title: 'Unsafe estimate',
+        contactId: 999,
+        lineItems: [{ description: 'Consulting', quantity: 1, unitPrice: 100 }],
+      });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REFERENCE_NOT_FOUND');
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { id: 999, tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.estimate.create).not.toHaveBeenCalled();
+  });
+
   test('happy path: title + ≥1 lineItem + future validUntil → 201 with created row + audit', async () => {
     const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
     prisma.estimate.create.mockResolvedValue({

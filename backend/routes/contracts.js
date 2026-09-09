@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
+const { requireTenantReferences, sendTenantReferenceError } = require("../lib/tenantReferences");
 
 // GET /api/contracts — list with optional status filter
 // GET /api/contracts?fields=summary
@@ -200,6 +201,10 @@ router.post("/", async (req, res) => {
   try {
     const { title, status, startDate, endDate, value, terms, contactId, dealId } = req.body;
     if (!title) return res.status(400).json({ error: "title is required" });
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+      { key: "dealId", model: "deal", value: dealId, label: "Deal" },
+    ]);
 
     const contract = await prisma.contract.create({
       data: {
@@ -209,14 +214,15 @@ router.post("/", async (req, res) => {
         endDate: endDate ? new Date(endDate) : null,
         value: value ? parseFloat(value) : 0.0,
         terms: terms || null,
-        contactId: contactId ? parseInt(contactId) : null,
-        dealId: dealId ? parseInt(dealId) : null,
+        contactId: refs.contactId,
+        dealId: refs.dealId,
         tenantId: req.user.tenantId,
       },
       include: { contact: true, deal: true },
     });
     res.status(201).json(contract);
   } catch (err) {
+    if (sendTenantReferenceError(res, err)) return;
     console.error(err);
     res.status(500).json({ error: "Failed to create contract" });
   }
@@ -232,6 +238,10 @@ router.put("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Contract not found" });
 
     const { title, status, startDate, endDate, value, terms, contactId, dealId } = req.body;
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+      { key: "dealId", model: "deal", value: dealId, label: "Deal" },
+    ]);
     const data = {};
     if (title !== undefined) data.title = title;
     if (status !== undefined) data.status = status;
@@ -239,8 +249,8 @@ router.put("/:id", async (req, res) => {
     if (endDate !== undefined) data.endDate = endDate ? new Date(endDate) : null;
     if (value !== undefined) data.value = parseFloat(value);
     if (terms !== undefined) data.terms = terms;
-    if (contactId !== undefined) data.contactId = contactId ? parseInt(contactId) : null;
-    if (dealId !== undefined) data.dealId = dealId ? parseInt(dealId) : null;
+    if (contactId !== undefined) data.contactId = refs.contactId;
+    if (dealId !== undefined) data.dealId = refs.dealId;
 
     const contract = await prisma.contract.update({
       where: { id: existing.id },
@@ -249,6 +259,7 @@ router.put("/:id", async (req, res) => {
     });
     res.json(contract);
   } catch (err) {
+    if (sendTenantReferenceError(res, err)) return;
     console.error(err);
     res.status(500).json({ error: "Failed to update contract" });
   }

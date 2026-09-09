@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef, useContext, useCallback } from 'react';
 import { MessageSquare, Send, X, UserPlus, Star, User, Circle } from 'lucide-react';
-import { io } from 'socket.io-client';
+import { createAuthenticatedSocket } from '../utils/socket';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 
 export default function LiveChat() {
   const notify = useNotify();
-  const { user, tenant } = useContext(AuthContext);
+  const { tenant } = useContext(AuthContext);
   const tenantId = tenant?.id || 1;
 
   const [sessions, setSessions] = useState([]);
@@ -59,12 +59,8 @@ export default function LiveChat() {
   useEffect(() => {
     loadSessions();
 
-    const socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
+    const socket = createAuthenticatedSocket(window.location.origin, { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
-
-    socket.on('connect', () => {
-      socket.emit('join_room', `tenant-${tenantId}`);
-    });
 
     socket.on('chat_new_session', () => {
       loadSessions();
@@ -109,7 +105,7 @@ export default function LiveChat() {
       return;
     }
     if (socketRef.current) {
-      socketRef.current.emit('join_room', `chat-${activeId}`);
+      socketRef.current.emit('join_chat', activeId);
     }
     loadThread(activeId);
     setShowRating(false);

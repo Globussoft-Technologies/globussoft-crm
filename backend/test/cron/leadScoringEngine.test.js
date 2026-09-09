@@ -953,11 +953,13 @@ describe('tickLeadScoringEngine — orchestration', () => {
       contactWith({ id: 1 }),
       contactWith({ id: 2 }),
     ]);
-    const io = { emit: vi.fn() };
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) };
     await tickLeadScoringEngine(io);
 
-    expect(io.emit).toHaveBeenCalledTimes(1);
-    const [event, payload] = io.emit.mock.calls[0];
+    expect(io.to).toHaveBeenCalledWith('tenant:1');
+    expect(emit).toHaveBeenCalledTimes(1);
+    const [event, payload] = emit.mock.calls[0];
     expect(event).toBe('lead_scores_updated');
     expect(payload.count).toBe(2);
     expect(payload.ts).toBeInstanceOf(Date);
@@ -1009,10 +1011,12 @@ describe('scoreContactsByIds — on-demand sequential scoring', () => {
 
   test('emits lead_scores_updated when io is supplied', async () => {
     prisma.contact.findMany.mockResolvedValue([contactWith({ id: 7 })]);
-    const io = { emit: vi.fn() };
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) };
     await scoreContactsByIds(1, [7], io);
-    expect(io.emit).toHaveBeenCalledTimes(1);
-    const [event, payload] = io.emit.mock.calls[0];
+    expect(io.to).toHaveBeenCalledWith('tenant:1');
+    expect(emit).toHaveBeenCalledTimes(1);
+    const [event, payload] = emit.mock.calls[0];
     expect(event).toBe('lead_scores_updated');
     expect(payload.count).toBe(1);
   });
@@ -1166,11 +1170,13 @@ describe('tickLeadScoringEngine — engine-shape contracts (#421 fixes verified)
     prisma.contact.update
       .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error('row fail'));
-    const io = { emit: vi.fn() };
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) };
 
     await tickLeadScoringEngine(io);
 
-    expect(io.emit).toHaveBeenCalledWith(
+    expect(io.to).toHaveBeenCalledWith('tenant:1');
+    expect(emit).toHaveBeenCalledWith(
       'lead_scores_updated',
       expect.objectContaining({ count: 2 }),
     );
@@ -1406,4 +1412,3 @@ describe('#571 — non-uniform distribution across 100 synthetic contacts', () =
     expect(hot).toBeGreaterThanOrEqual(70);
   });
 });
-

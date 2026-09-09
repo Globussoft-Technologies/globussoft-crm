@@ -1,6 +1,7 @@
 const cronRegistry = require("../lib/cronRegistry");
 
 const prisma = require("../lib/prisma");
+const { emitToTenant } = require("../lib/socketRooms");
 
 /**
  * Sync leads from a specific marketplace provider API.
@@ -32,7 +33,7 @@ async function syncMarketplace(tenantId, provider, io) {
     });
 
     if (created > 0 && io) {
-      io.emit("marketplace_lead_new", { provider, count: created });
+      emitToTenant(io, tenantId, "marketplace_lead_new", { provider, count: created });
     }
 
     console.log(`[MarketplaceEngine] ${provider}: fetched=${fetched}, created=${created}, duplicates=${duplicates}`);

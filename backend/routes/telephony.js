@@ -10,6 +10,7 @@ const {
   maskConfigRow,
 } = require("../lib/credentialMasking");
 const { writeAudit } = require("../lib/audit");
+const { emitToTenant } = require("../lib/socketRooms");
 
 // #651 — third-party credentials on TelephonyConfig. GET masks; PUT requires
 // full fresh value; rotation stamps lastRotatedAt + emits audit row.
@@ -127,9 +128,9 @@ router.post("/webhook/myoperator", async (req, res) => {
 
     if (req.io) {
       if (direction === "INBOUND" && (status === "ringing" || status === "incoming")) {
-        req.io.emit("incoming_call", { callLog, contact });
+        emitToTenant(req.io, tenantId, "incoming_call", { callLog, contact });
       } else {
-        req.io.emit("call_status_update", { callLog });
+        emitToTenant(req.io, tenantId, "call_status_update", { callLog });
       }
     }
 
@@ -192,9 +193,9 @@ router.post("/webhook/knowlarity", async (req, res) => {
 
     if (req.io) {
       if (direction === "INBOUND" && (status === "ringing" || status === "incoming")) {
-        req.io.emit("incoming_call", { callLog, contact });
+        emitToTenant(req.io, tenantId, "incoming_call", { callLog, contact });
       } else {
-        req.io.emit("call_status_update", { callLog });
+        emitToTenant(req.io, tenantId, "call_status_update", { callLog });
       }
     }
 

@@ -2,6 +2,7 @@ const router = require("express").Router();
 const prisma = require("../lib/prisma");
 const { notify, notifyTenant, resolve } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
+const { emitToUser } = require("../lib/socketRooms");
 
 // GET / — list notifications (paginated) with optional filters
 router.get("/", async (req, res) => {
@@ -83,7 +84,7 @@ router.put("/read-all", async (req, res) => {
       where: { userId: req.user.userId, tenantId: req.user.tenantId, isRead: false },
       data: { isRead: true },
     });
-    if (req.io) req.io.emit("notifications_cleared", { userId: req.user.userId });
+    emitToUser(req.io, req.user.tenantId, req.user.userId, "notifications_cleared", { userId: req.user.userId });
     res.json({ status: "ok", code: "NOTIFICATIONS_MARKED_READ", updated: count }); // #550
   } catch (err) {
     console.error("[Notifications] Mark all read error:", err);
@@ -151,7 +152,7 @@ async function markAllReadHandler(req, res) {
       where: { userId: req.user.userId, tenantId: req.user.tenantId, isRead: false },
       data: { isRead: true },
     });
-    if (req.io) req.io.emit("notifications_cleared", { userId: req.user.userId });
+    emitToUser(req.io, req.user.tenantId, req.user.userId, "notifications_cleared", { userId: req.user.userId });
     res.json({ status: "ok", code: "NOTIFICATIONS_MARKED_READ", updated: count }); // #550
   } catch (err) {
     console.error("[Notifications] Mark all read error:", err);

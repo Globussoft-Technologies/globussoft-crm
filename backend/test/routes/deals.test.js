@@ -123,6 +123,12 @@ prisma.fieldPermission = {
 prisma.pipelineStage = {
   findMany: vi.fn().mockResolvedValue([]),
 };
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
+prisma.pipeline = prisma.pipeline || {};
+prisma.pipeline.findFirst = vi.fn();
+prisma.winLossReason = prisma.winLossReason || {};
+prisma.winLossReason.findFirst = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -153,6 +159,9 @@ beforeEach(() => {
   prisma.fieldPermission.findMany.mockResolvedValue([]);
   prisma.pipelineStage.findMany.mockReset();
   prisma.pipelineStage.findMany.mockResolvedValue([]);
+  prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 1 });
+  prisma.pipeline.findFirst.mockReset().mockResolvedValue({ id: 1 });
+  prisma.winLossReason.findFirst.mockReset().mockResolvedValue({ id: 42 });
   // Sensible defaults — happy-path resolves.
   prisma.auditLog.findFirst.mockResolvedValue(null);
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
@@ -294,6 +303,18 @@ describe('GET /api/deals/:id — fetch one (#188)', () => {
 // ─── POST / — create deal (validation contract) ─────────────────────
 
 describe('POST /api/deals — create (#162 #168 #173 validation)', () => {
+  test('returns 404 instead of linking a contact from another tenant', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp({ tenantId: 5 }))
+      .post('/api/deals')
+      .send({ title: 'Tenant-safe deal', contactId: 91 });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Contact not found', code: 'REFERENCE_NOT_FOUND' });
+    expect(prisma.deal.create).not.toHaveBeenCalled();
+  });
+
   test('happy path: defaults currency from tenant, stage→lead, probability→50', async () => {
     prisma.deal.create.mockResolvedValue({
       id: 11, title: 'New Deal', amount: 250, probability: 50,

@@ -10,6 +10,7 @@ const prisma = require("../lib/prisma");
 const { verifyRole } = require("../middleware/auth");
 const { hasModuleAction } = require("../middleware/fieldFilter");
 const { emailSendLimiter } = require("../middleware/apiRateLimiters");
+const { emitToTenant } = require("../lib/socketRooms");
 
 // Compose-mail attachments: memory storage so the buffer can be base64'd
 // straight into the SendGrid payload without a disk round-trip. multer is a
@@ -425,7 +426,7 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
         }).catch(() => { });
       }
 
-      if (req.io) req.io.emit('email_sent', emailRecord);
+      emitToTenant(req.io, req.user.tenantId, 'email_sent', emailRecord);
 
       results.push({
         to: recipient,
@@ -528,7 +529,7 @@ router.post("/log-call", async (req, res) => {
       }
     });
 
-    if (req.io) req.io.emit('call_logged', callLog);
+    emitToTenant(req.io, req.user.tenantId, 'call_logged', callLog);
     res.status(201).json(callLog);
   } catch (_err) {
     res.status(500).json({ error: "Logging phone interaction failed" });
@@ -549,7 +550,7 @@ router.get("/track/:trackingId/open.gif", async (req, res) => {
     const track = await prisma.emailTracking.findUnique({ where: { trackingId: req.params.trackingId } });
     if (track) {
       // Emit real-time notification
-      if (req.io) req.io.emit("email_opened", { emailId: track.emailId, trackingId: track.trackingId });
+      emitToTenant(req.io, track.tenantId, "email_opened", { emailId: track.emailId, trackingId: track.trackingId });
     }
   } catch (_err) { /* silent — don't break tracking pixel */ }
 
@@ -566,7 +567,8 @@ router.get("/track/:trackingId/click", async (req, res) => {
       where: { trackingId: req.params.trackingId },
       data: { clickedAt: new Date(), type: "click", url: url || null },
     });
-    if (req.io) req.io.emit("email_clicked", { trackingId: req.params.trackingId, url });
+    const track = await prisma.emailTracking.findUnique({ where: { trackingId: req.params.trackingId } });
+    if (track) emitToTenant(req.io, track.tenantId, "email_clicked", { trackingId: req.params.trackingId, url });
   } catch (_err) { /* silent */ }
   res.redirect(req.query.url || "/");
 });

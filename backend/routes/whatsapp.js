@@ -33,6 +33,7 @@
 // (DPDP / TRAI compliance).
 
 const express = require("express");
+const { emitToTenant } = require("../lib/socketRooms");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
@@ -274,7 +275,7 @@ router.post("/send", verifyToken, whatsappSendLimiter, async (req, res) => {
     }
 
     if (req.io) {
-      req.io.emit("whatsapp:queued", {
+      emitToTenant(req.io, req.user.tenantId, "whatsapp:queued", {
         messageId: message.id,
         to,
         threadId: thread?.id || null,
@@ -2596,7 +2597,7 @@ async function _legacyPostWebhookDeadCode(req, res) {
           }
 
           if (req.io) {
-            req.io.emit("whatsapp:received", {
+            emitToTenant(req.io, tenantId, "whatsapp:received", {
               from,
               body,
               mediaType,
@@ -2640,8 +2641,13 @@ async function _legacyPostWebhookDeadCode(req, res) {
                 JSON.stringify(status.errors || status),
               );
             }
-            await prisma.whatsAppMessage.updateMany({
+            const existingMessage = await prisma.whatsAppMessage.findFirst({
               where: { providerMsgId: status.id },
+              select: { id: true, tenantId: true },
+            });
+            if (!existingMessage) continue;
+            await prisma.whatsAppMessage.update({
+              where: { id: existingMessage.id },
               data: {
                 status: newStatus,
                 ...(newStatus === "READ" && { read: true }),
@@ -2652,7 +2658,7 @@ async function _legacyPostWebhookDeadCode(req, res) {
             });
 
             if (req.io) {
-              req.io.emit("whatsapp:status", {
+              emitToTenant(req.io, existingMessage.tenantId, "whatsapp:status", {
                 providerMsgId: status.id,
                 status: newStatus,
                 recipientId: status.recipient_id,

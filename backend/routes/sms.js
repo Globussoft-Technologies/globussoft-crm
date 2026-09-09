@@ -10,6 +10,7 @@ const {
   maskConfigRow,
 } = require("../lib/credentialMasking");
 const { writeAudit } = require("../lib/audit");
+const { emitToTenant } = require("../lib/socketRooms");
 
 // #651 — fields on SmsConfig that hold third-party credentials. The GET
 // /config endpoint masks these to `{ configured, last4 }`; PUT /config
@@ -86,7 +87,7 @@ router.post("/send", verifyToken, smsSendLimiter, async (req, res) => {
 
     // Emit socket event
     if (req.io) {
-      req.io.emit("sms:sent", { messageId: message.id, to: normalizedTo, status: result.success ? "SENT" : "FAILED" });
+      emitToTenant(req.io, req.user.tenantId, "sms:sent", { messageId: message.id, to: normalizedTo, status: result.success ? "SENT" : "FAILED" });
     }
 
     if (result.success) {
@@ -233,7 +234,7 @@ router.post("/send-bulk", verifyToken, smsSendLimiter, async (req, res) => {
       });
 
       if (req.io) {
-        req.io.emit("sms:sent", {
+        emitToTenant(req.io, req.user.tenantId, "sms:sent", {
           messageId: message.id,
           to: normalized,
           status: sendResult.success ? "SENT" : "FAILED",
@@ -812,7 +813,7 @@ router.post("/webhook/:provider", webhookLimiter, async (req, res) => {
         });
 
         if (req.io) {
-          req.io.emit("sms:received", { from: From, body: Body, contactId: contact?.id });
+          emitToTenant(req.io, tenantId, "sms:received", { from: From, body: Body, contactId: contact?.id });
         }
       } else if (MessageSid && status) {
         const statusMap = {

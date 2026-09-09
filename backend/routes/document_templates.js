@@ -3,6 +3,7 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
+const { emitToTenant } = require("../lib/socketRooms");
 
 const router = express.Router();
 
@@ -440,7 +441,7 @@ router.post("/:id/send-email", async (req, res) => {
       }).catch(() => {});
     }
 
-    if (req.io) req.io.emit("email_sent", emailRecord);
+    emitToTenant(req.io, req.user.tenantId, "email_sent", emailRecord);
 
     res.json({
       success: true,

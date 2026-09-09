@@ -35,6 +35,7 @@
 const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { decryptCredential } = require("../lib/credentialMasking");
+const { emitToTenant } = require("../lib/socketRooms");
 const { sendText, sendTemplate } = require("../services/whatsappProvider");
 
 // Socket.io reference for broadcasting sent/failed events. Set via
@@ -350,7 +351,7 @@ async function finishJob(job, outcome) {
       }),
     ]);
     if (socketIo) {
-      socketIo.emit("whatsapp:sent", {
+      emitToTenant(socketIo, job.tenantId, "whatsapp:sent", {
         messageId: job.messageId,
         providerMsgId: outcome.providerMsgId || null,
         status: "SENT",
@@ -398,7 +399,7 @@ async function finishJob(job, outcome) {
       }),
     ]);
     if (socketIo) {
-      socketIo.emit("whatsapp:sent", {
+      emitToTenant(socketIo, job.tenantId, "whatsapp:sent", {
         messageId: job.messageId,
         status: "FAILED",
         error: outcome.error || "send failed",

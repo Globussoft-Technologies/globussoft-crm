@@ -12,6 +12,8 @@ const { formatMoney } = require("../utils/formatMoney");
 const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
 const { canonicaliseChannel, CHANNEL_ALIASES } = require("../lib/intakePayloadValidators");
 const { getSubBrandAccessSet } = require("../middleware/travelGuards");
+const { emitToTenant } = require("../lib/socketRooms");
+const { requireTenantReferences, sendTenantReferenceError } = require("../lib/tenantReferences");
 
 const router = express.Router();
 
@@ -367,6 +369,11 @@ router.post("/", async (req, res) => {
     // #162: validate amount, probability, stage so bad inputs return 400.
     const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: false });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+      { key: "pipelineId", model: "pipeline", value: pipelineId, label: "Pipeline" },
+      { key: "winLossReasonId", model: "winLossReason", value: winLossReasonId, label: "Win/loss reason" },
+    ]);
 
     const data = {
       title,
@@ -376,8 +383,8 @@ router.post("/", async (req, res) => {
       ownerId: req.user.userId,
       tenantId: req.user.tenantId,
     };
-    if (contactId) data.contactId = parseInt(contactId);
-    if (pipelineId) data.pipelineId = parseInt(pipelineId);
+    if (refs.contactId) data.contactId = refs.contactId;
+    if (refs.pipelineId) data.pipelineId = refs.pipelineId;
     if (expectedClose) data.expectedClose = new Date(expectedClose);
     if (subBrand) data.subBrand = String(subBrand);
     // #977: POST was previously dropping lostReason / winLossReasonId on the
@@ -386,7 +393,7 @@ router.post("/", async (req, res) => {
     // GET /api/win-loss/analysis byReason then silently omitted the row.
     // Mirror PUT's thread-through (line 357-358) so create + update agree.
     if (lostReason !== undefined) data.lostReason = lostReason;
-    if (winLossReasonId !== undefined) data.winLossReasonId = parseInt(winLossReasonId);
+    if (winLossReasonId !== undefined) data.winLossReasonId = refs.winLossReasonId;
     if (currency) {
       data.currency = currency;
     } else {
@@ -414,9 +421,10 @@ router.post("/", async (req, res) => {
     await audit("CREATE", deal.id, req.user.userId, req.user.tenantId, { title: deal.title, amount: deal.amount, stage: deal.stage });
     try { require("../lib/eventBus").emitEvent("deal.created", { dealId: deal.id, title: deal.title, amount: deal.amount, stage: deal.stage, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    emitToTenant(req.io, req.user.tenantId, "deal_updated", deal);
     res.status(201).json(deal);
   } catch (error) {
+    if (sendTenantReferenceError(res, error)) return;
     console.error("[deals] create error:", error.message);
     // #165: surface Prisma validation errors as 400, not 500.
     const mapped = httpFromPrismaError(error);
@@ -440,6 +448,11 @@ router.put("/:id", async (req, res) => {
     // amount / out-of-range probability / unknown stage.
     const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+      { key: "pipelineId", model: "pipeline", value: pipelineId, label: "Pipeline" },
+      { key: "winLossReasonId", model: "winLossReason", value: winLossReasonId, label: "Win/loss reason" },
+    ]);
 
     // #173: terminal-stage state machine. Once a deal is `won` or
     // `lost`, the stage is closed — re-opening or flipping to the
@@ -463,12 +476,12 @@ router.put("/:id", async (req, res) => {
     if (amount !== undefined) data.amount = parseFloat(amount);
     if (probability !== undefined) data.probability = parseInt(probability);
     if (stage !== undefined) data.stage = stage;
-    if (contactId !== undefined) data.contactId = contactId ? parseInt(contactId) : null;
-    if (pipelineId !== undefined) data.pipelineId = pipelineId ? parseInt(pipelineId) : null;
+    if (contactId !== undefined) data.contactId = refs.contactId;
+    if (pipelineId !== undefined) data.pipelineId = refs.pipelineId;
     if (expectedClose !== undefined) data.expectedClose = expectedClose ? new Date(expectedClose) : null;
     if (currency !== undefined) data.currency = currency;
     if (lostReason !== undefined) data.lostReason = lostReason;
-    if (winLossReasonId !== undefined) data.winLossReasonId = parseInt(winLossReasonId);
+    if (winLossReasonId !== undefined) data.winLossReasonId = refs.winLossReasonId;
     if (subBrand !== undefined) data.subBrand = subBrand ? String(subBrand) : null;
 
     // Track stage transition
@@ -546,9 +559,10 @@ router.put("/:id", async (req, res) => {
       }
     } catch (_) { /* event bus failures must not break the update */ }
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    emitToTenant(req.io, req.user.tenantId, "deal_updated", deal);
     res.json(deal);
   } catch (error) {
+    if (sendTenantReferenceError(res, error)) return;
     console.error("[deals] update error:", error.message);
     // #168 #165: bad amount / probability that slipped past the validator
     // (e.g. a Prisma decimal-overflow) returns 400, not 500.
@@ -624,7 +638,7 @@ router.put("/:id/stage", async (req, res) => {
       }
     }
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    emitToTenant(req.io, req.user.tenantId, "deal_updated", deal);
     res.json(deal);
   } catch (error) {
     console.error("[deals] stage-update error:", error.message);
@@ -666,7 +680,7 @@ router.post("/:id/won", async (req, res) => {
     await audit("UPDATE", deal.id, req.user.userId, req.user.tenantId, { action: "won", from: existing.stage });
     try { await require("../lib/eventBus").emitEvent("deal.won", { dealId: deal.id, title: deal.title, amount: deal.amount, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    emitToTenant(req.io, req.user.tenantId, "deal_updated", deal);
     res.json(deal);
   } catch (error) {
     console.error("[deals] mark-won error:", error.message);
@@ -682,10 +696,13 @@ router.post("/:id/lost", async (req, res) => {
       where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
     });
     if (!existing) return res.status(404).json({ error: "Deal not found" });
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "winLossReasonId", model: "winLossReason", value: winLossReasonId, label: "Win/loss reason" },
+    ]);
 
     const data = { stage: "lost", probability: 0 };
     if (lostReason) data.lostReason = lostReason;
-    if (winLossReasonId) data.winLossReasonId = parseInt(winLossReasonId);
+    if (winLossReasonId) data.winLossReasonId = refs.winLossReasonId;
 
     const deal = await prisma.deal.update({
       where: { id: existing.id },
@@ -710,9 +727,10 @@ router.post("/:id/lost", async (req, res) => {
     await audit("UPDATE", deal.id, req.user.userId, req.user.tenantId, { action: "lost", from: existing.stage, lostReason });
     try { require("../lib/eventBus").emitEvent("deal.lost", { dealId: deal.id, title: deal.title, amount: deal.amount, lostReason, contactId: deal.contactId, userId: req.user.userId }, req.user.tenantId, req.io); } catch(_e) {}
 
-    if (req.io) req.io.emit("deal_updated", deal);
+    emitToTenant(req.io, req.user.tenantId, "deal_updated", deal);
     res.json(deal);
   } catch (error) {
+    if (sendTenantReferenceError(res, error)) return;
     console.error("[deals] mark-lost error:", error.message);
     res.status(500).json({ error: "Failed to mark deal as lost" });
   }
@@ -738,7 +756,7 @@ router.delete("/:id", verifyRole(["ADMIN"]), async (req, res) => {
       data: { deletedAt: new Date() },
     });
 
-    if (req.io) req.io.emit("deal_deleted", existing.id);
+    emitToTenant(req.io, req.user.tenantId, "deal_deleted", existing.id);
     res.json({ ...deal, success: true, softDeleted: true });
   } catch (error) {
     console.error("[deals] delete error:", error.message);
@@ -762,7 +780,7 @@ router.post("/:id/restore", verifyRole(["ADMIN"]), async (req, res) => {
       data: { deletedAt: null },
       include: { contact: true, owner: true },
     });
-    if (req.io) req.io.emit("deal_updated", deal);
+    emitToTenant(req.io, req.user.tenantId, "deal_updated", deal);
     res.json({ ...deal, restored: true });
   } catch (error) {
     console.error("[deals] restore error:", error.message);

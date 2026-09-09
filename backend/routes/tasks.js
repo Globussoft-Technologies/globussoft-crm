@@ -10,6 +10,7 @@ const { summarizeMessages } = require("../lib/leadConversationSummary");
 const { notify, notifyMany } = require("../lib/notificationService");
 const { sendEmail } = require("../lib/emailSender");
 const { toE164 } = require("../utils/deduplication");
+const { requireTenantReferences, sendTenantReferenceError } = require("../lib/tenantReferences");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 
@@ -558,6 +559,10 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
     const normalizedStatus = normalizeTaskStatusForTenant(req.body.status, travelTenant);
     const inputErr = validateTaskInput({ ...req.body, status: normalizedStatus }, { travelTenant });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+      { key: "userId", model: "user", value: assigneeRaw, label: "Assignee" },
+    ]);
 
     const task = await prisma.task.create({
       data: {
@@ -568,10 +573,8 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
         // the IST parser so the wall-clock the user typed survives storage.
         // Full ISO timestamps stay on the native ctor.
         dueDate: dueDate ? parseTenantDateInput(dueDate) : null,
-        contactId: contactId ? parseInt(contactId) : null,
-        userId: assigneeRaw !== undefined && assigneeRaw !== null && assigneeRaw !== ""
-          ? parseInt(assigneeRaw)
-          : null,
+        contactId: refs.contactId,
+        userId: refs.userId,
         notes: notes || null,
         // Lead Reports cluster — nullable when omitted, so the pre-existing
         // create shape is byte-for-byte unchanged for callers that don't send
@@ -606,6 +609,7 @@ router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, r
     }
     res.status(201).json(notificationResults ? { ...task, notificationResults } : task);
   } catch (err) {
+    if (sendTenantReferenceError(res, err)) return;
     console.error("[tasks] create failed:", err);
     res.status(500).json({
       error: "Failed to create Task",
@@ -630,6 +634,9 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const { title, notes, dueDate, priority, status, targetUserId, type, outcome } = req.body;
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "userId", model: "user", value: targetUserId, label: "Assignee" },
+    ]);
     const data = {};
     if (title !== undefined) data.title = title;
     if (notes !== undefined) data.notes = notes;
@@ -642,7 +649,7 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
     if (type !== undefined) data.type = type || null;
     if (outcome !== undefined) data.outcome = outcome || null;
     if (targetUserId !== undefined) {
-      data.userId = targetUserId !== null && targetUserId !== "" ? parseInt(targetUserId) : null;
+      data.userId = refs.userId;
     }
 
     // gap #17: capture prior status BEFORE the update so task.completed can be
@@ -699,6 +706,7 @@ router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req
 
     res.json(notificationResults ? { ...task, notificationResults } : task);
   } catch (err) {
+    if (sendTenantReferenceError(res, err)) return;
     console.error(err);
     res.status(500).json({ error: "Failed to update Task" });
   }
@@ -829,5 +837,4 @@ router.post("/:id/restore", verifyToken, requirePermission("tasks", "delete"), a
 });
 
 module.exports = router;
-
 

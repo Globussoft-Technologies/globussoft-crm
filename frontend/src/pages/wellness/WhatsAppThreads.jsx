@@ -14,7 +14,7 @@
 // are tenant-agnostic — adding a generic /whatsapp link later is one line.
 
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { io as socketIO } from 'socket.io-client';
+import { createAuthenticatedSocket } from '../../utils/socket';
 import { AuthContext } from '../../App';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -415,16 +415,14 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
 
     // socket.io-client defaults to same-origin when no URL is passed —
     // works for both local dev (Vite proxy) and prod (same domain).
-    const socket = socketIO({
+    const socket = createAuthenticatedSocket('/', {
       // withCredentials lets cookie-based session info travel if used;
       // harmless if absent. Path defaults to /socket.io.
       withCredentials: true,
       transports: ['websocket', 'polling'],
     });
 
-    const joinRoom = () => socket.emit('join_room', `tenant:${tenantId}`);
-    socket.on('connect', joinRoom);
-    // Reconnects re-fire `connect` -> room is re-joined automatically.
+    // The server derives and joins the tenant room from the authenticated JWT.
 
     socket.on('whatsapp:received', (payload) => {
       if (!payload || payload.tenantId !== tenantId) return;
@@ -523,7 +521,6 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
     });
 
     return () => {
-      socket.off('connect', joinRoom);
       socket.off('whatsapp:received');
       socket.off('whatsapp:status');
       socket.disconnect();

@@ -5,6 +5,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { sendSms } = require("../services/smsProvider");
 const { computeFirstResponseDueAt } = require("../lib/leadSla");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
+const { emitToTenant } = require("../lib/socketRooms");
 // v3.4.11: sanitization adopted from the v3.4.10 audit. Campaign.name is
 // rendered in the marketing admin UI cards; Campaign.scheduleFilters is
 // a JSON blob (String? @db.Text) re-rendered in the scheduled-campaigns
@@ -345,7 +346,7 @@ async function sendCampaign(campaign, io) {
 
   // Socket event
   if (io) {
-    io.emit("campaign_sent", { campaignId: campaign.id, sent: sentCount, failed: failedCount });
+    emitToTenant(io, tenantId, "campaign_sent", { campaignId: campaign.id, sent: sentCount, failed: failedCount });
   }
 
   console.log(`[CampaignEngine] Sent campaign "${campaign.name}" to ${sentCount} recipients (${failedCount} failed)`);
@@ -831,7 +832,7 @@ router.post("/submit", async (req, res) => {
 
     // Broadcast to real-time clients!
     if (req.io) {
-      req.io.emit('deal_updated', deal);
+      emitToTenant(req.io, deal.tenantId, 'deal_updated', deal);
     }
 
     res.status(201).json({ success: true, message: "Submission captured successfully in CRM Pipeline." });

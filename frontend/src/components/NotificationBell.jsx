@@ -7,7 +7,7 @@ import React, {
 } from "react";
 import { Bell, Check, CheckCheck, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { io } from "socket.io-client";
+import { createAuthenticatedSocket } from "../utils/socket";
 import { fetchApi } from "../utils/api";
 import { AuthContext } from "../App";
 
@@ -114,7 +114,7 @@ const NotificationBell = () => {
 
     if (!user) return;
 
-    const socket = io("/", { reconnection: false, timeout: 5000 });
+    const socket = createAuthenticatedSocket("/", { reconnection: false, timeout: 5000 });
     socket.on("connect_error", () => {
       /* nginx may not proxy socket.io — silent */
     });

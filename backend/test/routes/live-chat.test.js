@@ -229,10 +229,10 @@ describe('POST /visitor/start — visitor opens a chat session', () => {
       }),
     });
 
-    // Socket.io emitted to tenant-7 room with chat_new_session event.
+    // Socket.io emitted to the authenticated tenant room.
     const emits = app.locals.emitCalls;
     expect(emits).toContainEqual(
-      expect.objectContaining({ room: 'tenant-7', event: 'chat_new_session' })
+      expect.objectContaining({ room: 'tenant:7', event: 'chat_new_session' })
     );
   });
 });
@@ -309,8 +309,8 @@ describe('POST /visitor/:sessionId/message — visitor sends a message', () => {
     });
     // Emits to BOTH the tenant room AND the chat-specific room.
     const rooms = app.locals.emitCalls.map((c) => c.room);
-    expect(rooms).toContain('tenant-7');
-    expect(rooms).toContain('chat-50');
+    expect(rooms).toContain('tenant:7');
+    expect(rooms).toContain('chat:50');
   });
 });
 

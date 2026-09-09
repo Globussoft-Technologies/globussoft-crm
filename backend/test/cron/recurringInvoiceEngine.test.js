@@ -172,7 +172,7 @@ describe('cron/recurringInvoiceEngine — cadence math + side-effects', () => {
 
   test('empty due list — no creates, no updates, no audit, no socket emit', async () => {
     prisma.invoice.findMany.mockResolvedValue([]);
-    const io = { emit: vi.fn() };
+    const io = { to: vi.fn() };
 
     await processRecurringInvoices(io);
 
@@ -180,7 +180,7 @@ describe('cron/recurringInvoiceEngine — cadence math + side-effects', () => {
     expect(prisma.invoice.update).not.toHaveBeenCalled();
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
     // `if (created > 0)` guards the emit — empty list must NOT fire it.
-    expect(io.emit).not.toHaveBeenCalled();
+    expect(io.to).not.toHaveBeenCalled();
   });
 
   // Post-214017c1 the transaction body runs a CATCH-UP while-loop: it mints
@@ -276,12 +276,14 @@ describe('cron/recurringInvoiceEngine — cadence math + side-effects', () => {
       dueRow({ id: 2, invoiceNum: 'INV-B', nextRecurDate: recentPast() }),
       dueRow({ id: 3, invoiceNum: 'INV-C', nextRecurDate: recentPast() }),
     ]);
-    const io = { emit: vi.fn() };
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) };
 
     await processRecurringInvoices(io);
 
-    expect(io.emit).toHaveBeenCalledTimes(1);
-    expect(io.emit).toHaveBeenCalledWith('invoice_created', { count: 3 });
+    expect(io.to).toHaveBeenCalledWith('tenant:2');
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('invoice_created', { count: 3 });
   });
 
   test('tenantId falls back to 1 when parent invoice has null tenantId (legacy seed data)', async () => {
@@ -330,11 +332,11 @@ describe('cron/recurringInvoiceEngine — cadence math + side-effects', () => {
     // outage during the initial findMany — engine returns silently
     // rather than crashing the cron host process.
     prisma.invoice.findMany.mockRejectedValue(new Error('connection refused'));
-    const io = { emit: vi.fn() };
+    const io = { to: vi.fn() };
 
     await expect(processRecurringInvoices(io)).resolves.not.toThrow();
     expect(prisma.invoice.create).not.toHaveBeenCalled();
     expect(prisma.invoice.update).not.toHaveBeenCalled();
-    expect(io.emit).not.toHaveBeenCalled();
+    expect(io.to).not.toHaveBeenCalled();
   });
 });

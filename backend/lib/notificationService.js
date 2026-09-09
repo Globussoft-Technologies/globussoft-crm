@@ -8,6 +8,7 @@
  */
 
 const prisma = require("./prisma");
+const { emitToUser } = require("./socketRooms");
 
 // Default preferences when no custom row exists
 const DEFAULT_PREFERENCES = {
@@ -214,8 +215,8 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
 
   // 2. Real-time socket
   if (activeChannels.includes("socket") && io) {
-    console.log(`[notificationService] Sending socket.io notification to user:${userId}`);
-    io.to(`user:${userId}`).emit("notification_new", {
+    console.log(`[notificationService] Sending socket.io notification to tenant:${tenantId}:user:${userId}`);
+    emitToUser(io, tenantId, userId, "notification_new", {
       id: notification.id,
       userId,
       title: notification.title,

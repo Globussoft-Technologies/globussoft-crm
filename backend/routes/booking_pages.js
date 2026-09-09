@@ -4,6 +4,7 @@ const fs = require("fs");
 const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
+const { emitToTenant } = require("../lib/socketRooms");
 
 const router = express.Router();
 
@@ -615,7 +616,7 @@ router.post("/public/:slug/book", async (req, res) => {
       },
     });
 
-    if (req.io) req.io.emit("booking_created", { bookingPageId: page.id, bookingId: booking.id });
+    emitToTenant(req.io, page.tenantId, "booking_created", { bookingPageId: page.id, bookingId: booking.id });
 
     res.status(201).json({
       success: true,

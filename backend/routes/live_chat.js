@@ -1,5 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const { emitToTenant, chatRoom } = require("../lib/socketRooms");
 
 const router = express.Router();
 
@@ -50,7 +51,7 @@ router.post("/visitor/start", async (req, res) => {
 
     // Notify all agents in this tenant of the new session
     if (req.io) {
-      req.io.to(`tenant-${tid}`).emit("chat_new_session", { session });
+      emitToTenant(req.io, tid, "chat_new_session", { session });
     }
 
     res.json({ sessionId: session.id, session });
@@ -81,8 +82,8 @@ router.post("/visitor/:sessionId/message", async (req, res) => {
     });
 
     if (req.io) {
-      req.io.to(`tenant-${session.tenantId}`).emit("chat_message", { sessionId, message });
-      req.io.to(`chat-${sessionId}`).emit("chat_message", { sessionId, message });
+      emitToTenant(req.io, session.tenantId, "chat_message", { sessionId, message });
+      req.io.to(chatRoom(sessionId)).emit("chat_message", { sessionId, message });
     }
 
     res.json({ success: true, message });
@@ -127,8 +128,8 @@ router.post("/visitor/:sessionId/rate", async (req, res) => {
     });
 
     if (req.io) {
-      req.io.to(`tenant-${session.tenantId}`).emit("chat_closed", { sessionId, session: updated });
-      req.io.to(`chat-${sessionId}`).emit("chat_closed", { sessionId, session: updated });
+      emitToTenant(req.io, session.tenantId, "chat_closed", { sessionId, session: updated });
+      req.io.to(chatRoom(sessionId)).emit("chat_closed", { sessionId, session: updated });
     }
 
     res.json({ success: true, session: updated });
@@ -270,8 +271,8 @@ router.post("/:id/assign", async (req, res) => {
     });
 
     if (req.io) {
-      req.io.to(`tenant-${session.tenantId}`).emit("chat_assigned", { sessionId: id, session: updated });
-      req.io.to(`chat-${id}`).emit("chat_assigned", { sessionId: id, session: updated });
+      emitToTenant(req.io, session.tenantId, "chat_assigned", { sessionId: id, session: updated });
+      req.io.to(chatRoom(id)).emit("chat_assigned", { sessionId: id, session: updated });
     }
 
     res.json({ success: true, session: updated });
@@ -304,8 +305,8 @@ router.post("/:id/messages", async (req, res) => {
     });
 
     if (req.io) {
-      req.io.to(`chat-${id}`).emit("chat_message", { sessionId: id, message });
-      req.io.to(`tenant-${req.user.tenantId}`).emit("chat_message", { sessionId: id, message });
+      req.io.to(chatRoom(id)).emit("chat_message", { sessionId: id, message });
+      emitToTenant(req.io, req.user.tenantId, "chat_message", { sessionId: id, message });
     }
 
     res.json({ success: true, message });
@@ -344,8 +345,8 @@ router.post("/:id/close", async (req, res) => {
     });
 
     if (req.io) {
-      req.io.to(`tenant-${req.user.tenantId}`).emit("chat_closed", { sessionId: id, session: updated });
-      req.io.to(`chat-${id}`).emit("chat_closed", { sessionId: id, session: updated });
+      emitToTenant(req.io, req.user.tenantId, "chat_closed", { sessionId: id, session: updated });
+      req.io.to(chatRoom(id)).emit("chat_closed", { sessionId: id, session: updated });
     }
 
     res.json({ success: true, session: updated });

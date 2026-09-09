@@ -234,10 +234,12 @@ describe('cron/dealInsightsEngine — socket.io emit', () => {
     prisma.deal.findMany
       .mockResolvedValueOnce([{ tenantId: 1 }])
       .mockResolvedValueOnce([overdueDealFixture(10, 1)]);
-    const io = { emit: vi.fn() };
+    const emit = vi.fn();
+    const io = { to: vi.fn(() => ({ emit })) };
     await tickDealInsightsEngine(io);
-    expect(io.emit).toHaveBeenCalledTimes(1);
-    expect(io.emit).toHaveBeenCalledWith('deal_insights_updated', expect.objectContaining({
+    expect(io.to).toHaveBeenCalledWith('tenant:1');
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('deal_insights_updated', expect.objectContaining({
       scanned: 1,
       created: expect.any(Number),
       ts: expect.any(Date),
@@ -256,16 +258,17 @@ describe('cron/dealInsightsEngine — socket.io emit', () => {
     await expect(tickDealInsightsEngine(undefined)).resolves.toBeDefined();
   });
 
-  test('emit happens AFTER all tenants have been processed (not per-tenant)', async () => {
+  test('emits isolated updates to each tenant room', async () => {
     prisma.deal.findMany
       .mockResolvedValueOnce([{ tenantId: 1 }, { tenantId: 2 }])
       .mockResolvedValueOnce([overdueDealFixture(10, 1)])
       .mockResolvedValueOnce([overdueDealFixture(20, 2)]);
-    const io = { emit: vi.fn() };
+    const emitsByRoom = new Map();
+    const io = { to: vi.fn((room) => ({ emit: (...args) => emitsByRoom.set(room, args) })) };
     await tickDealInsightsEngine(io);
-    expect(io.emit).toHaveBeenCalledTimes(1);
-    const payload = io.emit.mock.calls[0][1];
-    // Both tenants' scanned counts are aggregated into the single emit.
-    expect(payload.scanned).toBe(2);
+    expect(io.to).toHaveBeenCalledWith('tenant:1');
+    expect(io.to).toHaveBeenCalledWith('tenant:2');
+    expect(emitsByRoom.get('tenant:1')[1].scanned).toBe(1);
+    expect(emitsByRoom.get('tenant:2')[1].scanned).toBe(1);
   });
 });

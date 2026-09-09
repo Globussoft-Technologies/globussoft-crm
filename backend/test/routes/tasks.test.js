@@ -114,6 +114,10 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 // The route checks the tenant vertical before handling each request.
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: "generic" });
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findFirst = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -169,6 +173,8 @@ beforeEach(() => {
   prisma.task.delete.mockReset();
   prisma.auditLog.create.mockReset().mockResolvedValue({});
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: "generic" });
+  prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 1 });
+  prisma.user.findFirst.mockReset().mockResolvedValue({ id: 42 });
   emitEventMock.mockReset();
 });
 
@@ -404,6 +410,19 @@ describe('GET /?fields=summary — slim-shape opt-in (#920 slice 4)', () => {
 // ── POST / — create with validation, assignee fallback, audit ────────
 
 describe('POST / — create', () => {
+  test('returns 404 when targetUserId belongs to another tenant', async () => {
+    prisma.user.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/tasks')
+      .set('Authorization', makeBearer({ tenantId: 1 }))
+      .send({ title: 'Do not cross tenants', targetUserId: 404 });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Assignee not found', code: 'REFERENCE_NOT_FOUND' });
+    expect(prisma.task.create).not.toHaveBeenCalled();
+  });
+
   test('rejects missing title with 400', async () => {
     const res = await request(makeApp())
       .post('/api/tasks')

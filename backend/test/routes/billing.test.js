@@ -102,6 +102,10 @@ prisma.auditLog = {
 prisma.fieldPermission = {
   findMany: vi.fn().mockResolvedValue([]),
 };
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
+prisma.deal = prisma.deal || {};
+prisma.deal.findFirst = vi.fn();
 // TMC instalment reconciliation path — stubs so the tmc-instalment
 // confirm-payment block doesn't throw when kind='tmc-instalment' is set.
 prisma.tripInstalmentPayment = prisma.tripInstalmentPayment || {};
@@ -154,6 +158,8 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset();
   prisma.auditLog.findFirst.mockReset();
   prisma.auditLog.create.mockReset();
+  prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 42 });
+  prisma.deal.findFirst.mockReset().mockResolvedValue({ id: 22 });
   prisma.fieldPermission.findMany.mockReset();
   prisma.fieldPermission.findMany.mockResolvedValue([]);
   prisma.tripInstalmentPayment.findFirst.mockReset().mockResolvedValue(null);
@@ -354,6 +360,19 @@ describe('POST /api/billing/public/confirm-payment - payment-link statuses', () 
 // ─── POST / — Invoice creation (validation contract) ───────────────
 
 describe('POST /api/billing — create invoice (#158 #177 #198)', () => {
+  test('returns 404 when contactId does not belong to the caller tenant', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    const futureDate = new Date(Date.now() + 86400000).toISOString();
+
+    const res = await request(makeApp({ tenantId: 8 }))
+      .post('/api/billing')
+      .send({ amount: 250, dueDate: futureDate, contactId: 42 });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REFERENCE_NOT_FOUND');
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+  });
+
   test('happy path: amount + dueDate + contactId → 201 with created row', async () => {
     const futureDate = new Date(Date.now() + 7 * 86400000).toISOString();
     prisma.invoice.create.mockResolvedValue({

@@ -566,15 +566,17 @@ app.all("/ws/callified-agent", (_req, res) => {
   });
 });
 
-const io = new Server(server, { cors: { origin: "*" } });
-const presenceColors = [
-  "#ef4444",
-  "#3b82f6",
-  "#10b981",
-  "#f59e0b",
-  "#8b5cf6",
-  "#ec4899",
-];
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith("chrome-extension://")) {
+        return callback(null, true);
+      }
+      return callback(new Error("Origin not allowed"));
+    },
+    credentials: true,
+  },
+});
 
 // Set global io reference for eventBus notifications
 const { setIO } = require("./lib/eventBus");
@@ -599,36 +601,12 @@ try {
 // webhook mount) so the WhatsApp webhook handler can use it. No need
 // to re-attach here — left as a comment marker only.
 
+const { authenticateSocket, attachAuthenticatedSocket } = require("./lib/socketAuth");
+io.use(authenticateSocket);
+
 io.on("connection", (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);
-
-  socket.on("join_presence", (data) => {
-    socket.userData = {
-      id: socket.id,
-      name: data.name,
-      color: presenceColors[Math.floor(Math.random() * presenceColors.length)],
-    };
-  });
-
-  socket.on("mouse_move", (data) => {
-    if (!socket.userData) return;
-    socket.broadcast.emit("cursor_update", {
-      id: socket.id,
-      rx: data.rx,
-      ry: data.ry,
-      name: socket.userData.name,
-      color: socket.userData.color,
-    });
-  });
-
-  socket.on("join_room", (room) => {
-    socket.join(room);
-  });
-
-  socket.on("disconnect", () => {
-    console.log(`[Socket] Client disconnected: ${socket.id}`);
-    io.emit("user_left", socket.id);
-  });
+  attachAuthenticatedSocket(socket);
 });
 
 // Import Enterprise Routes
@@ -2669,4 +2647,3 @@ if (require("fs").existsSync(FRONTEND_DIST)) {
 }
 
 // nodemon restart trigger
-

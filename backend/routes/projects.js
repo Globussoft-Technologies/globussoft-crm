@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { requireTenantReferences, sendTenantReferenceError } = require("../lib/tenantReferences");
 
 // GET /api/projects — list with optional status filter
 //
@@ -202,6 +203,10 @@ router.post("/", async (req, res) => {
   try {
     const { name, description, priority, startDate, endDate, budget, contactId, dealId } = req.body;
     if (!name) return res.status(400).json({ error: "name is required" });
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+      { key: "dealId", model: "deal", value: dealId, label: "Deal" },
+    ]);
 
     const project = await prisma.project.create({
       data: {
@@ -212,14 +217,15 @@ router.post("/", async (req, res) => {
         endDate: endDate ? new Date(endDate) : null,
         budget: budget ? parseFloat(budget) : 0,
         ownerId: req.user.userId,
-        contactId: contactId ? parseInt(contactId) : null,
-        dealId: dealId ? parseInt(dealId) : null,
+        contactId: refs.contactId,
+        dealId: refs.dealId,
         tenantId: req.user.tenantId,
       },
       include: { owner: true, contact: true, deal: true, tasks: true },
     });
     res.status(201).json(project);
   } catch (err) {
+    if (sendTenantReferenceError(res, err)) return;
     console.error(err);
     res.status(500).json({ error: "Failed to create project" });
   }
@@ -235,6 +241,10 @@ router.put("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Project not found" });
 
     const { name, description, status, priority, startDate, endDate, budget, contactId, dealId } = req.body;
+    const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+      { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+      { key: "dealId", model: "deal", value: dealId, label: "Deal" },
+    ]);
     const data = {};
     if (name !== undefined) data.name = name;
     if (description !== undefined) data.description = description;
@@ -243,8 +253,8 @@ router.put("/:id", async (req, res) => {
     if (startDate !== undefined) data.startDate = startDate ? new Date(startDate) : null;
     if (endDate !== undefined) data.endDate = endDate ? new Date(endDate) : null;
     if (budget !== undefined) data.budget = parseFloat(budget);
-    if (contactId !== undefined) data.contactId = contactId ? parseInt(contactId) : null;
-    if (dealId !== undefined) data.dealId = dealId ? parseInt(dealId) : null;
+    if (contactId !== undefined) data.contactId = refs.contactId;
+    if (dealId !== undefined) data.dealId = refs.dealId;
 
     const project = await prisma.project.update({
       where: { id: existing.id },
@@ -253,6 +263,7 @@ router.put("/:id", async (req, res) => {
     });
     res.json(project);
   } catch (err) {
+    if (sendTenantReferenceError(res, err)) return;
     console.error(err);
     res.status(500).json({ error: "Failed to update project" });
   }

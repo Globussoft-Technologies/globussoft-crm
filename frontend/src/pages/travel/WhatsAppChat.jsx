@@ -29,7 +29,7 @@
 // (../wellness/whatsapp/*) — shared, unmodified.
 
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { io as socketIO } from 'socket.io-client';
+import { createAuthenticatedSocket } from '../../utils/socket';
 import { Link } from 'react-router-dom';
 import { AuthContext } from '../../App';
 import { fetchApi, getAuthToken } from '../../utils/api';
@@ -679,16 +679,14 @@ export default function TravelWhatsAppChat() {
 
     // socket.io-client defaults to same-origin when no URL is passed —
     // works for both local dev (Vite proxy) and prod (same domain).
-    const socket = socketIO({
+    const socket = createAuthenticatedSocket('/', {
       // withCredentials lets cookie-based session info travel if used;
       // harmless if absent. Path defaults to /socket.io.
       withCredentials: true,
       transports: ['websocket', 'polling'],
     });
 
-    const joinRoom = () => socket.emit('join_room', `tenant:${tenantId}`);
-    socket.on('connect', joinRoom);
-    // Reconnects re-fire `connect` → room is re-joined automatically.
+    // The server derives and joins the tenant room from the authenticated JWT.
 
     socket.on('whatsapp:received', (payload) => {
       if (!payload || payload.tenantId !== tenantId) return;
@@ -819,7 +817,6 @@ export default function TravelWhatsAppChat() {
     });
 
     return () => {
-      socket.off('connect', joinRoom);
       socket.off('whatsapp:received');
       socket.off('whatsapp:status');
       socket.off('whatsapp:qr');

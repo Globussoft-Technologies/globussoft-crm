@@ -84,6 +84,10 @@ prisma.contract = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
+prisma.deal = prisma.deal || {};
+prisma.deal.findFirst = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -110,6 +114,8 @@ beforeEach(() => {
   prisma.contract.create.mockReset();
   prisma.contract.update.mockReset();
   prisma.contract.delete.mockReset();
+  prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 11 });
+  prisma.deal.findFirst.mockReset().mockResolvedValue({ id: 22 });
 });
 
 // ─── GET / — list with optional status filter ──────────────────────
@@ -222,6 +228,22 @@ describe('GET /api/contracts/:id — fetch one', () => {
 // ─── POST / — create ───────────────────────────────────────────────
 
 describe('POST /api/contracts — create', () => {
+  test('foreign-tenant contact reference → 404 and no contract is written', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    const app = makeApp({ tenantId: 1 });
+    const res = await request(app).post('/api/contracts').send({
+      title: 'Unsafe contract',
+      contactId: 999,
+    });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REFERENCE_NOT_FOUND');
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { id: 999, tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.contract.create).not.toHaveBeenCalled();
+  });
+
   test('happy path: title + full payload → 201 + tenant stamped + dates/values coerced', async () => {
     prisma.contract.create.mockResolvedValue({
       id: 101,

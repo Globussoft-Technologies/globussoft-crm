@@ -12,6 +12,7 @@ const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { emitToTenant } = require("../lib/socketRooms");
 
 // Mailgun POSTs as application/x-www-form-urlencoded (and multipart for
 // attachments, but the forward action gives us form-encoded fields).
@@ -80,7 +81,7 @@ async function processInboundEmail(payload, io) {
 
   // 5. Real-time fanout.
   if (io) {
-    io.emit("email_received", {
+    emitToTenant(io, tenantId, "email_received", {
       emailId: emailMessage.id,
       contactId,
       tenantId,

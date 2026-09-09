@@ -9,6 +9,7 @@ const pdfRenderer = require("../services/pdfRenderer");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { requireTenantReferences, sendTenantReferenceError } = require("../lib/tenantReferences");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { formatMoney } = require("../utils/formatMoney");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
@@ -677,6 +678,10 @@ router.post(
           .status(400)
           .json({ error: "contactId is required", code: "CONTACT_REQUIRED" });
       }
+      const refs = await requireTenantReferences(prisma, req.user.tenantId, [
+        { key: "contactId", model: "contact", value: contactId, label: "Contact" },
+        { key: "dealId", model: "deal", value: dealId, label: "Deal" },
+      ]);
       const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 
       // Travel vertical — optional sub-brand tag (tmc | rfu | travelstall |
@@ -696,8 +701,8 @@ router.post(
         invoiceNum: invNum,
         amount: Math.round(amt * 100) / 100, // #198: store to-the-paise; reject was above
         dueDate: due,
-        contactId: parseInt(contactId),
-        dealId: dealId ? parseInt(dealId) : null,
+        contactId: refs.contactId,
+        dealId: refs.dealId,
         tenantId: req.user.tenantId,
       };
       let invoice;
@@ -754,6 +759,7 @@ router.post(
       } catch (_e) {}
       res.status(201).json(invoice);
     } catch (_err) {
+      if (sendTenantReferenceError(res, _err)) return;
       res
         .status(500)
         .json({ error: "Invoice compilation and issuance failed" });

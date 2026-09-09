@@ -10,14 +10,14 @@
 //   links shared between users open in the destination tab WITHOUT a
 //   re-login. The flag is sourced from the "Keep me signed in" checkbox on
 //   the Login form (default ON) and exclusively flows through setAuthToken
-//   in utils/api.js. Every other source file must still go through that
+//   in utils/authToken.js (re-exported by utils/api.js). Every other source file must still go through that
 //   helper — direct localStorage.setItem('token', ...) elsewhere is
 //   forbidden because it sidesteps the rememberMe UX and re-introduces the
 //   #343 silent-leak failure mode.
 //
 // What this suite still guards:
-//   1. Production source files OTHER than utils/api.js must never write the
-//      token to localStorage directly. utils/api.js is the canonical writer
+//   1. Production source files OTHER than utils/authToken.js must never write the
+//      token to localStorage directly. utils/authToken.js is the canonical writer
 //      and is allowed to mirror to localStorage when opt-in flag is set.
 //   2. setAuthToken's default behavior (no opts, or remember=false) leaves
 //      localStorage untouched (or scrubs any prior entry on explicit-false).
@@ -51,10 +51,10 @@ function listSourceFiles(dir) {
       // Skip co-located test/spec files just in case (.test.js next to a
       // module rather than under __tests__/).
       if (/\.(test|spec)\./.test(entry.name)) continue;
-      // utils/api.js is the canonical token-writer; it is allowed (and
+      // utils/authToken.js is the canonical token-writer; it is allowed (and
       // expected) to write to localStorage when setAuthToken's `remember`
       // flag is true. Every OTHER source file still must not.
-      if (full.endsWith(path.join('utils', 'api.js'))) continue;
+      if (full.endsWith(path.join('utils', 'authToken.js'))) continue;
       out.push(full);
     }
   }
@@ -88,7 +88,7 @@ describe('#343 — token must not live in localStorage (file-grep regression)', 
     expect(
       violations,
       `#343 regression: token must not be written to localStorage in production code.\n` +
-        `Use setAuthToken (utils/api.js) instead — that helper writes to the in-memory\n` +
+        `Use setAuthToken (utils/authToken.js, re-exported by utils/api.js) instead — that helper writes to the in-memory\n` +
         `holder + sessionStorage so a stolen disk image / persistent XSS doesn't grant\n` +
         `cross-tab session theft. Hits:\n  - ${violations.join('\n  - ')}`,
     ).toEqual([]);

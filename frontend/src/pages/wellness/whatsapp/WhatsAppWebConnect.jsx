@@ -10,7 +10,7 @@
 //   isAdmin   - gates Connect / Disconnect / Refresh / My-profile controls
 //   onChanged - called when the thread list should reload (connect/disconnect/import)
 import { useEffect, useRef, useState } from 'react';
-import { io as socketIO } from 'socket.io-client';
+import { createAuthenticatedSocket } from '../../../utils/socket';
 import { fetchApi, getAuthToken } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { ImageLightbox, openImage } from './ImageLightbox';
@@ -158,9 +158,7 @@ export default function WhatsAppWebConnect({ apiBase, tenantId, isAdmin, onChang
 
   useEffect(() => {
     if (!tenantId) return undefined;
-    const socket = socketIO({ withCredentials: true, transports: ['websocket', 'polling'] });
-    const join = () => socket.emit('join_room', `tenant:${tenantId}`);
-    socket.on('connect', join);
+    const socket = createAuthenticatedSocket('/', { withCredentials: true, transports: ['websocket', 'polling'] });
     socket.on('whatsapp:qr', (p) => {
       if (p && p.tenantId === tenantId && p.qr) setQrImage(p.qr);
     });
@@ -180,7 +178,6 @@ export default function WhatsAppWebConnect({ apiBase, tenantId, isAdmin, onChang
       if (p && p.tenantId === tenantId) reload();
     });
     return () => {
-      socket.off('connect', join);
       socket.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -681,4 +678,3 @@ export default function WhatsAppWebConnect({ apiBase, tenantId, isAdmin, onChang
     </div>
   );
 }
-

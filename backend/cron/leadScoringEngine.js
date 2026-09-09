@@ -1,5 +1,6 @@
 const cronRegistry = require('../lib/cronRegistry');
 const prisma = require("../lib/prisma");
+const { emitToTenant } = require("../lib/socketRooms");
 const aiGateway = require("../lib/aiGateway");
 
 /**
@@ -395,7 +396,7 @@ async function scoreContactsByIds(tenantId, contactIds, io) {
   console.log(`[LeadScoring] scoreContactsByIds: scored=${scored}, errors=${errors} for tenant=${tenantId}`);
 
   if (io && scored > 0) {
-    io.emit('lead_scores_updated', { count: scored, ts: new Date() });
+    emitToTenant(io, tenantId, 'lead_scores_updated', { count: scored, ts: new Date() });
   }
 
   return { scored, errors };
@@ -500,14 +501,10 @@ async function tickLeadScoringEngine(io) {
       }
 
       totalScored += contacts.length;
+      emitToTenant(io, t.id, 'lead_scores_updated', { count: contacts.length, ts: new Date() });
     }
 
     console.log(`[LeadScoring] Scored ${totalScored} contacts across ${tenants.length} tenants.`);
-
-    // Broadcast real-time update so connected UIs can refresh
-    if (io) {
-      io.emit('lead_scores_updated', { count: totalScored, ts: new Date() });
-    }
 
     return { scored: totalScored };
   } catch (err) {

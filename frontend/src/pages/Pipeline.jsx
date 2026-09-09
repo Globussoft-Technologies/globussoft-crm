@@ -4,7 +4,7 @@ import { Briefcase, Plus, Upload, Search, Filter, RefreshCw, Pencil, Trash2, X, 
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
-import { io } from 'socket.io-client';
+import { createAuthenticatedSocket } from '../utils/socket';
 import DealModal from '../components/DealModal';
 import { AuthContext } from '../App';
 import TopScrollSync from '../components/TopScrollSync';
@@ -176,7 +176,7 @@ const Pipeline = () => {
 
   useEffect(() => {
     load();
-    const socket = io('/', { reconnection: false, timeout: 5000 });
+    const socket = createAuthenticatedSocket('/', { reconnection: false, timeout: 5000 });
     socket.on('connect_error', () => {});
     socket.on('error', () => {});
     socket.on('deal_updated', (updated) => {

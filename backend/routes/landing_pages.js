@@ -11,6 +11,7 @@ const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
 
 const { renderPage } = require("../services/landingPageRenderer");
+const { emitToTenant } = require("../lib/socketRooms");
 const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE } = require("../lib/tenantPaymentGateway");
 const {
   applyLandingPagePaymentToTrip,
@@ -7675,7 +7676,7 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
 
 
 
-    if (req.io) req.io.emit("deal_updated", {});
+    emitToTenant(req.io, tenantId, "deal_updated", {});
 
 
 
@@ -8058,7 +8059,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
 
 
-    if (req.io) req.io.emit("deal_updated", {});
+    emitToTenant(req.io, tenantId, "deal_updated", {});
 
 
 

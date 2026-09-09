@@ -15,6 +15,8 @@ import {
   Navigate,
   Outlet,
   useParams,
+  useLocation,
+  useNavigate,
 } from "react-router-dom";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -31,6 +33,7 @@ import {
   getAuthToken,
   clearAuthToken,
   markAuthReady,
+  fetchApi,
 } from "./utils/api";
 
 import {
@@ -440,6 +443,35 @@ const TravelFlightOfferImageGenerator = lazy(
 );
 const TravelInvoicesAdmin = lazy(() => import("./pages/travel/InvoicesAdmin"));
 const TravelTally = lazy(() => import("./pages/travel/Tally"));
+const TallyHomePage = lazy(() => import("./pages/travel/tally/TallyHomePage"));
+const TallyExportPreviewPage = lazy(() => import("./pages/travel/tally/TallyExportPreviewPage"));
+const TallyCompanySetupPage = lazy(
+  () => import("./pages/travel/tally/TallyCompanySetupPage"),
+);
+const TravelTallyLedgerViewPage = lazy(
+  () => import("./pages/travel/tally/TravelTallyLedgerViewPage"),
+);
+const TallyLedgerPage = lazy(
+  () => import("./pages/travel/tally/TallyLedgerPage"),
+);
+const VoucherMasterSetupPage = lazy(
+  () => import("./pages/travel/tally/VoucherMasterSetupPage"),
+);
+const TallySyncQueuePage = lazy(() => import("./pages/travel/tally/TallySyncQueuePage"));
+const TallySyncHistoryPage = lazy(() => import("./pages/travel/tally/TallySyncHistoryPage"));
+const TallySyncErrorsPage = lazy(() => import("./pages/travel/tally/TallySyncErrorsPage"));
+const TallyVoucherTypesPage = lazy(() => import("./pages/travel/tally/TallyVoucherTypesPage"));
+const TallyLedgerGroupsPage = lazy(() => import("./pages/travel/tally/TallyLedgerGroupsPage"));
+const TallyCostCentresPage = lazy(() => import("./pages/travel/tally/TallyCostCentresPage"));
+const TallyMastersPage = lazy(() => import("./pages/travel/tally/TallyMastersPage"));
+const TallyPaymentAccountsPage = lazy(() => import("./pages/travel/tally/TallyPaymentAccountsPage"));
+const TallyTaxMastersPage = lazy(() => import("./pages/travel/tally/TallyTaxMastersPage"));
+const TallyExpenseMappingPage = lazy(() => import("./pages/travel/tally/TallyExpenseMappingPage"));
+const TallyPaymentMappingPage = lazy(() => import("./pages/travel/tally/TallyPaymentMappingPage"));
+const TallyTaxMappingPage = lazy(() => import("./pages/travel/tally/TallyTaxMappingPage"));
+const TallyVoucherMappingPage = lazy(() => import("./pages/travel/tally/TallyVoucherMappingPage"));
+const TallyPartyMappingPage = lazy(() => import("./pages/travel/tally/TallyPartyMappingPage"));
+const TallyServiceMappingPage = lazy(() => import("./pages/travel/tally/TallyServiceMappingPage"));
 // Arc 2 #901 slice 7 frontend consumer  cross-invoice payment-milestone
 // dashboard. Consumes /api/travel/payment-schedules/upcoming (backend commit
 // e4832fee). Operator surface for upcoming/overdue milestones across all
@@ -864,6 +896,66 @@ function TravelOnly({ children }) {
   if (tenant && tenant.vertical !== "travel") {
     return <Navigate to={landingFor(user, tenant)} replace />;
   }
+  return children;
+}
+
+// Tally is a travel-only accounting surface and must also honor the
+// tenant's dedicated RBAC grant on bookmarked/direct URLs.
+function TravelTallyOnly({ children }) {
+  return (
+    <TravelOnly>
+      <RoleGuard
+        requiredPermission={{ module: "tally", action: "read" }}
+        feature="Tally accounting"
+      >
+        <TallyCompanySetupGate>{children}</TallyCompanySetupGate>
+      </RoleGuard>
+    </TravelOnly>
+  );
+}
+
+function TallyCompanySetupGate({ children }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [state, setState] = useState({ loading: true, configured: false });
+  const isHome = location.pathname === "/travel/tally";
+  const isSetup = location.pathname === "/travel/tally/company-setup";
+
+  useEffect(() => {
+    if (isHome || isSetup) {
+      setState({ loading: false, configured: true });
+      return undefined;
+    }
+    let cancelled = false;
+    setState((current) => ({ ...current, loading: true }));
+    fetchApi("/api/travel/tally/master-details", { silent: true })
+      .then((data) => {
+        if (cancelled) return;
+        const details = data?.masterDetails || {};
+        setState({ loading: false, configured: Boolean(details.companyName && details.state && details.financialYear && details.financialYearTo && details.booksBeginningFrom) });
+      })
+      .catch(() => { if (!cancelled) setState({ loading: false, configured: false }); });
+    return () => { cancelled = true; };
+  }, [isHome, isSetup, location.pathname]);
+
+  if (isHome || isSetup) return children;
+  if (state.loading) return <main style={{ padding: 24 }}><p>Checking Company Setup…</p></main>;
+  if (!state.configured) return (
+    <main className="tally-setup-gate">
+      <section className="tally-setup-card" aria-labelledby="tally-setup-title">
+        <div className="tally-setup-icon" aria-hidden="true">₹</div>
+        <div className="tally-setup-content">
+          <span className="tally-setup-eyebrow">Tally workspace</span>
+          <h1 id="tally-setup-title">Company Setup Required</h1>
+          <p>Please save your Tally company details before opening this page.</p>
+          <button className="btn-primary tally-setup-action" type="button" onClick={() => navigate("/travel/tally/company-setup")}>
+            Open Company Setup
+            <span aria-hidden="true">→</span>
+          </button>
+        </div>
+      </section>
+    </main>
+  );
   return children;
 }
 
@@ -3373,7 +3465,72 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
-                      <Route path="travel/tally" element={<TravelOnly><TravelTally /></TravelOnly>} />
+                      <Route
+                        path="travel/tally/view/custom/:customLedgerId"
+                        element={
+                          <TravelTallyOnly>
+                            <TravelTallyLedgerViewPage />
+                          </TravelTallyOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/tally/view/:ledgerView"
+                        element={
+                          <TravelTallyOnly>
+                            <TravelTallyLedgerViewPage />
+                          </TravelTallyOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/tally/ledger"
+                        element={
+                          <TravelTallyOnly>
+                            <TallyLedgerPage />
+                          </TravelTallyOnly>
+                        }
+                      />
+                      <Route path="travel/tally/mappings" element={<TravelTallyOnly><TallyLedgerPage showMappingsOnly /></TravelTallyOnly>} />
+                      <Route
+                        path="travel/tally/settings"
+                        element={
+                          <TravelTallyOnly>
+                            <VoucherMasterSetupPage />
+                          </TravelTallyOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/tally/company-setup"
+                        element={
+                          <TravelTallyOnly>
+                            <TallyCompanySetupPage />
+                          </TravelTallyOnly>
+                        }
+                      />
+                      <Route path="travel/tally/sync-queue" element={<TravelTallyOnly><TallySyncQueuePage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/sync-history" element={<TravelTallyOnly><TallySyncHistoryPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/sync-errors" element={<TravelTallyOnly><TallySyncErrorsPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/masters/vouchers" element={<TravelTallyOnly><TallyVoucherTypesPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/masters/groups" element={<TravelTallyOnly><TallyLedgerGroupsPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/masters/cost-centres" element={<TravelTallyOnly><TallyCostCentresPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/masters" element={<TravelTallyOnly><TallyMastersPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/masters/payment-accounts" element={<TravelTallyOnly><TallyPaymentAccountsPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/masters/tax" element={<TravelTallyOnly><TallyTaxMastersPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/mapping/expense" element={<TravelTallyOnly><TallyExpenseMappingPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/mapping/party" element={<TravelTallyOnly><TallyPartyMappingPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/mapping/service" element={<TravelTallyOnly><TallyServiceMappingPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/mapping/payment" element={<TravelTallyOnly><TallyPaymentMappingPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/mapping/tax" element={<TravelTallyOnly><TallyTaxMappingPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/mapping/voucher" element={<TravelTallyOnly><TallyVoucherMappingPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/export" element={<TravelTallyOnly><TallyExportPreviewPage /></TravelTallyOnly>} />
+                      <Route path="travel/tally/export/:tripId" element={<TravelTallyOnly><TallyExportPreviewPage /></TravelTallyOnly>} />
+                      <Route
+                        path="travel/tally"
+                        element={
+                          <TravelTallyOnly>
+                            <TallyHomePage />
+                          </TravelTallyOnly>
+                        }
+                      />
                       {/* PRD_TRAVEL_BILLING G022 (FR-3.5.e)  supplier-payable batch
                   ops surface. Lists / approves / sends / settles batches +
                   bank-friendly CSV export. */}

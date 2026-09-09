@@ -26,7 +26,42 @@ function numericId(value) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-async function reconcileTripInstalmentPayment({ db = prisma, instalment, amountMajor, capturedAt = new Date() }) {
+async function syncTravelInvoiceStatusForParticipant({ db = prisma, tripId, participantId, tenantId = null, fallbackPaidAt = new Date() }) {
+  if (!db.travelInvoice?.findFirst || !db.travelInvoice?.update || !db.tripInstalmentPayment?.findMany) return null;
+  const numericTripId = numericId(tripId);
+  const numericParticipantId = numericId(participantId);
+  if (!numericTripId || !numericParticipantId) return null;
+
+  const invoiceWhere = { tripId: numericTripId, participantId: numericParticipantId };
+  if (tenantId != null) invoiceWhere.tenantId = Number(tenantId);
+  const invoice = await db.travelInvoice.findFirst({
+    where: invoiceWhere,
+    orderBy: { id: "desc" },
+    select: { id: true, totalAmount: true, status: true, paidAt: true },
+  });
+  if (!invoice) return null;
+
+  const instalments = await db.tripInstalmentPayment.findMany({
+    where: { tripId: numericTripId, participantId: numericParticipantId },
+    select: { paidAmount: true, paidAt: true },
+  });
+  const paidTotal = instalments.reduce((sum, row) => sum + (Number(row.paidAmount) || 0), 0);
+  const invoiceTotal = Number(invoice.totalAmount) || 0;
+  const fullyPaid = invoiceTotal > 0 && paidTotal >= invoiceTotal;
+  const nextStatus = fullyPaid ? "Paid" : paidTotal > 0 ? "Partial" : invoice.status;
+  const latestPaidAt = instalments
+    .map((row) => row.paidAt ? new Date(row.paidAt) : null)
+    .filter((date) => date && !Number.isNaN(date.getTime()))
+    .sort((a, b) => b.getTime() - a.getTime())[0] || fallbackPaidAt;
+  const nextPaidAt = fullyPaid ? latestPaidAt : null;
+  if (invoice.status === nextStatus && String(invoice.paidAt || "") === String(nextPaidAt || "")) return invoice;
+  return db.travelInvoice.update({
+    where: { id: invoice.id },
+    data: { status: nextStatus, paidAt: nextPaidAt },
+  });
+}
+
+async function reconcileTripInstalmentPayment({ db = prisma, instalment, amountMajor, capturedAt = new Date(), tenantId = null }) {
   if (!instalment) return null;
   const amount = Number(instalment.amount) || 0;
   const previousPaid = Number(instalment.paidAmount) || 0;
@@ -43,6 +78,14 @@ async function reconcileTripInstalmentPayment({ db = prisma, instalment, amountM
       data: { status, paidAmount, paidAt: capturedAt },
     });
   }
+
+  await syncTravelInvoiceStatusForParticipant({
+    db,
+    tripId: instalment.tripId,
+    participantId: instalment.participantId,
+    tenantId,
+    fallbackPaidAt: capturedAt,
+  });
 
   return updated;
 }
@@ -165,6 +208,7 @@ async function reconcileTripPaymentRecord({
       db,
       tripId,
       participantId,
+      paymentId: currentPayment.id,
       amountMajor: capturedAmount,
       mode: metadata.paymentMode === "complete" ? "complete" : "installment",
       installmentIndex: Number.isInteger(Number(metadata.installmentIndex))
@@ -200,5 +244,6 @@ module.exports = {
   isSuccessfulPayment,
   parseMetadata,
   reconcileTripInstalmentPayment,
+  syncTravelInvoiceStatusForParticipant,
   reconcileTripPaymentRecord,
 };

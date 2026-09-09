@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TripFinancialSummary from "./TripFinancialSummary";
 
 const TRIPS_LAST_LIST_URL_KEY = "travel.trips.lastListUrl";
 
@@ -294,6 +295,8 @@ function OverviewTab({ trip, onJump, notify }) {
           tone={trip.status}
         />
       </div>
+
+      <TripFinancialSummary trip={trip} />
 
       {/* Payment band — wider visualisation */}
       <SummaryBand
@@ -1085,7 +1088,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
         </div>
       )}
 
-      {Boolean(window.__SHOW_LEGACY_PARTICIPANT_LIST__) && <div style={{ ...listShell, borderRadius: 14, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)" }}>
+      <div style={{ ...listShell, borderRadius: 14, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)" }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border-color)", fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
           Participant list
         </div>
@@ -1174,7 +1177,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
             );
           })
         )}
-      </div>}
+      </div>
     </div>
   );
 }

@@ -93,6 +93,7 @@ const MANAGER_PERMISSIONS = [
   'pricing.write', 'pricing.update',
   'sightseeing.write', 'sightseeing.update',
   'payables.write', 'payables.update', 'payables.export',
+  'tally.read', 'tally.write', 'tally.update', 'tally.export',
   'cancellation_policies.write', 'cancellation_policies.update',
   'suppliers.read', 'suppliers.write', 'suppliers.update', 'suppliers.delete',
   'commission_profiles.write', 'commission_profiles.update',

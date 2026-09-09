@@ -33,6 +33,7 @@ const {
   buildAccountingXlsx,
   escapeXml,
   fmtTallyDate,
+  csvDate,
   money2,
   round2,
   csvEscape,
@@ -103,6 +104,11 @@ describe("fmtTallyDate", () => {
     expect(fmtTallyDate("not-a-date")).toBe("");
     expect(fmtTallyDate("")).toBe("");
   });
+  test("uses the UTC calendar date for ISO timestamps", () => {
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    expect(fmtTallyDate(timestamp)).toBe("20260101");
+    expect(csvDate(timestamp)).toBe("2026-01-01");
+  });
 });
 
 describe("money2", () => {
@@ -150,7 +156,7 @@ describe("buildTallyXml", () => {
   test("one invoice → 1 Sales voucher: number, YYYYMMDD date, party ledger", () => {
     const xml = buildTallyXml([makeInvoice()], { tenantName: "Travelstall" });
     expect((xml.match(/<TALLYMESSAGE>/g) || []).length).toBe(1);
-    expect(xml).toContain('<VOUCHER VCHTYPE="Sales" ACTION="Create">');
+    expect(xml).toContain('<VOUCHER DATE="10-Jun-2026" VCHTYPE="Sales" ACTION="Create">');
     expect(xml).toContain("<VOUCHERNUMBER>TINV-2026-0001</VOUCHERNUMBER>");
     expect(xml).toContain("<DATE>20260610</DATE>");
     expect(xml).toContain("<PARTYLEDGERNAME>Ravi Kumar</PARTYLEDGERNAME>");

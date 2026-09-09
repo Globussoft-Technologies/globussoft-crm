@@ -23,7 +23,6 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const { parseCsv, parseXlsxBuffer } = require("../lib/csvIO");
 const { extractText: extractPdfText } = require("../lib/pdfTextExtractor");
-const { runOcr } = require("../services/passportOcrClient");
 
 const router = express.Router();
 const upload = multer({
@@ -547,7 +546,7 @@ function textRowsByDescription(text, file) {
     .filter((row) => row.transactionDate && row.amount > 0);
 }
 
-// Generic text/OCR fallback for image statements and irregular PDF output.
+// Generic text fallback for irregular PDF output.
 function textRows(text, file) {
   const source = String(text || "").replace(/\r/g, "\n");
   const dates = [...source.matchAll(/\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b/g)];
@@ -649,7 +648,7 @@ router.post(
         name.endsWith(".pdf") ||
         req.file.mimetype === "application/pdf"
       ) {
-        extraction = "pdf-ocr";
+        extraction = "pdf-text";
         const extracted = await extractPdfText(req.file.buffer);
         const coordinateRows = parsePdfTableRows(extracted.pages, req.file);
         const textRows = textRowsByDescription(extracted.text, req.file);
@@ -681,11 +680,17 @@ router.post(
             ];
         }
       } else {
-        extraction = "image-ocr";
-        rows = textRows(
-          `${(await runOcr(req.file.buffer)).vizText || ""}`,
-          req.file,
-        );
+        // Bank-statement image OCR is intentionally disabled for now.
+        // extraction = "image-ocr";
+        // rows = textRows(
+        //   `${(await runOcr(req.file.buffer)).vizText || ""}`,
+        //   req.file,
+        // );
+        return res.status(422).json({
+          error:
+            "Image OCR for bank statements is temporarily disabled. Please upload a CSV, XLS/XLSX, or text-based PDF statement.",
+          code: "BANK_STATEMENT_OCR_DISABLED",
+        });
       }
       if (!rows.length)
         return res

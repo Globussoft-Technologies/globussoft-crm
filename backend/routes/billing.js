@@ -945,6 +945,7 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
       payment = await prisma.payment.create({
         data: {
           invoiceId: invoice.id,
+          contactId: invoice.contactId,
           amount: Number(invoice.amount),
           gateway: paymentMethod || "manual",
           gatewayId: transactionRef || null,

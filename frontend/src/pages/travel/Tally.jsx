@@ -1,32 +1,53 @@
 // Travel CRM — Tally accounting wizard and report preview.
 //
 // The page coordinates three stages:
-//   1. Master filters and company details.
-//   2. Backend-filtered ledger accounts, trip taxes, and reconciliation.
+//   1. Master company and accounting details.
+//   2. Ledger filters, backend-filtered accounts, trip taxes, and reconciliation.
 //   3. Report preview with bank transactions, trip profit/loss, and totals.
 //
 // Ledger values are fetched from existing Travel CRM records. User edits and
 // statement confirmations are kept in the wizard state and passed to the
 // report preview; this page does not create accounting records directly.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowRight,
-  Check,
   ChevronLeft,
-  Download,
   FileBarChart,
   IndianRupee,
   Landmark,
   Settings2,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { fetchApi } from "../../utils/api";
 import { formatMoney } from "../../utils/money";
-import ReconciliationQueue, { TripTaxTable } from "./ReconciliationQueue";
 import CompactRangeCalendar from "./CompactRangeCalendar";
+import ReconciliationQueue from "./ReconciliationQueue";
+import CommonLedgerView from "./tally/CommonLedgerView";
+import LedgerMapping from "./tally/LedgerMapping";
+import LedgerManager from "./tally/LedgerManager";
+import PurchaseLedgerView from "./tally/PurchaseLedgerView";
+import SalesLedgerView from "./tally/SalesLedgerView";
+import TallyExportActions from "./tally/TallyExportActions";
+import TallyMasterSection from "./tally/TallyMasterSection";
+import TallyPreviewSummary from "./tally/TallyPreviewSummary";
+import TallySetupReset from "./tally/TallySetupReset";
+import TripwiseLedgerView from "./tally/TripwiseLedgerView";
+import {
+  getInvoiceAmount,
+  getTripLedgerRows,
+  getTripTaxTotals,
+} from "./tally/tallyMath";
+import { useTravelTallyLedgerMappings } from "./tally/useTravelTallyLedgerMappings";
+import { useTravelTallyLedgers } from "./tally/useTravelTallyLedgers";
+import { useTravelTallyMaster } from "./tally/useTravelTallyMaster";
+import { useTravelTallyVoucherSetup } from "./tally/useTravelTallyVoucherSetup";
+import { loadTallyState, saveTallyState } from "./tally/tallyStorage";
+
+const statementItemsStorageKey = "travel-tally-statement-items";
+const tripTaxesStorageKey = "travel-tally-trip-taxes";
 
 const brands = [
-  ["", "Select sub-brand"],
+  ["all", "All sub-brands"],
   ["tmc", "TMC (schools)"],
   ["rfu", "RFU (Umrah)"],
   ["travelstall", "Travel Stall"],
@@ -60,38 +81,21 @@ const label = {
 const isBankStatementRow = (row) =>
   String(row?.reference || "").startsWith("STATEMENT-DEBIT-") ||
   /bank statement debit/i.test(String(row?.category || ""));
-const getCustomerTripValue = (row) =>
-  Number(row?.amount || 0);
+const getCustomerTripValue = (row) => getInvoiceAmount(row || {});
+const formatLedgerDate = (value) => {
+  if (!value) return "No due date";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "No due date"
+    : date.toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+};
 let activeTcsUpdater = null;
 let activeGstUpdater = null;
 let activeSupplierGstUpdater = null;
-
-function Field({
-  title,
-  value,
-  onChange,
-  placeholder,
-  type = "text",
-  required = false,
-  min,
-  max,
-}) {
-  return (
-    <label style={label}>
-      {title}
-      {required ? " *" : ""}
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        min={min}
-        max={max}
-        style={input}
-      />
-    </label>
-  );
-}
 
 function DetailCard({
   title,
@@ -99,13 +103,14 @@ function DetailCard({
   rows,
   empty,
   customer,
+  payable,
   onTcsChange,
   onGstChange,
 }) {
   const showGst = false;
   const showTcs = false;
   const columns =
-    customer
+    customer || payable
       ? "minmax(0, 1fr) 96px 96px"
       : showGst && showTcs
         ? "minmax(0, 1fr) 96px 86px 86px"
@@ -152,16 +157,17 @@ function DetailCard({
                     background: "var(--modal-bg, #ffffff)",
                   }}
                 >
-                  <span>Contact</span>
+                  <span>{payable ? "Supplier" : "Contact"}</span>
                   <span>{customer ? "Received" : "Amount"}</span>
                   {customer && <span>Remaining</span>}
+                  {payable && <span>Due / Status</span>}
                   {showGst && <span>GST</span>}
                   {showTcs && <span>TCS</span>}
                 </div>
               }
               {rows.map((row) => (
                 <div
-                  key={row.reference}
+                  key={row.id || row.reference}
                   style={{
                     display: "grid",
                     gridTemplateColumns: columns,
@@ -183,13 +189,23 @@ function DetailCard({
                     >
                       {row.reference}
                       {row.email ? ` - ${row.email}` : ""}
+                      {row.description ? ` - ${row.description}` : ""}
                       {row.category ? ` - ${row.category}` : ""}
+                      {row.paymentReference
+                        ? ` - Payment: ${row.paymentReference}`
+                        : ""}
+                      {row.tripName && row.tripName !== "Unassigned"
+                        ? ` - Trip: ${row.tripName}`
+                        : ""}
                     </small>
                   </span>
                   <strong style={{ whiteSpace: "nowrap" }}>
                     {Number(row.amount || 0) !== 0
                       ? formatMoney(row.amount, {
-                          currency: customer ? row.currency || "INR" : "INR",
+                          currency:
+                            customer || payable
+                              ? row.currency || "INR"
+                              : "INR",
                         })
                       : "-"}
                   </strong>
@@ -201,6 +217,30 @@ function DetailCard({
                           })
                         : "-"}
                     </strong>
+                  )}
+                  {payable && (
+                    <span style={{ minWidth: 0 }}>
+                      <strong style={{ display: "block", whiteSpace: "nowrap" }}>
+                        {row.status === "paid"
+                          ? row.paidAt
+                            ? `Paid ${formatLedgerDate(row.paidAt)}`
+                            : "Paid date unavailable"
+                          : formatLedgerDate(row.dueDate)}
+                      </strong>
+                      <small
+                        style={{
+                          color:
+                            row.status === "paid"
+                              ? "#10b981"
+                              : row.status === "scheduled"
+                                ? "#3b82f6"
+                                : "#f59e0b",
+                          textTransform: "capitalize",
+                        }}
+                      >
+                        {row.status || "pending"}
+                      </small>
+                    </span>
                   )}
                   {showGst && (
                     <input
@@ -265,48 +305,110 @@ function DetailCard({
   );
 }
 
-export default function Tally() {
+export default function Tally({ initialStep = 0 }) {
   // Wizard state is intentionally local so users can review and edit the
   // ledger before moving to the final report step.
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(initialStep);
   const [error, setError] = useState("");
-  const [master, setMaster] = useState({
-    companyName: "",
-    mailingName: "",
-    gstin: "",
-    pan: "",
-    state: "",
-    address: "",
-    subBrand: "",
-    tripId: "",
-    from: "",
-    to: "",
-  });
+  const [saveMessage, setSaveMessage] = useState("");
+  const masterState = useTravelTallyMaster();
+  const { master, updateMaster, validateMasterStep, saveMaster } = masterState;
   const [gst, setGst] = useState("");
   const [customFields, setCustomFields] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [paymentDetails, setPaymentDetails] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
+  const [payables, setPayables] = useState([]);
   const [trips, setTrips] = useState([]);
-  const [tripTaxes, setTripTaxes] = useState({});
-  const [statementItems, setStatementItems] = useState([]);
+  const [quoteTrips, setQuoteTrips] = useState([]);
+  const [quotes, setQuotes] = useState([]);
+  const [tripTaxes, setTripTaxes] = useState(() =>
+    loadTallyState(tripTaxesStorageKey, {}),
+  );
+  const [statementItems, setStatementItems] = useState(() =>
+    loadTallyState(statementItemsStorageKey, []),
+  );
   const [tripSummary, setTripSummary] = useState(null);
+  const [quoteSummary, setQuoteSummary] = useState(null);
   const requiresTcs = false;
   const [loading, setLoading] = useState(false);
-  const loadedLedgerFilters = useRef("");
+  const navigate = useNavigate();
 
-  // Update one Master field while preserving the rest of the filter state.
-  const updateMaster = (key) => (value) =>
-    setMaster((current) => ({
-      ...current,
-      [key]: value,
-      ...(key === "from" ? { to: "" } : {}),
-      ...(key === "subBrand" ? { tripId: "" } : {}),
-    }));
+  useEffect(() => {
+    saveTallyState(statementItemsStorageKey, statementItems);
+  }, [statementItems]);
+
+  useEffect(() => {
+    saveTallyState(tripTaxesStorageKey, tripTaxes);
+  }, [tripTaxes]);
+
+  const selectedSubBrand = master.subBrand === "all" ? "" : master.subBrand;
+  const selectedSubBrandLabel =
+    brands.find(([value]) => value === master.subBrand)?.[1] ||
+    "All sub-brands";
+  const usesQuoteAccounting = Boolean(selectedSubBrand && selectedSubBrand !== "tmc");
+  // Keep quote-backed records in the same trip collection used by the whole
+  // wizard. They have no itinerary ID, so they use the stable quote-* key.
+  const ledgerTrips = useMemo(() => [...trips, ...quoteTrips], [trips, quoteTrips]);
+  const ledgerState = useTravelTallyLedgers({
+    accounts,
+    masterSubBrand: master.subBrand,
+    statementItems,
+    trips: ledgerTrips,
+    customers,
+    paymentDetails,
+    suppliers,
+    payables,
+    tripTaxes,
+    setError,
+  });
+  const ledgerMappingState = useTravelTallyLedgerMappings();
+  const voucherSetupState = useTravelTallyVoucherSetup();
+
+  const handleViewLedger = (ledger) => {
+    const ledgerType = String(ledger?.type || ledger?.name || "").toLowerCase();
+    const ledgerView = ledgerType.includes("sale")
+      ? "sales"
+      : ledgerType.includes("purchase")
+        ? "purchase"
+        : ledgerType.includes("gst") || ledgerType.includes("tcs")
+          ? "taxes"
+      : ledgerType.includes("bank")
+        ? "bank"
+        : ledgerType.includes("cash")
+          ? "cash"
+        : ledgerType.includes("expense")
+            ? "common"
+            : "tripwise";
+    const params = new URLSearchParams();
+    // A custom ledger must retain its identity even when its accounting type
+    // is PURCHASE/SALES. Otherwise it opens the built-in account view and
+    // displays every row in that account instead of the custom subset.
+    if (ledger?.custom) {
+      const databaseId = ledger.databaseId || String(ledger.id || "").replace(/^db-/, "");
+      if (/^\d+$/.test(String(databaseId))) {
+        params.set("ledgerName", ledger.name || "");
+        navigate(`/travel/tally/view/custom/${databaseId}?${params}`);
+        return;
+      }
+    }
+    // Custom expense ledgers are category-specific. Pass the database ledger
+    // id so the ledger view can resolve its EXPENSE mapping and filter rows.
+    if (ledgerView === "common" && ledger?.custom) {
+      const databaseId = ledger.databaseId || String(ledger.id || "").replace(/^db-/, "");
+      if (/^\d+$/.test(String(databaseId))) {
+        navigate(`/travel/tally/view/custom/${databaseId}`);
+        return;
+      }
+      if (ledger.name) params.set("ledgerName", ledger.name);
+    }
+    navigate(`/travel/tally/view/${ledgerView}${params.toString() ? `?${params}` : ""}`);
+  };
 
   // Load available trips whenever the selected sub-brand changes.
   useEffect(() => {
-    if (!master.subBrand) {
+    if (master.subBrand !== "all" && !master.subBrand) {
       setTrips([]);
       return undefined;
     }
@@ -314,8 +416,8 @@ export default function Tally() {
     const params = new URLSearchParams({
       fields: "summary",
       limit: "200",
-      subBrand: master.subBrand,
     });
+    if (selectedSubBrand) params.set("subBrand", selectedSubBrand);
     if (master.from) params.set("from", master.from);
     if (master.to) params.set("to", master.to);
     fetchApi(`/api/travel/itineraries?${params}`)
@@ -328,14 +430,35 @@ export default function Tally() {
     return () => {
       cancelled = true;
     };
-  }, [master.subBrand, master.from, master.to]);
+  }, [master.subBrand, selectedSubBrand, master.from, master.to]);
+
+  useEffect(() => {
+    if (!usesQuoteAccounting) {
+      setQuotes([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const params = new URLSearchParams({
+      subBrand: selectedSubBrand,
+      fields: "summary",
+      limit: "500",
+    });
+    fetchApi(`/api/travel/quotes?${params}`)
+      .then((data) => {
+        if (!cancelled) setQuotes(Array.isArray(data?.quotes) ? data.quotes : []);
+      })
+      .catch(() => {
+        if (!cancelled) setQuotes([]);
+      });
+    return () => { cancelled = true; };
+  }, [selectedSubBrand, usesQuoteAccounting]);
 
   // Load backend ledger accounts and customer/supplier details for the
   // selected sub-brand, date range, and optional trip.
   useEffect(() => {
     setTripTaxes((current) => {
       const next = {};
-      trips.forEach((trip) => {
+      ledgerTrips.forEach((trip) => {
         const id = String(trip.id);
         const existing = current[id] || {};
         const backendRows = customers.filter(
@@ -351,48 +474,69 @@ export default function Tally() {
           gstRate:
             existing.gstRate !== "" && existing.gstRate != null
               ? existing.gstRate
-              : (backendGstRate ?? ""),
+              : (backendGstRate ?? 0),
           tcsRate:
             existing.tcsRate !== "" && existing.tcsRate != null
               ? existing.tcsRate
-              : (backendTcsRate ?? ""),
+              : (backendTcsRate ?? 0),
         };
       });
       return next;
     });
-  }, [trips, customers]);
+  }, [ledgerTrips, customers]);
 
   // Seed editable trip-tax inputs from backend GST/TCS values without
   // overwriting values the user has already edited in this wizard.
   useEffect(() => {
-    if (!master.subBrand) return;
-    const filterKey = JSON.stringify({
-      subBrand: master.subBrand,
-      tripId: master.tripId,
-      from: master.from,
-      to: master.to,
-    });
-    if (loadedLedgerFilters.current === filterKey) return;
-    loadedLedgerFilters.current = filterKey;
+    if (master.subBrand !== "all" && !master.subBrand) return;
     let cancelled = false;
     const params = new URLSearchParams({ subBrand: master.subBrand });
     if (master.from) params.set("from", master.from);
     if (master.to) params.set("to", master.to);
-    if (master.tripId) params.set("itineraryId", master.tripId);
+    if (usesQuoteAccounting) {
+      if (master.quoteId) params.set("quoteId", master.quoteId);
+    } else if (master.tripId) {
+      params.set("itineraryId", master.tripId);
+    }
     setLoading(true);
     fetchApi(`/api/travel/tally/ledger?${params}`)
       .then((data) => {
         if (!cancelled) {
           setAccounts(data?.accounts || []);
-          setCustomers(data?.customerDetails || []);
+          const nextCustomers = data?.customerDetails || [];
+          setCustomers(nextCustomers);
+          setPaymentDetails(data?.paymentDetails || []);
           setSuppliers(data?.supplierDetails || []);
+          setPayables(data?.payableDetails || []);
           setTripSummary(data?.trip || null);
+          setQuoteSummary(data?.quote || null);
+          const quoteRows = [
+            ...nextCustomers,
+            ...(data?.payableDetails || []),
+            ...(data?.supplierDetails || []),
+          ];
+          const quoteRowsById = new Map();
+          quoteRows.forEach((row) => {
+            if (row.quoteId != null && !row.itineraryId && !row.tripId && !quoteRowsById.has(String(row.quoteId))) {
+              quoteRowsById.set(String(row.quoteId), row);
+            }
+          });
+          setQuoteTrips([...quoteRowsById.entries()].map(([quoteId, row]) => ({
+            id: `quote-${quoteId}`,
+            quoteId: Number(quoteId),
+            destination: row.tripName || `Quote #${quoteId}`,
+            status: "Quoted",
+            ledgerType: "quote",
+          })));
           setGst("");
         }
       })
       .catch(() => {
         if (!cancelled) {
           setTripSummary(null);
+          setQuoteSummary(null);
+          setPaymentDetails([]);
+          setQuoteTrips([]);
           setError("Could not load filtered ledger details.");
         }
       })
@@ -402,7 +546,7 @@ export default function Tally() {
     return () => {
       cancelled = true;
     };
-  }, [master.subBrand, master.tripId, master.from, master.to]);
+  }, [master.subBrand, selectedSubBrand, master.tripId, master.quoteId, master.from, master.to, usesQuoteAccounting]);
 
   // Save an edited ledger amount in local wizard state.
   const saveAmount = (id, value) => {
@@ -470,25 +614,33 @@ export default function Tally() {
   activeGstUpdater = step === 1 ? updateCustomerGst : null;
   activeSupplierGstUpdater = step === 1 ? updateSupplierGst : null;
 
-  const activeTripOptions = trips.filter((trip) => {
+  const activeTripOptions = ledgerTrips.filter((trip) => {
         const id = String(trip.id);
         const earnings = customers
-          .filter((row) => String(row.itineraryId) === id)
+          .filter((row) => String(row.itineraryId) === id || String(row.quoteId) === id.replace(/^quote-/, ""))
           .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
         const spent = suppliers
           .filter((row) => !isBankStatementRow(row))
-          .filter((row) => String(row.itineraryId) === id)
+          .filter((row) => String(row.itineraryId) === id || String(row.quoteId) === id.replace(/^quote-/, ""))
           .reduce((sum, row) => sum + Number(row.amount || 0), 0);
-        return earnings > 0 || spent > 0;
+        const payableSpent = payables
+          .filter((row) => String(row.itineraryId) === id || String(row.quoteId) === id.replace(/^quote-/, ""))
+          .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        return earnings > 0 || spent > 0 || payableSpent > 0;
       });
-  const visibleTrips = master.tripId
-    ? trips.filter((trip) => String(trip.id) === String(master.tripId))
-    : activeTripOptions;
+  const visibleTrips = usesQuoteAccounting
+    ? (master.quoteId ? ledgerTrips.filter((trip) => String(trip.quoteId) === String(master.quoteId)) : quoteTrips)
+    : (master.tripId
+    ? ledgerTrips.filter((trip) => String(trip.id) === String(master.tripId))
+    : activeTripOptions);
   const visibleTripIds = new Set(visibleTrips.map((trip) => String(trip.id)));
-  const visibleCustomers = customers.filter((row) =>
+  const visibleCustomers = usesQuoteAccounting ? customers : customers.filter((row) =>
     !row.itineraryId || visibleTripIds.has(String(row.itineraryId)),
   );
-  const visibleSuppliers = suppliers.filter(
+  const visiblePayables = usesQuoteAccounting ? payables : payables.filter(
+    (row) => !row.itineraryId || visibleTripIds.has(String(row.itineraryId)),
+  );
+  const visibleSuppliers = usesQuoteAccounting ? suppliers : suppliers.filter(
     (row) => !row.itineraryId || visibleTripIds.has(String(row.itineraryId)),
   );
   const tripSuppliers = visibleSuppliers.filter((row) => !isBankStatementRow(row));
@@ -508,67 +660,20 @@ export default function Tally() {
   const removeCustomField = (id) =>
     setCustomFields((current) => current.filter((field) => field.id !== id));
 
-  const validateMasterStep = () => {
-    if (!master.companyName.trim()) return "Enter the company name to continue.";
-    if (!master.subBrand) return "Select a sub-brand to continue.";
-    if (master.from && master.to && master.to <= master.from)
-      return "To date must be after the From date.";
-    return "";
-  };
-
-  const validateLedgerStep = () => {
-    if (!trips.length)
-      return "No trips found for the selected sub-brand and dates.";
-    if (!activeTripOptions.length)
-      return "No trips with earnings or spending for the selected filters.";
-    const applicableTrips = master.tripId
-      ? trips.filter((trip) => String(trip.id) === String(master.tripId))
-      : trips;
-    const activeTrips = applicableTrips.filter((trip) => {
-      const id = String(trip.id);
-      const earnings = customers
-        .filter((row) => String(row.itineraryId) === id)
-        .reduce((sum, row) => sum + getCustomerTripValue(row), 0);
-      const spent = suppliers
-        .filter((row) => !isBankStatementRow(row))
-        .filter((row) => String(row.itineraryId) === id)
-        .reduce((sum, row) => sum + Number(row.amount || 0), 0);
-      return earnings > 0 || spent > 0;
-    });
-    const missingTax = activeTrips.some((trip) => {
-      const id = String(trip.id);
-      const tax = tripTaxes[id] || {};
-      const international = Boolean(
-        trip.international ||
-          trip.isInternational ||
-          customers.some((row) => String(row.itineraryId) === id && row.international),
-      );
-      return (
-        tax.gstRate === "" ||
-        tax.gstRate == null ||
-        (international && (tax.tcsRate === "" || tax.tcsRate == null))
-      );
-    });
-    if (missingTax)
-      return "Enter GST % for every trip and TCS % for every international trip. Enter 0 when no tax applies.";
-    return "";
-  };
-
-  const canOpenStep = (targetStep) => {
-    if (targetStep <= step) return true;
-    if (targetStep === 1) return !validateMasterStep();
-    if (targetStep === 2) return !validateMasterStep() && !validateLedgerStep();
-    return false;
-  };
-
-  // Validate the current stage before advancing the wizard.
-  const continueWizard = () => {
+  const saveMasterDetails = async () => {
     const masterError = validateMasterStep();
-    if (step === 0 && masterError) return setError(masterError);
-    const ledgerError = validateLedgerStep();
-    if (step === 1 && ledgerError) return setError(ledgerError);
-    setError("");
-    setStep((current) => Math.min(current + 1, 2));
+    if (masterError) {
+      setSaveMessage("");
+      return setError(masterError);
+    }
+    try {
+      await saveMaster();
+      setError("");
+      setSaveMessage("Master details saved.");
+    } catch {
+      setSaveMessage("");
+      setError("Master details could not be saved. Please try again.");
+    }
   };
 
   // Merge confirmed statement rows and totals from ReconciliationQueue into
@@ -649,18 +754,11 @@ export default function Tally() {
         {steps.map((item, index) => {
           const Icon = item.icon;
           const active = index === step;
-          const done = index < step;
           return (
             <button
               key={item.title}
               type="button"
-              disabled={!canOpenStep(index)}
               onClick={() => {
-                const masterError = validateMasterStep();
-                const ledgerError = validateLedgerStep();
-                if (index === 1 && masterError) return setError(masterError);
-                if (index === 2 && (masterError || ledgerError))
-                  return setError(masterError || ledgerError);
                 setError("");
                 setStep(index);
               }}
@@ -668,11 +766,7 @@ export default function Tally() {
                 ...card,
                 padding: "16px 18px",
                 textAlign: "left",
-                borderColor: active
-                  ? "#5b7cfa"
-                  : done
-                    ? "#10b98155"
-                    : undefined,
+                borderColor: active ? "#5b7cfa" : undefined,
                 background: active ? "rgba(91,124,250,.14)" : undefined,
                 color: "var(--text-primary)",
                 display: "flex",
@@ -687,15 +781,11 @@ export default function Tally() {
                   borderRadius: "50%",
                   display: "grid",
                   placeItems: "center",
-                  background: active
-                    ? "#5b7cfa"
-                    : done
-                      ? "#10b981"
-                      : "rgba(148,163,184,.18)",
+                  background: active ? "#5b7cfa" : "rgba(148,163,184,.18)",
                   color: "white",
                 }}
               >
-                {done ? <Check size={16} /> : <Icon size={16} />}
+                <Icon size={16} />
               </span>
               <span>
                 <strong style={{ display: "block" }}>{item.title}</strong>
@@ -709,6 +799,93 @@ export default function Tally() {
       </section>
       <section style={{ ...card, padding: 20 }}>
         {step === 1 && (
+          <div
+            style={{
+              ...card,
+              padding: 14,
+              marginBottom: 14,
+            }}
+          >
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+                gap: 14,
+                alignItems: "end",
+              }}
+            >
+              <label style={label}>
+                Sub-brand *
+                <select
+                  required
+                  value={master.subBrand}
+                  onChange={(event) =>
+                    updateMaster("subBrand")(event.target.value)
+                  }
+                  style={input}
+                >
+                  {brands.map(([value, text]) => (
+                    <option key={value} value={value}>
+                      {text}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div>
+                <label style={{ ...label, marginBottom: 8 }}>
+                  Transaction dates
+                </label>
+                <CompactRangeCalendar
+                  from={master.from}
+                  to={master.to}
+                  popover
+                  onChange={({ from, to }) => {
+                    updateMaster("from")(from);
+                    updateMaster("to")(to);
+                  }}
+                />
+              </div>
+            </div>
+            <small
+              style={{
+                display: "block",
+                marginTop: 10,
+                color: "var(--text-secondary)",
+              }}
+            >
+              These filters control the trips and accounting records shown
+              below. Current scope: {selectedSubBrandLabel}
+            </small>
+          </div>
+        )}
+        {step === 1 && usesQuoteAccounting && (
+          <label
+            style={{
+              ...label,
+              display: "block",
+              maxWidth: 420,
+              marginBottom: 14,
+            }}
+          >
+            Quote
+            <select
+              value={master.quoteId}
+              onChange={(event) => updateMaster("quoteId")(event.target.value)}
+              style={input}
+            >
+              <option value="">All quotes</option>
+              {quotes.map((quote) => (
+                <option key={quote.id} value={quote.id}>
+                  QT-{String(quote.id).padStart(4, "0")} · {quote.contact?.name || `Quote #${quote.id}`}
+                </option>
+              ))}
+            </select>
+            <small style={{ display: "block", marginTop: 5, color: "var(--text-secondary)" }}>
+              Quote-linked invoices and supplier payables are shown for this sub-brand.
+            </small>
+          </label>
+        )}
+        {step === 1 && !usesQuoteAccounting && (
           <label
             style={{
               ...label,
@@ -735,7 +912,7 @@ export default function Tally() {
                 </>
               ) : (
                 <option value="" disabled>
-                  {trips.length
+                  {ledgerTrips.length
                     ? "No trips with earnings or spending"
                     : "No trips found for the selected filters"}
                 </option>
@@ -748,121 +925,86 @@ export default function Tally() {
                 color: "var(--text-secondary)",
               }}
             >
-              Trips are filtered by Sub-brand and transaction dates.
+              Trips are filtered by sub-brand and transaction dates.
             </small>
           </label>
         )}
         {step === 0 && (
           <>
-            <h2 style={{ margin: 0, fontSize: "1.15rem" }}>Master details</h2>
-            <p style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-              Set up the company and reporting filters first.
-            </p>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
-                gap: 14,
-              }}
-            >
-              <label style={label}>
-                Sub-brand *
-                <select
-                  required
-                  value={master.subBrand}
-                  onChange={(event) =>
-                    updateMaster("subBrand")(event.target.value)
-                  }
-                  style={input}
-                >
-                  {brands.map(([value, text]) => (
-                    <option key={value} value={value}>
-                      {text}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <Field
-                title="Company name"
-                value={master.companyName}
-                onChange={updateMaster("companyName")}
-                placeholder="Legal company name"
-                required
-              />
-              <Field
-                title="Mailing name"
-                value={master.mailingName}
-                onChange={updateMaster("mailingName")}
-                placeholder="Name shown on invoices"
-              />
-              <Field
-                title="GSTIN"
-                value={master.gstin}
-                onChange={updateMaster("gstin")}
-                placeholder="22AAAAA0000A1Z5"
-              />
-              <Field
-                title="PAN"
-                value={master.pan}
-                onChange={updateMaster("pan")}
-                placeholder="AAAAA0000A"
-              />
-              <Field
-                title="State"
-                value={master.state}
-                onChange={updateMaster("state")}
-                placeholder="State / province"
-              />
-              <label style={{ ...label, gridColumn: "span 2" }}>
-                Registered address
-                <textarea
-                  value={master.address}
-                  onChange={(event) =>
-                    updateMaster("address")(event.target.value)
-                  }
-                  rows={2}
-                  placeholder="Business address"
-                  style={{ ...input, resize: "vertical" }}
-                />
-              </label>
-              <div style={{ gridColumn: "span 2" }}>
-                <label style={{ ...label, marginBottom: 8 }}>
-                  Transaction dates
-                </label>
-                <CompactRangeCalendar
-                  from={master.from}
-                  to={master.to}
-                  popover
-                  onChange={({ from, to }) => {
-                    updateMaster("from")(from);
-                    updateMaster("to")(to);
-                  }}
-                />
-              </div>
-            </div>
+            <TallyMasterSection
+              master={master}
+              updateMaster={updateMaster}
+            />
           </>
         )}
         {step === 1 && (
           <div style={{ ...card, padding: 16 }}>
-            <h2 style={{ margin: 0, fontSize: "1.15rem" }}>Ledger accounts</h2>
-            <p style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-              Sales and purchase accounts are calculated for the selected
-              period.
-            </p>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                gap: 16,
+              }}
+            >
+              <div>
+                <h2 style={{ margin: 0, fontSize: "1.15rem" }}>
+                  Ledger accounts
+                </h2>
+                <p style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+                  Create ledgers, update common ledgers, and review calculated
+                  sales or purchase totals for the selected period.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Open Tally settings"
+                title="Settings"
+                onClick={() => navigate("/travel/tally/settings")}
+                style={{
+                  border: "1px solid #ef4444",
+                  borderRadius: 8,
+                  padding: "9px 14px",
+                  background: "transparent",
+                  color: "#ef4444",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <Settings2 size={15} />
+              </button>
+            </div>
+            <LedgerManager
+              brands={brands}
+              selectedSubBrandLabel={selectedSubBrandLabel}
+              ledgerState={ledgerState}
+              onViewLedger={handleViewLedger}
+            />
+            <LedgerMapping
+              ledgerRows={ledgerState.ledgerRows}
+              mappings={ledgerMappingState.mappings}
+              onChange={ledgerMappingState.updateMapping}
+              onReset={ledgerMappingState.resetMappings}
+            />
+            <TallySetupReset
+              hasSavedSetup={
+                ledgerState.hasSavedLedgers ||
+                ledgerMappingState.hasSavedMappings
+              }
+              onReset={() => {
+                ledgerState.resetSavedLedgers();
+                ledgerMappingState.resetSavedMappings();
+              }}
+            />
             {loading && (
               <p style={{ color: "var(--text-secondary)", fontSize: 13 }}>
                 Loading filtered records…
               </p>
             )}
-            {accounts
-              .filter((account) => ["sales", "purchase"].includes(account.id))
-              .map((account) => (
-                <AccountRow
-                  key={account.id}
-                  account={account}
-                  onSave={saveAmount}
-                />
-              ))}
             <AccountRow
               account={{
                 id: "inputGst",
@@ -886,122 +1028,7 @@ export default function Tally() {
                 international travel.
               </small>
             )}
-            <div
-              style={{
-                marginTop: 16,
-                paddingTop: 14,
-                borderTop:
-                  "1px solid var(--border-color, rgba(148,163,184,.16))",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 12,
-                  marginBottom: 10,
-                }}
-              >
-                <div>
-                  <strong>Add fields to report</strong>
-                  <small
-                    style={{ display: "block", color: "var(--text-secondary)" }}
-                  >
-                    Add any extra label and value required in the report.
-                  </small>
-                </div>
-                <button
-                  type="button"
-                  onClick={addCustomField}
-                  style={{
-                    border: "1px solid #5b7cfa",
-                    borderRadius: 8,
-                    padding: "8px 12px",
-                    background: "transparent",
-                    color: "var(--text-primary)",
-                    fontWeight: 700,
-                  }}
-                >
-                  + Add field
-                </button>
-              </div>
-              {customFields.map((field) => (
-                <div
-                  key={field.id}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr auto",
-                    gap: 10,
-                    marginBottom: 10,
-                  }}
-                >
-                  <input
-                    aria-label="Field name"
-                    value={field.name}
-                    onChange={(event) =>
-                      updateCustomField(field.id, "name", event.target.value)
-                    }
-                    placeholder="Field name"
-                    style={input}
-                  />
-                  <input
-                    aria-label="Field value"
-                    value={field.value}
-                    onChange={(event) =>
-                      updateCustomField(field.id, "value", event.target.value)
-                    }
-                    placeholder="Value"
-                    style={input}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeCustomField(field.id)}
-                    style={{
-                      border: 0,
-                      background: "transparent",
-                      color: "#f87171",
-                      padding: "0 8px",
-                    }}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-                gap: 14,
-                marginTop: 16,
-              }}
-            >
-              <DetailCard
-                title="Customer A/c"
-                description="Sales and invoice details."
-                rows={visibleCustomers}
-                empty="No customer sales found for these filters."
-                customer
-              />
-              <DetailCard
-                title="Supplier A/c"
-                description="Purchase and expense details."
-                rows={visibleSuppliers}
-                empty="No supplier purchases found for these filters."
-              />
-            </div>
           </div>
-        )}
-        {step === 1 && (
-          <TripTaxTable
-            trips={visibleTrips}
-            customers={visibleCustomers}
-            suppliers={tripSuppliers}
-            tripTaxes={tripTaxes}
-            selectedTripId={master.tripId}
-            onChange={updateTripTax}
-          />
         )}
         <div style={{ display: step === 1 ? "block" : "none" }}>
           <ReconciliationQueue
@@ -1010,6 +1037,7 @@ export default function Tally() {
             suppliers={visibleSuppliers}
             trips={visibleTrips}
             tripTaxes={tripTaxes}
+            statementItems={statementItems}
             onTripTaxChange={updateTripTax}
             onLedgerApplied={applyReconciliation}
           />
@@ -1022,10 +1050,18 @@ export default function Tally() {
             customFields={customFields}
             customers={visibleCustomers}
             suppliers={tripSuppliers}
+            commonRows={visibleSuppliers}
+            payables={visiblePayables}
             trips={visibleTrips}
             tripTaxes={tripTaxes}
             statementItems={statementItems}
             tripSummary={tripSummary}
+            quoteSummary={quoteSummary}
+            usesQuoteAccounting={usesQuoteAccounting}
+            selectedSubBrandLabel={selectedSubBrandLabel}
+            ledgerRows={ledgerState.ledgerRows}
+            ledgerMappings={ledgerMappingState.mappings}
+            voucherTypes={voucherSetupState.voucherTypes}
           />
         )}
         <div
@@ -1045,6 +1081,12 @@ export default function Tally() {
             >
               {error}
             </span>
+          ) : saveMessage ? (
+            <span
+              style={{ color: "#10b981", fontSize: 13, marginRight: "auto" }}
+            >
+              {saveMessage}
+            </span>
           ) : (
             <span style={{ marginRight: "auto" }} />
           )}
@@ -1063,29 +1105,21 @@ export default function Tally() {
               <ChevronLeft size={16} /> Back
             </button>
           )}
-          {step < 2 && (
+          {step === 0 && (
             <button
               type="button"
-              onClick={continueWizard}
-              disabled={step === 1 && !activeTripOptions.length}
+              onClick={saveMasterDetails}
               style={{
-                border: 0,
+                border: "1px solid #5b7cfa",
                 borderRadius: 9,
                 padding: "10px 16px",
-                background: "#5b7cfa",
-                color: "white",
-                display: "inline-flex",
-                gap: 8,
-                alignItems: "center",
+                background: "transparent",
+                color: "#5b7cfa",
                 fontWeight: 700,
-                opacity: step === 1 && !activeTripOptions.length ? 0.55 : 1,
-                cursor:
-                  step === 1 && !activeTripOptions.length
-                    ? "not-allowed"
-                    : "pointer",
+                cursor: "pointer",
               }}
             >
-              Continue <ArrowRight size={16} />
+              Save
             </button>
           )}
         </div>
@@ -1158,6 +1192,7 @@ function ReportRow({ label, value }) {
 function TripProfitLossWithTrips({
   customers,
   suppliers,
+  payables = [],
   trips,
   selectedTripId = "",
   tripTaxes = {},
@@ -1190,7 +1225,7 @@ function TripProfitLossWithTrips({
       }
     }
   });
-  suppliers.filter((row) => !isBankStatementRow(row)).forEach((row) => {
+  payables.forEach((row) => {
     const current = row.itineraryId
       ? grouped.get(String(row.itineraryId))
       : null;
@@ -1352,8 +1387,7 @@ function TripProfitLossWithTrips({
                   "Ledger dates",
                   "Earnings",
                   "Spent",
-                  "GST",
-                  "TCS",
+                  "GST/TCS",
                   "Profit / Loss",
                 ].map((label) => (
                   <th
@@ -1377,8 +1411,7 @@ function TripProfitLossWithTrips({
                   <td style={cell}>{row.dateLabel}</td>
                   <td style={right}>{formatMoney(row.sales)}</td>
                   <td style={right}>{formatMoney(row.expenses)}</td>
-                  <td style={right}>{formatMoney(row.gst)}</td>
-                  <td style={right}>{formatMoney(row.tcs)}</td>
+                  <td style={right}>{formatMoney(row.gst + row.tcs)}</td>
                   <td
                     style={{
                       ...right,
@@ -1404,10 +1437,7 @@ function TripProfitLossWithTrips({
                   {formatMoney(totalExpenses)}
                 </td>
                 <td style={{ ...right, fontWeight: 800 }}>
-                  {formatMoney(totals.gst)}
-                </td>
-                <td style={{ ...right, fontWeight: 800 }}>
-                  {formatMoney(totals.tcs)}
+                  {formatMoney(totals.gst + totals.tcs)}
                 </td>
                 <td
                   style={{
@@ -1466,10 +1496,7 @@ function CumulativeReportCard({
       );
   const sales = salesOverride != null
     ? Number(salesOverride)
-    : reportCustomers.reduce(
-        (sum, row) => sum + Number(row.amount || 0),
-        0,
-      );
+      : reportCustomers.reduce((sum, row) => sum + getInvoiceAmount(row), 0);
   const supplierExpenses = purchaseOverride != null
     ? Number(purchaseOverride)
     : reportSuppliers.reduce(
@@ -1499,7 +1526,7 @@ function CumulativeReportCard({
   const gst = reportTrips.reduce((sum, trip) => {
     const amount = customers
       .filter((row) => String(row.itineraryId) === String(trip.id))
-      .reduce((total, row) => total + Number(row.amount || 0), 0);
+      .reduce((total, row) => total + getInvoiceAmount(row), 0);
     return (
       sum + (amount * Number(tripTaxes[String(trip.id)]?.gstRate || 0)) / 100
     );
@@ -1507,7 +1534,7 @@ function CumulativeReportCard({
   const tcs = reportTrips.reduce((sum, trip) => {
     const amount = customers
       .filter((row) => String(row.itineraryId) === String(trip.id))
-      .reduce((total, row) => total + Number(row.amount || 0), 0);
+      .reduce((total, row) => total + getInvoiceAmount(row), 0);
     return (
       sum + (amount * Number(tripTaxes[String(trip.id)]?.tcsRate || 0)) / 100
     );
@@ -1557,8 +1584,10 @@ function CumulativeReportCard({
       <div style={{ display: "grid", gap: 0, marginTop: 10 }}>
         <ReportRow label="Total earnings" value={formatMoney(sales)} />
         <ReportRow label="Total spent" value={formatMoney(expenses)} />
-        <ReportRow label="Total GST" value={formatMoney(gst)} />
-        <ReportRow label="Total TCS" value={formatMoney(tcs)} />
+        <ReportRow
+          label="Total GST/TCS"
+          value={formatMoney(gst + tcs)}
+        />
       </div>
       <div
         style={{
@@ -1583,24 +1612,34 @@ function CumulativeReportCard({
 function LedgerPreview({
   master,
   accounts,
-  gst,
   customFields,
   customers,
   suppliers,
+  commonRows = [],
+  payables = [],
   trips = [],
   tripTaxes = {},
   statementItems = [],
   tripSummary,
+  quoteSummary,
+  usesQuoteAccounting = false,
+  selectedSubBrandLabel = "All sub-brands",
+  ledgerRows = [],
+  ledgerMappings = [],
+  voucherTypes = [],
 }) {
   const totals = accounts.filter((account) =>
-    ["sales", "purchase"].includes(account.id),
+    ["sales", "purchase", "officeExpenses"].includes(account.id),
   );
   const sales = Number(
     totals.find((account) => account.id === "sales")?.amount || 0,
   );
-  const expenses = Number(
-    totals.find((account) => account.id === "purchase")?.amount || 0,
+  const expenses = ["purchase", "officeExpenses"].reduce(
+    (sum, id) =>
+      sum + Number(totals.find((account) => account.id === id)?.amount || 0),
+    0,
   );
+  const taxTotals = getTripTaxTotals({ trips, customers, tripTaxes });
   // Open the print-ready A4 report containing only the visible report sections.
   const downloadPdf = () => {
     const escapeHtml = (value) =>
@@ -1611,36 +1650,37 @@ function LedgerPreview({
             character
           ],
       );
-    const tripRows = trips.map((trip) => {
-      const key = String(trip.id);
-      const customerRows = customers.filter((row) => String(row.itineraryId) === key);
+    const ledgerRows = getTripLedgerRows({
+      trips,
+      customers,
+      suppliers,
+      payables,
+      tripTaxes,
+    });
+    const tripRows = ledgerRows.map((row) => {
+      const key = String(row.id);
+      const customerRows = customers.filter(
+        (customer) => String(customer.itineraryId) === key,
+      );
       const supplierRows = suppliers
-        .filter((row) => !isBankStatementRow(row))
-        .filter((row) => String(row.itineraryId) === key);
-      const earnings = customerRows.reduce(
-        (sum, row) => sum + getCustomerTripValue(row),
-        0,
-      );
-      const spent = supplierRows.reduce(
-        (sum, row) => sum + Number(row.amount || 0),
-        0,
-      );
+        .filter((supplier) => !isBankStatementRow(supplier))
+        .filter((supplier) => String(supplier.itineraryId) === key);
       const dates = [...new Set(
         [...customerRows, ...supplierRows]
-          .map((row) => row.transactionDate && String(row.transactionDate).slice(0, 10))
+          .map(
+            (entry) =>
+              entry.transactionDate && String(entry.transactionDate).slice(0, 10),
+          )
           .filter(Boolean),
       )].sort();
-      const tax = tripTaxes[key] || {};
-      const gstAmount = (earnings * Number(tax.gstRate || 0)) / 100;
-      const tcsAmount = (earnings * Number(tax.tcsRate || 0)) / 100;
       return {
-        name: trip.destination || `Trip ${key}`,
+        name: row.label,
         dateLabel: dates.length > 1 ? `${dates[0]} to ${dates.at(-1)}` : dates[0] || "-",
-        earnings,
-        spent,
-        gstAmount,
-        tcsAmount,
-        profit: earnings - spent - gstAmount - tcsAmount,
+        earnings: row.sales,
+        spent: row.purchase + row.commonExpenses,
+        gstAmount: row.gst,
+        tcsAmount: row.tcs,
+        profit: row.profit,
       };
     }).filter((row) => row.earnings > 0 || row.spent > 0);
     const totalGst = tripRows.reduce((sum, row) => sum + row.gstAmount, 0);
@@ -1667,7 +1707,7 @@ function LedgerPreview({
     );
     if (!popup) return;
     popup.document.write(
-      `<!doctype html><html><head><meta charset="utf-8"><title>Travel Tally Report</title><style>@page{size:A4;margin:16mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;background:#fff;margin:0;font-size:10px;line-height:1.35}header{border-bottom:3px solid #2563eb;padding-bottom:12px;margin-bottom:18px}h1{font-size:22px;margin:0 0 5px;color:#0f172a}h2{font-size:14px;margin:0 0 9px;color:#0f172a}p{margin:0;color:#64748b}.section{margin:0 0 20px;break-inside:avoid}table{width:100%;border-collapse:collapse;table-layout:fixed}th{background:#eaf1ff;color:#1e3a8a;font-size:9px;text-transform:uppercase;letter-spacing:.03em;text-align:left}th,td{border:1px solid #d7deea;padding:7px 8px;vertical-align:top;overflow-wrap:anywhere}tbody tr:nth-child(even){background:#f8fafc}.num{text-align:right;white-space:nowrap}.positive{color:#047857;font-weight:700}.negative{color:#b91c1c;font-weight:700}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.metric{border:1px solid #d7deea;border-radius:7px;padding:9px 10px;background:#f8fafc}.metric label{display:block;color:#64748b;font-size:9px;margin-bottom:3px}.metric strong{font-size:13px}.total-row td{background:#eefcf7;font-weight:700}.muted{color:#64748b;font-size:9px}thead{display:table-header-group}tr{break-inside:avoid}</style></head><body><header><h1>Travel Tally Report</h1><p>${escapeHtml(master.companyName || "Travel accounting")} · ${escapeHtml(master.subBrand || "All sub-brands")} · ${escapeHtml(master.from || "Any date")} to ${escapeHtml(master.to || "Any date")}</p></header><section class="section"><h2>Bank Statement Transactions</h2>${statementItems.length ? `<table><thead><tr><th style="width:13%">Date</th><th style="width:34%">Description</th><th style="width:25%">Reference</th><th style="width:14%" class="num">Credit</th><th style="width:14%" class="num">Debit / Withdrawal</th></tr></thead><tbody>${statementRows}</tbody></table>` : `<p class="muted">No bank statement transactions were added.</p>`}</section><section class="section"><h2>Trip Details / Profit &amp; Loss</h2>${tripRows.length ? `<table><thead><tr><th style="width:22%">Trip / Place</th><th style="width:16%">Ledger dates</th><th class="num">Earnings</th><th class="num">Spent</th><th class="num">GST</th><th class="num">TCS</th><th class="num">Profit / Loss</th></tr></thead><tbody>${tripRowsHtml}</tbody></table>` : `<p class="muted">No trip details were found for the selected filters.</p>`}</section><section class="section"><h2>Cumulative Profit / Loss</h2><div class="summary"><div class="metric"><label>Total earnings</label><strong>${escapeHtml(formatMoney(sales))}</strong></div><div class="metric"><label>Total spent</label><strong>${escapeHtml(formatMoney(expenses))}</strong></div><div class="metric"><label>Total GST</label><strong>${escapeHtml(formatMoney(totalGst))}</strong></div><div class="metric"><label>Total TCS</label><strong>${escapeHtml(formatMoney(totalTcs))}</strong></div></div><table><tbody><tr class="total-row"><td>Cumulative ${cumulativeProfit >= 0 ? "Profit" : "Loss"}</td><td class="num ${cumulativeProfit >= 0 ? "positive" : "negative"}">${escapeHtml(formatMoney(Math.abs(cumulativeProfit)))}</td></tr></tbody></table></section></body></html>`,
+      `<!doctype html><html><head><meta charset="utf-8"><title>Travel Tally Report</title><style>@page{size:A4;margin:16mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;background:#fff;margin:0;font-size:10px;line-height:1.35}header{border-bottom:3px solid #2563eb;padding-bottom:12px;margin-bottom:18px}h1{font-size:22px;margin:0 0 5px;color:#0f172a}h2{font-size:14px;margin:0 0 9px;color:#0f172a}p{margin:0;color:#64748b}.section{margin:0 0 20px;break-inside:avoid}table{width:100%;border-collapse:collapse;table-layout:fixed}th{background:#eaf1ff;color:#1e3a8a;font-size:9px;text-transform:uppercase;letter-spacing:.03em;text-align:left}th,td{border:1px solid #d7deea;padding:7px 8px;vertical-align:top;overflow-wrap:anywhere}tbody tr:nth-child(even){background:#f8fafc}.num{text-align:right;white-space:nowrap}.positive{color:#047857;font-weight:700}.negative{color:#b91c1c;font-weight:700}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.metric{border:1px solid #d7deea;border-radius:7px;padding:9px 10px;background:#f8fafc}.metric label{display:block;color:#64748b;font-size:9px;margin-bottom:3px}.metric strong{font-size:13px}.total-row td{background:#eefcf7;font-weight:700}.muted{color:#64748b;font-size:9px}thead{display:table-header-group}tr{break-inside:avoid}</style></head><body><header><h1>Travel Tally Report</h1><p>${escapeHtml(master.companyName || "Travel accounting")} · ${escapeHtml(selectedSubBrandLabel)} · ${escapeHtml(master.from || "Any date")} to ${escapeHtml(master.to || "Any date")}</p></header><section class="section"><h2>Bank Statement Transactions</h2>${statementItems.length ? `<table><thead><tr><th style="width:13%">Date</th><th style="width:34%">Description</th><th style="width:25%">Reference</th><th style="width:14%" class="num">Credit</th><th style="width:14%" class="num">Debit / Withdrawal</th></tr></thead><tbody>${statementRows}</tbody></table>` : `<p class="muted">No bank statement transactions were added.</p>`}</section><section class="section"><h2>Trip Details / Profit &amp; Loss</h2>${tripRows.length ? `<table><thead><tr><th style="width:22%">Trip / Place</th><th style="width:16%">Ledger dates</th><th class="num">Earnings</th><th class="num">Spent</th><th class="num">GST</th><th class="num">TCS</th><th class="num">Profit / Loss</th></tr></thead><tbody>${tripRowsHtml}</tbody></table>` : `<p class="muted">No trip details were found for the selected filters.</p>`}</section><section class="section"><h2>Cumulative Profit / Loss</h2><div class="summary"><div class="metric"><label>Total earnings</label><strong>${escapeHtml(formatMoney(sales))}</strong></div><div class="metric"><label>Total spent</label><strong>${escapeHtml(formatMoney(expenses))}</strong></div><div class="metric"><label>Total GST</label><strong>${escapeHtml(formatMoney(totalGst))}</strong></div><div class="metric"><label>Total TCS</label><strong>${escapeHtml(formatMoney(totalTcs))}</strong></div></div><table><tbody><tr class="total-row"><td>Cumulative ${cumulativeProfit >= 0 ? "Profit" : "Loss"}</td><td class="num ${cumulativeProfit >= 0 ? "positive" : "negative"}">${escapeHtml(formatMoney(Math.abs(cumulativeProfit)))}</td></tr></tbody></table></section></body></html>`,
     );
     popup.document.close();
     popup.focus();
@@ -1686,6 +1726,12 @@ function LedgerPreview({
           Trip-wise revenue, costs, GST, TCS, and profit/loss.
         </p>
       </div>
+      <TallyPreviewSummary
+        accounts={accounts}
+        customers={customers}
+        trips={trips}
+        tripTaxes={tripTaxes}
+      />
       <div style={{ ...card, padding: 16, marginTop: 20 }}>
         <h3 style={{ margin: "0 0 12px" }}>Master filters</h3>
         <ReportRow label="Company name" value={master.companyName || "—"} />
@@ -1694,13 +1740,31 @@ function LedgerPreview({
         <ReportRow label="PAN" value={master.pan || "—"} />
         <ReportRow label="State" value={master.state || "—"} />
         <ReportRow label="Registered address" value={master.address || "—"} />
-        <ReportRow label="Sub-brand" value={master.subBrand || "—"} />
         <ReportRow
-          label="Trip / Booking"
-          value={
-            tripSummary?.destination ||
-            (master.tripId ? `Trip ${master.tripId}` : "All trips")
-          }
+          label="Financial year"
+          value={master.financialYear || "—"}
+        />
+        <ReportRow
+          label="Books beginning from"
+          value={master.booksBeginningFrom || "—"}
+        />
+        <ReportRow
+          label="Voucher numbering"
+          value={master.voucherNumbering || "—"}
+        />
+        <ReportRow label="Base currency" value={master.baseCurrency || "—"} />
+        <ReportRow
+          label="Opening balance handling"
+          value={master.openingBalanceMode || "—"}
+        />
+        <ReportRow label="Sub-brand" value={selectedSubBrandLabel} />
+        <ReportRow
+          label={usesQuoteAccounting ? "Quote" : "Trip / Booking"}
+          value={usesQuoteAccounting
+            ? (quoteSummary
+              ? `QT-${String(quoteSummary.id).padStart(4, "0")} · ${quoteSummary.contact?.name || "Quote"}`
+              : (master.quoteId ? `Quote ${master.quoteId}` : "All quotes"))
+            : (tripSummary?.destination || (master.tripId ? `Trip ${master.tripId}` : "All trips"))}
         />
         <ReportRow
           label="Transaction period"
@@ -1718,7 +1782,10 @@ function LedgerPreview({
             value={formatMoney(account.amount)}
           />
         ))}
-        <ReportRow label="GST %" value={gst === "" ? "—" : `${gst}%`} />
+        <ReportRow
+          label="GST/TCS"
+          value={formatMoney(taxTotals.gst + taxTotals.tcs)}
+        />
         {customFields
           .filter((field) => field.name.trim())
           .map((field) => (
@@ -1732,6 +1799,7 @@ function LedgerPreview({
       <TripProfitLossWithTrips
         customers={customers}
         suppliers={suppliers}
+        payables={payables}
         trips={trips}
         selectedTripId={master.tripId}
         tripTaxes={tripTaxes}
@@ -1739,8 +1807,11 @@ function LedgerPreview({
         salesOverride={Number(
           accounts.find((account) => account.id === "sales")?.amount || 0,
         )}
-        purchaseOverride={Number(
-          accounts.find((account) => account.id === "purchase")?.amount || 0,
+        purchaseOverride={["purchase", "officeExpenses"].reduce(
+          (sum, id) =>
+            sum +
+            Number(accounts.find((account) => account.id === id)?.amount || 0),
+          0,
         )}
       />
       <CumulativeReportCard
@@ -1753,31 +1824,27 @@ function LedgerPreview({
         salesOverride={Number(
           accounts.find((account) => account.id === "sales")?.amount || 0,
         )}
-        purchaseOverride={Number(
-          accounts.find((account) => account.id === "purchase")?.amount || 0,
+        purchaseOverride={["purchase", "officeExpenses"].reduce(
+          (sum, id) =>
+            sum +
+            Number(accounts.find((account) => account.id === id)?.amount || 0),
+          0,
         )}
       />
-      <div
-        style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}
-      >
-        <button
-          type="button"
-          onClick={downloadPdf}
-          style={{
-            border: 0,
-            borderRadius: 9,
-            padding: "10px 16px",
-            background: "#5b7cfa",
-            color: "white",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 8,
-            fontWeight: 700,
-          }}
-        >
-          <Download size={15} /> Download PDF
-        </button>
-      </div>
+      <TallyExportActions
+        accounts={accounts}
+        customers={customers}
+        commonRows={commonRows}
+        payables={payables}
+        trips={trips}
+        tripTaxes={tripTaxes}
+        master={master}
+        selectedSubBrandLabel={selectedSubBrandLabel}
+        ledgerRows={ledgerRows}
+        ledgerMappings={ledgerMappings}
+        voucherTypes={voucherTypes}
+        onDownloadPdf={downloadPdf}
+      />
     </div>
   );
 }

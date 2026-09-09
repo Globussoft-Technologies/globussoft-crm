@@ -286,7 +286,10 @@ describe('GET /api/travel/trips', () => {
     });
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { tenantId: 1 },
+        where: {
+          tenantId: 1,
+          NOT: { tripCode: { startsWith: "QUOTE-" } },
+        },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: 50,
         skip: 0,
@@ -1827,7 +1830,6 @@ describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
     expect(res.body).toMatchObject({ code: 'REGISTRATION_NOT_FOUND' });
   });
 });
-
 
 
 

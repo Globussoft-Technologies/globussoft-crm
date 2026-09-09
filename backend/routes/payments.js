@@ -19,7 +19,8 @@ const {
 } = require("../lib/tenantPaymentGateway");
 const { fulfillSubscriptionOrder } = require("../lib/subscriptionFulfillment");
 const { applyLandingPagePaymentToTrip } = require("../lib/landingPagePayments");
-const { reconcileTripInstalmentPayment } = require("../lib/tripPaymentReconciliation");
+const { reconcileTripInstalmentPayment, reconcileTripPaymentRecord } = require("../lib/tripPaymentReconciliation");
+const { enqueueTransaction } = require("../lib/travelTallyMasters");
 
 const router = express.Router();
 
@@ -351,6 +352,9 @@ async function reconcileTravelInvoice(notes, paymentEnt) {
 // to retry indefinitely). Event payload mirrors the billing.js version
 // so workflow rule conditions can be authored once and match either path.
 function emitPaymentCollected(payment) {
+  enqueueTravelPaymentTally(payment).catch((error) =>
+    console.warn("[Payments] travel Tally queue preparation failed:", error.message),
+  );
   try {
     require("../lib/eventBus").emitEvent(
       "payment.collected",
@@ -368,6 +372,46 @@ function emitPaymentCollected(payment) {
   } catch (_e) {
     /* best-effort */
   }
+}
+
+// Successful gateway payments can arrive through several webhook and manual
+// verification paths. Keep the Tally queue hook here so every shared success
+// path gets the same durable receipt row. Non-travel payments are ignored.
+async function enqueueTravelPaymentTally(payment) {
+  if (!payment?.tenantId) return null;
+  let metadata = {};
+  try {
+    metadata = typeof payment.metadata === "string"
+      ? JSON.parse(payment.metadata || "{}")
+      : payment.metadata || {};
+  } catch (_) {
+    metadata = {};
+  }
+  const metadataText = JSON.stringify(metadata).toLowerCase();
+  const isTravel = metadataText.includes("travel") || metadata.itineraryId || metadata.tripId || metadata.travelInvoiceId;
+  if (!isTravel) return null;
+  return enqueueTransaction({
+    tenantId: payment.tenantId,
+    subBrand: metadata.subBrand || null,
+    sourceType: "TRAVEL_PAYMENT",
+    sourceId: payment.id,
+    reference: payment.gatewayId || `PAY-${payment.id}`,
+    transactionType: "RECEIPT",
+    tripId: metadata.itineraryId || metadata.tripId || null,
+    partyName: metadata.customerName || metadata.partyName || "Travel customer",
+    amount: payment.amount,
+    voucherType: "RECEIPT",
+    payload: {
+      paymentId: payment.id,
+      invoiceId: payment.invoiceId,
+      amount: Number(payment.amount || 0),
+      currency: payment.currency,
+      method: payment.gateway,
+      reference: payment.gatewayId,
+      paidAt: payment.paidAt,
+      metadata,
+    },
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -922,6 +966,7 @@ router.post(
                     db: prisma,
                     tripId: paymentMeta.tripId,
                     participantId,
+                    paymentId: payment.id,
                     amountMajor: payment.amount,
                     mode: paymentMeta.paymentMode === "complete" ? "complete" : "installment",
                     installmentIndex: Number.isFinite(Number(paymentMeta.installmentIndex)) ? Number(paymentMeta.installmentIndex) : 0,
@@ -1075,6 +1120,27 @@ router.get("/", async (req, res) => {
       }
     }
 
+    // Older landing-page payments may already be successful but still carry
+    // only a draft token. Once that draft has been converted, reconcile it so
+    // the Payment row points to the participant invoice and uses the same
+    // source as invoice payment history.
+    for (const payment of payments) {
+      if (!['SUCCESS', 'PAID', 'CAPTURED'].includes(String(payment.status || '').toUpperCase())) continue;
+      let metadata = {};
+      try { metadata = JSON.parse(payment.metadata || "{}"); } catch (_err) {}
+      if (metadata.kind !== "landing-page-registration" || metadata.participantId) continue;
+      if (!metadata.draftToken) continue;
+      try {
+        const result = await reconcileTripPaymentRecord({ db: prisma, payment, capturedAt: payment.paidAt || payment.createdAt });
+        if (result?.payment) {
+          const index = payments.findIndex((row) => row.id === payment.id);
+          if (index >= 0) payments[index] = result.payment;
+        }
+      } catch (err) {
+        console.warn("[Payments] converted landing payment reconciliation skipped:", err.message);
+      }
+    }
+
     // Batch-fetch contact names for all contactIds in this result set.
     const contactIds = [...new Set(payments.map((p) => p.contactId).filter(Boolean))];
     const contactMap = {};
@@ -1150,7 +1216,8 @@ router.get("/", async (req, res) => {
       draftContacts.forEach((c) => { draftContactByEmail[String(c.email).trim().toLowerCase()] = c; });
       drafts.forEach((d) => {
         const contact = draftContactByEmail[String(d.parentEmail || "").trim().toLowerCase()] || null;
-        registrationDraftMap[d.draftToken] = {
+        const convertedParticipant = tmcParticipantMap[Number(d.convertedToParticipantId)] || null;
+        registrationDraftMap[d.draftToken] = convertedParticipant || {
           id: contact?.id || null,
           name: contact?.name || d.parentName || d.studentName || null,
           email: contact?.email || d.parentEmail || null,
@@ -1159,22 +1226,38 @@ router.get("/", async (req, res) => {
       });
     }
 
-    // For travel payments (invoiceId=null, contactId=null), resolve customer +
-    // invoice label from the TravelInvoice referenced in payment metadata.
+    // For travel payments, resolve customer + invoice label from the
+    // TravelInvoice referenced in payment metadata. Manual travel payments
+    // historically stored the generic invoiceId plus invoiceNum, so support
+    // both metadata shapes.
     const travelInvIdsToFetch = [];
+    const travelInvNumsToFetch = [];
     for (const p of payments) {
-      if (!p.contactId && !p.invoiceId) {
-        if (parsedMetaMap[p.id].travelInvoiceId) travelInvIdsToFetch.push(Number(parsedMetaMap[p.id].travelInvoiceId));
+      if (!p.contactId) {
+        const meta = parsedMetaMap[p.id];
+        if (meta.travelInvoiceId) travelInvIdsToFetch.push(Number(meta.travelInvoiceId));
+        if (meta.invoiceNum) travelInvNumsToFetch.push(String(meta.invoiceNum));
       }
     }
     const travelInvMap = {};
-    if (travelInvIdsToFetch.length > 0) {
+    const travelInvNumMap = {};
+    if (travelInvIdsToFetch.length > 0 || travelInvNumsToFetch.length > 0) {
       const uniqueTravelIds = [...new Set(travelInvIdsToFetch)];
+      const uniqueTravelNums = [...new Set(travelInvNumsToFetch)];
       const travelInvs = await prisma.travelInvoice.findMany({
-        where: { id: { in: uniqueTravelIds }, tenantId },
+        where: {
+          tenantId,
+          OR: [
+            ...(uniqueTravelIds.length > 0 ? [{ id: { in: uniqueTravelIds } }] : []),
+            ...(uniqueTravelNums.length > 0 ? [{ invoiceNum: { in: uniqueTravelNums } }] : []),
+          ],
+        },
         select: { id: true, invoiceNum: true, contactId: true, itineraryId: true },
       });
-      travelInvs.forEach((ti) => { travelInvMap[ti.id] = ti; });
+      travelInvs.forEach((ti) => {
+        travelInvMap[ti.id] = ti;
+        travelInvNumMap[ti.invoiceNum] = ti;
+      });
       // Batch-fetch any contacts we don't already have from travel invoices
       const extraCids = [...new Set(
         travelInvs.map((ti) => ti.contactId).filter((cid) => cid && !contactMap[cid])
@@ -1197,9 +1280,22 @@ router.get("/", async (req, res) => {
     if (invoiceIds.length > 0) {
       const invoices = await prisma.invoice.findMany({
         where: { id: { in: invoiceIds }, tenantId },
-        select: { id: true, visitId: true, invoiceNum: true },
+        select: { id: true, contactId: true, visitId: true, invoiceNum: true },
       });
       invoices.forEach((inv) => { invoiceMap[inv.id] = inv; });
+
+      // Manual and older gateway payment rows may only retain invoiceId.
+      // Load the invoice's contact so those payments still show a customer.
+      const invoiceContactIds = [...new Set(
+        invoices.map((inv) => inv.contactId).filter((id) => id && !contactMap[id])
+      )];
+      if (invoiceContactIds.length > 0) {
+        const invoiceContacts = await prisma.contact.findMany({
+          where: { id: { in: invoiceContactIds }, tenantId },
+          select: { id: true, name: true, email: true, phone: true },
+        });
+        invoiceContacts.forEach((c) => { contactMap[c.id] = c; });
+      }
     }
 
     const visitIdsToFetch = [];
@@ -1286,10 +1382,15 @@ router.get("/", async (req, res) => {
 
     res.json(payments.map((p) => {
       let contact = p.contactId ? (contactMap[p.contactId] || null) : null;
+      if (!contact && p.invoiceId) {
+        const invoiceContactId = invoiceMap[p.invoiceId]?.contactId;
+        contact = invoiceContactId ? (contactMap[invoiceContactId] || null) : null;
+      }
       let travelInvoiceNum = null;
       let itineraryId = null;
       if (!contact && parsedMetaMap[p.id]) {
-        const ti = travelInvMap[Number(parsedMetaMap[p.id].travelInvoiceId)];
+        const meta = parsedMetaMap[p.id];
+        const ti = travelInvMap[Number(meta.travelInvoiceId)] || travelInvNumMap[String(meta.invoiceNum)];
         if (ti) {
           travelInvoiceNum = ti.invoiceNum;
           if (ti.contactId) contact = contactMap[ti.contactId] || null;
@@ -1461,7 +1562,7 @@ router.get("/stats", verifyToken, async (req, res) => {
       // amount) doesn't NaN the whole aggregate.
       const amt = Number(r.amount) || 0;
       totalSum += amt;
-      if (status === "SUCCESS") {
+      if (["SUCCESS", "PAID", "CAPTURED"].includes(String(status).toUpperCase())) {
         successSum += amt;
       }
       if (r.createdAt && (lastCreatedAt === null || new Date(r.createdAt) > lastCreatedAt)) {

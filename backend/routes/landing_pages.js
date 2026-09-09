@@ -18,6 +18,7 @@ const {
   resolveLandingPagePaymentSelection,
 } = require("../lib/landingPagePayments");
 const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
+const { createDraftInvoiceForParticipant } = require("../lib/tmcParticipantInvoice");
 function publicFeaturedVerticalWhere(vertical) {
   const key = String(vertical || "").trim().toLowerCase();
   if (key !== "travel") return {};
@@ -7174,6 +7175,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
     );
     if (participant) {
       await materializeTripInstalmentsFromPlan({ db: prisma, tripId: page.tripId, participantIds: [participant.id], allowMissingPlan: true });
+      await createDraftInvoiceForParticipant({ db: prisma, tenantId, tripId: page.tripId, participantId: participant.id });
       await prisma.pendingTripRegistration.update({
         where: { id: draft.id },
         data: { status: "CONVERTED", convertedToParticipantId: participant.id },
@@ -7625,6 +7627,7 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
         db: prisma,
         tripId: page.tripId,
         participantId: participant.id,
+        paymentId: paymentRecord.id,
         amountMajor: paymentAmountMajor,
         mode: paymentMode,
         installmentIndex: paymentInstallmentIndex,
@@ -7689,6 +7692,7 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
 
     if (participant && page.tripId) {
       await materializeTripInstalmentsFromPlan({ db: prisma, tripId: page.tripId, participantIds: [participant.id], allowMissingPlan: true });
+      await createDraftInvoiceForParticipant({ db: prisma, tenantId, tripId: page.tripId, participantId: participant.id });
     }
 
     if (formProps.successRedirectUrl) {
@@ -8003,6 +8007,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
     if (participant && page.tripId) {
       await materializeTripInstalmentsFromPlan({ db: prisma, tripId: page.tripId, participantIds: [participant.id], allowMissingPlan: true });
+      await createDraftInvoiceForParticipant({ db: prisma, tenantId, tripId: page.tripId, participantId: participant.id });
     }
 
     if (paymentSubmission && (!participant || !paymentRecord)) {
@@ -8013,6 +8018,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
         db: prisma,
         tripId: page.tripId,
         participantId: participant.id,
+        paymentId: paymentRecord.id,
         amountMajor: paymentAmountMajor,
         mode: paymentMode,
         installmentIndex: paymentInstallmentIndex,

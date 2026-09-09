@@ -1,0 +1,445 @@
+import { useState } from "react";
+import { AlertCircle, CheckCircle2, Download } from "lucide-react";
+import {
+  buildBaseFileName,
+  buildCsv,
+  buildTallyMastersXml,
+  buildTallyXml,
+  buildVoucherRows,
+  validateExport,
+} from "./tallyExportBuilder";
+
+const button = {
+  border: 0,
+  borderRadius: 9,
+  padding: "10px 16px",
+  color: "white",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  fontWeight: 700,
+};
+const validationPanel = {
+  border: "1px solid var(--border-color, rgba(148,163,184,.2))",
+  borderRadius: 10,
+  padding: 12,
+  marginTop: 18,
+  background: "var(--card-bg, rgba(255,255,255,.04))",
+};
+const validationRow = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 13,
+};
+const th = {
+  padding: "8px 9px",
+  textAlign: "left",
+  color: "var(--text-secondary)",
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: ".02em",
+  borderBottom: "1px solid var(--border-color, rgba(148,163,184,.16))",
+  whiteSpace: "nowrap",
+};
+const td = {
+  padding: "9px",
+  borderBottom: "1px solid var(--border-color, rgba(148,163,184,.1))",
+  fontSize: 12,
+  verticalAlign: "top",
+};
+const rowHasIssue = (row) => {
+  const debit = Number(row[6] || 0);
+  const credit = Number(row[7] || 0);
+  const hasDebit = row[6] !== "" && row[6] != null;
+  const hasCredit = row[7] !== "" && row[7] != null;
+
+  return (
+    !String(row[0] || "").trim() ||
+    !String(row[1] || "").trim() ||
+    !String(row[2] || "").trim() ||
+    !String(row[3] || "").trim() ||
+    ((!hasDebit && !hasCredit) || (hasDebit && hasCredit)) ||
+    (hasDebit && debit <= 0) ||
+    (hasCredit && credit <= 0)
+  );
+};
+const summarizeVoucherTypes = (rows) =>
+  rows.slice(1).reduce((summary, row) => {
+    const voucherType = row[1] || "Unknown";
+    summary[voucherType] = (summary[voucherType] || 0) + 1;
+    return summary;
+  }, {});
+const summarizeVoucherAmounts = (rows) =>
+  rows.slice(1).reduce((summary, row) => {
+    const voucherType = row[1] || "Unknown";
+    const current = summary[voucherType] || { count: 0, debit: 0, credit: 0 };
+    current.count += 1;
+    current.debit += Number(row[6] || 0);
+    current.credit += Number(row[7] || 0);
+    summary[voucherType] = current;
+    return summary;
+  }, {});
+
+const downloadFile = (fileName, contents, type) => {
+  const blob = new Blob([contents], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
+
+export default function TallyExportActions({
+  accounts,
+  commonRows = [],
+  customers,
+  payables,
+  trips,
+  tripTaxes,
+  master,
+  selectedSubBrandLabel,
+  ledgerRows = [],
+  ledgerMappings = [],
+  voucherTypes = [],
+  onDownloadPdf,
+}) {
+  const voucherRows = buildVoucherRows({
+    accounts,
+    commonRows,
+    customers,
+    payables,
+    trips,
+    tripTaxes,
+    master,
+    selectedSubBrandLabel,
+    ledgerRows,
+    ledgerMappings,
+    voucherTypes,
+  });
+  const exportWarnings = validateExport({ master, voucherRows });
+  const hasVoucherRows = voucherRows.length > 1;
+  const voucherSummary = summarizeVoucherTypes(voucherRows);
+  const voucherAmountSummary = summarizeVoucherAmounts(voucherRows);
+  const [selectedVoucherType, setSelectedVoucherType] = useState("all");
+  const [mastersDownloaded, setMastersDownloaded] = useState(false);
+  const filteredRows = voucherRows
+    .slice(1)
+    .filter((row) => (selectedVoucherType === "all" ? true : row[1] === selectedVoucherType));
+  const previewRows = filteredRows.slice(0, 18);
+  const typeOptions = ["all", ...Object.keys(voucherSummary)];
+
+  const exportCsv = () => {
+    if (!hasVoucherRows) return;
+
+    downloadFile(
+      `${buildBaseFileName(master)}.csv`,
+      buildCsv(voucherRows),
+      "text/csv;charset=utf-8",
+    );
+  };
+
+  const exportXml = () => {
+    if (!hasVoucherRows) return;
+
+    downloadFile(
+      `${buildBaseFileName(master)}.xml`,
+      buildTallyXml({
+        companyName: master.companyName,
+        voucherRows,
+      }),
+      "application/xml;charset=utf-8",
+    );
+  };
+  const exportEducationalXml = () => {
+    if (!hasVoucherRows || !mastersDownloaded) return;
+    downloadFile(
+      `${buildBaseFileName(master)}-educational.xml`,
+      buildTallyXml({
+        companyName: master.companyName,
+        voucherRows,
+        educationalMode: true,
+      }),
+      "application/xml;charset=utf-8",
+    );
+  };
+  const exportAlterReceiptsXml = () => {
+    if (!hasVoucherRows || !mastersDownloaded) return;
+    downloadFile(
+      `${buildBaseFileName(master)}-alter-receipts.xml`,
+      buildTallyXml({
+        companyName: master.companyName,
+        voucherRows,
+        alterExistingReceipts: true,
+      }),
+      "application/xml;charset=utf-8",
+    );
+  };
+  const exportMastersXml = () => {
+    if (!hasVoucherRows) return;
+    downloadFile(
+      `${buildBaseFileName(master)}-masters.xml`,
+      buildTallyMastersXml({ companyName: master.companyName, voucherRows }),
+      "application/xml;charset=utf-8",
+    );
+    setMastersDownloaded(true);
+  };
+  return (
+    <>
+      <div style={validationPanel}>
+        <div
+          style={{
+            ...validationRow,
+            color: exportWarnings.length ? "#f59e0b" : "#10b981",
+            fontWeight: 700,
+          }}
+        >
+          {exportWarnings.length ? (
+            <AlertCircle size={16} />
+          ) : (
+            <CheckCircle2 size={16} />
+          )}
+          {exportWarnings.length
+            ? "Review before export"
+            : "Ready for export"}
+        </div>
+        <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+          {(exportWarnings.length
+            ? exportWarnings
+            : [`${voucherRows.length - 1} voucher rows prepared.`]
+          ).map((message) => (
+            <div
+              key={message}
+              style={{ color: "var(--text-secondary)", fontSize: 13 }}
+            >
+              {message}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ ...validationPanel, marginTop: 12 }}>
+        <div
+          style={{
+            ...validationRow,
+            justifyContent: "space-between",
+            alignItems: "baseline",
+          }}
+        >
+          <strong>Export voucher preview</strong>
+          <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+            Showing {previewRows.length} of {filteredRows.length}
+          </span>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            marginTop: 10,
+          }}
+        >
+          {typeOptions.map((type) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => setSelectedVoucherType(type)}
+              style={{
+                border: "1px solid var(--border-color, rgba(148,163,184,.2))",
+                borderRadius: 999,
+                padding: "4px 9px",
+                fontSize: 12,
+                color:
+                  selectedVoucherType === type
+                    ? "var(--text-primary)"
+                    : "var(--text-secondary)",
+                background:
+                  selectedVoucherType === type
+                    ? "rgba(59,130,246,.12)"
+                    : "transparent",
+                cursor: "pointer",
+              }}
+            >
+              {type === "all" ? "All vouchers" : `${type}: ${voucherSummary[type]}`}
+            </button>
+          ))}
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 10,
+            marginTop: 12,
+          }}
+        >
+          {Object.entries(voucherAmountSummary).map(([type, summary]) => (
+            <div
+              key={type}
+              style={{
+                border: "1px solid var(--border-color, rgba(148,163,184,.16))",
+                borderRadius: 10,
+                padding: 10,
+                background: "rgba(255,255,255,.02)",
+              }}
+            >
+              <strong style={{ display: "block", marginBottom: 6 }}>{type}</strong>
+              <small
+                style={{ display: "block", color: "var(--text-secondary)" }}
+              >
+                Entries: {summary.count}
+              </small>
+              <small
+                style={{ display: "block", color: "var(--text-secondary)" }}
+              >
+                Debit: {summary.debit.toFixed(2)}
+              </small>
+              <small
+                style={{ display: "block", color: "var(--text-secondary)" }}
+              >
+                Credit: {summary.credit.toFixed(2)}
+              </small>
+            </div>
+          ))}
+        </div>
+        <div style={{ overflowX: "auto", marginTop: 10 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={th}>Date</th>
+                <th style={th}>Type</th>
+                <th style={th}>Ledger</th>
+                <th style={th}>Party</th>
+                <th style={th}>Trip</th>
+                <th style={th}>Reference</th>
+                <th style={{ ...th, textAlign: "right" }}>Debit</th>
+                <th style={{ ...th, textAlign: "right" }}>Credit</th>
+                <th style={th}>Narration</th>
+                <th style={th}>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {previewRows.length ? (
+                previewRows.map((row, index) => (
+                  <tr
+                    key={`${row[5] || row[2]}-${index}`}
+                    style={
+                      rowHasIssue(row)
+                        ? { background: "rgba(245, 158, 11, 0.08)" }
+                        : undefined
+                    }
+                  >
+                    <td style={td}>{row[0] || "-"}</td>
+                    <td style={td}>{row[1] || "-"}</td>
+                    <td style={td}>{row[2] || "-"}</td>
+                    <td style={td}>{row[3] || "-"}</td>
+                    <td style={td}>{row[4] || "-"}</td>
+                    <td style={td}>{row[5] || "-"}</td>
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {row[6] || "-"}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {row[7] || "-"}
+                    </td>
+                    <td style={td}>{row[8] || "-"}</td>
+                    <td style={td}>{row[9] || "-"}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td style={td} colSpan={10}>
+                    <span style={{ color: "var(--text-secondary)" }}>
+                      No voucher rows available for preview.
+                    </span>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: 10,
+          marginTop: 18,
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ width: "100%", textAlign: "right", color: "var(--text-secondary)", fontSize: 12 }}>
+          Import order: 1. Masters XML through Tally Masters, 2. Voucher XML through Tally Transactions.
+        </span>
+        <button
+          type="button"
+          onClick={exportCsv}
+          disabled={!hasVoucherRows}
+          style={{
+            ...button,
+            background: hasVoucherRows ? "#0f766e" : "#64748b",
+            cursor: hasVoucherRows ? "pointer" : "not-allowed",
+          }}
+        >
+          <Download size={15} /> Download CSV
+        </button>
+        <button
+          type="button"
+          onClick={exportMastersXml}
+          disabled={!hasVoucherRows}
+          style={{
+            ...button,
+            background: hasVoucherRows ? "#0369a1" : "#64748b",
+            cursor: hasVoucherRows ? "pointer" : "not-allowed",
+          }}
+        >
+          <Download size={15} /> Download Masters XML
+        </button>
+        <button
+          type="button"
+          onClick={exportXml}
+          disabled={!hasVoucherRows || !mastersDownloaded}
+          title={mastersDownloaded ? "Download voucher transactions" : "Download the Masters XML first"}
+          style={{
+            ...button,
+            background: hasVoucherRows && mastersDownloaded ? "#7c3aed" : "#64748b",
+            cursor: hasVoucherRows && mastersDownloaded ? "pointer" : "not-allowed",
+          }}
+        >
+          <Download size={15} /> Download Voucher XML
+        </button>
+        <button
+          type="button"
+          onClick={exportEducationalXml}
+          disabled={!hasVoucherRows || !mastersDownloaded}
+          title="For unlicensed Tally Educational Mode; dates are moved to the first day of each month"
+          style={{
+            ...button,
+            background: hasVoucherRows && mastersDownloaded ? "#b45309" : "#64748b",
+            cursor: hasVoucherRows && mastersDownloaded ? "pointer" : "not-allowed",
+          }}
+        >
+          <Download size={15} /> Educational Voucher XML
+        </button>
+        <button
+          type="button"
+          onClick={exportAlterReceiptsXml}
+          disabled={!hasVoucherRows || !mastersDownloaded}
+          title="Alter existing paid Sales and Receipt vouchers using their existing voucher numbers"
+          style={{
+            ...button,
+            background: hasVoucherRows && mastersDownloaded ? "#be123c" : "#64748b",
+            cursor: hasVoucherRows && mastersDownloaded ? "pointer" : "not-allowed",
+          }}
+        >
+          <Download size={15} /> Alter Existing Paid Vouchers XML
+        </button>
+        <button
+          type="button"
+          onClick={onDownloadPdf}
+          style={{ ...button, background: "#5b7cfa" }}
+        >
+          <Download size={15} /> Download PDF
+        </button>
+      </div>
+    </>
+  );
+}

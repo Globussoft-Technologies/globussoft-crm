@@ -271,7 +271,7 @@ router.get("/detailed/:type", async (req, res) => {
 
     // Resolve the per-type where + query fns once so count + page stay in sync.
     let where = null;
-    let orderBy = { createdAt: 'desc' };
+    let orderBy = [{ createdAt: 'desc' }, { id: 'desc' }];
     let include = undefined;
     let countModel = null;
     let findModel = null;
@@ -302,7 +302,7 @@ router.get("/detailed/:type", async (req, res) => {
       // #117: filter on issuedDate for invoices (the model has no createdAt).
       where = buildWhere(req, startDate, endDate, {}, 'issuedDate');
       if (status) where.status = status;
-      orderBy = { issuedDate: 'desc' };
+      orderBy = [{ issuedDate: 'desc' }, { id: 'desc' }];
       include = { contact: { select: { name: true, email: true } } };
       countModel = prisma.invoice; findModel = prisma.invoice;
     } else if (type === 'expenses') {

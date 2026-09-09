@@ -55,7 +55,7 @@ router.get("/", async (req, res) => {
       : (parsedPage - 1) * parsedLimit;
     const findManyArgs = {
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     };
     if (paginated) { findManyArgs.skip = skip; findManyArgs.take = parsedLimit; }
     if (isSummary) {

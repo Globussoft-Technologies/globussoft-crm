@@ -197,21 +197,46 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
       return res.status(400).json({ error: "Enter a valid email address" });
     }
 
+    const configuredTenantIdRaw = String(process.env.PUBLIC_LEAD_TENANT_ID || "").trim();
+    const configuredTenantSlug = String(process.env.PUBLIC_LEAD_TENANT_SLUG || "").trim();
+    if (!configuredTenantIdRaw && !configuredTenantSlug) {
+      return res.status(503).json({ error: "Lead capture is not configured" });
+    }
+
+    const configuredTenantId = configuredTenantIdRaw
+      ? Number(configuredTenantIdRaw)
+      : null;
+    if (
+      configuredTenantIdRaw &&
+      (!Number.isInteger(configuredTenantId) || configuredTenantId < 1)
+    ) {
+      console.error("[auth/public/lead-inquiry] PUBLIC_LEAD_TENANT_ID must be a positive integer");
+      return res.status(503).json({ error: "Lead capture is not configured" });
+    }
+
     const tenant = await prisma.tenant.findFirst({
-      where: { vertical: "generic", isActive: true },
-      orderBy: { id: "asc" },
-      select: { id: true },
+      where: {
+        vertical: "generic",
+        isActive: true,
+        ...(configuredTenantId ? { id: configuredTenantId } : {}),
+        ...(configuredTenantSlug ? { slug: configuredTenantSlug } : {}),
+      },
+      select: { id: true, slug: true },
     });
     if (!tenant) return res.status(503).json({ error: "Lead capture is not configured" });
 
     // Use the same WebForm relation as configurable public forms so every
-    // landing inquiry can be surfaced in the Leads table.
+    // landing inquiry can be surfaced in the Leads table. Include the resolved
+    // tenant id in the globally unique slug and verify the upsert result before
+    // writing a submission, so a pre-existing form can never redirect public
+    // lead data into a different tenant.
+    const landingFormSlug = `globus-crm-landing-${tenant.id}`;
     const landingForm = await prisma.webForm.upsert({
-      where: { slug: "globus-crm-landing" },
+      where: { slug: landingFormSlug },
       update: {},
       create: {
         name: "Landing Page",
-        slug: "globus-crm-landing",
+        slug: landingFormSlug,
         description: "Public Globus CRM trial inquiry form",
         fieldsJson: JSON.stringify([
           { sourceKey: "name", fieldType: "text", sourceKind: "contact" },
@@ -225,6 +250,10 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
         tenantId: tenant.id,
       },
     });
+    if (landingForm.tenantId !== tenant.id) {
+      console.error("[auth/public/lead-inquiry] landing form belongs to a different tenant");
+      return res.status(503).json({ error: "Lead capture is not configured" });
+    }
 
     const submissionPayload = JSON.stringify({ name, email, phone, company, companySize });
     const existing = await prisma.contact.findFirst({

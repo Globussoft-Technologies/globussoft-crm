@@ -703,6 +703,10 @@ describe('GET /api/deals?fields=summary — slim-shape opt-in (#920 slice 2)', (
     const findArgs = prisma.deal.findMany.mock.calls[0][0];
     expect(findArgs.take).toBe(25);
     expect(findArgs.skip).toBe(50);
+    expect(findArgs.orderBy).toEqual([
+      { createdAt: 'desc' },
+      { id: 'desc' },
+    ]);
     // Slim path still in effect — pagination doesn't override the shape.
     expect(findArgs.select).toBeDefined();
     expect(findArgs.include).toBeUndefined();

@@ -3010,9 +3010,7 @@ const Leads = () => {
         { key: "amount", label: "Amount" },
       ]
       : []),
-  ].filter((column) =>
-    !isGeneric || preferredVisibleColumns.includes(column.key),
-  );
+  ];
   const isLeadFixedColumnVisible = (key) =>
     leadFixedExtraColumnDefs.some((column) => column.key === key);
   const getCustomFieldFilterKind = (fieldType) => {
@@ -6785,7 +6783,6 @@ const Leads = () => {
                               onSave={updateLeadInlineValue}
                               required
                               editOnDisplayClick={false}
-                              showEditButton={false}
                               renderValue={(name) => (
                                 <a
                                   href={leadDetailPath(lead)}

@@ -139,7 +139,10 @@ function CategoryBadge({ category }) {
 }
 
 const EMPTY_FORM = {
-  expenseType: '',
+  // Office is the legacy/default expense source. Keeping it selected makes
+  // the common expense fields available immediately while still allowing
+  // operators to switch to a trip expense explicitly.
+  expenseType: 'OFFICE',
   subBrand: '',
   quoteId: '',
   tmcTripId: '',

@@ -961,11 +961,7 @@ export default function SuppliersAdmin() {
     e.preventDefault();
     const f = payableForm[supplierId] || EMPTY_PAYABLE_FORM;
     const quoteId = String(f.quoteId || "").trim();
-    if (!quoteId) {
-      notify.error("Quote ID is required");
-      return;
-    }
-    if (!/^QT-?\d+$/i.test(quoteId)) {
+    if (quoteId && !/^QT-?\d+$/i.test(quoteId)) {
       notify.error("Quote ID must look like QT-0001");
       return;
     }
@@ -988,7 +984,7 @@ export default function SuppliersAdmin() {
       await fetchApi(`/api/travel/suppliers/${supplierId}/payables`, {
         method: "POST",
         body: JSON.stringify({
-          quoteId: quoteId.replace(/^QT-/i, ""),
+          quoteId: quoteId ? quoteId.replace(/^QT-/i, "") : null,
           description: descTrimmed,
           amount: amountNum,
           dueDate: f.dueDate || null,
@@ -2820,7 +2816,6 @@ function renderPayablesPanel({
             onChange={(e) => onFormChange({ quoteId: e.target.value })}
             style={inputStyle}
             aria-label={`Payable quote ID for ${supplier.name}`}
-            required
           >
             <option value="">{quotesLoading ? "Loading quotes…" : "Select Quote ID *"}</option>
             {quotes.map((quote) => (

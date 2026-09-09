@@ -1688,7 +1688,10 @@ export default function QuoteBuilder() {
     }
     return {
       contactId: contactIdInt,
-      totalAmount: Number(grandTotal.toFixed(2)),
+      // Persist the customer-facing quote total before GST/TCS. Tax is stored
+      // separately in gstTcsAmount; this also keeps pricing-preview markup
+      // informational and out of the draft header total.
+      totalAmount: Number(taxable.toFixed(2)),
       gstTcsPercent: Number(taxPct) || 0,
       gstTcsAmount: Number(taxAmount.toFixed(2)),
       currency: currency || "INR",

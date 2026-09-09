@@ -87,6 +87,19 @@ test("direct Tally push rejects malformed XML before contacting a connector", as
   expect((await response.json()).code).toBe("INVALID_TALLY_XML");
 });
 
+test("direct Tally push rejects destructive XML before contacting a connector", async ({ request }) => {
+  const token = await travelAdmin(request);
+  if (!token) test.skip(true, "travel admin login unavailable");
+  const destructiveXml = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><VOUCHER ACTION="Delete"><VOUCHERNUMBER>TEST-1</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
+  const response = await request.post(`${BASE_URL}/api/travel/tally/connector/push`, {
+    headers: headers(token),
+    data: { vouchersXml: destructiveXml },
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(response.status()).toBe(400);
+  expect((await response.json()).code).toBe("UNSAFE_TALLY_XML");
+});
+
 test("Tally read endpoints return their pagination-safe envelopes", async ({ request }) => {
   const token = await travelAdmin(request);
   if (!token) test.skip(true, "travel admin login unavailable");

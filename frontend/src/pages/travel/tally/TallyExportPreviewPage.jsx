@@ -11,6 +11,8 @@ import { useTravelTallyMaster } from "./useTravelTallyMaster";
 import tallyIcon from "../../../assets/tally-icon.png";
 
 const field = (value) => value == null || value === "" ? "—" : String(value);
+const requestConnectorStatus = (silent = true) =>
+  fetchApi("/api/travel/tally/connector/status", { silent });
 
 export default function TallyExportPreviewPage() {
   const { tripId } = useParams();
@@ -33,17 +35,26 @@ export default function TallyExportPreviewPage() {
   });
   const [pushNotice, setPushNotice] = useState(null);
   const [pushing, setPushing] = useState(false);
+  const [mastersDownloaded, setMastersDownloaded] = useState(false);
   useEffect(() => setTallyPreviewSelection("voucher:0"), [tripId]);
 
   useEffect(() => {
     let cancelled = false;
-    const loadStatus = () => fetchApi("/api/travel/tally/connector/status", { silent: true })
+    const loadStatus = () => requestConnectorStatus(true)
       .then((status) => { if (!cancelled) setConnectorStatus(status); })
       .catch(() => { if (!cancelled) setConnectorStatus(null); });
     loadStatus();
     const timer = setInterval(loadStatus, 15_000);
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
+
+  const refreshConnectorStatus = async () => {
+    try {
+      setConnectorStatus(await requestConnectorStatus(false));
+    } catch (_) {
+      setConnectorStatus(null);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -114,13 +125,6 @@ export default function TallyExportPreviewPage() {
   const pushTripDirectly = async () => {
     const exportData = buildTripExport();
     if (!exportData || !connectorStatus?.online || summary?.unpaidSales > 0) return;
-    const pushKey = `travel-tally-pushed:${tripId}:${educationalMode ? "educational" : "normal"}`;
-    try {
-      if (window.localStorage.getItem(pushKey) === "true") {
-        setPushNotice({ title: "Trip already pushed", message: "This trip was already pushed successfully to Tally. Please verify the existing voucher before pushing it again." });
-        return;
-      }
-    } catch (_) { /* optional browser preference */ }
     const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows: exportData.voucherRows });
     const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows: exportData.voucherRows, educationalMode });
     setPushing(true);
@@ -133,7 +137,6 @@ export default function TallyExportPreviewPage() {
         }),
       });
       const tally = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
-      try { window.localStorage.setItem(pushKey, "true"); } catch (_) { /* optional browser preference */ }
       notify.success(`Trip pushed to Tally. Created ${tally?.created || 0}, altered ${tally?.altered || 0}.`);
     } catch (error) {
       if (error.code === "TALLY_DUPLICATE_PUSH") {
@@ -146,6 +149,23 @@ export default function TallyExportPreviewPage() {
     } finally {
       setPushing(false);
     }
+  };
+  const downloadTripMastersXml = () => {
+    const exportData = buildTripExport();
+    if (!exportData) return;
+    downloadXmlFile(
+      `${exportData.fileName}-masters.xml`,
+      buildTallyMastersXml({ companyName: master.companyName, voucherRows: exportData.voucherRows }),
+    );
+    setMastersDownloaded(true);
+  };
+  const downloadTripVoucherXml = () => {
+    const exportData = buildTripExport();
+    if (!exportData || !mastersDownloaded) return;
+    downloadXmlFile(
+      `${exportData.fileName}${educationalMode ? "-educational" : ""}-vouchers.xml`,
+      buildTallyXml({ companyName: master.companyName, voucherRows: exportData.voucherRows, educationalMode }),
+    );
   };
   const generateConnectorCredentials = async () => {
     setGeneratingCredentials(true);
@@ -182,21 +202,21 @@ export default function TallyExportPreviewPage() {
   const selectedPreview = previewOptions.find((option) => option.value === tallyPreviewSelection) || previewOptions[0];
 
   if (loading) return <main style={page}><p>Loading Tally export preview…</p></main>;
-  if (!tripId) return <main style={page}><button type="button" onClick={() => navigate("/travel/tally")} style={button}><ArrowLeft size={15} /> Back to Tally Export</button><section style={card}><span style={eyebrow}>Tally Export</span><h1>All Trips</h1><p style={muted}>Paid Sales and Cash Profit use customer payments received. Unpaid invoice value remains outstanding.</p><div style={{ ...connectorPanel, borderColor: connectorStatus?.online ? "#10b981" : undefined }}><div style={connectorHeader}><div><strong>Direct Tally connector</strong><small style={{ display: "block", color: connectorStatus?.online ? "#10b981" : "var(--text-secondary)" }}>{connectorStatus?.online ? `Online${connectorStatus.machineId ? ` on ${connectorStatus.machineId}` : ""}` : connectorStatus?.configured ? "Configured, but currently offline" : "Not configured"}</small></div><div style={connectorButtons}><button type="button" onClick={() => navigate("/travel/tally/export")} style={smallButton}>Refresh status</button><PermissionGate module="tally" action="update"><button type="button" onClick={generateConnectorCredentials} disabled={generatingCredentials} style={smallButton}><KeyRound size={14} /> {generatingCredentials ? "Generating…" : connectorStatus?.configured ? "Rotate credentials" : "Generate credentials"}</button></PermissionGate></div></div>{connectorCredentials && <div style={credentialNotice}><strong>Save this configuration now</strong><small>The token is shown only once. Download it before leaving this page.</small><button type="button" onClick={downloadConnectorConfig} style={smallButton}><Download size={14} /> Download config.json</button></div>}<small style={muted}>Run the connector on the Windows computer where Tally is open on localhost port 9000.</small></div><div style={{ overflowX: "auto" }}><table style={table}><thead><tr>{["Trip", "Status", "Paid Sales", "Purchase", "GST / TCS", "Cash Profit / Loss", "Actions"].map((label) => <th key={label} style={th}>{label}</th>)}</tr></thead><tbody>{allRows.map((row) => <tr key={row.id}><td style={td}><strong>{row.label}</strong><small style={{ display: "block", color: "var(--text-secondary)" }}>Trip #{row.id}</small></td><td style={td}>{row.status}</td><td style={td}>{formatMoney(row.sales)}{row.unpaidSales > 0 && <><small style={{ display: "block", color: "#f59e0b" }}>Unpaid: {formatMoney(row.unpaidSales)}</small><small style={tallyWarning}>⚠ Do not push to Tally — the remaining amount may create duplicate records.</small></>}</td><td style={td}>{formatMoney(row.purchase)}</td><td style={td}>{formatMoney(row.gst + row.tcs)}</td><td style={td}>{formatMoney(row.profit)}</td><td style={td}><button type="button" aria-label={`Preview ${row.label}`} title={row.unpaidSales > 0 ? "Do not push to Tally while this trip has an outstanding amount" : `Preview ${row.label}`} onClick={() => navigate(`/travel/tally/export/${row.id}`)} style={iconButton}><img src={tallyIcon} alt="" style={tallyIconStyle} /></button></td></tr>)}</tbody></table></div></section></main>;
+  if (!tripId) return <main style={page}><button type="button" onClick={() => navigate("/travel/tally")} style={button}><ArrowLeft size={15} /> Back to Tally Export</button><section style={card}><span style={eyebrow}>Tally Export</span><h1>All Trips</h1><p style={muted}>Paid Sales and Cash Profit use customer payments received. Unpaid invoice value remains outstanding.</p><div style={{ ...connectorPanel, borderColor: connectorStatus?.online ? "#10b981" : undefined }}><div style={connectorHeader}><div><strong>Direct Tally connector</strong><small style={{ display: "block", color: connectorStatus?.online ? "#10b981" : "var(--text-secondary)" }}>{connectorStatus?.online ? `Online${connectorStatus.machineId ? ` on ${connectorStatus.machineId}` : ""}` : connectorStatus?.configured ? "Configured, but currently offline" : "Not configured"}</small></div><div style={connectorButtons}><button type="button" onClick={refreshConnectorStatus} style={smallButton}>Refresh status</button><PermissionGate module="tally" action="update"><button type="button" onClick={generateConnectorCredentials} disabled={generatingCredentials} style={smallButton}><KeyRound size={14} /> {generatingCredentials ? "Generating…" : connectorStatus?.configured ? "Rotate credentials" : "Generate credentials"}</button></PermissionGate></div></div>{connectorCredentials && <div style={credentialNotice}><strong>Save this configuration now</strong><small>The token is shown only once. Download it before leaving this page.</small><button type="button" onClick={downloadConnectorConfig} style={smallButton}><Download size={14} /> Download config.json</button></div>}<small style={muted}>Run the connector on the Windows computer where Tally is open on localhost port 9000.</small></div><div style={{ overflowX: "auto" }}><table style={table}><thead><tr>{["Trip", "Status", "Paid Sales", "Purchase", "GST / TCS", "Cash Profit / Loss", "Actions"].map((label) => <th key={label} style={th}>{label}</th>)}</tr></thead><tbody>{allRows.map((row) => <tr key={row.id}><td style={td}><strong>{row.label}</strong><small style={{ display: "block", color: "var(--text-secondary)" }}>Trip #{row.id}</small></td><td style={td}>{row.status}</td><td style={td}>{formatMoney(row.sales)}{row.unpaidSales > 0 && <><small style={{ display: "block", color: "#f59e0b" }}>Unpaid: {formatMoney(row.unpaidSales)}</small><small style={tallyWarning}>⚠ Do not push to Tally — the remaining amount may create duplicate records.</small></>}</td><td style={td}>{formatMoney(row.purchase)}</td><td style={td}>{formatMoney(row.gst + row.tcs)}</td><td style={td}>{formatMoney(row.profit)}</td><td style={td}><button type="button" aria-label={`Preview ${row.label}`} title={row.unpaidSales > 0 ? "Do not push to Tally while this trip has an outstanding amount" : `Preview ${row.label}`} onClick={() => navigate(`/travel/tally/export/${row.id}`)} style={iconButton}><img src={tallyIcon} alt="" style={tallyIconStyle} /></button></td></tr>)}</tbody></table></div></section></main>;
   if (!trip || !summary) return <main style={page}><button type="button" onClick={() => navigate("/travel/tally")} style={button}><ArrowLeft size={15} /> Back to Tally Export</button><section style={card}><h1>Trip not found</h1><p style={muted}>This trip is no longer available for export.</p></section></main>;
 
   return <main style={page}>
     {pushNotice && <TallyPushNotice notice={pushNotice} onClose={() => setPushNotice(null)} />}
     <button type="button" onClick={() => navigate("/travel/tally")} style={button}><ArrowLeft size={15} /> Back to Tally Export</button>
     <section style={card}>
-      <div style={header}><div><span style={eyebrow}>Tally Export Preview</span><h1 style={{ margin: "5px 0 0" }}>{summary.label}</h1><p style={muted}>Complete trip accounting details prepared for direct Tally push.</p><small style={muted}>Masters and vouchers are sent automatically in the correct order.</small></div></div>
+      <div style={header}><div><span style={eyebrow}>Tally Export Preview</span><h1 style={{ margin: "5px 0 0" }}>{summary.label}</h1><p style={muted}>Complete trip accounting details prepared for direct Tally push or manual XML export.</p><small style={muted}>Import Masters XML before Voucher XML when importing manually.</small></div></div>
       <div style={detailsGrid}><Detail label="Trip ID" value={`#${trip.id}`} /><Detail label="Status" value={summary.status} /><Detail label="Trip Code" value={trip.tripCode} /><Detail label="Destination" value={trip.destination} /><Detail label="Start Date" value={trip.startDate || trip.fromDate} /><Detail label="End Date" value={trip.endDate || trip.toDate} /><Detail label="Company" value={master.companyName} /><Detail label="Sub-brand" value={master.subBrand === "all" ? "All" : master.subBrand} /></div>
       <div style={voucher}><div style={voucherHeader}>Tally voucher summary <span>Globussoft</span></div><div style={summaryGrid}><Metric label="Paid sales" value={summary.sales} /><Metric label="Unpaid sales" value={summary.unpaidSales} /><Metric label="Purchase" value={summary.purchase} /><Metric label="Cash profit / loss" value={summary.profit} positive={summary.profit >= 0} /><Metric label="Accrual profit / loss" value={summary.accrualProfit} positive={summary.accrualProfit >= 0} /></div></div>
       <TallyPreviewSelector options={previewOptions} value={selectedPreview?.value || ""} onChange={setTallyPreviewSelection} />
       {selectedPreview?.kind === "voucher" ? <TallyVoucherPreview row={selectedPreview.row} companyName={master.companyName} /> : selectedPreview ? <TallyLedgerPreview ledger={selectedPreview.ledger} rows={previewRows} /> : <p style={muted}>No voucher or ledger data available for preview.</p>}
     </section>
     <section style={card}><h2 style={sectionTitle}>All trip records</h2><RecordTable title="Customer invoices & receipts" rows={customers} columns={["name", "reference", "invoiceTotal", "amount"]} labels={["Party", "Reference", "Invoice", "Received"]} /><RecordTable title="Expenses" rows={payables} columns={["name", "reference", "amount", "status"]} labels={["Supplier", "Reference", "Amount", "Status"]} /></section>
-    <div style={bottomPush}><PermissionGate module="tally" action="export"><button type="button" onClick={pushTripDirectly} disabled={!connectorStatus?.online || pushing || summary.unpaidSales > 0} title={summary.unpaidSales > 0 ? "Direct push is blocked while the trip has an outstanding amount" : connectorStatus?.online ? "Send masters and vouchers directly to local Tally" : "Start the local Tally connector first"} style={{ ...downloadButton, background: connectorStatus?.online && !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", borderColor: connectorStatus?.online && !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", cursor: connectorStatus?.online && !pushing && summary.unpaidSales <= 0 ? "pointer" : "not-allowed" }}><UploadCloud size={16} /> {pushing ? "Pushing…" : "Push directly to Tally"}</button></PermissionGate><label style={educationalToggle}><input type="checkbox" checked={educationalMode} onChange={(event) => { const enabled = event.target.checked; setEducationalMode(enabled); try { window.localStorage.setItem("travel-tally-educational-mode", String(enabled)); } catch (_) { /* optional preference */ } }} /> Tally is running in Educational Mode <small>(uses the first day of each month)</small></label></div>
+    <div style={bottomPush}><div style={connectorButtons}><button type="button" onClick={downloadTripMastersXml} style={{ ...downloadButton, background: "#0369a1", borderColor: "#0369a1" }}><Download size={16} /> Download Masters XML</button><button type="button" onClick={downloadTripVoucherXml} disabled={!mastersDownloaded} title={mastersDownloaded ? "Download voucher transactions" : "Download and import Masters XML first"} style={{ ...downloadButton, opacity: mastersDownloaded ? 1 : 0.55, cursor: mastersDownloaded ? "pointer" : "not-allowed" }}><Download size={16} /> Download {educationalMode ? "Educational " : ""}Voucher XML</button><PermissionGate module="tally" action="export"><button type="button" onClick={pushTripDirectly} disabled={!connectorStatus?.online || pushing || summary.unpaidSales > 0} title={summary.unpaidSales > 0 ? "Direct push is blocked while the trip has an outstanding amount" : connectorStatus?.online ? "Send masters and vouchers directly to local Tally" : "Start the local Tally connector first"} style={{ ...downloadButton, background: connectorStatus?.online && !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", borderColor: connectorStatus?.online && !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", cursor: connectorStatus?.online && !pushing && summary.unpaidSales <= 0 ? "pointer" : "not-allowed" }}><UploadCloud size={16} /> {pushing ? "Pushing…" : "Push directly to Tally"}</button></PermissionGate></div><label style={educationalToggle}><input type="checkbox" checked={educationalMode} onChange={(event) => { const enabled = event.target.checked; setEducationalMode(enabled); try { window.localStorage.setItem("travel-tally-educational-mode", String(enabled)); } catch (_) { /* optional preference */ } }} /> Tally is running in Educational Mode <small>(uses the first day of each month)</small></label></div>
   </main>;
 }
 

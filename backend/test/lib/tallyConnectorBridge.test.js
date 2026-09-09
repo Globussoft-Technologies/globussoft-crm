@@ -1,5 +1,6 @@
 import http from "node:http";
 import { WebSocket } from "ws";
+import { Server as SocketIOServer } from "socket.io";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createRequire } from "node:module";
 
@@ -14,10 +15,32 @@ const {
   sendTallyJob,
 } = requireCJS("../../lib/tallyConnectorBridge");
 const prisma = requireCJS("../../lib/prisma");
+const { attachCallifiedAgentBridge } = requireCJS("../../lib/callifiedAgentBridge");
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("Tally connector bridge", () => {
+  test("coexists with Callified and Socket.IO WebSocket upgrades", async () => {
+    const server = http.createServer();
+    attachCallifiedAgentBridge(server);
+    attachTallyConnectorBridge(server);
+    const io = new SocketIOServer(server, { transports: ["websocket"] });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const client = new WebSocket(
+      `ws://127.0.0.1:${address.port}/socket.io/?EIO=4&transport=websocket`,
+    );
+
+    const handshake = await new Promise((resolve, reject) => {
+      client.once("message", (data) => resolve(String(data)));
+      client.once("error", reject);
+    });
+    expect(handshake).toMatch(/^0\{/);
+
+    client.close();
+    await new Promise((resolve) => client.once("close", resolve));
+    await new Promise((resolve) => io.close(resolve));
+  });
   test("generates one-time credentials while storing only the token hash", () => {
     const credentials = createConnectorCredentials();
     expect(credentials.token).toMatch(/^[a-f0-9]{64}$/);

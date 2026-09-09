@@ -855,7 +855,10 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     const fileRecords = [];
 
-    const contactData = { source: "website-form", status: "Lead" };
+    const contactData = {
+      source: formScope === "travel" ? "inbound:web_form" : "website-form",
+      status: "Lead",
+    };
 
     const missing = [];
 

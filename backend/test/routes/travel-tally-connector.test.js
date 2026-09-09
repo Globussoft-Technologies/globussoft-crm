@@ -7,6 +7,7 @@ import prisma from "../../lib/prisma.js";
 
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+const SAFE_VOUCHER_XML = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><VOUCHER ACTION="Create"><VOUCHERNUMBER>TEST-1</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
 
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
@@ -81,8 +82,25 @@ describe("travel Tally connector routes", () => {
     expect(malformed.status).toBe(400);
     expect(malformed.body.code).toBe("INVALID_TALLY_XML");
 
-    const offline = await request(makeApp()).post("/api/travel/tally/connector/push").set(auth()).send({ vouchersXml: "<ENVELOPE></ENVELOPE>" });
+    const offline = await request(makeApp()).post("/api/travel/tally/connector/push").set(auth()).send({ vouchersXml: SAFE_VOUCHER_XML });
     expect(offline.status).toBe(503);
     expect(offline.body.code).toBe("TALLY_CONNECTOR_OFFLINE");
+  });
+
+  test.each([
+    ["delete action", SAFE_VOUCHER_XML.replace('ACTION="Create"', 'ACTION="Delete"')],
+    ["alter action", SAFE_VOUCHER_XML.replace('ACTION="Create"', 'ACTION="Alter"')],
+    ["DTD declaration", SAFE_VOUCHER_XML.replace("<ENVELOPE>", '<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><ENVELOPE>')],
+    ["TDL operation", SAFE_VOUCHER_XML.replace("<REQUESTDATA>", "<REQUESTDATA><TDL><TDLMESSAGE /></TDL>")],
+    ["master object in voucher payload", SAFE_VOUCHER_XML.replace("<VOUCHER ACTION=\"Create\"><VOUCHERNUMBER>TEST-1</VOUCHERNUMBER></VOUCHER>", '<LEDGER NAME="Bad" ACTION="Create"><NAME>Bad</NAME></LEDGER>')],
+  ])("rejects unsafe Tally XML: %s", async (_label, vouchersXml) => {
+    const response = await request(makeApp())
+      .post("/api/travel/tally/connector/push")
+      .set(auth())
+      .send({ vouchersXml });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("UNSAFE_TALLY_XML");
+    expect(prisma.travelTallySyncLog.create).not.toHaveBeenCalled();
   });
 });

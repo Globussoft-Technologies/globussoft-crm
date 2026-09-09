@@ -39,6 +39,45 @@ function validXml(value) {
   return /<ENVELOPE(?:\s|>)/i.test(xml) && /<\/ENVELOPE>\s*$/i.test(xml);
 }
 
+function validateImportXml(value, stage) {
+  const xml = String(value || "").trim();
+  if (!validXml(xml)) return { valid: false, reason: "Valid Tally ENVELOPE XML is required" };
+
+  if (
+    /<!DOCTYPE|<!ENTITY|<\?(?!xml\b)|<TDL(?:\s|>)|<EXPORTDATA(?:\s|>)|<FUNCTION(?:\s|>)/i.test(xml)
+  ) {
+    return { valid: false, reason: "Tally XML contains a prohibited declaration or operation" };
+  }
+  if (!/<TALLYREQUEST>\s*Import Data\s*<\/TALLYREQUEST>/i.test(xml) || !/<IMPORTDATA(?:\s|>)/i.test(xml)) {
+    return { valid: false, reason: "Only Tally Import Data envelopes are allowed" };
+  }
+  if (/<(?:ISDELETED|ISCANCELLED|CANCELLED)>\s*Yes\s*<\//i.test(xml)) {
+    return { valid: false, reason: "Delete and cancellation operations are not allowed" };
+  }
+
+  const objects = [...xml.matchAll(/<TALLYMESSAGE\b[^>]*>\s*<([A-Z][A-Z0-9_.-]*)\b([^>]*)>/gi)];
+  const objectTypes = objects.map((match) => match[1].toUpperCase());
+  if (objectTypes.length === 0) {
+    return { valid: false, reason: "Tally XML does not contain any import objects" };
+  }
+  const actionTokens = [...xml.matchAll(/\bACTION\s*=/gi)];
+  const allObjectsCreate = objects.every((match) => /\bACTION\s*=\s*["']Create["']/i.test(match[2]));
+  if (!allObjectsCreate || actionTokens.length !== objects.length) {
+    return { valid: false, reason: "Only explicit ACTION=Create operations are allowed" };
+  }
+
+  const expectedReport = stage === "masters" ? "All Masters" : "Vouchers";
+  if (!new RegExp(`<REPORTNAME>\\s*${expectedReport}\\s*</REPORTNAME>`, "i").test(xml)) {
+    return { valid: false, reason: `The ${stage} payload has an unexpected Tally report type` };
+  }
+  const allowedTypes = stage === "masters" ? new Set(["LEDGER", "VOUCHERTYPE"]) : new Set(["VOUCHER"]);
+  if (objectTypes.some((type) => !allowedTypes.has(type))) {
+    return { valid: false, reason: `The ${stage} payload contains an unsupported Tally object` };
+  }
+
+  return { valid: true, xml };
+}
+
 router.get("/status", ...guards, requirePermission("tally", "read"), async (req, res) => {
   try {
     const integration = await prisma.integration.findUnique({
@@ -88,6 +127,12 @@ router.post("/push", ...guards, requirePermission("tally", "export"), async (req
   const vouchersXml = String(req.body?.vouchersXml || "").trim();
   if (!validXml(vouchersXml) || (mastersXml && !validXml(mastersXml))) {
     return res.status(400).json({ error: "Valid Tally ENVELOPE XML is required", code: "INVALID_TALLY_XML" });
+  }
+  const vouchersValidation = validateImportXml(vouchersXml, "vouchers");
+  const mastersValidation = mastersXml ? validateImportXml(mastersXml, "masters") : { valid: true };
+  if (!vouchersValidation.valid || !mastersValidation.valid) {
+    const validation = !vouchersValidation.valid ? vouchersValidation : mastersValidation;
+    return res.status(400).json({ error: validation.reason, code: "UNSAFE_TALLY_XML" });
   }
   if (!getConnectorStatus(req.travelTenant.id).online) {
     return res.status(503).json({ error: "Tally connector is offline. Start it on the Tally computer and try again.", code: "TALLY_CONNECTOR_OFFLINE" });

@@ -585,12 +585,6 @@ app.all("/ws/tally-connector", (_req, res) => {
   });
 });
 
-// Both raw WebSocket handlers mark requests they own. This final delegated
-// handler closes genuinely unknown upgrade paths without racing either bridge.
-server.on("upgrade", (req, socket) => {
-  if (!req._webSocketUpgradeClaimed) socket.destroy();
-});
-
 const io = new Server(server, { cors: { origin: "*" } });
 const presenceColors = [
   "#ef4444",
@@ -2696,4 +2690,3 @@ if (require("fs").existsSync(FRONTEND_DIST)) {
 }
 
 // nodemon restart trigger
-

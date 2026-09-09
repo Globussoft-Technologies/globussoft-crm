@@ -656,7 +656,7 @@ export default function LandingPages() {
   };
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
+    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box', animation: 'fadeIn 0.3s ease' }}>
       {pageReturnState && (
         <nav
           aria-label="Breadcrumb"

@@ -49,11 +49,11 @@
 //   - We DO NOT mutate the diagnostic on this page; we only read +
 //     forward to the two POST endpoints above.
 
-import { useCallback, useEffect, useState, useContext } from "react";
+import { useEffect, useState, useContext } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ChevronLeft, ClipboardCheck, RefreshCw, FileText, Send, Copy, Share2,
-  AlertTriangle, Sparkles, CheckCircle, XCircle, Eye, EyeOff, UserCheck, Heart,
+  AlertTriangle, CheckCircle, Eye, EyeOff, UserCheck, Heart, UserRound, Mail, Phone, Hash,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -78,13 +78,6 @@ function getDiagnosticsListUrl() {
     return "/travel/diagnostics";
   }
 }
-
-const CLASS_COLORS = {
-  match: { bg: "rgba(47, 122, 77, 0.14)", color: "#2F7A4D", border: "#2F7A4D" },
-  review: { bg: "rgba(200, 154, 78, 0.18)", color: "#9A6F2E", border: "#9A6F2E" },
-  mismatch: { bg: "rgba(190, 50, 50, 0.14)", color: "#A33636", border: "#A33636" },
-  unknown: { bg: "rgba(95, 110, 130, 0.12)", color: "#5C6E82", border: "#5C6E82" },
-};
 
 function fmtDate(d) {
   if (!d) return "";
@@ -128,63 +121,6 @@ function parseTalkingPointsEnvelope(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-// G104  DD-5.7 blind-collapsed section parser. Splits the LLM-returned
-// brief text into named sections so each can render in its own collapsed
-// <details>. The brief may carry an explicit `sections` array (real LLM
-// output) OR be flat prose with markdown-ish headings (`## Lead with`,
-// `Lead with:`, etc.). Falls back to a single "Advisor brief" section
-// when no structural cues are present.
-function parseBriefSections(envelope) {
-  if (!envelope) return [];
-  // Explicit array  preferred shape when the LLM router returns structured JSON.
-  if (Array.isArray(envelope.sections)) {
-    return envelope.sections
-      .filter((s) => s && (s.key || s.title) && (s.body || s.text))
-      .map((s, i) => ({
-        key: String(s.key || s.title || `section-${i}`).trim(),
-        title: String(s.title || s.key || `Section ${i + 1}`).trim(),
-        body: String(s.body || s.text || "").trim(),
-      }));
-  }
-  const text = String(envelope.text || "").trim();
-  if (!text) return [];
-  // Try to split on bold/markdown-style headings.
-  // Patterns:
-  //   ## Section title
-  //   **Section title**
-  //   Section title:        (line ending with colon)
-  const lines = text.split(/\r?\n/);
-  const sections = [];
-  let current = null;
-  const headingRegex = /^(?:#{1,4}\s+)?(?:\*\*)?\s*(lead with|concerns?|objections?|next step|alternatives?|ladder|pricing|why now|skills?|outcomes?|board hook|runway|family fit|qualification|tier match)\b[:\-*\s]*$/i;
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) {
-      if (current) current.body += "\n";
-      continue;
-    }
-    const m = headingRegex.exec(line);
-    if (m) {
-      if (current && current.body.trim()) sections.push(current);
-      const title = m[1].replace(/\b\w/g, (c) => c.toUpperCase());
-      const key = title.toLowerCase().replace(/\s+/g, "_");
-      current = { key, title, body: "" };
-      continue;
-    }
-    if (!current) {
-      current = { key: "advisor_brief", title: "Advisor brief", body: "" };
-    }
-    current.body += rawLine + "\n";
-  }
-  if (current && current.body.trim()) sections.push(current);
-  // Trim bodies.
-  for (const s of sections) s.body = s.body.trim();
-  if (sections.length === 0 && text) {
-    return [{ key: "advisor_brief", title: "Advisor brief", body: text }];
-  }
-  return sections;
-}
-
 function formatAnswer(value) {
   if (value === null || value === undefined || value === "") return "";
   if (Array.isArray(value)) return value.join(", ");
@@ -222,7 +158,6 @@ export default function DiagnosticDetail() {
   const [diagnosticsListUrl] = useState(getDiagnosticsListUrl);
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
-  const canRegen = user?.role === "ADMIN" || user?.role === "MANAGER";
   // PRD 3.3.7 + DD-5.7  human_pick is senior-role-gated to ADMIN only.
   // MANAGER + USER see prior pick as read-only display; only ADMIN can
   // edit. Engine output is collapsed for ADMIN until pick recorded.
@@ -233,7 +168,6 @@ export default function DiagnosticDetail() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
-  const [regenInFlight, setRegenInFlight] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfDownloadBusy, setPdfDownloadBusy] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -244,22 +178,9 @@ export default function DiagnosticDetail() {
   const [shareEmail, setShareEmail] = useState("");
   const [sharePhone, setSharePhone] = useState("");
 
-  const [callTranscript, setCallTranscript] = useState("");
-  const [compareInFlight, setCompareInFlight] = useState(false);
-  const [comparison, setComparison] = useState(null);
-
   // human_pick recorder + collapsible engine output (TMC-only, T11).
   const [humanPickDraft, setHumanPickDraft] = useState("");
   const [humanPickSaving, setHumanPickSaving] = useState(false);
-  const [catalogue, setCatalogue] = useState([]);
-
-  // G104  DD-5.7 blind-collapsed sales brief. Each parsed section starts
-  // closed; per-section reveal-click fires a fire-and-forget audit POST
-  // so we can prove "advisor saw section X at time Y" without re-billing
-  // the LLM. The Set tracks already-revealed keys (deduped audit emits).
-  const [briefOpenKeys, setBriefOpenKeys] = useState(new Set());
-  const [briefRevealedKeys, setBriefRevealedKeys] = useState(new Set());
-  const [catalogueLoading, setCatalogueLoading] = useState(false);
   const [engineExpanded, setEngineExpanded] = useState(false);
 
   const load = () => {
@@ -304,16 +225,21 @@ export default function DiagnosticDetail() {
   // the result in a new tab.
 
   const copyShareLink = async () => {
-    const url = shareInfo?.shareUrl;
-    if (!url) {
-      notify.error("Generate a share link first.");
-      return;
-    }
+    let url = shareInfo?.shareUrl;
     try {
+      if (!url) {
+        const res = await fetchApi(`/api/travel/diagnostics/${diagId}/share`, {
+          method: "POST",
+          body: JSON.stringify({ channel: "manual", frontendBase: window.location.origin }),
+        });
+        url = res?.shareUrl;
+        if (!url) throw new Error("No share link was returned");
+        setShareInfo(res);
+      }
       await navigator.clipboard?.writeText(url);
-      notify.success("Share link copied.");
-    } catch {
-      notify.error("Copy failed. Select the link manually.");
+      notify.success("Share link created and copied.");
+    } catch (e) {
+      notify.error(e?.message || "Could not create a share link.");
     }
   };
 
@@ -449,27 +375,6 @@ export default function DiagnosticDetail() {
     if (diag?.humanPick) setEngineExpanded(true);
   }, [diag?.humanPick]);
 
-  // Load the catalogue of active trips for the human_pick dropdown.
-  // Only fetched once per page load AND only for TMC diagnostics; other
-  // sub-brands never see the recorder section.
-  const loadCatalogue = useCallback(() => {
-    setCatalogueLoading(true);
-    fetchApi("/api/travel-tmc-catalogue?status=active", { silent: true })
-      .then((res) => {
-        const items = Array.isArray(res) ? res : (res?.items || res?.catalogue || []);
-        setCatalogue(items.filter((r) => r?.status === "active"));
-      })
-      .catch(() => {
-        // Non-fatal  the dropdown still ships "other" + "no_rec" options.
-        setCatalogue([]);
-      })
-      .finally(() => setCatalogueLoading(false));
-  }, []);
-
-  useEffect(() => {
-    if (diag?.subBrand === "tmc") loadCatalogue();
-  }, [diag?.subBrand, loadCatalogue]);
-
   const saveHumanPick = async () => {
     if (!canEditHumanPick) return;
     if (!humanPickDraft) {
@@ -489,60 +394,12 @@ export default function DiagnosticDetail() {
         // Server returned an envelope we don't recognize  refetch to be safe.
         setDiag((prev) => (prev ? { ...prev, humanPick: humanPickDraft } : prev));
       }
-      notify.success("Human pick recorded  engine output unlocked.");
+      notify.success("Human recommendation recorded. AI output unlocked.");
       setEngineExpanded(true);
     } catch (e) {
       notify.error(e?.body?.error || e?.message || "Failed to save human pick");
     } finally {
       setHumanPickSaving(false);
-    }
-  };
-
-  const regenTalkingPoints = async () => {
-    if (!canRegen) return;
-    setRegenInFlight(true);
-    try {
-      const res = await fetchApi(
-        `/api/travel/diagnostics/${diagId}/talking-points/regen`,
-        { method: "POST", body: JSON.stringify({}) },
-      );
-      // Server returns { diagnostic, talkingPoints }; we just update the
-      // local diag so the brief block re-renders from the canonical
-      // persisted envelope.
-      if (res?.diagnostic) {
-        setDiag(res.diagnostic);
-      } else {
-        load();
-      }
-      notify.success("Talking-points brief regenerated");
-    } catch (e) {
-      notify.error(e?.message || "Failed to regenerate talking points");
-    } finally {
-      setRegenInFlight(false);
-    }
-  };
-
-  const runCompare = async () => {
-    const transcript = callTranscript.trim();
-    if (!transcript) {
-      notify.error("Paste the call transcript before comparing");
-      return;
-    }
-    setCompareInFlight(true);
-    try {
-      const res = await fetchApi(
-        `/api/travel/diagnostics/${diagId}/form-vs-call/compare`,
-        {
-          method: "POST",
-          body: JSON.stringify({ callTranscript: transcript }),
-        },
-      );
-      setComparison(res);
-    } catch (e) {
-      notify.error(e?.message || "Failed to compare form vs call");
-      setComparison(null);
-    } finally {
-      setCompareInFlight(false);
     }
   };
 
@@ -599,10 +456,7 @@ export default function DiagnosticDetail() {
   const answers = parseAnswers(diag?.answersJson);
   const isCatalogueInterest = diag?.source === "public_catalogue_interest";
   const catalogueInterest = answers.catalogueInterest || {};
-  const envelope = parseTalkingPointsEnvelope(diag?.talkingPointsJson);
   const subBrandLabel = SUB_BRAND_LABEL[diag?.subBrand] || diag?.subBrand || "";
-  const classKey = (comparison?.classification || "unknown").toLowerCase();
-  const classColor = CLASS_COLORS[classKey] || CLASS_COLORS.unknown;
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
@@ -637,25 +491,11 @@ export default function DiagnosticDetail() {
       {(diag.contact?.name || diag.contact?.email || diag.contact?.phone || diag.contactId) && (
         <section style={card}>
           <h2 style={cardTitle}>Customer</h2>
-          <div style={summaryRow}>
-            <div>
-              <span style={kvLabel}>Name</span>
-              <span style={{ marginLeft: 8 }}>{diag.contact?.name || ""}</span>
-            </div>
-            <div>
-              <span style={kvLabel}>Email</span>
-              <span style={{ marginLeft: 8 }}>{diag.contact?.email || ""}</span>
-            </div>
-            <div>
-              <span style={kvLabel}>Phone</span>
-              <span style={{ marginLeft: 8 }}>{diag.contact?.phone || ""}</span>
-            </div>
-            {diag.contactId && (
-              <div>
-                <span style={kvLabel}>Contact ID</span>
-                <span style={{ marginLeft: 8 }}>#{diag.contactId}</span>
-              </div>
-            )}
+          <div style={customerGrid}>
+            <CustomerInfo icon={UserRound} label="Name" value={diag.contact?.name} />
+            <CustomerInfo icon={Mail} label="Email" value={diag.contact?.email} />
+            <CustomerInfo icon={Phone} label="Phone" value={diag.contact?.phone} />
+            {diag.contactId && <CustomerInfo icon={Hash} label="Contact ID" value={`#${diag.contactId}`} />}
           </div>
         </section>
       )}
@@ -909,8 +749,6 @@ export default function DiagnosticDetail() {
       {!isCatalogueInterest && diag.subBrand === "tmc" && (
         <HumanPickSection
           diag={diag}
-          catalogue={catalogue}
-          catalogueLoading={catalogueLoading}
           humanPickDraft={humanPickDraft}
           setHumanPickDraft={setHumanPickDraft}
           saveHumanPick={saveHumanPick}
@@ -921,292 +759,6 @@ export default function DiagnosticDetail() {
         />
       )}
 
-      {/*  Section 2: talking-points brief  */}
-      {!isCatalogueInterest && <section style={{ ...card, marginTop: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <h2 style={{ ...cardTitle, margin: 0 }}>
-            <Sparkles size={18} aria-hidden /> Advisor talking-points brief
-          </h2>
-          {envelope?.stub && (
-            <span style={stubPill} aria-label="Sample output — connect an AI provider for a real brief">
-              SAMPLE
-            </span>
-          )}
-          {canRegen && (
-            <button
-              type="button"
-              onClick={regenTalkingPoints}
-              disabled={regenInFlight}
-              style={{ ...primaryBtn, marginLeft: "auto", opacity: regenInFlight ? 0.6 : 1 }}
-              aria-label={envelope ? "Regenerate talking points" : "Generate talking points"}
-            >
-              <RefreshCw size={14} aria-hidden />
-              {regenInFlight
-                ? "Working"
-                : envelope
-                ? "Regenerate"
-                : "Generate brief"}
-            </button>
-          )}
-        </div>
-        {envelope ? (
-          <>
-            {(() => {
-              // G104  DD-5.7 blind-collapsed UX. Each Job-B sales-brief
-              // section starts CLOSED. Per-section reveal-click fires an
-              // audit POST (deduped per session). Open-all / Close-all
-              // toggles bulk the section state.
-              const sections = parseBriefSections(envelope);
-              if (sections.length === 0) {
-                return (
-                  <div style={emptyBox} role="status">
-                    <Sparkles
-                      size={18}
-                      aria-hidden
-                      style={{ color: "var(--text-secondary)" }}
-                    />
-                    <div>(no brief content returned)</div>
-                  </div>
-                );
-              }
-              const allOpen = sections.every((s) =>
-                briefOpenKeys.has(s.key),
-              );
-              const openAll = () => {
-                const next = new Set(briefOpenKeys);
-                for (const s of sections) {
-                  next.add(s.key);
-                  if (!briefRevealedKeys.has(s.key)) {
-                    fetchApi(`/api/travel/diagnostics/${diagId}/brief-reveal`, {
-                      method: "POST",
-                      body: JSON.stringify({ sectionKey: s.key }),
-                    }).catch(() => {});
-                  }
-                }
-                setBriefOpenKeys(next);
-                setBriefRevealedKeys((prev) => {
-                  const n = new Set(prev);
-                  for (const s of sections) n.add(s.key);
-                  return n;
-                });
-              };
-              const closeAll = () => setBriefOpenKeys(new Set());
-              return (
-                <>
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      marginBottom: 8,
-                      alignItems: "center",
-                    }}
-                    data-testid="brief-collapse-toolbar"
-                  >
-                    <span
-                      style={{
-                        fontSize: 12,
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      Sections start collapsed — open each one as you read.
-                    </span>
-                    {sections.length > 1 && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={allOpen ? closeAll : openAll}
-                          style={collapseToggleBtn}
-                          aria-label={
-                            allOpen ? "Close all sections" : "Open all sections"
-                          }
-                        >
-                          {allOpen ? (
-                            <>
-                              <EyeOff size={12} aria-hidden /> Close all
-                            </>
-                          ) : (
-                            <>
-                              <Eye size={12} aria-hidden /> Open all
-                            </>
-                          )}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  {sections.map((s) => (
-                    <details
-                      key={s.key}
-                      open={briefOpenKeys.has(s.key)}
-                      data-testid={`brief-section-${s.key}`}
-                      style={detailsStyle}
-                      onToggle={(e) => {
-                        const isOpen = e.currentTarget.open;
-                        setBriefOpenKeys((prev) => {
-                          const next = new Set(prev);
-                          if (isOpen) next.add(s.key);
-                          else next.delete(s.key);
-                          return next;
-                        });
-                        if (isOpen && !briefRevealedKeys.has(s.key)) {
-                          setBriefRevealedKeys((prev) => {
-                            const n = new Set(prev);
-                            n.add(s.key);
-                            return n;
-                          });
-                          fetchApi(
-                            `/api/travel/diagnostics/${diagId}/brief-reveal`,
-                            {
-                              method: "POST",
-                              body: JSON.stringify({ sectionKey: s.key }),
-                            },
-                          ).catch(() => {});
-                        }
-                      }}
-                    >
-                      <summary style={summaryStyle}>{s.title}</summary>
-                      <div style={proseBox} data-testid={`brief-body-${s.key}`}>
-                        {s.body}
-                      </div>
-                    </details>
-                  ))}
-                </>
-              );
-            })()}
-            <div style={metaLine}>
-              Generated by <strong>{envelope.model || "unknown model"}</strong>
-              {" "}on {fmtDate(envelope.generatedAt)}
-            </div>
-          </>
-        ) : (
-          <div style={emptyBox} role="status">
-            <Sparkles size={18} aria-hidden style={{ color: "var(--text-secondary)" }} />
-            <div>
-              No brief generated yet.{" "}
-              {canRegen
-                ? "Click Generate brief to have AI put together an advisor-ready summary."
-                : "Ask an admin or manager to generate one."}
-            </div>
-          </div>
-        )}
-      </section>}
-
-      {/*  Section 3: form-vs-call comparison  */}
-      {!isCatalogueInterest && <section style={{ ...card, marginTop: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <h2 style={{ ...cardTitle, margin: 0 }}>
-            <Send size={18} aria-hidden /> Form-vs-call comparison
-          </h2>
-          <span
-            style={{
-              fontSize: 12, color: "var(--text-secondary)",
-              cursor: "help",
-            }}
-            title="Paste the call transcript and we'll compare it against the answers submitted on the form, and flag anything that doesn't match."
-            aria-label="What is this?"
-          >
-            (what is this?)
-          </span>
-        </div>
-        <p style={{ color: "var(--text-secondary)", fontSize: 13, margin: "0 0 8px" }}>
-          Paste the call transcript and click Compare. AI will check it
-          against the form answers and tell you whether they match, need a
-          second look, or don&rsquo;t line up.
-        </p>
-        <textarea
-          value={callTranscript}
-          onChange={(e) => setCallTranscript(e.target.value)}
-          rows={6}
-          placeholder="Paste the call transcript here"
-          style={textarea}
-          aria-label="Call transcript"
-        />
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-          <button
-            type="button"
-            onClick={runCompare}
-            disabled={compareInFlight || !callTranscript.trim()}
-            style={{
-              ...primaryBtn,
-              opacity: (compareInFlight || !callTranscript.trim()) ? 0.6 : 1,
-            }}
-            aria-label="Compare form vs call"
-          >
-            <Send size={14} aria-hidden />
-            {compareInFlight ? "Comparing" : "Compare"}
-          </button>
-        </div>
-
-        {comparison && (
-          <div style={{ marginTop: 16 }} data-testid="comparison-result">
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
-              <span
-                data-testid="comparison-classification-badge"
-                style={{
-                  padding: "6px 14px", borderRadius: 999, fontWeight: 700,
-                  fontSize: 13, letterSpacing: 0.5, textTransform: "uppercase",
-                  background: classColor.bg, color: classColor.color,
-                  border: `1px solid ${classColor.border}`,
-                }}
-              >
-                {comparison.classification || "unknown"}
-              </span>
-              <span style={{ fontSize: 14 }}>
-                <strong>{comparison.scorePercent != null ? `${comparison.scorePercent}%` : ""}</strong>{" "}
-                <span style={{ color: "var(--text-secondary)" }}>confidence</span>
-              </span>
-              {comparison.stub && (
-                <span style={stubPill} aria-label="Sample output — connect an AI provider for a real comparison">SAMPLE</span>
-              )}
-              <span style={{ marginLeft: "auto", color: "var(--text-secondary)", fontSize: 12 }}>
-                {comparison.model || "unknown model"} &middot; {fmtDate(comparison.generatedAt)}
-              </span>
-            </div>
-            {comparison.summary && (
-              <div style={{ ...proseBox, marginTop: 12 }} data-testid="comparison-summary">
-                {comparison.summary}
-              </div>
-            )}
-            {Array.isArray(comparison.perFieldDiff) && comparison.perFieldDiff.length > 0 && (
-              <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 12 }} data-testid="comparison-table">
-                <thead>
-                  <tr>
-                    <th style={th}>Question</th>
-                    <th style={th}>Form answer</th>
-                    <th style={th}>Call answer</th>
-                    <th style={{ ...th, textAlign: "center" }}>Match</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {comparison.perFieldDiff.map((row, idx) => (
-                    <tr key={`${row.question}-${idx}`} style={{ borderTop: "1px solid var(--border-light)" }}>
-                      <td style={{ ...td, fontWeight: 500 }}>{row.question}</td>
-                      <td style={td}>{formatAnswer(row.formValue)}</td>
-                      <td style={td}>{formatAnswer(row.callValue)}</td>
-                      <td style={{ ...td, textAlign: "center" }}>
-                        {row.matched ? (
-                          <CheckCircle
-                            size={18}
-                            aria-label="Matched"
-                            data-testid={`match-${idx}`}
-                            style={{ color: "#2F7A4D" }}
-                          />
-                        ) : (
-                          <XCircle
-                            size={18}
-                            aria-label="Mismatched"
-                            data-testid={`mismatch-${idx}`}
-                            style={{ color: "#A33636" }}
-                          />
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        )}
-      </section>}
     </div>
   );
 }
@@ -1229,13 +781,8 @@ export default function DiagnosticDetail() {
 // reviewer can compare their pick against the engine's primary/alternative
 // recommendations + per-signal scores for §3.3.7 disagreement triage.
 
-const SPECIAL_PICK_OPTIONS = [
-  { value: "other", label: "Other (not in the catalogue)" },
-  { value: "no_rec", label: "No recommendation" },
-];
-
 function HumanPickSection({
-  diag, catalogue, catalogueLoading,
+  diag,
   humanPickDraft, setHumanPickDraft, saveHumanPick, humanPickSaving,
   canEditHumanPick, engineExpanded, setEngineExpanded,
 }) {
@@ -1243,15 +790,6 @@ function HumanPickSection({
   const hasPick = !!persisted;
   const engineScores = parseTalkingPointsEnvelope(diag?.engineScoresJson);
   const engineFlags = parseTalkingPointsEnvelope(diag?.flagsJson);
-  const labelForValue = (v) => {
-    if (!v) return "—";
-    const fromCatalogue = catalogue.find((c) => c.tripId === v || String(c.id) === v);
-    if (fromCatalogue) return fromCatalogue.title || fromCatalogue.tripId;
-    const special = SPECIAL_PICK_OPTIONS.find((o) => o.value === v);
-    if (special) return special.label;
-    return v;
-  };
-
   return (
     <section style={{ ...card, marginTop: 16 }} aria-label="Human pick and engine output">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
@@ -1266,39 +804,27 @@ function HumanPickSection({
       </div>
 
       <p style={{ color: "var(--text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-        Pick which trip you&rsquo;d personally recommend for this school{" "}
+        Record the trip you&rsquo;d personally recommend for this school{" "}
         <strong>before</strong> looking at the AI&rsquo;s suggestion below.
-        Comparing your picks against the AI&rsquo;s over time helps us
-        fine-tune how well it matches real advisor judgment.
+        This keeps the senior review independent and gives the team a clear
+        recommendation to compare with the AI.
       </p>
 
-      {/* Dropdown (ADMIN) or read-only display (MANAGER / USER) */}
+      {/* Free-text recommendation (ADMIN) or read-only display (MANAGER / USER). */}
       {canEditHumanPick ? (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
           <label style={{ flex: "1 1 280px", display: "flex", flexDirection: "column", gap: 6 }}>
-            <span style={kvLabel}>Your pick</span>
-            <select
-              data-testid="human-pick-select"
+            <span style={kvLabel}>Your recommendation</span>
+            <input
+              data-testid="human-pick-input"
+              type="text"
               value={humanPickDraft}
               onChange={(e) => setHumanPickDraft(e.target.value)}
               style={input}
-              aria-label="Human pick"
-            >
-              <option value="">— select —</option>
-              {catalogueLoading && (
-                <option value="" disabled>
-                  Loading catalogue…
-                </option>
-              )}
-              {catalogue.map((c) => (
-                <option key={c.tripId || c.id} value={c.tripId || String(c.id)}>
-                  {c.title || c.tripId}
-                </option>
-              ))}
-              {SPECIAL_PICK_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+              maxLength={120}
+              placeholder="Type the trip or recommendation"
+              aria-label="Human recommendation"
+            />
           </label>
           <button
             type="button"
@@ -1316,8 +842,8 @@ function HumanPickSection({
         </div>
       ) : (
         <div style={{ fontSize: 14 }} data-testid="human-pick-readonly">
-          <span style={kvLabel}>Recorded pick</span>
-          <span style={{ marginLeft: 8 }}>{labelForValue(persisted)}</span>
+          <span style={kvLabel}>Recorded recommendation</span>
+          <span style={{ marginLeft: 8 }}>{persisted || "—"}</span>
           <span style={{ marginLeft: 12, color: "var(--text-secondary)", fontSize: 12 }}>
             (ADMIN only)
           </span>
@@ -1403,6 +929,18 @@ function EngineKV({ label, value }) {
   );
 }
 
+function CustomerInfo({ icon: Icon, label, value }) {
+  return (
+    <div style={customerInfoTile}>
+      <Icon size={16} aria-hidden style={customerInfoIcon} />
+      <div style={customerInfoContent}>
+        <span style={kvLabel}>{label}</span>
+        <span style={customerInfoValue} title={value || "Not provided"}>{value || "Not provided"}</span>
+      </div>
+    </div>
+  );
+}
+
 // ? Styles ?
 
 const backLink = {
@@ -1429,6 +967,43 @@ const summaryRow = {
   fontSize: 14,
 };
 
+const customerGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 210px), 1fr))",
+  gap: 10,
+};
+
+const customerInfoTile = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 9,
+  minWidth: 0,
+  padding: "10px 12px",
+  border: "1px solid var(--border-light)",
+  borderRadius: 8,
+  background: "var(--subtle-bg)",
+};
+
+const customerInfoIcon = {
+  flex: "0 0 auto",
+  marginTop: 2,
+  color: "var(--primary-color, var(--accent-color))",
+};
+
+const customerInfoContent = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 3,
+  minWidth: 0,
+};
+
+const customerInfoValue = {
+  color: "var(--text-primary)",
+  fontSize: 14,
+  fontWeight: 600,
+  overflowWrap: "anywhere",
+};
+
 const kvLabel = {
   color: "var(--text-secondary)", fontWeight: 600, fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
@@ -1444,70 +1019,6 @@ const classChip = {
   padding: "2px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
   background: "var(--subtle-bg)", color: "var(--text-primary)",
   border: "1px solid var(--border-color)",
-};
-
-const stubPill = {
-  padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700,
-  letterSpacing: 0.8,
-  background: "rgba(200, 154, 78, 0.18)", color: "#9A6F2E",
-  border: "1px solid #9A6F2E",
-};
-
-const proseBox = {
-  background: "var(--bg-color)",
-  border: "1px solid var(--border-light)",
-  borderRadius: 8,
-  padding: 12,
-  fontSize: 14,
-  lineHeight: 1.55,
-  whiteSpace: "pre-wrap",
-  color: "var(--text-primary)",
-};
-
-const metaLine = {
-  marginTop: 8,
-  fontSize: 12,
-  color: "var(--text-secondary)",
-};
-
-// G104  DD-5.7 blind-collapsed UX styles.
-const detailsStyle = {
-  border: "1px solid var(--border-light)",
-  borderRadius: 8,
-  background: "var(--bg-color)",
-  marginBottom: 8,
-  padding: "8px 12px",
-};
-
-const summaryStyle = {
-  cursor: "pointer",
-  fontSize: 14,
-  fontWeight: 600,
-  padding: "4px 0",
-  color: "var(--text-primary)",
-  listStyle: "revert",
-};
-
-const collapseToggleBtn = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-  marginLeft: "auto",
-  padding: "4px 10px",
-  borderRadius: 6,
-  fontSize: 12,
-  fontWeight: 500,
-  background: "transparent",
-  color: "var(--text-secondary)",
-  border: "1px solid var(--border-color)",
-  cursor: "pointer",
-};
-
-const emptyBox = {
-  padding: 16, borderRadius: 8,
-  background: "var(--subtle-bg)", border: "1px dashed var(--border-color)",
-  display: "flex", alignItems: "center", gap: 10,
-  color: "var(--text-secondary)", fontSize: 14,
 };
 
 const errorBox = {
@@ -1706,15 +1217,6 @@ const secondaryBtn = {
   padding: "6px 12px", borderRadius: 6, fontWeight: 600, fontSize: 13,
   background: "var(--surface-color)", color: "var(--text-primary)",
   border: "1px solid var(--border-color)", cursor: "pointer",
-};
-
-const textarea = {
-  width: "100%", boxSizing: "border-box",
-  padding: 10, borderRadius: 6,
-  border: "1px solid var(--border-color)",
-  background: "var(--bg-color)", color: "var(--text-primary)",
-  fontSize: 13, resize: "vertical",
-  fontFamily: "inherit",
 };
 
 const input = {

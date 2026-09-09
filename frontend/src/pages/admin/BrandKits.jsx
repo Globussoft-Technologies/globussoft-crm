@@ -614,7 +614,7 @@ export default function BrandKits() {
   const wcagPrimaryBg = wcagContrastRatio(form.primaryColor, form.bgColor);
 
   return (
-    <div style={{ padding: "2rem", height: "100%", overflowY: "auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box", height: "100%", overflowY: "auto", animation: "fadeIn 0.4s ease-out" }}>
       <header
         style={{
           display: "flex",

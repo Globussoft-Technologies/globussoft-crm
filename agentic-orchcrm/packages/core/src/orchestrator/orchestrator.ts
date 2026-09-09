@@ -441,7 +441,7 @@ export class Orchestrator {
                   // it just gives it enough space to write a properly paginated
                   // document instead of being pressured into cramming content
                   // tighter than the print-preflight can accept.
-                  const ladder = [32000, 24000, 16000, 8000];
+                  const ladder = [12000, 8000];
                   let lastErr: unknown;
                   for (const maxTokens of ladder) {
                     try {

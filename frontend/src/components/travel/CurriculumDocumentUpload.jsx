@@ -55,6 +55,7 @@ import {
   ChevronDown,
   ChevronUp,
   FileText,
+  LoaderCircle,
   RefreshCw,
   Trash2,
   Upload,
@@ -75,6 +76,12 @@ const EMPTY_FORM = {
   subjects: '',
   notes: '',
 };
+
+const UPLOAD_STAGES = [
+  { title: 'Uploading your PDF', detail: 'Saving the curriculum document securely.' },
+  { title: 'Finding learning outcomes', detail: 'Reading grades, subjects, topics, and objectives.' },
+  { title: 'Building recommendations', detail: 'Indexing outcomes so diagnostics can find the best-fit trips.' },
+];
 
 // Backend code → user-friendly message. Falls back to the backend's own
 // message where it's already human-readable (MISSING_FIELDS,
@@ -216,6 +223,7 @@ export default function CurriculumDocumentUpload() {
   const [file, setFile] = useState(null);
   const [formError, setFormError] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [uploadStage, setUploadStage] = useState(0);
   const fileInputRef = useRef(null);
 
   const [expandedId, setExpandedId] = useState(null);
@@ -241,6 +249,17 @@ export default function CurriculumDocumentUpload() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!uploading) return undefined;
+    setUploadStage(0);
+    const analysisTimer = window.setTimeout(() => setUploadStage(1), 900);
+    const indexingTimer = window.setTimeout(() => setUploadStage(2), 3500);
+    return () => {
+      window.clearTimeout(analysisTimer);
+      window.clearTimeout(indexingTimer);
+    };
+  }, [uploading]);
 
   const resetForm = () => {
     setForm({ ...EMPTY_FORM });
@@ -506,12 +525,51 @@ export default function CurriculumDocumentUpload() {
             <button type="button" onClick={resetForm} style={secondaryBtn} disabled={uploading}>
               Clear
             </button>
-            <button type="submit" style={uploading ? primaryBtnDisabled : primaryBtn} disabled={uploading}>
+            <button type="submit" style={{ ...(uploading ? primaryBtnDisabled : primaryBtn), position: 'relative' }} disabled={uploading} aria-busy={uploading}>
               <Upload size={14} /> {uploading ? 'Uploading & indexing…' : 'Upload & index'}
+              {uploading && (
+                <span style={{
+                  position: 'absolute', inset: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  borderRadius: 'inherit', background: 'inherit', fontSize: 13,
+                }}>
+                  <LoaderCircle size={14} style={{ animation: 'spin 0.9s linear infinite' }} /> Uploading & indexing...
+                </span>
+              )}
             </button>
           </div>
           {uploading && (
-            <p style={{ color: 'var(--text-secondary)', fontSize: 12, textAlign: 'right', margin: 0 }}>
+            <div
+              data-testid="curriculum-upload-progress"
+              aria-live="polite"
+              style={{
+                display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: 12, alignItems: 'center',
+                padding: '12px 14px', border: '1px solid rgba(79, 70, 229, 0.22)', borderRadius: 8,
+                background: 'rgba(79, 70, 229, 0.06)',
+              }}
+            >
+              <LoaderCircle size={20} color="var(--primary-color, var(--accent-color))" style={{ animation: 'spin 0.9s linear infinite' }} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: 13 }}>{UPLOAD_STAGES[uploadStage].title}</strong>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>This may take a few minutes for larger PDFs.</span>
+                </div>
+                <p style={{ color: 'var(--text-secondary)', fontSize: 12, margin: '3px 0 9px' }}>
+                  {UPLOAD_STAGES[uploadStage].detail}
+                </p>
+                <div aria-hidden="true" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 5 }}>
+                  {UPLOAD_STAGES.map((stage, index) => (
+                    <span key={stage.title} style={{
+                      height: 4, borderRadius: 4,
+                      background: index <= uploadStage ? 'var(--primary-color, var(--accent-color))' : 'rgba(79, 70, 229, 0.16)',
+                      transition: 'background 180ms ease',
+                    }} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          {uploading && (
+            <p style={{ display: 'none', color: 'var(--text-secondary)', fontSize: 12, textAlign: 'right', margin: 0 }}>
               This can take a little while — PDF extraction, LLM analysis, and embedding all run before the response returns.
             </p>
           )}

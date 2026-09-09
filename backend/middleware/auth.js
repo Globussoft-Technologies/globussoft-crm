@@ -7,7 +7,7 @@ const { JWT_SECRET } = require("../config/secrets");
 // #914 slice 2: cookie name comes from the same helper that SETS the
 // cookie on auth-success paths (slice 1). Single-source the name so a
 // future rename can't desync read+write sites.
-const { TOKEN_COOKIE } = require("../lib/authCookies");
+const { TOKEN_COOKIE, setAuthCookie } = require("../lib/authCookies");
 
 // #537 (PT-05): RFC 7235 semantics — missing/invalid credentials are 401
 // (not 403). 403 is reserved for "authenticated but not allowed". Also
@@ -139,6 +139,15 @@ const verifyToken = async (req, res, next) => {
       if (Number.isFinite(requested) && requested === verified.tenantId) {
         verified.activeTenantId = requested;
       }
+    }
+
+    // Browser navigations (PDFs, attachments, previews) cannot attach the
+    // SPA's Authorization header. Refresh the HttpOnly cookie from a verified
+    // bearer request so a long-lived active SPA session keeps those links
+    // usable without requiring a logout/login cycle.
+    const isLogoutRequest = req.path === "/logout" || /\/auth\/logout$/.test(req.originalUrl || req.path);
+    if (authHeader && typeof res.cookie === "function" && !isLogoutRequest) {
+      setAuthCookie(res, token);
     }
 
     req.user = verified;

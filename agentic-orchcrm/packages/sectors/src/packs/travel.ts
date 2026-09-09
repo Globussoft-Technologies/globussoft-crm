@@ -203,6 +203,8 @@ EDITORIAL NORMALIZATION — BrochureContent must be presentation-ready, not a du
 - Convert long cancellation schedules, inclusions, cost status and logistics into well-labelled structured rows or concise bullets. Never output an unedited wall of source text.
 - Detect obvious previous-trip leakage or internal/operator wording and exclude it from visible brochure copy. Put unresolved contradictions in \`tmc.sourceControl.contradictions\` rather than presenting them as facts.
 
+OUTPUT BUDGET: Keep the JSON concise and presentation-ready. Prefer short summaries and bullets over repeating source text; target no more than 6,000 output tokens unless the supplied itinerary genuinely requires more detail.
+
 Reply with ONLY the JSON object.`;
 
 export const travelPack: SectorPack = {
@@ -225,7 +227,7 @@ export const travelPack: SectorPack = {
       description: 'Composes structured TMC school-trip brochure content as JSON.',
       tier: 'reasoning',
       tools: [],
-      maxOutputTokens: 16384,
+      maxOutputTokens: 8000,
       responseSchema: BROCHURE_CONTENT_SCHEMA,
       systemPrompt: `${TMC_SYSTEM_PROMPT}\n\n${TMC_ENGINE_INSTRUCTION}`,
     },

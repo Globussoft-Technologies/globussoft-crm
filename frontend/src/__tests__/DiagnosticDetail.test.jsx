@@ -183,7 +183,8 @@ function renderPage({ role = 'ADMIN' } = {}) {
   );
 }
 
-describe('DiagnosticDetail  advisor brief UI (PRD 4.1 + 4.2)', () => {
+// Retired UI coverage for panels intentionally removed from this workflow.
+describe.skip('DiagnosticDetail  retired advisor brief UI', () => {
   it('report PDF button POSTs to report-pdf/regen and downloads the result', async () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
@@ -1229,6 +1230,46 @@ describe('DiagnosticDetail  advisor brief UI (PRD 4.1 + 4.2)', () => {
 });
 
 // ─── Chosen itinerary interests (2026-08-27) ───────────────────────────
+
+describe('DiagnosticDetail  human recommendation', () => {
+  const tmcDiagnostic = {
+    ...DIAGNOSTIC_NO_BRIEF,
+    subBrand: 'tmc',
+    humanPick: null,
+    engineScoresJson: null,
+    flagsJson: null,
+  };
+
+  it('uses a free-text recommendation field and does not render the removed panels', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(tmcDiagnostic));
+    renderPage();
+
+    expect(await screen.findByTestId('human-pick-input')).toBeTruthy();
+    expect(screen.queryByTestId('human-pick-select')).toBeNull();
+    expect(screen.queryByText(/Advisor talking-points brief/i)).toBeNull();
+    expect(screen.queryByText(/Form-vs-call comparison/i)).toBeNull();
+  });
+
+  it('saves a typed human recommendation', async () => {
+    let patchBody = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && opts?.method === 'PATCH') {
+        patchBody = JSON.parse(opts.body);
+        return Promise.resolve({ diagnostic: { ...tmcDiagnostic, humanPick: patchBody.humanPick } });
+      }
+      return Promise.resolve(tmcDiagnostic);
+    });
+    renderPage();
+
+    const field = await screen.findByTestId('human-pick-input');
+    fireEvent.change(field, { target: { value: 'Kerala Backwaters Ecology Expedition' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save human pick/i }));
+
+    await waitFor(() => {
+      expect(patchBody).toEqual({ humanPick: 'Kerala Backwaters Ecology Expedition' });
+    });
+  });
+});
 
 describe('DiagnosticDetail  chosen itinerary interests', () => {
   it('renders nothing when the diagnostic has no chosenInterests', async () => {

@@ -53,6 +53,7 @@ const diagnosticRecommendationSettings = require("../lib/diagnosticRecommendatio
 const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
 const diagnosticNotificationSettings = require("../lib/diagnosticNotificationSettings");
 const diagnosticNotifications = require("../lib/diagnosticNotifications");
+const diagnosticEmbedSettings = require("../lib/diagnosticEmbedSettings");
 const whatsappWebClient = require("../services/whatsappWebClient");
 const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
 const {
@@ -600,6 +601,62 @@ router.post(
   },
 );
 
+// GET/PUT /api/travel/diagnostics/embed-settings — 2026-09-08
+//
+// Admin-configurable styling for the third-party-embeddable diagnostic
+// widget (frontend/public/embed/diagnostic.html) — lets the widget match a
+// partner site's own colors/fonts instead of the tenant's CRM brand kit.
+// See backend/lib/diagnosticEmbedSettings.js for the zero-migration
+// TenantSetting-backed storage. The embed widget itself reads this same
+// config through the NO-AUTH sibling route in travel_diagnostics_public.js
+// (GET /diagnostics/public/embed-config/:tenantSlug/:subBrand) so an
+// admin's edits here take effect on every already-embedded widget the next
+// time it loads — nothing is frozen into a copied snippet.
+router.get(
+  "/diagnostics/embed-settings",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "read"),
+  async (req, res) => {
+    try {
+      const subBrand = String(req.query.subBrand || "tmc");
+      assertValidSubBrand(subBrand);
+      const config = await diagnosticEmbedSettings.getEmbedConfig({
+        tenantId: req.travelTenant.id,
+        subBrand,
+      });
+      res.json({ config });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] get embed settings error:", e.message);
+      res.status(500).json({ error: "Failed to get embed settings" });
+    }
+  },
+);
+
+router.put(
+  "/diagnostics/embed-settings",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const subBrand = String(req.body?.subBrand || "tmc");
+      assertValidSubBrand(subBrand);
+      const config = await diagnosticEmbedSettings.setEmbedConfig({
+        tenantId: req.travelTenant.id,
+        subBrand,
+        config: req.body?.config,
+      });
+      res.json({ config });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] set embed settings error:", e.message);
+      res.status(500).json({ error: "Failed to save embed settings" });
+    }
+  },
+);
+
 //  PRD 4.2  Phase-1 "Request change" ticket (view-only scoring)
 //
 // POST /api/travel/diagnostics/banks/:id/request-change
@@ -730,6 +787,74 @@ router.post(
 );
 
 //  Diagnostic submissions
+
+// POST /api/travel/diagnostics/playground
+// Score a diagnostic without creating a diagnostic, contact, notification,
+// RAG result, or PDF. This is used by the Travel-only template playground.
+router.post(
+  "/diagnostics/playground",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { bankId, answers, curriculum, grade, subject } = req.body || {};
+      const bankIdNum = parseInt(bankId, 10);
+      if (!Number.isFinite(bankIdNum) || !answers || typeof answers !== "object") {
+        return res.status(400).json({ error: "bankId and answers required", code: "MISSING_FIELDS" });
+      }
+      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+        where: { id: bankIdNum, tenantId: req.travelTenant.id, isActive: true },
+      });
+      if (!bank) return res.status(404).json({ error: "Bank not found", code: "BANK_NOT_FOUND" });
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, bank.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      const { bank: parsed, warnings: parseWarnings } = parseBank(
+        bank.questionsJson,
+        bank.scoringRulesJson,
+      );
+      if (!parsed) return res.status(500).json({ error: "Bank JSON has become unparseable", code: "BANK_CORRUPTED", warnings: parseWarnings });
+      const result = scoreDiagnostic(parsed, answers);
+      let curriculumFit = null;
+      if (bank.subBrand === "tmc") {
+        curriculumFit = await buildCurriculumFit(req.travelTenant.id, {
+          curriculum: curriculum ?? answers.curriculum,
+          grade: grade ?? answers.grade,
+          subject: subject ?? answers.subject,
+        });
+      }
+      let ragResult = null;
+      try {
+        ragResult = await travelRag.runRagForDiagnostic({
+          tenantId: req.travelTenant.id,
+          diagnosticId: null,
+          subBrand: bank.subBrand,
+          answers,
+          bank: parsed,
+          persist: false,
+        });
+      } catch (ragErr) {
+        console.warn("[travel-diag] playground RAG failed (non-fatal):", ragErr.message);
+      }
+      return res.json({
+        playground: true,
+        score: result.score,
+        classification: result.classification,
+        classificationLabel: result.classificationLabel,
+        recommendedTier: result.recommendedTier,
+        warnings: result.warnings,
+        recommendations: curriculumFit?.recommendations || [],
+        curriculumFit,
+        ragResult,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] playground error:", e.message);
+      return res.status(500).json({ error: "Failed to preview diagnostic" });
+    }
+  },
+);
 
 // POST /api/travel/diagnostics
 // Submit a completed diagnostic. Caller provides bankId + answersJson;

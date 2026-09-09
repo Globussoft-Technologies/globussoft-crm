@@ -12,6 +12,7 @@ prisma.tenantSetting = {
   findMany: vi.fn(),
   findUnique: vi.fn(),
   upsert: vi.fn(),
+  deleteMany: vi.fn(),
   delete: vi.fn(),
 };
 
@@ -19,6 +20,7 @@ beforeEach(() => {
   prisma.tenantSetting.findMany.mockReset();
   prisma.tenantSetting.findUnique.mockReset();
   prisma.tenantSetting.upsert.mockReset();
+  prisma.tenantSetting.deleteMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.tenantSetting.delete.mockReset();
 });
 
@@ -53,6 +55,30 @@ describe("curriculumDocuments — saveCurriculumDocument", () => {
     expect(call.update.category).toBe("travel-curriculum-document");
     expect(JSON.parse(call.create.value)).toMatchObject({ id: "abc123", title: "CBSE Class 9" });
   });
+
+  test("stores large extracted-objective lists in separate TEXT-safe chunks", async () => {
+    prisma.tenantSetting.upsert.mockResolvedValue({});
+    const extractedObjectives = Array.from({ length: 120 }, (_, index) => ({
+      text: `Objective ${index}: ${"learning outcome ".repeat(80)}`,
+      subject: "Science",
+    }));
+
+    await curriculumDocuments.saveCurriculumDocument({
+      tenantId: 5,
+      documentId: "large-doc",
+      data: { title: "CBSE Classes 1-12", extractedObjectives, qdrantPointIds: ["unused"] },
+    });
+
+    const parent = prisma.tenantSetting.upsert.mock.calls[0][0];
+    expect(JSON.parse(parent.create.value).extractedObjectives).toBeUndefined();
+    expect(JSON.parse(parent.create.value).qdrantPointIds).toBeUndefined();
+    const chunks = prisma.tenantSetting.upsert.mock.calls.slice(1).map(([args]) => args);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk.create.value, "utf8")).toBeLessThan(48 * 1024);
+      expect(chunk.create.category).toBe("travel-curriculum-objectives");
+    }
+  });
 });
 
 describe("curriculumDocuments — getCurriculumDocument", () => {
@@ -69,6 +95,20 @@ describe("curriculumDocuments — getCurriculumDocument", () => {
     });
     const doc = await curriculumDocuments.getCurriculumDocument({ tenantId: 1, documentId: "xyz" });
     expect(doc).toMatchObject({ id: "xyz", title: "ICSE Class 10", status: "indexed" });
+  });
+
+  test("rehydrates extracted objectives from companion chunks", async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      key: "travel.curriculum.doc.xyz",
+      value: JSON.stringify({ id: "xyz", title: "ICSE Classes 1-12", objectiveCount: 2 }),
+    });
+    prisma.tenantSetting.findMany.mockResolvedValue([
+      { value: JSON.stringify([{ text: "Class 1 science" }]) },
+      { value: JSON.stringify([{ text: "Class 12 economics" }]) },
+    ]);
+
+    const doc = await curriculumDocuments.getCurriculumDocument({ tenantId: 1, documentId: "xyz" });
+    expect(doc.extractedObjectives).toEqual([{ text: "Class 1 science" }, { text: "Class 12 economics" }]);
   });
 
   test("returns null for a corrupted (non-JSON) row instead of throwing", async () => {
@@ -110,9 +150,13 @@ describe("curriculumDocuments — listCurriculumDocuments", () => {
 
 describe("curriculumDocuments — deleteCurriculumDocument", () => {
   test("returns true on successful delete", async () => {
+    prisma.tenantSetting.deleteMany.mockResolvedValue({ count: 1 });
     prisma.tenantSetting.delete.mockResolvedValue({});
     const ok = await curriculumDocuments.deleteCurriculumDocument({ tenantId: 1, documentId: "abc" });
     expect(ok).toBe(true);
+    expect(prisma.tenantSetting.deleteMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ category: "travel-curriculum-objectives" }),
+    }));
   });
 
   test("returns false instead of throwing when the row doesn't exist", async () => {

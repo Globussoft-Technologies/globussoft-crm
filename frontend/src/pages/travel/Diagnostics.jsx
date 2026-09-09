@@ -10,7 +10,7 @@ import {
   Compass,
   Eye,
   Filter,
-  Plus,
+  Settings,
   Trash2,
   ArrowUpDown,
 } from "lucide-react";
@@ -43,7 +43,12 @@ function readPageParam(params) {
   return Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
 }
 
-function ContactCell({ contact, contactId }) {
+function formatDiagnosticLevel(classification) {
+  const match = /^level_(\d+)$/i.exec(String(classification || "").trim());
+  return match ? `Level ${match[1]}` : "—";
+}
+
+function ContactCell({ contact, contactId, returnTo }) {
   const hasName = Boolean(contact?.name);
   const hasEmail = Boolean(contact?.email);
   const hasPhone = Boolean(contact?.phone);
@@ -94,6 +99,7 @@ function ContactCell({ contact, contactId }) {
     return (
       <Link
         to={`/contacts/${contactId}`}
+        state={{ backTo: returnTo, backLabel: "Back to diagnostics" }}
         style={contactLinkStyle}
         aria-label={`Open contact #${contactId}`}
       >
@@ -116,6 +122,7 @@ export default function Diagnostics() {
   const isAdmin = user?.role === "ADMIN";
   const { activeSubBrand } = useActiveSubBrand();
   const location = useLocation();
+  const diagnosticsListUrl = `${location.pathname}${location.search}`;
   const [searchParams, setSearchParams] = useSearchParams();
 
   const page = readPageParam(searchParams);
@@ -475,6 +482,7 @@ export default function Diagnostics() {
         <div style={{ display: "flex", gap: 8 }}>
           <Link
             to="/travel/trip-knowledge"
+            state={{ returnTo: diagnosticsListUrl, returnLabel: "Back to diagnostics" }}
             style={ctaSecondary}
             aria-label="Manage brochure knowledge base"
             title="Connect Google Drive and manage brochure PDFs so AI-powered diagnostics can recommend trips from your catalog"
@@ -487,15 +495,15 @@ export default function Diagnostics() {
               style={ctaSecondary}
               aria-label="Create new diagnostic bank (admin)"
             >
-              <Plus size={16} aria-hidden /> Diagnostic settings
+              <Settings size={16} aria-hidden /> Diagnostic settings
             </Link>
           )}
           <Link
-            to="/travel/diagnostics/new"
+            to="/travel/diagnostics/new?playground=1"
             style={ctaPrimary}
-            aria-label="Add new diagnostic entry"
+            aria-label="Try out diagnostic"
           >
-            <Compass size={16} aria-hidden /> Add diagnostic entry
+            <Compass size={16} aria-hidden /> Try out diagnostic
           </Link>
         </div>
       </div>
@@ -627,7 +635,16 @@ export default function Diagnostics() {
                   disabled={!selectedCount || bulkDeleting}
                   style={{
                     ...bulkDeleteBtn,
-                    opacity: !selectedCount || bulkDeleting ? 0.55 : 1,
+                    background: !selectedCount || bulkDeleting
+                      ? "#fee2e2"
+                      : "#dc2626",
+                    color: !selectedCount || bulkDeleting
+                      ? "#9f1239"
+                      : "#ffffff",
+                    borderColor: !selectedCount || bulkDeleting
+                      ? "#fda4af"
+                      : "#dc2626",
+                    opacity: 1,
                     cursor: !selectedCount || bulkDeleting ? "not-allowed" : "pointer",
                   }}
                   aria-label="Delete selected diagnostics"
@@ -676,6 +693,7 @@ export default function Diagnostics() {
                   <col style={{ width: "160px" }} />
                   <col style={{ width: "260px" }} />
                   <col style={{ width: "110px" }} />
+                  <col style={{ width: "90px" }} />
                   <col style={{ width: "140px" }} />
                   <col style={{ width: "100px" }} />
                   <col style={{ width: "80px" }} />
@@ -696,6 +714,7 @@ export default function Diagnostics() {
                     <th style={th} aria-sort={sortKey === "submitted" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("submitted", "Submitted")}</th>
                     <th style={th} aria-sort={sortKey === "contact" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("contact", "Contact")}</th>
                     <th style={th} aria-sort={sortKey === "subBrand" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("subBrand", "Sub-brand")}</th>
+                    <th style={th}>Level</th>
                     <th style={th} aria-sort={sortKey === "classification" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("classification", "Classification")}</th>
                     <th style={th} aria-sort={sortKey === "tier" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("tier", "Tier")}</th>
                     <th style={th} aria-sort={sortKey === "score" ? (sortDirection === "desc" ? "descending" : "ascending") : "none"}>{sortButton("score", "Score")}</th>
@@ -738,10 +757,19 @@ export default function Diagnostics() {
                           </Link>
                         </td>
                         <td style={td}>
-                          <ContactCell contact={d.contact} contactId={d.contactId} />
+                          <ContactCell
+                            contact={d.contact}
+                            contactId={d.contactId}
+                            returnTo={diagnosticsListUrl}
+                          />
                         </td>
                         <td style={td}>
                           <span style={brandBadge}>{d.subBrand}</span>
+                        </td>
+                        <td style={td}>
+                          <span style={levelBadge} title={`Diagnostic ${formatDiagnosticLevel(d.classification)}`}>
+                            {formatDiagnosticLevel(d.classification)}
+                          </span>
                         </td>
                         <td style={td}>
                           {d.classificationLabel || d.classification || "—"}
@@ -1241,6 +1269,21 @@ const brandBadge = {
   color: "var(--primary-color)",
   textTransform: "uppercase",
   letterSpacing: 0.5,
+};
+
+const levelBadge = {
+  display: "inline-flex",
+  alignItems: "center",
+  minWidth: 58,
+  justifyContent: "center",
+  padding: "3px 8px",
+  borderRadius: 999,
+  background: "var(--subtle-bg)",
+  border: "1px solid var(--border-color)",
+  color: "var(--text-primary)",
+  fontSize: 12,
+  fontWeight: 600,
+  whiteSpace: "nowrap",
 };
 
 const rowLink = {

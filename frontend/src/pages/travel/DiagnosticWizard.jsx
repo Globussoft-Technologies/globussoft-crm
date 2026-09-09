@@ -11,10 +11,11 @@
 // via /travel/diagnostics/banks/new.
 
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, ClipboardCheck, Send, CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import DiagnosticSubmitOverlay from '../../components/travel/DiagnosticSubmitOverlay';
 
 const SUB_BRANDS = [
   { value: 'tmc', label: 'TMC (school trips)' },
@@ -26,6 +27,8 @@ const SUB_BRANDS = [
 export default function DiagnosticWizard() {
   const notify = useNotify();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const playground = searchParams.get('playground') === '1';
 
   // ── Step 1: pick a bank ────────────────────────────────────────────
   const [subBrand, setSubBrand] = useState('tmc');
@@ -100,7 +103,7 @@ export default function DiagnosticWizard() {
     if (!selectedBank) return;
     setSubmitting(true);
     try {
-      const res = await fetchApi('/api/travel/diagnostics', {
+      const res = await fetchApi(playground ? '/api/travel/diagnostics/playground' : '/api/travel/diagnostics', {
         method: 'POST',
         body: JSON.stringify({
           bankId: selectedBank.id,
@@ -111,7 +114,7 @@ export default function DiagnosticWizard() {
       if (res?.warnings?.length > 0) {
         notify.info(`Submitted with ${res.warnings.length} warning(s) — see result panel.`);
       } else {
-        notify.success('Diagnostic submitted.');
+        notify.success(playground ? 'Preview ready. Nothing was saved.' : 'Diagnostic submitted.');
       }
     } catch (e) {
       const msg = e?.body?.error || 'Submit failed';
@@ -133,7 +136,7 @@ export default function DiagnosticWizard() {
       <div style={shell}>
         <header style={headerRow}>
           <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
-            <ClipboardCheck size={28} aria-hidden /> Take a diagnostic
+            <ClipboardCheck size={28} aria-hidden /> {playground ? 'Try out diagnostic' : 'Take a diagnostic'}
           </h1>
           <Link to="/travel/diagnostics" style={backLink}>
             <ChevronLeft size={16} aria-hidden /> Back to list
@@ -158,7 +161,7 @@ export default function DiagnosticWizard() {
         </section>
 
         <section style={card}>
-          <h2 style={cardTitle}>2. Start with your current template</h2>
+          <h2 style={cardTitle}>2. {playground ? 'Preview your current template' : 'Start with your current template'}</h2>
           {loadingBanks ? (
             <div style={empty}>Loading your current template&hellip;</div>
           ) : !currentBank ? (
@@ -206,9 +209,10 @@ export default function DiagnosticWizard() {
 
   return (
     <div style={shell}>
+      <DiagnosticSubmitOverlay active={submitting} primaryColor="var(--primary-color, #4f46e5)" />
       <header style={headerRow}>
         <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
-          <ClipboardCheck size={28} aria-hidden /> Diagnostic — {subBrand.toUpperCase()}
+          <ClipboardCheck size={28} aria-hidden /> {playground ? 'Diagnostic playground' : 'Diagnostic'} — {subBrand.toUpperCase()}
         </h1>
         <button type="button" onClick={() => setSelectedBank(null)} style={backLink} aria-label="Change bank">
           <ChevronLeft size={16} aria-hidden /> Change bank
@@ -307,6 +311,7 @@ export default function DiagnosticWizard() {
 
 function ResultCard({ result, onAnother }) {
   const { classification, classificationLabel, recommendedTier, score, warnings = [] } = result;
+  const trips = result?.ragResult?.recommendations?.recommendedTrips || [];
   return (
     <div style={shell}>
       <header style={headerRow}>
@@ -350,6 +355,24 @@ function ResultCard({ result, onAnother }) {
           <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: 'var(--text-secondary)' }}>
             {warnings.map((w) => <li key={w}>{w}</li>)}
           </ul>
+        </section>
+      )}
+
+      {trips.length > 0 && (
+        <section style={card}>
+          <h3 style={cardTitle}>Recommended trips</h3>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {trips.map((trip, index) => (
+              <div key={`${trip.category || 'other'}-${trip.name}-${index}`} style={{ ...bankRow, cursor: 'default' }}>
+                <div>
+                  <strong>{trip.name}</strong>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{trip.category || 'Other'}</div>
+                  {trip.summary && <div style={{ marginTop: 4, fontSize: 13 }}>{trip.summary}</div>}
+                </div>
+                {trip.driveLink && <a href={trip.driveLink} target="_blank" rel="noopener noreferrer" style={backLink}>View brochure</a>}
+              </div>
+            ))}
+          </div>
         </section>
       )}
 

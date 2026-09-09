@@ -29,9 +29,11 @@ const embedClient = require("./embedClient");
 const llmRouter = require("./llmRouter");
 const { getRecommendationTopK } = require("./diagnosticRecommendationSettings");
 
-const ITINERARY_TOP_K = 15;
+const ITINERARY_TOP_K = 30;
 const OBJECTIVE_SEARCH_LIMIT = 24;
-const MAX_OBJECTIVES_PER_DOCUMENT = 200;
+const MAX_OBJECTIVES_PER_DOCUMENT = 1500;
+const EXTRACTION_SECTION_CHARS = 45000;
+const EMBEDDING_BATCH_SIZE = 100;
 
 function normalizeTag(value) {
   return String(value || "").trim().toUpperCase();
@@ -137,33 +139,79 @@ async function reindexCurriculumDocument({ tenantId, subBrand, documentId, title
   });
 }
 
-async function extractObjectives({ tenantId, text, board, gradeBand, subjects }) {
-  const trimmedText = String(text || "").slice(0, 60000); // keep the LLM payload bounded
-  if (!trimmedText.trim()) return [];
-
-  let llmResult;
-  try {
-    llmResult = await llmRouter.routeRequest({
-      task: "curriculum-objective-extraction",
-      payload: { text: trimmedText, board, gradeBand, subjects },
-      tenantId,
-    });
-  } catch (e) {
-    const err = new Error(`Curriculum objective extraction failed: ${e.message}`);
-    err.code = "EXTRACTION_FAILED";
-    throw err;
+function splitCurriculumText(text) {
+  const source = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!source) return [];
+  const sections = [];
+  let remaining = source;
+  while (remaining.length > EXTRACTION_SECTION_CHARS) {
+    let boundary = remaining.lastIndexOf('\n', EXTRACTION_SECTION_CHARS);
+    if (boundary < EXTRACTION_SECTION_CHARS * 0.6) {
+      boundary = remaining.lastIndexOf('. ', EXTRACTION_SECTION_CHARS) + 1;
+    }
+    if (boundary < EXTRACTION_SECTION_CHARS * 0.6) boundary = EXTRACTION_SECTION_CHARS;
+    sections.push(remaining.slice(0, boundary).trim());
+    remaining = remaining.slice(boundary).trim();
   }
+  if (remaining) sections.push(remaining);
+  return sections;
+}
 
-  const parsed = parseJsonObject(llmResult?.text || "");
-  const raw = Array.isArray(parsed?.objectives) ? parsed.objectives : [];
-  return raw
-    .map((o) => ({
-      text: String(o?.text || "").trim(),
-      subject: String(o?.subject || "").trim() || (subjects && subjects[0]) || "General",
-      topicCode: o?.topicCode ? String(o.topicCode).trim() : null,
-    }))
-    .filter((o) => o.text)
-    .slice(0, MAX_OBJECTIVES_PER_DOCUMENT);
+function normaliseObjective(raw, subjects, documentGradeBand) {
+  const text = String(raw?.text || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  return {
+    text,
+    subject: String(raw?.subject || '').replace(/\s+/g, ' ').trim() || (subjects && subjects[0]) || 'General',
+    topicCode: raw?.topicCode ? String(raw.topicCode).trim() : null,
+    gradeBand: raw?.gradeBand ? String(raw.gradeBand).trim() : documentGradeBand || null,
+  };
+}
+
+function objectiveKey(objective) {
+  return [objective.gradeBand, objective.subject, objective.text]
+    .map((part) => String(part || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim())
+    .join('|');
+}
+
+async function extractObjectives({ tenantId, text, board, gradeBand, subjects }) {
+  const sections = splitCurriculumText(text);
+  if (!sections.length) return [];
+
+  const objectives = [];
+  const seen = new Set();
+  for (let index = 0; index < sections.length && objectives.length < MAX_OBJECTIVES_PER_DOCUMENT; index += 1) {
+    let llmResult;
+    try {
+      llmResult = await llmRouter.routeRequest({
+        task: 'curriculum-objective-extraction',
+        payload: {
+          text: sections[index],
+          board,
+          gradeBand,
+          subjects,
+          section: { index: index + 1, total: sections.length },
+        },
+        tenantId,
+      });
+    } catch (e) {
+      const err = new Error(`Curriculum objective extraction failed in section ${index + 1}: ${e.message}`);
+      err.code = 'EXTRACTION_FAILED';
+      throw err;
+    }
+    const parsed = parseJsonObject(llmResult?.text || '');
+    const raw = Array.isArray(parsed?.objectives) ? parsed.objectives : [];
+    for (const entry of raw) {
+      const objective = normaliseObjective(entry, subjects, gradeBand);
+      if (!objective) continue;
+      const key = objectiveKey(objective);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      objectives.push(objective);
+      if (objectives.length >= MAX_OBJECTIVES_PER_DOCUMENT) break;
+    }
+  }
+  return objectives;
 }
 
 async function embedAndIndexObjectives({ tenantId, subBrand, documentId, title, board, gradeBand, subjects, objectives, embedConfig }) {
@@ -179,8 +227,12 @@ async function embedAndIndexObjectives({ tenantId, subBrand, documentId, title, 
 
   if (!objectives.length) return { qdrantPointIds: [] };
 
-  const texts = objectives.map((o) => o.text);
-  const { embeddings } = await embedConfig.client.embedTexts(texts, embedConfig);
+  const embeddings = new Map();
+  for (let start = 0; start < objectives.length; start += EMBEDDING_BATCH_SIZE) {
+    const batch = objectives.slice(start, start + EMBEDDING_BATCH_SIZE);
+    const result = await embedConfig.client.embedTexts(batch.map((o) => o.text), embedConfig);
+    for (const [index, vector] of result.embeddings || []) embeddings.set(start + index, vector);
+  }
 
   const boardNormalized = normalizeTag(board);
   const gradeBandNormalized = normalizeTag(gradeBand);
@@ -202,6 +254,7 @@ async function embedAndIndexObjectives({ tenantId, subBrand, documentId, title, 
         boardNormalized,
         gradeBand: gradeBand || null,
         gradeBandNormalized,
+        objectiveGradeBand: objective.gradeBand || gradeBand || null,
         subjects: Array.isArray(subjects) ? subjects : [],
         subject: objective.subject,
         objectiveText: objective.text,
@@ -234,7 +287,42 @@ function buildQueryText(profile) {
   if (profile.grade) parts.push(`Grade: ${profile.grade}`);
   if (profile.subject) parts.push(`Subject: ${profile.subject}`);
   if (profile.outcomes) parts.push(`Desired learning outcomes: ${profile.outcomes}`);
+  if (profile.diagnosticSignals) parts.push(`Diagnostic answers: ${profile.diagnosticSignals}`);
   return parts.length ? parts.join(". ") : "General curriculum-aligned school trip.";
+}
+
+function gradeRange(value) {
+  const values = String(value || '').match(/\d{1,2}/g)?.map(Number) || [];
+  if (!values.length) return null;
+  return { min: Math.min(...values), max: Math.max(...values) };
+}
+
+function gradeCompatibility(selectedGrade, objectiveGradeBand) {
+  const selected = gradeRange(selectedGrade);
+  const covered = gradeRange(objectiveGradeBand);
+  if (!selected || !covered) return 1;
+  if (selected.min >= covered.min && selected.max <= covered.max) {
+    return selected.min === covered.min && selected.max === covered.max ? 3 : 2;
+  }
+  return 0;
+}
+
+function rankObjectiveHits(objectiveHits, selectedGrade) {
+  return [...objectiveHits]
+    .map((hit) => ({
+      ...hit,
+      gradeCompatibility: gradeCompatibility(
+        selectedGrade,
+        hit.payload?.objectiveGradeBand || hit.payload?.gradeBand,
+      ),
+    }))
+    .filter((hit) => hit.gradeCompatibility > 0)
+    .sort((a, b) => {
+      if (b.gradeCompatibility !== a.gradeCompatibility) {
+        return b.gradeCompatibility - a.gradeCompatibility;
+      }
+      return Number(b.score || 0) - Number(a.score || 0);
+    });
 }
 
 // Group itinerary chunks by source file, keep the strongest chunk per file —
@@ -254,11 +342,25 @@ function consolidateItineraryChunks(chunks) {
     result.push({
       fileName: meta.fileName,
       driveLink: meta.driveViewLink,
+      folderPath: meta.folderPath || '',
+      category: categoryFromFolderPath(meta.folderPath),
       text: top.payload?.text || "",
       score: top.score,
     });
   }
   return result.sort((a, b) => b.score - a.score);
+}
+
+function categoryFromFolderPath(folderPath) {
+  const ignored = new Set(['tmc', 'brochure', 'brochures']);
+  const category = String(folderPath || '').split('/').map((part) => part.trim()).find(
+    (part) => part && !ignored.has(part.toLowerCase()) && !/\.pdf$/i.test(part),
+  );
+  return category || 'Other';
+}
+
+function brochureKey(value) {
+  return String(value || '').replace(/\.pdf$/i, '').replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
 }
 
 /**
@@ -298,9 +400,11 @@ async function matchCurriculumForDiagnostic({ tenantId, subBrand, profile }) {
       tenantId,
       subBrand,
       board: profile.curriculum,
-      gradeBand: profile.grade,
       providerId: embedConfig.providerId,
-      limit: OBJECTIVE_SEARCH_LIMIT,
+      // Do not exact-filter by grade here. A Class 1-12 syllabus must remain
+      // available for a Class 8 diagnostic; range-aware ranking below handles
+      // both broad and single-grade documents.
+      limit: OBJECTIVE_SEARCH_LIMIT * 3,
     }),
     qdrant.searchBySubBrand({
       vector: queryVector,
@@ -314,34 +418,40 @@ async function matchCurriculumForDiagnostic({ tenantId, subBrand, profile }) {
   // No board/gradeBand exact hits (casing/naming drift) — retry the
   // curriculum search once without the filter so a near-match still surfaces
   // rather than silently returning nothing.
-  let effectiveObjectiveHits = objectiveHits;
-  if (!effectiveObjectiveHits.length && (profile.curriculum || profile.grade)) {
-    effectiveObjectiveHits = await qdrant.searchCurriculum({
+  let effectiveObjectiveHits = rankObjectiveHits(objectiveHits, profile.grade);
+  if (!effectiveObjectiveHits.length && profile.curriculum) {
+    const fallbackHits = await qdrant.searchCurriculum({
       vector: queryVector,
       tenantId,
       subBrand,
       providerId: embedConfig.providerId,
-      limit: OBJECTIVE_SEARCH_LIMIT,
+      limit: OBJECTIVE_SEARCH_LIMIT * 3,
     });
+    effectiveObjectiveHits = rankObjectiveHits(fallbackHits, profile.grade);
   }
   if (!effectiveObjectiveHits.length || !itineraryHits.length) return null;
 
   const itineraryContext = consolidateItineraryChunks(itineraryHits);
 
   const llmPayload = {
+    recommendationLimit: topK,
     profile: {
       curriculum: profile.curriculum || null,
       grade: profile.grade || null,
       subject: profile.subject || null,
       outcomes: profile.outcomes || null,
+      diagnosticSignals: profile.diagnosticSignals || null,
     },
     curriculumObjectives: effectiveObjectiveHits.map((h) => ({
       subject: h.payload.subject,
       objective: h.payload.objectiveText,
+      gradeBand: h.payload.objectiveGradeBand || h.payload.gradeBand || null,
     })),
     itineraries: itineraryContext.map((c) => ({
       fileName: c.fileName,
       driveLink: c.driveLink,
+      folderPath: c.folderPath,
+      category: c.category,
       excerpt: c.text,
     })),
   };
@@ -360,6 +470,8 @@ async function matchCurriculumForDiagnostic({ tenantId, subBrand, profile }) {
 
   const parsed = parseJsonObject(llmResult?.text || "");
   const rawRecs = Array.isArray(parsed?.recommendations) ? parsed.recommendations : [];
+  const brochuresByLink = new Map(itineraryContext.filter((row) => row.driveLink).map((row) => [row.driveLink, row]));
+  const brochuresByName = new Map(itineraryContext.map((row) => [brochureKey(row.fileName), row]));
   const recommendations = rawRecs
     .map((r) => {
       const destination = String(r?.destination || "").trim();
@@ -373,11 +485,15 @@ async function matchCurriculumForDiagnostic({ tenantId, subBrand, profile }) {
         }))
         .filter((reason) => reason.learningOutcome)
         .slice(0, 4);
+      const brochure = brochuresByLink.get(String(r?.driveLink || '').trim())
+        || brochuresByName.get(brochureKey(destination));
       return {
         destination,
         fitScore,
         reasons,
-        brochurePdfUrl: r?.driveLink ? String(r.driveLink).trim() : null,
+        brochurePdfUrl: r?.driveLink ? String(r.driveLink).trim() : brochure?.driveLink || null,
+        folderPath: brochure?.folderPath || '',
+        category: brochure?.category || 'Other',
         mappingIds: [],
         source: "ai",
       };
@@ -400,5 +516,9 @@ module.exports = {
   indexCurriculumDocument,
   reindexCurriculumDocument,
   deindexCurriculumDocument,
+  gradeCompatibility,
+  rankObjectiveHits,
   matchCurriculumForDiagnostic,
+  splitCurriculumText,
+  extractObjectives,
 };

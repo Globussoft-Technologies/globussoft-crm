@@ -966,6 +966,7 @@ app.use("/api", (req, res, next) => {
     "/auth/email-otp",
     "/auth/check-email",
     "/auth/public/tenants",
+    "/auth/public/lead-inquiry",
     "/auth/forgot-password",
     "/auth/reset-password",
     "/auth/2fa/verify",

@@ -10,7 +10,8 @@ import { useEffect, useRef, useState } from "react";
 //
 // `hideBottomScrollbar` keeps the sync behavior but visually hides the
 // native bottom scrollbar, which is useful on dense split tables where the
-// top bar is the only one we want the user to see.
+// top bar is the only one we want the user to see. `hideTopBar` does the
+// reverse (no top bar, native bottom scrollbar only); opt-in, default false.
 //
 // `scrollWidth` is OPTIONAL - when omitted, the actual rendered width of the
 // wrapped content is measured automatically (via ResizeObserver, so it stays
@@ -26,6 +27,7 @@ const TopScrollSync = ({
   stickyTop = false,
   stickyTopOffset = 0,
   hideBottomScrollbar = false,
+  hideTopBar = false,
 }) => {
   const topRef = useRef(null);
   const bottomRef = useRef(null);
@@ -111,7 +113,7 @@ const TopScrollSync = ({
 
   return (
     <div className="top-scroll-sync">
-      {forceScrollbar || hasHorizontalOverflow ? (
+      {!hideTopBar && (forceScrollbar || hasHorizontalOverflow) ? (
         <div
           ref={topRef}
           className="top-scroll-sync__top"

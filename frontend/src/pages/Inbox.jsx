@@ -299,6 +299,21 @@ export default function Inbox() {
 
   const [detail, setDetail] = useState(null);
 
+  // Opening an email marks it read: optimistic local update (clears the
+  // blue dot immediately) + persist via POST /api/communications/inbox/:id/read
+  // so the dot stays cleared across reloads. Works for thread-less rows too
+  // (threadId is null on most inbound/sent mail). Already-read rows skip both.
+  const openEmail = (email) => {
+    if (!email) return;
+    setDetail({ ...email, read: true });
+    if (email.read) return;
+    setEmails((prev) => prev.map((e) => (e.id === email.id ? { ...e, read: true } : e)));
+    fetchApi(`/api/communications/inbox/${email.id}/read`, {
+      method: 'POST',
+      silent: true,
+    }).catch(() => {});
+  };
+
   const inboxPath =
     emailFolder === "all"
       ? "/api/communications/inbox"
@@ -960,13 +975,13 @@ export default function Inbox() {
                 <div
                   key={email.id}
                   className="table-row-hover"
-                  onClick={() => setDetail(email)}
+                  onClick={() => openEmail(email)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      setDetail(email);
+                      openEmail(email);
                     }
                   }}
                   style={{

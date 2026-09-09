@@ -1072,11 +1072,18 @@ router.get('/', async (req, res) => {
       const total = await prisma.contact.count({ where });
       return res.json({ total });
     }
-    // #172: honor limit / offset query params with sensible defaults + a hard cap.
+    // #172: honor limit / offset / page query params with sensible defaults + a hard cap.
     // Pre-fix the API silently returned the entire dataset, breaking pagination
-    // and exposing a perf/DoS surface.
+    // and exposing a perf/DoS surface. `page` is 1-based; when both `page` and
+    // `offset` are sent, the explicit `offset` wins. When `page` is present
+    // the response is a { data, total, page, limit, offset, totalPages }
+    // envelope; otherwise the legacy plain array (keeps existing consumers).
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
-    const offset = Math.max(0, parseInt(req.query.offset) || 0);
+    const paginated = req.query.page !== undefined;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const offset = req.query.offset !== undefined
+      ? Math.max(0, parseInt(req.query.offset) || 0)
+      : (paginated ? (page - 1) * limit : Math.max(0, parseInt(req.query.offset) || 0));
     // #920 slice 1 — PII reduction via opt-in slim shape. When the caller
     // passes ?fields=summary, the response drops the heavy nested includes
     // (activities/tasks/assignedTo) AND the sensitive flat fields
@@ -1127,7 +1134,17 @@ router.get('/', async (req, res) => {
     // projection" opt-in.
     const withTags = serializeContactTagsBatch(filtered);
     const withCustomFields = isSummary ? withTags : await attachLeadCustomFieldsBatch(withTags, req.user.tenantId);
-    res.json(withCustomFields);
+    if (!paginated) return res.json(withCustomFields);
+    const total = await prisma.contact.count({ where });
+    const effPage = req.query.offset !== undefined ? Math.floor(offset / limit) + 1 : page;
+    return res.json({
+      data: withCustomFields,
+      total,
+      page: effPage,
+      limit,
+      offset,
+      totalPages: Math.max(Math.ceil(total / limit), 1),
+    });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
   }
@@ -1962,6 +1979,10 @@ const updateContactById = async (req, res) => {
     // for why this must be stripped before the Prisma spread.
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    const hasCustomFieldUpdates =
+      customFields &&
+      typeof customFields === "object" &&
+      Object.keys(customFields).length > 0;
     const tagsInput = Object.prototype.hasOwnProperty.call(req.body, "tags")
       ? req.body.tags
       : undefined;
@@ -1976,8 +1997,23 @@ const updateContactById = async (req, res) => {
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // PRD Gap §1.1a/§1.1d — coerce date strings to Date objects (mirrors POST handler).
     const updateData = { ...req.body };
+    // Custom fields live in related rows, so explicitly touch the Contact
+    // timestamp when they are edited; Prisma cannot infer this from an empty
+    // Contact update after customFields has been removed above.
     if (tagsResult.hasValue) {
       updateData.tagsJson = tagsResult.tags.length ? JSON.stringify(tagsResult.tags) : null;
+    }
+    // Keep Generic CRM's Last Updated value persisted across full reloads.
+    // Related custom-field writes do not trigger Prisma's @updatedAt hook.
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    if (
+      tenant?.vertical === "generic" &&
+      (Object.keys(updateData).length > 0 || hasCustomFieldUpdates || tagsResult.hasValue)
+    ) {
+      updateData.updatedAt = new Date();
     }
     if (typeof updateData.anniversary === "string" && updateData.anniversary !== "") {
       updateData.anniversary = new Date(updateData.anniversary);

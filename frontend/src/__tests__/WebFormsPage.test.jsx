@@ -316,7 +316,7 @@ describe('WebForms builder page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Get embed code and URL/i }));
 
-    expect(screen.getAllByDisplayValue(/embed\/web-form\.html\?slug=brand-intake/).length).toBeGreaterThan(0);
+    expect(screen.getAllByDisplayValue(/embed\/web-form\.html\?id=101/).length).toBeGreaterThan(0);
 
     expect(screen.getAllByDisplayValue(/iframe src=/i).length).toBeGreaterThan(0);
 
@@ -348,7 +348,7 @@ describe('WebForms builder page', () => {
 
     });
 
-    expect(await screen.findByText('Contact fields')).toBeInTheDocument();
+    expect(await screen.findByText('CONTACT FIELDS')).toBeInTheDocument();
 
     expect(screen.queryByText('Contact and lead custom fields')).toBeNull();
 
@@ -388,6 +388,14 @@ describe('WebForms builder page', () => {
 
     });
 
+    const renameCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+    );
+    // Renaming the header name must not rewrite the slug — public links use the stable id.
+    expect(JSON.parse(renameCall[1].body)).toEqual(
+      expect.objectContaining({ name: 'Saved form', slug: 'brand-intake' }),
+    );
+
     expect(notifySuccess).toHaveBeenCalledWith('Form saved');
 
   });
@@ -425,6 +433,53 @@ describe('WebForms builder page', () => {
         expect.objectContaining({ name: '' }),
 
       );
+
+    });
+
+    expect(notifySuccess).toHaveBeenCalledWith('Form saved');
+
+  });
+
+  test('keeps the internal form name and the public display title independent', async () => {
+
+    renderPage();
+
+
+
+    await openBuilder();
+
+    const matches = await screen.findAllByDisplayValue('Brand intake');
+
+    expect(matches).toHaveLength(2);
+
+    fireEvent.change(matches[1], { target: { value: 'Public title' } });
+
+    expect(matches[0]).toHaveValue('Brand intake');
+
+    expect(matches[1]).toHaveValue('Public title');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+
+
+    await waitFor(() => {
+
+      const saveCall = fetchApiMock.mock.calls.find(
+
+        ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+
+      );
+
+      expect(saveCall).toBeTruthy();
+
+      const body = JSON.parse(saveCall[1].body);
+
+      expect(body.name).toBe('Brand intake');
+
+      expect(body.settings).toEqual(expect.objectContaining({ formTitle: 'Public title' }));
+
+      // Renames must not rewrite the slug — public links use the stable id.
+      expect(body.slug).toBe('brand-intake');
 
     });
 

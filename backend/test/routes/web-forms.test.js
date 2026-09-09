@@ -90,7 +90,7 @@ const TENANT_ID = 11;
 const USER_ID = 22;
 
 
-function makeApp() {
+function makeApp(vertical = 'generic') {
 
   const app = express();
 
@@ -98,7 +98,7 @@ function makeApp() {
 
   app.use((/** @type {any} */ req, /** @type {import('express').Response} */ _res, /** @type {import('express').NextFunction} */ next) => {
 
-    req.user = { userId: USER_ID, tenantId: TENANT_ID, role: 'ADMIN' };
+    req.user = { userId: USER_ID, tenantId: TENANT_ID, role: 'ADMIN', vertical };
 
     next();
 
@@ -158,6 +158,33 @@ beforeEach(() => {
 
 describe('GET /api/forms', () => {
 
+  test('isolates travel forms from generic forms for authenticated users', async () => {
+    prisma.webForm.findMany.mockResolvedValue([{
+      id: 8,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'travel',
+      name: 'Travel enquiry',
+      slug: 'travel-enquiry',
+      isActive: true,
+      fieldsJson: '[]',
+      styleJson: '{}',
+      settingsJson: '{}',
+    }]);
+
+    const response = await request(makeApp('travel')).get('/api/forms?scope=travel');
+
+    expect(response.status).toBe(200);
+    expect(response.body[0]).toMatchObject({ id: 8, scope: 'travel' });
+    expect(prisma.webForm.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: TENANT_ID, scope: 'travel' },
+    }));
+
+    const forbidden = await request(makeApp('travel')).get('/api/forms?scope=generic');
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body.code).toBe('FORM_SCOPE_FORBIDDEN');
+  });
+
   test('lists forms with submission counts', async () => {
 
     prisma.webForm.findMany.mockResolvedValue([
@@ -184,7 +211,7 @@ describe('GET /api/forms', () => {
 
     expect(prisma.webForm.findMany).toHaveBeenCalledWith({
 
-      where: { tenantId: TENANT_ID },
+      where: { tenantId: TENANT_ID, scope: 'generic' },
 
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
 
@@ -494,6 +521,44 @@ describe('GET /api/forms/public/:slug', () => {
 
 
 describe('POST /api/forms/public/:slug/submit', () => {
+
+  test('creates travel submissions with travel scope and inbound web-form source', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 81,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      scope: 'travel',
+      name: 'Plan my trip',
+      slug: 'plan-my-trip',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: '{}',
+      settingsJson: '{}',
+    });
+
+    const response = await request(makeApp('travel'))
+      .post('/api/forms/public/plan-my-trip/submit?scope=travel')
+      .field('name', 'Travel Customer');
+
+    expect(response.status).toBe(201);
+    expect(prisma.webForm.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { slug: 'plan-my-trip', scope: 'travel', isActive: true },
+    }));
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        tenantId: TENANT_ID,
+        name: 'Travel Customer',
+        source: 'inbound:web_form',
+        status: 'Lead',
+      }),
+    }));
+    expect(prisma.webFormSubmission.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ tenantId: TENANT_ID, webFormId: 81, scope: 'travel' }),
+    }));
+  });
 
   test('creates a contact, writes the submission, and preserves multiselect values', async () => {
 

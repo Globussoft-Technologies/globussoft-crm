@@ -107,6 +107,8 @@
 
       var slug = params.get('id') || params.get('slug') || '';
 
+      var scope = params.get('scope') || 'generic';
+
       var apiBase = (params.get('api') || location.origin).replace(/\/+$/,'');
 
       var root = document.getElementById('app');
@@ -315,7 +317,7 @@
 
         try {
 
-          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug) + '/submit', { method: 'POST', body: fd });
+          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug) + '/submit?scope=' + encodeURIComponent(scope), { method: 'POST', body: fd });
 
           var json = await res.json().catch(function(){ return {}; });
 
@@ -389,7 +391,7 @@
 
         try {
 
-          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug));
+          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug) + '?scope=' + encodeURIComponent(scope));
 
           var json = await res.json();
 

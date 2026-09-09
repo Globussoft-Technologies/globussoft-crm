@@ -47,6 +47,59 @@ test("Tally masters rejects a generic tenant", async ({ request }) => {
   expect((await response.json()).code).toBe("WRONG_VERTICAL");
 });
 
+test("Tally connector status is authenticated, travel-only, and never exposes its token hash", async ({ request }) => {
+  const unauthenticated = await request.get(`${BASE_URL}/api/travel/tally/connector/status`, { timeout: REQUEST_TIMEOUT });
+  expect([401, 403]).toContain(unauthenticated.status());
+
+  const genericToken = await genericAdmin(request);
+  if (!genericToken) test.skip(true, "generic admin login unavailable");
+  const wrongVertical = await request.get(`${BASE_URL}/api/travel/tally/connector/status`, {
+    headers: headers(genericToken),
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(wrongVertical.status()).toBe(403);
+  expect((await wrongVertical.json()).code).toBe("WRONG_VERTICAL");
+
+  const token = await travelAdmin(request);
+  if (!token) test.skip(true, "travel admin login unavailable");
+  const response = await request.get(`${BASE_URL}/api/travel/tally/connector/status`, {
+    headers: headers(token),
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(response.status()).toBe(200);
+  const body = await response.json();
+  expect(typeof body.online).toBe("boolean");
+  expect(typeof body.configured).toBe("boolean");
+  expect(body.connectorUrl).toMatch(/^wss?:\/\//);
+  expect(JSON.stringify(body)).not.toContain("tokenHash");
+  expect(body).not.toHaveProperty("token");
+});
+
+test("direct Tally push rejects malformed XML before contacting a connector", async ({ request }) => {
+  const token = await travelAdmin(request);
+  if (!token) test.skip(true, "travel admin login unavailable");
+  const response = await request.post(`${BASE_URL}/api/travel/tally/connector/push`, {
+    headers: headers(token),
+    data: { vouchersXml: "<not-tally />" },
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(response.status()).toBe(400);
+  expect((await response.json()).code).toBe("INVALID_TALLY_XML");
+});
+
+test("direct Tally push rejects destructive XML before contacting a connector", async ({ request }) => {
+  const token = await travelAdmin(request);
+  if (!token) test.skip(true, "travel admin login unavailable");
+  const destructiveXml = '<?xml version="1.0"?><ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME></REQUESTDESC><REQUESTDATA><TALLYMESSAGE><VOUCHER ACTION="Delete"><VOUCHERNUMBER>TEST-1</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
+  const response = await request.post(`${BASE_URL}/api/travel/tally/connector/push`, {
+    headers: headers(token),
+    data: { vouchersXml: destructiveXml },
+    timeout: REQUEST_TIMEOUT,
+  });
+  expect(response.status()).toBe(400);
+  expect((await response.json()).code).toBe("UNSAFE_TALLY_XML");
+});
+
 test("Tally read endpoints return their pagination-safe envelopes", async ({ request }) => {
   const token = await travelAdmin(request);
   if (!token) test.skip(true, "travel admin login unavailable");

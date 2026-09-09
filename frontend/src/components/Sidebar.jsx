@@ -2224,8 +2224,9 @@ function renderTravelNav({
         <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" requiredPermission={{ module: "visa", action: "manage" }} />
       </>)}
 
-      {group("Marketing", ["/travel/brochures", "/landing-pages", "/admin/brand-kits"], <>
+      {group("Marketing", ["/travel/brochures", "/travel/forms", "/landing-pages", "/admin/brand-kits"], <>
         <Link to="/travel/brochures" icon={Sparkles} label="Brochure Engine" requiredPermission={{ module: "marketing", action: "read" }} />
+        <Link to="/travel/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" requiredPermission={{ module: "settings", action: "manage" }} />
       </>)}

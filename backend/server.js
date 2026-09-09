@@ -556,10 +556,29 @@ try {
   );
 }
 
+// Local Tally bridge. Attach before socket.io so engine.io delegates this
+// dedicated raw-WebSocket path to the connector handler.
+try {
+  const { attachTallyConnectorBridge } = require("./lib/tallyConnectorBridge");
+  attachTallyConnectorBridge(server);
+} catch (e) {
+  console.error(
+    "[server] Tally connector bridge attach failed (non-fatal):",
+    e.message,
+  );
+}
+
 // Plain HTTP requests to the WebSocket bridge path must not fall through to
 // the SPA shell. The upgrade listener above handles WebSocket handshakes;
 // anything else on this path is a client error.
 app.all("/ws/callified-agent", (_req, res) => {
+  res.status(426).json({
+    error: "Upgrade Required",
+    code: "UPGRADE_REQUIRED",
+  });
+});
+
+app.all("/ws/tally-connector", (_req, res) => {
   res.status(426).json({
     error: "Upgrade Required",
     code: "UPGRADE_REQUIRED",
@@ -1426,6 +1445,7 @@ app.use("/api/fx", travelFxRoutes);
 // See G030 spec failure (run 27463877000) for the original collision report.
 app.use("/api/travel", require("./routes/travel_invoice_ledgers"));
 app.use("/api/travel", travelInvoicesRoutes);
+app.use("/api/travel/tally/connector", require("./routes/travel_tally_connector"));
 app.use("/api/travel", require("./routes/travel_tally"));
 app.use("/api/travel", require("./routes/travel_reconciliation"));
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
@@ -2670,4 +2690,3 @@ if (require("fs").existsSync(FRONTEND_DIST)) {
 }
 
 // nodemon restart trigger
-

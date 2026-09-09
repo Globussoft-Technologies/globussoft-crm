@@ -4,9 +4,21 @@ const dateOnly = (value) => {
   if (!value) return "";
   const raw = String(value).trim();
   const dayFirst = raw.match(/^(\d{2})[-/](\d{2})[-/](\d{4})/);
-  if (dayFirst) return `${dayFirst[3]}-${dayFirst[2]}-${dayFirst[1]}`;
+  if (dayFirst) {
+    const candidate = `${dayFirst[3]}-${dayFirst[2]}-${dayFirst[1]}`;
+    return isValidIsoDate(candidate) ? candidate : "";
+  }
   const yearFirst = raw.match(/^(\d{4})[-/](\d{2})[-/](\d{2})/);
-  return yearFirst ? `${yearFirst[1]}-${yearFirst[2]}-${yearFirst[3]}` : raw.slice(0, 10);
+  if (yearFirst) {
+    const candidate = `${yearFirst[1]}-${yearFirst[2]}-${yearFirst[3]}`;
+    return isValidIsoDate(candidate) ? candidate : "";
+  }
+  return "";
+};
+const isValidIsoDate = (value) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 };
 const accountAmount = (accounts, id) =>
   toTallyAmount(accounts.find((account) => account.id === id)?.amount);
@@ -118,7 +130,7 @@ const voucherRowToXml = (row, index, { educationalMode = false, alterExistingRec
   const shouldAlter = alterExistingReceipts && (voucherType === "Sales" || voucherType === "Receipt");
   const actionAttributes = shouldAlter
     ? ` DATE="${xmlCell(originalDate || dateOnly(new Date().toISOString()))}" TAGNAME="Voucher Number" TAGVALUE="${xmlCell(voucherNumber)}" ACTION="Alter"`
-    : ` ACTION="Create"`;
+    : ` DATE="${safeDate}" ACTION="Create"`;
   return `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER VCHTYPE="${xmlCell(voucherType)}"${actionAttributes} OBJVIEW="Accounting Voucher View"><DATE>${safeDate}</DATE><VOUCHERTYPENAME>${xmlCell(voucherType)}</VOUCHERTYPENAME><VOUCHERNUMBER>${xmlCell(voucherNumber)}</VOUCHERNUMBER><PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW><ISINVOICE>No</ISINVOICE><REFERENCE>${xmlCell(reference)}</REFERENCE><NARRATION>${xmlCell(fullNarration)}</NARRATION>${ledgerEntryXml({ ledger, amount: primaryAmount })}${ledgerEntryXml({ ledger: counterLedger, amount: -primaryAmount, isParty: counterIsParty, billReference: billReference || (voucherType === "Sales" || voucherType === "Purchase" ? voucherNumber : ""), billType })}</VOUCHER></TALLYMESSAGE>`;
 };
 

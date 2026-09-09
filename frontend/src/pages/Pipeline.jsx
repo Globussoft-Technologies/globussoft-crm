@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext, useCallback, useMemo } from 're
 import { useSearchParams, Link } from 'react-router-dom';
 import { Briefcase, Plus, Upload, Search, Filter, RefreshCw, Pencil, Trash2, X, Zap } from 'lucide-react';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { createAuthenticatedSocket } from '../utils/socket';
@@ -153,8 +154,8 @@ const Pipeline = () => {
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([
-      fetchApi('/api/deals').catch(() => []),
-      fetchApi('/api/contacts').catch(() => []),
+      fetchAllPages('/api/deals').catch(() => []),
+      fetchAllPages('/api/contacts').catch(() => []),
       fetchApi('/api/pipeline_stages').catch(() => []),
     ]).then(([dealData, contactData, stageData]) => {
       setDeals(Array.isArray(dealData) ? dealData : []);

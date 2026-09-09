@@ -1,10 +1,10 @@
 /**
  * Dashboard — generic CRM landing page (vertical=generic).
  *
- * KPI tiles (Closed Revenue, Expected Revenue, Total Contacts, Conversion
- * Rate, Total Deals) read from `/api/deals/stats` so the numbers reflect the
- * FULL tenant population, not a paginated window. The "Recent Deals" widget
- * legitimately wants the newest, so it pulls `/api/deals?limit=10`.
+ * Deal KPI tiles read from `/api/deals/stats` and Total Contacts reads from
+ * `/api/contacts?count=1`, so the numbers reflect the FULL tenant population,
+ * not a paginated window. The "Recent Deals" widget legitimately wants the
+ * newest, so it pulls `/api/deals?limit=10`.
  *
  * #567 fix: previously this page computed KPIs client-side by reducing over
  * `/api/deals?limit=100`. On large tenants (5,381 deals / 375 won / $5B
@@ -58,7 +58,7 @@ export default function Dashboard() {
   const isManager = role === 'MANAGER';
   const [stats, setStats] = useState(DEFAULT_STATS);
   const [recentDeals, setRecentDeals] = useState([]);
-  const [contacts, setContacts] = useState([]);
+  const [contactTotal, setContactTotal] = useState(0);
   const [myPendingTasks, setMyPendingTasks] = useState([]);
 
   useEffect(() => {
@@ -75,9 +75,9 @@ export default function Dashboard() {
     // Contacts tile only matters for ADMIN/MANAGER's org-wide view; skip the
     // fetch for USER role since their tile set replaces it with My Tasks.
     if (!isUser) {
-      fetchApi('/api/contacts')
-        .then((d) => setContacts(Array.isArray(d) ? d : []))
-        .catch(() => setContacts([]));
+      fetchApi('/api/contacts?count=1')
+        .then((d) => setContactTotal(Number(d?.total) || (Array.isArray(d) ? d.length : 0)))
+        .catch(() => setContactTotal(0));
     }
     // Personal pending-tasks list — drives the "My Pending Tasks" tile and
     // the right-rail widget on the USER variant. ?mine=true is the canonical
@@ -92,7 +92,7 @@ export default function Dashboard() {
   // KPIs derived purely from `stats` (server aggregates), not from any list.
   const totalRevenue = stats.wonValue || 0;
   const expectedRevenue = stats.expectedValue || 0;
-  const activeLeads = contacts.length;
+  const activeLeads = contactTotal;
   // #639 — keep the raw numeric so formatPercent renders a 1-decimal "0.0%"
   // consistently. Pre-fix this was Math.round-d to an integer and rendered
   // as bare "0%" / "12%", out of sync with Funnel + Reports which used 1dp.

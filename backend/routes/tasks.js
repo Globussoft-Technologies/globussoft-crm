@@ -442,7 +442,7 @@ router.get("/", verifyToken, async (req, res) => {
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where, take: limit, skip: offset,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     };
     if (isSummary) {
       findManyArgs.select = {
@@ -837,4 +837,3 @@ router.post("/:id/restore", verifyToken, requirePermission("tasks", "delete"), a
 });
 
 module.exports = router;
-

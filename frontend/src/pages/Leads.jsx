@@ -1,4 +1,5 @@
 import { fetchApi } from "../utils/api";
+import { fetchAllPages } from "../utils/fetchAllPages";
 import { useNotify } from "../utils/notify";
 import { formatDateMedium as formatDate } from "../utils/date";
 import {
@@ -1301,7 +1302,7 @@ const Leads = () => {
         advancedFilters.length > 0
           ? `&filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
           : "";
-      const data = await fetchApi(
+      const data = await fetchAllPages(
         `/api/contacts?status=Lead&limit=500${filtersQs}`,
       );
       const rows = Array.isArray(data) ? data : [];

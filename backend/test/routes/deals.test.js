@@ -196,6 +196,7 @@ describe('GET /api/deals — list with tenant + soft-delete + role scoping', () 
     // Default pagination (take=100, skip=0)
     expect(findArgs.take).toBe(100);
     expect(findArgs.skip).toBe(0);
+    expect(findArgs.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('USER role: ownerId is forced to req.user.userId (#588 own-deals scope)', async () => {

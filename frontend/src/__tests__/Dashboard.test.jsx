@@ -37,6 +37,18 @@ import { fetchApi } from '../utils/api';
 import Dashboard from '../pages/Dashboard';
 import { AuthContext } from '../App';
 
+const DEFAULT_TEST_STATS = {
+  totalDeals: 0,
+  totalValue: 0,
+  wonCount: 0,
+  wonValue: 0,
+  lostCount: 0,
+  lostValue: 0,
+  expectedValue: 0,
+  winRate: 0,
+  byStage: [],
+};
+
 // Force USD locale so formatMoney output is stable regardless of host
 // localStorage state. Other suites may have written 'tenant' to localStorage
 // (the OwnerDashboard suite seeds wellness/INR), which would otherwise leak
@@ -122,6 +134,20 @@ describe('<Dashboard />', () => {
     // canonical "0.0%"). 375/5381 * 100 ≈ 6.97 → "7.0%". Pre-#639 this was
     // Math.round-d to "7%".
     expect(screen.getByText('7.0%')).toBeInTheDocument();
+  });
+
+  it('renders Total Contacts from the count endpoint instead of a capped list', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/contacts?count=1') return Promise.resolve({ total: 1234 });
+      if (url.startsWith('/api/deals/stats')) return Promise.resolve(DEFAULT_TEST_STATS);
+      return Promise.resolve([]);
+    });
+
+    renderDashboard();
+
+    await waitFor(() => expect(screen.getByText('1234')).toBeInTheDocument());
+    expect(fetchApi).toHaveBeenCalledWith('/api/contacts?count=1');
+    expect(fetchApi).not.toHaveBeenCalledWith('/api/contacts');
   });
 
   it('Recent Deals widget reads from /api/deals?limit=10 (separate fetchApi call)', async () => {

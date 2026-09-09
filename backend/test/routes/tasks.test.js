@@ -280,6 +280,7 @@ describe('GET / — list', () => {
     const args = prisma.task.findMany.mock.calls[0][0];
     expect(args.take).toBe(10);
     expect(args.skip).toBe(5);
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('?limit=9999 is clamped to 500 (#172 hard cap)', async () => {

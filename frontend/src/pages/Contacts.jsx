@@ -1,4 +1,5 @@
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useRef, useMemo, useLayoutEffect, useCallback } from 'react';
@@ -433,7 +434,7 @@ const Contacts = () => {
     const qs = advancedFilters.length > 0
       ? `?filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
       : '';
-    fetchApi(`/api/contacts${qs}`).then(data => {
+    fetchAllPages(`/api/contacts${qs}`).then(data => {
         setContacts(Array.isArray(data) ? data : []);
         setLoading(false);
       }).catch(() => { setContacts([]); setLoading(false); });

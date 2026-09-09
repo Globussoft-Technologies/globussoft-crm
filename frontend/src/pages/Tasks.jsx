@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
+import { fetchAllPages } from '../utils/fetchAllPages';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
@@ -261,7 +262,7 @@ export default function Tasks() {
 
   const loadData = async () => {
     try {
-      const t = await fetchApi('/api/tasks');
+      const t = await fetchAllPages('/api/tasks');
       setTasks(Array.isArray(t) ? t : []);
     } catch (err) {
       console.error(err);

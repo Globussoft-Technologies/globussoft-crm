@@ -303,14 +303,14 @@ export async function auditPrintLayout(
     const page = await browser.newPage();
     await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
     try {
-      await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30_000 });
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 12_000 });
     } catch {
       /* Slow image hosts are reported as broken below when they truly failed. */
     }
     // Give slow-but-working images a real chance to finish before judging them,
     // so a slow host is never mistaken for a broken image (which would reject
     // an otherwise-good design).
-    await settleImages(page, 20_000);
+    await settleImages(page, 8_000);
     try {
       await Promise.race([
         page.evaluate('(async()=>{try{await document.fonts.ready}catch(e){}})()'),
@@ -414,11 +414,11 @@ export async function shrinkOverflowingPages(
     const page = await browser.newPage();
     await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
     try {
-      await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30_000 });
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 12_000 });
     } catch {
       /* Slow image hosts settle below; still worth attempting the salvage. */
     }
-    await settleImages(page, 20_000);
+    await settleImages(page, 8_000);
     try {
       await Promise.race([
         page.evaluate('(async()=>{try{await document.fonts.ready}catch(e){}})()'),
@@ -443,7 +443,7 @@ export async function shrinkOverflowingPages(
       );
     }
 
-    for (const zoom of [0.94, 0.9, 0.86, 0.82, 0.78, 0.72, 0.66, 0.6, 0.54, 0.5]) {
+    for (const zoom of [0.94, 0.9, 0.86, 0.82]) {
       await page.evaluate(
         `(function(pageNums, zoom){
           ${LAYOUT_FIND_PAGES_JS}
@@ -514,7 +514,7 @@ export async function renderHtmlToArtifact(
       // Render at 2x so images/text are crisp in the PDF (default DSR=1 prints soft).
       await page.setViewport({ width: 1240, height: 1754, deviceScaleFactor: 2 });
       try {
-        await page.setContent(html, { waitUntil: 'networkidle0', timeout: 45_000 });
+        await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15_000 });
       } catch {
         // Slow/large internet images — proceed and render what has loaded;
         // gradient fallbacks cover anything that didn't finish in time.
@@ -522,7 +522,7 @@ export async function renderHtmlToArtifact(
       // networkidle0's timeout above is swallowed, so without this the PDF was
       // exported while photos were still downloading — the "images are missing
       // from the brochure" defect. Wait for them to actually settle first.
-      await settleImages(page, 25_000);
+      await settleImages(page, 12_000);
       // Wait for web fonts so the style system's Google-font pairings render
       // deterministically. Guarded so it never blocks past the budget above.
       try {

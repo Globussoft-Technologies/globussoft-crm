@@ -142,6 +142,7 @@ export default function TravelDiagnosticPublicForm() {
     <DiagnosticFormRenderer
       config={formConfig}
       questions={questions}
+      identityFields={formConfig?.identityFields}
       answers={answers}
       identity={identity}
       onAnswerChange={setAnswer}

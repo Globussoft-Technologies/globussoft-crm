@@ -3985,7 +3985,16 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
         }
       }
 
+      let lastCategory = null;
       trips.forEach((trip, tIdx) => {
+        const category = String(trip.category || 'Other').trim() || 'Other';
+        if (category !== lastCategory) {
+          ensureAnswerSpace(28);
+          doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
+            .text(category, pageMargin, doc.y, { characterSpacing: 0.4, lineBreak: false });
+          doc.y += 16;
+          lastCategory = category;
+        }
         const measured = measureTripCard(trip, tIdx);
         ensureAnswerSpace(measured.cardH + 8);
         const rowTop = doc.y;

@@ -16,6 +16,11 @@ const prisma = require("./prisma");
 
 const CATEGORY = "travel-curriculum-document";
 const KEY_PREFIX = "travel.curriculum.doc.";
+const OBJECTIVES_CATEGORY = "travel-curriculum-objectives";
+const OBJECTIVES_KEY_SUFFIX = ".objectives.";
+// MySQL TEXT is limited to 64 KiB. Leave ample room below that limit for
+// multi-byte characters and store large extracted-objective lists in chunks.
+const OBJECTIVE_CHUNK_MAX_BYTES = 48 * 1024;
 
 function generateDocumentId() {
   return crypto.randomBytes(8).toString("hex");
@@ -23,6 +28,33 @@ function generateDocumentId() {
 
 function keyFor(documentId) {
   return `${KEY_PREFIX}${documentId}`;
+}
+
+function objectiveKeyPrefix(documentId) {
+  return `${keyFor(documentId)}${OBJECTIVES_KEY_SUFFIX}`;
+}
+
+function objectiveChunkKey(documentId, index) {
+  return `${objectiveKeyPrefix(documentId)}${index}`;
+}
+
+function splitObjectiveChunks(objectives) {
+  const chunks = [];
+  let chunk = [];
+  for (const objective of objectives) {
+    const candidate = [...chunk, objective];
+    if (chunk.length && Buffer.byteLength(JSON.stringify(candidate), "utf8") > OBJECTIVE_CHUNK_MAX_BYTES) {
+      chunks.push(chunk);
+      chunk = [objective];
+    } else {
+      chunk = candidate;
+    }
+    if (Buffer.byteLength(JSON.stringify(chunk), "utf8") > OBJECTIVE_CHUNK_MAX_BYTES) {
+      throw new Error("A curriculum learning objective is too large to store.");
+    }
+  }
+  if (chunk.length) chunks.push(chunk);
+  return chunks;
 }
 
 function parseRow(row) {
@@ -66,7 +98,26 @@ async function getCurriculumDocument({ tenantId, documentId }) {
   const row = await prisma.tenantSetting.findUnique({
     where: { tenantId_key: { tenantId, key: keyFor(documentId) } },
   });
-  return parseRow(row);
+  const doc = parseRow(row);
+  if (!doc || Array.isArray(doc.extractedObjectives)) return doc;
+
+  const rows = await prisma.tenantSetting.findMany({
+    where: {
+      tenantId,
+      category: OBJECTIVES_CATEGORY,
+      key: { startsWith: objectiveKeyPrefix(documentId) },
+    },
+    orderBy: { key: "asc" },
+  });
+  const extractedObjectives = (rows || []).flatMap((objectiveRow) => {
+    try {
+      const chunk = JSON.parse(objectiveRow.value);
+      return Array.isArray(chunk) ? chunk : [];
+    } catch {
+      return [];
+    }
+  });
+  return { ...doc, extractedObjectives };
 }
 
 /**
@@ -80,12 +131,36 @@ async function getCurriculumDocument({ tenantId, documentId }) {
  */
 async function saveCurriculumDocument({ tenantId, documentId, data }) {
   const payload = { ...data, id: documentId, tenantId };
-  const value = JSON.stringify(payload);
+  const objectives = Array.isArray(payload.extractedObjectives) ? payload.extractedObjectives : [];
+  const storedPayload = { ...payload };
+  delete storedPayload.extractedObjectives;
+  // Point ids are deterministic and are not read by any workflow. Keeping up
+  // to 1,500 of them in the metadata would hit the same TEXT limit.
+  delete storedPayload.qdrantPointIds;
+  const value = JSON.stringify(storedPayload);
   await prisma.tenantSetting.upsert({
     where: { tenantId_key: { tenantId, key: keyFor(documentId) } },
     create: { tenantId, key: keyFor(documentId), value, category: CATEGORY },
     update: { value, category: CATEGORY },
   });
+  await prisma.tenantSetting.deleteMany({
+    where: {
+      tenantId,
+      category: OBJECTIVES_CATEGORY,
+      key: { startsWith: objectiveKeyPrefix(documentId) },
+    },
+  });
+  const chunks = splitObjectiveChunks(objectives);
+  await Promise.all(chunks.map((chunk, index) => prisma.tenantSetting.upsert({
+    where: { tenantId_key: { tenantId, key: objectiveChunkKey(documentId, index) } },
+    create: {
+      tenantId,
+      key: objectiveChunkKey(documentId, index),
+      value: JSON.stringify(chunk),
+      category: OBJECTIVES_CATEGORY,
+    },
+    update: { value: JSON.stringify(chunk), category: OBJECTIVES_CATEGORY },
+  })));
   return payload;
 }
 
@@ -100,6 +175,13 @@ async function saveCurriculumDocument({ tenantId, documentId, data }) {
  */
 async function deleteCurriculumDocument({ tenantId, documentId }) {
   try {
+    await prisma.tenantSetting.deleteMany({
+      where: {
+        tenantId,
+        category: OBJECTIVES_CATEGORY,
+        key: { startsWith: objectiveKeyPrefix(documentId) },
+      },
+    });
     await prisma.tenantSetting.delete({
       where: { tenantId_key: { tenantId, key: keyFor(documentId) } },
     });
@@ -116,4 +198,6 @@ module.exports = {
   saveCurriculumDocument,
   deleteCurriculumDocument,
   CATEGORY,
+  OBJECTIVES_CATEGORY,
+  splitObjectiveChunks,
 };

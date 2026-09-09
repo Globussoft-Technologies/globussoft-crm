@@ -895,6 +895,17 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(await screen.findByRole('heading', { name: /Notifications/i })).toBeTruthy();
   });
 
+  // ─── Embed Forms tab (2026-09-08 overhaul) — now the standalone
+  // DiagnosticEmbedFormsPanel.jsx, not an inline component here.
+  it('Embed Forms tab renders the standalone panel, not the old inline builder', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Embed Forms/i }));
+    expect(await screen.findByRole('heading', { name: /Embed Forms/i })).toBeTruthy();
+    // The fake template picker this rewrite removed must be gone.
+    expect(screen.queryByText(/^Diagnostic template$/i)).toBeNull();
+  });
+
   // Mount-GET resolver that returns one existing TMC bank (id 42, v3).
   function makeExistingBankFetch(postHandler, bankPatch = {}) {
     fetchApiMock.mockImplementation((url, opts) => {

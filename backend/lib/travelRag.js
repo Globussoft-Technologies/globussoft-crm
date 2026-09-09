@@ -23,7 +23,7 @@ const { sanitizeJsonForStringColumn } = require("./sanitizeJson");
 const { READINESS_LEVELS, readinessLevelFromScore } = require("./travelDiagnosticScoring");
 const { getRecommendationTopK, DEFAULT_TOP_K } = require("./diagnosticRecommendationSettings");
 
-const RAG_TOP_K = 15; // Qdrant retrieval depth — how many brochure chunks to fetch
+const RAG_TOP_K = 30; // Qdrant retrieval depth — preserves a strong pool for up to the configured shortlist size
 // Historical default (bumped 5 -> 10 on 2026-08-24), now the fallback used
 // when no admin-configured value exists — see diagnosticRecommendationSettings.js.
 const MAX_RAG_RECOMMENDATIONS = DEFAULT_TOP_K; // how many trips are actually shown/rendered
@@ -59,12 +59,50 @@ function consolidateChunks(chunks) {
     result.push({
       fileName: meta.fileName,
       folderPath: meta.folderPath,
+      category: categoryFromFolderPath(meta.folderPath),
       driveLink: meta.driveViewLink,
       text: top.payload?.text || "",
       score: top.score,
     });
   }
   return result.sort((a, b) => b.score - a.score);
+}
+
+function categoryFromFolderPath(folderPath) {
+  const parts = String(folderPath || '').split('/').map((part) => part.trim()).filter(Boolean);
+  const ignored = new Set(['tmc', 'brochure', 'brochures']);
+  const category = parts.find((part) => !ignored.has(part.toLowerCase()) && !/\.pdf$/i.test(part));
+  return category || 'Other';
+}
+
+function brochureKey(value) {
+  return String(value || '')
+    .replace(/\.pdf$/i, '')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// LLM output is useful for the customer-facing explanation, but the Drive
+// folder is source metadata. Recover it from the retrieved brochure instead
+// of relying on the model to echo it correctly (or at all).
+function attachBrochureMetadata(recommendations, brochures) {
+  const byLink = new Map();
+  const byName = new Map();
+  for (const brochure of brochures || []) {
+    if (brochure.driveLink) byLink.set(String(brochure.driveLink).trim(), brochure);
+    const key = brochureKey(brochure.fileName);
+    if (key) byName.set(key, brochure);
+  }
+  for (const recommendation of recommendations || []) {
+    const match = byLink.get(String(recommendation.driveLink || '').trim())
+      || byName.get(brochureKey(recommendation.name));
+    if (!match) continue;
+    recommendation.driveLink = recommendation.driveLink || match.driveLink || '';
+    recommendation.folderPath = match.folderPath || recommendation.folderPath || '';
+    recommendation.category = match.category || recommendation.category || 'Other';
+  }
+  return recommendations;
 }
 
 /**
@@ -78,7 +116,7 @@ function consolidateChunks(chunks) {
  * @param {object} [opts.bank]
  * @returns {Promise<{id:number, readinessScore:number, recommendations:object}|null>}
  */
-async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, bank }) {
+async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, bank, persist = true }) {
   if (!subBrand) {
     console.log("[travelRag] no subBrand provided; skipping RAG");
     return null;
@@ -119,9 +157,11 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
   const llmPayload = {
     subBrand,
     queryText,
+    recommendationLimit: topK,
     brochures: context.map((c) => ({
       fileName: c.fileName,
       folderPath: c.folderPath,
+      category: c.category,
       driveLink: c.driveLink,
       excerpt: c.text,
     })),
@@ -145,32 +185,28 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     return null;
   }
 
+  attachBrochureMetadata(parsed.recommendedTrips, context);
+
   // Ensure at least `topK` recommendations (admin-configurable, defaults to
   // 10 — see diagnosticRecommendationSettings.js) by padding with the
   // next-best retrieved brochure entries when the LLM returns fewer. Never
   // exceed the retrieved set.
-  if (Array.isArray(parsed.recommendedTrips) && parsed.recommendedTrips.length < topK) {
-    const seen = new Set(parsed.recommendedTrips.map((t) => String(t.name || "").trim().toLowerCase()));
-    for (const c of context) {
-      if (parsed.recommendedTrips.length >= topK) break;
-      const tripName = String(c.fileName || "").replace(/\.pdf$/i, "").trim();
-      if (!tripName) continue;
-      const key = tripName.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      parsed.recommendedTrips.push({
-        name: tripName,
-        driveLink: c.driveLink || "",
-        summary: "",
-        learnings: [],
-      });
-    }
-  }
+  // `topK` is a display ceiling, not a quota. Returning fewer, stronger
+  // matches is preferable to filling the shortlist with merely retrieved PDFs.
 
   const recommendationsJson = sanitizeJsonForStringColumn(JSON.stringify(parsed));
   const topChunkIdsJson = sanitizeJsonForStringColumn(
     JSON.stringify(chunks.map((c) => c.id)),
   );
+
+  if (!persist) {
+    return {
+      id: null,
+      readinessScore: parsed.readinessScore,
+      recommendations: parsed,
+      preview: true,
+    };
+  }
 
   const existing = await prisma.travelDiagnosticRagResult.findUnique({
     where: { diagnosticId },
@@ -303,7 +339,14 @@ function validateAndNormalise(parsed, topK = DEFAULT_TOP_K) {
         }
       }
 
-      return { name, driveLink, summary, learnings: learnings.filter((l) => !isPolicyOrAdminText(l)).slice(0, 4) };
+      return {
+        name,
+        driveLink,
+        folderPath: String(trip.folderPath || '').trim(),
+        category: String(trip.category || trip.folderCategory || '').trim() || 'Other',
+        summary,
+        learnings: learnings.filter((l) => !isPolicyOrAdminText(l)).slice(0, 4),
+      };
     })
     .filter(Boolean)
     // Was `.slice(0, RAG_TOP_K)` (15) — that's the Qdrant retrieval depth,
@@ -336,6 +379,7 @@ module.exports = {
   getRagResultForDiagnostic,
   buildQueryText,
   parseRagResponse,
+  attachBrochureMetadata,
   RAG_SUB_BRAND,
   RAG_TASK,
   RAG_TOP_K,

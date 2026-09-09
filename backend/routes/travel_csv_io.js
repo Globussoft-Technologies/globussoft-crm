@@ -472,14 +472,68 @@ router.post(
 
 // ── Diagnostic banks ───────────────────────────────────────────────
 
-const DIAG_BANK_COLS = [
-  { key: "id", header: "id" },
+const DIAG_BANK_READABLE_COLS = [
+  { key: "rowType", header: "rowType" },
   { key: "subBrand", header: "subBrand" },
+  { key: "templateName", header: "templateName" },
   { key: "version", header: "version" },
   { key: "isActive", header: "isActive" },
-  { key: "questionsJson", header: "questionsJson" },
-  { key: "scoringRulesJson", header: "scoringRulesJson" },
+  { key: "questionId", header: "questionId" },
+  { key: "questionText", header: "questionText" },
+  { key: "questionType", header: "questionType" },
+  { key: "questionHelp", header: "questionHelp" },
+  { key: "required", header: "required" },
+  { key: "optionValue", header: "optionValue" },
+  { key: "optionLabel", header: "optionLabel" },
+  { key: "optionWeight", header: "optionWeight" },
+  { key: "minScore", header: "minScore" },
+  { key: "maxScore", header: "maxScore" },
+  { key: "classification", header: "classification" },
+  { key: "tierLabel", header: "tierLabel" },
+  { key: "recommendedTier", header: "recommendedTier" },
 ];
+
+function readableDiagnosticRows(bank) {
+  let questions = [];
+  let rules = {};
+  try { questions = JSON.parse(bank.questionsJson || "{}").questions || []; } catch { questions = []; }
+  try { rules = JSON.parse(bank.scoringRulesJson || "{}"); } catch { rules = {}; }
+  const base = { subBrand: bank.subBrand, templateName: bank.templateName || "", version: bank.version, isActive: String(bank.isActive) };
+  const rows = [];
+  questions.forEach((question) => {
+    const options = Array.isArray(question.options) && question.options.length ? question.options : [{}];
+    options.forEach((option) => rows.push({ ...base, rowType: "question", questionId: question.id || "", questionText: question.text || "", questionType: question.type || "single-choice", questionHelp: question.help || "", required: String(Boolean(question.required)), optionValue: option.value || "", optionLabel: option.label || "", optionWeight: option.weight ?? "" }));
+  });
+  (rules.bands || []).forEach((band) => rows.push({ ...base, rowType: "band", minScore: band.minScore ?? "", maxScore: band.maxScore ?? "", classification: band.classification || "", tierLabel: band.label || "", recommendedTier: band.recommendedTier || "" }));
+  return rows;
+}
+
+function diagnosticRowsForImport(rows) {
+  if (!rows.some((row) => String(row.rowType || "").trim())) return rows;
+  const groups = new Map();
+  rows.forEach((row) => {
+    const key = `${String(row.subBrand || "").trim()}::${String(row.version || "").trim()}`;
+    if (!groups.has(key)) groups.set(key, { ...row, questions: new Map(), bands: [] });
+    const group = groups.get(key);
+    if (String(row.rowType).toLowerCase() === "band") {
+      group.bands.push({ minScore: Number(row.minScore), maxScore: Number(row.maxScore), classification: String(row.classification || "").trim(), label: String(row.tierLabel || "").trim(), recommendedTier: String(row.recommendedTier || "").trim() });
+      return;
+    }
+    const id = String(row.questionId || "").trim();
+    if (!id) return;
+    if (!group.questions.has(id)) group.questions.set(id, { id, text: String(row.questionText || "").trim(), type: String(row.questionType || "single-choice").trim(), help: String(row.questionHelp || "").trim(), required: String(row.required).toLowerCase() === "true", options: [] });
+    const question = group.questions.get(id);
+    if (String(row.optionValue || "").trim()) question.options.push({ value: String(row.optionValue).trim(), label: String(row.optionLabel || row.optionValue).trim(), weight: Number(row.optionWeight || 0) });
+  });
+  return [...groups.values()].map((group) => ({
+    subBrand: group.subBrand,
+    templateName: group.templateName || "",
+    version: group.version,
+    isActive: group.isActive,
+    questionsJson: JSON.stringify({ questions: [...group.questions.values()] }),
+    scoringRulesJson: JSON.stringify({ method: "weighted-sum", bands: group.bands }),
+  }));
+}
 
 router.get("/diagnostic-banks/export.csv", verifyToken, requireTravelTenant, async (req, res) => {
   try {
@@ -503,7 +557,7 @@ router.get("/diagnostic-banks/export.csv", verifyToken, requireTravelTenant, asy
       orderBy: [{ subBrand: "asc" }, { version: "asc" }],
       take: 5000,
     });
-    const csv = serializeRows(DIAG_BANK_COLS, rows);
+    const csv = serializeRows(DIAG_BANK_READABLE_COLS, rows.flatMap(readableDiagnosticRows));
     setCsvDownloadHeaders(res, "travel-diagnostic-banks-export.csv");
     res.send(csv);
   } catch (e) {
@@ -537,7 +591,8 @@ router.post(
       if (!parsed) {
         return res.status(400).json({ error: "No CSV/Excel body or file uploaded", code: "NO_CSV" });
       }
-      const { rows } = parsed;
+      const { rows: uploadedRows } = parsed;
+      const rows = diagnosticRowsForImport(uploadedRows);
       if (rows.length === 0) {
         return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
       }
@@ -603,6 +658,7 @@ router.post(
 
           const data = {
             subBrand,
+            templateName: String(row.templateName || "").trim() || null,
             version,
             questionsJson,
             scoringRulesJson,

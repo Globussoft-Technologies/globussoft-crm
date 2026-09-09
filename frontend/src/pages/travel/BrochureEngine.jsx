@@ -2843,7 +2843,7 @@ export default function BrochureEngine() {
 
   return (
     <FormTouchedContext.Provider value={touched}>
-    <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
+    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       <div style={pageHeaderRow}>
         <div>
           <h1 style={pageTitle}><Sparkles size={28} aria-hidden /> Brochure Engine</h1>

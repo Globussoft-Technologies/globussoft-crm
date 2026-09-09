@@ -31,6 +31,44 @@ beforeEach(() => {
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null); // default topK (10)
 });
 
+test("treats a Class 1-12 curriculum PDF as applicable to a Class 8 diagnostic", () => {
+  expect(curriculumRag.gradeCompatibility("Class 8", "Class 1-12")).toBe(2);
+  expect(curriculumRag.gradeCompatibility("Class 8", "Class 8")).toBe(3);
+  expect(curriculumRag.gradeCompatibility("Class 8", "Class 9-10")).toBe(0);
+});
+
+test("extracts every long-document section with per-objective subject and grade metadata", async () => {
+  const source = `${"Class 1 Science outcomes. ".repeat(2300)}\nClass 12 Economics outcomes.`;
+  const routeRequest = vi.spyOn(llmRouter, "routeRequest").mockImplementation(async ({ payload }) => ({
+    text: JSON.stringify({
+      objectives: payload.section.index === 1
+        ? [
+          { text: "Classify plants through observation", subject: "Science", gradeBand: "Class 1" },
+          { text: "Shared objective", subject: "Science", gradeBand: "Class 1" },
+        ]
+        : [
+          { text: "Shared objective", subject: "Science", gradeBand: "Class 1" },
+          { text: "Analyse inflation using real data", subject: "Economics", gradeBand: "Class 12" },
+        ],
+    }),
+  }));
+
+  const objectives = await curriculumRag.extractObjectives({
+    tenantId: 1,
+    text: source,
+    board: "CBSE",
+    gradeBand: "Class 1-12",
+    subjects: ["Science", "Economics"],
+  });
+
+  expect(routeRequest).toHaveBeenCalledTimes(2);
+  expect(objectives).toEqual([
+    { text: "Classify plants through observation", subject: "Science", topicCode: null, gradeBand: "Class 1" },
+    { text: "Shared objective", subject: "Science", topicCode: null, gradeBand: "Class 1" },
+    { text: "Analyse inflation using real data", subject: "Economics", topicCode: null, gradeBand: "Class 12" },
+  ]);
+});
+
 describe("curriculumRag.matchCurriculumForDiagnostic — safety-net fallbacks", () => {
   test("returns null when Qdrant is not enabled/configured", async () => {
     vi.spyOn(qdrant, "isEnabled").mockReturnValue(false);
@@ -183,6 +221,36 @@ describe("curriculumRag.matchCurriculumForDiagnostic — safety-net fallbacks", 
 
     expect(out.recommendations).toHaveLength(4);
   });
+});
+
+test("sends diagnostic signals and grade-compatible syllabus objectives to the AI matcher", async () => {
+  vi.spyOn(qdrant, "isEnabled").mockReturnValue(true);
+  vi.spyOn(embedClient, "resolveEmbedConfig").mockResolvedValue({
+    providerId: "openai",
+    client: { embedText: vi.fn().mockResolvedValue([0.1, 0.2]), embedTexts: vi.fn() },
+  });
+  vi.spyOn(qdrant, "countCurriculumPoints").mockResolvedValue(3);
+  vi.spyOn(qdrant, "searchCurriculum").mockResolvedValue([
+    { id: "broad", score: 0.7, payload: { subject: "Geography", objectiveText: "Study rivers through field observation", gradeBand: "Class 1-12" } },
+    { id: "wrong", score: 0.99, payload: { subject: "Geography", objectiveText: "Advanced climate modelling", gradeBand: "Class 11-12" } },
+  ]);
+  vi.spyOn(qdrant, "searchBySubBrand").mockResolvedValue([
+    { id: "c1", score: 0.8, payload: { driveFileId: "f1", fileName: "River Trail.pdf", driveViewLink: "https://x", text: "River fieldwork" } },
+  ]);
+  const routeRequest = vi.spyOn(llmRouter, "routeRequest").mockResolvedValue({
+    text: JSON.stringify({ recommendations: [{ destination: "River Trail", fitScore: 90, reasons: [{ subject: "Geography", learningOutcome: "Study rivers through field observation" }] }] }),
+    model: "stub",
+  });
+
+  await curriculumRag.matchCurriculumForDiagnostic({
+    tenantId: 1,
+    subBrand: "tmc",
+    profile: { curriculum: "CBSE", grade: "Class 8", diagnosticSignals: "Trip duration: 3-5 days. Group size: 40" },
+  });
+
+  const payload = routeRequest.mock.calls[0][0].payload;
+  expect(payload.profile.diagnosticSignals).toContain("Trip duration");
+  expect(payload.curriculumObjectives).toEqual([{ subject: "Geography", objective: "Study rivers through field observation", gradeBand: "Class 1-12" }]);
 });
 
 describe("curriculumRag.indexCurriculumDocument / reindexCurriculumDocument", () => {

@@ -34,6 +34,9 @@
  */
 
 const TOKEN_COOKIE = "auth_token";
+// Match the staff JWT lifetime. A browser navigation cannot attach the SPA's
+// Authorization header, so protected files authenticate with this cookie.
+const AUTH_COOKIE_MAX_AGE_SEC = 7 * 24 * 60 * 60;
 
 /**
  * Write the auth-token cookie onto an Express Response.
@@ -47,7 +50,7 @@ const TOKEN_COOKIE = "auth_token";
  *        still carries its existing 7-day expiry — these two TTLs are
  *        intentionally divergent during the migration window.
  */
-function setAuthCookie(res, token, { maxAgeSec = 60 * 15 } = {}) {
+function setAuthCookie(res, token, { maxAgeSec = AUTH_COOKIE_MAX_AGE_SEC } = {}) {
   res.cookie(TOKEN_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -68,4 +71,4 @@ function clearAuthCookie(res) {
   res.clearCookie(TOKEN_COOKIE, { path: "/api" });
 }
 
-module.exports = { TOKEN_COOKIE, setAuthCookie, clearAuthCookie };
+module.exports = { TOKEN_COOKIE, AUTH_COOKIE_MAX_AGE_SEC, setAuthCookie, clearAuthCookie };

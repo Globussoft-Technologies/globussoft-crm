@@ -1999,7 +1999,7 @@ function TemplatePreviewModal({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0, 0, 0, 0.5)',
+        background: 'rgba(15, 23, 42, 0.72)',
         zIndex: 1000,
         display: 'flex',
         alignItems: 'center',
@@ -2013,14 +2013,15 @@ function TemplatePreviewModal({
     >
       <div
         style={{
-          background: 'var(--surface-color)',
-          borderRadius: 8,
-          border: '1px solid var(--border-color)',
+          background: '#ffffff',
+          color: '#172033',
+          borderRadius: 14,
+          border: '2px solid rgba(15, 23, 42, 0.2)',
           maxWidth: 900,
           width: '100%',
           maxHeight: '90vh',
           overflow: 'auto',
-          boxShadow: '0 12px 32px rgba(0, 0, 0, 0.3)',
+          boxShadow: '0 24px 70px rgba(0, 0, 0, 0.38)',
         }}
       >
         {/* Header */}
@@ -2064,11 +2065,17 @@ function TemplatePreviewModal({
           <button
             type="button"
             onClick={onClose}
-            style={iconBtn}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '7px 10px', borderRadius: 7,
+              background: '#f1f5f9', color: '#172033',
+              border: '1px solid #cbd5e1', cursor: 'pointer',
+              fontSize: 12, fontWeight: 700,
+            }}
             aria-label="Close preview"
             data-testid="preview-close-btn"
           >
-            <X size={20} />
+            <X size={17} /> Close
           </button>
         </div>
 

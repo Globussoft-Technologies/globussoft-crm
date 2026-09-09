@@ -199,7 +199,7 @@ describe('POST /api/auth/login — Set-Cookie auth_token (#914 slice 1)', () => 
     expect(cookie).toMatch(/HttpOnly/i);
     expect(cookie).toMatch(/SameSite=Strict/i);
     expect(cookie).toMatch(/Path=\/api/i);
-    expect(cookie).toMatch(/Max-Age=900/); // 15min * 60s — must match helper default
+    expect(cookie).toMatch(/Max-Age=604800/); // 7-day cookie matches the staff JWT lifetime
     // NODE_ENV is not 'production' in this test, so Secure must be absent.
     expect(cookie).not.toMatch(/Secure/);
   });

@@ -91,7 +91,7 @@ describe('setAuthCookie — default options', () => {
       secure: false, // NODE_ENV is not 'production' in this test
       sameSite: 'strict',
       path: '/api',
-      maxAge: 15 * 60 * 1000, // 15 min in ms
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
     });
   });
 });
@@ -226,7 +226,7 @@ describe('setAuthCookie — opts edge shapes', () => {
     setAuthCookie(res, 'jwt.payload.sig', {});
 
     const [, , opts] = res.cookie.mock.calls[0];
-    expect(opts.maxAge).toBe(15 * 60 * 1000);
+    expect(opts.maxAge).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   test('opts.maxAgeSec=undefined explicitly → falls back to default 900', () => {
@@ -239,7 +239,7 @@ describe('setAuthCookie — opts edge shapes', () => {
     setAuthCookie(res, 'jwt.payload.sig', { maxAgeSec: undefined });
 
     const [, , opts] = res.cookie.mock.calls[0];
-    expect(opts.maxAge).toBe(15 * 60 * 1000);
+    expect(opts.maxAge).toBe(7 * 24 * 60 * 60 * 1000);
   });
 });
 

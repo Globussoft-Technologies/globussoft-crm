@@ -240,7 +240,7 @@ afterEach(() => {
 });
 
 describe('<Diagnostics /> — page chrome + filter bar', () => {
-  it('renders heading + sub-brand filter + classification filter + Refresh + add-diagnostic CTA', async () => {
+  it('renders heading + sub-brand filter + classification filter + Refresh + playground CTA', async () => {
     renderPage(REGULAR_USER);
     expect(screen.getByRole('heading', { name: /Diagnostics/i })).toBeInTheDocument();
     // Anchored to end-of-string: a second unrelated title ("...AI-powered
@@ -252,7 +252,7 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reset filters/i })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Try out diagnostic/i })).toBeInTheDocument();
     // Wait for the mount-time GET to settle.
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
@@ -262,10 +262,10 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     });
   });
 
-  it('add-diagnostic CTA targets /travel/diagnostics/new', async () => {
+  it('playground CTA targets /travel/diagnostics/new?playground=1', async () => {
     renderPage(REGULAR_USER);
-    const cta = screen.getByRole('link', { name: /Add new diagnostic entry/i });
-    expect(cta.getAttribute('href')).toBe('/travel/diagnostics/new');
+    const cta = screen.getByRole('link', { name: /Try out diagnostic/i });
+    expect(cta.getAttribute('href')).toBe('/travel/diagnostics/new?playground=1');
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalled();
     });
@@ -286,15 +286,15 @@ describe('<Diagnostics /> — RBAC on "New bank" CTA (SUT lines 74-82)', () => {
     expect(newBank.getAttribute('href')).toBe('/travel/diagnostics/banks/new');
   });
 
-  it('ADMIN role also gets the add-diagnostic CTA', async () => {
+  it('ADMIN role also gets the playground CTA', async () => {
     renderPage(ADMIN_USER);
-    expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Try out diagnostic/i })).toBeInTheDocument();
   });
 
   it('USER role: "New bank" CTA is hidden (admin-only mutation surface)', async () => {
     renderPage(REGULAR_USER);
     expect(screen.queryByRole('link', { name: /Create new diagnostic bank/i })).toBeNull();
-    expect(screen.getByRole('link', { name: /Add new diagnostic entry/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Try out diagnostic/i })).toBeInTheDocument();
   });
 });
 
@@ -361,8 +361,8 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
 
     expect(table.style.width).toBe('100%');
     expect(table.style.tableLayout).toBe('fixed');
-    // 6 data columns + 1 trailing "View diagnostic" actions column.
-    expect(table.querySelectorAll('col').length).toBe(7);
+    // 7 data columns (including Level) + 1 trailing actions column.
+    expect(table.querySelectorAll('col').length).toBe(8);
     expect(screen.queryByTestId('diagnostics-table-scroll')).toBeNull();
     expect(screen.queryByText('travelstall')).toBeNull();
   });
@@ -465,7 +465,7 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     });
   });
 
-  it('renders table columns in the order Submitted → Contact → Sub-brand → Classification → Tier → Score → Actions', async () => {
+  it('renders table columns in the order Submitted → Contact → Sub-brand → Level → Classification → Tier → Score → Actions', async () => {
     renderPage();
     await screen.findByText('tmc');
 
@@ -477,6 +477,7 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
       'Submitted',
       'Contact',
       'Sub-brand',
+      'Level',
       'Classification',
       'Tier',
       'Score',
@@ -761,6 +762,13 @@ describe('<Diagnostics /> — row rendering (badges + scores + classification fa
     // falls back to the raw classification identifier per SUT line 174.
     const visaRow = screen.getByText('visasure').closest('tr');
     expect(within(visaRow).getByText('level_2')).toBeInTheDocument();
+  });
+
+  it('shows the stored diagnostic level separately from its classification label', async () => {
+    renderPage();
+    const tmcRow = (await screen.findByText('tmc')).closest('tr');
+    expect(within(tmcRow).getByText('Level 1')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Level' })).toBeInTheDocument();
   });
 
   it('tier badge renders via className tier-badge--<tier> for entry/primary/premium; bare tier-badge for null', async () => {

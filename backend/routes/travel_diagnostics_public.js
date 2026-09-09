@@ -16,6 +16,7 @@
 //   POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit
 //   GET  /api/travel/diagnostics/public/report/:slug
 //   POST /api/travel/diagnostics/public/report/:slug/interests
+//   GET  /api/travel/diagnostics/public/embed-config/:tenantSlug/:subBrand
 
 const express = require("express");
 const crypto = require("crypto");
@@ -33,6 +34,8 @@ const travelRag = require("../lib/travelRag");
 const diagnosticChosenInterests = require("../lib/diagnosticChosenInterests");
 const { resolveCancellationPolicyForForm } = require("../lib/travelDiagnosticCancellationPolicy");
 const diagnosticNotifications = require("../lib/diagnosticNotifications");
+const diagnosticEmbedSettings = require("../lib/diagnosticEmbedSettings");
+const { getRecommendationTopK } = require("../lib/diagnosticRecommendationSettings");
 
 const {
   getReadinessLevel,
@@ -273,8 +276,10 @@ router.get("/diagnostics/public/form/:tenantSlug/:subBrand", async (req, res) =>
     }
 
     let questions;
+    let identityFields = null;
     try {
       const parsed = JSON.parse(bank.questionsJson);
+      identityFields = Array.isArray(parsed.identityFields) ? parsed.identityFields : null;
       questions = (parsed.questions || []).map((q) => ({
         id: q.id,
         text: q.text,
@@ -326,6 +331,7 @@ router.get("/diagnostics/public/form/:tenantSlug/:subBrand", async (req, res) =>
       bankId: bank.id,
       version: bank.version,
       questions,
+      identityFields,
       form: stripInternalFormFields(form),
       brandKit,
     });
@@ -336,6 +342,49 @@ router.get("/diagnostics/public/form/:tenantSlug/:subBrand", async (req, res) =>
     res.status(500).json({ error: "Failed to load public form" });
   }
 });
+
+// GET /api/travel/diagnostics/public/embed-config/:tenantSlug/:subBrand
+//
+// No-auth — called by the embeddable widget (frontend/public/embed/
+// diagnostic.html) on every load so an admin's styling edits (saved via the
+// authed /api/travel/diagnostics/embed-settings routes) take effect on
+// every already-embedded widget immediately, instead of being frozen into
+// a copied snippet. Returns {} when never configured — the widget always
+// has sensible built-in defaults to fall back on.
+router.get(
+  "/diagnostics/public/embed-config/:tenantSlug/:subBrand",
+  async (req, res) => {
+    try {
+      const tenantSlug = String(req.params.tenantSlug || "").trim();
+      const subBrand = String(req.params.subBrand || "").trim();
+      if (!tenantSlug || !subBrand) {
+        return res.status(400).json({
+          error: "tenantSlug and subBrand required",
+          code: "MISSING_PARAMS",
+        });
+      }
+      assertValidSubBrand(subBrand);
+
+      const tenant = await resolveTravelTenantBySlug(tenantSlug);
+      if (!tenant) {
+        return res
+          .status(404)
+          .json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
+      }
+
+      const config = await diagnosticEmbedSettings.getEmbedConfig({
+        tenantId: tenant.id,
+        subBrand,
+      });
+      res.json({ config });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[diag-public-form] get embed config error:", e.message);
+      res.status(500).json({ error: "Failed to load embed config" });
+    }
+  },
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public: submit a published diagnostic form
@@ -448,36 +497,40 @@ router.post(
       }
 
       // Validate identity fields against form config.
+      const bankIdentityFields = getBankIdentityFields(bank.questionsJson, form);
+      const nameField = bankIdentityFields.find((field) => field.id === "name");
+      const emailField = bankIdentityFields.find((field) => field.id === "email");
+      const phoneField = bankIdentityFields.find((field) => field.id === "phone");
       const cleanName = sanitizeText(String(name || "").trim());
       const cleanEmail = sanitizeText(String(email || "").trim());
       const cleanPhone = sanitizeText(String(phone || "").trim());
       if (cleanName.length > 120) {
         return res.status(400).json({ error: "Name must be 120 characters or fewer", code: "NAME_INVALID" });
       }
-      if (form.includeName && form.nameRequired && !cleanName) {
+      if (nameField?.enabled && nameField.required && !cleanName) {
         return res
           .status(400)
           .json({ error: "Name is required", code: "NAME_REQUIRED" });
       }
-      if (form.includeEmail && form.emailRequired && !cleanEmail) {
+      if (emailField?.enabled && emailField.required && !cleanEmail) {
         return res
           .status(400)
           .json({ error: "Email is required", code: "EMAIL_REQUIRED" });
       }
-      if (form.includeEmail && form.emailRequired && !isValidEmail(cleanEmail)) {
+      if (emailField?.enabled && emailField.required && !isValidEmail(cleanEmail)) {
         return res
           .status(400)
           .json({ error: "Email is invalid", code: "EMAIL_INVALID" });
       }
-      if (form.includeEmail && cleanEmail && cleanEmail.length > 254) {
+      if (emailField?.enabled && cleanEmail && cleanEmail.length > 254) {
         return res.status(400).json({ error: "Email must be 254 characters or fewer", code: "EMAIL_INVALID" });
       }
-      if (form.includePhone && form.phoneRequired && !cleanPhone) {
+      if (phoneField?.enabled && phoneField.required && !cleanPhone) {
         return res
           .status(400)
           .json({ error: "Phone is required", code: "PHONE_REQUIRED" });
       }
-      if (form.includePhone && cleanPhone && !isValidPhone(cleanPhone)) {
+      if (phoneField?.enabled && cleanPhone && !isValidPhone(cleanPhone)) {
         return res.status(400).json({
           error: "Phone must contain 10 to 15 digits, optionally with a leading +",
           code: "PHONE_INVALID",
@@ -783,6 +836,15 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
       tenantId: diag.tenantId,
       diagnosticId: diag.id,
     });
+    const recommendationLimit = await getRecommendationTopK({
+      tenantId: diag.tenantId,
+      subBrand: diag.subBrand,
+    });
+    const recommendations = buildUnifiedRecommendations({
+      curriculumFit: parseJsonOrNull(diag.curriculumFitJson),
+      ragRecommendations: ragResult?.recommendations?.recommendedTrips,
+      limit: recommendationLimit,
+    });
 
     res.json({
       diagnosticId: diag.id,
@@ -801,6 +863,7 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
       contact,
       ragResult,
       curriculumFit: parseJsonOrNull(diag.curriculumFitJson),
+      recommendations,
       chosenInterests,
       createdAt: diag.createdAt,
     });
@@ -914,6 +977,67 @@ function parseJsonOrNull(raw) {
   } catch {
     return null;
   }
+}
+
+function getBankIdentityFields(questionsJson, legacyForm) {
+  const defaults = [
+    { id: "name", enabled: legacyForm.includeName !== false, required: legacyForm.nameRequired !== false },
+    { id: "email", enabled: legacyForm.includeEmail !== false, required: legacyForm.emailRequired !== false },
+    { id: "phone", enabled: legacyForm.includePhone !== false, required: legacyForm.phoneRequired === true },
+  ];
+  try {
+    const saved = JSON.parse(questionsJson || "{}").identityFields;
+    if (!Array.isArray(saved)) return defaults;
+    return defaults.map((fallback) => {
+      const field = saved.find((item) => item?.id === fallback.id);
+      return field ? { ...fallback, enabled: field.enabled !== false, required: Boolean(field.required) } : fallback;
+    });
+  } catch {
+    return defaults;
+  }
+}
+
+// Produce one customer-facing shortlist. Curriculum matches are strong
+// evidence, but they do not create a separate recommendation experience:
+// Travel Knowledge fills the remaining relevant places from the diagnostic's
+// answer-aware RAG ranking. Never pad with unrelated catalogue entries.
+function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit }) {
+  const max = Math.max(1, Number(limit) || 10);
+  const seen = new Set();
+  const out = [];
+  const add = (item) => {
+    const hasFitScore = item.fitScore !== null && item.fitScore !== undefined && item.fitScore !== '';
+    const fitScore = Number(item.fitScore);
+    // A zero or negative score is an explicit non-match, never a customer
+    // recommendation. Score-less Travel Knowledge results remain eligible.
+    if (hasFitScore && Number.isFinite(fitScore) && fitScore <= 0) return;
+    const key = String(item.driveLink || item.brochurePdfUrl || item.name || item.destination || '')
+      .replace(/\.pdf$/i, '').replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+    if (!key || seen.has(key) || out.length >= max) return;
+    seen.add(key);
+    out.push(item);
+  };
+  for (const match of curriculumFit?.recommendations || []) {
+    add({
+      name: match.destination,
+      driveLink: match.brochurePdfUrl || '',
+      category: match.category || 'Other',
+      summary: (match.reasons || []).map((reason) => reason.rationale || reason.learningOutcome || reason.subject).filter(Boolean).slice(0, 2).join(' '),
+      learnings: (match.reasons || []).map((reason) => reason.learningOutcome).filter(Boolean).slice(0, 4),
+      fitScore: match.fitScore ?? null,
+    });
+  }
+  for (const trip of ragRecommendations || []) {
+    add({
+      name: trip.name,
+      driveLink: trip.driveLink || '',
+      category: trip.category || 'Other',
+      summary: trip.summary || '',
+      learnings: Array.isArray(trip.learnings) ? trip.learnings : [],
+      fitScore: null,
+    });
+  }
+  return out;
 }
 
 async function buildPublicCurriculumFitFallback({ tenantId, answers, questions }) {

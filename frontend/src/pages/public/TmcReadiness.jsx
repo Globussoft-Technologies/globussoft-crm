@@ -33,6 +33,7 @@ import {
   GraduationCap,
   Loader2,
 } from "lucide-react";
+import DiagnosticSubmitOverlay from "../../components/travel/DiagnosticSubmitOverlay";
 
 const DEFAULT_TENANT_SLUG = "tmc";
 const SUBMIT_URL = "/api/travel/diagnostics/public/submit-tmc";
@@ -446,6 +447,7 @@ export default function TmcReadiness() {
 
   return (
     <Shell>
+      <DiagnosticSubmitOverlay active={submitting} primaryColor="var(--primary-color, var(--accent-color, #122647))" />
       <header style={headerWrap}>
         <h1 style={headerTitle}>
           <GraduationCap size={22} aria-hidden style={{ color: "#122647" }} />

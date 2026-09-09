@@ -20,10 +20,12 @@ import {
   getIdentityFields,
   secondaryBtn,
 } from "./diagnosticFormTheme";
+import DiagnosticSubmitOverlay from "./DiagnosticSubmitOverlay";
 
 export default function DiagnosticFormRenderer({
   config,
   questions = [],
+  identityFields: configuredIdentityFields,
   answers = {},
   identity = {},
   onAnswerChange,
@@ -39,13 +41,19 @@ export default function DiagnosticFormRenderer({
   const theme = buildTheme(config);
   const styling = parseStyling(config?.form?.stylingConfigJson);
   const form = config?.form || {};
-  const identityFields = getIdentityFields(form, styling);
+  const identityFields = Array.isArray(configuredIdentityFields)
+    ? configuredIdentityFields.filter((field) => field?.enabled !== false)
+    : getIdentityFields(form, styling);
 
   const showLogo = Boolean(theme.logoUrl);
   const showHeader = Boolean(form.headerHtml || form.title || form.subtitle);
 
   return (
     <Shell theme={theme} styling={styling} preview={preview}>
+      <DiagnosticSubmitOverlay
+        active={submitting && mode !== "preview"}
+        primaryColor={theme.primaryColor || DEFAULT_PRIMARY}
+      />
       <div style={card(theme, styling)}>
         {showLogo && renderLogo(theme, styling)}
         {showHeader && (
@@ -163,12 +171,26 @@ function QuestionBlock({ question, value, onChange, onToggleMulti, theme, stylin
 
   return (
     <fieldset style={cardStyle}>
-      <legend style={legend(theme, styling)}>
-        <span style={{ display: "block", padding: "0 4px" }}>
-          {q.text}
-          {q.required && <span aria-hidden="true"> *</span>}
-        </span>
+      {/* <legend> is visually hidden, not removed — a <fieldset> still
+          needs one for its accessible name (screen readers announce it as
+          the group's label). The VISIBLE title below is a plain in-flow
+          element instead of the legend itself, because a legend's default
+          straddle-the-border rendering (1) always shows a background "seam"
+          behind the text unless it's painted opaquely, which read as an
+          unwanted colored bar the moment the card had any fill/tint, and
+          (2) some browsers only partially honor margin-top for
+          repositioning it since a legend's vertical placement is governed
+          by a special UA layout algorithm, not plain box-model margins —
+          so the "question title position" slider had no visible effect. A
+          normal block element has neither problem. */}
+      <legend style={visuallyHidden}>
+        {q.text}
+        {q.required ? " (required)" : ""}
       </legend>
+      <div style={questionTitle(theme, styling)} aria-hidden="true" data-testid="question-title">
+        {q.text}
+        {q.required && <span aria-hidden="true"> *</span>}
+      </div>
       {q.type === "multi-select" ? (
         <div style={optionsGrid}>
           {opts.map((o) => {
@@ -177,7 +199,7 @@ function QuestionBlock({ question, value, onChange, onToggleMulti, theme, stylin
             return (
               <label
                 key={o.value}
-                style={optionRow(theme, checked)}
+                style={optionRow(theme, checked, styling.optionAlign)}
               >
                 <input
                   type="checkbox"
@@ -198,7 +220,7 @@ function QuestionBlock({ question, value, onChange, onToggleMulti, theme, stylin
             return (
               <label
                 key={o.value}
-                style={optionRow(theme, checked)}
+                style={optionRow(theme, checked, styling.optionAlign)}
               >
                 <input
                   type="radio"
@@ -445,14 +467,36 @@ function normalizeImageUrl(value) {
   return raw;
 }
 
-function legend(theme) {
+// The VISUALLY HIDDEN <legend> still needs standard sr-only clipping (not
+// display:none — that removes it from the accessibility tree in some screen
+// readers) so a <fieldset> keeps a real accessible name.
+const visuallyHidden = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0, 0, 0, 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
+function questionTitle(theme, styling = {}) {
   return {
     fontWeight: 600,
     fontSize: 16,
     color: theme.textColor || DEFAULT_TEXT,
-    padding: "0 8px",
-    marginLeft: 4,
-    width: "auto",
+    textAlign: styling.questionAlign || "left",
+    marginBottom: 12,
+    // position: relative + top, NOT margin-top — margin-top pushes every
+    // sibling below it down too, which grew the whole card's height (and,
+    // since every question card in the list does this, elongated the
+    // entire form) instead of just moving the title text. `top` shifts the
+    // title visually while the space it reserves in the layout stays
+    // exactly the same, so nothing else moves.
+    position: "relative",
+    top: styling.questionTitleOffset ?? 0,
   };
 }
 
@@ -462,11 +506,18 @@ const optionsGrid = {
   marginTop: 8,
 };
 
-function optionRow(theme, checked) {
+function optionRow(theme, checked, align = "left") {
   const primary = theme.primaryColor || DEFAULT_PRIMARY;
+  // The marker (radio/checkbox) stays attached to the label text as one
+  // unit — "position" here shifts that whole group within the option box
+  // via justify-content, rather than text-align, since text-align alone
+  // would leave the marker pinned on the left while just the words shifted,
+  // which reads as broken rather than "centered"/"right-aligned".
+  const justify = align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start";
   return {
     display: "flex",
     alignItems: "center",
+    justifyContent: justify,
     padding: "14px 16px",
     borderRadius: 8,
     border: `1px solid ${checked ? primary : "#dadfe8"}`,

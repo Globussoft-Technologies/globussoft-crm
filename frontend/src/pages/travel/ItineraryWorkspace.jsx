@@ -22,7 +22,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft, Plane, Hotel, MapPin, Car, Bus, Train, Camera, Utensils,
   FileText, Shield, Package, Plus, Trash2, Copy, GripVertical, Sparkles,
-  Download, Share2, Cloud, BookmarkPlus, Clock, ChevronDown,
+  Download, Cloud, BookmarkPlus, Clock, ChevronDown,
   ChevronRight, X, Check, Calendar, ExternalLink, Loader2, Tag, Info,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
@@ -355,8 +355,7 @@ export default function ItineraryWorkspace() {
   const [customItemTypes, setCustomItemTypes] = useState([]);
   const [cancellationPolicies, setCancellationPolicies] = useState([]);
   const [extraDays, setExtraDays] = useState(0);
-  const [busyAction, setBusyAction] = useState(null); // 'catalogue' | 'kb' | 'template' | 'share'
-  const [shareUrl, setShareUrl] = useState(null);
+  const [busyAction, setBusyAction] = useState(null); // 'catalogue' | 'kb' | 'template'
   const [dragItemId, setDragItemId] = useState(null);
   const [dropTarget, setDropTarget] = useState(null); // { day, index } | null
   const [aiFillBusy, setAiFillBusy] = useState(false);
@@ -723,19 +722,6 @@ export default function ItineraryWorkspace() {
     }
   }, [aiFillBusy, itin, dayCount, id, load, notify]);
 
-  const handleShare = async () => {
-    setBusyAction("share");
-    try {
-      const res = await fetchApi(`/api/travel/itineraries/${id}/share`, { method: "POST", body: JSON.stringify({}) });
-      const url = res?.shareUrl || res?.url || null;
-      if (url) { setShareUrl(url); notify.success("Share link ready"); }
-      else notify.info("Share link generated");
-      await load();
-    } catch (e) {
-      notify.error(e?.body?.error || e?.message || "Failed to create share link");
-    } finally { setBusyAction(null); }
-  };
-
   const handleAddToCatalogue = async () => {
     setBusyAction("catalogue");
     try {
@@ -793,9 +779,6 @@ export default function ItineraryWorkspace() {
           <a href={pdfHref} target="_blank" rel="noreferrer" style={{ ...S.btn, ...S.btnPrimary, textDecoration: "none" }}>
             <Download size={14} /> Generate PDF
           </a>
-          <button type="button" onClick={handleShare} disabled={busyAction === "share"} style={S.btn}>
-            <Share2 size={14} /> Share
-          </button>
         </div>
 
         <div style={S.metaRow}>
@@ -836,13 +819,6 @@ export default function ItineraryWorkspace() {
           )}
         </div>
 
-        {shareUrl && (
-          <div style={S.shareStrip}>
-            <code style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{shareUrl}</code>
-            <button type="button" style={S.btnSm} onClick={() => { navigator.clipboard?.writeText(shareUrl); notify.success("Copied"); }}>Copy</button>
-            <button type="button" style={S.btnSm} onClick={() => setShareUrl(null)}><X size={12} /></button>
-          </div>
-        )}
 
         <div style={S.tabRow} role="tablist" aria-label="Itinerary sections">
           {TABS.filter((t) => {
@@ -2093,7 +2069,6 @@ const S = {
     return { padding: "0.15rem 0.5rem", borderRadius: 10, background: tone[0], color: tone[1], fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" };
   },
 
-  shareStrip: { display: "flex", alignItems: "center", gap: 8, padding: "0.4rem 0.6rem", border: BORDER, borderRadius: 6, background: "var(--surface-color)", fontSize: "0.76rem" },
 
   tabRow: { display: "flex", gap: 2, borderBottom: BORDER },
   tabIdle: { padding: "0.45rem 0.9rem", border: "none", borderBottom: "2px solid transparent", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", fontSize: "0.86rem", fontWeight: 500 },

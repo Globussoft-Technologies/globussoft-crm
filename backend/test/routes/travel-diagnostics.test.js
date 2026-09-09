@@ -920,6 +920,71 @@ describe('POST /diagnostics/notification-settings/test', () => {
   });
 });
 
+// ─── GET/PUT /diagnostics/embed-settings (2026-09-08) — third-party
+// embeddable-widget styling, TenantSetting-backed (diagnosticEmbedSettings.js) ─
+
+describe('GET /diagnostics/embed-settings', () => {
+  test('happy: returns the saved config', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ primary: '#4f46e5', title: 'TMC diagnostic' }),
+    });
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/embed-settings?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.config).toEqual({ primary: '#4f46e5', title: 'TMC diagnostic' });
+  });
+
+  test('never configured yet → {}', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/embed-settings?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.config).toEqual({});
+  });
+
+  test('missing Bearer → 401', async () => {
+    const res = await request(makeApp()).get('/api/travel/diagnostics/embed-settings?subBrand=tmc');
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('PUT /diagnostics/embed-settings', () => {
+  test('happy: ADMIN saves a config', async () => {
+    prisma.tenantSetting.upsert.mockResolvedValue({});
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/embed-settings')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'tmc', config: { primary: '#111111', maxWidth: 900 } });
+    expect(res.status).toBe(200);
+    expect(res.body.config).toEqual({ primary: '#111111', maxWidth: 900 });
+    expect(prisma.tenantSetting.upsert.mock.calls[0][0]).toMatchObject({
+      where: { tenantId_key: { tenantId: 1, key: 'travel.diagnostics.embedConfig.tmc' } },
+    });
+  });
+
+  test('a non-object config → 400 INVALID_CONFIG', async () => {
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/embed-settings')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ subBrand: 'tmc', config: 'not-an-object' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CONFIG');
+    expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+  });
+
+  test('USER role rejected (ADMIN-only write)', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .put('/api/travel/diagnostics/embed-settings')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ subBrand: 'tmc', config: {} });
+    expect(res.status).toBe(403);
+    expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+  });
+});
+
 // ─── POST /diagnostics/:id/talking-points/regen ───────────────────────
 
 describe('DELETE /diagnostics/bulk', () => {

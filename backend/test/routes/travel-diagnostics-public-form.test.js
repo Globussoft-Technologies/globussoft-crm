@@ -694,6 +694,56 @@ describe("GET /api/travel/diagnostics/public/report/:slug", () => {
   });
 });
 
+describe("GET /api/travel/diagnostics/public/embed-config/:tenantSlug/:subBrand", () => {
+  test("returns the saved embed config for the resolved tenant", async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ primary: "#4f46e5", title: "Widget title" }),
+    });
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/embed-config/travelstall/travelstall",
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.config).toEqual({ primary: "#4f46e5", title: "Widget title" });
+    expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_key: { tenantId: 1, key: "travel.diagnostics.embedConfig.travelstall" } },
+    });
+  });
+
+  test("never configured yet → {} (widget falls back to its own defaults)", async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/embed-config/travelstall/travelstall",
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.config).toEqual({});
+  });
+
+  test("unknown tenant slug → 404 TENANT_NOT_FOUND", async () => {
+    prisma.tenant.findFirst.mockResolvedValue(null);
+    prisma.tenant.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/embed-config/no-such-tenant/travelstall",
+    );
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("TENANT_NOT_FOUND");
+  });
+
+  test("invalid subBrand → 400", async () => {
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/embed-config/travelstall/not-a-real-brand",
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("no auth required — reachable with no Authorization header", async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/embed-config/travelstall/tmc",
+    );
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("POST /api/travel/diagnostics/public/report/:slug/interests", () => {
   test("happy: saves the chosen interests and echoes them back", async () => {
     const res = await request(makeApp())

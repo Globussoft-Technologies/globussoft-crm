@@ -206,12 +206,6 @@ export default function DiagnosticWizard() {
   const isAnswered = q.type === 'multi-select'
     ? Array.isArray(ansForQ) && ansForQ.length > 0
     : ansForQ !== undefined && ansForQ !== '';
-  const selectSingleOption = (value) => {
-    setAnswer(q.id, value);
-    if (q.type !== 'multi-select' && !isLast) {
-      setQIndex((i) => Math.min(questions.length - 1, i + 1));
-    }
-  };
 
   return (
     <div style={shell}>
@@ -255,7 +249,7 @@ export default function DiagnosticWizard() {
               <button
                 key={opt.value}
                 type="button"
-                onClick={() => q.type === 'multi-select' ? toggleMulti(q.id, opt.value) : selectSingleOption(opt.value)}
+                onClick={() => q.type === 'multi-select' ? toggleMulti(q.id, opt.value) : setAnswer(q.id, opt.value)}
                 style={selected ? optionActive : optionIdle}
                 aria-pressed={selected}
               >

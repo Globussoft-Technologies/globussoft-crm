@@ -568,15 +568,36 @@ router.get("/diagnostic-banks/export.csv", verifyToken, requireTravelTenant, asy
 });
 
 router.get("/diagnostic-banks/template.csv", verifyToken, requirePermission("diagnostics", "write"), requireTravelTenant, (req, res) => {
-  const sample = {
-    subBrand: "tmc",
-    version: "1",
-    isActive: "true",
-    questionsJson: JSON.stringify({ questions: [{ id: "trip_type", text: "What type of trip are you planning?", type: "single-choice", options: [{ value: "educational", label: "Educational trip", weight: 5 }] }] }),
-    scoringRulesJson: JSON.stringify({ method: "weighted-sum", bands: [{ minScore: 0, maxScore: 10, classification: "starter", label: "Starter", recommendedTier: "entry" }] }),
-  };
+  const sample = [
+    {
+      rowType: "question",
+      subBrand: "tmc",
+      templateName: "TMC readiness",
+      version: "1",
+      isActive: "true",
+      questionId: "trip_type",
+      questionText: "What type of trip are you planning?",
+      questionType: "single-choice",
+      required: "true",
+      optionValue: "educational",
+      optionLabel: "Educational trip",
+      optionWeight: "5",
+    },
+    {
+      rowType: "band",
+      subBrand: "tmc",
+      templateName: "TMC readiness",
+      version: "1",
+      isActive: "true",
+      minScore: "0",
+      maxScore: "10",
+      classification: "starter",
+      tierLabel: "Starter",
+      recommendedTier: "entry",
+    },
+  ];
   setCsvDownloadHeaders(res, "travel-diagnostic-banks-template.csv");
-  res.send(serializeRows(DIAG_BANK_COLS.filter((column) => column.key !== "id"), [sample]));
+  res.send(serializeRows(DIAG_BANK_READABLE_COLS, sample));
 });
 
 router.post(

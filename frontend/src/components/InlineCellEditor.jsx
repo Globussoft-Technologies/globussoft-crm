@@ -45,11 +45,11 @@ export default function InlineCellEditor({ contactId, field, value, onSaved }) {
   const save = async (nextValue) => {
     setSaving(true);
     try {
-      await fetchApi(`/api/contacts/${contactId}`, {
+      const updatedContact = await fetchApi(`/api/contacts/${contactId}`, {
         method: "PUT",
         body: JSON.stringify({ customFields: { [field.fieldKey]: nextValue } }),
       });
-      onSaved?.(nextValue);
+      onSaved?.(nextValue, updatedContact?.updatedAt);
       setEditing(false);
     } catch (err) {
       notify.error(err?.body?.error || err?.message || `Failed to save ${field.label}`);

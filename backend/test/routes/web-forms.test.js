@@ -313,7 +313,7 @@ describe('POST /api/forms', () => {
 
 describe('PUT /api/forms/:id', () => {
 
-  test('renames a form and regenerates the slug when one is not provided', async () => {
+  test('renames a form without touching the slug so shared links keep working', async () => {
 
     prisma.webForm.findFirst
       .mockResolvedValueOnce({
@@ -335,7 +335,7 @@ describe('PUT /api/forms/:id', () => {
       tenantId: TENANT_ID,
       createdByUserId: USER_ID,
       name: 'EmpMonitor Demo',
-      slug: 'empmonitor-demo',
+      slug: 'untitled-form-06-aug-2026-18-18',
       description: '',
       isActive: true,
       fieldsJson: JSON.stringify([]),
@@ -348,11 +348,15 @@ describe('PUT /api/forms/:id', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(res.body.slug).toBe('empmonitor-demo');
+    expect(res.body.slug).toBe('untitled-form-06-aug-2026-18-18');
     expect(prisma.webForm.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         name: 'EmpMonitor Demo',
-        slug: 'empmonitor-demo',
+      }),
+    }));
+    expect(prisma.webForm.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.not.objectContaining({
+        slug: expect.any(String),
       }),
     }));
   });
@@ -442,7 +446,47 @@ describe('GET /api/forms/public/:slug', () => {
 
     expect(res.body.slug).toBe('contact-us');
 
-    expect(res.body.embedCode).toContain('/embed/web-form.html?slug=contact-us');
+    expect(res.body.embedCode).toContain('/embed/web-form.html?id=1');
+
+  });
+
+  test('resolves the active form by stable numeric id', async () => {
+
+    prisma.webForm.findFirst.mockResolvedValue({
+
+      id: 1,
+
+      tenantId: TENANT_ID,
+
+      createdByUserId: USER_ID,
+
+      name: 'Contact Us',
+
+      slug: 'contact-us',
+
+      description: 'Talk to us',
+
+      isActive: true,
+
+      fieldsJson: JSON.stringify([]),
+
+      styleJson: JSON.stringify({}),
+
+      settingsJson: JSON.stringify({}),
+
+    });
+
+
+    const res = await request(makeApp()).get('/api/forms/public/1');
+
+
+    expect(res.status).toBe(200);
+
+    expect(res.body.id).toBe(1);
+
+    expect(prisma.webForm.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 1, isActive: true } }),
+    );
 
   });
 
@@ -700,6 +744,53 @@ describe('POST /api/forms/public/:slug/submit', () => {
       where: { id: 2003 },
       data: { callifiedCampaignId: 77 },
     });
+  });
+
+  test('maps picker fallback customs to Contact columns instead of dropping them', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'text', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'custom-industry', sourceKind: 'lead_custom', sourceKey: 'industry', fieldType: 'text', label: 'Industry', required: false, hidden: false, width: 'full', options: [] },
+        { id: 'custom-job-roles', sourceKind: 'lead_custom', sourceKey: 'jobRoles', fieldType: 'text', label: 'Job Roles', required: false, hidden: false, width: 'full', options: [] },
+        { id: 'custom-organization', sourceKind: 'lead_custom', sourceKey: 'organization', fieldType: 'text', label: 'Organization', required: false, hidden: false, width: 'full', options: [] },
+        { id: 'custom headcount', sourceKind: 'lead_custom', sourceKey: 'numberOfEmployees', fieldType: 'text', label: 'No Of Employee', required: false, hidden: false, width: 'full', options: [] },
+        { id: 'custom-medium', sourceKind: 'lead_custom', sourceKey: 'medium', fieldType: 'text', label: 'Medium', required: false, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ submitButtonLabel: 'Send', successMessage: 'Thanks!' }),
+    });
+
+    const res = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit')
+      .field('name', 'Jane Doe')
+      .field('email', 'jane@example.com')
+      .field('industry', 'Logistics')
+      .field('jobRoles', 'Sales Manager')
+      .field('organization', 'Acme Corp')
+      .field('numberOfEmployees', '51-200')
+      .field('medium', 'Referral');
+
+    expect(res.status).toBe(201);
+    // Job title refers to Job title, No Of Employee refers to Company Size.
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        industry: 'Logistics',
+        title: 'Sales Manager',
+        company: 'Acme Corp',
+        companySize: '51-200',
+        source: 'Referral',
+      }),
+    }));
+    // Nothing left for the custom-field writer — no definitions needed.
+    expect(prisma.leadCustomFieldValue.upsert).not.toHaveBeenCalled();
   });
 
 

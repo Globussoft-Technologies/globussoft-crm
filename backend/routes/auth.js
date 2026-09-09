@@ -181,6 +181,122 @@ router.get("/public/tenants", async (req, res) => {
   }
 });
 
+// Public marketing landing form. It captures interest as a Generic CRM lead
+// without exposing the authenticated contacts API.
+router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const phone = String(req.body?.phone || "").trim();
+    const company = String(req.body?.company || "").trim();
+    const companySize = String(req.body?.companySize || "").trim();
+    if (!name || !email || !phone || !company) {
+      return res.status(400).json({ error: "Name, email, phone, and company are required" });
+    }
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      return res.status(400).json({ error: "Enter a valid email address" });
+    }
+
+    const configuredTenantIdRaw = String(process.env.PUBLIC_LEAD_TENANT_ID || "").trim();
+    if (!configuredTenantIdRaw) {
+      return res.status(503).json({ error: "Lead capture is not configured" });
+    }
+
+    const configuredTenantId = Number(configuredTenantIdRaw);
+    if (
+      (!Number.isInteger(configuredTenantId) || configuredTenantId < 1)
+    ) {
+      console.error("[auth/public/lead-inquiry] PUBLIC_LEAD_TENANT_ID must be a positive integer");
+      return res.status(503).json({ error: "Lead capture is not configured" });
+    }
+
+    const tenant = await prisma.tenant.findFirst({
+      where: {
+        id: configuredTenantId,
+        vertical: "generic",
+        isActive: true,
+      },
+      select: { id: true },
+    });
+    if (!tenant) return res.status(503).json({ error: "Lead capture is not configured" });
+
+    // Use the same WebForm relation as configurable public forms so every
+    // landing inquiry can be surfaced in the Leads table. Include the resolved
+    // tenant id in the globally unique slug and verify the upsert result before
+    // writing a submission, so a pre-existing form can never redirect public
+    // lead data into a different tenant.
+    const landingFormSlug = `globus-crm-landing-${tenant.id}`;
+    const landingForm = await prisma.webForm.upsert({
+      where: { slug: landingFormSlug },
+      update: {},
+      create: {
+        name: "Landing Page",
+        slug: landingFormSlug,
+        description: "Public Globus CRM trial inquiry form",
+        fieldsJson: JSON.stringify([
+          { sourceKey: "name", fieldType: "text", sourceKind: "contact" },
+          { sourceKey: "email", fieldType: "email", sourceKind: "contact" },
+          { sourceKey: "phone", fieldType: "tel", sourceKind: "contact" },
+          { sourceKey: "company", fieldType: "text", sourceKind: "contact" },
+          { sourceKey: "companySize", fieldType: "number", sourceKind: "contact" },
+        ]),
+        styleJson: "{}",
+        settingsJson: "{}",
+        tenantId: tenant.id,
+      },
+    });
+    if (landingForm.tenantId !== tenant.id) {
+      console.error("[auth/public/lead-inquiry] landing form belongs to a different tenant");
+      return res.status(503).json({ error: "Lead capture is not configured" });
+    }
+
+    const submissionPayload = JSON.stringify({ name, email, phone, company, companySize });
+    const existing = await prisma.contact.findFirst({
+      where: { tenantId: tenant.id, email, deletedAt: null },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.webFormSubmission.create({
+        data: {
+          webFormId: landingForm.id,
+          contactId: existing.id,
+          payloadJson: submissionPayload,
+          sourceUrl: "landing-page",
+          tenantId: tenant.id,
+        },
+      });
+      return res.status(200).json({ received: true, duplicate: true });
+    }
+
+    const contact = await prisma.contact.create({
+      data: {
+        name: name.slice(0, 191),
+        email: email.slice(0, 191),
+        phone: phone.slice(0, 40),
+        company: company.slice(0, 191),
+        companySize: companySize.slice(0, 100) || null,
+        status: "Lead",
+        source: "website-form",
+        tenantId: tenant.id,
+      },
+    });
+
+    await prisma.webFormSubmission.create({
+      data: {
+        webFormId: landingForm.id,
+        contactId: contact.id,
+        payloadJson: submissionPayload,
+        sourceUrl: "landing-page",
+        tenantId: tenant.id,
+      },
+    });
+    res.status(201).json({ received: true });
+  } catch (err) {
+    console.error("[auth/public/lead-inquiry] error:", err.message);
+    res.status(500).json({ error: "Unable to submit lead inquiry" });
+  }
+});
+
 // Marketing /get-started wizard and customer-register preflight: check whether
 // an email already belongs to an active user. Returns { exists: boolean } so
 // the frontend can route existing users to /login and new users into the

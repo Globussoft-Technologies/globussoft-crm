@@ -72,6 +72,7 @@ prisma.user = {
 };
 prisma.tenant = {
   findUnique: vi.fn().mockResolvedValue(null),
+  findFirst: vi.fn().mockResolvedValue(null),
   findMany: vi.fn().mockResolvedValue([]),
   create: vi.fn(),
 };
@@ -98,6 +99,12 @@ prisma.revokedToken = {
 };
 prisma.smsConfig = {
   findFirst: vi.fn().mockResolvedValue(null),
+};
+prisma.webForm = {
+  upsert: vi.fn(),
+};
+prisma.webFormSubmission = {
+  create: vi.fn(),
 };
 // T37 / Class B6 — RBAC self-heal seam. /login (inline self-heal block
 // at routes/auth.js:521-535) AND /signup + /register (call
@@ -177,6 +184,7 @@ beforeEach(() => {
   prisma.user.create.mockReset();
   prisma.user.update.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tenant.findFirst.mockReset().mockResolvedValue(null);
   prisma.tenant.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.create.mockReset();
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
@@ -192,6 +200,9 @@ beforeEach(() => {
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.revokedToken.upsert.mockReset().mockResolvedValue({});
   prisma.smsConfig.findFirst.mockReset().mockResolvedValue(null);
+  prisma.webForm.upsert.mockReset();
+  prisma.webFormSubmission.create.mockReset();
+  delete process.env.PUBLIC_LEAD_TENANT_ID;
   emailOtp.enforceRegistrationOtp.mockReset().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
   // T37 / Class B6 — keep self-heal seam permissive across tests.
   prisma.userRole.count.mockReset().mockResolvedValue(1);
@@ -213,6 +224,87 @@ beforeEach(() => {
   // findFirst delegate so every existing `prisma.user.findUnique.mockResolvedValue(...)`
   // assertion keeps working without per-test edits.
   prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
+});
+
+// ── POST /api/auth/public/lead-inquiry ──────────────────────────────
+
+describe('POST /api/auth/public/lead-inquiry', () => {
+  const payload = {
+    name: 'Public Prospect',
+    email: 'prospect@example.com',
+    phone: '+91 98765 43210',
+    company: 'Prospect Ltd',
+    companySize: '50',
+  };
+
+  test('503 when no destination tenant is explicitly configured', async () => {
+    const res = await request(makeApp())
+      .post('/api/auth/public/lead-inquiry')
+      .send(payload);
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/not configured/i);
+    expect(prisma.tenant.findFirst).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('routes the inquiry only to the configured active generic tenant', async () => {
+    process.env.PUBLIC_LEAD_TENANT_ID = '42';
+    prisma.tenant.findFirst.mockResolvedValue({ id: 42 });
+    prisma.webForm.upsert.mockResolvedValue({ id: 70, tenantId: 42 });
+    prisma.contact.create.mockResolvedValue({ id: 80 });
+    prisma.webFormSubmission.create.mockResolvedValue({ id: 90 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/public/lead-inquiry')
+      .send(payload);
+
+    expect(res.status).toBe(201);
+    expect(prisma.tenant.findFirst).toHaveBeenCalledWith({
+      where: { id: 42, vertical: 'generic', isActive: true },
+      select: { id: true },
+    });
+    expect(prisma.webForm.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { slug: 'globus-crm-landing-42' },
+      create: expect.objectContaining({
+        slug: 'globus-crm-landing-42',
+        tenantId: 42,
+      }),
+    }));
+    expect(prisma.contact.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ tenantId: 42, email: payload.email }),
+    });
+    expect(prisma.webFormSubmission.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ webFormId: 70, contactId: 80, tenantId: 42 }),
+    });
+  });
+
+  test('503 when PUBLIC_LEAD_TENANT_ID is not a positive integer', async () => {
+    process.env.PUBLIC_LEAD_TENANT_ID = 'not-an-id';
+
+    const res = await request(makeApp())
+      .post('/api/auth/public/lead-inquiry')
+      .send(payload);
+
+    expect(res.status).toBe(503);
+    expect(prisma.tenant.findFirst).not.toHaveBeenCalled();
+    expect(prisma.webForm.upsert).not.toHaveBeenCalled();
+  });
+
+  test('fails closed if the resolved landing form belongs to another tenant', async () => {
+    process.env.PUBLIC_LEAD_TENANT_ID = '42';
+    prisma.tenant.findFirst.mockResolvedValue({ id: 42 });
+    prisma.webForm.upsert.mockResolvedValue({ id: 70, tenantId: 99 });
+
+    const res = await request(makeApp())
+      .post('/api/auth/public/lead-inquiry')
+      .send(payload);
+
+    expect(res.status).toBe(503);
+    expect(prisma.contact.findFirst).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.webFormSubmission.create).not.toHaveBeenCalled();
+  });
 });
 
 // ── POST /api/auth/login ─────────────────────────────────────────────

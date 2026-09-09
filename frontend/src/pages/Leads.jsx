@@ -1,6 +1,6 @@
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
-import { formatDateMedium as formatDate } from "../utils/date";
+import { formatDateMedium as formatDate, formatDateTime } from "../utils/date";
 import {
   Fragment,
   useState,
@@ -113,8 +113,18 @@ const FIELD_LIMITS = {
   company: 191,
   title: 200,
   phone: 20,
+  industry: 191,
+  companySize: 191,
+  website: 200,
+  linkedin: 191,
+  stateCode: 10,
+  billingStateCode: 10,
+  firstTouchSource: 191,
+  lastTouchSource: 191,
+  treatmentOfInterest: 191,
+  gst: 15,
 };
-const LEADS_PAGE_SIZE_OPTIONS = [25, 50, 100];
+const LEADS_PAGE_SIZE_OPTIONS = [ 10, 25, 50, 100];
 const LEADS_AUTO_REFRESH_MS = 15000;
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_COLUMN_MIN_WIDTH = 72;
@@ -136,6 +146,10 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "tags",
   "assignedTo",
   "createdAt",
+  "campaign",
+  "callStatus",
+  "callifiedAi",
+  "callifiedScore",
 ];
 const LEADS_COLUMN_DEFAULT_WIDTHS = {
   select: 48,
@@ -155,6 +169,24 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   amount: 130,
   assignedTo: 170,
   createdAt: 145,
+  status: 130,
+  title: 180,
+  firstName: 140,
+  lastName: 140,
+  website: 200,
+  linkedin: 180,
+  industry: 150,
+  companySize: 190,
+  description: 220,
+  stateCode: 110,
+  lastUpdated: 170,
+  firstTouchSource: 160,
+  lastTouchSource: 160,
+  treatmentOfInterest: 180,
+  birthDate: 130,
+  anniversary: 130,
+  gst: 180,
+  billingStateCode: 150,
   actions: LEADS_ACTIONS_COLUMN_WIDTH,
 };
 
@@ -679,7 +711,9 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag }) {
   );
 }
 
-const leadSourceLabel = (lead) =>
+const leadSourceLabel = (lead, isGeneric = false) =>
+  // Submission provenance takes precedence over a form's configurable Source field.
+  (isGeneric && lead?.webFormSubmissions?.length ? "website-form" : "") ||
   lead?.source ||
   lead?.firstTouchSource ||
   lead?.submitSource ||
@@ -693,7 +727,24 @@ const leadSourceLabel = (lead) =>
 // the lead submitted, via contact.webFormSubmissions[0]. Empty string when
 // the lead never came through a form (cell renders "—").
 const leadWebFormName = (lead) =>
-  lead?.webFormSubmissions?.[0]?.webForm?.name || "";
+  lead?.webFormSubmissions?.[0]?.webForm?.name ||
+  (["website-form", "Landing Page"].includes(lead?.source)
+    ? "Landing Page"
+    : "");
+// First/Last name columns (generic Leads table only): pure derivation of
+// Contact.name — first whitespace-separated token vs the remainder. Single
+// token → last name empty (cell renders "—"). No schema backing needed.
+const splitLeadName = (fullName) => {
+  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstName: "", lastName: "" };
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+};
+// <input type="date"> needs exactly YYYY-MM-DD — slice it off ISO strings.
+const toDateInputValue = (value) => {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : "";
+};
 // Reject all C0 controls (NUL/BEL/etc.) + DEL. \t \n \r are intentionally
 // included  text inputs shouldn't carry them either, and any paste-from-
 // malicious-source typically smuggles via NUL or BEL. Detecting control
@@ -834,6 +885,7 @@ function BuiltInInlineCellEditor({
   required = false,
   renderValue = null,
   editOnDisplayClick = true,
+  showEditButton = true,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -897,25 +949,27 @@ function BuiltInInlineCellEditor({
             String(value)
           )}
         </span>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setEditing(true);
-          }}
-          aria-label={`Edit ${label} for ${lead.name || "lead"}`}
-          title={`Edit ${label}`}
-          style={{
-            ...actionIconBtn,
-            flexShrink: 0,
-            padding: 2,
-            opacity: hovered ? 0.85 : 0,
-            pointerEvents: hovered ? "auto" : "none",
-            transition: "opacity 0.15s ease",
-          }}
-        >
-          <Pencil size={12} />
-        </button>
+        {showEditButton && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setEditing(true);
+            }}
+            aria-label={`Edit ${label} for ${lead.name || "lead"}`}
+            title={`Edit ${label}`}
+            style={{
+              ...actionIconBtn,
+              flexShrink: 0,
+              padding: 2,
+              opacity: hovered ? 0.85 : 0,
+              pointerEvents: hovered ? "auto" : "none",
+              transition: "opacity 0.15s ease",
+            }}
+          >
+            <Pencil size={12} />
+          </button>
+        )}
       </span>
     );
   }
@@ -992,6 +1046,10 @@ const Leads = () => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
+  // Generic CRM: no top scrollbar — the native bottom scrollbar of the
+  // scroll pane is the only horizontal bar. Other verticals keep the
+  // sticky top bar + hidden bottom bar exactly as before.
+  const showLeadsTopScrollbar = !isGeneric;
   // ADMINs always get the full assignment UI. Travel non-admins can also
   // reassign the leads they own, but only to non-admin staff targets.
   const isAdmin = auth?.user?.role === "ADMIN";
@@ -1003,7 +1061,7 @@ const Leads = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [leadsPage, setLeadsPage] = useState(0);
-  const [leadsPageSize, setLeadsPageSize] = useState(25);
+  const [leadsPageSize, setLeadsPageSize] = useState(10);
   const [pageInput, setPageInput] = useState("1");
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [columnLayout, setColumnLayout] = useState(() => {
@@ -1305,8 +1363,28 @@ const Leads = () => {
         `/api/contacts?status=Lead&limit=500${filtersQs}`,
       );
       const rows = Array.isArray(data) ? data : [];
-      setLeads(rows);
-      return rows;
+      let mergedRows = rows;
+      setLeads((previousRows) => {
+        const previousById = new Map(previousRows.map((row) => [row.id, row]));
+        mergedRows = rows.map((row) => {
+          const previous = previousById.get(row.id);
+          if (!previous?.updatedAt) return row;
+          const previousTime = new Date(previous.updatedAt).getTime();
+          const serverTime = new Date(row.updatedAt).getTime();
+          // A background refresh can finish with a stale/missing timestamp
+          // while the edit response is already visible locally. Keep the
+          // newer value until the API catches up.
+          if (
+            !Number.isFinite(serverTime) ||
+            (Number.isFinite(previousTime) && previousTime > serverTime)
+          ) {
+            return { ...row, updatedAt: previous.updatedAt };
+          }
+          return row;
+        });
+        return mergedRows;
+      });
+      return mergedRows;
     } catch {
       if (!background) notify.error("Failed to load leads");
       return [];
@@ -2310,7 +2388,7 @@ const Leads = () => {
     }
     setEditSaving(true);
     try {
-      await fetchApi(`/api/contacts/${editing.id}`, {
+      const updatedLead = await fetchApi(`/api/contacts/${editing.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2322,9 +2400,25 @@ const Leads = () => {
           customFields: editForm.customFields || {},
         }),
       });
+      const savedUpdatedAt = updatedLead?.updatedAt || new Date().toISOString();
+      setLeads((prev) =>
+        prev.map((row) =>
+          row.id === editing.id
+            ? {
+              ...row,
+              name: editForm.name.trim(),
+              email: editForm.email.trim(),
+              company: editForm.company.trim(),
+              title: editForm.title.trim(),
+              source: editForm.source,
+              customFields: editForm.customFields || {},
+              updatedAt: savedUpdatedAt,
+            }
+            : row,
+        ),
+      );
       notify.success("Lead updated");
       setEditing(null);
-      fetchLeads({ background: true });
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to update lead");
     } finally {
@@ -2841,6 +2935,27 @@ const Leads = () => {
         key === "tags" ||
         key === "assignedTo" ||
         key === "createdAt" ||
+        // Extended Freshsales-parity set (backend catalog) — plain Contact
+        // scalars/derivations, rendered read-only except Job Title.
+        key === "status" ||
+        key === "title" ||
+        key === "firstName" ||
+        key === "lastName" ||
+        key === "website" ||
+        key === "linkedin" ||
+        key === "industry" ||
+        key === "companySize" ||
+        key === "description" ||
+        key === "stateCode" ||
+        key === "lastUpdated" ||
+        // Web-form parity set (same Contact data as the web-form Add-field list).
+        key === "firstTouchSource" ||
+        key === "lastTouchSource" ||
+        key === "treatmentOfInterest" ||
+        key === "birthDate" ||
+        key === "anniversary" ||
+        key === "gst" ||
+        key === "billingStateCode" ||
         customFieldByKey.has(key),
     )
     .map((key) => {
@@ -2854,6 +2969,24 @@ const Leads = () => {
       if (key === "tags") return { key, label: "Tags" };
       if (key === "assignedTo") return { key, label: "Assigned To" };
       if (key === "createdAt") return { key, label: "Created" };
+      if (key === "status") return { key, label: "Status" };
+      if (key === "title") return { key, label: "Job Title" };
+      if (key === "firstName") return { key, label: "First Name" };
+      if (key === "lastName") return { key, label: "Last Name" };
+      if (key === "website") return { key, label: "Website URL" };
+      if (key === "linkedin") return { key, label: "LinkedIn" };
+      if (key === "industry") return { key, label: "Service Type" };
+      if (key === "companySize") return { key, label: "No Of Employee" };
+      if (key === "description") return { key, label: "Note" };
+      if (key === "stateCode") return { key, label: "State" };
+      if (key === "lastUpdated") return { key, label: "Last Updated" };
+      if (key === "firstTouchSource") return { key, label: "First Touch Source" };
+      if (key === "lastTouchSource") return { key, label: "Last Touch Source" };
+      if (key === "treatmentOfInterest") return { key, label: "Treatment Of Interest" };
+      if (key === "birthDate") return { key, label: "Birth Date" };
+      if (key === "anniversary") return { key, label: "Anniversary" };
+      if (key === "gst") return { key, label: "GSTIN" };
+      if (key === "billingStateCode") return { key, label: "Billing State Code" };
       const field = customFieldByKey.get(key);
       return {
         key,
@@ -2877,7 +3010,11 @@ const Leads = () => {
         { key: "amount", label: "Amount" },
       ]
       : []),
-  ];
+  ].filter((column) =>
+    !isGeneric || preferredVisibleColumns.includes(column.key),
+  );
+  const isLeadFixedColumnVisible = (key) =>
+    leadFixedExtraColumnDefs.some((column) => column.key === key);
   const getCustomFieldFilterKind = (fieldType) => {
     if (fieldType === "date") return "date";
     if (fieldType === "number") return "number";
@@ -2920,6 +3057,22 @@ const Leads = () => {
         return { fieldKey: "assignedToId", label: "Assigned To", kind: "id" };
       case "createdAt":
         return { fieldKey: "createdAt", label: "Created", kind: "date" };
+      case "lastUpdated":
+        return { fieldKey: "updatedAt", label: "Last Updated", kind: "date" };
+      case "firstTouchSource":
+        return { fieldKey: "firstTouchSource", label: "First Touch Source", kind: "text" };
+      case "lastTouchSource":
+        return { fieldKey: "lastTouchSource", label: "Last Touch Source", kind: "text" };
+      case "treatmentOfInterest":
+        return { fieldKey: "treatmentOfInterest", label: "Treatment Of Interest", kind: "text" };
+      case "birthDate":
+        return { fieldKey: "birthDate", label: "Birth Date", kind: "date" };
+      case "anniversary":
+        return { fieldKey: "anniversary", label: "Anniversary", kind: "date" };
+      case "gst":
+        return { fieldKey: "gst", label: "GSTIN", kind: "text" };
+      case "billingStateCode":
+        return { fieldKey: "billingStateCode", label: "Billing State Code", kind: "text" };
       case "subBrand":
         return { fieldKey: "subBrand", label: "Sub-brand", kind: "text" };
       default:
@@ -3113,10 +3266,14 @@ const Leads = () => {
           return lead.company || "";
         case "phone":
           return lead.phone || "";
+        case "firstName":
+          return splitLeadName(lead.name).firstName;
+        case "lastName":
+          return splitLeadName(lead.name).lastName;
         case "aiScore":
           return Number(lead.aiScore ?? 0);
         case "source":
-          return lead.source || "";
+          return isGeneric ? leadSourceLabel(lead, true) : lead.source || "";
         case "webForm":
           return leadWebFormName(lead);
         case "tags":
@@ -3125,6 +3282,9 @@ const Leads = () => {
           return lead.assignedTo?.name || lead.assignedTo?.email || "";
         case "createdAt":
           return lead.createdAt ? new Date(lead.createdAt).getTime() : 0;
+        case "birthDate":
+        case "anniversary":
+          return lead[key] ? new Date(lead[key]).getTime() : 0;
         case "campaign": {
           const campaign = callifiedCampaigns.find(
             (c) => String(c.id) === String(lead.callifiedCampaignId),
@@ -3159,6 +3319,7 @@ const Leads = () => {
       callifiedSummaries,
       customFieldByKey,
       dealsByContact,
+      isGeneric,
       tmcPaidByEmail,
     ],
   );
@@ -3362,18 +3523,30 @@ const Leads = () => {
       }
     }
 
-    await fetchApi(`/api/contacts/${lead.id}`, {
+    const updatedLead = await fetchApi(`/api/contacts/${lead.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ [field]: value }),
     });
     setLeads((prev) =>
       prev.map((row) =>
-        row.id === lead.id ? { ...row, [field]: value } : row,
+        row.id === lead.id
+          ? {
+            ...row,
+            [field]: value,
+            updatedAt: updatedLead?.updatedAt || row.updatedAt,
+          }
+          : row,
       ),
     );
     setPreviewLead((current) =>
-      current?.id === lead.id ? { ...current, [field]: value } : current,
+      current?.id === lead.id
+        ? {
+          ...current,
+          [field]: value,
+          updatedAt: updatedLead?.updatedAt || current.updatedAt,
+        }
+        : current,
     );
     if (field === "tags" && Array.isArray(value)) {
       setLeadTagCatalog((prev) => {
@@ -3435,7 +3608,7 @@ const Leads = () => {
   };
 
   const filteredLeads = leads.filter((lead) => {
-    if (!matchesSource(lead.source, sourceFilter)) return false;
+    if (!matchesSource(isGeneric ? leadSourceLabel(lead, true) : lead.source, sourceFilter)) return false;
     if (isTravel && subBrandFilter && lead.subBrand !== subBrandFilter)
       return false;
     if (isTravel && !leadMatchesStage(lead)) return false;
@@ -3468,7 +3641,7 @@ const Leads = () => {
       lead.email,
       lead.company,
       lead.phone,
-      lead.source,
+      isGeneric ? leadSourceLabel(lead, true) : lead.source,
       normalizeLeadTags(lead.tags).join(" "),
       lead.assignedTo?.name,
       lead.assignedTo?.email,
@@ -3885,12 +4058,16 @@ const Leads = () => {
         >
           {leadingControls}
           <span
+            title={isGeneric ? label : undefined}
             style={{
               flex: 1,
               minWidth: 0,
               overflow: "hidden",
               textOverflow: "ellipsis",
-              whiteSpace: "normal",
+              // Generic CRM: narrow columns truncate with … instead of
+              // wrapping onto a second line; hover reveals the full name
+              // via title. Other verticals keep the wrapping behavior.
+              whiteSpace: isGeneric ? "nowrap" : "normal",
               lineHeight: 1.2,
             }}
           >
@@ -3932,6 +4109,7 @@ const Leads = () => {
     extraStyle = {},
     renderValue,
     required = false,
+    onSave = updateLeadInlineValue,
   }) => (
     <td
       style={getBodyCellStyle(field, extraStyle)}
@@ -3944,7 +4122,7 @@ const Leads = () => {
         value={value}
         type={type}
         options={options}
-        onSave={updateLeadInlineValue}
+        onSave={onSave}
         renderValue={renderValue}
         required={required}
       />
@@ -3983,7 +4161,7 @@ const Leads = () => {
             contactId={lead.id}
             field={field}
             value={raw}
-            onSaved={(newValue) => {
+            onSaved={(newValue, updatedAt) => {
               setLeads((prev) =>
                 prev.map((l) =>
                   l.id === lead.id
@@ -3993,6 +4171,7 @@ const Leads = () => {
                         ...(l.customFields || {}),
                         [field.fieldKey]: newValue,
                       },
+                      updatedAt: updatedAt || l.updatedAt,
                     }
                     : l,
                 ),
@@ -4064,7 +4243,7 @@ const Leads = () => {
           lead,
           field: "source",
           label: "Source",
-          value: leadSourceLabel(lead),
+          value: leadSourceLabel(lead, isGeneric),
           type: "select",
           options: sourceFilterOptions,
           renderValue: (displayValue) => (
@@ -4164,6 +4343,245 @@ const Leads = () => {
             {formatDate(lead.createdAt)}
           </td>
         );
+      case "status": {
+        // Lifecycle stage — inline-editable dropdown, pill display.
+        return renderBuiltInLeadCell({
+          lead,
+          field: "status",
+          label: "Status",
+          value: lead.status || "Lead",
+          type: "select",
+          options: ["Lead", "Prospect", "Customer", "Churned", "Junk"],
+          renderValue: (displayValue) => (
+            <span style={sourceBadgeStyle}>{displayValue || ""}</span>
+          ),
+        });
+      }
+      case "title":
+        return renderBuiltInLeadCell({
+          lead,
+          field: "title",
+          label: "Job Title",
+          value: lead.title,
+          extraStyle: { color: "var(--text-secondary)" },
+        });
+      case "firstName":
+      case "lastName": {
+        // Derived from Contact.name — editing a part rewrites the full name.
+        const { firstName, lastName } = splitLeadName(lead.name);
+        const isFirst = column.key === "firstName";
+        return renderBuiltInLeadCell({
+          lead,
+          field: column.key,
+          label: isFirst ? "First Name" : "Last Name",
+          value: isFirst ? firstName : lastName,
+          extraStyle: {
+            color: (isFirst ? firstName : lastName)
+              ? "var(--text-primary)"
+              : "var(--text-secondary)",
+          },
+          renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+          onSave: async (row, _field, part) => {
+            const current = splitLeadName(row.name);
+            const next = isFirst
+              ? [part, current.lastName].filter(Boolean).join(" ")
+              : [current.firstName, part].filter(Boolean).join(" ");
+            await updateLeadInlineValue(row, "name", next.trim() || row.name);
+          },
+        });
+      }
+      case "website":
+      case "linkedin": {
+        if (column.key === "website" && isGeneric) {
+          const raw = String(lead.website || "").trim();
+          const href = raw
+            ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`)
+            : "";
+          return renderBuiltInLeadCell({
+            lead,
+            field: "website",
+            label: "Website URL",
+            value: lead.website,
+            extraStyle: { color: "var(--text-secondary)" },
+            renderValue: () =>
+              href ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ color: "var(--accent-color)" }}
+                >
+                  {raw}
+                </a>
+              ) : (
+                "—"
+              ),
+          });
+        }
+        if (column.key === "website" && !isGeneric) {
+          const rawWebsite = String(lead.website || "").trim();
+          const hrefWebsite = rawWebsite
+            ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawWebsite) ? rawWebsite : `https://${rawWebsite}`)
+            : "";
+          return (
+            <td
+              style={getBodyCellStyle(column.key, {
+                color: "var(--text-secondary)",
+                fontSize: "0.875rem",
+              })}
+              title={rawWebsite || undefined}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {hrefWebsite ? (
+                <a href={hrefWebsite} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "var(--accent-color)" }}>
+                  {rawWebsite}
+                </a>
+              ) : (
+                "â€”"
+              )}
+            </td>
+          );
+        }
+        if (column.key === "linkedin") {
+          const rawLinkedin = String(lead.linkedin || "").trim();
+          const hrefLinkedin = rawLinkedin
+            ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawLinkedin) ? rawLinkedin : `https://${rawLinkedin}`)
+            : "";
+          return renderBuiltInLeadCell({
+            lead,
+            field: "linkedin",
+            label: "LinkedIn",
+            value: lead.linkedin,
+            extraStyle: { color: "var(--text-secondary)" },
+            renderValue: () =>
+              hrefLinkedin ? (
+                <a href={hrefLinkedin} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "var(--accent-color)" }}>
+                  {rawLinkedin}
+                </a>
+              ) : (
+                ""
+              ),
+          });
+        }
+        return (
+          <td style={getBodyCellStyle(column.key, { color: "var(--text-secondary)", fontSize: "0.875rem" })}>
+            {lead.website || "—"}
+          </td>
+        );
+      }
+        // Read-only link cell — prepends https:// when the stored value
+        // has no scheme so the anchor actually navigates.
+        /* const raw = String(lead[column.key] || "").trim();
+        const href = raw ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`) : "";
+        return (
+          <td
+            style={getBodyCellStyle(column.key, {
+              color: "var(--text-secondary)",
+              fontSize: "0.875rem",
+            })}
+            title={raw || undefined}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {href ? (
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                style={{ color: "var(--accent-color)" }}
+              >
+                {raw}
+              </a>
+            ) : (
+              "—"
+            )}
+          </td>
+        );
+      }
+      */
+      case "companySize": {
+        if (isGeneric) {
+          // No Of Employee — free text (counts like "50" and ranges like
+          // "11-50" both occur), same data as the web-form field.
+          return renderBuiltInLeadCell({
+            lead,
+            field: "companySize",
+            label: "No Of Employee",
+            value: lead.companySize,
+            extraStyle: { color: "var(--text-secondary)" },
+            renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+          });
+        }
+        const value = column.key === "lastUpdated"
+          ? (lead.updatedAt || lead.createdAt)
+          : lead.updatedAt;
+        return (
+          <td style={getBodyCellStyle(column.key, { color: value ? "var(--text-primary)" : "var(--text-secondary)", fontSize: "0.875rem" })}>
+            {value ? formatDate(value) : "—"}
+          </td>
+        );
+      }
+      case "industry":
+      case "description":
+      case "stateCode":
+      case "billingStateCode":
+      case "firstTouchSource":
+      case "lastTouchSource":
+      case "treatmentOfInterest":
+      case "gst": {
+        // Inline-editable scalars — same Contact data as the web-form
+        // Add-field list. Blank when empty (no dash placeholder).
+        const scalarLabels = {
+          industry: "Service Type",
+          description: "Note",
+          stateCode: "State",
+          billingStateCode: "Billing State Code",
+          firstTouchSource: "First Touch Source",
+          lastTouchSource: "Last Touch Source",
+          treatmentOfInterest: "Treatment Of Interest",
+          gst: "GSTIN",
+        };
+        return renderBuiltInLeadCell({
+          lead,
+          field: column.key,
+          label: scalarLabels[column.key] || column.label,
+          value: lead[column.key],
+          extraStyle: { color: "var(--text-secondary)" },
+          renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+        });
+      }
+      case "birthDate":
+      case "anniversary": {
+        const dateValue = lead[column.key];
+        return renderBuiltInLeadCell({
+          lead,
+          field: column.key,
+          label: column.key === "birthDate" ? "Birth Date" : "Anniversary",
+          value: toDateInputValue(dateValue),
+          type: "date",
+          extraStyle: { color: "var(--text-secondary)" },
+          renderValue: () => (dateValue ? formatDate(dateValue) : ""),
+          // Clearing a date must write null — "" would 500 on the DateTime column.
+          onSave: (row, _field, nextValue) =>
+            updateLeadInlineValue(row, column.key, nextValue || null),
+        });
+      }
+      case "lastUpdated": {
+        const value = lead.updatedAt;
+        return (
+          <td
+            style={getBodyCellStyle(column.key, {
+              color: value ? "var(--text-primary)" : "var(--text-secondary)",
+              fontSize: "0.875rem",
+            })}
+            title={value ? String(value) : undefined}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {value ? formatDateTime(value) : "—"}
+          </td>
+        );
+      }
       default:
         return null;
     }
@@ -4245,6 +4663,11 @@ const Leads = () => {
       <header
         style={{
           marginBottom: "1rem",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          flexWrap: "wrap",
         }}
       >
         <div
@@ -4278,6 +4701,47 @@ const Leads = () => {
             </p>
           </div>
         </div>
+        {/* Generic CRM only: Lead Fields + Create Lead live in the header's
+            right corner (moved up from the lower action row so the header
+            carries the primary CTAs). Other verticals keep the header
+            title-only exactly as before. */}
+        {isGeneric && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => navigate("/settings/lead-fields")}
+              title="Manage lead custom fields"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.45rem",
+              }}
+            >
+              <SlidersHorizontal size={16} /> Lead Fields
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              aria-label="Create a new lead"
+              onClick={openCreate}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.45rem",
+              }}
+            >
+              <Plus size={16} /> Create Lead
+            </button>
+          </div>
+        )}
       </header>
       <div
         style={{
@@ -5252,35 +5716,24 @@ const Leads = () => {
           </div>
         )}
 
-        {isGeneric && (
+        {/* Lead Fields lives in the header for generic (see above); the
+            lower-row Create Lead stays for non-generic tenants only. */}
+        {!isGeneric && (
           <button
             type="button"
-            className="btn-secondary"
-            onClick={() => navigate("/settings/lead-fields")}
-            title="Manage lead custom fields"
+            className="btn-primary"
+            aria-label="Create a new lead"
+            onClick={openCreate}
             style={{
               display: "inline-flex",
               alignItems: "center",
               gap: "0.45rem",
+              marginLeft: "auto",
             }}
           >
-            <SlidersHorizontal size={16} /> Lead Fields
+            <Plus size={16} /> Create Lead
           </button>
         )}
-        <button
-          type="button"
-          className="btn-primary"
-          aria-label="Create a new lead"
-          onClick={openCreate}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.45rem",
-            marginLeft: "auto",
-          }}
-        >
-          <Plus size={16} /> Create Lead
-        </button>
       </div>
 
       {isTravel && (
@@ -5444,8 +5897,12 @@ const Leads = () => {
       )}
 
       <div
-        className="card"
-        style={{ overflow: "hidden" }}
+        className={isGeneric ? undefined : "card"}
+        style={
+          isGeneric
+            ? { display: "flex", flexDirection: "column", gap: "1rem" }
+            : { overflow: "hidden" }
+        }
       >
         <div
           style={{
@@ -5455,7 +5912,18 @@ const Leads = () => {
             gap: "0.75rem",
             flexWrap: "wrap",
             padding: "1rem",
-            borderBottom: "1px solid var(--border-color)",
+            // Generic CRM only: detach the toolbar from the leads table into
+            // its own card; the flex-column gap on the wrapper separates it
+            // from the table card below. Other verticals keep the merged
+            // toolbar + borderBottom exactly as before.
+            ...(isGeneric
+              ? {
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "12px",
+                  background: "var(--surface-color)",
+                  order: 1,
+                }
+              : { borderBottom: "1px solid var(--border-color)" }),
           }}
         >
           <div
@@ -5491,6 +5959,8 @@ const Leads = () => {
                 style={{
                   paddingLeft: "2.5rem",
                   backgroundColor: "var(--surface-hover)",
+                  height: 38,
+                  fontSize: "0.85rem",
                 }}
               />
             </div>
@@ -5509,11 +5979,13 @@ const Leads = () => {
               }
               showSelectedFilters={false}
               showCountBadge
-              compactTrigger
               buttonTitle="Filter leads"
               buttonAriaLabel="Filter by"
               buttonStyle={{
                 ...compactToolbarButtonStyle,
+                height: 38,
+                padding: "0 0.85rem",
+                fontSize: "0.85rem",
               }}
             />
           </div>
@@ -6183,12 +6655,31 @@ const Leads = () => {
             )}
           </div>
         </div>
-        <div className="leads-split-table">
+        <div
+          className={`leads-split-table${isGeneric ? " leads-split-table--no-topbar" : ""}`}
+          style={
+            isGeneric
+              ? {
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "16px",
+                  background: "var(--surface-color)",
+                  // Let the complete generic table establish its natural
+                  // height so the horizontal scrollbar sits at the table's
+                  // actual bottom, not at the bottom of a nested viewport.
+                  // The inner TopScrollSync wrapper owns horizontal overflow.
+                  // Generic order: toolbar (1) → table (2) → pagination (3).
+                  order: 2,
+                }
+              : undefined
+          }
+        >
           <div
             className="leads-table-frozen-pane"
             style={{ width: leadsFrozenTableWidthPx }}
           >
-            <div className="leads-table-frozen-spacer" />
+            {/* 16px offset matching the top scrollbar height — only needed
+                when the top bar is rendered (non-generic). */}
+            {showLeadsTopScrollbar && <div className="leads-table-frozen-spacer" />}
             <table
               ref={leadsFrozenTableRef}
               className={`${leadsTableClassName} leads-table--frozen`}
@@ -6294,6 +6785,7 @@ const Leads = () => {
                               onSave={updateLeadInlineValue}
                               required
                               editOnDisplayClick={false}
+                              showEditButton={false}
                               renderValue={(name) => (
                                 <a
                                   href={leadDetailPath(lead)}
@@ -6334,11 +6826,12 @@ const Leads = () => {
           </div>
           <div className="leads-table-scroll-pane">
             <TopScrollSync
-              forceScrollbar
+              forceScrollbar={showLeadsTopScrollbar}
               scrollWidth={leadsScrollableTableMinWidth}
               stickyTop
               stickyTopOffset={0}
-              hideBottomScrollbar
+              hideBottomScrollbar={showLeadsTopScrollbar}
+              hideTopBar={!showLeadsTopScrollbar}
             >
               <table
                 ref={leadsScrollableTableRef}
@@ -6371,7 +6864,7 @@ const Leads = () => {
                         {renderLeadUserHeaderCell(column)}
                       </Fragment>
                     ))}
-                    {isGeneric &&
+                    {isLeadFixedColumnVisible("campaign") &&
                       renderColumnHeaderCell(
                         "campaign",
                         "Callified Campaign",
@@ -6382,7 +6875,7 @@ const Leads = () => {
                           label: "Callified Campaign",
                         }),
                       )}
-                    {isGeneric &&
+                    {isLeadFixedColumnVisible("callStatus") &&
                       renderColumnHeaderCell(
                         "callStatus",
                         "Call Status",
@@ -6393,7 +6886,7 @@ const Leads = () => {
                           label: "Call Status",
                         }),
                       )}
-                    {isGeneric &&
+                    {isLeadFixedColumnVisible("callifiedAi") &&
                       renderColumnHeaderCell(
                         "callifiedAi",
                         "Callified AI call",
@@ -6404,7 +6897,7 @@ const Leads = () => {
                           label: "Callified AI call",
                         }),
                       )}
-                    {isGeneric &&
+                    {isLeadFixedColumnVisible("callifiedScore") &&
                       renderColumnHeaderCell(
                         "callifiedScore",
                         "Callified Score",
@@ -6483,7 +6976,7 @@ const Leads = () => {
                             {renderLeadUserBodyCell(lead, column)}
                           </Fragment>
                         ))}
-                        {isGeneric && (
+                        {isLeadFixedColumnVisible("campaign") && (
                           <td
                             style={getBodyCellStyle("campaign")}
                             onClick={(e) => e.stopPropagation()}
@@ -6512,7 +7005,7 @@ const Leads = () => {
                             />
                           </td>
                         )}
-                        {isGeneric && (
+                        {isLeadFixedColumnVisible("callStatus") && (
                           <td
                             style={getBodyCellStyle("callStatus")}
                             onClick={(e) => e.stopPropagation()}
@@ -6644,7 +7137,7 @@ const Leads = () => {
                             })()}
                           </td>
                         )}
-                        {isGeneric && (
+                        {isLeadFixedColumnVisible("callifiedAi") && (
                           <td
                             style={getBodyCellStyle("callifiedAi")}
                             onClick={(e) => e.stopPropagation()}
@@ -6734,7 +7227,7 @@ const Leads = () => {
                             </button>
                           </td>
                         )}
-                        {isGeneric && (
+                        {isLeadFixedColumnVisible("callifiedScore") && (
                           <td
                             style={getBodyCellStyle("callifiedScore")}
                             onClick={(e) => e.stopPropagation()}
@@ -7573,6 +8066,16 @@ const Leads = () => {
               background: "var(--surface-color)",
               position: "relative",
               zIndex: 2,
+              // Generic CRM only: pagination renders BELOW the table
+              // (toolbar → table → pagination via flex order) as its own
+              // bar card. Other verticals keep the footer below the table.
+              ...(isGeneric
+                ? {
+                    order: 3,
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "12px",
+                  }
+                : null),
             }}
           >
             <span
@@ -7800,7 +8303,7 @@ const Leads = () => {
                 >
                   Source
                 </div>
-                <strong>{leadSourceLabel(previewLeadCurrent)}</strong>
+                <strong>{leadSourceLabel(previewLeadCurrent, isGeneric)}</strong>
               </div>
               <div className="card" style={{ padding: "0.85rem" }}>
                 <div

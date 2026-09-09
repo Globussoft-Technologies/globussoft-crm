@@ -39,6 +39,13 @@ describe('buildWebFormEmbedCode', () => {
 
     expect(code).toContain('title="Lead &lt;Form&gt;"');
   });
+
+  test('prefers the stable numeric id for public links when present', () => {
+    const code = buildWebFormEmbedCode({ id: 101, name: 'Contact Us', slug: 'contact-us' }, 'https://crm.example.com');
+
+    expect(code).toContain('https://crm.example.com/embed/web-form.html?id=101');
+    expect(code).not.toContain('?slug=contact-us');
+  });
 });
 
 describe('public web form embed footer', () => {

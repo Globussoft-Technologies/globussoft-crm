@@ -45,10 +45,19 @@ router.get("/", async (req, res) => {
     const where = req.user.role === 'ADMIN'
       ? { tenantId: req.user.tenantId }
       : { tenantId: req.user.tenantId, userId: req.user.userId };
+    // Pagination (?limit=&page=&offset=): paginated envelope only when `page`
+    // or `offset` is present; otherwise legacy plain array.
+    const paginated = req.query.page !== undefined || req.query.offset !== undefined;
+    const parsedLimit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100);
+    const parsedPage = Math.max(parseInt(req.query.page) || 1, 1);
+    const skip = req.query.offset !== undefined
+      ? Math.max(parseInt(req.query.offset) || 0, 0)
+      : (parsedPage - 1) * parsedLimit;
     const findManyArgs = {
       where,
       orderBy: { createdAt: 'desc' },
     };
+    if (paginated) { findManyArgs.skip = skip; findManyArgs.take = parsedLimit; }
     if (isSummary) {
       findManyArgs.select = {
         id: true,
@@ -69,7 +78,17 @@ router.get("/", async (req, res) => {
       findManyArgs.include = { user: { select: { id: true, name: true, email: true } } };
     }
     const schedules = await prisma.reportSchedule.findMany(findManyArgs);
-    res.json(schedules);
+    if (!paginated) return res.json(schedules);
+    const total = await prisma.reportSchedule.count({ where });
+    const effPage = req.query.offset !== undefined ? Math.floor(skip / parsedLimit) + 1 : parsedPage;
+    return res.json({
+      data: schedules,
+      total,
+      page: effPage,
+      limit: parsedLimit,
+      offset: skip,
+      totalPages: Math.max(Math.ceil(total / parsedLimit), 1),
+    });
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch report schedules" });
   }

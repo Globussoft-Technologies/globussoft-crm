@@ -2884,6 +2884,69 @@ table.leads-table thead th {
   box-shadow: inset 0 -1px 0 var(--border-color);
 }
 
+/* Generic CRM: the top scrollbar is removed, so the sticky header docks
+   flush to the top of the scroll viewport (no 16px gap strip). Scoped to
+   the --no-topbar modifier — all other usages keep top: 16px. */
+.leads-split-table--no-topbar table.leads-table thead th {
+  top: 0;
+}
+
+/* Generic CRM Leads: keep the column headings pinned while the rows move,
+   and use the compact neutral scrollbars from the table reference layout. */
+.leads-split-table--no-topbar {
+  max-height: none !important;
+  overflow: visible !important;
+  scrollbar-width: auto;
+  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
+  scrollbar-gutter: stable;
+}
+
+.leads-split-table--no-topbar::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.leads-split-table--no-topbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.leads-split-table--no-topbar::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+
+.leads-split-table--no-topbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+  border-width: 2px;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom {
+  scrollbar-width: auto;
+  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar {
+  height: 12px;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+  border-width: 2px;
+}
+
 table.leads-table thead tr:first-child th {
   border-top: 1px solid var(--border-color);
 }

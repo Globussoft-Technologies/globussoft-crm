@@ -340,6 +340,43 @@ describe('GET /api/contacts — list', () => {
     expect(args.skip).toBe(4);
   });
 
+  test('?page=2&limit=10 returns { data, total, page, limit, offset, totalPages } envelope', async () => {
+    prisma.contact.count.mockResolvedValueOnce(25);
+    const res = await request(makeApp()).get('/api/contacts?page=2&limit=10');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.total).toBe(25);
+    expect(res.body.page).toBe(2);
+    expect(res.body.limit).toBe(10);
+    expect(res.body.offset).toBe(10);
+    expect(res.body.totalPages).toBe(3);
+    const args = prisma.contact.findMany.mock.calls[0][0];
+    expect(args.take).toBe(10);
+    expect(args.skip).toBe(10);
+  });
+
+  test('?page without ?offset derives offset=(page-1)*limit; explicit offset wins', async () => {
+    prisma.contact.count.mockResolvedValue(7);
+    await request(makeApp()).get('/api/contacts?page=3&limit=5');
+    expect(prisma.contact.findMany.mock.calls[0][0].skip).toBe(10);
+
+    prisma.contact.findMany.mockClear();
+    const res = await request(makeApp()).get('/api/contacts?page=3&limit=5&offset=2');
+    expect(res.status).toBe(200);
+    expect(res.body.offset).toBe(2);
+    expect(res.body.page).toBe(1); // floor(2/5)+1
+    expect(prisma.contact.findMany.mock.calls[0][0].skip).toBe(2);
+  });
+
+  test('no ?page param keeps the legacy plain-array shape', async () => {
+    const res = await request(makeApp()).get('/api/contacts?limit=10&offset=10');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(prisma.contact.count).not.toHaveBeenCalled();
+  });
+
   test('?q searches name/email/company server-side and composes with Customer count scope', async () => {
     const res = await request(makeApp()).get('/api/contacts?status=Customer&q=Acme&count=1');
 

@@ -205,9 +205,10 @@ async function applyLandingPagePaymentToTrip({
       })
     : null;
 
-  // Persist the invoice link on the original gateway payment. This keeps
-  // Tally's Bank/Cash ledgers and the invoice/participant ledgers on the same
-  // source record instead of relying only on metadata inference.
+  // Persist the travel-invoice link in metadata. Payment.invoiceId is the
+  // legacy generic-Invoice identifier used throughout payments.js; storing a
+  // TravelInvoice id there makes equal numeric ids resolve to the wrong
+  // customer/invoice. Keep the two id domains explicit.
   if (paymentId && invoice && db.payment?.update) {
     try {
       const current = db.payment.findUnique
@@ -218,7 +219,6 @@ async function applyLandingPagePaymentToTrip({
       await db.payment.update({
         where: { id: Number(paymentId) },
         data: {
-          invoiceId: invoice.id,
           metadata: JSON.stringify({
             ...metadata,
             travelInvoiceId: invoice.id,

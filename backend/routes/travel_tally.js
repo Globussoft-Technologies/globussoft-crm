@@ -97,6 +97,20 @@ const tallyMasterWhere = (tenantId, subBrand) => ({
   ...(subBrand && subBrand !== "all" ? { subBrand } : {}),
 });
 
+const parseLedgerId = (value) => {
+  if (value == null || value === "") return null;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : NaN;
+};
+
+const requireTenantLedger = async (tenantId, ledgerId) => {
+  if (ledgerId == null) return null;
+  return prisma.travelTallyLedger.findFirst({
+    where: { id: ledgerId, tenantId },
+    select: { id: true },
+  });
+};
+
 // Parse an inclusive date-range boundary for the ledger query.
 const parseDate = (value, end = false) => {
   if (!value) return null;
@@ -511,7 +525,11 @@ router.post("/tally/payment-accounts", verifyToken, requireTravelTenant, require
     const mode = String(body.mode || "").trim();
     const accountName = String(body.accountName || "").trim();
     if (!mode || !accountName) return res.status(400).json({ error: "mode and accountName are required", code: "MISSING_FIELDS" });
-    const ledgerId = body.ledgerId == null || body.ledgerId === "" ? null : Number(body.ledgerId);
+    const ledgerId = parseLedgerId(body.ledgerId);
+    if (Number.isNaN(ledgerId)) return res.status(400).json({ error: "ledgerId must be a positive integer", code: "INVALID_LEDGER_ID" });
+    if (ledgerId && !(await requireTenantLedger(req.travelTenant.id, ledgerId))) {
+      return res.status(404).json({ error: "Ledger not found", code: "LEDGER_NOT_FOUND" });
+    }
     const row = await prisma.travelTallyPaymentAccount.upsert({
       where: { tenantId_subBrand_mode_accountName: { tenantId: req.travelTenant.id, subBrand: body.subBrand || null, mode, accountName } },
       update: { ledgerId, status: String(body.status || "ACTIVE") },
@@ -533,7 +551,11 @@ router.post("/tally/tax-masters", verifyToken, requireTravelTenant, requirePermi
     const taxType = String(body.taxType || "").trim().toUpperCase();
     const rate = Number(body.rate);
     if (!taxName || !taxType || !Number.isFinite(rate) || rate < 0) return res.status(400).json({ error: "taxName, taxType, and a valid rate are required", code: "MISSING_FIELDS" });
-    const ledgerId = body.ledgerId == null || body.ledgerId === "" ? null : Number(body.ledgerId);
+    const ledgerId = parseLedgerId(body.ledgerId);
+    if (Number.isNaN(ledgerId)) return res.status(400).json({ error: "ledgerId must be a positive integer", code: "INVALID_LEDGER_ID" });
+    if (ledgerId && !(await requireTenantLedger(req.travelTenant.id, ledgerId))) {
+      return res.status(404).json({ error: "Ledger not found", code: "LEDGER_NOT_FOUND" });
+    }
     const row = await prisma.travelTallyTaxMaster.upsert({
       where: { tenantId_subBrand_taxName_taxType: { tenantId: req.travelTenant.id, subBrand: body.subBrand || null, taxName, taxType } },
       update: { ledgerId, rate, calculationBasis: String(body.calculationBasis || "TAXABLE_VALUE"), applicability: body.applicability ? String(body.applicability) : null, status: String(body.status || "ACTIVE") },

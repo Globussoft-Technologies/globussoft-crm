@@ -58,6 +58,9 @@ prisma.travelSupplierPayable = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.travelTallySyncQueue = {
+  updateMany: vi.fn(),
+};
 // The PUT payable route auto-creates an Expense when status flips to 'paid'.
 prisma.expense = {
   create: vi.fn().mockResolvedValue({ id: 1 }),
@@ -129,6 +132,7 @@ beforeEach(() => {
   prisma.travelSupplierPayable.create.mockReset();
   prisma.travelSupplierPayable.update.mockReset();
   prisma.travelSupplierPayable.delete.mockReset();
+  prisma.travelTallySyncQueue.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -366,6 +370,10 @@ describe('DELETE /api/travel/suppliers/:id/payables/:payableId', () => {
     expect(prisma.travelSupplierPayable.delete).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 300 } }),
     );
+    expect(prisma.travelTallySyncQueue.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, sourceType: "SUPPLIER_PAYABLE", sourceId: 300 },
+      data: { status: "CANCELLED", lastError: "Source payable was deleted" },
+    });
   });
 
   test('missing payable returns 404 PAYABLE_NOT_FOUND (no delete)', async () => {

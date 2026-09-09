@@ -1903,7 +1903,10 @@ router.post("/trips/:id/participants", verifyToken, requireTravelTenant, require
       });
       return { participant, invoice };
     });
-    res.status(201).json(result);
+    // Preserve the established participant response at the top level. The
+    // generated invoice is additive so existing callers reading `id`,
+    // `fullName`, etc. do not break.
+    res.status(201).json({ ...result.participant, invoice: result.invoice });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-trips] participant create error:", e.message);
@@ -2614,7 +2617,6 @@ router.delete("/trips/:id/documents/:docId", verifyToken, requireTravelTenant, r
 });
 
 module.exports = router;
-
 
 
 

@@ -252,6 +252,21 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     });
   });
 
+  it('keeps the wellness provider-sync screen separate from generic calendar views', async () => {
+    fetchApiMock.mockImplementation(makeOfflineMock());
+    render(
+      <AuthContext.Provider value={{ user: { tenant: { vertical: 'wellness' } } }}>
+        <CalendarSync />
+      </AuthContext.Provider>,
+    );
+
+    expect(screen.getByRole('heading', { name: /Calendar Sync/i })).toBeInTheDocument();
+    expect(screen.getByText('Google Calendar')).toBeInTheDocument();
+    expect(screen.getByText('Microsoft Outlook')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /Calendar view/i })).not.toBeInTheDocument();
+    expect(await screen.findByText(/No events synced yet/i)).toBeInTheDocument();
+  });
+
   it('both providers offline: each card shows "Not connected" pill + a Connect button', async () => {
     fetchApiMock.mockImplementation(makeOfflineMock());
     render(<CalendarSync />);

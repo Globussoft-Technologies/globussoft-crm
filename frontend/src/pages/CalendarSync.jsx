@@ -525,6 +525,7 @@ export default function CalendarSync() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const tenantVertical = user?.tenant?.vertical || "generic";
+  const isGenericTenant = tenantVertical === "generic";
   const isTravelTenant = tenantVertical === "travel";
   // Travel tenants only use Google Calendar; generic + wellness keep both.
   const availableProviders = PROVIDERS.filter((p) =>
@@ -2284,7 +2285,7 @@ export default function CalendarSync() {
         <Calendar size={26} style={{ color: "var(--accent-color)" }} />
         <div>
           <h2 style={{ fontSize: "1.5rem", fontWeight: "bold", margin: 0 }}>
-            {isTravelTenant ? "Calendar Sync" : "Calendar"}
+            {isGenericTenant ? "Calendar" : "Calendar Sync"}
           </h2>
           <p
             style={{
@@ -2293,9 +2294,11 @@ export default function CalendarSync() {
               margin: 0,
             }}
           >
-            {tenantVertical === "travel"
+            {isTravelTenant
               ? "Connect your Google Calendar to sync meetings into the CRM"
-              : "View CRM events by day, week, month, agenda, or list and manage calendar synchronization"}
+              : isGenericTenant
+                ? "View CRM events by day, week, month, agenda, or list and manage calendar synchronization"
+                : "Connect your Google and Outlook calendars to sync meetings into the CRM"}
           </p>
         </div>
       </header>
@@ -2694,7 +2697,7 @@ export default function CalendarSync() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", marginBottom: "1rem" }}>
             <div>
               <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 600 }}>
-                {!isTravelTenant && activeTab === "meetings"
+                {isGenericTenant && activeTab === "meetings"
                   ? "Calendar events"
                   : activeTab === "trips"
                   ? "Travel trips"
@@ -2705,7 +2708,7 @@ export default function CalendarSync() {
                       : "Upcoming meetings"}
               </h3>
               <div style={{ marginTop: 4, fontSize: "0.8rem", color: "var(--text-secondary)" }}>
-                {!isTravelTenant && activeTab === "meetings"
+                {isGenericTenant && activeTab === "meetings"
                   ? `${events.length} event${events.length === 1 ? "" : "s"} synchronized`
                   : activeTab === "trips"
                   ? `${travelTripRows.length} confirmed trip${travelTripRows.length === 1 ? "" : "s"}`
@@ -2767,7 +2770,7 @@ export default function CalendarSync() {
                 </button>
               </div>
             )}
-            {isTravelTenant && activeTab === "meetings" && (
+            {!isGenericTenant && activeTab === "meetings" && (
               <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
                   <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", fontWeight: 600 }}>Status</span>
@@ -2835,7 +2838,7 @@ export default function CalendarSync() {
             <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-secondary)" }}>
               Loading events...
             </div>
-          ) : !isTravelTenant && activeTab === "meetings" ? (
+          ) : isGenericTenant && activeTab === "meetings" ? (
             <GenericCalendarViews events={events} onEventClick={handleOpenEventDetail} />
           ) : activeTab === "trips" ? (
             travelTripRows.length === 0 ? (

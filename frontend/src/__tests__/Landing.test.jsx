@@ -14,7 +14,7 @@
  * Cases pinned here:
  *   1. Smoke render — `<Landing />` mounts inside `<MemoryRouter>` without
  *      throwing.
- *   2. Hero CTAs — "Start Free Trial" (→ /get-started) and "Explore Features"
+ *   2. Hero CTAs — "Start Free Trial" (→ /get-started) and "See How It Works"
  *      anchor (→ #features) are present in the hero.
  *   3. Hero stats row — the 4 stat tiles (25+ Modules, 313 E2E Tests,
  *      30+ API Endpoints, 100% Pass Rate) all render.
@@ -52,17 +52,17 @@ describe('Landing (public marketing page)', () => {
 
   it('renders the hero headline + primary CTA + secondary CTA', () => {
     renderLanding();
-    expect(screen.getByText(/Close more deals\./i)).toBeInTheDocument();
-    expect(screen.getByText(/Know every customer\./i)).toBeInTheDocument();
-    expect(screen.getByText(/Powered by AI\./i)).toBeInTheDocument();
+    const heroHeading = screen.getByRole('heading', { level: 1 });
+    expect(heroHeading).toHaveTextContent('Automated Calls by AI Agents.');
+    expect(heroHeading).toHaveTextContent('Automated Notes & Follow-ups by AI Agents.');
 
     // Primary hero CTA → /get-started
     const startFreeTrial = screen.getByRole('link', { name: /Start Free Trial/i });
     expect(startFreeTrial).toHaveAttribute('href', '/get-started');
 
     // Secondary hero CTA — anchor to #features
-    const exploreFeatures = screen.getByRole('link', { name: /Explore Features/i });
-    expect(exploreFeatures).toHaveAttribute('href', '#features');
+    const seeHowItWorks = screen.getByRole('link', { name: /See How It Works/i });
+    expect(seeHowItWorks).toHaveAttribute('href', '#features');
   });
 
   it('renders the hero stats row (4 tiles)', () => {
@@ -81,12 +81,12 @@ describe('Landing (public marketing page)', () => {
   it('renders every FEATURES entry as a section heading', () => {
     renderLanding();
     const expectedFeatures = [
-      'Agent Assignment',
-      'Agent-wise Reports',
-      'Detailed Reports + Download',
-      'Auto Email Reports',
+      'AI Automated Calling',
+      'AI Automated Follow-ups',
       'AI Lead Scoring',
       'Drag-Drop Pipeline',
+      'Agent-wise Reports',
+      'Auto Email Reports',
     ];
     for (const title of expectedFeatures) {
       expect(screen.getByRole('heading', { name: title })).toBeInTheDocument();
@@ -165,7 +165,9 @@ describe('Landing (public marketing page)', () => {
     const { unmount } = renderLanding();
     unmount();
     renderLanding();
-    expect(screen.getByText(/Close more deals\./i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Automated Calls by AI Agents.'
+    );
     expect(screen.getByRole('link', { name: /Start Free Trial/i })).toBeInTheDocument();
   });
 

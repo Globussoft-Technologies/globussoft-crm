@@ -286,12 +286,22 @@ const EXPOSURE_STATUS_STYLE = {
 // Slice-4 add-payable form initial state. Empty strings normalise to null
 // on submit (description + amount required, the rest optional).
 const EMPTY_PAYABLE_FORM = {
+  quoteId: "",
   description: "",
   amount: "",
   dueDate: "",
   poNumber: "",
   notes: "",
 };
+
+function payableQuoteId(notes) {
+  const match = String(notes || "").match(/^QUOTE_ID:(\d+)/);
+  return match ? `QT-${String(match[1]).padStart(4, "0")}` : "—";
+}
+
+function payableNotes(notes) {
+  return String(notes || "").replace(/^QUOTE_ID:\d+\r?\n?/, "") || "—";
+}
 
 const EMPTY_FORM = {
   name: "",
@@ -495,10 +505,13 @@ export default function SuppliersAdmin() {
   const [expandedSupplierId, setExpandedSupplierId] = useState(null);
   const [payablesBySupplier, setPayablesBySupplier] = useState({}); // { [supplierId]: [rows] }
   const [payablesLoadingBy, setPayablesLoadingBy] = useState({}); // { [supplierId]: bool }
+  const [quotesBySubBrand, setQuotesBySubBrand] = useState({}); // { [subBrand]: quote rows }
+  const [quotesLoadingBySubBrand, setQuotesLoadingBySubBrand] = useState({});
   const [payableForm, setPayableForm] = useState({}); // { [supplierId]: form }
   const [payableSaving, setPayableSaving] = useState({}); // { [supplierId]: bool }
   // Mark-as-paid confirmation dialog state.
   const [pendingPay, setPendingPay] = useState(null); // { supplierId, payable } | null
+  const [payModeInput, setPayModeInput] = useState("neft");
   const [payRefInput, setPayRefInput] = useState("");
   const [pendingUploadFormat, setPendingUploadFormat] = useState(null); // "csv" | "xlsx" | null
 
@@ -900,12 +913,34 @@ export default function SuppliersAdmin() {
       });
   };
 
+  const loadQuotesForSubBrand = (subBrand) => {
+    const key = String(subBrand || "").trim();
+    if (!key || quotesBySubBrand[key] || quotesLoadingBySubBrand[key]) return;
+    setQuotesLoadingBySubBrand((m) => ({ ...m, [key]: true }));
+    fetchApi(`/api/travel/quotes?subBrand=${encodeURIComponent(key)}&limit=500&fields=summary`)
+      .then((d) => {
+        setQuotesBySubBrand((m) => ({
+          ...m,
+          [key]: Array.isArray(d?.quotes) ? d.quotes : [],
+        }));
+      })
+      .catch((err) => {
+        setQuotesBySubBrand((m) => ({ ...m, [key]: [] }));
+        notify.error(err?.body?.error || err?.message || "Failed to load quotes");
+      })
+      .finally(() => {
+        setQuotesLoadingBySubBrand((m) => ({ ...m, [key]: false }));
+      });
+  };
+
   const togglePayablesPanel = (supplierId) => {
     if (expandedSupplierId === supplierId) {
       setExpandedSupplierId(null);
       return;
     }
     setExpandedSupplierId(supplierId);
+    const supplier = suppliers.find((row) => row.id === supplierId);
+    loadQuotesForSubBrand(supplier?.subBrand);
     // Always re-fetch on open — payables state shifts often (mark-paid,
     // cancel, third-party reconciliation), so stale-while-revalidate would
     // mislead the operator. Fresh GET on every expand is the safe default.
@@ -925,6 +960,15 @@ export default function SuppliersAdmin() {
   const handleAddPayable = async (e, supplierId) => {
     e.preventDefault();
     const f = payableForm[supplierId] || EMPTY_PAYABLE_FORM;
+    const quoteId = String(f.quoteId || "").trim();
+    if (!quoteId) {
+      notify.error("Quote ID is required");
+      return;
+    }
+    if (!/^QT-?\d+$/i.test(quoteId)) {
+      notify.error("Quote ID must look like QT-0001");
+      return;
+    }
     const descTrimmed = (f.description || "").trim();
     if (!descTrimmed) {
       notify.error("Description is required");
@@ -944,6 +988,7 @@ export default function SuppliersAdmin() {
       await fetchApi(`/api/travel/suppliers/${supplierId}/payables`, {
         method: "POST",
         body: JSON.stringify({
+          quoteId: quoteId.replace(/^QT-/i, ""),
           description: descTrimmed,
           amount: amountNum,
           dueDate: f.dueDate || null,
@@ -965,6 +1010,7 @@ export default function SuppliersAdmin() {
   // of immediately patching the server. The actual API call fires from confirmMarkPaid.
   const openMarkPaidDialog = (supplierId, payable) => {
     setPendingPay({ supplierId, payable });
+    setPayModeInput(payable.paymentMode || "neft");
     setPayRefInput("");
   };
 
@@ -978,6 +1024,7 @@ export default function SuppliersAdmin() {
           method: "PUT",
           body: JSON.stringify({
             status: "paid",
+            paymentMode: payModeInput,
             paymentReference: payRefInput.trim() || undefined,
           }),
         },
@@ -986,6 +1033,7 @@ export default function SuppliersAdmin() {
         "Payable marked paid — expense record created automatically",
       );
       setPendingPay(null);
+      setPayModeInput("neft");
       setPayRefInput("");
       loadPayables(supplierId);
     } catch (err) {
@@ -2332,6 +2380,8 @@ export default function SuppliersAdmin() {
                         >
                           {renderPayablesPanel({
                             supplier: s,
+                            quotes: quotesBySubBrand[s.subBrand] || [],
+                            quotesLoading: !!quotesLoadingBySubBrand[s.subBrand],
                             canWrite,
                             loading: !!payablesLoadingBy[s.id],
                             payables: payablesBySupplier[s.id] || [],
@@ -2448,6 +2498,22 @@ export default function SuppliersAdmin() {
               automatically.
             </div>
             <div>
+              <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                Payment mode
+              </label>
+              <select
+                value={payModeInput}
+                onChange={(e) => setPayModeInput(e.target.value)}
+                style={{ ...inputStyle, width: "100%" }}
+                aria-label="Payment mode"
+              >
+                <option value="cash">Cash</option>
+                <option value="upi">UPI</option>
+                <option value="neft">NEFT / bank transfer</option>
+                <option value="manual">Other manual</option>
+              </select>
+            </div>
+            <div>
               <label
                 style={{
                   display: "block",
@@ -2543,6 +2609,8 @@ export default function SuppliersAdmin() {
 //   4. Loading indicator: replaces (2) until the initial GET resolves.
 function renderPayablesPanel({
   supplier,
+  quotes,
+  quotesLoading,
   canWrite,
   loading,
   payables,
@@ -2589,6 +2657,7 @@ function renderPayablesPanel({
         >
           <thead>
             <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <th style={{ ...payableTh }}>Quote ID</th>
               <th style={{ ...payableTh }}>Description</th>
               <th style={{ ...payableTh }}>Amount</th>
               <th style={{ ...payableTh }}>Due</th>
@@ -2623,6 +2692,7 @@ function renderPayablesPanel({
                     opacity: isCancelled ? 0.6 : 1,
                   }}
                 >
+                  <td style={payableTd}>{p.quoteId ? `QT-${String(p.quoteId).padStart(4, "0")}` : payableQuoteId(p.notes)}</td>
                   <td style={payableTd}>{p.description || "—"}</td>
                   <td style={payableTd}>
                     {amountDisplay} {currency}
@@ -2674,7 +2744,7 @@ function renderPayablesPanel({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {p.notes || "—"}
+                    {payableNotes(p.notes)}
                   </td>
                   {canWrite && (
                     <td
@@ -2745,6 +2815,20 @@ function renderPayablesPanel({
             borderTop: "1px dashed var(--border-color)",
           }}
         >
+          <select
+            value={form.quoteId}
+            onChange={(e) => onFormChange({ quoteId: e.target.value })}
+            style={inputStyle}
+            aria-label={`Payable quote ID for ${supplier.name}`}
+            required
+          >
+            <option value="">{quotesLoading ? "Loading quotes…" : "Select Quote ID *"}</option>
+            {quotes.map((quote) => (
+              <option key={quote.id} value={`QT-${quote.id}`}>
+                QT-{String(quote.id).padStart(4, "0")} · {quote.contact?.name || "Unnamed customer"}
+              </option>
+            ))}
+          </select>
           <input
             placeholder="Description *"
             value={form.description}

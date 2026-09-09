@@ -54,6 +54,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const axios = require("axios");
+const multer = require("multer");
 const { PDFDocument: PdfLibDocument } = require("pdf-lib");
 const router = express.Router();
 const s3Service = require("../services/s3Service");
@@ -309,7 +310,6 @@ async function renderItineraryPdfBuffer(full, contact, { heroBuffer, viewerWater
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
-const multer = require("multer");
 const { renderTravelItineraryPdf } = require("../services/pdfRenderer");
 
 // Cover photos only: memory storage, image mime types, 8 MB. Kept local to
@@ -347,6 +347,7 @@ const {
 } = require("../middleware/travelGuards");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
+const { ensureCostCentre } = require("../lib/travelTallyMasters");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 // const { resolveForSubBrand } = require("../lib/subBrandConfig"); // (was used for the legacy Q9 wabaId log; superseded by the connected WhatsApp Web client)
 // WhatsApp dispatch goes through the CONNECTED WhatsApp Web client (the
@@ -1164,6 +1165,20 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
       include: { items: { orderBy: { position: "asc" } } },
     });
 
+    // Ledger masters are created only through the Tally screens/actions.
+    // Trip creation must not create customer or service ledgers implicitly.
+    const tallyMasters = null;
+    try {
+      await ensureCostCentre({
+        tenantId: req.travelTenant.id,
+        itineraryId: itinerary.id,
+        tripCode: itinerary.id ? `TRIP-${itinerary.id}` : null,
+        destination: itinerary.destination,
+      });
+    } catch (tallyError) {
+      console.warn("[travel-itin] Tally master auto-create failed:", tallyError.message);
+    }
+
     // G049 — bump template usage metrics on clone-from-template event.
     // Non-fatal: a metric-bump failure must NOT roll back the itinerary
     // create (the operator's primary action wins). The lastUsedAt bump
@@ -1194,7 +1209,7 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
     // NOT re-notify, so a later draft→sent edit can't double-send.)
     if (["draft", "sent", "revised"].includes(itinerary.status)) notifyCustomerTrip(itinerary, "sent");
 
-    res.status(201).json(itinerary);
+    res.status(201).json({ ...itinerary, tallyMasters });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     if (e.code === "P2002") {

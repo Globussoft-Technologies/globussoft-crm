@@ -40,7 +40,7 @@
 
 import { useEffect, useRef, useState, useContext } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
-import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, History, Upload, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
+import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, HandCoins, Link2, History, Upload, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
@@ -278,6 +278,17 @@ export default function InvoicesAdmin() {
   const [historyInv, setHistoryInv] = useState(null);
   const [historyData, setHistoryData] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [manualPaymentInv, setManualPaymentInv] = useState(null);
+  const [manualPaymentData, setManualPaymentData] = useState(null);
+  const [manualPaymentLoading, setManualPaymentLoading] = useState(false);
+  const [manualPaymentSaving, setManualPaymentSaving] = useState(false);
+  const [manualPaymentForm, setManualPaymentForm] = useState({
+    milestoneId: "",
+    amount: "",
+    method: "cash",
+    reference: "",
+    paidAt: new Date().toISOString().slice(0, 10),
+  });
 
   // Slice 22 — TDS withholding tiles in the edit modal. When opening edit
   // on an Issued / Paid invoice we lazy-fetch GET /:id?include=lines and
@@ -848,6 +859,92 @@ export default function InvoicesAdmin() {
     setHistoryLoading(false);
   };
 
+  const openManualPayment = async (inv) => {
+    if (!inv?.id) return;
+    setManualPaymentInv(inv);
+    setManualPaymentData(null);
+    setManualPaymentLoading(true);
+    setManualPaymentForm({
+      milestoneId: "",
+      amount: "",
+      method: "cash",
+      reference: "",
+      paidAt: new Date().toISOString().slice(0, 10),
+    });
+    try {
+      const data = await fetchApi(`/api/travel/invoices/${inv.id}/transactions`);
+      const milestones = Array.isArray(data?.milestones) ? data.milestones : [];
+      const openMilestone = milestones.find(
+        (milestone) => !["paid", "waived"].includes(String(milestone.status).toLowerCase()),
+      );
+      setManualPaymentData(data || null);
+      if (openMilestone) {
+        setManualPaymentForm((current) => ({
+          ...current,
+          milestoneId: String(openMilestone.id),
+          amount: String(openMilestone.expectedAmount || ""),
+        }));
+      }
+    } catch (err) {
+      notify.error(err?.message || "Failed to load payment milestones.");
+      setManualPaymentInv(null);
+    } finally {
+      setManualPaymentLoading(false);
+    }
+  };
+
+  const closeManualPayment = () => {
+    setManualPaymentInv(null);
+    setManualPaymentData(null);
+  };
+
+  const submitManualPayment = async (event) => {
+    event.preventDefault();
+    if (!manualPaymentInv) return;
+    const milestoneId = Number(manualPaymentForm.milestoneId);
+    const amount = Number(manualPaymentForm.amount);
+    const hasMilestone = Number.isInteger(milestoneId) && milestoneId > 0;
+    const outstandingAmount = Number(manualPaymentData?.summary?.outstanding);
+    if (manualPaymentData?.milestones?.length > 0 && !hasMilestone) {
+      notify.error("Select an unpaid payment milestone.");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      notify.error("Enter a payment amount greater than zero.");
+      return;
+    }
+    if (Number.isFinite(outstandingAmount) && amount > outstandingAmount) {
+      notify.error(`Payment cannot exceed the outstanding amount of ${outstandingAmount.toFixed(2)}.`);
+      return;
+    }
+    if (!manualPaymentForm.method.trim()) {
+      notify.error("Select a payment method.");
+      return;
+    }
+    setManualPaymentSaving(true);
+    try {
+      const paymentPath = hasMilestone
+        ? `/api/travel/invoices/${manualPaymentInv.id}/schedule/${milestoneId}/mark-paid`
+        : `/api/travel/invoices/${manualPaymentInv.id}/manual-payment`;
+      await fetchApi(paymentPath, {
+        method: "POST",
+        body: JSON.stringify({
+          amount,
+          method: manualPaymentForm.method.trim(),
+          reference: manualPaymentForm.reference.trim() || undefined,
+          paidAt: manualPaymentForm.paidAt || undefined,
+        }),
+      });
+      notify.success("Manual payment recorded successfully.");
+      closeManualPayment();
+      setReloadTick((tick) => tick + 1);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to record payment.");
+    } finally {
+      setManualPaymentSaving(false);
+    }
+  };
+
   // Accounting exports (ADMIN/MANAGER) — Tally XML / CA CSV / plain XLSX.
   // The XLSX is the "hand to your CA / import into Excel Software for Travel"
   // file (PRD §4.4 Excel Software bridge — built internally, no vendor API).
@@ -1355,10 +1452,24 @@ export default function InvoicesAdmin() {
                             <History size={16} />
                           </button>
                         )}
+                        {/* Manual collections are recorded against an open
+                            payment milestone so the invoice and audit trail
+                            reconcile with the resulting Payment row. */}
+                        {!inv.tripId && (inv.status === "Issued" || inv.status === "Partial") && (
+                          <button
+                            type="button"
+                            onClick={() => openManualPayment(inv)}
+                            title={`Record manual payment for invoice ${inv.invoiceNum}`}
+                            aria-label={`Record manual payment for invoice ${inv.invoiceNum}`}
+                            style={{ ...iconBtn, color: "var(--success-color, #22c55e)" }}
+                          >
+                            <HandCoins size={16} />
+                          </button>
+                        )}
                         {/* Generate a hosted pay-link for the outstanding
                             balance — only meaningful once issued + not yet
                             fully paid / voided. Reconciles back to this invoice. */}
-                        {(inv.status === "Issued" || inv.status === "Partial") && (
+                        {!inv.tripId && (inv.status === "Issued" || inv.status === "Partial") && (
                           <button
                             type="button"
                             onClick={() => generatePayLink(inv)}
@@ -1367,7 +1478,7 @@ export default function InvoicesAdmin() {
                             aria-label={`Generate payment link for invoice ${inv.invoiceNum}`}
                             style={{
                               ...iconBtn,
-                              color: "var(--success-color, #22c55e)",
+                              color: "var(--info-color, #2563eb)",
                               opacity: linkingId === inv.id ? 0.5 : 1,
                               cursor: linkingId === inv.id ? "wait" : "pointer",
                             }}
@@ -1375,7 +1486,7 @@ export default function InvoicesAdmin() {
                             {linkingId === inv.id ? (
                               <span style={{ fontSize: 11, fontWeight: 600 }}>Linking…</span>
                             ) : (
-                              <CreditCard size={16} />
+                              <Link2 size={16} />
                             )}
                           </button>
                         )}
@@ -1592,6 +1703,135 @@ export default function InvoicesAdmin() {
         </div>
       )}
 
+      {/* Manual customer payment modal. */}
+      {manualPaymentInv && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Record manual payment for invoice ${manualPaymentInv.invoiceNum}`}
+          style={modalOverlay}
+          onClick={(e) => { if (e.target === e.currentTarget) closeManualPayment(); }}
+        >
+          <form onSubmit={submitManualPayment} className="glass" style={{ ...modalCard, maxWidth: 520, width: "92%" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <h2 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+                <CreditCard size={18} /> Record manual payment
+              </h2>
+              <button type="button" onClick={closeManualPayment} aria-label="Close" style={{ ...iconBtn }}>✕</button>
+            </div>
+            <p style={{ margin: "10px 0 16px", color: "var(--text-secondary)", fontSize: 13 }}>
+              Invoice {manualPaymentInv.invoiceNum} - record cash, UPI, bank transfer, or another offline collection.
+            </p>
+
+            {manualPaymentLoading ? (
+              <div style={empty}>Loading payment milestones...</div>
+            ) : (
+              <>
+                {(() => {
+                  const allMilestones = Array.isArray(manualPaymentData?.milestones)
+                    ? manualPaymentData.milestones
+                    : [];
+                  const openMilestones = allMilestones.filter(
+                    (milestone) => !["paid", "waived"].includes(String(milestone.status).toLowerCase()),
+                  );
+                  return allMilestones.length > 0 && openMilestones.length === 0 ? (
+                    <div style={{ ...empty, color: "var(--warning-color, #f59e0b)" }}>
+                      No unpaid milestones are available for this invoice.
+                    </div>
+                  ) : (
+                    <>
+                      {allMilestones.length > 0 && (
+                        <label style={fieldLabel}>
+                          Payment milestone
+                          <select
+                            value={manualPaymentForm.milestoneId}
+                            onChange={(e) => {
+                              const milestone = openMilestones.find((item) => String(item.id) === e.target.value);
+                              setManualPaymentForm((current) => ({
+                                ...current,
+                                milestoneId: e.target.value,
+                                amount: String(milestone?.expectedAmount || ""),
+                              }));
+                            }}
+                            style={inputStyle}
+                          >
+                            <option value="">Select milestone</option>
+                            {openMilestones.map((milestone) => (
+                              <option key={milestone.id} value={milestone.id}>
+                                Milestone {milestone.milestoneOrder ?? milestone.id} - {manualPaymentInv.currency || "INR"} {milestone.expectedAmount}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      <label style={fieldLabel}>
+                        Amount received
+                        {Number.isFinite(Number(manualPaymentData?.summary?.outstanding)) && (
+                          <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>
+                            {` (Outstanding: ${manualPaymentInv.currency || "INR"} ${Number(manualPaymentData.summary.outstanding).toFixed(2)})`}
+                          </span>
+                        )}
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          max={Number.isFinite(Number(manualPaymentData?.summary?.outstanding))
+                            ? Number(manualPaymentData.summary.outstanding)
+                            : undefined}
+                          value={manualPaymentForm.amount}
+                          onChange={(e) => setManualPaymentForm((current) => ({ ...current, amount: e.target.value }))}
+                          style={inputStyle}
+                          placeholder="e.g. 25000"
+                        />
+                      </label>
+                      <label style={fieldLabel}>
+                        Payment method
+                        <select
+                          value={manualPaymentForm.method}
+                          onChange={(e) => setManualPaymentForm((current) => ({ ...current, method: e.target.value }))}
+                          style={inputStyle}
+                        >
+                          <option value="cash">Cash</option>
+                          <option value="upi">UPI</option>
+                          <option value="neft">NEFT / bank transfer</option>
+                          <option value="manual">Other manual</option>
+                        </select>
+                      </label>
+                      <label style={fieldLabel}>
+                        Reference <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>(optional)</span>
+                        <input
+                          type="text"
+                          maxLength={128}
+                          value={manualPaymentForm.reference}
+                          onChange={(e) => setManualPaymentForm((current) => ({ ...current, reference: e.target.value }))}
+                          style={inputStyle}
+                          placeholder="UPI ID, bank reference, or receipt number"
+                        />
+                      </label>
+                      <label style={fieldLabel}>
+                        Payment date
+                        <input
+                          type="date"
+                          value={manualPaymentForm.paidAt}
+                          onChange={(e) => setManualPaymentForm((current) => ({ ...current, paidAt: e.target.value }))}
+                          style={inputStyle}
+                        />
+                      </label>
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
+                        <button type="button" onClick={closeManualPayment} style={secondaryBtn}>Cancel</button>
+                        <button type="submit" disabled={manualPaymentSaving || (allMilestones.length > 0 && !manualPaymentForm.milestoneId)} style={primaryBtnBranded}>
+                          {manualPaymentSaving ? "Recording..." : "Record payment"}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </>
+            )}
+          </form>
+        </div>
+      )}
+
       {/* Transaction-history modal — milestones + payments for one invoice. */}
       {historyInv && (
         <div
@@ -1764,6 +2004,15 @@ const tableFrame = {
   maxHeight: "none",
 };
 const empty = { padding: 20, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
+const fieldLabel = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  marginBottom: 12,
+  color: "var(--text-secondary)",
+  fontSize: 12,
+  fontWeight: 600,
+};
 const inputStyle = {
   padding: "8px 10px",
   borderRadius: 6,

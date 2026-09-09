@@ -6,7 +6,7 @@
 // statements and keeps pending files separate from already-applied files.
 
 import { useEffect, useRef, useState } from "react";
-import { Pencil, Upload } from "lucide-react";
+import { Pencil, Upload, X, Check } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { formatMoney } from "../../utils/money";
 import { useNotify } from "../../utils/notify";
@@ -41,8 +41,41 @@ const button = {
   fontWeight: 700,
   cursor: "pointer",
 };
+
+// Bank statement import is temporarily hidden from the frontend.
+const BANK_STATEMENT_IMPORT_ENABLED = false;
 const getCustomerTripValue = (row) =>
   Number(row?.amount || 0);
+
+const statementTotals = (items = []) => ({
+  creditedTotal: items
+    .filter((item) => item.direction !== "DEBIT")
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0),
+  withdrawnTotal: items
+    .filter((item) => item.direction === "DEBIT")
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0),
+});
+
+const restoreSavedStatement = (items = []) => {
+  if (!items.length) return null;
+  const totals = statementTotals(items);
+  const file = {
+    id: "saved-statement",
+    fileName: "Saved bank statement",
+    extraction: "Previously confirmed statement",
+    transactionCount: items.length,
+    items,
+    applied: true,
+  };
+  return {
+    files: [file],
+    fileName: file.fileName,
+    extraction: file.extraction,
+    transactionCount: items.length,
+    ...totals,
+    items,
+  };
+};
 
 // The parent owns ledger totals and report data; this component only manages
 // the statement-review UI and sends confirmed changes through callbacks.
@@ -50,6 +83,7 @@ export default function ReconciliationQueue({
   accounts = [],
   customers = [],
   suppliers = [],
+  statementItems = [],
   onLedgerApplied,
 }) {
   const notify = useNotify();
@@ -66,15 +100,14 @@ export default function ReconciliationQueue({
     return () => style.remove();
   }, []);
 
+  useEffect(() => {
+    if (!statement && statementItems.length) {
+      setStatement(restoreSavedStatement(statementItems));
+    }
+  }, [statement, statementItems]);
+
   // Calculate aggregate credit and debit totals for the statement summary.
-  const totalsFromItems = (items = []) => ({
-    creditedTotal: items
-      .filter((item) => item.direction !== "DEBIT")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0),
-    withdrawnTotal: items
-      .filter((item) => item.direction === "DEBIT")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0),
-  });
+  const totalsFromItems = statementTotals;
 
   // Keep both the aggregate list and its source file in sync when a reviewer
   // edits a description, reference, date, or amount.
@@ -241,12 +274,10 @@ export default function ReconciliationQueue({
     const remainingFiles = (statement.files || []).filter(
       (file) => file.id !== fileId,
     );
-    const remainingItems = (statement.items || []).filter(
-      (item) => item.statementFileId !== fileId,
-    );
+    const remainingItems = remainingFiles.flatMap((file) => file.items || []);
     const removedTotals = totalsFromItems(removedItems);
 
-    if (previousTotals && removedFile.applied) {
+    if (removedFile.applied) {
       const currentSales = Number(
         accounts.find((account) => account.id === "sales")?.amount || 0,
       );
@@ -264,8 +295,12 @@ export default function ReconciliationQueue({
         withdrawnTotal: remainingAppliedItems
           .filter((item) => item.direction === "DEBIT")
           .reduce((sum, item) => sum + Number(item.amount || 0), 0),
-        sales: currentSales - removedTotals.creditedTotal,
-        purchase: currentPurchase - removedTotals.withdrawnTotal,
+        sales: previousTotals
+          ? currentSales - removedTotals.creditedTotal
+          : currentSales,
+        purchase: previousTotals
+          ? currentPurchase - removedTotals.withdrawnTotal
+          : currentPurchase,
         customerDetails: customers.filter(
           (row) => !removedIds.has(row.statementItemId),
         ),
@@ -300,7 +335,7 @@ export default function ReconciliationQueue({
   };
 
   // Upload one supported statement file and append it as a pending file.
-  // Parsing and OCR are performed by the backend reconciliation endpoint.
+  // Parsing is performed by the backend reconciliation endpoint.
   const upload = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -361,6 +396,8 @@ export default function ReconciliationQueue({
     }
   };
 
+  if (!BANK_STATEMENT_IMPORT_ENABLED) return null;
+
   return (
     <section
       className="travel-reconciliation"
@@ -384,8 +421,8 @@ export default function ReconciliationQueue({
               marginTop: 3,
             }}
           >
-            Upload a statement to separate credited and debited/withdrawal
-            amounts.
+            Upload a CSV, XLS/XLSX, or text-based PDF statement to separate
+            credited and debited/withdrawal amounts.
           </small>
         </div>
         <div>
@@ -402,7 +439,7 @@ export default function ReconciliationQueue({
             ref={fileRef}
             hidden
             type="file"
-            accept=".pdf,.csv,.xlsx,.xls,image/*"
+            accept=".pdf,.csv,.xlsx,.xls"
             onChange={upload}
           />
         </div>
@@ -593,6 +630,7 @@ export function TripTaxTable({
 }) {
   const [editingRowId, setEditingRowId] = useState(null);
   const [drafts, setDrafts] = useState({});
+  const [originalRates, setOriginalRates] = useState({});
   if (!trips.length) return null;
   const displayedTrips = selectedTripId
     ? trips
@@ -609,6 +647,7 @@ export function TripTaxTable({
   if (!displayedTrips.length) return null;
   const startEditing = (rowId) => {
     const next = {};
+    const nextOriginals = {};
     displayedTrips.forEach((trip) => {
       const id = String(trip.id);
       const earnings = customers
@@ -633,8 +672,13 @@ export function TripTaxTable({
             (earnings * Number(tax.tcsRate || 0)) / 100,
         ),
       };
+      nextOriginals[id] = {
+        gstRate: tax.gstRate ?? "",
+        tcsRate: tax.tcsRate ?? "",
+      };
     });
     setDrafts(next);
+    setOriginalRates(nextOriginals);
     setEditingRowId(String(rowId));
   };
   const updateDraft = (id, key, value) => {
@@ -642,7 +686,18 @@ export function TripTaxTable({
       ...current,
       [id]: { ...(current[id] || {}), [key]: value },
     }));
-    if (key === "gstRate" || key === "tcsRate") onChange?.(id, key, value);
+  };
+  const saveEdit = (id) => {
+    const draft = drafts[id] || {};
+    if (draft.gstRate !== undefined) onChange?.(id, "gstRate", draft.gstRate);
+    if (draft.tcsRate !== undefined) onChange?.(id, "tcsRate", draft.tcsRate);
+    setEditingRowId(null);
+  };
+  const cancelEdit = (id) => {
+    const original = originalRates[id] || {};
+    onChange?.(id, "gstRate", original.gstRate ?? "");
+    onChange?.(id, "tcsRate", original.tcsRate ?? "");
+    setEditingRowId(null);
   };
   return (
     <div style={{ ...box, padding: 12, marginTop: 14 }}>
@@ -651,8 +706,8 @@ export function TripTaxTable({
           <strong>Trip totals and taxes</strong>
           <small style={{ display: "block", color: "var(--text-secondary)", marginTop: 3 }}>
             {editingRowId
-              ? "Edit the selected row, then click its edit icon again to finish."
-              : "Click a row's edit icon to edit all columns in that row."}
+              ? "Edit GST % and TCS % for the selected row, then save or cancel your changes."
+              : "Click a row's edit icon to edit GST % and TCS %."}
           </small>
         </div>
       </div>
@@ -668,7 +723,6 @@ export function TripTaxTable({
           <thead>
             <tr>
               {[
-                "Actions",
                 "Trip / Place",
                 "Earnings",
                 "Spent",
@@ -676,6 +730,7 @@ export function TripTaxTable({
                 "GST Amount",
                 "TCS %",
                 "TCS Amount",
+                "Actions",
               ].map((label) => (
                 <th
                   key={label}
@@ -708,8 +763,8 @@ export function TripTaxTable({
                 .filter((row) => String(row.itineraryId) === id)
                 .reduce((sum, row) => sum + Number(row.amount || 0), 0);
               const draft = drafts[id] || {};
-              const earnings = editing ? Number(draft.earnings || 0) : calculatedEarnings;
-              const spent = editing ? Number(draft.spent || 0) : calculatedSpent;
+              const earnings = calculatedEarnings;
+              const spent = calculatedSpent;
               const international = Boolean(
                 trip.international ||
                   trip.isInternational ||
@@ -720,71 +775,21 @@ export function TripTaxTable({
               const tax = tripTaxes[id] || {};
               const gstRate = Number(editing ? draft.gstRate || 0 : tax.gstRate || 0);
               const tcsRate = Number(editing ? draft.tcsRate || 0 : tax.tcsRate || 0);
-              const gstAmount = editing
-                ? Number(draft.gstAmount || 0)
-                : (earnings * gstRate) / 100;
-              const tcsAmount = editing
-                ? Number(draft.tcsAmount || 0)
-                : (earnings * tcsRate) / 100;
-              const profit = editing
-                ? Number(draft.profit || 0)
-                : earnings - spent - gstAmount - tcsAmount;
+              const gstAmount = (earnings * gstRate) / 100;
+              const tcsAmount = (earnings * tcsRate) / 100;
+              const profit = earnings - spent - gstAmount - tcsAmount;
               return (
                 <tr key={id}>
-                  <td style={{ padding: "9px 8px" }}>
-                    <button
-                      type="button"
-                      onClick={() => (editing ? setEditingRowId(null) : startEditing(id))}
-                      aria-label={`${editing ? "Finish editing" : "Edit"} row for ${trip.destination || id}`}
-                      title={editing ? "Finish editing row" : "Edit row"}
-                      style={{
-                        border: 0,
-                        background: "transparent",
-                        color: "var(--text-secondary)",
-                        cursor: "pointer",
-                        padding: 3,
-                        display: "inline-flex",
-                        alignItems: "center",
-                      }}
-                    >
-                      <Pencil size={13} />
-                    </button>
-                  </td>
                   <td style={{ padding: "9px 8px", fontWeight: 700 }}>
-                    {editing ? (
-                      <input
-                        aria-label={`Trip name for ${trip.destination || id}`}
-                        value={draft.tripName || ""}
-                        onChange={(event) => updateDraft(id, "tripName", event.target.value)}
-                        style={{ ...taxInput, width: "100%", marginLeft: 0 }}
-                      />
-                    ) : (
-                      trip.destination || `Trip ${id}`
-                    )}
+                    {trip.destination || `Trip ${id}`}
                   </td>
                   <td style={{ padding: "9px 8px", textAlign: "right" }}>
-                    {editing ? (
-                      <input
-                        aria-label={`Earnings for ${trip.destination || id}`}
-                        value={draft.earnings ?? ""}
-                        onChange={(event) => updateDraft(id, "earnings", event.target.value)}
-                        inputMode="decimal"
-                        style={{ ...taxInput, width: 100 }}
-                      />
-                    ) : formatMoney(earnings)}
+                    {formatMoney(earnings)}
                   </td>
                   <td style={{ padding: "9px 8px", textAlign: "right" }}>
-                    {editing ? (
-                      <input
-                        aria-label={`Spent for ${trip.destination || id}`}
-                        value={draft.spent ?? ""}
-                        onChange={(event) => updateDraft(id, "spent", event.target.value)}
-                        inputMode="decimal"
-                        style={{ ...taxInput, width: 100 }}
-                      />
-                    ) : formatMoney(spent)}
+                    {formatMoney(spent)}
                   </td>
-                  <td style={{ padding: "9px 8px" }}>
+                  <td style={{ padding: "9px 8px", textAlign: "right" }}>
                     {editing ? (
                       <input
                         aria-label={`GST percentage for ${trip.destination || id}`}
@@ -797,17 +802,9 @@ export function TripTaxTable({
                     ) : `${tax.gstRate ?? 0}%`}
                   </td>
                   <td style={{ padding: "9px 8px", textAlign: "right" }}>
-                    {editing ? (
-                      <input
-                        aria-label={`GST amount for ${trip.destination || id}`}
-                        value={draft.gstAmount ?? ""}
-                        onChange={(event) => updateDraft(id, "gstAmount", event.target.value)}
-                        inputMode="decimal"
-                        style={{ ...taxInput, width: 100 }}
-                      />
-                    ) : formatMoney(gstAmount)}
+                    {formatMoney(gstAmount)}
                   </td>
-                  <td style={{ padding: "9px 8px" }}>
+                  <td style={{ padding: "9px 8px", textAlign: "right" }}>
                     {editing && international ? (
                       <input
                         aria-label={`TCS percentage for ${trip.destination || id}`}
@@ -839,18 +836,82 @@ export function TripTaxTable({
                     )}
                   </td>
                   <td style={{ padding: "9px 8px", textAlign: "right" }}>
-                    {international || editing ? (
-                      <input
-                        aria-label={`TCS amount for ${trip.destination || id}`}
-                        value={international ? draft.tcsAmount ?? "" : ""}
-                        onChange={(event) => updateDraft(id, "tcsAmount", event.target.value)}
-                        inputMode="decimal"
-                        placeholder={international ? "0" : "—"}
-                        disabled={!international}
-                        style={{ ...taxInput, width: 100 }}
-                      />
+                    {international ? (
+                      formatMoney(tcsAmount)
                     ) : (
-                      "—"
+                      <span
+                        style={{
+                          display: "block",
+                          textAlign: "right",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        —
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ padding: "9px 8px" }}>
+                    {editing ? (
+                      <div
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => cancelEdit(id)}
+                          aria-label={`Cancel editing row for ${trip.destination || id}`}
+                          title="Cancel"
+                          style={{
+                            border: 0,
+                            background: "transparent",
+                            color: "#ef4444",
+                            cursor: "pointer",
+                            padding: 3,
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <X size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => saveEdit(id)}
+                          aria-label={`Save row for ${trip.destination || id}`}
+                          title="Save"
+                          style={{
+                            border: 0,
+                            background: "transparent",
+                            color: "#10b981",
+                            cursor: "pointer",
+                            padding: 3,
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <Check size={13} /> Save
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => startEditing(id)}
+                        aria-label={`Edit row for ${trip.destination || id}`}
+                        title="Edit row"
+                        style={{
+                          border: 0,
+                          background: "transparent",
+                          color: "var(--text-secondary)",
+                          cursor: "pointer",
+                          padding: 3,
+                          display: "inline-flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        <Pencil size={13} />
+                      </button>
                     )}
                   </td>
                 </tr>

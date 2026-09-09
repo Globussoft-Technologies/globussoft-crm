@@ -56,6 +56,7 @@ const { toE164 } = require("../utils/deduplication");
 const { sendEmail } = require("../lib/emailSender");
 const { mintPaymentPortalToken } = require("../lib/travelPaymentPortalToken");
 const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
+const { createDraftInvoiceForParticipant } = require("../lib/tmcParticipantInvoice");
 const {
   parseSpreadsheetBuffer,
   parseParticipantImportRow,
@@ -162,7 +163,12 @@ async function requireTmcAccess(req, res, next) {
 // via a single require() instead of cargo-culting the literal `select`.
 router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
-    const where = { tenantId: req.travelTenant.id };
+    // Quote Builder trips are operationally owned by the quote and should
+    // not appear in the standalone TMC Trips register.
+    const where = {
+      tenantId: req.travelTenant.id,
+      NOT: { tripCode: { startsWith: "QUOTE-" } },
+    };
     const searchRaw = req.query.search ?? req.query.q;
     const search = typeof searchRaw === "string" ? searchRaw.trim() : "";
     if (req.query.status) {
@@ -1866,23 +1872,38 @@ router.post("/trips/:id/participants", verifyToken, requireTravelTenant, require
       }
     }
 
-    const created = await prisma.tripParticipant.create({
-      data: {
+    const result = await prisma.$transaction(async (tx) => {
+      const participant = await tx.tripParticipant.create({
+        data: {
+          tripId: trip.id,
+          fullName: String(fullName),
+          passportNumber: passportNumber || null,
+          passportExpiry: passportExpiry ? new Date(passportExpiry) : null,
+          passportDocId: passportDocId ? parseInt(passportDocId, 10) : null,
+          aadhaarLast4: aadhaarLast4 || null,
+          aadhaarTokenId: aadhaarTokenId || null,
+          parentName: parentName || null,
+          parentPhone: normalizedPhone,
+          parentEmail: parentEmail || null,
+          medicalNotes: medicalNotes || null,
+          consentCapturedAt: consentCapturedAt ? new Date(consentCapturedAt) : null,
+        },
+      });
+      await materializeTripInstalmentsFromPlan({
+        db: tx,
         tripId: trip.id,
-        fullName: String(fullName),
-        passportNumber: passportNumber || null,
-        passportExpiry: passportExpiry ? new Date(passportExpiry) : null,
-        passportDocId: passportDocId ? parseInt(passportDocId, 10) : null,
-        aadhaarLast4: aadhaarLast4 || null,
-        aadhaarTokenId: aadhaarTokenId || null,
-        parentName: parentName || null,
-        parentPhone: normalizedPhone,
-        parentEmail: parentEmail || null,
-        medicalNotes: medicalNotes || null,
-        consentCapturedAt: consentCapturedAt ? new Date(consentCapturedAt) : null,
-      },
+        participantIds: [participant.id],
+        allowMissingPlan: true,
+      });
+      const invoice = await createDraftInvoiceForParticipant({
+        db: tx,
+        tenantId: req.travelTenant.id,
+        tripId: trip.id,
+        participantId: participant.id,
+      });
+      return { participant, invoice };
     });
-    res.status(201).json(created);
+    res.status(201).json(result);
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-trips] participant create error:", e.message);
@@ -2007,6 +2028,12 @@ async function decideApplication(req, res, nextStatus) {
           tripId: trip.id,
           participantIds: [pid],
           allowMissingPlan: true,
+        });
+        await createDraftInvoiceForParticipant({
+          db: tx,
+          tenantId: req.travelTenant.id,
+          tripId: trip.id,
+          participantId: pid,
         });
       }
       return row;
@@ -2266,6 +2293,13 @@ router.post(
           tripId: trip.id,
           participantIds: [createdParticipant.id],
           allowMissingPlan: true,
+        });
+
+        await createDraftInvoiceForParticipant({
+          db: tx,
+          tenantId: req.travelTenant.id,
+          tripId: trip.id,
+          participantId: createdParticipant.id,
         });
 
         return { participant: createdParticipant, updatedDraft: draftUpdate };

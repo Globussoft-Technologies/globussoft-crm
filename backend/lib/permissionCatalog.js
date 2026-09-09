@@ -275,6 +275,11 @@ const TRAVEL_MODULES = {
   // timeline. Includes `export` for CSV/Excel exports the operator
   // surface offers.
   payables: ['read', 'write', 'update', 'export'],
+  // `tally` gates the local travel accounting workspace. Live connector
+  // operations remain deferred, but configuration, mappings, previews,
+  // queue preparation, history, and retry actions are independently
+  // grantable from the broader invoice module.
+  tally: ['read', 'write', 'update', 'export', 'manage'],
   cancellation_policies: ['read', 'write', 'update', 'delete', 'manage'],
 
   // Operations
@@ -421,6 +426,10 @@ const TRAVEL_DOMAINS_BODY = [
   {
     domain: 'Travel Suppliers',
     modules: ['suppliers', 'commission_profiles', 'payables', 'cancellation_policies'],
+  },
+  {
+    domain: 'Travel Accounting',
+    modules: ['tally'],
   },
   {
     domain: 'Travel Operations',

@@ -31,6 +31,16 @@ const CATEGORY_OPTIONS = [
 ];
 
 const PAYMENT_METHODS = ['cash', 'card', 'online', 'upi'];
+const EXPENSE_SOURCE_TYPES = [
+  { value: 'OFFICE', label: 'Office' },
+  { value: 'TRIP', label: 'Trip' },
+];
+const EXPENSE_SUB_BRANDS = [
+  { value: 'travelstall', label: 'Travel Stall' },
+  { value: 'rfu', label: 'RFU' },
+  { value: 'visasure', label: 'Visa Sure' },
+  { value: 'tmc', label: 'TMC' },
+];
 
 const STATUS_CONFIG = {
   Draft:      { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' },
@@ -83,6 +93,24 @@ function encodeExpenseNotes(payment) {
   return encodePayment(payment);
 }
 
+function paymentModeLabel(notes) {
+  if (!notes) return '\u2014';
+
+  try {
+    const parsed = typeof notes === 'string' ? JSON.parse(notes) : notes;
+    const payment = parsed?.payment;
+    if (!payment || typeof payment !== 'object') return '\u2014';
+
+    const entries = PAYMENT_METHODS
+      .filter(method => Number(payment[method]) > 0)
+      .map(method => `${method === 'upi' ? 'UPI' : method[0].toUpperCase() + method.slice(1)} (${formatMoney(payment[method])})`);
+
+    return entries.length ? entries.join(' + ') : '\u2014';
+  } catch {
+    return '\u2014';
+  }
+}
+
 function StatusBadge({ status }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.Pending;
   return (
@@ -111,6 +139,10 @@ function CategoryBadge({ category }) {
 }
 
 const EMPTY_FORM = {
+  expenseType: '',
+  subBrand: '',
+  quoteId: '',
+  tmcTripId: '',
   recipientName: '',
   description: '',
   category: CATEGORY_OPTIONS[0],
@@ -131,6 +163,8 @@ export default function Expenses() {
     pendingAmount: null,
   });
   const [form, setForm] = useState(EMPTY_FORM);
+  const [quotes, setQuotes] = useState([]);
+  const [tmcTrips, setTmcTrips] = useState([]);
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
@@ -144,6 +178,16 @@ export default function Expenses() {
   const [hasMore, setHasMore] = useState(true);
   const [tableError, setTableError] = useState(null);
   const [reloadTick, setReloadTick] = useState(0);
+
+  useEffect(() => {
+    Promise.all([
+      fetchApi('/api/travel/quotes?limit=500&fields=summary').catch(() => ({ quotes: [] })),
+      fetchApi('/api/travel/trips?limit=500&fields=summary').catch(() => ({ trips: [] })),
+    ]).then(([quoteData, tripData]) => {
+      setQuotes(Array.isArray(quoteData?.quotes) ? quoteData.quotes : []);
+      setTmcTrips(Array.isArray(tripData?.trips) ? tripData.trips : []);
+    });
+  }, []);
 
   useEffect(() => {
     expensesRef.current = expenses;
@@ -282,6 +326,10 @@ export default function Expenses() {
           expenseDate: form.expenseDate,
           notes: encodeExpenseNotes(form.payment),
           status,
+          expenseType: form.expenseType,
+          subBrand: form.subBrand,
+          quoteId: form.quoteId || null,
+          tmcTripId: form.tmcTripId || null,
         }),
       });
       setForm(EMPTY_FORM);
@@ -484,6 +532,56 @@ export default function Expenses() {
             <form onSubmit={(e) => createExpense(e, 'Pending')} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  Expense For <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <select required className="input-field" value={form.expenseType}
+                  onChange={e => setForm({ ...EMPTY_FORM, expenseType: e.target.value })}
+                  style={{ background: 'var(--input-bg)' }}>
+                  <option value="">Select Office or Trip</option>
+                  {EXPENSE_SOURCE_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
+                </select>
+              </div>
+
+              {form.expenseType === 'TRIP' && <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  Sub-brand <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <select required className="input-field" value={form.subBrand}
+                  onChange={e => setForm({ ...form, subBrand: e.target.value, quoteId: '', tmcTripId: '' })}
+                  style={{ background: 'var(--input-bg)' }}>
+                  <option value="">Select sub-brand</option>
+                  {EXPENSE_SUB_BRANDS.map(brand => <option key={brand.value} value={brand.value}>{brand.label}</option>)}
+                </select>
+              </div>}
+
+              {form.subBrand && form.subBrand === 'tmc' && <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  TMC Trip <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <select required className="input-field" value={form.tmcTripId}
+                  onChange={e => setForm({ ...form, tmcTripId: e.target.value })}
+                  style={{ background: 'var(--input-bg)' }}>
+                  <option value="">Select TMC trip</option>
+                  {tmcTrips.map(trip => <option key={trip.id} value={trip.id}>{trip.tripCode} — {trip.destination}</option>)}
+                </select>
+              </div>}
+
+              {form.subBrand && form.subBrand !== 'tmc' && <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  Quote ID <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <select required className="input-field" value={form.quoteId}
+                  onChange={e => setForm({ ...form, quoteId: e.target.value })}
+                  style={{ background: 'var(--input-bg)' }}>
+                  <option value="">Select quote</option>
+                  {quotes.filter(quote => quote.subBrand === form.subBrand).map(quote => <option key={quote.id} value={quote.id}>#{quote.id} — {quote.contact?.name || `Quote ${quote.id}`}</option>)}
+                </select>
+              </div>}
+
+              {form.expenseType && (
+                <>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
                   Recipient Name <span style={{ color: '#ef4444' }}>*</span>
                 </label>
                 <input type="text" required className="input-field" placeholder="Enter recipient name"
@@ -496,7 +594,7 @@ export default function Expenses() {
                   value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
               </div>
 
-              <div>
+              {form.expenseType !== 'TRIP' && <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
                   Category <span style={{ color: '#ef4444' }}>*</span>
                 </label>
@@ -508,7 +606,7 @@ export default function Expenses() {
                   style={{ background: 'var(--input-bg)' }}>
                   {CATEGORY_OPTIONS.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                 </select>
-              </div>
+              </div>}
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
@@ -564,6 +662,8 @@ export default function Expenses() {
                   Submit for Approval
                 </button>
               </div>
+                </>
+              )}
             </form>
           </div>
         </div>
@@ -633,6 +733,7 @@ export default function Expenses() {
                   <tr style={{ textAlign: 'left' }}>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Title</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Amount</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Payment Mode</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Category</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Status</th>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>User</th>
@@ -643,6 +744,7 @@ export default function Expenses() {
                   <colgroup>
                     <col style={{ width: '220px' }} /> {/* Title */}
                     <col style={{ width: '140px' }} /> {/* Amount */}
+                    <col style={{ width: '190px' }} /> {/* Payment Mode */}
                     <col style={{ width: '150px' }} /> {/* Category */}
                     <col style={{ width: '130px' }} /> {/* Status */}
                     <col style={{ width: '220px' }} /> {/* User */}
@@ -657,6 +759,9 @@ export default function Expenses() {
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{exp.title}</td>
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '600', color: '#10b981' }}>
                         {formatMoney(exp.amount)}
+                      </td>
+                      <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>
+                        {paymentModeLabel(exp.notes)}
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>
                         <CategoryBadge category={exp.category} />

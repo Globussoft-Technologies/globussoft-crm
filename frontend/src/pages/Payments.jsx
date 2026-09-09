@@ -158,6 +158,17 @@ function formatDate(value) {
   }
 }
 
+function formatPaidDate(value) {
+  if (!value) return "—";
+  try {
+    // Payment dates entered through a date picker are calendar dates, not
+    // user-facing timestamps. Avoid showing UTC midnight as 5:30 AM in IST.
+    return new Date(value).toLocaleDateString();
+  } catch {
+    return String(value);
+  }
+}
+
 export default function Payments() {
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
@@ -350,7 +361,9 @@ export default function Payments() {
       failed = 0;
     for (const p of payments) {
       if (!inDateRange(p)) continue;
-      if (p.status === "SUCCESS") collected += Number(p.amount || 0);
+      if (["SUCCESS", "PAID", "CAPTURED"].includes(String(p.status || "").toUpperCase())) {
+        collected += Number(p.amount || 0);
+      }
       else if (p.status === "PENDING") pending += 1;
       else if (p.status === "FAILED") failed += 1;
     }
@@ -833,7 +846,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                   <Td>
                     <StatusBadge status={p.status} />
                   </Td>
-                  <Td>{formatDate(p.paidAt)}</Td>
+                  <Td>{formatPaidDate(p.paidAt)}</Td>
                   <Td onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => setSelected(p)}
@@ -1440,7 +1453,7 @@ function DetailModal({ payment, onClose }) {
           <GatewayBadge gateway={payment.gateway} />
         </DetailRow>
         <DetailRow label="Paid On">
-          {formatDate(payment.paidAt) || "—"}
+          {formatPaidDate(payment.paidAt)}
         </DetailRow>
         <DetailRow label="Created">{formatDate(payment.createdAt)}</DetailRow>
 

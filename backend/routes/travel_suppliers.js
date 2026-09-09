@@ -33,6 +33,7 @@ const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { encrypt, decrypt } = require("../lib/fieldEncryption");
 const { requireTravelTenant } = require("../middleware/travelGuards");
+const { enqueueTransaction } = require("../lib/travelTallyMasters");
 
 const VALID_CATEGORIES = [
   "airline", "hotel", "gds", "visa-portal",
@@ -434,6 +435,17 @@ const listProjection = require("../lib/listProjection");
 const { toCsv, withBom, parseCsv, toXlsxBuffer, parseXlsxBuffer } = require("../lib/csvIO");
 
 const VALID_SUPPLIER_CATEGORIES = ["hotel", "flight", "transport", "visa-consul", "other"];
+const VALID_PAYABLE_PAYMENT_MODES = new Set(["cash", "upi", "neft", "manual"]);
+
+function assertValidPayablePaymentMode(mode) {
+  if (mode == null || mode === "") return;
+  if (!VALID_PAYABLE_PAYMENT_MODES.has(String(mode))) {
+    const err = new Error("Invalid payment mode");
+    err.status = 400;
+    err.code = "INVALID_PAYMENT_MODE";
+    throw err;
+  }
+}
 const supplierImportUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -4617,7 +4629,7 @@ router.get(
 );
 
 // POST /api/travel/suppliers/:id/payables — ADMIN/MANAGER only.
-// Required: description, amount. Optional: poNumber, currency, dueDate, notes, status.
+// Required: description, amount. Optional: quoteId, poNumber, currency, dueDate, notes, status.
 router.post(
   "/suppliers/:id/payables",
   verifyToken,
@@ -4629,7 +4641,7 @@ router.post(
       if (!supplier) return;
 
       const {
-        description, amount, poNumber, currency, dueDate, notes, status,
+        quoteId, description, amount, poNumber, currency, dueDate, notes, status,
       } = req.body || {};
 
       if (!description || !String(description).trim() || amount == null) {
@@ -4641,7 +4653,13 @@ router.post(
       assertValidPayableAmount(amount);
       assertValidPayableStatus(status);
       const parsedDueDate = parseDueDateOrThrow(dueDate);
-
+      const parsedQuoteId = quoteId == null || quoteId === "" ? null : parseInt(String(quoteId).replace(/^QT-/i, ""), 10);
+      if (parsedQuoteId != null && !Number.isFinite(parsedQuoteId)) {
+        return res.status(400).json({ error: "quoteId must be a valid Quote ID", code: "INVALID_QUOTE_ID" });
+      }
+      const storedNotes = parsedQuoteId != null
+        ? `QUOTE_ID:${parsedQuoteId}${notes ? `\n${String(notes)}` : ""}`
+        : (notes ? String(notes) : null);
       const created = await prisma.travelSupplierPayable.create({
         data: {
           tenantId: req.travelTenant.id,
@@ -4651,10 +4669,36 @@ router.post(
           poNumber: poNumber ? String(poNumber) : null,
           currency: currency ? String(currency) : undefined,
           dueDate: parsedDueDate,
-          notes: notes ? String(notes) : null,
+          notes: storedNotes,
           status: status || undefined,
         },
       });
+
+      try {
+        await enqueueTransaction({
+          tenantId: req.travelTenant.id,
+          subBrand: supplier.subBrand,
+          sourceType: "SUPPLIER_PAYABLE",
+          sourceId: created.id,
+          reference: created.poNumber || `PAYABLE-${created.id}`,
+          transactionType: "PURCHASE",
+          tripId: null,
+          partyName: supplier.name,
+          amount: created.amount,
+          voucherType: "PURCHASE",
+          payload: {
+            payableId: created.id,
+            supplierId: supplier.id,
+            supplierName: supplier.name,
+            description: created.description,
+            amount: String(created.amount),
+            currency: created.currency,
+            status: created.status,
+          },
+        });
+      } catch (queueError) {
+        console.warn("[travel-sup] Tally queue preparation failed:", queueError.message);
+      }
 
       await writeAudit(
         "TravelSupplierPayable",
@@ -4703,7 +4747,7 @@ router.put(
 
       const data = {};
       const {
-        description, amount, poNumber, currency, dueDate, notes, status, paidAt, paymentReference,
+        description, amount, poNumber, currency, dueDate, notes, status, paidAt, paymentMode, paymentReference,
       } = req.body || {};
 
       if (description !== undefined) {
@@ -4728,6 +4772,10 @@ router.put(
       if (paymentReference !== undefined) {
         data.paymentReference = paymentReference ? String(paymentReference).trim().slice(0, 255) : null;
       }
+      if (paymentMode !== undefined) {
+        assertValidPayablePaymentMode(paymentMode);
+        data.paymentMode = paymentMode ? String(paymentMode) : null;
+      }
       if (status !== undefined) {
         assertValidPayableStatus(status);
         data.status = status;
@@ -4749,6 +4797,57 @@ router.put(
         where: { id: payableId },
         data,
       });
+
+      try {
+        await enqueueTransaction({
+          tenantId: req.travelTenant.id,
+          subBrand: supplier.subBrand,
+          sourceType: "SUPPLIER_PAYABLE",
+          sourceId: updated.id,
+          reference: updated.poNumber || `PAYABLE-${updated.id}`,
+          transactionType: "PURCHASE",
+          tripId: null,
+          partyName: supplier.name,
+          amount: updated.amount,
+          voucherType: "PURCHASE",
+          payload: { payableId: updated.id, supplierId: supplier.id, supplierName: supplier.name, description: updated.description, amount: String(updated.amount), currency: updated.currency, status: updated.status, updatedAt: updated.updatedAt },
+        });
+      } catch (queueError) {
+        console.warn("[travel-sup] Tally queue refresh failed:", queueError.message);
+      }
+      if (updated.status === "cancelled" && prisma.travelTallySyncQueue) {
+        await prisma.travelTallySyncQueue.updateMany({ where: { tenantId: req.travelTenant.id, sourceType: "SUPPLIER_PAYABLE", sourceId: updated.id }, data: { status: "CANCELLED", lastError: "Source payable was cancelled" } });
+      }
+
+      if (data.status === "paid" && existing.status !== "paid") {
+        try {
+          await enqueueTransaction({
+            tenantId: req.travelTenant.id,
+            subBrand: supplier.subBrand,
+            sourceType: "SUPPLIER_PAYABLE_PAYMENT",
+            sourceId: updated.id,
+            reference: updated.paymentReference || updated.poNumber || `PAYMENT-${updated.id}`,
+            transactionType: "PAYMENT",
+            tripId: null,
+            partyName: supplier.name,
+            amount: updated.amount,
+            voucherType: "PAYMENT",
+            payload: {
+              payableId: updated.id,
+              supplierId: supplier.id,
+              supplierName: supplier.name,
+              amount: String(updated.amount),
+              currency: updated.currency,
+              paymentReference: updated.paymentReference,
+              paymentMode: updated.paymentMode,
+              paidAt: updated.paidAt,
+              billReference: updated.poNumber || `PAYABLE-${updated.id}`,
+            },
+          });
+        } catch (queueError) {
+          console.warn("[travel-sup] Tally payment queue preparation failed:", queueError.message);
+        }
+      }
 
       await writeAudit(
         "TravelSupplierPayable",
@@ -4818,6 +4917,13 @@ router.delete(
       });
       if (!existing) {
         return res.status(404).json({ error: "Payable not found", code: "PAYABLE_NOT_FOUND" });
+      }
+
+      if (prisma.travelTallySyncQueue) {
+        await prisma.travelTallySyncQueue.updateMany({
+          where: { tenantId: req.travelTenant.id, sourceType: "SUPPLIER_PAYABLE", sourceId: payableId },
+          data: { status: "CANCELLED", lastError: "Source payable was deleted" },
+        });
       }
 
       await prisma.travelSupplierPayable.delete({ where: { id: payableId } });
@@ -5046,6 +5152,8 @@ router.get(
           dueDate: r.dueDate,
           status: r.status,
           paidAt: r.paidAt,
+          paymentReference: r.paymentReference,
+          paymentMode: r.paymentMode,
           daysUntilDue,
           createdAt: r.createdAt,
         };

@@ -3,6 +3,7 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const eventBus = require("../lib/eventBus");
 const { verifyRole, verifyToken } = require("../middleware/auth");
+const { enqueueTransaction } = require("../lib/travelTallyMasters");
 
 // GET /api/expenses — list with optional filters
 //
@@ -190,18 +191,50 @@ router.get("/:id", async (req, res) => {
 // POST /api/expenses — create expense
 router.post("/", async (req, res) => {
   try {
-    const { title, amount, category, description, notes, expenseDate, contactId, receiptUrl } = req.body;
+    const { title, amount, category, description, notes, expenseDate, contactId, receiptUrl, itineraryId, expenseType, subBrand, quoteId, tmcTripId } = req.body;
 
     if (!title) return res.status(400).json({ error: "title is required" });
     if (amount === undefined || amount === null) return res.status(400).json({ error: "amount is required" });
+    const tripId = itineraryId == null || itineraryId === "" ? null : parseInt(itineraryId, 10);
+    if (tripId !== null && (!Number.isInteger(tripId) || tripId <= 0)) return res.status(400).json({ error: "itineraryId must be a positive integer" });
+    if (tripId !== null) {
+      const trip = await prisma.itinerary.findFirst({ where: { id: tripId, tenantId: req.user.tenantId }, select: { id: true } });
+      if (!trip) return res.status(404).json({ error: "Trip not found" });
+    }
+
+    const sourceType = String(expenseType || "OFFICE").toUpperCase();
+    if (!["OFFICE", "TRIP"].includes(sourceType)) return res.status(400).json({ error: "expenseType must be OFFICE or TRIP" });
+    const sourceSubBrand = sourceType === "TRIP" && subBrand ? String(subBrand).toLowerCase() : null;
+    if (sourceType === "TRIP" && !sourceSubBrand) return res.status(400).json({ error: "subBrand is required for trip expenses" });
+    if (sourceSubBrand && !["tmc", "rfu", "travelstall", "visasure"].includes(sourceSubBrand)) return res.status(400).json({ error: "Invalid subBrand" });
+
+    const parsedQuoteId = quoteId == null || quoteId === "" ? null : parseInt(quoteId, 10);
+    const parsedTmcTripId = tmcTripId == null || tmcTripId === "" ? null : parseInt(tmcTripId, 10);
+    if (sourceSubBrand === "tmc") {
+      if (!Number.isInteger(parsedTmcTripId) || parsedTmcTripId <= 0) return res.status(400).json({ error: "tmcTripId is required for TMC expenses" });
+      const tmcTrip = await prisma.tmcTrip.findFirst({ where: { id: parsedTmcTripId, tenantId: req.user.tenantId }, select: { id: true } });
+      if (!tmcTrip) return res.status(404).json({ error: "TMC trip not found" });
+    } else if (sourceType === "TRIP") {
+      if (!Number.isInteger(parsedQuoteId) || parsedQuoteId <= 0) return res.status(400).json({ error: "quoteId is required for this sub-brand" });
+      const quote = await prisma.travelQuote.findFirst({ where: { id: parsedQuoteId, tenantId: req.user.tenantId, subBrand: sourceSubBrand }, select: { id: true } });
+      if (!quote) return res.status(404).json({ error: "Quote not found for this sub-brand" });
+    }
+
+    let expenseNotes = notes || null;
+    try {
+      const parsedNotes = notes ? JSON.parse(notes) : {};
+      expenseNotes = JSON.stringify({ ...parsedNotes, expenseType: sourceType, subBrand: sourceSubBrand, quoteId: parsedQuoteId, tmcTripId: parsedTmcTripId });
+    } catch {
+      expenseNotes = JSON.stringify({ note: notes || null, expenseType: sourceType, subBrand: sourceSubBrand, quoteId: parsedQuoteId, tmcTripId: parsedTmcTripId });
+    }
 
     const expense = await prisma.expense.create({
       data: {
         title,
         description: description || null,
         amount: parseFloat(amount),
-        category: category || "General",
-        notes: notes || null,
+        category: sourceType === "TRIP" ? "Trip Expenses" : (category || "General"),
+        notes: expenseNotes,
         receiptUrl: receiptUrl || null,
         expenseDate: expenseDate ? new Date(expenseDate) : new Date(),
         userId: req.user.userId ? parseInt(req.user.userId) : null,
@@ -210,6 +243,32 @@ router.post("/", async (req, res) => {
       },
       include: { user: true, contact: true },
     });
+
+    try {
+      await enqueueTransaction({
+        tenantId: req.user.tenantId,
+        sourceType: tripId ? "TRIP_EXPENSE" : "OFFICE_EXPENSE",
+        sourceId: expense.id,
+        reference: `EXP-${expense.id}`,
+        transactionType: "PAYMENT",
+        partyName: expense.title,
+        amount: expense.amount,
+        voucherType: "PAYMENT",
+        tripId,
+        payload: {
+          expenseId: expense.id,
+          title: expense.title,
+          category: expense.category,
+          amount: Number(expense.amount || 0),
+          currency: expense.currency || "INR",
+          expenseDate: expense.expenseDate,
+          status: expense.status,
+          itineraryId: tripId,
+        },
+      });
+    } catch (queueError) {
+      console.warn("[expenses.post] Tally queue preparation failed:", queueError.message);
+    }
 
     // Emit event for notification engine when expense is created
     const submitterName = expense.user?.name || "Employee";
@@ -256,6 +315,25 @@ router.put("/:id", async (req, res) => {
       data,
       include: { user: true, contact: true },
     });
+
+    try {
+      await enqueueTransaction({
+        tenantId: req.user.tenantId,
+        sourceType: "OFFICE_EXPENSE",
+        sourceId: expense.id,
+        reference: `EXP-${expense.id}`,
+        transactionType: "PAYMENT",
+        partyName: expense.title,
+        amount: expense.amount,
+        voucherType: "PAYMENT",
+        payload: { expenseId: expense.id, title: expense.title, category: expense.category, amount: Number(expense.amount || 0), currency: expense.currency || "INR", expenseDate: expense.expenseDate, status: expense.status, updatedAt: expense.updatedAt },
+      });
+      if (String(expense.status).toLowerCase() === "cancelled" && prisma.travelTallySyncQueue) {
+        await prisma.travelTallySyncQueue.updateMany({ where: { tenantId: req.user.tenantId, sourceType: "OFFICE_EXPENSE", sourceId: expense.id }, data: { status: "CANCELLED", lastError: "Source expense was cancelled" } });
+      }
+    } catch (queueError) {
+      console.warn("[expenses.put] Tally queue refresh failed:", queueError.message);
+    }
 
     res.json(expense);
   } catch (err) {

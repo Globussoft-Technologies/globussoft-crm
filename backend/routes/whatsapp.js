@@ -316,7 +316,7 @@ router.get("/messages", verifyToken, async (req, res) => {
     const [messages, total] = await Promise.all([
       prisma.whatsAppMessage.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip,
         take,
         include: { contact: { select: { id: true, name: true, phone: true } } },
@@ -554,7 +554,7 @@ router.get("/threads", verifyToken, async (req, res) => {
     const [threads, total] = await Promise.all([
       prisma.whatsAppThread.findMany({
         where,
-        orderBy: { lastMessageAt: "desc" },
+        orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
         skip,
         take,
         include: {
@@ -1728,7 +1728,7 @@ router.get("/opt-outs", verifyToken, async (req, res) => {
     const [optOuts, total] = await Promise.all([
       prisma.whatsAppOptOut.findMany({
         where,
-        orderBy: { capturedAt: "desc" },
+        orderBy: [{ capturedAt: "desc" }, { id: "desc" }],
         skip,
         take,
       }),

@@ -190,7 +190,7 @@ router.get("/inbox", async (req, res) => {
       prisma.emailMessage.findMany({
         where,
         include: { contact: true },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take,
       }),
@@ -482,7 +482,7 @@ router.get("/calls", async (req, res) => {
       prisma.callLog.findMany({
         where: { tenantId: req.user.tenantId },
         include: { contact: true },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take,
       }),

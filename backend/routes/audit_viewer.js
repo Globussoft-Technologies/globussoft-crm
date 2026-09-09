@@ -114,7 +114,7 @@ router.get('/', async (req, res) => {
     const isSummary = req.query.fields === 'summary';
     const findManyArgs = {
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       skip: (page - 1) * limit,
       take: limit,
     };

@@ -31,7 +31,7 @@ router.get("/", async (req, res) => {
     const limit = Math.min(100, Math.max(1, parseInt(limitRaw || "10", 10) || 10));
     const findManyArgs = {
       where: { tenantId: req.user.tenantId },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     };
     if (isSummary) {
       findManyArgs.select = {
@@ -59,14 +59,13 @@ router.get("/", async (req, res) => {
         prisma.ticket.count({
           where: {
             tenantId: req.user.tenantId,
-            status: { notIn: ["Resolved", "Closed"] },
+            status: "Open",
           },
         }),
         prisma.ticket.count({
           where: {
             tenantId: req.user.tenantId,
             priority: "Urgent",
-            status: { not: "Closed" },
           },
         }),
       ])

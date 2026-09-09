@@ -8,7 +8,7 @@ router.get('/events', verifyToken, async (req, res) => {
   try {
     const events = await prisma.calendarEvent.findMany({
       where: { userId: req.user.userId, tenantId: req.user.tenantId },
-      orderBy: { startTime: 'asc' },
+      orderBy: [{ startTime: 'asc' }, { id: 'asc' }],
       take: parseInt(req.query.limit) || 50,
     });
     res.json(events);
@@ -34,7 +34,7 @@ router.get('/upcoming', verifyToken, async (req, res) => {
     const now = new Date();
     const events = await prisma.calendarEvent.findMany({
       where: { userId: req.user.userId, tenantId: req.user.tenantId, startTime: { gte: now } },
-      orderBy: { startTime: 'asc' },
+      orderBy: [{ startTime: 'asc' }, { id: 'asc' }],
       take: 10,
     });
     res.json(events);

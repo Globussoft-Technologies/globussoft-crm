@@ -319,14 +319,13 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByText(/Outstanding:\s*\$1234\.56/i)).toBeInTheDocument();
   });
 
-  it('Invoice # field is read-only and seeded from nextInvoiceNum', async () => {
+  it('does not show a fabricated invoice number before the server saves it', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
     await openCreateInvoiceForm();
 
-    // Seed has INV-001, INV-002, INV-003 → next should be INV-004.
     const invInput = screen.getByLabelText(/Invoice number/i);
-    expect(invInput.value).toMatch(/INV-004/);
+    expect(invInput.value).toBe('Assigned when saved');
     // Field is marked readOnly so the user can't pre-set it.
     expect(invInput).toHaveAttribute('readOnly');
   });
@@ -634,7 +633,7 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getByText('Unknown')).toBeInTheDocument();
   });
 
-  it('nextInvoiceNum defaults to INV-001 when the invoice list is empty', async () => {
+  it('does not fabricate INV-001 when the invoice list is empty', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/billing') return Promise.resolve([]);
       if (url === '/api/contacts') return Promise.resolve(sampleContacts);
@@ -646,7 +645,7 @@ describe('<Invoices /> — page surface', () => {
     await waitFor(() => expect(screen.getByText(/No invoices yet/i)).toBeInTheDocument());
     await openCreateInvoiceForm();
     const invInput = screen.getByLabelText(/Invoice number/i);
-    expect(invInput.value).toBe('INV-001');
+    expect(invInput.value).toBe('Assigned when saved');
   });
 
   it('OVERDUE rows still expose Mark Paid + Generate Payment Link + Void (status branches as not-paid not-voided)', async () => {

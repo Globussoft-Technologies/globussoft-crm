@@ -378,7 +378,7 @@ router.get("/", verifyToken, async (req, res) => {
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where: { tenantId: req.user.tenantId },
-      orderBy: [{ status: "desc" }, { dueDate: "asc" }],
+      orderBy: [{ status: "desc" }, { dueDate: "asc" }, { id: "asc" }],
     };
     // Travel vertical — optional ?subBrand= filter for the per-brand ledger.
     // Matches invoices explicitly tagged with the brand OR (back-compat with

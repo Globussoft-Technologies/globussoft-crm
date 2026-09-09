@@ -428,6 +428,33 @@ describe('<Surveys /> — list + CRUD + response-view shell', () => {
     expect(screen.getByText(/0 selected/i)).toBeInTheDocument();
   });
 
+  it('recipient search includes contacts beyond the first API page', async () => {
+    const user = userEvent.setup();
+    const firstPage = Array.from({ length: 500 }, (_, index) => ({
+      id: index + 1,
+      name: `Contact ${index + 1}`,
+      email: `contact${index + 1}@example.com`,
+    }));
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/surveys' && (!opts || !opts.method || opts.method === 'GET')) return Promise.resolve(surveysFixture);
+      if (url.endsWith('/aggregate')) return Promise.resolve(aggregateFixture);
+      if (url.endsWith('/responses')) return Promise.resolve([]);
+      if (url === '/api/contacts?limit=500') return Promise.resolve(firstPage);
+      if (url.includes('/api/contacts?') && url.includes('offset=500')) {
+        return Promise.resolve([{ id: 501, name: 'Deep Page Recipient', email: 'deep-recipient@example.com' }]);
+      }
+      return Promise.resolve({});
+    });
+
+    render(<Surveys />);
+    await screen.findByText('Q2 Customer NPS');
+    await user.click(screen.getByText('Q2 Customer NPS'));
+    await user.click(await screen.findByRole('button', { name: /send survey/i }));
+    const searchInput = await screen.findByPlaceholderText(/search by name/i);
+    await user.type(searchInput, 'Deep Page Recipient');
+    expect(await screen.findByText('Deep Page Recipient')).toBeInTheDocument();
+  });
+
   it('send-to button is disabled when no contacts are selected', async () => {
     const user = userEvent.setup();
     fetchApi.mockImplementation((url, opts) => {

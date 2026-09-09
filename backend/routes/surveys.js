@@ -524,7 +524,7 @@ router.get("/", async (req, res) => {
     if (isSummary) {
       const slim = await prisma.survey.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: {
           id: true,
           name: true,
@@ -538,7 +538,7 @@ router.get("/", async (req, res) => {
 
     const surveys = await prisma.survey.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     });
 
     const ids = surveys.map(s => s.id);
@@ -1279,7 +1279,7 @@ router.get("/:id/responses", async (req, res) => {
 
     const responses = await prisma.surveyResponse.findMany({
       where: { surveyId: id, tenantId: req.user.tenantId },
-      orderBy: { respondedAt: "desc" },
+      orderBy: [{ respondedAt: "desc" }, { id: "desc" }],
     });
 
     const contactIds = [...new Set(responses.map(r => r.contactId).filter(Boolean))];
@@ -1373,7 +1373,7 @@ router.get("/:id/export.csv", async (req, res) => {
 
     const responses = await prisma.surveyResponse.findMany({
       where: { surveyId: id, tenantId: req.user.tenantId },
-      orderBy: { respondedAt: "desc" },
+      orderBy: [{ respondedAt: "desc" }, { id: "desc" }],
     });
     const contactIds = [...new Set(responses.map(r => r.contactId).filter(Boolean))];
     const contacts = contactIds.length

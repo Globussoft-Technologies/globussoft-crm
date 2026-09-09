@@ -14,7 +14,7 @@ router.get('/', verifyToken, async (req, res) => {
     const tickets = await prisma.ticket.findMany({
       where,
       include: { assignee: { select: { id: true, name: true, email: true } } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
     res.json(tickets);
   } catch (_err) {

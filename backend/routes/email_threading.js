@@ -96,7 +96,7 @@ router.post("/auto-thread", async (req, res) => {
     const tenantId = req.user.tenantId;
     const orphans = await prisma.emailMessage.findMany({
       where: { tenantId, threadId: null },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
 
     let processed = 0;
@@ -136,7 +136,7 @@ router.get("/threads", async (req, res) => {
 
     const messages = await prisma.emailMessage.findMany({
       where,
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
 
     // Group by threadId

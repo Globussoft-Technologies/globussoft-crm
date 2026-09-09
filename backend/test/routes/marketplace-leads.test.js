@@ -198,7 +198,7 @@ describe('GET /api/marketplace-leads', () => {
     expect(args.where.status).toBe('New');
     expect(args.where.createdAt.gte).toBeInstanceOf(Date);
     expect(args.where.createdAt.lte).toBeInstanceOf(Date);
-    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('applies pagination (skip/take) and returns envelope {leads,total,page,pages}', async () => {

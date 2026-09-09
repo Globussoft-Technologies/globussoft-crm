@@ -153,7 +153,7 @@ describe('GET /api/calendar/events', () => {
       .set('Authorization', `Bearer ${tokenFor()}`);
 
     const call = prisma.calendarEvent.findMany.mock.calls[0][0];
-    expect(call.orderBy).toEqual({ startTime: 'asc' });
+    expect(call.orderBy).toEqual([{ startTime: 'asc' }, { id: 'asc' }]);
   });
 
   test('?limit=abc (non-numeric) → falls back to take=50 (NaN || 50)', async () => {
@@ -297,7 +297,7 @@ describe('GET /api/calendar/upcoming', () => {
       .set('Authorization', `Bearer ${tokenFor()}`);
 
     const call = prisma.calendarEvent.findMany.mock.calls[0][0];
-    expect(call.orderBy).toEqual({ startTime: 'asc' });
+    expect(call.orderBy).toEqual([{ startTime: 'asc' }, { id: 'asc' }]);
   });
 
   test('missing Authorization → 401', async () => {

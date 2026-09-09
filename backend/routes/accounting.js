@@ -424,7 +424,7 @@ router.get("/:provider/synced", verifyToken, async (req, res) => {
       prisma.accountingSync.count({ where }),
       prisma.accountingSync.findMany({
         where,
-        orderBy: { syncedAt: "desc" },
+        orderBy: [{ syncedAt: "desc" }, { id: "desc" }],
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),

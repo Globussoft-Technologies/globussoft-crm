@@ -60,7 +60,7 @@ export default function Tickets() {
       setTickets(ticketList);
       setTotalTickets(Array.isArray(t) ? ticketList.length : Number(t?.total) || ticketList.length);
       setOpenCount(Array.isArray(t) ? ticketList.filter((ticket) => ticket.status === 'Open').length : Number(t?.openCount) || 0);
-      setUrgentCount(Array.isArray(t) ? ticketList.filter((ticket) => ticket.priority === 'Urgent' && ticket.status !== 'Closed').length : Number(t?.urgentCount) || 0);
+      setUrgentCount(Array.isArray(t) ? ticketList.filter((ticket) => ticket.priority === 'Urgent').length : Number(t?.urgentCount) || 0);
       if (!Array.isArray(t) && Number.isFinite(Number(t?.page)) && Number(t.page) !== targetPage) {
         setPage(Number(t.page));
       }

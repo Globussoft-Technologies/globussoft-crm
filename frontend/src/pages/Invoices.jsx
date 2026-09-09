@@ -237,18 +237,6 @@ export default function Invoices() {
   const visibleInvoices = filteredInvoices;
 
 
-  const nextInvoiceNum = useMemo(() => {
-    if (invoices.length === 0) return "INV-001";
-    const nums = invoices
-      .map((inv) => {
-        const match = (inv.invoiceNum || "").match(/INV-(\d+|[A-F0-9]+)/i);
-        return match ? parseInt(match[1], 16) : 0;
-      })
-      .filter((n) => !isNaN(n));
-    const max = nums.length > 0 ? Math.max(...nums) : 0;
-    return `INV-${String(max + 1).padStart(3, "0")}`;
-  }, [invoices]);
-
   const handleFieldChange = (field, value) => {
     setNewInvoice((prev) => ({ ...prev, [field]: value }));
   };
@@ -855,12 +843,9 @@ export default function Invoices() {
               onSubmit={createInvoice}
               style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}
             >
-              {/* #314: Invoice # is server-generated and was being silently
-                  overwritten on save, leaving the user confused about why their
-                  custom number didn't stick. Make the field read-only and surface
-                  the next number that will be assigned, so what the user sees
-                  up-front matches what the backend writes. Custom numbering is an
-                  admin-only feature and isn't part of this form. */}
+              {/* Invoice numbers are generated atomically by the backend. Do not
+                  fabricate a sequential preview here: saved invoices use a random
+                  collision-resistant suffix, so that preview could never match. */}
               <div>
                 <label
                   style={{
@@ -876,7 +861,7 @@ export default function Invoices() {
                   type="text"
                   className="input-field"
                   placeholder="Auto-generated on save"
-                  value={nextInvoiceNum}
+                  value="Assigned when saved"
                   readOnly
                   aria-label="Invoice number (auto-generated on save)"
                   style={{ opacity: 0.75, cursor: "not-allowed" }}
@@ -889,7 +874,7 @@ export default function Invoices() {
                     display: "block",
                   }}
                 >
-                  Auto-generated on save
+                  The saved invoice number will appear after creation.
                 </span>
               </div>
 

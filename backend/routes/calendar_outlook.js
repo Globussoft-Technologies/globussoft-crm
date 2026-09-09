@@ -310,7 +310,7 @@ router.get("/events", verifyToken, async (req, res) => {
         provider: "microsoft",
         tenantId,
       },
-      orderBy: { startTime: "asc" },
+      orderBy: [{ startTime: "asc" }, { id: "asc" }],
     });
     return res.json(events);
   } catch (err) {

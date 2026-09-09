@@ -505,7 +505,7 @@ describe('GET /api/accounting/:provider/synced — pagination envelope', () => {
 
     const args = prisma.accountingSync.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ provider: 'quickbooks', tenantId: 4 });
-    expect(args.orderBy).toEqual({ syncedAt: 'desc' });
+    expect(args.orderBy).toEqual([{ syncedAt: 'desc' }, { id: 'desc' }]);
     expect(args.skip).toBe(0);
     expect(args.take).toBe(50);
   });

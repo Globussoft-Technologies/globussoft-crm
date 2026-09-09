@@ -249,7 +249,7 @@ describe('audit_viewer query semantics + CSV contract', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(200);
     const call = prisma.auditLog.findMany.mock.calls[0][0];
-    expect(call.orderBy).toEqual({ createdAt: 'desc' });
+    expect(call.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
     expect(call.include).toEqual({
       user: { select: { id: true, name: true, email: true } },
     });

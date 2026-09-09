@@ -14,6 +14,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { fetchApi } from "../utils/api";
+import { fetchAllPages } from "../utils/fetchAllPages";
 import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
 
@@ -681,7 +682,7 @@ export default function CalendarSync() {
     }
 
     try {
-      const contactsRes = await fetchApi("/api/contacts?limit=200", { silent: true });
+      const contactsRes = await fetchAllPages("/api/contacts?limit=500", { silent: true });
       const contacts = Array.isArray(contactsRes)
         ? contactsRes
         : contactsRes?.data || contactsRes?.contacts || [];
@@ -1151,7 +1152,7 @@ export default function CalendarSync() {
   // leaves the manual email input as the only path.
   useEffect(() => {
     if (!showCreateModal || contactOptions.length) return;
-    fetchApi("/api/contacts?limit=200")
+    fetchAllPages("/api/contacts?limit=500", { silent: true })
       .then((res) => {
         const list = Array.isArray(res)
           ? res

@@ -102,7 +102,7 @@ describe('GET /api/expenses — list', () => {
     expect(res.body).toHaveLength(2);
     const findArgs = prisma.expense.findMany.mock.calls[0][0];
     expect(findArgs.where).toEqual({ tenantId: 1 });
-    expect(findArgs.orderBy).toEqual({ createdAt: 'desc' });
+    expect(findArgs.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('?status=Pending forwards to Prisma where clause', async () => {

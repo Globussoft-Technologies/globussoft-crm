@@ -192,7 +192,7 @@ describe('GET /api/support', () => {
     // Critically: where clause was tenant-scoped.
     const findManyArgs = prisma.ticket.findMany.mock.calls[0][0];
     expect(findManyArgs.where).toEqual({ tenantId: 7 });
-    expect(findManyArgs.orderBy).toEqual({ createdAt: 'desc' });
+    expect(findManyArgs.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 });
 

@@ -173,7 +173,7 @@ describe('GET / — list notifications', () => {
 
     const args = prisma.notification.findMany.mock.calls[0][0];
     expect(args.where).toEqual({ userId: 7, tenantId: 1 });
-    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
     expect(args.skip).toBe(0);
     expect(args.take).toBe(10);
   });
@@ -358,7 +358,7 @@ describe('GET /?fields=summary — slim-shape opt-in (#920 slice 7)', () => {
     expect(args.take).toBe(25);
     expect(args.skip).toBe(50); // (page - 1) * limit
     expect(args.select).toBeDefined();
-    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('?fields=summary combines with existing filters (unread/status/priority/entityType) on the where clause', async () => {

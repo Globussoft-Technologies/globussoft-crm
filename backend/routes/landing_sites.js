@@ -101,7 +101,7 @@ router.get('/', verifyToken, async (req, res) => {
     if (!paginated) {
       const pages = await prisma.landingPage.findMany({
         where: baseWhere,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         select,
       });
       const list = pinnedRow ? pages.filter((pageRow) => pageRow.id !== pinnedRow.id) : pages;
@@ -117,7 +117,7 @@ router.get('/', verifyToken, async (req, res) => {
       prisma.landingPage.count({ where: listWhere }),
       prisma.landingPage.findMany({
         where: listWhere,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
         select,

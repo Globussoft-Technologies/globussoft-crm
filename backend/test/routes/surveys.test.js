@@ -1308,7 +1308,7 @@ describe('GET /?fields=summary — slim-shape opt-in (#920 slice 8)', () => {
     const args = prisma.survey.findMany.mock.calls[0][0];
     // tenantId is sourced from req.user (JWT), not the query.
     expect(args.where).toEqual({ tenantId: 42 });
-    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('?fields=other (any non-exact value) falls through to the default enriched shape', async () => {
@@ -1348,8 +1348,7 @@ describe('GET /?fields=summary — slim-shape opt-in (#920 slice 8)', () => {
     expect(res.status).toBe(200);
     expect(res.body.map(r => r.id)).toEqual([3, 2, 1]);
     const args = prisma.survey.findMany.mock.calls[0][0];
-    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
     expect(args.where).toEqual({ tenantId: 7 });
   });
 });
-

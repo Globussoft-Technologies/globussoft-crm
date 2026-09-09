@@ -291,7 +291,7 @@ router.get(
       const [rows, total] = await Promise.all([
         prisma.auditLog.findMany({
           where,
-          orderBy: { createdAt: "desc" },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           skip: fetchOffset,
           take: fetchLimit,
         }),

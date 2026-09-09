@@ -630,7 +630,7 @@ router.get("/calls", verifyToken, async (req, res) => {
       prisma.callLog.count({ where }),
       prisma.callLog.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip: (page - 1) * limit,
         take: limit,
         select: {

@@ -559,7 +559,7 @@ describe('GET /api/calendar/outlook/events', () => {
       tenantId: 42,
       provider: 'microsoft',
     });
-    expect(args.orderBy).toEqual({ startTime: 'asc' });
+    expect(args.orderBy).toEqual([{ startTime: 'asc' }, { id: 'asc' }]);
   });
 });
 

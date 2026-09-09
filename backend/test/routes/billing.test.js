@@ -741,7 +741,7 @@ describe('GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)'
     expect(args.where).toEqual({ tenantId: 42 });
     // Ordering contract preserved so the Invoices/Billing page still
     // renders status-grouped, due-date-sorted rows under the slim shape.
-    expect(args.orderBy).toEqual([{ status: 'desc' }, { dueDate: 'asc' }]);
+    expect(args.orderBy).toEqual([{ status: 'desc' }, { dueDate: 'asc' }, { id: 'asc' }]);
   });
 
   test('?fields=summary response body shape — slim row passes through unchanged', async () => {

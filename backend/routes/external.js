@@ -221,7 +221,7 @@ router.get("/contacts", async (req, res) => {
     const [data, total] = await Promise.all([
       prisma.contact.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: limit,
         skip: offset,
         select: {
@@ -351,7 +351,7 @@ router.get("/leads", async (req, res) => {
 
     const leads = await prisma.contact.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: parseLimit(limit, 100),
       select: {
         id: true, name: true, email: true, phone: true, source: true,
@@ -993,7 +993,7 @@ router.get("/services", async (req, res) => {
 
     const services = await prisma.service.findMany({
       where,
-      orderBy: [{ ticketTier: "desc" }, { name: "asc" }],
+      orderBy: [{ ticketTier: "desc" }, { name: "asc" }, { id: "asc" }],
       take: parseLimit(req.query.limit),
       skip: parseOffset(req.query.offset),
     });
@@ -1053,7 +1053,7 @@ router.get("/appointments", async (req, res) => {
 
     const visits = await prisma.visit.findMany({
       where,
-      orderBy: { visitDate: "asc" },
+      orderBy: [{ visitDate: "asc" }, { id: "asc" }],
       take: parseLimit(req.query.limit, 100),
       skip: parseOffset(req.query.offset),
       include: {

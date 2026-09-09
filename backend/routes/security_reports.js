@@ -264,7 +264,7 @@ router.get("/incidents", verifyToken, verifyRole(["ADMIN"]), async (req, res) =>
     const [incidents, total] = await Promise.all([
       prisma.securityIncident.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip: offset,
         take: limit,
       }),

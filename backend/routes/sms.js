@@ -422,7 +422,7 @@ router.get("/messages", verifyToken, async (req, res) => {
     const [rawRows, totalAll] = await Promise.all([
       prisma.smsMessage.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip,
         take: fetchTake,
         include: { contact: { select: { id: true, name: true, phone: true } } },

@@ -583,7 +583,7 @@ describe('GET /api/calendar/google/events', () => {
       tenantId: 42,
       provider: 'google',
     });
-    expect(args.orderBy).toEqual({ startTime: 'asc' });
+    expect(args.orderBy).toEqual([{ startTime: 'asc' }, { id: 'asc' }]);
   });
 });
 

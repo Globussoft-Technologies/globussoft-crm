@@ -169,7 +169,7 @@ describe('GET / — list tickets', () => {
     expect(prisma.ticket.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
       include: { assignee: { select: { id: true, name: true, email: true } } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   });
 });
@@ -212,7 +212,7 @@ describe('GET / — paginated list', () => {
     expect(prisma.ticket.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
       include: { assignee: { select: { id: true, name: true, email: true } } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       skip: 2,
       take: 2,
     });
@@ -220,14 +220,13 @@ describe('GET / — paginated list', () => {
     expect(prisma.ticket.count).toHaveBeenNthCalledWith(2, {
       where: {
         tenantId: 1,
-        status: { notIn: ['Resolved', 'Closed'] },
+        status: 'Open',
       },
     });
     expect(prisma.ticket.count).toHaveBeenNthCalledWith(3, {
       where: {
         tenantId: 1,
         priority: 'Urgent',
-        status: { not: 'Closed' },
       },
     });
   });
@@ -641,7 +640,7 @@ describe('GET / ?fields=summary — slim-shape opt-in (#920 slice 3)', () => {
     expect(args.include).toBeUndefined();
     // Tenant scope preserved on the slim branch
     expect(args.where).toEqual({ tenantId: 1 });
-    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('?fields= (empty) → falls through to FULL shape with nested assignee include', async () => {
@@ -727,7 +726,7 @@ describe('GET / ?fields=summary — slim-shape opt-in (#920 slice 3)', () => {
     expect(args.take).toBeUndefined();
     expect(args.skip).toBeUndefined();
     // orderBy + where survive the slim branch
-    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
     expect(args.where).toEqual({ tenantId: 1 });
   });
 });

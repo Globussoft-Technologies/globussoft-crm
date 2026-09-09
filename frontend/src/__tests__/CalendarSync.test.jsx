@@ -714,6 +714,31 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(attendeesInput.value).toContain('anita@example.com');
   });
 
+  it('attendee dropdown includes contacts beyond the first API page', async () => {
+    const firstPage = Array.from({ length: 500 }, (_, index) => ({
+      id: index + 1,
+      name: `Contact ${index + 1}`,
+      email: `contact${index + 1}@example.com`,
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts?limit=500') return Promise.resolve(firstPage);
+      if (url.includes('/api/contacts?') && url.includes('offset=500')) {
+        return Promise.resolve([{ id: 501, name: 'Deep Page Contact', email: 'deep@example.com' }]);
+      }
+      if (url === '/api/calendar/google/events' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(sampleGoogleEvents);
+      }
+      if (url === '/api/calendar/outlook/events') return Promise.reject(new Error('not connected'));
+      return Promise.resolve(null);
+    });
+
+    render(<CalendarSync />);
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+    expect(await screen.findByRole('option', { name: /Deep Page Contact \(deep@example.com\)/i })).toBeInTheDocument();
+  });
+
   it('createMeet: checking "Add a Google Meet link" sends createMeet:true in the POST', async () => {
     fetchApiMock.mockImplementation(makeGoogleOnlineWithContacts());
     const { container } = render(<CalendarSync />);

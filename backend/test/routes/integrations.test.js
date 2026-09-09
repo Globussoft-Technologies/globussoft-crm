@@ -92,6 +92,7 @@ authMw.verifyRole = (roles) => (req, res, next) => {
 prisma.integration = {
   findMany: vi.fn(),
   findFirst: vi.fn(),
+  findUnique: vi.fn(),
   update: vi.fn(),
   upsert: vi.fn(),
   updateMany: vi.fn(),
@@ -104,6 +105,9 @@ prisma.marketplaceConfig = {
 prisma.marketplaceLead = {
   count: vi.fn(),
 };
+
+const callifiedClient = requireCJS('../../services/callifiedClient');
+callifiedClient.clearTokenCache = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -123,12 +127,14 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 beforeEach(() => {
   prisma.integration.findMany.mockReset();
   prisma.integration.findFirst.mockReset();
+  prisma.integration.findUnique.mockReset();
   prisma.integration.update.mockReset();
   prisma.integration.upsert.mockReset();
   prisma.integration.updateMany.mockReset();
   prisma.user.findUnique.mockReset();
   prisma.marketplaceConfig.findMany.mockReset();
   prisma.marketplaceLead.count.mockReset();
+  callifiedClient.clearTokenCache.mockReset();
 
   // Sensible defaults — happy-path resolves.
   prisma.integration.findMany.mockResolvedValue([]);
@@ -452,6 +458,19 @@ describe('POST /api/integrations/disconnect — ADMIN gate + soft disable', () =
     const args = prisma.integration.updateMany.mock.calls[0][0];
     expect(args.where).toEqual({ tenantId: 5, provider: 'slack' });
     expect(args.data).toEqual({ isActive: false, token: null });
+    expect(callifiedClient.clearTokenCache).not.toHaveBeenCalled();
+  });
+
+  test('Callified disconnect clears only the current tenant token cache', async () => {
+    prisma.integration.updateMany.mockResolvedValue({ count: 1 });
+    const app = makeApp({ tenantId: 42 });
+    const res = await request(app)
+      .post('/api/integrations/disconnect')
+      .send({ provider: 'callified' });
+
+    expect(res.status).toBe(200);
+    expect(callifiedClient.clearTokenCache).toHaveBeenCalledOnce();
+    expect(callifiedClient.clearTokenCache).toHaveBeenCalledWith(42);
   });
 
   test('idempotent — no error when no matching row exists (route does not 404)', async () => {
@@ -472,6 +491,40 @@ describe('POST /api/integrations/disconnect — ADMIN gate + soft disable', () =
       .send({ provider: 'slack' });
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'Failed to disconnect' });
+  });
+});
+
+// ─── PUT /callified/config ─────────────────────────────────────────────
+
+describe('PUT /api/integrations/callified/config — cached JWT invalidation', () => {
+  test('successful credential update clears the current tenant token cache', async () => {
+    prisma.integration.findUnique.mockResolvedValue(null);
+    prisma.integration.upsert.mockResolvedValue({
+      isActive: true,
+      updatedAt: new Date('2026-09-09T10:00:00Z'),
+    });
+
+    const res = await request(makeApp({ tenantId: 73 }))
+      .put('/api/integrations/callified/config')
+      .send({ apiKey: 'replacement-key', baseUrl: 'https://callified.example.com' });
+
+    expect(res.status).toBe(200);
+    expect(callifiedClient.clearTokenCache).toHaveBeenCalledOnce();
+    expect(callifiedClient.clearTokenCache).toHaveBeenCalledWith(73);
+  });
+
+  test('failed credential update leaves the existing token cache untouched', async () => {
+    prisma.integration.findUnique.mockResolvedValue(null);
+    prisma.integration.upsert.mockRejectedValue(new Error('db down'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await request(makeApp({ tenantId: 73 }))
+      .put('/api/integrations/callified/config')
+      .send({ apiKey: 'replacement-key' });
+
+    expect(res.status).toBe(500);
+    expect(callifiedClient.clearTokenCache).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 });
 
@@ -794,7 +847,6 @@ describe('GET /api/integrations/callified/sso — 302 redirect', () => {
     expect(res.text).toBe('User not found');
   });
 });
-
 
 
 

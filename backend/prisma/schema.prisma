@@ -1094,7 +1094,9 @@ model LeadCustomFieldValue {
 model WebForm {
   id        Int      @id @default(autoincrement())
   name      String
-  slug      String   @unique
+  // Vertical/module boundary. Existing records and callers remain Generic.
+  scope     String   @default("generic")
+  slug      String
   description String? @db.Text
   isActive  Boolean  @default(true)
 
@@ -1117,8 +1119,9 @@ model WebForm {
 
   submissions WebFormSubmission[]
 
-  @@index([tenantId, createdAt])
-  @@index([tenantId, isActive])
+  @@unique([scope, slug])
+  @@index([tenantId, scope, createdAt])
+  @@index([tenantId, scope, isActive])
 }
 
 // One row per public form submit. Stores the raw payload snapshot for the
@@ -1127,6 +1130,10 @@ model WebFormSubmission {
   id        Int      @id @default(autoincrement())
   webFormId Int
   webForm   WebForm  @relation(fields: [webFormId], references: [id], onDelete: Cascade)
+
+  // Copied from WebForm so submission/report queries retain an explicit
+  // vertical boundary even when the parent form is later removed.
+  scope     String   @default("generic")
 
   contactId Int?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
@@ -1139,8 +1146,8 @@ model WebFormSubmission {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId, webFormId])
-  @@index([tenantId, submittedAt])
+  @@index([tenantId, scope, webFormId])
+  @@index([tenantId, scope, submittedAt])
 }
 
 // ── Table Column Visibility Preference (generic vertical only) ──────

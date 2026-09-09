@@ -1,0 +1,10 @@
+{
+  "serverUrl": "wss://crm.example.com/ws/tally-connector",
+  "customerId": 1,
+  "connectorId": "tally_replace_me",
+  "token": "replace-with-the-one-time-token-from-the-website",
+  "machineId": "office-pc-1",
+  "localTallyUrl": "http://127.0.0.1:9000",
+  "requestTimeoutMs": 45000,
+  "rejectUnauthorized": true
+}

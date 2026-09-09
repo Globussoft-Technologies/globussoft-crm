@@ -1,6 +1,21 @@
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Navigate } from "react-router-dom";
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -6424,7 +6439,7 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick,
 
 
 
-export default function WebForms() {
+export default function WebForms({ scope = "generic" }) {
 
 
 
@@ -6456,7 +6471,6 @@ export default function WebForms() {
 
 
 
-  const { tenant } = useContext(AuthContext) || {};
 
 
 
@@ -6471,8 +6485,8 @@ export default function WebForms() {
 
 
 
-
-  const isGeneric = tenant?.vertical !== "wellness" && tenant?.vertical !== "travel";
+  const formScope = scope === "travel" ? "travel" : "generic";
+  const scopeQuery = formScope === "generic" ? "" : `?scope=${encodeURIComponent(formScope)}`;
 
 
 
@@ -6783,6 +6797,11 @@ export default function WebForms() {
 
   const refreshLeadFields = useCallback(async () => {
 
+    if (formScope !== "generic") {
+      setLeadFields([]);
+      return;
+    }
+
     try {
 
       const data = await fetchApi("/api/lead-custom-fields");
@@ -6795,7 +6814,7 @@ export default function WebForms() {
 
     }
 
-  }, []);
+  }, [formScope]);
 
 
 
@@ -6863,7 +6882,7 @@ export default function WebForms() {
 
 
 
-        fetchApi("/api/forms"),
+        fetchApi(`/api/forms${scopeQuery}`),
 
 
 
@@ -6879,7 +6898,7 @@ export default function WebForms() {
 
 
 
-        fetchApi("/api/lead-custom-fields").catch(() => []),
+        formScope === "generic" ? fetchApi("/api/lead-custom-fields").catch(() => []) : Promise.resolve([]),
 
 
 
@@ -7167,7 +7186,7 @@ export default function WebForms() {
 
 
 
-  }, []);
+  }, [formScope, scopeQuery]);
 
 
 
@@ -7201,11 +7220,9 @@ export default function WebForms() {
 
   useEffect(() => {
 
-    if (!isGeneric) return;
-
     loadData();
 
-  }, [isGeneric, loadData]);
+  }, [loadData]);
 
 
 
@@ -7429,7 +7446,7 @@ export default function WebForms() {
 
 
 
-  if (!isGeneric) {
+  if (scope !== "travel" && scope !== "generic") {
 
 
 
@@ -7445,7 +7462,7 @@ export default function WebForms() {
 
 
 
-    return <Navigate to="/dashboard" replace />;
+    return null;
 
 
 
@@ -8703,7 +8720,7 @@ export default function WebForms() {
 
 
 
-      const created = await fetchApi("/api/forms", {
+      const created = await fetchApi(`/api/forms${scopeQuery}`, {
 
 
 
@@ -8735,7 +8752,7 @@ export default function WebForms() {
 
 
 
-        body: JSON.stringify({ name, description: "" }),
+        body: JSON.stringify({ name, description: "", scope: formScope }),
 
 
 
@@ -8995,7 +9012,7 @@ export default function WebForms() {
 
 
 
-      const updated = await fetchApi(`/api/forms/${selectedForm.id}`, {
+      const updated = await fetchApi(`/api/forms/${selectedForm.id}${scopeQuery}`, {
 
 
 
@@ -9453,7 +9470,7 @@ export default function WebForms() {
 
     try {
 
-      await fetchApi(`/api/forms/${targetForm.id}`, { method: "DELETE" });
+      await fetchApi(`/api/forms/${targetForm.id}${scopeQuery}`, { method: "DELETE" });
 
       setForms((current) => current.filter((item) => String(item.id) !== String(targetForm.id)));
 

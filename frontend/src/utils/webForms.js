@@ -33,13 +33,15 @@ export function buildPublicUrl(form, origin) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
   // Prefer the stable numeric id so renames never break shared links.
   // Older slug-based links keep working via the backend's slug fallback.
-  if (form?.id != null && String(form.id) !== '') return `${base}/embed/web-form.html?id=${encodeURIComponent(form.id)}`;
-  return `${base}/embed/web-form.html?slug=${encodeURIComponent(form?.slug || '')}`;
+  const scope = form?.scope && form.scope !== 'generic' ? `&scope=${encodeURIComponent(form.scope)}` : '';
+  if (form?.id != null && String(form.id) !== '') return `${base}/embed/web-form.html?id=${encodeURIComponent(form.id)}${scope}`;
+  return `${base}/embed/web-form.html?slug=${encodeURIComponent(form?.slug || '')}${scope}`;
 }
 
 export function buildWebFormEmbedCode(form, origin) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
-  const query = form?.id != null && String(form.id) !== '' ? `id=${encodeURIComponent(form.id)}` : `slug=${encodeURIComponent(form?.slug || '')}`;
+  const scope = form?.scope && form.scope !== 'generic' ? `&scope=${encodeURIComponent(form.scope)}` : '';
+  const query = `${form?.id != null && String(form.id) !== '' ? `id=${encodeURIComponent(form.id)}` : `slug=${encodeURIComponent(form?.slug || '')}`}${scope}`;
   const title = escapeHtml(form?.name || 'Web form');
   return [
     '<!-- Globussoft CRM web form -->',

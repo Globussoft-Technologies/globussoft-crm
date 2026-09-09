@@ -1,5 +1,8 @@
-import { useState } from "react";
-import { AlertCircle, CheckCircle2, Download } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertCircle, CheckCircle2, Download, KeyRound, UploadCloud } from "lucide-react";
+import PermissionGate from "../../../components/PermissionGate";
+import { fetchApi } from "../../../utils/api";
+import { useNotify } from "../../../utils/notify";
 import {
   buildBaseFileName,
   buildCsv,
@@ -105,6 +108,7 @@ export default function TallyExportActions({
   voucherTypes = [],
   onDownloadPdf,
 }) {
+  const notify = useNotify();
   const voucherRows = buildVoucherRows({
     accounts,
     commonRows,
@@ -124,11 +128,75 @@ export default function TallyExportActions({
   const voucherAmountSummary = summarizeVoucherAmounts(voucherRows);
   const [selectedVoucherType, setSelectedVoucherType] = useState("all");
   const [mastersDownloaded, setMastersDownloaded] = useState(false);
+  const [connectorStatus, setConnectorStatus] = useState(null);
+  const [connectorCredentials, setConnectorCredentials] = useState(null);
+  const [generatingCredentials, setGeneratingCredentials] = useState(false);
+  const [pushing, setPushing] = useState(false);
   const filteredRows = voucherRows
     .slice(1)
     .filter((row) => (selectedVoucherType === "all" ? true : row[1] === selectedVoucherType));
   const previewRows = filteredRows.slice(0, 18);
   const typeOptions = ["all", ...Object.keys(voucherSummary)];
+
+  const loadConnectorStatus = async (silent = true) => {
+    try {
+      const status = await fetchApi("/api/travel/tally/connector/status", { silent });
+      setConnectorStatus(status);
+    } catch (_) {
+      if (!silent) setConnectorStatus(null);
+    }
+  };
+
+  useEffect(() => {
+    loadConnectorStatus();
+    const timer = setInterval(() => loadConnectorStatus(), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const generateConnectorCredentials = async () => {
+    setGeneratingCredentials(true);
+    try {
+      const credentials = await fetchApi("/api/travel/tally/connector/credentials", { method: "POST" });
+      setConnectorCredentials(credentials);
+      await loadConnectorStatus();
+      notify.success("Connector credentials generated. Download the config now; the token is shown only once.");
+    } finally {
+      setGeneratingCredentials(false);
+    }
+  };
+
+  const downloadConnectorConfig = () => {
+    if (!connectorCredentials) return;
+    downloadFile("config.json", JSON.stringify({
+      serverUrl: connectorCredentials.connectorUrl,
+      customerId: connectorCredentials.customerId,
+      connectorId: connectorCredentials.connectorId,
+      token: connectorCredentials.token,
+      machineId: "office-pc-1",
+      localTallyUrl: "http://127.0.0.1:9000",
+      requestTimeoutMs: 45000,
+      rejectUnauthorized: true,
+    }, null, 2), "application/json;charset=utf-8");
+  };
+
+  const pushDirectlyToTally = async () => {
+    if (!hasVoucherRows || exportWarnings.length || !connectorStatus?.online) return;
+    setPushing(true);
+    try {
+      const result = await fetchApi("/api/travel/tally/connector/push", {
+        method: "POST",
+        body: JSON.stringify({
+          mastersXml: buildTallyMastersXml({ companyName: master.companyName, voucherRows }),
+          vouchersXml: buildTallyXml({ companyName: master.companyName, voucherRows }),
+        }),
+      });
+      const voucherResult = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
+      notify.success(`Pushed to Tally successfully. Created ${voucherResult?.created || 0}, altered ${voucherResult?.altered || 0}.`);
+      await loadConnectorStatus();
+    } finally {
+      setPushing(false);
+    }
+  };
 
   const exportCsv = () => {
     if (!hasVoucherRows) return;
@@ -217,6 +285,32 @@ export default function TallyExportActions({
             </div>
           ))}
         </div>
+      </div>
+      <div style={{ ...validationPanel, borderColor: connectorStatus?.online ? "#10b981" : undefined }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div>
+            <strong style={{ display: "block" }}>Direct Tally connector</strong>
+            <span style={{ color: connectorStatus?.online ? "#10b981" : "var(--text-secondary)", fontSize: 13 }}>
+              {connectorStatus?.online
+                ? `Online${connectorStatus.machineId ? ` on ${connectorStatus.machineId}` : ""}`
+                : connectorStatus?.configured ? "Configured, but currently offline" : "Not configured"}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button type="button" className="btn-secondary" onClick={() => loadConnectorStatus(false)}>Refresh status</button>
+            <PermissionGate module="tally" action="update">
+              <button type="button" className="btn-secondary" onClick={generateConnectorCredentials} disabled={generatingCredentials}>
+                <KeyRound size={15} /> {generatingCredentials ? "Generating…" : connectorStatus?.configured ? "Rotate credentials" : "Generate credentials"}
+              </button>
+            </PermissionGate>
+          </div>
+        </div>
+        {connectorCredentials && <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: "rgba(245,158,11,.12)" }}>
+          <strong style={{ display: "block", color: "#f59e0b" }}>Save this configuration now</strong>
+          <small style={{ display: "block", margin: "5px 0 9px", color: "var(--text-secondary)" }}>The connector token cannot be displayed again. Rotating credentials disconnects the previous configuration.</small>
+          <button type="button" className="btn-secondary" onClick={downloadConnectorConfig}><Download size={15} /> Download config.json</button>
+        </div>}
+        <small style={{ display: "block", marginTop: 10, color: "var(--text-secondary)" }}>Run the Globussoft connector on the Windows computer where Tally is open on localhost port 9000.</small>
       </div>
       <div style={{ ...validationPanel, marginTop: 12 }}>
         <div
@@ -369,6 +463,21 @@ export default function TallyExportActions({
         <span style={{ width: "100%", textAlign: "right", color: "var(--text-secondary)", fontSize: 12 }}>
           Import order: 1. Masters XML through Tally Masters, 2. Voucher XML through Tally Transactions.
         </span>
+        <PermissionGate module="tally" action="export">
+          <button
+            type="button"
+            onClick={pushDirectlyToTally}
+            disabled={!hasVoucherRows || exportWarnings.length > 0 || !connectorStatus?.online || pushing}
+            title={!connectorStatus?.online ? "Start the local Tally connector first" : exportWarnings.length ? "Resolve export warnings before pushing" : "Send masters and vouchers directly to local Tally"}
+            style={{
+              ...button,
+              background: hasVoucherRows && !exportWarnings.length && connectorStatus?.online && !pushing ? "#ea580c" : "#64748b",
+              cursor: hasVoucherRows && !exportWarnings.length && connectorStatus?.online && !pushing ? "pointer" : "not-allowed",
+            }}
+          >
+            <UploadCloud size={15} /> {pushing ? "Pushing to Tally…" : "Push directly to Tally"}
+          </button>
+        </PermissionGate>
         <button
           type="button"
           onClick={exportCsv}

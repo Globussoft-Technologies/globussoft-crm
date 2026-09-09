@@ -169,6 +169,40 @@ const LEAD_CUSTOM_TO_CONTACT = {
   numberOfEmployees: "companySize",
   medium: "source",
 };
+const FORM_SCOPES = new Set(["generic", "travel"]);
+
+function normalizeScope(raw) {
+  const scope = textOr(raw, "generic").toLowerCase();
+
+  return FORM_SCOPES.has(scope) ? scope : null;
+}
+
+function requestedScope(req, raw) {
+  const scope = normalizeScope(raw ?? req.query?.scope);
+
+  if (!scope) {
+    const error = new Error("Invalid form scope");
+    error.statusCode = 400;
+    error.code = "INVALID_FORM_SCOPE";
+    throw error;
+  }
+
+  if (req.user?.vertical === "travel" && scope !== "travel") {
+    const error = new Error("Travel users may only access Travel forms");
+    error.statusCode = 403;
+    error.code = "FORM_SCOPE_FORBIDDEN";
+    throw error;
+  }
+
+  if (scope === "travel" && req.user?.vertical !== "travel") {
+    const error = new Error("Travel form scope is not available to this tenant");
+    error.statusCode = 403;
+    error.code = "FORM_SCOPE_FORBIDDEN";
+    throw error;
+  }
+
+  return scope;
+}
 
 function slugify(text) {
   return (
@@ -518,11 +552,11 @@ function buildEmbedCode(form, origin) {
   return [
     "<!-- Globussoft CRM web form -->",
 
-    `<iframe src="${base}/embed/web-form.html?${query}" title="${safeTitle}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
   ].join("\n");
 }
 
-async function ensureUniqueSlug(baseSlug, excludeId = null) {
+async function ensureUniqueSlug(baseSlug, scope = "generic", excludeId = null) {
   const seed = slugify(baseSlug);
 
   let slug = seed;
@@ -531,7 +565,9 @@ async function ensureUniqueSlug(baseSlug, excludeId = null) {
 
   while (true) {
     const existing = await prisma.webForm.findFirst({
-      where: excludeId ? { slug, id: { not: excludeId } } : { slug },
+      where: excludeId
+        ? { scope, slug, id: { not: excludeId } }
+        : { scope, slug },
 
       select: { id: true },
     });
@@ -555,6 +591,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
     const payload = {
       id: row.id,
       name: row.name,
+      scope: row.scope || "generic",
       slug: row.slug,
       description: row.description,
       isActive: row.isActive,
@@ -705,9 +742,9 @@ async function writeLeadCustomFieldValues(
   }
 }
 
-async function listWithCounts(tenantId) {
+async function listWithCounts(tenantId, scope) {
   const forms = await prisma.webForm.findMany({
-    where: { tenantId },
+    where: { tenantId, scope },
 
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
   });
@@ -736,7 +773,7 @@ async function listWithCounts(tenantId) {
 // Public routes -------------------------------------------------------------
 // Public forms resolve by stable numeric id when the ref is all digits,
 // falling back to the legacy slug so previously shared slug links keep working.
-async function findPublicForm(ref) {
+async function findPublicForm(ref, scope = "generic") {
   const raw = String(ref || "").trim();
 
   if (/^\d+$/.test(raw)) {
@@ -744,7 +781,7 @@ async function findPublicForm(ref) {
       where: { id: Number(raw), isActive: true },
     });
 
-    if (byId) return byId;
+    if (byId && (byId.scope || "generic") === scope) return byId;
   }
 
   const slug = slugify(raw);
@@ -752,13 +789,18 @@ async function findPublicForm(ref) {
   if (!slug) return null;
 
   return prisma.webForm.findFirst({
-    where: { slug, isActive: true },
+    where: { slug, scope, isActive: true },
   });
 }
 
 router.get("/public/:slug", async (req, res) => {
   try {
-    const form = await findPublicForm(req.params.slug);
+    const scope = normalizeScope(req.query?.scope);
+
+    if (!scope)
+      return res.status(400).json({ error: "Invalid form scope", code: "INVALID_FORM_SCOPE" });
+
+    const form = await findPublicForm(req.params.slug, scope);
 
     if (!form)
       return res
@@ -779,9 +821,16 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
   let submitStage = "start";
 
   try {
+    const scope = normalizeScope(req.query?.scope);
+
+    if (!scope)
+      return res.status(400).json({ error: "Invalid form scope", code: "INVALID_FORM_SCOPE" });
+
     submitStage = "load_form";
 
-    const form = await findPublicForm(req.params.slug);
+    submitStage = "load_form";
+
+    const form = await findPublicForm(req.params.slug, scope);
 
     if (!form)
       return res
@@ -791,6 +840,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     submitStage = "normalize_form";
 
     const fields = normalizeFields(form.fieldsJson);
+
+    const formScope = form.scope || "generic";
 
     const settings = normalizeSettings(form.settingsJson);
 
@@ -978,7 +1029,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     if (contactData.title === "") contactData.title = null;
 
-    if (contactData.source === "") contactData.source = "website-form";
+    if (contactData.source === "")
+      contactData.source = formScope === "travel" ? "inbound:web_form" : "website-form";
 
     submitStage = "validate_assignee";
 
@@ -997,7 +1049,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     // Auto-assign new Leads to a matching Callified campaign based on the
     // tenant's rule configuration when no campaign was supplied explicitly.
     // Mirrors the logic in contacts.js and external.js.
-    if (contactData.status === "Lead" && contactData.callifiedCampaignId == null) {
+    if (formScope === "generic" && contactData.status === "Lead" && contactData.callifiedCampaignId == null) {
       try {
         const matchedCampaignId = await evaluateAutoCampaignRules(form.tenantId, contactData, customFieldValues);
         if (matchedCampaignId) {
@@ -1034,7 +1086,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     // Backfill Callified campaign on existing leads when a form re-submission
     // now matches an auto-campaign rule.
-    if (contact && contact.callifiedCampaignId == null && contactData.callifiedCampaignId != null) {
+    if (formScope === "generic" && contact && contact.callifiedCampaignId == null && contactData.callifiedCampaignId != null) {
       contact = await prisma.contact.update({
         where: { id: contact.id },
         data: { callifiedCampaignId: contactData.callifiedCampaignId },
@@ -1065,7 +1117,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     submitStage = "write_custom_fields";
 
-    if (Object.keys(customFieldValues).length) {
+    if (formScope === "generic" && Object.keys(customFieldValues).length) {
       await writeLeadCustomFieldValues(
         contact.id,
         form.tenantId,
@@ -1075,7 +1127,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     // Auto-dial newly-created web-form Leads that have a Callified campaign + phone
     // when the tenant has enabled auto-dial for new leads. Mirrors external.js.
-    if (contact.status === "Lead" && contact.callifiedCampaignId && contact.phone) {
+    if (formScope === "generic" && contact.status === "Lead" && contact.callifiedCampaignId && contact.phone) {
       try {
         const autoDialEnabled = await getSetting(contact.tenantId, KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED, {
           coerce: (v) => String(v).toLowerCase() !== "false",
@@ -1144,6 +1196,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       data: {
         webFormId: form.id,
 
+        scope: form.scope || "generic",
+
         contactId: contact.id,
 
         payloadJson: JSON.stringify({
@@ -1183,7 +1237,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
         `Submission ID: ${submission.id}`,
 
-        `View public form: ${`${req.protocol}://${req.get("host")}/api/forms/public/${form.slug}`}`,
+        `View public form: ${`${req.protocol}://${req.get("host")}/api/forms/public/${form.slug}?scope=${encodeURIComponent(form.scope || "generic")}`}`,
       ].filter(Boolean);
 
       sendEmail({
@@ -1232,7 +1286,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
 router.get("/", verifyToken, async (req, res) => {
   try {
-    let forms = await listWithCounts(req.user.tenantId);
+    const scope = requestedScope(req);
+    let forms = await listWithCounts(req.user.tenantId, scope);
 
     if (forms.length === 0) {
       const now = new Date();
@@ -1251,11 +1306,13 @@ router.get("/", verifyToken, async (req, res) => {
 
       const name = `Untitled form - ${date}, ${time}`;
 
-      const slug = await ensureUniqueSlug(name);
+      const slug = await ensureUniqueSlug(name, scope);
 
       const form = await prisma.webForm.create({
         data: {
           tenantId: req.user.tenantId,
+
+          scope,
 
           createdByUserId: req.user.userId,
 
@@ -1282,13 +1339,17 @@ router.get("/", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] list error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to load forms" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to load forms",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 
 router.post("/", verifyToken, async (req, res) => {
   try {
     const body = req.body || {};
+    const scope = requestedScope(req, body.scope);
 
     const name = textOr(body.name);
 
@@ -1298,11 +1359,13 @@ router.post("/", verifyToken, async (req, res) => {
         .json({ error: "name is required", code: "NAME_REQUIRED" });
     }
 
-    const slug = await ensureUniqueSlug(body.slug || name);
+    const slug = await ensureUniqueSlug(body.slug || name, scope);
 
     const form = await prisma.webForm.create({
       data: {
         tenantId: req.user.tenantId,
+
+        scope,
 
         createdByUserId: req.user.userId,
 
@@ -1328,12 +1391,16 @@ router.post("/", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] create error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to create form" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to create form",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 
 router.get("/:id", verifyToken, async (req, res) => {
   try {
+    const scope = requestedScope(req);
     const id = parseInt(req.params.id, 10);
 
     if (!Number.isFinite(id)) {
@@ -1343,7 +1410,7 @@ router.get("/:id", verifyToken, async (req, res) => {
     }
 
     const form = await prisma.webForm.findFirst({
-      where: { id, tenantId: req.user.tenantId },
+      where: { id, tenantId: req.user.tenantId, scope },
     });
 
     if (!form)
@@ -1355,12 +1422,16 @@ router.get("/:id", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] get error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to load form" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to load form",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 
 router.put("/:id", verifyToken, async (req, res) => {
   try {
+    const scope = requestedScope(req);
     const id = parseInt(req.params.id, 10);
 
     if (!Number.isFinite(id)) {
@@ -1370,7 +1441,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     }
 
     const existing = await prisma.webForm.findFirst({
-      where: { id, tenantId: req.user.tenantId },
+      where: { id, tenantId: req.user.tenantId, scope },
     });
 
     if (!existing)
@@ -1389,7 +1460,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     }
 
     if (body.slug !== undefined) {
-      const slug = await ensureUniqueSlug(body.slug || existing.slug, existing.id);
+      const slug = await ensureUniqueSlug(body.slug || existing.slug, scope, existing.id);
 
       data.slug = slug;
     }
@@ -1426,12 +1497,16 @@ router.put("/:id", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] update error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to update form" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to update form",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
+    const scope = requestedScope(req);
     const id = parseInt(req.params.id, 10);
 
     if (!Number.isFinite(id)) {
@@ -1441,7 +1516,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
     }
 
     const existing = await prisma.webForm.findFirst({
-      where: { id, tenantId: req.user.tenantId },
+      where: { id, tenantId: req.user.tenantId, scope },
     });
 
     if (!existing)
@@ -1455,7 +1530,10 @@ router.delete("/:id", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] delete error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to delete form" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to delete form",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 

@@ -237,12 +237,11 @@ function attachCallifiedAgentBridge(server) {
       pathname = req.url;
     }
     if (pathname !== BRIDGE_PATH) {
-      // engine.io delegates every non-socket.io upgrade here, and this is the
-      // last handler in the chain — mirror engine.io's own behaviour for a
-      // path nobody claims rather than leaving the socket hanging.
-      socket.destroy();
+      // Other pre-socket.io upgrade handlers may own this path. Leave
+      // unmatched upgrades untouched so the next handler can claim them.
       return;
     }
+    req._webSocketUpgradeClaimed = true;
 
     let ticket = null;
     try {

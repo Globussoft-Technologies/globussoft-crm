@@ -184,7 +184,7 @@ describe('GET /api/forms', () => {
 
     expect(prisma.webForm.findMany).toHaveBeenCalledWith({
 
-      where: { tenantId: TENANT_ID },
+      where: { tenantId: TENANT_ID, scope: 'generic' },
 
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
 

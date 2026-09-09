@@ -74,6 +74,7 @@ import {
   TRAVEL_PAYMENT_SYNC_EVENT,
 } from "../../utils/travelPaymentSync";
 import { readableForegroundColor } from "../../utils/colorContrast";
+import DiagnosticSubmitOverlay from "../../components/travel/DiagnosticSubmitOverlay";
 
 const PORTAL_TOKEN_KEY = "portalToken";
 const PORTAL_CONTACT_KEY = "portalContact";
@@ -3181,7 +3182,8 @@ function DiagnosticsCard({ token }) {
   };
 
   return (
-    <section style={cardStyle} aria-labelledby="diag-heading">
+    <section style={{ ...cardStyle, position: "relative" }} aria-labelledby="diag-heading">
+      <DiagnosticSubmitOverlay active={submitting} fullScreen={false} primaryColor="var(--primary-color, #122647)" />
       <h2
         id="diag-heading"
         style={{ display: "flex", alignItems: "center", gap: 8, margin: 0 }}

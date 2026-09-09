@@ -46,7 +46,15 @@ router.use(async (req, res, next) => {
 });
 
 const VALID_TABLE_KEYS = new Set(["leads", "contacts"]);
-
+function normalizeVisibleColumnsForTable(tableKey, visible) {
+  const next = Array.isArray(visible) ? [...visible] : [];
+  if (tableKey === "leads" && !next.includes("tags")) {
+    const sourceIndex = next.indexOf("source");
+    const insertAt = sourceIndex >= 0 ? sourceIndex + 1 : next.length;
+    next.splice(insertAt, 0, "tags");
+  }
+  return next;
+}
 // Built-in columns per table — key + label. Kept in one place so the
 // frontend doesn't need to hardcode its own copy; the API is the source of
 // truth for "what columns exist" (custom fields are tenant-specific and
@@ -63,6 +71,40 @@ const BUILTIN_COLUMNS = {
     { key: "tags", label: "Tags" },
     { key: "assignedTo", label: "Assigned To" },
     { key: "createdAt", label: "Created" },
+    { key: "campaign", label: "Callified Campaign" },
+    { key: "callStatus", label: "Call Status" },
+    { key: "callifiedAi", label: "Callified AI call" },
+    { key: "callifiedScore", label: "Callified Score" },
+    // Extended Freshsales-parity set — every entry below is backed by a
+    // real Contact column (or a pure derivation of one, see firstName /
+    // lastName), so the Leads table can actually render it. Fields with no
+    // backing store (UTM params, FBP/FBC, addresses, subscription flags,
+    // lifecycle/lost-reason, sequence membership, …) are intentionally NOT
+    // listed — an unrenderable picker entry is worse than a missing one.
+    // Tenants that need those should define them via Settings > Lead
+    // Fields, which surface here automatically as cf_* columns.
+    { key: "status", label: "Status" }, // Contact.status
+    { key: "title", label: "Job Title" }, // Contact.title (inline-editable)
+    { key: "firstName", label: "First Name" }, // derived: first token of Contact.name
+    { key: "lastName", label: "Last Name" }, // derived: remainder of Contact.name
+    { key: "website", label: "Website URL" }, // Contact.website
+    { key: "linkedin", label: "LinkedIn" }, // Contact.linkedin
+    { key: "industry", label: "Service Type" }, // Contact.industry
+    { key: "companySize", label: "No Of Employee" }, // Contact.companySize — same data as the web-form No Of Employee field
+    { key: "description", label: "Note" }, // Contact.description (conversation-summary narrative)
+    { key: "stateCode", label: "State" }, // Contact.stateCode (ISO 3166-2, e.g. IN-KA)
+    { key: "lastUpdated", label: "Last Updated" }, // Contact.updatedAt
+    // Web-form parity set — every entry is a real Contact column, so the
+    // Customize-table picker offers the same data as the web-form Add-field
+    // list (labels match the web-form field labels).
+    { key: "firstTouchSource", label: "First Touch Source" }, // Contact.firstTouchSource
+    { key: "lastTouchSource", label: "Last Touch Source" }, // Contact.lastTouchSource
+    { key: "treatmentOfInterest", label: "Treatment Of Interest" }, // Contact.treatmentOfInterest
+    { key: "birthDate", label: "Birth Date" }, // Contact.birthDate (DateTime)
+    { key: "anniversary", label: "Anniversary" }, // Contact.anniversary (DateTime)
+    { key: "gst", label: "GSTIN" }, // Contact.gst
+    { key: "billingStateCode", label: "Billing State Code" }, // Contact.billingStateCode
+    { key: "actions", label: "Actions", lockedVisible: true }, // row actions — always shown, listed so the picker documents it
   ],
   contacts: [
     { key: "name", label: "Name", lockedVisible: true },
@@ -77,16 +119,6 @@ const BUILTIN_COLUMNS = {
 };
 
 const CUSTOM_FIELD_KEY_PREFIX = "cf_";
-
-function normalizeVisibleColumnsForTable(tableKey, visible) {
-  const next = Array.isArray(visible) ? [...visible] : [];
-  if (tableKey === "leads" && !next.includes("tags")) {
-    const sourceIndex = next.indexOf("source");
-    const insertAt = sourceIndex >= 0 ? sourceIndex + 1 : next.length;
-    next.splice(insertAt, 0, "tags");
-  }
-  return next;
-}
 
 async function getAvailableColumns(tableKey, tenantId) {
   const builtin = BUILTIN_COLUMNS[tableKey] || [];
@@ -169,11 +201,15 @@ router.put("/:tableKey", async (req, res) => {
       .map((k) => String(k))
       .filter((k) => availableKeys.has(k));
 
-    // The identity column (name) can't be hidden — silently re-add it if
-    // the caller's payload dropped it, rather than rejecting the whole save.
+    // Locked columns (identity `name`, always-on `actions`) can't be hidden —
+    // silently restore them if the caller's payload dropped them, rather
+    // than rejecting the whole save. `name` stays first; any other locked
+    // column is appended in catalog order (matches the table layout).
     const lockedKeys = (BUILTIN_COLUMNS[tableKey] || []).filter((c) => c.lockedVisible).map((c) => c.key);
-    for (const k of lockedKeys) {
-      if (!cleanVisible.includes(k)) cleanVisible.unshift(k);
+    const [firstLocked, ...restLocked] = lockedKeys;
+    if (firstLocked && !cleanVisible.includes(firstLocked)) cleanVisible.unshift(firstLocked);
+    for (const k of restLocked) {
+      if (!cleanVisible.includes(k)) cleanVisible.push(k);
     }
 
     await prisma.tableColumnPreference.upsert({

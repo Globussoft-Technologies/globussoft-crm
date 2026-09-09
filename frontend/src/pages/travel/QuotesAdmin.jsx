@@ -697,6 +697,7 @@ export default function QuotesAdmin() {
           <TopScrollSync disabled>
           <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
+              <col style={{ width: "9%" }} />
               <col style={{ width: "16%" }} />
               <col style={{ width: "9%" }} />
               <col style={{ width: "11%" }} />
@@ -709,6 +710,7 @@ export default function QuotesAdmin() {
             </colgroup>
             <thead>
               <tr>
+                <th style={{ ...th, whiteSpace: "nowrap" }}>Quote ID</th>
                 <th style={{ ...th, whiteSpace: "nowrap" }}>{sortHeader("Contact", "contact")}</th>
                 <th style={th}>{statusSortHeader()}</th>
                 <th style={th}>{sortHeader("Total", "total")}</th>
@@ -723,6 +725,9 @@ export default function QuotesAdmin() {
             <tbody>
               {visibleQuotes.map((q) => (
                 <tr key={q.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>
+                    <strong>QT-{String(q.id).padStart(4, "0")}</strong>
+                  </td>
                   <td style={{ ...td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     <strong>{q.contact?.name || "—"}</strong>
                   </td>

@@ -101,7 +101,23 @@ function extractLearningProfile(answers, questions) {
     grade: normalizeProfileValue(profile.grade),
     subject: normalizeProfileValue(profile.subject),
     outcomes: normalizeProfileValue(profile.outcomes),
+    diagnosticSignals: buildDiagnosticSignals(answers, questions),
   };
+}
+
+function buildDiagnosticSignals(answers, questions) {
+  const signals = [];
+  for (const question of questions || []) {
+    const answer = resolveQuestionAnswerLabel(question, answers?.[question.id]);
+    if (!answer) continue;
+    const label = String(question.text || question.label || question.id || '').trim();
+    // Identity/contact fields never help curriculum matching and should not be
+    // sent into the AI curriculum context.
+    if (!label || /\b(name|email|phone|mobile|contact)\b/i.test(label)) continue;
+    signals.push(`${label}: ${answer}`);
+    if (signals.join('. ').length >= 1800) break;
+  }
+  return signals.join('. ').slice(0, 1800) || null;
 }
 
 function normalizeAnswerMap(answers) {

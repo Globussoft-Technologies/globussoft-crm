@@ -31,7 +31,7 @@ describe("extractLearningProfile", () => {
         { curriculum: "CBSE", grade: "Grade 8", subject: "Geography" },
         [],
       ),
-    ).toEqual({ curriculum: "CBSE", grade: "Grade 8", subject: "Geography", outcomes: null });
+    ).toEqual({ curriculum: "CBSE", grade: "Grade 8", subject: "Geography", outcomes: null, diagnosticSignals: null });
   });
 
   test("extracts profile from question labels when ids are custom", () => {
@@ -44,7 +44,7 @@ describe("extractLearningProfile", () => {
           { id: "q3", text: "Subject focus" },
         ],
       ),
-    ).toEqual({ curriculum: "IB", grade: "Grade 9", subject: "Science", outcomes: null });
+    ).toEqual({ curriculum: "IB", grade: "Grade 9", subject: "Science", outcomes: null, diagnosticSignals: 'School board / curriculum: IB. Student grade: Grade 9. Subject focus: Science' });
   });
 
   test("extracts option labels when submitted answers are option values", () => {
@@ -69,7 +69,13 @@ describe("extractLearningProfile", () => {
           },
         ],
       ),
-    ).toEqual({ curriculum: "CBSE", grade: "8", subject: "Geography", outcomes: null });
+    ).toEqual({
+      curriculum: "CBSE",
+      grade: "8",
+      subject: "Geography",
+      outcomes: null,
+      diagnosticSignals: "Which curriculum / board do you follow?: CBSE. Grade: 8. Which subject should this trip support the most?: Geography",
+    });
   });
 });
 

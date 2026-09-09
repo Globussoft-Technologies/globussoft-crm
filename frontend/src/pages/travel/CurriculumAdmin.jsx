@@ -756,7 +756,7 @@ export default function CurriculumAdmin() {
             style={selectStyle}
             data-testid="curriculum-filter-curriculum"
           >
-            <option value="">All curricula</option>
+            <option value="">All curriculum types</option>
             {CURRICULUM_SUGGESTIONS.map((c) => (
               <option key={c} value={c}>{c}</option>
             ))}

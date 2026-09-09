@@ -1,0 +1,861 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Diagnostic</title>
+  <!--
+    Third-party-embeddable diagnostic widget (rewritten 2026-09-08).
+
+    Loaded inside an iframe that diagnostic.js creates on the embedding
+    site — same-origin relative to ITSELF (served from this CRM's own
+    domain), so its own fetch() calls below never hit a CORS wall
+    regardless of what site embeds it.
+
+    Styling config is fetched live from
+    GET /api/travel/diagnostics/public/embed-config/:tenantSlug/:subBrand
+    (admin-editable under Diagnostic Settings -> Embed Forms) every time
+    this page loads, instead of being frozen into the embed snippet — an
+    admin's later styling edits take effect on every already-embedded
+    widget on the next page load, nothing needs re-copying. An optional
+    ?config= query param (matching the same shape) is shallow-merged on
+    top for a one-off override.
+  -->
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      background: #f8fafc;
+      color: #0f172a;
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+    }
+    body { padding: 16px; }
+
+    .wrap { max-width: 860px; margin: 0 auto; position: relative; }
+    .panel {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+    }
+    .gbs-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #64748b;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .gbs-status .gbs-spinner { width: 16px; height: 16px; border-width: 2px; }
+
+    h1 { margin: 0 0 8px; font-size: 1.6rem; line-height: 1.25; }
+    .subtitle { margin: 0 0 22px; color: #5c687a; font-size: 0.95rem; }
+
+    .progress-track { height: 6px; background: #e2e8f0; border-radius: 999px; margin-bottom: 22px; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 999px; transition: width 0.25s ease; }
+
+    /* Each question is its own outlined card — not just a thin divider
+       line — matching the CRM-hosted public form's look. padding/gap here
+       are fallbacks; questionMarkup() below sets them inline from
+       config.cardPadding / config.optionGap so the admin's "Card padding"
+       / "Option gap" sliders (previously silently ignored by this file —
+       the real bug behind "outlines look tight", since only the admin
+       preview honored them) actually reach the live embed too. */
+    .question {
+      padding: 22px 20px;
+      margin-bottom: 18px;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      background: #fff;
+    }
+    .question:last-of-type { margin-bottom: 0; }
+    .question-title { font-weight: 700; margin-bottom: 14px; }
+    .options { display: grid; gap: 10px; }
+
+    /* Marker BEFORE the label (standard convention) — the old version put
+       it after the text, which read as broken/backwards. */
+    .option {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border: 1.5px solid #d8e0eb;
+      border-radius: 10px;
+      cursor: pointer;
+      background: #fff;
+      transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+    }
+    .option:hover { border-color: #b9c4d4; background: #f8fafc; }
+    .option:has(input:focus-visible) { outline: 2px solid #4f46e5; outline-offset: 1px; }
+    .option input { position: absolute; opacity: 0; width: 0; height: 0; }
+    .option-marker {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      border: 1.5px solid #94a3b8;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .option-marker.is-radio { border-radius: 50%; }
+    .option-marker.is-checkbox { border-radius: 5px; }
+    .option-marker svg { width: 11px; height: 11px; display: none; }
+    .option.is-selected .option-marker svg { display: block; }
+    .option-marker.is-radio-dot { position: relative; }
+    .option-marker.is-radio-dot::after {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #fff;
+      display: none;
+    }
+    .option.is-selected .option-marker.is-radio-dot::after { display: block; }
+    .option.is-tick-only .option-marker { display: none; }
+    .option.is-no-marker .option-marker { display: none; }
+    .option-tick { margin-left: auto; font-weight: 700; display: none; }
+    .option.is-tick-only.is-selected .option-tick { display: inline; }
+
+    .identity { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 22px 0; }
+    .field { display: grid; gap: 6px; font-size: 0.88rem; font-weight: 600; }
+    .field input {
+      width: 100%;
+      padding: 11px 13px;
+      border: 1.5px solid #d8e0eb;
+      border-radius: 9px;
+      font: inherit;
+      transition: border-color 0.15s ease;
+    }
+    .field input:focus-visible { outline: 2px solid #4f46e5; outline-offset: 1px; border-color: #4f46e5; }
+
+    .actions { display: flex; justify-content: flex-end; margin-top: 22px; }
+    .submit {
+      color: #fff;
+      border: 0;
+      border-radius: 999px;
+      padding: 13px 24px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 10px 24px rgba(79, 70, 229, 0.25);
+      transition: filter 0.15s ease, transform 0.1s ease;
+    }
+    .submit:hover:not(:disabled) { filter: brightness(1.05); }
+    .submit:active:not(:disabled) { transform: translateY(1px); }
+    .submit:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+
+    .message { padding: 14px 16px; border-radius: 10px; font-size: 0.9rem; }
+    .message.error { background: #fef2f2; color: #b91c1c; margin-bottom: 16px; }
+    .message.success { text-align: center; padding: 32px 20px; }
+    .message.success h1 { margin-bottom: 6px; }
+    .message.success p { margin: 0; color: #5c687a; }
+
+    .powered-by { margin-top: 18px; text-align: center; font-size: 11px; color: #94a3b8; }
+
+    .gbs-result h1 { margin-bottom: 4px; }
+    .gbs-result-score { display: flex; align-items: baseline; gap: 12px; margin: 14px 0; }
+    .gbs-result-score strong { font-size: 1rem; }
+    .gbs-result-score-value { font-size: 2.1rem; font-weight: 800; }
+    .gbs-result-summary { color: #475569; line-height: 1.55; margin: 0 0 18px; }
+    .gbs-result-subheading { margin: 22px 0 12px; font-size: 1.05rem; }
+    .gbs-result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .gbs-result-card { padding: 16px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; }
+    .gbs-result-card strong { display: block; margin-bottom: 4px; }
+    .gbs-result-card p { margin: 6px 0 0; font-size: 0.85rem; color: #64748b; line-height: 1.45; }
+    .gbs-result-fit { display: inline-block; font-size: 0.75rem; font-weight: 700; opacity: 0.75; }
+
+    /* Trips grouped by category ("Day trips", "International", …) — only
+       RAG-matched recommendations carry a category; curriculum-fit
+       recommendations (TMC) render as one flat group instead, since they
+       have no category concept. */
+    .gbs-result-category {
+      margin: 24px 0 10px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .gbs-result-category:first-of-type { margin-top: 6px; }
+
+    /* Each recommendation card doubles as a "pick your interests" checkbox
+       — checking one and hitting "Submit chosen interests" tells the
+       advisor which trips this submitter actually wants, same feature the
+       CRM-hosted report page and customer portal already have. */
+    .gbs-interest-check { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+    .gbs-interest-checkbox { margin-top: 3px; flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; }
+    .gbs-interest-label { display: block; margin-top: 8px; font-size: 0.78rem; font-weight: 700; color: #475569; }
+    .gbs-result-brochure { display: inline-flex; margin: 12px 0 0 24px; font-size: 0.82rem; font-weight: 700; text-decoration: none; }
+    .gbs-interests-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 22px; }
+    .gbs-interests-submit {
+      color: #fff;
+      border: 0;
+      border-radius: 999px;
+      padding: 11px 20px;
+      font: inherit;
+      font-weight: 700;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    .gbs-interests-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .gbs-interests-note { font-size: 0.85rem; color: #64748b; }
+    .gbs-interests-note.is-success { color: #16a34a; }
+    .gbs-interests-note.is-error { color: #b91c1c; }
+
+    .gbs-result-pdf {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 22px;
+      padding: 12px 20px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 0.9rem;
+      text-decoration: none;
+    }
+
+    /* ── 4-stage submit-loading overlay — mirrors the React
+       DiagnosticSubmitOverlay component used across every other diagnostic
+       surface in the app, ported to plain CSS/JS since this page has no
+       React runtime. Growing stack of step cards; the form stays faintly
+       visible (dimmed + blurred) underneath. ── */
+    .gbs-loading-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.66);
+      backdrop-filter: blur(2.5px);
+      -webkit-backdrop-filter: blur(2.5px);
+      border-radius: 20px;
+      padding: 20px;
+    }
+    .gbs-loading-overlay.is-active { display: flex; }
+    .gbs-loading-stack { display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: 460px; }
+    .gbs-loading-card {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 20px 26px;
+      border-radius: 18px;
+      background: #fff;
+      border: 2px solid var(--gbs-primary, #4f46e5);
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.10);
+      opacity: 0;
+      transform: translateY(10px);
+      animation: gbs-fade-in 0.4s ease-out forwards;
+    }
+    .gbs-loading-card.is-done {
+      border-color: rgba(34, 197, 94, 0.4);
+      opacity: 0.75;
+      transform: scale(0.98);
+    }
+    .gbs-loading-icon { width: 26px; height: 26px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+    .gbs-loading-spinner {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 3px solid rgba(15, 23, 42, 0.12);
+      border-top-color: var(--gbs-primary, #4f46e5);
+      animation: gbs-spin 0.8s linear infinite;
+    }
+    .gbs-loading-text { font-size: 17px; line-height: 1.4; text-align: left; color: var(--gbs-primary, #4f46e5); font-weight: 700; }
+    .gbs-loading-card.is-done .gbs-loading-text { color: #4b5563; font-weight: 600; }
+
+    @keyframes gbs-spin { to { transform: rotate(360deg); } }
+    @keyframes gbs-fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+    @media (max-width: 640px) {
+      body { padding: 10px; }
+      .panel { padding: 20px; }
+      .identity { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap" id="gbs-wrap">
+    <div class="panel" id="gbs-app">
+      <div class="gbs-status"><span class="gbs-spinner" style="border-radius:50%;border:2px solid rgba(15,23,42,.15);border-top-color:#4f46e5;animation:gbs-spin .8s linear infinite;display:inline-block"></span> Loading diagnostic…</div>
+    </div>
+    <div class="gbs-loading-overlay" id="gbs-loading-overlay">
+      <div class="gbs-loading-stack" id="gbs-loading-stack"></div>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var tenant = params.get("tenant") || "";
+      var subBrand = params.get("subBrand") || "";
+      var root = document.getElementById("gbs-app");
+      var wrap = document.getElementById("gbs-wrap");
+      var loadingOverlay = document.getElementById("gbs-loading-overlay");
+      var loadingStack = document.getElementById("gbs-loading-stack");
+
+      var DEFAULTS = {
+        title: "", subtitle: "", hideTitle: false, hideSubtitle: false,
+        primary: "#4f46e5", background: "#f8fafc", card: "#ffffff", text: "#0f172a",
+        selectedText: "", // "" = auto-pick a readable color against `primary`
+        radius: 16, fontFamily: "Inter, system-ui, -apple-system, sans-serif",
+        maxWidth: 860,
+        questionSize: 16, optionSize: 14.5, cardPadding: 20, optionGap: 10,
+        singleChoiceStyle: "buttons", multiSelectStyle: "checkboxes",
+        selectionMarker: "auto", optionColumns: 1,
+        progress: true, poweredBy: true,
+        submitLabel: "", // "" = falls back to the Public form's own submit label, then "See my result"
+        submitAlignment: "right", submitStyle: "rounded", submitWidth: "auto",
+        resultTitle: "Your result", showScore: true, showSummary: true,
+        recommendations: true, recommendationTitle: "Recommended for you",
+      };
+
+      var overrideConfig = {};
+      try { overrideConfig = JSON.parse(params.get("config") || "{}"); } catch (e) { overrideConfig = {}; }
+
+      var config = DEFAULTS;
+      var data = null;
+
+      var CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      var CHECK_CIRCLE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>';
+
+      function esc(v) {
+        return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+        });
+      }
+
+      function resize() {
+        try {
+          parent.postMessage({ source: "gbs-diagnostic-embed", type: "size", height: document.body.scrollHeight }, "*");
+        } catch (e) { /* not embedded, or cross-origin parent blocked postMessage — non-fatal */ }
+      }
+      if (typeof ResizeObserver !== "undefined") new ResizeObserver(resize).observe(document.body);
+
+      // Relative luminance -> readable text color, so the selected-option
+      // and submit-button text stay legible against ANY admin-picked
+      // primary color instead of relying on a manually-tuned field.
+      function pickReadableText(hex) {
+        var h = String(hex || "").replace("#", "");
+        if (h.length === 3) h = h.split("").map(function (c) { return c + c; }).join("");
+        if (!/^[0-9a-fA-F]{6}$/.test(h)) return "#ffffff";
+        var r = parseInt(h.substr(0, 2), 16) / 255;
+        var g = parseInt(h.substr(2, 2), 16) / 255;
+        var b = parseInt(h.substr(4, 2), 16) / 255;
+        function lin(c) { return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+        var lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+        return lum > 0.5 ? "#0f172a" : "#ffffff";
+      }
+
+      // ── 4-stage loading overlay ──────────────────────────────────────
+      var STAGES = [
+        "Submitting your response…",
+        "Going through all available trips…",
+        "Tailoring your recommendations…",
+        "Putting together your results…",
+      ];
+      var STAGE_MS = 4500; // same fixed duration per card as DiagnosticSubmitOverlay.jsx
+      var stageTimer = null;
+      var stageIndex = 0;
+
+      function renderLoadingStack() {
+        var html = "";
+        for (var i = 0; i <= stageIndex; i++) {
+          var done = i < stageIndex;
+          html += '<div class="gbs-loading-card' + (done ? " is-done" : "") + '">' +
+            '<span class="gbs-loading-icon">' + (done ? CHECK_CIRCLE_SVG : '<span class="gbs-loading-spinner"></span>') + "</span>" +
+            '<span class="gbs-loading-text">' + esc(STAGES[i]) + "</span>" +
+            "</div>";
+        }
+        loadingStack.innerHTML = html;
+      }
+
+      function startLoading() {
+        stageIndex = 0;
+        renderLoadingStack();
+        loadingOverlay.classList.add("is-active");
+        clearInterval(stageTimer);
+        stageTimer = setInterval(function () {
+          if (stageIndex < STAGES.length - 1) {
+            stageIndex += 1;
+            renderLoadingStack();
+          }
+        }, STAGE_MS);
+        resize();
+      }
+
+      function stopLoading() {
+        clearInterval(stageTimer);
+        loadingOverlay.classList.remove("is-active");
+      }
+
+      // ── Question rendering ───────────────────────────────────────────
+      function optionMarkup(question, option, index) {
+        var multi = question.type === "multi-select";
+        var style = multi ? config.multiSelectStyle : config.singleChoiceStyle;
+        var marker = config.selectionMarker === "auto" ? (multi ? "checkbox" : "radio") : config.selectionMarker;
+        var id = "gbs-q-" + esc(question.id) + "-" + index;
+        var extraClass = marker === "tick" ? " is-tick-only" : marker === "none" ? " is-no-marker" : "";
+        var markerHtml = "";
+        if (marker === "radio") {
+          markerHtml = '<span class="option-marker is-radio is-radio-dot"></span>';
+        } else if (marker === "checkbox") {
+          markerHtml = '<span class="option-marker is-checkbox">' + CHECK_SVG + "</span>";
+        }
+        var pillRadius = style === "pills" ? "999px" : Math.max(6, config.radius / 2) + "px";
+        return (
+          '<label class="option' + extraClass + '" for="' + id + '" style="border-radius:' + pillRadius + ';font-size:' + Math.max(11, Math.min(28, Number(config.optionSize) || 14.5)) + 'px !important">' +
+          markerHtml +
+          '<input id="' + id + '" type="' + (multi ? "checkbox" : "radio") + '" name="' + esc(question.id) + '" value="' + esc(option.value) + '" ' + (!multi ? "required" : "") + ">" +
+          "<span>" + esc(option.label || option.value) + "</span>" +
+          '<span class="option-tick">' + CHECK_SVG + "</span>" +
+          "</label>"
+        );
+      }
+
+      function questionMarkup(question, index) {
+        var options = Array.isArray(question.options) ? question.options : [];
+        var cols = Math.max(1, Math.min(3, Number(config.optionColumns) || 1));
+        var cardPadding = Math.max(0, Number(config.cardPadding) || 20) + "px";
+        var optionGap = Math.max(0, Number(config.optionGap) || 10) + "px";
+        var cardRadius = Math.max(0, Number(config.radius) || 16) * 0.7 + "px";
+        return (
+          '<section class="question" style="padding:' + cardPadding + ";background:" + esc(config.card) + ";border-radius:" + cardRadius + '">' +
+          '<div class="question-title" style="font-size:' + config.questionSize + 'px">' +
+          esc((config.progress !== false ? index + 1 + ". " : "") + (question.text || "Question")) +
+          '</div><div class="options" style="gap:' + optionGap + ";grid-template-columns:repeat(" + cols + ",minmax(0,1fr))\">" +
+          options.map(function (o, i) { return optionMarkup(question, o, i); }).join("") +
+          "</div></section>"
+        );
+      }
+
+      function syncSelectedStyles() {
+        var selectedBg = config.primary;
+        var selectedText = config.selectedText || pickReadableText(config.primary);
+        Array.prototype.forEach.call(root.querySelectorAll(".option"), function (option) {
+          var input = option.querySelector("input");
+          var apply = function () {
+            var checked = input.checked;
+            option.classList.toggle("is-selected", checked);
+            option.style.borderColor = checked ? config.primary : "";
+            option.style.background = checked ? selectedBg : "";
+            option.style.color = checked ? selectedText : "";
+          };
+          apply();
+          input.addEventListener("change", function () {
+            // Radio buttons only dispatch `change` on the newly selected
+            // input. Refresh every option so the old choice always loses
+            // its selected styling; checkboxes retain independent state.
+            Array.prototype.forEach.call(root.querySelectorAll(".option"), function (row) {
+              var rowInput = row.querySelector("input");
+              var checked = rowInput.checked;
+              row.classList.toggle("is-selected", checked);
+              row.style.borderColor = checked ? config.primary : "";
+              row.style.background = checked ? selectedBg : "";
+              row.style.color = checked ? selectedText : "";
+            });
+          });
+        });
+      }
+
+      function configuredIdentityFields(form, bankFields) {
+        var styling = {};
+        try { styling = JSON.parse(form.stylingConfigJson || "{}"); } catch (e) { styling = {}; }
+        var usingBankFields = Array.isArray(bankFields) && bankFields.length;
+        var custom = usingBankFields ? bankFields : (Array.isArray(styling.identityFields) ? styling.identityFields : []);
+        var fallback = [
+          { id: "name", label: "Name", type: "text", enabled: form.includeName !== false, required: form.nameRequired !== false },
+          { id: "email", label: "Email", type: "email", enabled: form.includeEmail !== false, required: form.emailRequired !== false },
+          { id: "phone", label: "Phone", type: "tel", enabled: form.includePhone !== false, required: form.phoneRequired === true },
+        ];
+        return (custom.length ? custom : fallback).filter(function (field) {
+          return field && field.enabled !== false && ["name", "email", "phone"].indexOf(field.id) !== -1;
+        }).map(function (field) {
+          // A bank-owned definition is the shared source of truth for
+          // Public Form, Embed Form and API validation. Only legacy forms
+          // without it fall back to their historical form-level flags.
+          if (!usingBankFields) {
+            if (field.id === "name") field.required = form.nameRequired !== false;
+            if (field.id === "email") field.required = form.emailRequired !== false;
+            if (field.id === "phone") field.required = form.phoneRequired === true;
+          }
+          return field;
+        });
+      }
+
+      function identityMarkup(form) {
+        var fields = configuredIdentityFields(form, data && data.identityFields);
+        if (!fields.length) return "";
+        return '<div class="identity">' + fields.map(function (field) {
+          var type = field.type === "tel" || field.type === "email" ? field.type : "text";
+          var required = field.required ? " required" : "";
+          return '<label class="field">' + esc(field.label || field.id) + (field.required ? " *" : "") +
+            '<input name="' + esc(field.id) + '" type="' + type + '" autocomplete="' + esc(field.id) + '"' + required + '></label>';
+        }).join("") + "</div>";
+      }
+
+      function render() {
+        var form = (data && data.form) || {};
+        var questions = Array.isArray(data && data.questions) ? data.questions : [];
+        document.title = config.title || form.title || "Diagnostic";
+
+        document.documentElement.style.setProperty("--gbs-primary", config.primary);
+        document.body.style.background = config.background;
+        document.body.style.color = config.text;
+        document.body.style.fontFamily = config.fontFamily;
+        wrap.style.maxWidth = Math.max(320, Number(config.maxWidth) || 860) + "px";
+        root.style.background = config.card;
+        root.style.borderRadius = config.radius + "px";
+        root.style.color = config.text;
+
+        if (!questions.length) {
+          root.innerHTML = '<div class="message error">This diagnostic has no questions configured yet.</div>';
+          resize();
+          return;
+        }
+
+        var progressBar = config.progress !== false
+          ? '<div class="progress-track"><div class="progress-fill" style="width:12%;background:' + esc(config.primary) + '"></div></div>'
+          : "";
+
+        // hideTitle/hideSubtitle: an admin who deliberately wants NO
+        // title/subtitle at all (not even the Public form's own one) needs
+        // a way to say so distinct from just leaving the override field
+        // blank — blank alone always falls back to the Public form's copy.
+        var titleHtml = config.hideTitle
+          ? ""
+          : '<h1 style="color:' + esc(config.primary) + '">' + esc(config.title || form.title || "Travel diagnostic") + "</h1>";
+        var subtitleHtml = config.hideSubtitle
+          ? ""
+          : '<p class="subtitle">' + esc(config.subtitle || form.subtitle || "Answer a few questions to receive your result.") + "</p>";
+
+        root.innerHTML =
+          titleHtml +
+          subtitleHtml +
+          progressBar +
+          '<form id="gbs-diagnostic-form" novalidate>' +
+          '<div id="gbs-questions">' + questions.map(questionMarkup).join("") + "</div>" +
+          identityMarkup(form) +
+          '<div class="actions" style="justify-content:' + esc(config.submitAlignment || "right") + '"><button class="submit" style="background:' + esc(config.primary) + ";color:" + esc(config.selectedText || pickReadableText(config.primary)) + ";border-radius:" + (config.submitStyle === "pill" ? "999px" : config.submitStyle === "square" ? "0" : "8px") + ";width:" + (config.submitWidth === "full" ? "100%" : "auto") + '" type="submit">' +
+          esc(config.submitLabel || form.thankYouMessage || "See my result") +
+          "</button></div>" +
+          "</form>" +
+          (config.poweredBy !== false ? '<div class="powered-by">Powered by Globussoft Travel CRM</div>' : "");
+
+        syncSelectedStyles();
+        document.getElementById("gbs-diagnostic-form").addEventListener("submit", submit);
+        resize();
+        try { parent.postMessage({ source: "gbs-diagnostic-embed", type: "form_loaded" }, "*"); } catch (e) { /* non-fatal */ }
+      }
+
+      // ── Chosen interests (multi-select on the recommendation cards +
+      // "Submit chosen interests") — parity with the CRM-hosted report page
+      // and customer portal's "pick your interests" feature, wired to the
+      // same public, no-auth endpoint: POST /diagnostics/public/report/
+      // :slug/interests, body {interests:[{name, driveLink}]}. ────────────
+      var interestsSelected = {}; // name -> boolean
+      var interestsItemsByName = {}; // name -> {name, driveLink}, for building the submit payload
+      var interestsSubmitting = false;
+      var interestsSubmittedAt = null;
+      var interestsError = "";
+      var currentReportSlug = null;
+
+      // curriculum-fit recs use `destination` + `brochurePdfUrl`; RAG trips
+      // use `name` + `driveLink`. Normalize both to one shape so the
+      // checkbox/submit logic doesn't need to care which source it's from.
+      function interestItemFor(rec) {
+        var name = String(rec.destination || rec.name || "").trim();
+        var driveLink = String(rec.driveLink || rec.brochurePdfUrl || "").trim();
+        return { name: name, driveLink: driveLink };
+      }
+
+      // Only RAG-matched trips carry a `category` (e.g. "Day trips",
+      // "International"); curriculum-fit recs don't, so they render as one
+      // flat, unlabeled group instead of a fake single category.
+      function groupRecsByCategory(recs) {
+        var anyCategory = recs.some(function (r) { return r.category; });
+        if (!anyCategory) return [{ label: "", items: recs }];
+        var order = [];
+        var map = {};
+        recs.forEach(function (r) {
+          var cat = r.category || "Other";
+          if (!map[cat]) { map[cat] = []; order.push(cat); }
+          map[cat].push(r);
+        });
+        return order.map(function (cat) { return { label: cat, items: map[cat] }; });
+      }
+
+      function recCardHtml(rec) {
+        var item = interestItemFor(rec);
+        if (item.name) interestsItemsByName[item.name] = item;
+        var checked = item.name && interestsSelected[item.name];
+        var fitScore = Number(rec.fitScore) > 0 ? Number(rec.fitScore) + "% fit" : "";
+        var blurb = rec.summary || (Array.isArray(rec.reasons) && rec.reasons[0] && (rec.reasons[0].rationale || rec.reasons[0].learningOutcome)) || "";
+        var body = "<strong>" + esc(item.name || "Recommendation") + "</strong>" +
+          (fitScore ? '<span class="gbs-result-fit"> ' + esc(fitScore) + "</span>" : "") +
+          (blurb ? "<p>" + esc(blurb) + "</p>" : "");
+        var brochure = item.driveLink
+          ? '<a class="gbs-result-brochure" href="' + esc(item.driveLink) + '" target="_blank" rel="noopener noreferrer">View brochure</a>'
+          : "";
+        if (!item.name) return '<div class="gbs-result-card">' + body + brochure + "</div>";
+        return '<div class="gbs-result-card"><label class="gbs-interest-check">' +
+          '<input type="checkbox" class="gbs-interest-checkbox" value="' + esc(item.name) + '" aria-label="Select ' + esc(item.name) + ' as an interest"' + (checked ? " checked" : "") + ">" +
+          '<span>' + body + '<span class="gbs-interest-label">Select as an interest</span></span></label>' + brochure + "</div>";
+      }
+
+      // Re-syncs just the submit-interests button/status line — called on
+      // every checkbox toggle instead of re-rendering the whole result, so
+      // an admin's category groups/cards aren't rebuilt (and any typed
+      // scroll position lost) on every click.
+      function renderInterestsBar() {
+        var count = 0;
+        for (var k in interestsSelected) { if (interestsSelected[k]) count += 1; }
+        var btn = document.getElementById("gbs-interests-submit-btn");
+        if (btn) {
+          btn.disabled = interestsSubmitting || count === 0;
+          btn.textContent = interestsSubmitting ? "Submitting…" : "Submit chosen interests (" + count + ")";
+        }
+        var note = document.getElementById("gbs-interests-note");
+        if (note) {
+          note.className = "gbs-interests-note" + (interestsError ? " is-error" : interestsSubmittedAt ? " is-success" : "");
+          note.textContent = interestsError
+            ? interestsError
+            : interestsSubmittedAt
+              ? "Thanks — we've noted your interests. You can update your picks anytime."
+              : "";
+        }
+      }
+
+      function submitInterests() {
+        if (!currentReportSlug || interestsSubmitting) return;
+        var items = [];
+        for (var name in interestsSelected) {
+          if (interestsSelected[name] && interestsItemsByName[name]) items.push(interestsItemsByName[name]);
+        }
+        if (!items.length) return;
+        interestsSubmitting = true;
+        interestsError = "";
+        renderInterestsBar();
+        fetch("/api/travel/diagnostics/public/report/" + encodeURIComponent(currentReportSlug) + "/interests", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ interests: items }),
+        })
+          .then(function (res) {
+            return res.json().then(function (body) {
+              if (!res.ok) throw new Error(body.error || "Failed to submit your chosen interests");
+              return body;
+            });
+          })
+          .then(function (body) {
+            interestsSubmitting = false;
+            interestsSubmittedAt = body.submittedAt || new Date().toISOString();
+            renderInterestsBar();
+          })
+          .catch(function (error) {
+            interestsSubmitting = false;
+            interestsError = error.message;
+            renderInterestsBar();
+          });
+      }
+
+      // Renders the REAL result — driven by the submit response (score,
+      // classification, curriculumFit, reportPdfUrl) plus, best-effort, the
+      // fuller report fetch (RAG-matched trips + summary + any PRIOR
+      // chosen-interests submission). Respects the same config the admin
+      // panel's Results/Recommendations tabs edit.
+      function renderResult(result, report) {
+        var showScore = config.showScore !== false;
+        var showSummary = config.showSummary !== false;
+        var showRecs = config.recommendations !== false;
+
+        currentReportSlug = result.reportSlug || null;
+        interestsSelected = {};
+        interestsItemsByName = {};
+        interestsSubmitting = false;
+        interestsError = "";
+        var priorInterests = report && report.chosenInterests && Array.isArray(report.chosenInterests.interests)
+          ? report.chosenInterests.interests
+          : [];
+        priorInterests.forEach(function (i) { if (i && i.name) interestsSelected[i.name] = true; });
+        interestsSubmittedAt = report && report.chosenInterests ? report.chosenInterests.submittedAt || null : null;
+
+        var curriculumRecs = result.curriculumFit && Array.isArray(result.curriculumFit.recommendations)
+          ? result.curriculumFit.recommendations
+          : [];
+        var hasUnifiedRecommendations = report && Array.isArray(report.recommendations);
+        var ragRecs = hasUnifiedRecommendations
+          ? report.recommendations
+          : (report && report.ragResult && report.ragResult.recommendations
+            && Array.isArray(report.ragResult.recommendations.recommendedTrips)
+            ? report.ragResult.recommendations.recommendedTrips
+            : []);
+        // Brochure-library RAG is the primary recommendation experience: it
+        // uses the submitted answers to retrieve the tenant's own indexed
+        // brochures. Curriculum matching remains a useful, deterministic
+        // safety net only when the library cannot return a result. The former
+        // order was backwards, so a generic curriculum card always hid a
+        // successful RAG response for TMC submissions.
+        // The report endpoint already applies the tenant's Recommendation
+        // Settings limit. Do not introduce a second embed-only cap here.
+        var recs = ragRecs.length ? ragRecs : curriculumRecs;
+        var summary = report && report.ragResult && report.ragResult.recommendations
+          ? report.ragResult.recommendations.summary
+          : "";
+
+        var scoreHtml = "";
+        if (showScore) {
+          scoreHtml = '<div class="gbs-result-score">';
+          if (result.classificationLabel || result.recommendedTier) {
+            scoreHtml += "<strong>" + esc(result.classificationLabel || result.recommendedTier) + "</strong>";
+          }
+          if (Number.isFinite(Number(result.score))) {
+            scoreHtml += '<span class="gbs-result-score-value" style="color:' + esc(config.primary) + '">' + esc(Number(result.score).toFixed(0)) + "</span>";
+          }
+          scoreHtml += "</div>";
+        }
+
+        var summaryHtml = showSummary && summary ? '<p class="gbs-result-summary">' + esc(summary) + "</p>" : "";
+
+        var recsHtml = "";
+        if (showRecs && recs.length) {
+          var groups = groupRecsByCategory(recs);
+          var groupsHtml = groups.map(function (g) {
+            var heading = g.label ? '<h4 class="gbs-result-category">' + esc(g.label) + "</h4>" : "";
+            return heading + '<div class="gbs-result-grid">' + g.items.map(recCardHtml).join("") + "</div>";
+          }).join("");
+          recsHtml = '<h3 class="gbs-result-subheading">' + esc(config.recommendationTitle || "Recommended for you") + "</h3>" +
+            groupsHtml +
+            '<div class="gbs-interests-actions" id="gbs-interests-bar">' +
+            '<button type="button" class="gbs-interests-submit" id="gbs-interests-submit-btn" style="background:' + esc(config.primary) + ";color:" + esc(config.selectedText || pickReadableText(config.primary)) + '">Submit chosen interests</button>' +
+            '<span class="gbs-interests-note" id="gbs-interests-note"></span>' +
+            "</div>";
+        }
+
+        var pdfHtml = result.reportPdfUrl
+          ? '<a class="gbs-result-pdf" style="background:' + esc(config.primary) + ";color:" + esc(config.selectedText || pickReadableText(config.primary)) + '" href="' + esc(result.reportPdfUrl) + '" target="_blank" rel="noopener noreferrer">Download full report</a>'
+          : "";
+
+        root.innerHTML =
+          '<div class="gbs-result">' +
+          '<h1 style="color:' + esc(config.primary) + '">' + esc(config.resultTitle || "Your result") + "</h1>" +
+          scoreHtml + summaryHtml + recsHtml + pdfHtml +
+          "</div>";
+
+        if (showRecs && recs.length) {
+          renderInterestsBar();
+          root.addEventListener("change", function (e) {
+            if (e.target && e.target.classList.contains("gbs-interest-checkbox")) {
+              interestsSelected[e.target.value] = e.target.checked;
+              interestsError = "";
+              renderInterestsBar();
+            }
+          });
+          var submitBtn = document.getElementById("gbs-interests-submit-btn");
+          if (submitBtn) submitBtn.addEventListener("click", submitInterests);
+        }
+
+        resize();
+      }
+
+      // Reads a named field's value via querySelector, NOT `form.fieldName`
+      // — `<input name="name">` collides with HTMLFormElement's own `.name`
+      // IDL property (which always wins, per the DOM spec's named-access
+      // rules), so `form.name.value` silently resolved to
+      // `"".value` (undefined) in every real browser — the submitter's
+      // Name field was NEVER actually sent. Same latent risk exists for
+      // any future field named `id`/`action`/`method`/`target`/`elements`/
+      // etc., so every identity field goes through this helper instead of
+      // ever being accessed as a bare `form.<name>` property again.
+      function fieldValue(form, name) {
+        var el = form.querySelector('[name="' + CSS.escape(name) + '"]');
+        return el ? el.value : "";
+      }
+
+      function submit(event) {
+        event.preventDefault();
+        var form = event.currentTarget;
+        var button = form.querySelector("button");
+        var answers = {};
+        (data.questions || []).forEach(function (q) {
+          var values = Array.prototype.slice.call(form.querySelectorAll('[name="' + CSS.escape(String(q.id)) + '"]:checked')).map(function (el) { return el.value; });
+          answers[q.id] = q.type === "multi-select" ? values : (values[0] || "");
+        });
+
+        button.disabled = true;
+        startLoading();
+
+        fetch("/api/travel/diagnostics/public/form/" + encodeURIComponent(tenant) + "/" + encodeURIComponent(subBrand) + "/submit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answers: answers, name: fieldValue(form, "name"), email: fieldValue(form, "email"), phone: fieldValue(form, "phone") }),
+        })
+          .then(function (res) {
+            return res.json().then(function (body) {
+              if (!res.ok) throw new Error(body.error || "Unable to submit diagnostic");
+              return body;
+            });
+          })
+          .then(function (result) {
+            stopLoading();
+            try {
+              parent.postMessage({ source: "gbs-diagnostic-embed", type: "diagnostic_completed", diagnosticId: result.diagnosticId || null }, "*");
+            } catch (e) { /* non-fatal */ }
+            // Best-effort: fetch the fuller report (adds RAG-matched trips +
+            // summary, which the submit response itself doesn't carry) —
+            // renders with whatever came back from submit() if this fails,
+            // never blocks showing a result.
+            if (result.reportSlug) {
+              fetch("/api/travel/diagnostics/public/report/" + encodeURIComponent(result.reportSlug))
+                .then(function (res) { return res.ok ? res.json() : null; })
+                .then(function (report) { renderResult(result, report); })
+                .catch(function () { renderResult(result, null); });
+            } else {
+              renderResult(result, null);
+            }
+          })
+          .catch(function (error) {
+            stopLoading();
+            button.disabled = false;
+            var notice = document.createElement("div");
+            notice.className = "message error";
+            notice.textContent = error.message;
+            form.prepend(notice);
+            resize();
+          });
+      }
+
+      // ── Boot ──────────────────────────────────────────────────────────
+      if (!tenant || !subBrand) {
+        root.innerHTML = '<div class="message error">Missing embed configuration.</div>';
+        return;
+      }
+
+      var configUrl = "/api/travel/diagnostics/public/embed-config/" + encodeURIComponent(tenant) + "/" + encodeURIComponent(subBrand);
+      var formUrl = "/api/travel/diagnostics/public/form/" + encodeURIComponent(tenant) + "/" + encodeURIComponent(subBrand);
+
+      Promise.all([
+        fetch(configUrl).then(function (res) { return res.ok ? res.json() : { config: {} }; }).catch(function () { return { config: {} }; }),
+        fetch(formUrl).then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) throw new Error(body.error || "Unable to load diagnostic");
+            return body;
+          });
+        }),
+      ])
+        .then(function (results) {
+          var savedConfig = (results[0] && results[0].config) || {};
+          config = Object.assign({}, DEFAULTS, savedConfig, overrideConfig);
+          data = results[1];
+          render();
+        })
+        .catch(function (error) {
+          root.innerHTML = '<div class="message error">' + esc(error.message) + "</div>";
+          resize();
+        });
+    })();
+  </script>
+</body>
+</html>

@@ -105,7 +105,9 @@
 
       var params = new URLSearchParams(location.search);
 
-      var slug = params.get('slug') || '';
+      var slug = params.get('id') || params.get('slug') || '';
+
+      var scope = params.get('scope') || 'generic';
 
       var apiBase = (params.get('api') || location.origin).replace(/\/+$/,'');
 
@@ -250,7 +252,9 @@
         var fields = Array.isArray(formData.fields) ? formData.fields : [];
 
         var titleOverride = new URLSearchParams(window.location.search).get('title');
-        var title = esc(titleOverride || formData.name || 'Web form');
+        var rawTitle = String(titleOverride || (formData.settings && formData.settings.formTitle) || '').trim();
+        var title = esc(rawTitle);
+        var titleHtml = title ? '<h1>' + title + '</h1>' : '';
 
         var desc = esc(formData.description || '');
 
@@ -273,7 +277,7 @@
 
         var footerLink = '<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>';
 
-        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header"><h1>' + title + '</h1>' + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div><div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(fieldHtml).join('') + '</div>' + optIn + '<div class="actions"><button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form><div class="note">' + footerLink + '</div></div>';
+        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div><div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(fieldHtml).join('') + '</div>' + optIn + '<div class="actions"><button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form><div class="note">' + footerLink + '</div></div>';
 
         scheduleSize();
 
@@ -313,7 +317,7 @@
 
         try {
 
-          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug) + '/submit', { method: 'POST', body: fd });
+          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug) + '/submit?scope=' + encodeURIComponent(scope), { method: 'POST', body: fd });
 
           var json = await res.json().catch(function(){ return {}; });
 
@@ -379,7 +383,7 @@
 
         if (!slug) {
 
-          setMessage('error', 'Missing form slug.');
+          setMessage('error', 'Missing form reference.');
 
           return;
 
@@ -387,7 +391,7 @@
 
         try {
 
-          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug));
+          var res = await fetch(apiBase + '/api/forms/public/' + encodeURIComponent(slug) + '?scope=' + encodeURIComponent(scope));
 
           var json = await res.json();
 

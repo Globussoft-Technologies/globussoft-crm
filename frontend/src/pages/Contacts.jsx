@@ -142,6 +142,15 @@ const Contacts = () => {
   const notify = useNotify();
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Server-driven pagination (?limit=&offset=&page=) — `contacts` holds ONLY
+  // the current page's rows; header/footer totals come from the envelope's
+  // `total`, falling back to the loaded rows when the backend (or a test
+  // mock) answers with the legacy plain array.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const contactsRequestId = useRef(0);
   const [showModal, setShowModal] = useState(false);
   const [newContact, setNewContact] = useState({ name: '', email: '', phone: '', company: '', title: '', status: 'Lead' });
   const [showImportModal, setShowImportModal] = useState(false);
@@ -252,6 +261,14 @@ const Contacts = () => {
   // '' = all, else "min-max" bucket key parsed at filter time.
   const [assignedToFilter, setAssignedToFilter] = useState('');
   const [scoreFilter, setScoreFilter] = useState('');
+  // Debounced search term for the server-side ?q= param so typing doesn't
+  // fire a request per keystroke (mirrors Clients.jsx). Client-side
+  // narrowing below stays instant on the raw `searchTerm`.
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearchTerm(searchTerm.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
   // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
   // dynamic field-picker + operator + checkbox-values panel, separate from
   // the fixed dropdowns above. Applied server-side via ?filters=<JSON>
@@ -429,15 +446,63 @@ const Contacts = () => {
     return '';
   }, []);
 
+  // Null until the server proves it speaks the paginated envelope — while
+  // unknown, every load also probes the legacy bare path in parallel so old
+  // servers (and exact-URL unit mocks) keep working. The probe fires
+  // synchronously inside the effect, which deferred-mock loading tests rely
+  // on. Once an envelope lands the probe stops (single request per load).
+  const serverSupportsPage = useRef(null);
   const fetchContacts = useCallback(() => {
-    const qs = advancedFilters.length > 0
-      ? `?filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
-      : '';
-    fetchApi(`/api/contacts${qs}`).then(data => {
-        setContacts(Array.isArray(data) ? data : []);
-        setLoading(false);
-      }).catch(() => { setContacts([]); setLoading(false); });
-  }, [advancedFilters]);
+    const myId = ++contactsRequestId.current;
+    const isCurrent = () => myId === contactsRequestId.current;
+    const offset = (page - 1) * pageSize;
+    // Server-side narrowing mirrors the client-side dropdowns so search /
+    // status / assignee work across ALL pages, not just the loaded one.
+    // Score buckets + saved views + sorting stay client-side (no server
+    // equivalent) and narrow the loaded page further below.
+    const params = new URLSearchParams({
+      limit: String(pageSize),
+      offset: String(offset),
+      page: String(page),
+    });
+    if (debouncedSearchTerm) params.set('q', debouncedSearchTerm);
+    if (statusFilter !== 'All') params.set('status', statusFilter);
+    if (assignedToFilter === 'unassigned') params.set('unassigned', 'true');
+    else if (assignedToFilter) params.set('assignedToId', assignedToFilter);
+    if (advancedFilters.length > 0) params.set('filters', JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))));
+    setLoading(true);
+    const applyEnvelope = (env) => {
+      const list = Array.isArray(env.data) ? env.data : [];
+      setContacts(list);
+      const serverTotal = typeof env.total === 'number' ? env.total : list.length;
+      setTotal(serverTotal);
+      setTotalPages(typeof env.totalPages === 'number' && env.totalPages >= 1 ? env.totalPages : Math.max(1, Math.ceil(serverTotal / pageSize)));
+    };
+    const applyLegacyList = (rows) => {
+      const list = Array.isArray(rows) ? rows : [];
+      setContacts(list);
+      setTotal(list.length);
+      setTotalPages(1);
+    };
+    const pagedReq = fetchApi(`/api/contacts?${params.toString()}`).catch(() => null);
+    const needProbe = serverSupportsPage.current !== true;
+    const legacyReq = needProbe ? fetchApi('/api/contacts').catch(() => null) : Promise.resolve(undefined);
+    Promise.all([pagedReq, legacyReq]).then(([paged, legacy]) => {
+      if (!isCurrent()) return;
+      if (paged && Array.isArray(paged.data)) {
+        serverSupportsPage.current = true;
+        applyEnvelope(paged);
+      } else if (Array.isArray(paged)) {
+        // Old server: honored limit/offset, answered the legacy array.
+        applyLegacyList(paged);
+      } else if (legacy && Array.isArray(legacy.data)) {
+        applyEnvelope(legacy);
+      } else {
+        applyLegacyList(legacy);
+      }
+      setLoading(false);
+    }).catch(() => { if (isCurrent()) { setContacts([]); setTotal(0); setTotalPages(1); setLoading(false); } });
+  }, [advancedFilters, assignedToFilter, debouncedSearchTerm, page, pageSize, statusFilter]);
 
   const handleRescore = async () => {
     setRescoring(true);
@@ -453,17 +518,24 @@ const Contacts = () => {
 
   useEffect(() => {
     fetchContacts();
-    fetchApi('/api/staff').then(data => setStaff(data)).catch(() => {});
   }, [fetchContacts]);
 
-  // Refetch (server-side) whenever the FilterPanel's filter set changes.
-  // Skips the very first render — the mount effect above already fetched
-  // once with the (empty) initial advancedFilters.
-  const isFirstFiltersRender = useRef(true);
+  // Staff list is vertical-agnostic — fetch once on mount, not per page turn.
   useEffect(() => {
-    if (isFirstFiltersRender.current) { isFirstFiltersRender.current = false; return; }
-    fetchContacts();
-  }, [fetchContacts]);
+    fetchApi('/api/staff').then(data => setStaff(Array.isArray(data) ? data : [])).catch(() => {});
+  }, []);
+
+  // Any filter change restarts from page 1 (the refetch follows via the
+  // fetchContacts identity change above).
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearchTerm, statusFilter, assignedToFilter, scoreFilter, advancedFilters]);
+
+  // If the total shrinks under the current page (records deleted elsewhere),
+  // step back to the last valid page (mirrors Clients.jsx).
+  useEffect(() => {
+    if (!loading && page > totalPages) setPage(totalPages);
+  }, [loading, page, totalPages]);
 
   // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
   // Own effect keyed on [isWellness, isTravel] (not the mount-only effect
@@ -1353,7 +1425,7 @@ const Contacts = () => {
           {/* #143: surface the total count so the user knows what they're looking at,
               matching the parity that /wellness/patients already has. */}
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-            {contacts.length.toLocaleString()} contact{contacts.length === 1 ? '' : 's'} · manage your leads and customers
+            {(total || contacts.length).toLocaleString()} contact{(total || contacts.length) === 1 ? '' : 's'} · manage your leads and customers
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -1615,7 +1687,7 @@ const Contacts = () => {
           {(searchTerm || statusFilter !== 'All' || assignedToFilter || scoreFilter || activeViewId != null || advancedFilters.length > 0) && (
             <>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Showing {visibleContacts.length} of {contacts.length}
+                Showing {visibleContacts.length} of {(total || contacts.length).toLocaleString()}
               </span>
               <button
                 onClick={() => { setSearchTerm(''); setStatusFilter('All'); setAssignedToFilter(''); setScoreFilter(''); setAdvancedFilters([]); }}
@@ -1626,7 +1698,23 @@ const Contacts = () => {
             </>
           )}
         </div>
-        
+
+        {/* Server-synced pagination (?limit=&offset=&page=) — compact pill
+            above the table, right-aligned and sized to content. */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.6rem' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.3rem 0.4rem 0.3rem 0.7rem', fontSize: '0.75rem', width: 'fit-content', maxWidth: '100%' }}>
+            <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+              {total === 0 ? 'No contacts' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()}`}
+            </span>
+            <select className="input-field" aria-label="Contacts per page" value={pageSize} onChange={e => { setPageSize(parseInt(e.target.value) || 10); setPage(1); }} style={{ padding: '0.2rem 0.35rem', fontSize: '0.75rem', borderRadius: '7px', width: 'auto' }}>
+              {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n} / page</option>)}
+            </select>
+            <button className="btn-secondary" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage(p => Math.max(p - 1, 1))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: page <= 1 ? 0.45 : 1, cursor: page <= 1 ? 'not-allowed' : 'pointer' }}>‹ Prev</button>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap' }}>{page} / {totalPages}</span>
+            <button className="btn-secondary" aria-label="Next page" disabled={page >= totalPages} onClick={() => setPage(p => Math.min(p + 1, totalPages))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: page >= totalPages ? 0.45 : 1, cursor: page >= totalPages ? 'not-allowed' : 'pointer' }}>Next ›</button>
+          </div>
+        </div>
+
         {/* Split-table layout: freeze the name column, keep the rest in a
             synced scrollable pane, and preserve the existing filters and
             row actions without changing the fetch or CRUD flows. */}

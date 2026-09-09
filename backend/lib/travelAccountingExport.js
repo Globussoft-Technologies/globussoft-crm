@@ -79,12 +79,25 @@ function escapeXml(s) {
  */
 function fmtTallyDate(d) {
   if (d == null || d === "") return "";
+  if (typeof d === "string") {
+    const dayFirst = d.trim().match(/^(\d{2})[-/](\d{2})[-/](\d{4})/);
+    if (dayFirst) return `${dayFirst[3]}${dayFirst[2]}${dayFirst[1]}`;
+    const yearFirst = d.trim().match(/^(\d{4})[-/](\d{2})[-/](\d{2})/);
+    if (yearFirst) return `${yearFirst[1]}${yearFirst[2]}${yearFirst[3]}`;
+  }
   const dt = d instanceof Date ? d : new Date(d);
   if (!Number.isFinite(dt.getTime())) return "";
-  const y = dt.getFullYear();
-  const m = String(dt.getMonth() + 1).padStart(2, "0");
-  const day = String(dt.getDate()).padStart(2, "0");
+  const y = d instanceof Date ? dt.getFullYear() : dt.getUTCFullYear();
+  const m = String((d instanceof Date ? dt.getMonth() : dt.getUTCMonth()) + 1).padStart(2, "0");
+  const day = String(d instanceof Date ? dt.getDate() : dt.getUTCDate()).padStart(2, "0");
   return `${y}${m}${day}`;
+}
+
+function fmtTallyDateAttribute(d) {
+  const value = fmtTallyDate(d);
+  if (!/^\d{8}$/.test(value)) return "";
+  const monthName = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(value.slice(4, 6)) - 1];
+  return monthName ? `${value.slice(6, 8)}-${monthName}-${value.slice(0, 4)}` : "";
 }
 
 /**
@@ -129,9 +142,9 @@ function csvDate(d) {
   if (d == null || d === "") return "";
   const dt = d instanceof Date ? d : new Date(d);
   if (!Number.isFinite(dt.getTime())) return "";
-  const y = dt.getFullYear();
-  const m = String(dt.getMonth() + 1).padStart(2, "0");
-  const day = String(dt.getDate()).padStart(2, "0");
+  const y = d instanceof Date ? dt.getFullYear() : dt.getUTCFullYear();
+  const m = String((d instanceof Date ? dt.getMonth() : dt.getUTCMonth()) + 1).padStart(2, "0");
+  const day = String(d instanceof Date ? dt.getDate() : dt.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
@@ -139,17 +152,31 @@ function csvDate(d) {
 // (sales / output-tax ledgers); Yes → debit-side (party receivable).
 function ledgerEntry(ledgerName, isDeemedPositive, amount) {
   return (
-    `        <ALLLEDGERENTRIES.LIST>\n` +
+    `        <LEDGERENTRIES.LIST>\n` +
     `          <LEDGERNAME>${escapeXml(ledgerName)}</LEDGERNAME>\n` +
     `          <ISDEEMEDPOSITIVE>${isDeemedPositive ? "Yes" : "No"}</ISDEEMEDPOSITIVE>\n` +
+    `          <ISPARTYLEDGER>${isDeemedPositive ? "Yes" : "No"}</ISPARTYLEDGER>\n` +
+    `          <ISLASTDEEMEDPOSITIVE>${isDeemedPositive ? "Yes" : "No"}</ISLASTDEEMEDPOSITIVE>\n` +
     `          <AMOUNT>${money2(amount)}</AMOUNT>\n` +
-    `        </ALLLEDGERENTRIES.LIST>`
+    `        </LEDGERENTRIES.LIST>`
+  );
+}
+
+function billAllocation(reference, billType, amount) {
+  if (!reference) return "";
+  return (
+    `          <BILLALLOCATIONS.LIST>\n` +
+    `            <NAME>${escapeXml(reference)}</NAME>\n` +
+    `            <BILLTYPE>${escapeXml(billType)}</BILLTYPE>\n` +
+    `            <AMOUNT>${money2(amount)}</AMOUNT>\n` +
+    `          </BILLALLOCATIONS.LIST>`
   );
 }
 
 function buildVoucher(invoice) {
   const invNum = escapeXml(invoice.invoiceNum || "");
-  const date = fmtTallyDate(invoice.date);
+  const date = fmtTallyDate(invoice.date) || fmtTallyDate(new Date());
+  const attributeDate = fmtTallyDateAttribute(invoice.date) || fmtTallyDateAttribute(new Date());
   const partyLedger = escapeXml(invoice.customerName || "Unknown Customer");
 
   // Narration carries the sub-brand + issuing legal entity so the CA can
@@ -189,12 +216,14 @@ function buildVoucher(invoice) {
 
   // Party ledger — the receivable side. ISDEEMEDPOSITIVE=Yes + negative
   // amount preserves Tally's double-entry invariant (all AMOUNTs sum to 0).
-  entries.push(ledgerEntry(invoice.customerName || "Unknown Customer", true, -total));
+  const partyEntry = ledgerEntry(invoice.customerName || "Unknown Customer", true, -total);
+  entries.push(partyEntry + (invoice.billReference ? `\n${billAllocation(invoice.billReference, "New Ref", -total)}` : ""));
 
   return (
     `    <TALLYMESSAGE>\n` +
-    `      <VOUCHER VCHTYPE="Sales" ACTION="Create">\n` +
+    `      <VOUCHER DATE="${attributeDate}" VCHTYPE="Sales" ACTION="Create">\n` +
     `        <DATE>${date}</DATE>\n` +
+    `        <EFFECTIVEDATE>${date}</EFFECTIVEDATE>\n` +
     `        <VOUCHERNUMBER>${invNum}</VOUCHERNUMBER>\n` +
     `        <NARRATION>${narration}</NARRATION>\n` +
     `        <PARTYLEDGERNAME>${partyLedger}</PARTYLEDGERNAME>\n` +

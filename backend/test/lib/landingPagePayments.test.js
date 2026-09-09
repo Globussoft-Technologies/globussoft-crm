@@ -5,6 +5,10 @@ const instalmentModule = requireCJS("../../lib/travelTripInstalments");
 const originalMaterialize = instalmentModule.materializeTripInstalmentsFromPlan;
 const materializeMock = vi.fn();
 instalmentModule.materializeTripInstalmentsFromPlan = materializeMock;
+const participantInvoiceModule = requireCJS("../../lib/tmcParticipantInvoice");
+const originalCreateDraftInvoice = participantInvoiceModule.createDraftInvoiceForParticipant;
+const createDraftInvoiceMock = vi.fn();
+participantInvoiceModule.createDraftInvoiceForParticipant = createDraftInvoiceMock;
 
 const {
   parseMoneyAmount,
@@ -15,6 +19,7 @@ const {
 
 afterAll(() => {
   instalmentModule.materializeTripInstalmentsFromPlan = originalMaterialize;
+  participantInvoiceModule.createDraftInvoiceForParticipant = originalCreateDraftInvoice;
 });
 
 function paymentPage(overrides = {}) {
@@ -39,6 +44,7 @@ function paymentPage(overrides = {}) {
 describe("landingPagePayments", () => {
   beforeEach(() => {
     materializeMock.mockReset();
+    createDraftInvoiceMock.mockReset().mockResolvedValue(null);
   });
 
   test("parses formatted money values safely", () => {
@@ -82,6 +88,7 @@ describe("landingPagePayments", () => {
       { id: 13, instalmentIndex: 2, amount: 2500, paidAmount: 0, status: "pending" },
     ];
     const db = {
+      tmcTrip: { findFirst: vi.fn().mockResolvedValue(null) },
       tripInstalmentPayment: {
         findMany: vi.fn().mockResolvedValue(rows),
         update: vi.fn().mockImplementation(async ({ where, data }) => {
@@ -125,6 +132,7 @@ describe("landingPagePayments", () => {
 
   test("treats a repeated hosted-payment callback as idempotent", async () => {
     const db = {
+      tmcTrip: { findFirst: vi.fn().mockResolvedValue(null) },
       tripInstalmentPayment: {
         findMany: vi.fn().mockResolvedValue([
           { id: 21, instalmentIndex: 0, amount: 5000, paidAmount: 5000, status: "paid" },
@@ -146,6 +154,7 @@ describe("landingPagePayments", () => {
       { id: 32, instalmentIndex: 1, amount: 5000, paidAmount: 0, status: "pending" },
     ];
     const db = {
+      tmcTrip: { findFirst: vi.fn().mockResolvedValue(null) },
       tripInstalmentPayment: {
         findMany: vi.fn().mockResolvedValue(rows),
         update: vi.fn().mockImplementation(async ({ where, data }) => ({ ...rows.find((row) => row.id === where.id), ...data })),
@@ -158,5 +167,50 @@ describe("landingPagePayments", () => {
     });
 
     expect(db.tripInstalmentPayment.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 32 } }));
+  });
+
+  test("stores a travel invoice link in payment metadata without reusing generic invoiceId", async () => {
+    const rows = [
+      { id: 41, instalmentIndex: 0, amount: 5000, paidAmount: 0, status: "pending" },
+    ];
+    createDraftInvoiceMock.mockResolvedValue({ id: 91, totalAmount: 5000 });
+    const db = {
+      tmcTrip: { findFirst: vi.fn().mockResolvedValue({ tenantId: 8 }) },
+      payment: {
+        findUnique: vi.fn().mockResolvedValue({ metadata: JSON.stringify({ kind: "landing-page-registration" }) }),
+        update: vi.fn().mockResolvedValue({ id: 55 }),
+      },
+      travelInvoice: { update: vi.fn().mockResolvedValue({ id: 91, status: "Paid" }) },
+      tripInstalmentPayment: {
+        findMany: vi.fn()
+          .mockResolvedValueOnce(rows)
+          .mockResolvedValueOnce([{ paidAmount: 5000 }]),
+        update: vi.fn().mockResolvedValue({ ...rows[0], paidAmount: 5000, status: "paid" }),
+      },
+    };
+
+    await applyLandingPagePaymentToTrip({
+      db,
+      tripId: 7,
+      participantId: 42,
+      paymentId: 55,
+      amountMajor: 5000,
+      mode: "installment",
+      installmentIndex: 0,
+    });
+
+    expect(createDraftInvoiceMock).toHaveBeenCalledWith({
+      db,
+      tenantId: 8,
+      tripId: 7,
+      participantId: 42,
+    });
+    const paymentData = db.payment.update.mock.calls[0][0].data;
+    expect(paymentData).not.toHaveProperty("invoiceId");
+    expect(JSON.parse(paymentData.metadata)).toMatchObject({
+      travelInvoiceId: 91,
+      tripId: 7,
+      participantId: 42,
+    });
   });
 });

@@ -131,13 +131,78 @@ const DEFAULT_FILE_FORMATS = [
 
 const CONTACT_FIELDS = new Set([
   "name",
+  "firstName",
+  "lastName",
   "email",
   "phone",
   "company",
   "title",
   "source",
   "status",
+  "aiScore",
+  "assignedToId",
+  "assignedTo",
+  "industry",
+  "companySize",
+  "website",
+  "linkedin",
+  "description",
+  "tags",
+  "stateCode",
+  "billingStateCode",
+  "gst",
+  "birthDate",
+  "anniversary",
+  "firstTouchSource",
+  "lastTouchSource",
+  "subBrand",
+  "treatmentOfInterest",
 ]);
+
+// Add-field picker fallback customs ("custom" rows) mapped to the Contact
+// column holding the same data. Keeps form submissions from being silently
+// dropped when no matching Lead-Field definition exists.
+const LEAD_CUSTOM_TO_CONTACT = {
+  industry: "industry",
+  jobRoles: "title",
+  organization: "company",
+  numberOfEmployees: "companySize",
+  medium: "source",
+};
+const FORM_SCOPES = new Set(["generic", "travel"]);
+
+function normalizeScope(raw) {
+  const scope = textOr(raw, "generic").toLowerCase();
+
+  return FORM_SCOPES.has(scope) ? scope : null;
+}
+
+function requestedScope(req, raw) {
+  const scope = normalizeScope(raw ?? req.query?.scope);
+
+  if (!scope) {
+    const error = new Error("Invalid form scope");
+    error.statusCode = 400;
+    error.code = "INVALID_FORM_SCOPE";
+    throw error;
+  }
+
+  if (req.user?.vertical === "travel" && scope !== "travel") {
+    const error = new Error("Travel users may only access Travel forms");
+    error.statusCode = 403;
+    error.code = "FORM_SCOPE_FORBIDDEN";
+    throw error;
+  }
+
+  if (scope === "travel" && req.user?.vertical !== "travel") {
+    const error = new Error("Travel form scope is not available to this tenant");
+    error.statusCode = 403;
+    error.code = "FORM_SCOPE_FORBIDDEN";
+    throw error;
+  }
+
+  return scope;
+}
 
 function slugify(text) {
   return (
@@ -289,6 +354,8 @@ function defaultStyle() {
 
 function defaultSettings() {
   return {
+    formTitle: "",
+
     createAccount: false,
 
     createDeal: false,
@@ -418,6 +485,8 @@ function normalizeSettings(raw) {
   const settings = { ...defaultSettings(), ...(parseJson(raw, {}) || {}) };
 
   return {
+    formTitle: textOr(settings.formTitle),
+
     createAccount: Boolean(settings.createAccount),
 
     createDeal: Boolean(settings.createDeal),
@@ -475,14 +544,19 @@ function buildEmbedCode(form, origin) {
 
   const safeTitle = escapeHtml(form?.name || "Web form");
 
+  const query =
+    form?.id != null && String(form.id) !== ""
+      ? `id=${encodeURIComponent(form.id)}`
+      : `slug=${encodeURIComponent(form?.slug || "")}`;
+
   return [
     "<!-- Globussoft CRM web form -->",
 
-    `<iframe src="${base}/embed/web-form.html?slug=${encodeURIComponent(form?.slug || "")}" title="${safeTitle}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?${query}${form?.scope && form.scope !== "generic" ? `&scope=${encodeURIComponent(form.scope)}` : ""}" title="${safeTitle}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
   ].join("\n");
 }
 
-async function ensureUniqueSlug(baseSlug, excludeId = null) {
+async function ensureUniqueSlug(baseSlug, scope = "generic", excludeId = null) {
   const seed = slugify(baseSlug);
 
   let slug = seed;
@@ -491,7 +565,9 @@ async function ensureUniqueSlug(baseSlug, excludeId = null) {
 
   while (true) {
     const existing = await prisma.webForm.findFirst({
-      where: excludeId ? { slug, id: { not: excludeId } } : { slug },
+      where: excludeId
+        ? { scope, slug, id: { not: excludeId } }
+        : { scope, slug },
 
       select: { id: true },
     });
@@ -515,6 +591,7 @@ function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
     const payload = {
       id: row.id,
       name: row.name,
+      scope: row.scope || "generic",
       slug: row.slug,
       description: row.description,
       isActive: row.isActive,
@@ -665,9 +742,9 @@ async function writeLeadCustomFieldValues(
   }
 }
 
-async function listWithCounts(tenantId) {
+async function listWithCounts(tenantId, scope) {
   const forms = await prisma.webForm.findMany({
-    where: { tenantId },
+    where: { tenantId, scope },
 
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
   });
@@ -694,14 +771,36 @@ async function listWithCounts(tenantId) {
 }
 
 // Public routes -------------------------------------------------------------
+// Public forms resolve by stable numeric id when the ref is all digits,
+// falling back to the legacy slug so previously shared slug links keep working.
+async function findPublicForm(ref, scope = "generic") {
+  const raw = String(ref || "").trim();
+
+  if (/^\d+$/.test(raw)) {
+    const byId = await prisma.webForm.findFirst({
+      where: { id: Number(raw), isActive: true },
+    });
+
+    if (byId && (byId.scope || "generic") === scope) return byId;
+  }
+
+  const slug = slugify(raw);
+
+  if (!slug) return null;
+
+  return prisma.webForm.findFirst({
+    where: { slug, scope, isActive: true },
+  });
+}
 
 router.get("/public/:slug", async (req, res) => {
   try {
-    const slug = slugify(req.params.slug);
+    const scope = normalizeScope(req.query?.scope);
 
-    const form = await prisma.webForm.findFirst({
-      where: { slug, isActive: true },
-    });
+    if (!scope)
+      return res.status(400).json({ error: "Invalid form scope", code: "INVALID_FORM_SCOPE" });
+
+    const form = await findPublicForm(req.params.slug, scope);
 
     if (!form)
       return res
@@ -722,13 +821,16 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
   let submitStage = "start";
 
   try {
-    const slug = slugify(req.params.slug);
+    const scope = normalizeScope(req.query?.scope);
+
+    if (!scope)
+      return res.status(400).json({ error: "Invalid form scope", code: "INVALID_FORM_SCOPE" });
 
     submitStage = "load_form";
 
-    const form = await prisma.webForm.findFirst({
-      where: { slug, isActive: true },
-    });
+    submitStage = "load_form";
+
+    const form = await findPublicForm(req.params.slug, scope);
 
     if (!form)
       return res
@@ -738,6 +840,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     submitStage = "normalize_form";
 
     const fields = normalizeFields(form.fieldsJson);
+
+    const formScope = form.scope || "generic";
 
     const settings = normalizeSettings(form.settingsJson);
 
@@ -751,7 +855,10 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     const fileRecords = [];
 
-    const contactData = { source: "website-form", status: "Lead" };
+    const contactData = {
+      source: formScope === "travel" ? "inbound:web_form" : "website-form",
+      status: "Lead",
+    };
 
     const missing = [];
 
@@ -800,9 +907,25 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
       if (
         !CONTACT_FIELDS.has(field.sourceKey) &&
-        field.sourceKind === "lead_custom"
+        field.sourceKind === "lead_custom" &&
+        !LEAD_CUSTOM_TO_CONTACT[field.sourceKey]
       ) {
         customFieldValues[field.sourceKey] = raw;
+      }
+
+      // Web-form fallback customs (the "custom" rows in the Add-field picker
+      // — Industry, Job Roles, Organization, No Of Employee, Medium) carry
+      // real Contact data, so they write straight to Contact columns instead
+      // of being dropped for having no Lead-Field definition. Job title
+      // refers to Job title, No Of Employee refers to Company Size, etc.
+      if (field.sourceKind === "lead_custom" && LEAD_CUSTOM_TO_CONTACT[field.sourceKey]) {
+        const target = LEAD_CUSTOM_TO_CONTACT[field.sourceKey];
+
+        if (target === "source") {
+          if (textOr(raw)) contactData.source = textOr(raw);
+        } else {
+          contactData[target] = textOr(raw) || null;
+        }
       }
 
       if (field.sourceKind === "contact") {
@@ -821,12 +944,33 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
           const score = Number(raw);
 
           if (Number.isFinite(score)) contactData.aiScore = score;
-        } else if (field.sourceKey === "assignedToId") {
+        } else if (field.sourceKey === "assignedToId" || field.sourceKey === "assignedTo") {
           const assignedToId = Number(raw);
 
           if (Number.isInteger(assignedToId) && assignedToId > 0)
             contactData.assignedToId = assignedToId;
-        } else if (field.sourceKey === "industry")
+          else if (textOr(raw)) contactData.assignedToId = undefined;
+        } else if (field.sourceKey === "firstName" || field.sourceKey === "lastName") {
+          const part = textOr(raw);
+          if (part) {
+            const base = textOr(contactData.name, "");
+            const baseIsDefault = !base || base === "website-form" || base === "Web form lead";
+            contactData._firstName = textOr(contactData._firstName || (field.sourceKey === "firstName" ? part : ""));
+            contactData._lastName = textOr(contactData._lastName || (field.sourceKey === "lastName" ? part : ""));
+            if (field.sourceKey === "firstName") contactData._firstName = part;
+            if (field.sourceKey === "lastName") contactData._lastName = part;
+            const combined = [contactData._firstName, contactData._lastName].filter(Boolean).join(" ").trim();
+            if (combined && (baseIsDefault || field.sourceKey === "firstName" || field.sourceKey === "lastName")) {
+              contactData.name = combined;
+            }
+          }
+        } else if (field.sourceKey === "tags") {
+          const list = Array.isArray(raw) ? raw : String(raw == null ? "" : raw).split(",");
+          const clean = list.map((t) => textOr(t).slice(0, 60)).filter(Boolean).slice(0, 20);
+          if (clean.length) contactData.tagsJson = JSON.stringify(clean);
+        } else if (field.sourceKey === "description")
+          contactData.description = textOr(raw) || null;
+        else if (field.sourceKey === "industry")
           contactData.industry = textOr(raw) || null;
         else if (field.sourceKey === "companySize")
           contactData.companySize = textOr(raw) || null;
@@ -864,6 +1008,9 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       }
     }
 
+    delete contactData._firstName;
+    delete contactData._lastName;
+
     if (missing.length) {
       return res.status(400).json({
         error: `Missing required fields: ${missing.join(", ")}`,
@@ -885,7 +1032,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     if (contactData.title === "") contactData.title = null;
 
-    if (contactData.source === "") contactData.source = "website-form";
+    if (contactData.source === "")
+      contactData.source = formScope === "travel" ? "inbound:web_form" : "website-form";
 
     submitStage = "validate_assignee";
 
@@ -904,7 +1052,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     // Auto-assign new Leads to a matching Callified campaign based on the
     // tenant's rule configuration when no campaign was supplied explicitly.
     // Mirrors the logic in contacts.js and external.js.
-    if (contactData.status === "Lead" && contactData.callifiedCampaignId == null) {
+    if (formScope === "generic" && contactData.status === "Lead" && contactData.callifiedCampaignId == null) {
       try {
         const matchedCampaignId = await evaluateAutoCampaignRules(form.tenantId, contactData, customFieldValues);
         if (matchedCampaignId) {
@@ -941,7 +1089,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     // Backfill Callified campaign on existing leads when a form re-submission
     // now matches an auto-campaign rule.
-    if (contact && contact.callifiedCampaignId == null && contactData.callifiedCampaignId != null) {
+    if (formScope === "generic" && contact && contact.callifiedCampaignId == null && contactData.callifiedCampaignId != null) {
       contact = await prisma.contact.update({
         where: { id: contact.id },
         data: { callifiedCampaignId: contactData.callifiedCampaignId },
@@ -972,7 +1120,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     submitStage = "write_custom_fields";
 
-    if (Object.keys(customFieldValues).length) {
+    if (formScope === "generic" && Object.keys(customFieldValues).length) {
       await writeLeadCustomFieldValues(
         contact.id,
         form.tenantId,
@@ -982,7 +1130,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     // Auto-dial newly-created web-form Leads that have a Callified campaign + phone
     // when the tenant has enabled auto-dial for new leads. Mirrors external.js.
-    if (contact.status === "Lead" && contact.callifiedCampaignId && contact.phone) {
+    if (formScope === "generic" && contact.status === "Lead" && contact.callifiedCampaignId && contact.phone) {
       try {
         const autoDialEnabled = await getSetting(contact.tenantId, KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED, {
           coerce: (v) => String(v).toLowerCase() !== "false",
@@ -1051,6 +1199,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       data: {
         webFormId: form.id,
 
+        scope: form.scope || "generic",
+
         contactId: contact.id,
 
         payloadJson: JSON.stringify({
@@ -1090,7 +1240,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
         `Submission ID: ${submission.id}`,
 
-        `View public form: ${`${req.protocol}://${req.get("host")}/api/forms/public/${form.slug}`}`,
+        `View public form: ${`${req.protocol}://${req.get("host")}/api/forms/public/${form.slug}?scope=${encodeURIComponent(form.scope || "generic")}`}`,
       ].filter(Boolean);
 
       sendEmail({
@@ -1139,7 +1289,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
 router.get("/", verifyToken, async (req, res) => {
   try {
-    let forms = await listWithCounts(req.user.tenantId);
+    const scope = requestedScope(req);
+    let forms = await listWithCounts(req.user.tenantId, scope);
 
     if (forms.length === 0) {
       const now = new Date();
@@ -1158,11 +1309,13 @@ router.get("/", verifyToken, async (req, res) => {
 
       const name = `Untitled form - ${date}, ${time}`;
 
-      const slug = await ensureUniqueSlug(name);
+      const slug = await ensureUniqueSlug(name, scope);
 
       const form = await prisma.webForm.create({
         data: {
           tenantId: req.user.tenantId,
+
+          scope,
 
           createdByUserId: req.user.userId,
 
@@ -1189,13 +1342,17 @@ router.get("/", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] list error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to load forms" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to load forms",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 
 router.post("/", verifyToken, async (req, res) => {
   try {
     const body = req.body || {};
+    const scope = requestedScope(req, body.scope);
 
     const name = textOr(body.name);
 
@@ -1205,11 +1362,13 @@ router.post("/", verifyToken, async (req, res) => {
         .json({ error: "name is required", code: "NAME_REQUIRED" });
     }
 
-    const slug = await ensureUniqueSlug(body.slug || name);
+    const slug = await ensureUniqueSlug(body.slug || name, scope);
 
     const form = await prisma.webForm.create({
       data: {
         tenantId: req.user.tenantId,
+
+        scope,
 
         createdByUserId: req.user.userId,
 
@@ -1235,12 +1394,16 @@ router.post("/", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] create error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to create form" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to create form",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 
 router.get("/:id", verifyToken, async (req, res) => {
   try {
+    const scope = requestedScope(req);
     const id = parseInt(req.params.id, 10);
 
     if (!Number.isFinite(id)) {
@@ -1250,7 +1413,7 @@ router.get("/:id", verifyToken, async (req, res) => {
     }
 
     const form = await prisma.webForm.findFirst({
-      where: { id, tenantId: req.user.tenantId },
+      where: { id, tenantId: req.user.tenantId, scope },
     });
 
     if (!form)
@@ -1262,12 +1425,16 @@ router.get("/:id", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] get error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to load form" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to load form",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 
 router.put("/:id", verifyToken, async (req, res) => {
   try {
+    const scope = requestedScope(req);
     const id = parseInt(req.params.id, 10);
 
     if (!Number.isFinite(id)) {
@@ -1277,7 +1444,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     }
 
     const existing = await prisma.webForm.findFirst({
-      where: { id, tenantId: req.user.tenantId },
+      where: { id, tenantId: req.user.tenantId, scope },
     });
 
     if (!existing)
@@ -1288,22 +1455,21 @@ router.put("/:id", verifyToken, async (req, res) => {
     const body = req.body || {};
 
     const data = {};
-    let nextName = existing.name;
 
     if (body.name !== undefined) {
       const name = String(body.name == null ? "" : body.name).trim();
 
       data.name = name;
-      nextName = name;
     }
 
     if (body.slug !== undefined) {
-      const slug = await ensureUniqueSlug(body.slug || existing.slug, existing.id);
+      const slug = await ensureUniqueSlug(body.slug || existing.slug, scope, existing.id);
 
       data.slug = slug;
-    } else if (body.name !== undefined && nextName) {
-      data.slug = await ensureUniqueSlug(nextName, existing.id);
     }
+    // NOTE: slug is intentionally NOT regenerated from name. Public share links
+    // prefer the stable numeric id (see buildPublicUrl), and auto-regenerating
+    // the slug on rename broke every previously shared URL.
 
     if (body.description !== undefined)
       data.description = textOr(body.description);
@@ -1334,12 +1500,16 @@ router.put("/:id", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] update error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to update form" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to update form",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
+    const scope = requestedScope(req);
     const id = parseInt(req.params.id, 10);
 
     if (!Number.isFinite(id)) {
@@ -1349,7 +1519,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
     }
 
     const existing = await prisma.webForm.findFirst({
-      where: { id, tenantId: req.user.tenantId },
+      where: { id, tenantId: req.user.tenantId, scope },
     });
 
     if (!existing)
@@ -1363,7 +1533,10 @@ router.delete("/:id", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[web-forms] delete error:", err && err.message);
 
-    res.status(500).json({ error: "Failed to delete form" });
+    res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Failed to delete form",
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
 });
 

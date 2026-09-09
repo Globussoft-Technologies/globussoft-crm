@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
@@ -42,7 +42,12 @@ export default function KnowledgeBaseAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const location = useLocation();
   const [searchParams] = useSearchParams();
+  const returnTo = typeof location.state?.returnTo === 'string' && location.state.returnTo.startsWith('/travel/')
+    ? location.state.returnTo
+    : '/travel/diagnostics';
+  const returnLabel = location.state?.returnLabel || 'Go to Diagnostics';
 
   const [oauth, setOauth] = useState({ configured: false, connected: false, userInfo: null, rootFolderId: '' });
   const [config, setConfig] = useState({ rootFolderId: '', qdrantEnabled: false, embedEnabled: false, embedProvider: null, embedModel: null, vectorSize: null });
@@ -533,7 +538,7 @@ export default function KnowledgeBaseAdmin() {
 
   if (loading) {
     return (
-      <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto', color: 'var(--text-primary)' }}>
+      <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box', color: 'var(--text-primary)' }}>
         <Link to="/travel" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 13, textDecoration: 'none', marginBottom: 16 }}>
           <ArrowLeft size={16} /> Back to Travel
         </Link>
@@ -546,17 +551,17 @@ export default function KnowledgeBaseAdmin() {
   }
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto', color: 'var(--text-primary)' }}>
+    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box', color: 'var(--text-primary)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
         <Link to="/travel" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 13, textDecoration: 'none' }}>
           <ArrowLeft size={16} /> Back to Travel
         </Link>
         <Link
-          to="/travel/diagnostics"
+          to={returnTo}
           title="Open Diagnostics — brochures from this library help create trip recommendations."
           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 13, textDecoration: 'none' }}
         >
-          <ArrowLeft size={16} /> Go to Diagnostics
+          <ArrowLeft size={16} /> {returnLabel}
         </Link>
       </div>
 

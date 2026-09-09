@@ -127,7 +127,7 @@ describe('GET / — list report schedules', () => {
     expect(prisma.reportSchedule.findMany).toHaveBeenCalledWith({
       where: { tenantId: 42 },
       include: { user: { select: { id: true, name: true, email: true } } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   });
 
@@ -143,7 +143,7 @@ describe('GET / — list report schedules', () => {
     expect(prisma.reportSchedule.findMany).toHaveBeenCalledWith({
       where: { tenantId: 42, userId: 7 },
       include: { user: { select: { id: true, name: true, email: true } } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   });
 });
@@ -491,7 +491,7 @@ describe('GET /?fields=summary — slim-shape opt-in (#920 slice 47)', () => {
     const callArg = prisma.reportSchedule.findMany.mock.calls[0][0];
     expect(callArg.where).toEqual({ tenantId: 42 });
     expect(callArg.where).not.toHaveProperty('userId');
-    expect(callArg.orderBy).toEqual({ createdAt: 'desc' });
+    expect(callArg.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
   });
 
   test('?fields=summary preserves non-ADMIN scope (userId filter applied alongside slim select)', async () => {

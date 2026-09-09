@@ -31,16 +31,21 @@ export function buildWebFormPreviewUrl(form, origin) {
 
 export function buildPublicUrl(form, origin) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
-  return `${base}/embed/web-form.html?slug=${encodeURIComponent(form?.slug || '')}`;
+  // Prefer the stable numeric id so renames never break shared links.
+  // Older slug-based links keep working via the backend's slug fallback.
+  const scope = form?.scope && form.scope !== 'generic' ? `&scope=${encodeURIComponent(form.scope)}` : '';
+  if (form?.id != null && String(form.id) !== '') return `${base}/embed/web-form.html?id=${encodeURIComponent(form.id)}${scope}`;
+  return `${base}/embed/web-form.html?slug=${encodeURIComponent(form?.slug || '')}${scope}`;
 }
 
 export function buildWebFormEmbedCode(form, origin) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
-  const slug = encodeURIComponent(form?.slug || '');
+  const scope = form?.scope && form.scope !== 'generic' ? `&scope=${encodeURIComponent(form.scope)}` : '';
+  const query = `${form?.id != null && String(form.id) !== '' ? `id=${encodeURIComponent(form.id)}` : `slug=${encodeURIComponent(form?.slug || '')}`}${scope}`;
   const title = escapeHtml(form?.name || 'Web form');
   return [
     '<!-- Globussoft CRM web form -->',
-    `<iframe src="${base}/embed/web-form.html?slug=${slug}" title="${title}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?${query}" title="${title}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
     `<p><a href="${buildPublicUrl(form, origin)}" target="_blank" rel="noopener noreferrer">Open public form</a></p>`,
   ].join('\n');
 }

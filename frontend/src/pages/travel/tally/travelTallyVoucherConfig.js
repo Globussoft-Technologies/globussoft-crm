@@ -1,0 +1,62 @@
+export const defaultVoucherTypes = [
+  {
+    id: "sales",
+    label: "Sales",
+    numberingMode: "auto",
+    prefix: "SAL",
+    narrationTemplate: "Travel sales invoice",
+    counterpartyLabel: "Customer",
+    enabled: true,
+  },
+  {
+    id: "purchase",
+    label: "Purchase",
+    numberingMode: "auto",
+    prefix: "PUR",
+    narrationTemplate: "Travel supplier payable",
+    counterpartyLabel: "Supplier",
+    enabled: true,
+  },
+  {
+    id: "receipt",
+    label: "Receipt",
+    numberingMode: "auto",
+    prefix: "RCPT",
+    narrationTemplate: "Travel customer receipt",
+    counterpartyLabel: "Customer",
+    enabled: true,
+  },
+  {
+    id: "payment",
+    label: "Payment",
+    numberingMode: "auto",
+    prefix: "PAY",
+    narrationTemplate: "Travel expense payment",
+    counterpartyLabel: "Payee",
+    enabled: true,
+  },
+  {
+    id: "taxJournal",
+    label: "Journal",
+    numberingMode: "auto",
+    prefix: "TAX",
+    narrationTemplate: "Travel tax adjustment",
+    counterpartyLabel: "Reference",
+    enabled: true,
+  },
+  {
+    id: "journal",
+    label: "Journal",
+    numberingMode: "auto",
+    prefix: "JRN",
+    narrationTemplate: "Travel adjustment",
+    counterpartyLabel: "Reference",
+    enabled: true,
+  },
+];
+
+export const voucherNumberingModes = [
+  { value: "auto", label: "Automatic" },
+  { value: "manual", label: "Manual" },
+  { value: "auto-manual", label: "Automatic with manual override" },
+];

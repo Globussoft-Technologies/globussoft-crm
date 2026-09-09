@@ -261,6 +261,16 @@ model Tenant {
   // commit cb284098). Each row is one named operator-facing pricing
   // profile (flat_percent | flat_fee | tiered | per_pax_flat | hybrid).
   travelCommissionProfiles            TravelCommissionProfile[]
+  travelTallyLedgers                  TravelTallyLedger[]
+  travelTallyMappings                 TravelTallyMapping[]
+  travelTallySyncQueue                TravelTallySyncQueue[]
+  travelTallySyncLogs                 TravelTallySyncLog[]
+  travelTallySyncErrors               TravelTallySyncError[]
+  travelTallyVoucherTypes             TravelTallyVoucherType[]
+  travelTallyPaymentAccounts          TravelTallyPaymentAccount[]
+  travelTallyTaxMasters               TravelTallyTaxMaster[]
+  travelTallyLedgerGroups             TravelTallyLedgerGroup[]
+  travelTallyCostCentres              TravelTallyCostCentre[]
   // PRD_TRAVEL_MARKETING_FLYER #908 slice 3 — saved flyer templates
   // (additive; consumes lib/flyerTemplateValidator.js from slice 1
   // commit 28146498). Each row is one operator-composed flyer (palette
@@ -920,6 +930,7 @@ model Contact {
   externalPayloadJson String? @db.LongText
 
   createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now()) @updatedAt
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
   deletedAt DateTime?
@@ -1083,7 +1094,9 @@ model LeadCustomFieldValue {
 model WebForm {
   id        Int      @id @default(autoincrement())
   name      String
-  slug      String   @unique
+  // Vertical/module boundary. Existing records and callers remain Generic.
+  scope     String   @default("generic")
+  slug      String
   description String? @db.Text
   isActive  Boolean  @default(true)
 
@@ -1106,8 +1119,9 @@ model WebForm {
 
   submissions WebFormSubmission[]
 
-  @@index([tenantId, createdAt])
-  @@index([tenantId, isActive])
+  @@unique([scope, slug])
+  @@index([tenantId, scope, createdAt])
+  @@index([tenantId, scope, isActive])
 }
 
 // One row per public form submit. Stores the raw payload snapshot for the
@@ -1116,6 +1130,10 @@ model WebFormSubmission {
   id        Int      @id @default(autoincrement())
   webFormId Int
   webForm   WebForm  @relation(fields: [webFormId], references: [id], onDelete: Cascade)
+
+  // Copied from WebForm so submission/report queries retain an explicit
+  // vertical boundary even when the parent form is later removed.
+  scope     String   @default("generic")
 
   contactId Int?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
@@ -1128,8 +1146,8 @@ model WebFormSubmission {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId, webFormId])
-  @@index([tenantId, submittedAt])
+  @@index([tenantId, scope, webFormId])
+  @@index([tenantId, scope, submittedAt])
 }
 
 // ── Table Column Visibility Preference (generic vertical only) ──────
@@ -6990,6 +7008,9 @@ model Itinerary {
   // totalAmount recorded are untouched regardless of this flag.
   moneyEnabled            Boolean         @default(false)
   items                   ItineraryItem[]
+  travelQuotes            TravelQuote[]
+  supplierPayables        TravelSupplierPayable[]
+  travelTallyCostCentre   TravelTallyCostCentre?
   cancellationPolicies     CancellationPolicy[]
   contact                 Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
   tenant                  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
@@ -7422,6 +7443,7 @@ model TmcTrip {
   visaLetterDocuments   VisaLetterDocument[]
   rooming              RoomingAssignment[]
   paymentPlan          TripPaymentPlan?
+  purchaseOrders       TravelPurchaseOrder[]
   documentRequirements TripDocumentRequirement[]
   microsite            TripMicrosite?
   landingPage          LandingPage?
@@ -8416,14 +8438,224 @@ model TripMicrositeOtp {
 // Sub-brand scoping (Q25): every row carries .subBrand and is indexed by
 // (tenantId, subBrand). The voyagrAuth + apiKeyAuth.requireSubBrandMatch
 // helpers enforce sub-brand isolation at the route layer.
+model TravelTallyLedger {
+  id             Int      @id @default(autoincrement())
+  tenantId       Int      @default(1)
+  subBrand       String?  @db.VarChar(50)
+  sourceType     String   @db.VarChar(40)
+  sourceKey      String   @db.VarChar(160)
+  ledgerName     String   @db.VarChar(255)
+  ledgerCode     String?  @db.VarChar(100)
+  ledgerCategory String   @db.VarChar(40)
+  ledgerGroup    String   @db.VarChar(100)
+  description    String?  @db.Text
+  openingBalance Decimal  @default(0) @db.Decimal(15, 2)
+  openingBalanceType String @default("DEBIT") @db.VarChar(10)
+  gstApplicable  Boolean  @default(false)
+  tcsApplicable  Boolean  @default(false)
+  tdsApplicable  Boolean  @default(false)
+  effectiveFrom  DateTime?
+  status         String   @default("ACTIVE")
+  syncStatus     String   @default("NOT_CONNECTED")
+  lastSyncedAt   DateTime?
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  mappings       TravelTallyMapping[]
+  paymentAccounts TravelTallyPaymentAccount[] @relation("TallyLedgerPaymentAccounts")
+  taxMasters      TravelTallyTaxMaster[] @relation("TallyLedgerTaxMasters")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, subBrand, sourceKey])
+  @@index([tenantId, subBrand])
+  @@index([tenantId, ledgerCategory])
+}
+
+model TravelTallyLedgerGroup {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  subBrand    String?  @db.VarChar(50)
+  groupName   String   @db.VarChar(120)
+  parentGroup String?  @db.VarChar(120)
+  nature      String   @default("OTHER") @db.VarChar(30)
+  source      String   @default("USER") @db.VarChar(20)
+  status      String   @default("ACTIVE") @db.VarChar(20)
+  syncStatus  String   @default("NOT_CONNECTED") @db.VarChar(30)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, subBrand, groupName])
+  @@index([tenantId, status])
+}
+
+model TravelTallyCostCentre {
+  id          Int       @id @default(autoincrement())
+  tenantId    Int       @default(1)
+  itineraryId Int       @unique
+  code        String    @db.VarChar(80)
+  name        String    @db.VarChar(180)
+  status      String    @default("ACTIVE") @db.VarChar(20)
+  syncStatus  String    @default("NOT_CONNECTED") @db.VarChar(30)
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+}
+
+model TravelTallyMapping {
+  id              Int               @id @default(autoincrement())
+  tenantId        Int               @default(1)
+  subBrand        String?           @db.VarChar(50)
+  sourceType      String            @db.VarChar(40)
+  sourceKey       String            @db.VarChar(160)
+  transactionType String            @db.VarChar(40)
+  tallyLedgerId   Int
+  status          String            @default("ACTIVE")
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tallyLedger     TravelTallyLedger @relation(fields: [tallyLedgerId], references: [id], onDelete: Cascade)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([tenantId, subBrand, sourceType, sourceKey, transactionType])
+  @@index([tenantId, subBrand])
+  @@index([tallyLedgerId])
+}
+
+model TravelTallySyncQueue {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int      @default(1)
+  subBrand        String?  @db.VarChar(50)
+  sourceType      String   @db.VarChar(40)
+  sourceId        Int
+  reference       String   @db.VarChar(120)
+  transactionType String   @db.VarChar(40)
+  tripId          Int?
+  partyName       String?  @db.VarChar(255)
+  amount          Decimal  @db.Decimal(15, 2)
+  voucherType     String   @db.VarChar(40)
+  mappingStatus   String   @default("READY")
+  status          String   @default("PENDING")
+  payloadJson     String   @db.LongText
+  retryCount      Int      @default(0)
+  lastError       String?  @db.Text
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  logs            TravelTallySyncLog[]
+  errors          TravelTallySyncError[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, sourceType, sourceId, transactionType])
+  @@index([tenantId, status, mappingStatus])
+  @@index([tenantId, subBrand, createdAt])
+}
+
+model TravelTallySyncLog {
+  id                Int                   @id @default(autoincrement())
+  tenantId          Int                   @default(1)
+  queueId           Int?
+  sourceType        String                @db.VarChar(40)
+  sourceId          Int
+  voucherType       String                @db.VarChar(40)
+  tallyVoucherId    String?               @db.VarChar(120)
+  tallyVoucherNumber String?             @db.VarChar(120)
+  requestPayload    String?               @db.LongText
+  responsePayload   String?               @db.LongText
+  status            String                @db.VarChar(30)
+  triggeredByUserId Int?
+  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  queue             TravelTallySyncQueue? @relation(fields: [queueId], references: [id], onDelete: SetNull)
+  createdAt         DateTime              @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([queueId])
+}
+
+model TravelTallySyncError {
+  id          Int                 @id @default(autoincrement())
+  tenantId    Int                 @default(1)
+  queueId     Int
+  errorCode   String              @db.VarChar(60)
+  errorMessage String             @db.Text
+  resolvedAt  DateTime?
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  queue       TravelTallySyncQueue @relation(fields: [queueId], references: [id], onDelete: Cascade)
+  createdAt   DateTime            @default(now())
+
+  @@index([tenantId, resolvedAt])
+  @@index([queueId])
+}
+
+model TravelTallyVoucherType {
+  id            Int      @id @default(autoincrement())
+  tenantId      Int      @default(1)
+  subBrand      String?  @db.VarChar(50)
+  name          String   @db.VarChar(60)
+  numberingMode String   @default("AUTO") @db.VarChar(20)
+  prefix        String?  @db.VarChar(30)
+  status        String   @default("ACTIVE") @db.VarChar(20)
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([tenantId, subBrand, name])
+  @@index([tenantId, status])
+}
+
+model TravelTallyPaymentAccount {
+  id          Int                @id @default(autoincrement())
+  tenantId    Int                @default(1)
+  subBrand    String?            @db.VarChar(50)
+  mode        String             @db.VarChar(30)
+  accountName String             @db.VarChar(120)
+  ledgerId    Int?
+  status      String             @default("ACTIVE") @db.VarChar(20)
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ledger      TravelTallyLedger? @relation("TallyLedgerPaymentAccounts", fields: [ledgerId], references: [id], onDelete: SetNull)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@unique([tenantId, subBrand, mode, accountName])
+  @@index([tenantId, mode, status])
+}
+
+model TravelTallyTaxMaster {
+  id              Int                @id @default(autoincrement())
+  tenantId        Int                @default(1)
+  subBrand        String?            @db.VarChar(50)
+  taxName         String             @db.VarChar(120)
+  taxType         String             @db.VarChar(20)
+  ledgerId        Int?
+  rate            Decimal            @db.Decimal(8, 3)
+  calculationBasis String             @default("TAXABLE_VALUE") @db.VarChar(30)
+  applicability   String?            @db.VarChar(255)
+  effectiveFrom   DateTime?
+  effectiveTo     DateTime?
+  status          String             @default("ACTIVE") @db.VarChar(20)
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ledger          TravelTallyLedger?  @relation("TallyLedgerTaxMasters", fields: [ledgerId], references: [id], onDelete: SetNull)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([tenantId, subBrand, taxName, taxType])
+  @@index([tenantId, taxType, status])
+}
+
 model TravelQuote {
   id                   Int                   @id @default(autoincrement())
   tenantId             Int                   @default(1)
+  itineraryId          Int?
   subBrand             String
   contactId            Int
   contact              Contact               @relation(fields: [contactId], references: [id], onDelete: Restrict)
   status               String                @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
   totalAmount          Decimal?              @db.Decimal(15, 2)
+  // Customer-facing tax configured for this quote. Kept at quote level so
+  // approval, PDF, invoice, and payment-link flows can use the same value.
+  gstTcsPercent         Decimal?              @db.Decimal(5, 2)
+  gstTcsAmount          Decimal?              @db.Decimal(15, 2)
   currency             String                @default("INR")
   validUntil           DateTime?
   // Issue 11 — trip date for season-aware pricing breakdown.
@@ -8471,12 +8703,14 @@ model TravelQuote {
   lines                TravelQuoteLine[]
   invoices             TravelInvoice[]
   snapshots            TravelQuoteSnapshot[]
+  itinerary            Itinerary?            @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
   tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
+  @@index([tenantId, itineraryId])
   @@index([tenantId, assignedToUserId])
 }
 
@@ -8643,6 +8877,9 @@ model TravelInvoice {
   // find + update the SAME invoice as the advance → balance clears (one
   // evolving ledger record per booking).
   itineraryId          Int?
+  // TMC participant billing linkage; nullable for backward compatibility.
+  tripId               Int?
+  participantId        Int?
   // Tenant-scoped human-readable identifier (e.g. "TINV-2026-0001"). The
   // route layer assigns sequentially per tenant + sub-brand at create time.
   invoiceNum           String
@@ -8739,6 +8976,7 @@ model TravelInvoice {
   @@index([tenantId, parentInvoiceId])
   @@index([tenantId, cancellationPolicyId])
   @@index([tenantId, itineraryId])
+  @@index([tenantId, tripId, participantId])
   // Draft-invoice dedup guard (routes/travel_invoices.js POST /invoices).
   // The duplicate check filters on (tenantId, contactId, subBrand, status,
   // currency, totalAmount, dueDate); the first four cover selectivity, the
@@ -9086,6 +9324,7 @@ model TravelSupplier {
 model TravelSupplierPayable {
   id                  Int                                @id @default(autoincrement())
   tenantId            Int                                @default(1)
+  itineraryId         Int?
   supplierId          Int
   poNumber            String? // free-form purchase-order or booking reference
   description         String // "50 PNRs Apr 2026" / "Hotel block 25-28 May" etc.
@@ -9094,6 +9333,7 @@ model TravelSupplierPayable {
   dueDate             DateTime?
   status              String                             @default("pending") // pending | scheduled | paid | cancelled
   paidAt              DateTime?
+  paymentMode         String?                            @db.VarChar(32) // cash | upi | neft | manual
   paymentReference    String?                            @db.VarChar(255) // UPI ref / cheque # / bank ref captured at mark-paid
   notes               String?                            @db.Text
   // PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.a (G037) — optional PO→Payable linkage.
@@ -9114,6 +9354,7 @@ model TravelSupplierPayable {
   payableBatchId      Int?
   supplier            TravelSupplier                     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   tenant              Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  itinerary           Itinerary?                          @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
   purchaseOrder       TravelPurchaseOrder?               @relation(fields: [purchaseOrderId], references: [id])
   invoiceLine         TravelInvoiceLine?                 @relation(fields: [invoiceLineId], references: [id], onDelete: SetNull)
   payableBatch        TravelSupplierPayableBatch?        @relation(fields: [payableBatchId], references: [id], onDelete: SetNull)
@@ -9130,6 +9371,7 @@ model TravelSupplierPayable {
   updatedAt           DateTime                           @updatedAt
 
   @@index([tenantId, supplierId])
+  @@index([tenantId, itineraryId])
   @@index([tenantId, supplierId, status])
   @@index([tenantId, dueDate])
   @@index([tenantId, purchaseOrderId])
@@ -9207,6 +9449,7 @@ model TravelPurchaseOrder {
   tenantId       Int                       @default(1)
   supplierId     Int
   bookingId      Int?
+  tripId         Int?
   poNumber       String
   // draft | sent | acknowledged | fulfilled | cancelled
   status         String                    @default("draft")
@@ -9226,12 +9469,14 @@ model TravelPurchaseOrder {
   tenant         Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   supplier       TravelSupplier            @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   booking        Booking?                  @relation(fields: [bookingId], references: [id])
+  trip           TmcTrip?                  @relation(fields: [tripId], references: [id], onDelete: SetNull)
   lines          TravelPurchaseOrderLine[]
   payables       TravelSupplierPayable[]
 
   @@unique([tenantId, poNumber])
   @@index([tenantId, supplierId, status])
   @@index([tenantId, bookingId])
+  @@index([tenantId, tripId])
 }
 
 // Line items on a TravelPurchaseOrder.

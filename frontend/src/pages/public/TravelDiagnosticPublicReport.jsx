@@ -166,7 +166,15 @@ export default function TravelDiagnosticPublicReport() {
   // defensively at render time too: a diagnostic scored before that cap
   // existed can still have an already-persisted result with more entries
   // than any sane topK.
-  const trips = (Array.isArray(rag.recommendedTrips) ? rag.recommendedTrips : []).slice(0, 20);
+  const trips = (Array.isArray(data?.recommendations)
+    ? data.recommendations
+    : Array.isArray(rag.recommendedTrips) ? rag.recommendedTrips : []).slice(0, 20);
+  const tripsByCategory = trips.reduce((groups, trip) => {
+    const category = String(trip.category || 'Other').trim() || 'Other';
+    if (!groups[category]) groups[category] = [];
+    groups[category].push(trip);
+    return groups;
+  }, {});
 
   function toggleInterest(name) {
     setSelectedNames((prev) => {
@@ -217,6 +225,12 @@ export default function TravelDiagnosticPublicReport() {
   const curriculumFitRecs = Array.isArray(data?.curriculumFit?.recommendations)
     ? data.curriculumFit.recommendations
     : [];
+  const curriculumFitByCategory = curriculumFitRecs.reduce((groups, rec) => {
+    const category = String(rec.category || 'Other').trim() || 'Other';
+    if (!groups[category]) groups[category] = [];
+    groups[category].push(rec);
+    return groups;
+  }, {});
   // Cancellation policy — set on the report by the diagnostics API's
   // resolveCancellationPolicyForForm() helper (backend/routes/travel_diagnostics_public.js).
   // Only present when the admin has the "show cancellation policy" toggle on
@@ -274,15 +288,19 @@ export default function TravelDiagnosticPublicReport() {
           </section>
         )}
 
-        {curriculumFitRecs.length > 0 && (
+        {curriculumFitRecs.length > 0 && !Array.isArray(data?.recommendations) && (
           <section style={section(theme)}>
             <h2 style={sectionTitle(theme)}>Recommended destinations for your curriculum</h2>
-            <div style={{ display: "grid", gap: 12 }}>
-              {curriculumFitRecs.map((rec, idx) => (
+            <div style={{ display: "grid", gap: 18 }}>
+              {Object.entries(curriculumFitByCategory).map(([category, categoryRecs]) => (
+                <div key={category}>
+                  <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>{category}</h3>
+                  <div style={{ display: "grid", gap: 12 }}>
+              {categoryRecs.map((rec, idx) => (
                 <div key={rec.mappingIds?.[0] ?? idx} style={tripCard(theme)}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                     <h3 style={{ margin: "0 0 6px", fontSize: 16 }}>{rec.destination}</h3>
-                    {Number.isFinite(rec.fitScore) && (
+                    {Number(rec.fitScore) > 0 && (
                       <span style={{ fontSize: 13, fontWeight: 600, opacity: 0.8 }}>{rec.fitScore}% fit</span>
                     )}
                   </div>
@@ -305,20 +323,27 @@ export default function TravelDiagnosticPublicReport() {
                   )}
                 </div>
               ))}
+                  </div>
+                </div>
+              ))}
             </div>
           </section>
         )}
 
         {trips.length > 0 && (
           <section style={section(theme)}>
-            <h2 style={sectionTitle(theme)}>Curriculum alignment recommendations</h2>
+            <h2 style={sectionTitle(theme)}>Recommended trips for your school</h2>
             <p style={{ margin: "0 0 12px", fontSize: 13, opacity: 0.75 }}>
               Check off the trips you&rsquo;re actually interested in — we&rsquo;ll share your picks with your advisor.
             </p>
-            <div style={{ display: "grid", gap: 12 }}>
-              {trips.map((trip, idx) => (
+            <div style={{ display: "grid", gap: 18 }}>
+              {Object.entries(tripsByCategory).map(([category, categoryTrips]) => (
+                <div key={category}>
+                  <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>{category}</h3>
+                  <div style={{ display: "grid", gap: 12 }}>
+              {categoryTrips.map((trip, idx) => (
                 <label
-                  key={idx}
+                  key={`${category}-${idx}`}
                   style={{
                     ...tripCard(theme),
                     display: "flex",
@@ -366,6 +391,9 @@ export default function TravelDiagnosticPublicReport() {
                     )}
                   </div>
                 </label>
+              ))}
+                  </div>
+                </div>
               ))}
             </div>
             <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>

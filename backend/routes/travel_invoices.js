@@ -30,6 +30,7 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
+const { syncTravelInvoiceStatusForParticipant } = require("../lib/tripPaymentReconciliation");
 // G124 (Master PRD A3 residual) — per-document download audit alongside the
 // existing TRAVEL_INVOICE_PDF_DOWNLOADED entity row so the audit-viewer's
 // Document Access sub-tab surfaces invoice PDF pulls uniformly. Unit-tested
@@ -50,6 +51,7 @@ const { invoicePrefixFor, fiscalYearStart } = require("../lib/travelFiscalYear")
 const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
 // Arc 2 #901 slice 21 — TDS withholding sum from lines (lineType==='tds').
 const { computeTdsFromLines } = require("../lib/tdsCalculation");
+const { enqueueTransaction } = require("../lib/travelTallyMasters");
 // Arc 2 #901 slice 24 — late-payment penalty math (pure compute, no Prisma).
 const {
   computeLatePenalty,
@@ -483,6 +485,23 @@ router.get(
         prisma.travelInvoice.findMany(findManyArgs),
         prisma.travelInvoice.count({ where }),
       ]);
+      // Repair legacy invoices whose installment rows are fully paid but the
+      // parent TravelInvoice status was not synchronized by the old payment
+      // callback. Summary projections do not include participant/trip keys.
+      if (!isSummary) {
+        await Promise.all(invoices.map(async (invoice) => {
+          if (!invoice.tripId || !invoice.participantId) return null;
+          const repaired = await syncTravelInvoiceStatusForParticipant({
+            db: prisma,
+            tripId: invoice.tripId,
+            participantId: invoice.participantId,
+            tenantId: req.travelTenant.id,
+            fallbackPaidAt: invoice.paidAt || invoice.updatedAt || new Date(),
+          });
+          if (repaired) Object.assign(invoice, repaired);
+          return repaired;
+        }));
+      }
       res.json({ invoices, total, limit: take, offset: skip });
     } catch (e) {
       if (e.status) {
@@ -1256,6 +1275,7 @@ async function collectAccountingExportRows(req) {
       igstAmount: useIgst,
       tcsAmount: tcs,
       totalAmount: total,
+      billReference: inv.invoiceNum,
       lines: exportLines,
     });
   }
@@ -4692,6 +4712,32 @@ router.post(
         data: createData,
       });
 
+      try {
+        await enqueueTransaction({
+          tenantId: req.travelTenant.id,
+          subBrand: created.subBrand,
+          sourceType: "TRAVEL_INVOICE",
+          sourceId: created.id,
+          reference: created.invoiceNum,
+          transactionType: "SALES",
+          tripId: created.itineraryId || null,
+          partyName: `Customer #${created.contactId}`,
+          amount: created.totalAmount,
+          voucherType: created.docType === "CreditNote" ? "CREDIT NOTE" : created.docType === "DebitNote" ? "DEBIT NOTE" : "SALES",
+          payload: {
+            invoiceId: created.id,
+            invoiceNum: created.invoiceNum,
+            contactId: created.contactId,
+            totalAmount: String(created.totalAmount),
+            currency: created.currency,
+            status: created.status,
+            docType: created.docType,
+          },
+        });
+      } catch (queueError) {
+        console.warn("[travel-invoices] Tally queue preparation failed:", queueError.message);
+      }
+
       await writeAudit(
         "TravelInvoice",
         "CREATE",
@@ -4855,6 +4901,31 @@ router.put(
         data,
       });
 
+      try {
+        await enqueueTransaction({
+          tenantId: req.travelTenant.id,
+          subBrand: updated.subBrand,
+          sourceType: "TRAVEL_INVOICE",
+          sourceId: updated.id,
+          reference: updated.invoiceNum,
+          transactionType: "SALES",
+          tripId: updated.itineraryId,
+          partyName: `Customer #${updated.contactId}`,
+          amount: updated.totalAmount,
+          voucherType: updated.docType === "CreditNote" ? "CREDIT NOTE" : updated.docType === "DebitNote" ? "DEBIT NOTE" : "SALES",
+          payload: { invoiceId: updated.id, invoiceNum: updated.invoiceNum, contactId: updated.contactId, totalAmount: String(updated.totalAmount), currency: updated.currency, status: updated.status, docType: updated.docType, updatedAt: updated.updatedAt },
+        });
+      } catch (queueError) {
+        console.warn("[travel-invoices] Tally queue refresh failed:", queueError.message);
+      }
+      if (updated.status === "Voided" && prisma.travelTallySyncQueue) {
+        try {
+          await prisma.travelTallySyncQueue.updateMany({ where: { tenantId: req.travelTenant.id, sourceType: "TRAVEL_INVOICE", sourceId: updated.id }, data: { status: "CANCELLED", lastError: "Source invoice was voided" } });
+        } catch (queueError) {
+          console.warn("[travel-invoices] Tally queue cancellation failed:", queueError.message);
+        }
+      }
+
       await writeAudit(
         "TravelInvoice",
         "UPDATE",
@@ -4929,6 +5000,17 @@ router.delete(
           status: existing.status,
         },
       );
+
+      if (prisma.travelTallySyncQueue) {
+        try {
+          await prisma.travelTallySyncQueue.updateMany({
+            where: { tenantId: req.travelTenant.id, sourceType: "TRAVEL_INVOICE", sourceId: id },
+            data: { status: "CANCELLED", lastError: "Source invoice was deleted" },
+          });
+        } catch (queueError) {
+          console.warn("[travel-invoices] Tally queue cancellation failed:", queueError.message);
+        }
+      }
 
       await prisma.travelInvoice.delete({ where: { id } });
       res.status(204).end();
@@ -6299,6 +6381,156 @@ router.delete(
 );
 
 // ============================================================================
+// POST /api/travel/invoices/:id/manual-payment
+// Record an offline customer payment directly against an invoice that has no
+// payment schedule (legacy/header-only invoices). Scheduled invoices continue
+// to use the milestone endpoint below.
+router.post(
+  "/invoices/:id/manual-payment",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("invoices", "update"),
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      if (invoice.tripId) {
+        return res.status(409).json({
+          error: "TMC trip invoices are settled through participant installments.",
+          code: "TMC_INSTALLMENT_ONLY",
+        });
+      }
+
+      if (!["Issued", "Partial"].includes(invoice.status)) {
+        return res.status(400).json({
+          error: "Only Issued or Partial invoices can receive a payment",
+          code: "INVALID_INVOICE_STATUS",
+        });
+      }
+
+      const { amount, method, reference, paidAt } = req.body || {};
+      const amountNumber = Number(amount);
+      if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+        return res.status(400).json({
+          error: "amount must be a positive number",
+          code: "INVALID_AMOUNT",
+        });
+      }
+      if (!method || typeof method !== "string" || method.trim() === "") {
+        return res.status(400).json({
+          error: "method is required",
+          code: "MISSING_METHOD",
+        });
+      }
+      const paidAtDate = parsePaidAt(paidAt);
+      const effectivePaidAt = paidAtDate === undefined ? new Date() : paidAtDate;
+      const amountRounded = round2(amountNumber);
+      const totalReceivedBeforePayment = await successfulTravelInvoicePaymentTotal(
+        req.travelTenant.id,
+        invoice.id,
+      );
+      const outstandingBeforePayment = round2(
+        Math.max(0, Number(invoice.totalAmount || 0) - totalReceivedBeforePayment),
+      );
+      if (amountRounded > outstandingBeforePayment) {
+        return res.status(400).json({
+          error: `Payment cannot exceed the outstanding amount of ${outstandingBeforePayment.toFixed(2)}`,
+          code: "PAYMENT_EXCEEDS_OUTSTANDING",
+          outstandingAmount: outstandingBeforePayment,
+        });
+      }
+
+      const payment = await prisma.payment.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          invoiceId,
+          amount: amountRounded,
+          currency: invoice.currency,
+          gateway: method.trim(),
+          gatewayId: reference ? String(reference).trim().slice(0, 128) : null,
+          status: "SUCCESS",
+          paidAt: effectivePaidAt,
+          metadata: JSON.stringify({
+            type: "travel-invoice-manual-payment",
+            invoiceNum: invoice.invoiceNum,
+            subBrand: invoice.subBrand,
+          }),
+        },
+      });
+
+      try {
+        await enqueueTransaction({
+          tenantId: req.travelTenant.id,
+          subBrand: invoice.subBrand,
+          sourceType: "TRAVEL_INVOICE_PAYMENT",
+          sourceId: payment.id,
+          reference: reference ? String(reference).trim() : `RECEIPT-${payment.id}`,
+          transactionType: "RECEIPT",
+          tripId: invoice.itineraryId,
+          partyName: `Customer #${invoice.contactId}`,
+          amount: amountRounded,
+          voucherType: "RECEIPT",
+          payload: {
+            paymentId: payment.id,
+            invoiceId: invoice.id,
+            invoiceNum: invoice.invoiceNum,
+            amount: amountRounded,
+            currency: invoice.currency,
+            method: method.trim(),
+            reference: reference || null,
+            paidAt: effectivePaidAt,
+            billReference: invoice.invoiceNum,
+          },
+        });
+      } catch (queueError) {
+        console.warn("[travel-invoices] Tally receipt queue preparation failed:", queueError.message);
+      }
+
+      const successfulPayments = await prisma.payment.findMany({
+        where: { tenantId: req.travelTenant.id, invoiceId, status: "SUCCESS" },
+        select: { amount: true },
+      });
+      const totalReceived = round2(
+        successfulPayments.reduce((sum, row) => sum + Number(row.amount || 0), 0),
+      );
+      const totalDue = Number(invoice.totalAmount || 0);
+      const nextStatus = totalDue > 0 && totalReceived >= totalDue ? "Paid" : "Partial";
+
+      const updatedInvoice = await prisma.travelInvoice.update({
+        where: { id: invoice.id },
+        data: {
+          status: nextStatus,
+          ...(nextStatus === "Paid" ? { paidAt: effectivePaidAt } : {}),
+        },
+      });
+
+      await writeAudit(
+        "TravelInvoice",
+        "MANUAL_PAYMENT",
+        invoice.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          paymentId: payment.id,
+          amount: String(amountRounded),
+          method: method.trim(),
+          reference: reference ? String(reference).trim().slice(0, 128) : null,
+          totalReceived: String(totalReceived),
+          status: nextStatus,
+        },
+      );
+
+      res.status(201).json({ payment, invoice: updatedInvoice, totalReceived });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-invoices] manual payment error:", e.message);
+      res.status(500).json({ error: "Failed to record manual payment" });
+    }
+  },
+);
+
 // POST /api/travel/invoices/:id/schedule/:milestoneId/mark-paid
 // PRD_TRAVEL_BILLING §3 — slice 19 (operator-driven installment settlement).
 //
@@ -6434,6 +6666,21 @@ router.post(
         paidAtDate = parsed;
       }
 
+      const totalReceivedBeforePayment = await successfulTravelInvoicePaymentTotal(
+        req.travelTenant.id,
+        invoice.id,
+      );
+      const outstandingBeforePayment = Math.round(
+        Math.max(0, Number(invoice.totalAmount || 0) - totalReceivedBeforePayment) * 100,
+      ) / 100;
+      if (amountRounded > outstandingBeforePayment) {
+        return res.status(400).json({
+          error: `Payment cannot exceed the outstanding amount of ${outstandingBeforePayment.toFixed(2)}`,
+          code: "PAYMENT_EXCEEDS_OUTSTANDING",
+          outstandingAmount: outstandingBeforePayment,
+        });
+      }
+
       // 1. Create the Payment row (financial record-of-record).
       // Payment.invoiceId is generic Int? — we re-use it for the TravelInvoice
       // id (the schema doesn't separate Payment from TravelPayment; the
@@ -6457,6 +6704,35 @@ router.post(
           }),
         },
       });
+
+      try {
+        await enqueueTransaction({
+          tenantId: req.travelTenant.id,
+          subBrand: invoice.subBrand,
+          sourceType: "TRAVEL_INVOICE_PAYMENT",
+          sourceId: payment.id,
+          reference: reference ? String(reference) : `RECEIPT-${payment.id}`,
+          transactionType: "RECEIPT",
+          tripId: invoice.itineraryId,
+          partyName: `Customer #${invoice.contactId}`,
+          amount: amountRounded,
+          voucherType: "RECEIPT",
+          payload: {
+            paymentId: payment.id,
+            invoiceId: invoice.id,
+            invoiceNum: invoice.invoiceNum,
+            scheduleId: milestoneId,
+            amount: amountRounded,
+            currency: existing.expectedCurrency || invoice.currency,
+            method: methodNorm,
+            reference: reference || null,
+            paidAt: paidAtDate,
+            billReference: invoice.invoiceNum,
+          },
+        });
+      } catch (queueError) {
+        console.warn("[travel-invoices] Tally scheduled receipt queue preparation failed:", queueError.message);
+      }
 
       // 2. Update the milestone: status='paid', paidAt, receivedAmount.
       const updatedMilestone = await prisma.travelPaymentSchedule.update({
@@ -7133,6 +7409,7 @@ function isSuccessfulPaymentStatus(status) {
 function isPaymentLinkedToTravelInvoice(payment, meta, invoiceId) {
   return (
     (meta.type === "travel-payment-schedule" && payment.invoiceId === invoiceId) ||
+    (meta.type === "travel-invoice-manual-payment" && payment.invoiceId === invoiceId) ||
     ((meta.kind === "travel-milestone" || meta.kind === "travel-invoice") && Number(meta.travelInvoiceId) === invoiceId) ||
     (meta.type === "travel-quote-advance" && Number(meta.travelInvoiceId) === invoiceId)
   );
@@ -7179,6 +7456,13 @@ router.post(
       const id = parseInt(req.params.id, 10);
       const invoice = await loadParentInvoice(req, res, id);
       if (!invoice) return;
+
+      if (invoice.tripId) {
+        return res.status(409).json({
+          error: "TMC trip invoices are settled through participant installments.",
+          code: "TMC_INSTALLMENT_ONLY",
+        });
+      }
 
       const total = Number(invoice.totalAmount || 0);
       if (!(total > 0)) {
@@ -7293,6 +7577,73 @@ router.get(
       const invoice = await loadParentInvoice(req, res, id);
       if (!invoice) return;
 
+      // TMC invoices settle through TripInstalmentPayment, not the generic
+      // TravelPaymentSchedule / hosted-invoice payment records. Use the
+      // participant installment rows as the source of truth so a pending
+      // payment-link record cannot mask an already-paid installment.
+      if (invoice.tripId && invoice.participantId) {
+        const installmentRows = await prisma.tripInstalmentPayment.findMany({
+          where: {
+            tripId: invoice.tripId,
+            participantId: invoice.participantId,
+            invoiceId: invoice.id,
+          },
+          orderBy: [{ instalmentIndex: "asc" }, { id: "asc" }],
+          select: {
+            id: true,
+            instalmentIndex: true,
+            dueDate: true,
+            amount: true,
+            paidAmount: true,
+            status: true,
+            paidAt: true,
+          },
+        });
+        const milestones = installmentRows.map((row) => ({
+          id: row.id,
+          milestoneOrder: row.instalmentIndex + 1,
+          dueDate: row.dueDate,
+          expectedAmount: row.amount,
+          receivedAmount: row.paidAmount,
+          status: row.status,
+          paidAt: row.paidAt,
+        }));
+        const payments = installmentRows
+          .filter((row) => Number(row.paidAmount || 0) > 0)
+          .map((row) => ({
+            id: `tmc-installment-${row.id}`,
+            amount: row.paidAmount,
+            currency: invoice.currency || "INR",
+            method: "TMC installment",
+            reference: invoice.invoiceNum,
+            status: row.status === "paid" ? "PAID" : "PARTIAL",
+            paidAt: row.paidAt,
+            milestoneOrder: row.instalmentIndex + 1,
+          }));
+        const total = Number(invoice.totalAmount || 0);
+        const totalReceived = installmentRows.reduce(
+          (sum, row) => sum + Number(row.paidAmount || 0),
+          0,
+        );
+        return res.json({
+          invoice: {
+            id: invoice.id,
+            invoiceNum: invoice.invoiceNum,
+            status: invoice.status,
+            totalAmount: invoice.totalAmount,
+            currency: invoice.currency,
+          },
+          milestones,
+          payments,
+          summary: {
+            total: total.toFixed(2),
+            totalReceived: totalReceived.toFixed(2),
+            outstanding: Math.max(0, total - totalReceived).toFixed(2),
+            currency: invoice.currency || "INR",
+          },
+        });
+      }
+
       const milestones = await prisma.travelPaymentSchedule.findMany({
         where: { invoiceId: invoice.id, tenantId: req.travelTenant.id },
         orderBy: [{ milestoneOrder: "asc" }, { id: "asc" }],
@@ -7328,6 +7679,7 @@ router.get(
           orderBy: { paidAt: "desc" },
           select: {
             id: true,
+            invoiceId: true,
             amount: true,
             currency: true,
             gateway: true,

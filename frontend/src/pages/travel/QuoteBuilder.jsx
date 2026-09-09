@@ -537,7 +537,7 @@ export default function QuoteBuilder() {
   }, [activeSubBrand]);
   const [validUntil, setValidUntil] = useState("");
   const [discountPct, setDiscountPct] = useState(0);
-  const [taxPct, setTaxPct] = useState(0);
+  const [taxPct, setTaxPct] = useState(18);
 
   // Backend-sourced lines (each has `.id` from the server).
   const [persistedLines, setPersistedLines] = useState([]);
@@ -810,6 +810,7 @@ export default function QuoteBuilder() {
         setCurrency(q.currency || "INR");
         setSubBrand(q.subBrand || "tmc");
         setValidUntil(q.validUntil ? String(q.validUntil).slice(0, 10) : "");
+        setTaxPct(q.gstTcsPercent == null ? 18 : Number(q.gstTcsPercent));
         if (q.advancePaidAmount != null) {
           setPaymentInfo({
             amount: Number(q.advancePaidAmount),
@@ -1687,7 +1688,12 @@ export default function QuoteBuilder() {
     }
     return {
       contactId: contactIdInt,
-      totalAmount: Number(grandTotal.toFixed(2)),
+      // Persist the customer-facing quote total before GST/TCS. Tax is stored
+      // separately in gstTcsAmount; this also keeps pricing-preview markup
+      // informational and out of the draft header total.
+      totalAmount: Number(taxable.toFixed(2)),
+      gstTcsPercent: Number(taxPct) || 0,
+      gstTcsAmount: Number(taxAmount.toFixed(2)),
       currency: currency || "INR",
       status: status || "Draft",
       subBrand: subBrand || "tmc",

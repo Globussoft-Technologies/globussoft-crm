@@ -115,6 +115,7 @@ prisma.contact.count = vi.fn();
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.findMany = vi.fn();
 prisma.invoice.groupBy = vi.fn();
+prisma.invoice.count = vi.fn();
 prisma.expense = prisma.expense || {};
 prisma.expense.findMany = vi.fn();
 prisma.expense.groupBy = vi.fn();
@@ -161,6 +162,7 @@ beforeEach(() => {
   prisma.contact.count.mockReset();
   prisma.invoice.findMany.mockReset();
   prisma.invoice.groupBy.mockReset();
+  prisma.invoice.count.mockReset().mockResolvedValue(0);
   prisma.expense.findMany.mockReset();
   prisma.expense.groupBy.mockReset();
   prisma.user.findMany.mockReset();
@@ -425,6 +427,26 @@ describe('GET /detailed/:type — raw table dumps', () => {
     }));
     // Limit was 9999, must be clamped to 500
     expect(call.take).toBe(500);
+    expect(call.orderBy).toEqual([
+      { createdAt: 'desc' },
+      { id: 'desc' },
+    ]);
+  });
+
+  test('type=invoices uses issuedDate plus id for deterministic pagination', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    prisma.invoice.count.mockResolvedValue(0);
+
+    const res = await request(makeApp()).get(
+      '/api/reports/detailed/invoices?page=2&limit=25'
+    );
+
+    expect(res.status).toBe(200);
+    expect(prisma.invoice.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      skip: 25,
+      take: 25,
+      orderBy: [{ issuedDate: 'desc' }, { id: 'desc' }],
+    }));
   });
 
   test('unsupported type returns 400', async () => {

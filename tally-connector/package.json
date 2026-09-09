@@ -1,0 +1,26 @@
+{
+  "name": "globussoft-tally-connector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Outbound Windows connector between Globussoft CRM and local Tally",
+  "main": "index.js",
+  "bin": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js",
+    "build:windows": "pkg index.js --targets node22-win-x64 --output dist/globussoft-tally-connector.exe"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.22.0"
+  },
+  "pkg": {
+    "scripts": ["index.js"],
+    "outputPath": "dist"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

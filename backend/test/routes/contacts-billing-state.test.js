@@ -122,6 +122,8 @@ prisma.contact.findFirst = vi.fn();
 prisma.contact.findUnique = vi.fn();
 prisma.contact.create = vi.fn();
 prisma.contact.update = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 prisma.wallet = prisma.wallet || {};
@@ -152,6 +154,7 @@ beforeEach(() => {
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);

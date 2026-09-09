@@ -1,0 +1,62 @@
+CREATE TABLE IF NOT EXISTS `TravelTallySyncQueue` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `tenantId` INTEGER NOT NULL DEFAULT 1,
+  `subBrand` VARCHAR(50) NULL,
+  `sourceType` VARCHAR(40) NOT NULL,
+  `sourceId` INTEGER NOT NULL,
+  `reference` VARCHAR(120) NOT NULL,
+  `transactionType` VARCHAR(40) NOT NULL,
+  `tripId` INTEGER NULL,
+  `partyName` VARCHAR(255) NULL,
+  `amount` DECIMAL(15,2) NOT NULL,
+  `voucherType` VARCHAR(40) NOT NULL,
+  `mappingStatus` VARCHAR(20) NOT NULL DEFAULT 'READY',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  `payloadJson` LONGTEXT NOT NULL,
+  `retryCount` INTEGER NOT NULL DEFAULT 0,
+  `lastError` TEXT NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` DATETIME(3) NOT NULL,
+  UNIQUE INDEX `TravelTallySyncQueue_source_txn_key` (`tenantId`, `sourceType`, `sourceId`, `transactionType`),
+  INDEX `TravelTallySyncQueue_tenantId_status_mappingStatus_idx` (`tenantId`, `status`, `mappingStatus`),
+  INDEX `TravelTallySyncQueue_tenantId_subBrand_createdAt_idx` (`tenantId`, `subBrand`, `createdAt`),
+  PRIMARY KEY (`id`),
+  CONSTRAINT `TravelTallySyncQueue_tenantId_fkey` FOREIGN KEY (`tenantId`) REFERENCES `Tenant` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `TravelTallySyncLog` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `tenantId` INTEGER NOT NULL DEFAULT 1,
+  `queueId` INTEGER NULL,
+  `sourceType` VARCHAR(40) NOT NULL,
+  `sourceId` INTEGER NOT NULL,
+  `voucherType` VARCHAR(40) NOT NULL,
+  `tallyVoucherId` VARCHAR(120) NULL,
+  `tallyVoucherNumber` VARCHAR(120) NULL,
+  `requestPayload` LONGTEXT NULL,
+  `responsePayload` LONGTEXT NULL,
+  `status` VARCHAR(30) NOT NULL,
+  `triggeredByUserId` INTEGER NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX `TravelTallySyncLog_tenantId_createdAt_idx` (`tenantId`, `createdAt`),
+  INDEX `TravelTallySyncLog_tenantId_status_idx` (`tenantId`, `status`),
+  INDEX `TravelTallySyncLog_queueId_idx` (`queueId`),
+  PRIMARY KEY (`id`),
+  CONSTRAINT `TravelTallySyncLog_tenantId_fkey` FOREIGN KEY (`tenantId`) REFERENCES `Tenant` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `TravelTallySyncLog_queueId_fkey` FOREIGN KEY (`queueId`) REFERENCES `TravelTallySyncQueue` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `TravelTallySyncError` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `tenantId` INTEGER NOT NULL DEFAULT 1,
+  `queueId` INTEGER NOT NULL,
+  `errorCode` VARCHAR(60) NOT NULL,
+  `errorMessage` TEXT NOT NULL,
+  `resolvedAt` DATETIME(3) NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX `TravelTallySyncError_tenantId_resolvedAt_idx` (`tenantId`, `resolvedAt`),
+  INDEX `TravelTallySyncError_queueId_idx` (`queueId`),
+  PRIMARY KEY (`id`),
+  CONSTRAINT `TravelTallySyncError_tenantId_fkey` FOREIGN KEY (`tenantId`) REFERENCES `Tenant` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `TravelTallySyncError_queueId_fkey` FOREIGN KEY (`queueId`) REFERENCES `TravelTallySyncQueue` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

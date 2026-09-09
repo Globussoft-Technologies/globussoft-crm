@@ -1,0 +1,5 @@
+ALTER TABLE `TravelTallyLedger`
+  ADD COLUMN `openingBalance` DECIMAL(15, 2) NOT NULL DEFAULT 0,
+  ADD COLUMN `openingBalanceType` VARCHAR(10) NOT NULL DEFAULT 'DEBIT',
+  ADD COLUMN `tdsApplicable` BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN `effectiveFrom` DATETIME(3) NULL;

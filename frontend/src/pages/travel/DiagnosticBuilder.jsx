@@ -1,4 +1,4 @@
-// Travel CRM — Diagnostic Bank Builder (admin only).
+﻿// Travel CRM — Diagnostic Bank Builder (admin only).
 //
 // Lands at /travel/diagnostics/banks/new. Two authoring modes:
 //   - Visual (default) — form-based editor for questions + scoring bands
@@ -32,6 +32,7 @@ import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 import DiagnosticPublicFormPanel from './DiagnosticPublicFormPanel';
 import DiagnosticNotificationPanel from './DiagnosticNotificationPanel';
+import DiagnosticEmbedFormsPanel from './DiagnosticEmbedFormsPanel';
 import {
   SUGGESTED_DIAGNOSTIC_QUESTIONS,
   SUGGESTION_CATEGORY_LABELS,
@@ -484,13 +485,18 @@ export default function DiagnosticBuilder() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: mode === 'publicForm' ? 1760 : 1000, margin: '0 auto' }}>
+    <div style={pageShell}>
       <style>{diagnosticBuilderCss}</style>
-      <header style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-        <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
+      <header style={pageHeader}>
+        <div style={pageHeading}>
+          <h1 style={pageTitle}>
           <FileJson size={28} aria-hidden /> Diagnostic Settings
-        </h1>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          </h1>
+          <p style={pageDescription}>
+            Create reusable diagnostic templates, edit questions, and publish the active form for each travel brand.
+          </p>
+        </div>
+        <div className="diagnostic-settings-actions" style={headerActions}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Upload size={14} aria-hidden /> Export CSV
           </button>
@@ -498,12 +504,12 @@ export default function DiagnosticBuilder() {
             type="button"
             onClick={() => fileRef.current?.click()}
             style={secondaryBtn}
-            title="Bulk-upload diagnostic banks (CSV or Excel). Columns: subBrand, version, questionsJson, scoringRulesJson, isActive."
+            title="Bulk-upload diagnostic banks (CSV or Excel). Use the row-based spreadsheet template for questions, options, and scoring bands."
           >
             <Download size={14} aria-hidden /> Import CSV/Excel
           </button>
-          <button type="button" onClick={downloadImportTemplate} style={secondaryBtn} title="Download a ready-to-fill diagnostic bank CSV template">
-            <Download size={14} aria-hidden /> Download template
+  <button type="button" onClick={downloadImportTemplate} style={secondaryBtn} title="Download a readable spreadsheet template with separate rows for questions, options, and scoring bands.">
+    <Download size={14} aria-hidden /> Download spreadsheet template
           </button>
           <input
             ref={fileRef}
@@ -518,11 +524,8 @@ export default function DiagnosticBuilder() {
           </Link>
         </div>
       </header>
-      <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
-        Create reusable diagnostic templates, edit questions, and publish the active form for each travel brand.
-      </p>
 
-      <section style={card}>
+      <section style={templateCard}>
         <h2 style={cardTitle}>Sub-brand</h2>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {SUB_BRANDS.map((s) => (
@@ -672,6 +675,7 @@ export default function DiagnosticBuilder() {
           notify={notify}
         />
       )}
+      {mode === 'embedForms' && <DiagnosticEmbedFormsPanel subBrand={subBrand} notify={notify} />}
       {mode === 'notifications' && (
         <DiagnosticNotificationPanel
           subBrand={subBrand}
@@ -728,7 +732,7 @@ function ModeTabs({ mode, onChange, subBrand }) {
   // the generic weighted-sum scorer with no weight knobs to expose.
   const showEngineWeights = subBrand === 'tmc';
   return (
-    <div role="tablist" aria-label="Authoring mode" style={tabRow}>
+    <div className="diagnostic-settings-tabs" role="tablist" aria-label="Authoring mode" style={tabRow}>
       <button
         type="button"
         role="tab"
@@ -761,6 +765,15 @@ function ModeTabs({ mode, onChange, subBrand }) {
       <button
         type="button"
         role="tab"
+        aria-selected={mode === 'embedForms'}
+        onClick={() => onChange('embedForms')}
+        style={mode === 'embedForms' ? tabActive : tabIdle}
+      >
+        Embed Forms
+      </button>
+      <button
+        type="button"
+        role="tab"
         aria-selected={mode === 'notifications'}
         onClick={() => onChange('notifications')}
         style={mode === 'notifications' ? tabActive : tabIdle}
@@ -789,9 +802,10 @@ function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
   }
 
   const questions = parsed.questions;
+  const identityFields = normalizeBankIdentityFields(parsed.identityFields);
 
-  const writeQuestions = (next) =>
-    onChange(JSON.stringify({ ...parsed, questions: normalizeQuestions(next) }, null, 2));
+  const writeQuestions = (next, nextIdentityFields = identityFields) =>
+    onChange(JSON.stringify({ ...parsed, questions: normalizeQuestions(next), identityFields: nextIdentityFields }, null, 2));
 
   const addQuestion = () => {
     writeQuestions([
@@ -880,6 +894,10 @@ function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
           </button>
         </div>
       )}
+      <IdentityFieldsBankEditor
+        fields={identityFields}
+        onChange={(next) => writeQuestions(questions, next)}
+      />
       {questions.length === 0 ? (
         <p style={emptyHint}>No questions yet — click <em>Add question</em> to start.</p>
       ) : (
@@ -904,6 +922,40 @@ function QuestionsVisualEditor({ json, onChange, onSwitchToJson }) {
         />
       )}
     </section>
+  );
+}
+
+const DEFAULT_BANK_IDENTITY_FIELDS = [
+  { id: 'name', label: 'Name', type: 'text', enabled: true, required: true },
+  { id: 'email', label: 'Email', type: 'email', enabled: true, required: true },
+  { id: 'phone', label: 'Phone', type: 'tel', enabled: true, required: false },
+];
+
+function normalizeBankIdentityFields(fields) {
+  const saved = Array.isArray(fields) ? fields : [];
+  return DEFAULT_BANK_IDENTITY_FIELDS.map((fallback) => {
+    const field = saved.find((item) => item?.id === fallback.id);
+    return { ...fallback, ...(field || {}) };
+  });
+}
+
+function IdentityFieldsBankEditor({ fields, onChange }) {
+  const update = (id, patch) => onChange(fields.map((field) => field.id === id ? { ...field, ...patch } : field));
+  return (
+    <div style={{ ...subCard, marginTop: 16, marginBottom: 0 }}>
+      <div style={subCardHeader}><strong>Identity fields</strong><span style={microHint}>Used by Public Form, Embed Form, and public API submissions.</span></div>
+      <div style={fieldGrid}>
+        {fields.map((field) => (
+          <div key={field.id} style={{ display: 'grid', gap: 8, padding: 12, border: '1px solid var(--border-color)', borderRadius: 8 }}>
+            <input aria-label={`${field.id} field label`} value={field.label} onChange={(e) => update(field.id, { label: e.target.value })} style={input} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+              <label style={identityToggleLabel}><input type="checkbox" checked={field.enabled !== false} onChange={(e) => update(field.id, { enabled: e.target.checked })} /> Show</label>
+              <label style={identityToggleLabel}><input type="checkbox" checked={Boolean(field.required)} onChange={(e) => update(field.id, { required: e.target.checked })} /> Required</label>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -2094,6 +2146,38 @@ const card = {
   border: '1px solid var(--border-color)', marginBottom: 12,
   boxShadow: 'var(--shadow-sm)',
 };
+const pageShell = {
+  padding: 'clamp(16px, 2vw, 28px)',
+  maxWidth: 1440,
+  width: '100%',
+  boxSizing: 'border-box',
+  margin: '0 auto',
+};
+const pageHeader = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 20,
+  flexWrap: 'wrap',
+  marginBottom: 20,
+};
+const pageHeading = { minWidth: 0, flex: '1 1 420px' };
+const pageTitle = {
+  display: 'flex', alignItems: 'center', gap: 10,
+  margin: 0, fontSize: 'clamp(26px, 2vw, 32px)',
+};
+const pageDescription = {
+  color: 'var(--text-secondary)', margin: '8px 0 0', maxWidth: 720, lineHeight: 1.5,
+};
+const headerActions = {
+  display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap',
+  flex: '0 1 auto', paddingTop: 2,
+};
+const templateCard = {
+  ...card,
+  padding: '22px 24px',
+  marginBottom: 18,
+};
 const cardTitle = { margin: 0, marginBottom: 12, fontSize: 16 };
 const subCard = {
   background: 'var(--bg-color)', borderRadius: 8, padding: 14,
@@ -2104,17 +2188,17 @@ const subCardHeader = {
   marginBottom: 10,
 };
 const tabRow = {
-  display: 'flex', gap: 0, marginBottom: 12, borderBottom: '1px solid var(--border-color)',
+  display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 16, paddingBottom: 8, borderBottom: '1px solid var(--border-color)',
 };
 const tabIdle = {
-  padding: '8px 14px', fontWeight: 500, fontSize: 13,
+  padding: '8px 14px', borderRadius: 7, fontWeight: 600, fontSize: 13,
   background: 'transparent', color: 'var(--text-secondary)',
-  border: 'none', borderBottom: '2px solid transparent', cursor: 'pointer',
+  border: '1px solid transparent', cursor: 'pointer',
 };
 const tabActive = {
   ...tabIdle,
-  color: 'var(--primary-color)',
-  borderBottom: '2px solid var(--primary-color)',
+  color: 'var(--primary-color)', background: 'color-mix(in srgb, var(--primary-color) 10%, transparent)',
+  borderColor: 'color-mix(in srgb, var(--primary-color) 30%, var(--border-color))',
 };
 const advancedTools = {
   margin: '0 0 12px',
@@ -2305,6 +2389,7 @@ const sliderValue = {
 const fieldLabelWrap = {
   display: 'flex', flexDirection: 'column', gap: 4,
 };
+const identityToggleLabel = { display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-primary)' };
 const fieldLabel = {
   display: 'inline-flex', alignItems: 'center', gap: 4,
   fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500,
@@ -2536,7 +2621,29 @@ const diagnosticBuilderCss = `
     outline-offset: -2px;
   }
 
+  .diagnostic-settings-tabs button:focus {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+  .diagnostic-settings-tabs button {
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+  .diagnostic-settings-tabs button[aria-selected="true"] {
+    background: color-mix(in srgb, var(--primary-color, #5b6cff) 12%, transparent) !important;
+    color: var(--primary-color, #5b6cff) !important;
+  }
+  .diagnostic-settings-tabs button:focus-visible {
+    outline: none !important;
+    box-shadow: 0 0 0 2px var(--primary-color, #5b6cff) !important;
+  }
+
   @media (max-width: 760px) {
+    .diagnostic-settings-actions {
+      width: 100%;
+      justify-content: flex-start !important;
+    }
+
     .diagnostic-question-layout {
       grid-template-columns: 1fr !important;
     }

@@ -2,7 +2,7 @@ import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import { formatDate, formatDateTime } from '../utils/date';
 import React, { useContext, useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useLocation } from 'react-router-dom';
 import { ArrowLeft, Phone, Mail, Paperclip, Upload, Trash2, FileText, Target, Pencil, MessageSquareText, Sparkles } from 'lucide-react';
 import { AuthContext } from '../App';
 
@@ -21,9 +21,16 @@ function isDocumentFile(file) {
 
 const ContactDetail = () => {
   const { id } = useParams();
+  const location = useLocation();
   const auth = useContext(AuthContext);
   const isWellness = auth?.tenant?.vertical === 'wellness';
   const isTravel = auth?.tenant?.vertical === 'travel';
+  const diagnosticsReturnUrl = typeof location.state?.backTo === 'string'
+    && location.state.backTo.startsWith('/travel/diagnostics')
+    ? location.state.backTo
+    : null;
+  const backTo = diagnosticsReturnUrl || '/contacts';
+  const backLabel = diagnosticsReturnUrl ? 'Back to diagnostics' : 'Back to Contacts';
   const [contact, setContact] = useState(null);
   const [attachments, setAttachments] = useState([]);
   const [showUpload, setShowUpload] = useState(false);
@@ -325,8 +332,8 @@ const ContactDetail = () => {
 
   return (
     <div style={{ padding: '2rem' }}>
-      <Link to="/contacts" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', marginBottom: '1.5rem', textDecoration: 'none' }}>
-        <ArrowLeft size={16} /> Back to Contacts
+      <Link to={backTo} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', marginBottom: '1.5rem', textDecoration: 'none' }}>
+        <ArrowLeft size={16} /> {backLabel}
       </Link>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 1fr) 2fr', gap: '1.5rem' }}>

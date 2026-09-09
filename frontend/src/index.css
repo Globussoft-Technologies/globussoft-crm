@@ -307,6 +307,851 @@ button {
   font-family: inherit;
 }
 
+/* Tally company setup gate */
+.tally-setup-gate {
+  min-height: min(72vh, 620px);
+  display: grid;
+  place-items: center;
+  padding: 2rem 1.25rem;
+}
+
+.tally-setup-card {
+  width: min(100%, 720px);
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(124, 58, 237, 0.16), transparent 42%),
+    var(--glass-bg);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.tally-setup-card::after {
+  content: "";
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  right: -72px;
+  bottom: -92px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  opacity: 0.12;
+  filter: blur(24px);
+  pointer-events: none;
+}
+
+.tally-setup-icon {
+  width: 3.25rem;
+  height: 3.25rem;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  border-radius: 16px;
+  color: #c4b5fd;
+  background: linear-gradient(145deg, rgba(124, 58, 237, 0.3), rgba(37, 99, 235, 0.2));
+  box-shadow: 0 10px 24px rgba(79, 70, 229, 0.2), inset 0 1px rgba(255, 255, 255, 0.16);
+  font-size: 1.7rem;
+  font-weight: 800;
+}
+
+.tally-setup-content {
+  position: relative;
+  z-index: 1;
+}
+
+.tally-setup-eyebrow {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--accent-color);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.tally-setup-content h1 {
+  color: var(--text-primary);
+  font-size: clamp(1.65rem, 4vw, 2.25rem);
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+}
+
+.tally-setup-content p {
+  max-width: 48ch;
+  margin: 0.75rem 0 1.5rem;
+  color: var(--text-secondary);
+  font-size: 0.98rem;
+}
+
+.tally-setup-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.tally-setup-action span {
+  font-size: 1.15em;
+  line-height: 1;
+  transition: transform 0.2s ease;
+}
+
+.tally-setup-action:hover span {
+  transform: translateX(3px);
+}
+
+.tally-mapping-page {
+  min-height: calc(100vh - 5.125rem);
+  max-width: 73.75rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.tally-mapping-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin: 0.75rem 0 1.35rem;
+}
+
+.tally-mapping-eyebrow {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: var(--accent-color);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.tally-mapping-header h1 {
+  margin: 0 0 0.4rem;
+  color: var(--text-primary);
+  font-size: clamp(1.7rem, 3vw, 2.35rem);
+  letter-spacing: -0.04em;
+}
+
+.tally-mapping-header p {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+}
+
+.tally-mapping-queue-button,
+.tally-mapping-save,
+.tally-mapping-suggestion button {
+  border: 0;
+  border-radius: 9px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
+
+.tally-mapping-queue-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--surface-color));
+  color: var(--accent-color);
+}
+
+.tally-mapping-queue-button:hover,
+.tally-mapping-save:hover:not(:disabled),
+.tally-mapping-suggestion button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 7px 16px rgba(15, 23, 42, 0.12);
+}
+
+.tally-mapping-queue-button span {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.tally-mapping-message,
+.tally-mapping-error {
+  padding: 0.7rem 0.9rem;
+  margin: 0 0 1rem;
+  border-radius: 9px;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.tally-mapping-message {
+  border: 1px solid rgba(47, 133, 90, 0.2);
+  background: rgba(47, 133, 90, 0.08);
+  color: #2f855a;
+}
+
+.tally-mapping-error {
+  border: 1px solid rgba(197, 48, 48, 0.2);
+  background: rgba(197, 48, 48, 0.08);
+  color: #c53030;
+}
+
+.tally-mapping-card {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  background: var(--surface-color);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+}
+
+.tally-mapping-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.2rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tally-mapping-card-heading h2 {
+  margin: 0 0 0.2rem;
+  font-size: 1.05rem;
+}
+
+.tally-mapping-card-heading p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.tally-mapping-card-heading > span {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tally-mapping-table-wrap {
+  overflow-x: auto;
+}
+
+.tally-mapping-card table {
+  width: 100%;
+  min-width: 42.5rem;
+  border-collapse: collapse;
+}
+
+.tally-mapping-card th {
+  padding: 0.78rem 1.2rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.69rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.tally-mapping-card td {
+  padding: 0.9rem 1.2rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  vertical-align: middle;
+}
+
+.tally-mapping-card tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.tally-mapping-card tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.tally-mapping-card select {
+  width: min(100%, 16.875rem);
+  min-height: 2.35rem;
+  padding: 0.42rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  outline: none;
+  background: var(--input-bg, var(--surface-color));
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.tally-mapping-card select:focus {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.tally-mapping-type {
+  display: inline-flex;
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--surface-color));
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.tally-mapping-save {
+  padding: 0.5rem 0.8rem;
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.tally-mapping-save:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tally-mapping-suggestion {
+  display: block;
+  margin-top: 0.35rem;
+  color: #b7791f;
+  font-size: 0.74rem;
+}
+
+.tally-mapping-suggestion button {
+  margin-left: 0.35rem;
+  padding: 0.25rem 0.45rem;
+  background: rgba(183, 121, 31, 0.1);
+  color: #986515;
+  font-size: 0.7rem;
+}
+
+.tally-mapping-empty {
+  padding: 1.5rem;
+  border: 1px dashed var(--border-color);
+  border-radius: 14px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.tally-mapping-empty-cell {
+  padding: 2.2rem 1rem !important;
+  color: var(--text-secondary) !important;
+  text-align: center;
+}
+
+.tally-ledger-groups-page > .tally-ledger-groups-header h1 {
+  color: var(--text-primary);
+  font-size: clamp(1.7rem, 3vw, 2.35rem);
+  letter-spacing: -0.04em;
+}
+
+.tally-ledger-groups-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+}
+
+.tally-ledger-groups-form {
+  grid-template-columns: repeat(3, minmax(11.25rem, 1fr)) auto !important;
+  padding: 1.2rem !important;
+  border-radius: 16px !important;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
+}
+
+.tally-ledger-groups-form label {
+  color: var(--text-primary);
+}
+
+.tally-ledger-groups-form input,
+.tally-ledger-groups-form select {
+  height: 2.6rem !important;
+  border-color: var(--border-color) !important;
+  background: var(--input-bg, var(--surface-color)) !important;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.tally-ledger-groups-form input:focus,
+.tally-ledger-groups-form select:focus {
+  border-color: var(--accent-color) !important;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.tally-ledger-groups-submit,
+.tally-ledger-groups-cancel,
+.tally-ledger-groups-edit {
+  min-height: 2.6rem;
+  padding: 0.55rem 0.9rem !important;
+  border: 0;
+  border-radius: 9px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tally-ledger-groups-submit {
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.tally-ledger-groups-cancel,
+.tally-ledger-groups-edit {
+  border: 1px solid var(--border-color);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.tally-ledger-groups-table {
+  margin-top: 1.4rem !important;
+  padding: 0 !important;
+  overflow: hidden;
+  border-radius: 16px !important;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+}
+
+.tally-ledger-groups-table table {
+  min-width: 56.25rem;
+  height: auto !important;
+  table-layout: auto !important;
+}
+
+.tally-ledger-groups-table tbody,
+.tally-ledger-groups-table tr {
+  height: auto !important;
+}
+
+.tally-ledger-groups-table tbody tr {
+  height: 3.625rem !important;
+}
+
+.tally-ledger-groups-table th,
+.tally-ledger-groups-table td {
+  height: auto !important;
+  vertical-align: middle !important;
+}
+
+.tally-ledger-groups-table tbody tr {
+  transition: background 0.18s ease;
+}
+
+.tally-ledger-groups-table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.tally-ledger-groups-table th:last-child,
+.tally-ledger-groups-table td:last-child {
+  min-width: 5.125rem;
+  white-space: nowrap;
+}
+
+.tally-ledger-groups-pill,
+.tally-ledger-groups-source,
+.tally-ledger-groups-status,
+.tally-ledger-groups-sync {
+  display: inline-flex;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.tally-ledger-groups-pill {
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+}
+
+.tally-ledger-groups-source {
+  background: rgba(100, 116, 139, 0.1);
+  color: var(--text-secondary);
+}
+
+.tally-ledger-groups-status {
+  background: rgba(47, 133, 90, 0.1);
+  color: #2f855a;
+}
+
+.tally-ledger-groups-sync {
+  background: rgba(183, 121, 31, 0.1);
+  color: #986515;
+}
+
+.tally-ledger-groups-built-in {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.tally-master-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin: 0.75rem 0 1.35rem;
+}
+
+.tally-master-header h1 {
+  margin: 0 0 0.4rem;
+  color: var(--text-primary);
+  font-size: clamp(1.7rem, 3vw, 2.35rem);
+  letter-spacing: -0.04em;
+}
+
+.tally-master-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+}
+
+.tally-master-form {
+  padding: 1.2rem !important;
+  border-radius: 16px !important;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
+}
+
+.tally-master-form input,
+.tally-master-form select {
+  height: 2.6rem !important;
+  border-color: var(--border-color) !important;
+  background: var(--input-bg, var(--surface-color)) !important;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.tally-master-form input:focus,
+.tally-master-form select:focus {
+  border-color: var(--accent-color) !important;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.tally-master-form button[type="submit"] {
+  border: 0;
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.tally-master-form button[type="button"] {
+  border: 1px solid var(--border-color);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.tally-master-table {
+  margin-top: 1.4rem !important;
+  padding: 0 !important;
+  overflow: hidden;
+  border-radius: 16px !important;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+}
+
+.tally-master-table tbody tr {
+  transition: background 0.18s ease;
+}
+
+.tally-master-table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.tally-master-table tbody td:nth-child(3) {
+  color: #2f855a;
+  font-weight: 700;
+}
+
+.tally-master-table tbody button {
+  padding: 0.42rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (max-width: 43.75rem) {
+  .tally-master-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tally-master-header .tally-mapping-queue-button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 53.125rem) {
+  .tally-ledger-groups-form {
+    grid-template-columns: repeat(2, minmax(11.25rem, 1fr)) !important;
+  }
+}
+
+@media (max-width: 35rem) {
+  .tally-ledger-groups-page {
+    padding: 1.125rem 0.875rem !important;
+  }
+
+  .tally-ledger-groups-form {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 700px) {
+  .tally-mapping-page {
+    padding: 18px 14px;
+  }
+
+  .tally-mapping-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tally-mapping-queue-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .tally-mapping-card-heading,
+  .tally-mapping-card th,
+  .tally-mapping-card td {
+    padding-right: 0.8rem;
+    padding-left: 0.8rem;
+  }
+}
+
+/* Pending Tally sync queue */
+.tally-sync-page {
+  min-height: calc(100vh - 82px);
+}
+
+.tally-sync-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin: 0.75rem 0 1.25rem;
+}
+
+.tally-sync-eyebrow {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--accent-color);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.tally-sync-header h1 {
+  margin-bottom: 0.35rem;
+  font-size: clamp(1.7rem, 3vw, 2.35rem);
+  letter-spacing: -0.04em;
+}
+
+.tally-sync-header p,
+.tally-sync-card-heading p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.tally-sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.tally-sync-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) repeat(2, minmax(170px, 1fr));
+  gap: 0.7rem;
+  padding: 0.85rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 15px;
+  background: var(--surface-color);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+.tally-sync-filters input,
+.tally-sync-filters select {
+  width: 100%;
+  min-height: 2.65rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  outline: none;
+  background: var(--input-bg, var(--surface-color));
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.tally-sync-filters input:focus,
+.tally-sync-filters select:focus {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.tally-sync-card {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  background: var(--surface-color);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+}
+
+.tally-sync-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.2rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tally-sync-card-heading h2 {
+  margin-bottom: 0.2rem;
+  font-size: 1.05rem;
+}
+
+.tally-sync-count,
+.tally-type-pill,
+.tally-status-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.tally-sync-count {
+  padding: 0.3rem 0.65rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.tally-sync-table-wrap {
+  overflow-x: auto;
+}
+
+.tally-sync-card table {
+  width: 100%;
+  min-width: 850px;
+  border-collapse: collapse;
+}
+
+.tally-sync-card th {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.69rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.tally-sync-card td {
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  vertical-align: middle;
+}
+
+.tally-sync-card tbody tr {
+  transition: background 0.18s ease;
+}
+
+.tally-sync-card tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.tally-type-pill {
+  padding: 0.22rem 0.55rem;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.tally-amount {
+  color: var(--text-primary) !important;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.tally-status-pill {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.tally-mapping-state,
+.tally-mapping-warning {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.tally-mapping-warning {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.tally-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tally-row-actions .btn-secondary {
+  padding: 0.4rem 0.65rem;
+  font-size: 0.76rem;
+}
+
+.tally-sync-empty {
+  padding: 2.5rem 1rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .tally-setup-card {
+    flex-direction: column;
+    gap: 1.15rem;
+    border-radius: 20px;
+  }
+
+  .tally-setup-action {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 760px) {
+  .tally-sync-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tally-sync-actions {
+    justify-content: flex-start;
+  }
+
+  .tally-sync-filters {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Glassmorphism Classes */
 .glass {
   background: var(--glass-bg);
@@ -1250,6 +2095,17 @@ body[data-vertical="travel"] .travel-sidebar-collapsed .travel-settings-link.act
   animation: fadeIn 0.4s ease-out forwards;
 }
 
+/* Keep the layout main free of transforms so viewport-level modal backdrops
+   are not constrained to the scrolling content area. */
+@keyframes pageFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.page-fade-in {
+  animation: pageFadeIn 0.4s ease-out forwards;
+}
+
 /* Sidebar nav scrollbar — more visible */
 aside nav::-webkit-scrollbar {
   width: 5px;
@@ -2026,6 +2882,69 @@ table.leads-table thead th {
   z-index: 6;
   background-color: var(--modal-bg);
   box-shadow: inset 0 -1px 0 var(--border-color);
+}
+
+/* Generic CRM: the top scrollbar is removed, so the sticky header docks
+   flush to the top of the scroll viewport (no 16px gap strip). Scoped to
+   the --no-topbar modifier — all other usages keep top: 16px. */
+.leads-split-table--no-topbar table.leads-table thead th {
+  top: 0;
+}
+
+/* Generic CRM Leads: keep the column headings pinned while the rows move,
+   and use the compact neutral scrollbars from the table reference layout. */
+.leads-split-table--no-topbar {
+  max-height: none !important;
+  overflow: visible !important;
+  scrollbar-width: auto;
+  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
+  scrollbar-gutter: stable;
+}
+
+.leads-split-table--no-topbar::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.leads-split-table--no-topbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.leads-split-table--no-topbar::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+
+.leads-split-table--no-topbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+  border-width: 2px;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom {
+  scrollbar-width: auto;
+  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar {
+  height: 12px;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+
+.leads-split-table--no-topbar .top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+  border-width: 2px;
 }
 
 table.leads-table thead tr:first-child th {

@@ -154,6 +154,23 @@ describe("ContactDetail — page contract", () => {
     expect(screen.getByText(/\+91-9000000001/)).toBeTruthy();
   });
 
+  it("returns to Diagnostics when opened from a diagnostic entry", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    render(
+      <MemoryRouter initialEntries={[{
+        pathname: '/contacts/42',
+        state: { backTo: '/travel/diagnostics?subBrand=tmc&page=2', backLabel: 'Back to diagnostics' },
+      }]}>
+        <Routes>
+          <Route path="/contacts/:id" element={<ContactDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const backLink = await screen.findByRole('link', { name: /Back to diagnostics/i });
+    expect(backLink).toHaveAttribute('href', '/travel/diagnostics?subBrand=tmc&page=2');
+  });
+
   it("renders the status chip and AI score chip", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage();

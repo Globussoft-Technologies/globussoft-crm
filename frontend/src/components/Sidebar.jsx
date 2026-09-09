@@ -2224,8 +2224,9 @@ function renderTravelNav({
         <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" requiredPermission={{ module: "visa", action: "manage" }} />
       </>)}
 
-      {group("Marketing", ["/travel/brochures", "/landing-pages", "/admin/brand-kits"], <>
+      {group("Marketing", ["/travel/brochures", "/travel/forms", "/landing-pages", "/admin/brand-kits"], <>
         <Link to="/travel/brochures" icon={Sparkles} label="Brochure Engine" requiredPermission={{ module: "marketing", action: "read" }} />
+        <Link to="/travel/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" requiredPermission={{ module: "settings", action: "manage" }} />
       </>)}
@@ -2443,12 +2444,41 @@ function renderTravelNavLegacy({
 
       <Section label="Financial">
         <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
-        <Link to="/travel/tally" icon={Calculator} label="Tally" requiredPermission={{ module: "invoices", action: "export" }} />
+         <Link to="/travel/tally" icon={Calculator} label="Tally" requiredPermission={{ module: "tally", action: "read" }} />
         <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} />
         <Link to="/travel/payables" icon={CreditCard} label="Payables" requiredPermission={{ module: "payables", action: "read" }} />
         <Link to="/payments" icon={IndianRupee} label="Payments received" requiredPermission={{ module: "payments", action: "read" }} />
         <Link to="/expenses" icon={WalletIcon} label="Expense Management" requiredPermission={{ module: "expenses", action: "read" }} />
       </Section>
+
+      {/* <Section label="TALLY">
+        <Link to="/travel/tally" icon={Calculator} label="Dashboard" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/company-setup" icon={Settings} label="Company Setup" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/masters" icon={Layers} label="Masters" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/sales" icon={Receipt} label="Sales Ledger" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/purchase" icon={Receipt} label="Purchase Ledger" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/common" icon={IndianRupee} label="Common / Expenses" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/trip-expenses" icon={IndianRupee} label="Trip Expenses" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/office-expenses" icon={IndianRupee} label="Office Expenses" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/customers" icon={UserCheck} label="Customers" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/suppliers" icon={Building2} label="Suppliers" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/bank" icon={CreditCard} label="Bank" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/cash" icon={WalletIcon} label="Cash" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/taxes" icon={Receipt} label="GST / TCS" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/gst" icon={Receipt} label="GST" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/tcs" icon={Receipt} label="TCS" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/salary" icon={WalletIcon} label="Salary" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/view/tripwise" icon={MapIcon} label="Tripwise" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/mapping/party" icon={UserCheck} label="Party Mapping" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/mapping/service" icon={Briefcase} label="Service Mapping" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/mapping/expense" icon={IndianRupee} label="Expense Mapping" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/mapping/payment" icon={CreditCard} label="Payment Mapping" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/mapping/tax" icon={Receipt} label="Tax Mapping" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/mapping/voucher" icon={FileSpreadsheet} label="Voucher Mapping" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/sync-queue" icon={Clock} label="Pending Sync" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/sync-history" icon={History} label="Sync History" requiredPermission={{ module: "tally", action: "read" }} />
+        <Link to="/travel/tally/sync-errors" icon={ShieldAlert} label="Failed / Retry" requiredPermission={{ module: "tally", action: "read" }} />
+      </Section> */}
 
       {/* The generic /reports link was removed here  travel uses its own
           /travel/reports (linked above). The generic deal-stage chart +

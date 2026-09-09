@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import "./ExplorePage.css";
 import "./ExplorePageOverrides.css";
+import DiagnosticSubmitOverlay from "../../components/travel/DiagnosticSubmitOverlay";
 
 const heroImage = "https://images.unsplash.com/photo-1533105079780-92b9be482077?w=1500&q=90";
 const diagnosticSubBrand = "tmc";
@@ -689,7 +690,13 @@ function DiagnosticPanel({
         </button>
       </div>
 
-      <div className="explore-diagnostic-shell">
+      <div className="explore-diagnostic-shell" style={{ position: "relative" }}>
+        <DiagnosticSubmitOverlay
+          active={submitting}
+          fullScreen={false}
+          borderRadius={30}
+          primaryColor="var(--explore-button, #6c4df5)"
+        />
         {loading && (
           <div className="explore-diagnostic-status">
             <Loader2 size={22} className="explore-spin" />

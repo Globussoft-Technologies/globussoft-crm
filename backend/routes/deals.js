@@ -134,9 +134,17 @@ router.get("/", async (req, res) => {
       };
     }
 
-    // #172: pagination support (was ignored entirely pre-fix).
+    // #172: pagination support via limit / offset / page (sensible defaults +
+    // a hard cap). `page` is 1-based; when both `page` and `offset` are
+    // sent, the explicit `offset` wins. When `page` is present the response
+    // is a { data, total, page, limit, offset, totalPages } envelope;
+    // otherwise the legacy plain array (keeps existing consumers).
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));
-    const offset = Math.max(0, parseInt(req.query.offset) || 0);
+    const paginated = req.query.page !== undefined;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const offset = req.query.offset !== undefined
+      ? Math.max(0, parseInt(req.query.offset) || 0)
+      : (paginated ? (page - 1) * limit : Math.max(0, parseInt(req.query.offset) || 0));
     // #920 slice 2 — PII reduction via opt-in slim shape. Mirrors the
     // contacts.js pattern shipped in slice 1 (f7790241). When the caller
     // passes ?fields=summary the response drops the heavy nested includes
@@ -151,7 +159,7 @@ router.get("/", async (req, res) => {
     const isSummary = req.query.fields === "summary";
     const findManyArgs = {
       where, take: limit, skip: offset,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     };
     if (isSummary) {
       findManyArgs.select = {
@@ -178,7 +186,17 @@ router.get("/", async (req, res) => {
       ...d,
       channel: channelFromContactSource(d.contact?.source) || null,
     }));
-    res.json(enriched);
+    if (!paginated) return res.json(enriched);
+    const total = await prisma.deal.count({ where });
+    const effPage = req.query.offset !== undefined ? Math.floor(offset / limit) + 1 : page;
+    return res.json({
+      data: enriched,
+      total,
+      page: effPage,
+      limit,
+      offset,
+      totalPages: Math.max(Math.ceil(total / limit), 1),
+    });
   } catch (error) {
     console.error("[deals] list error:", error.message);
     res.status(500).json({ error: "Failed to fetch deals" });

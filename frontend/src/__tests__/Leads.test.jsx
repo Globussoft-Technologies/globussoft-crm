@@ -619,7 +619,9 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(phoneHeader.closest('.leads-table-scroll-pane')).toBeTruthy();
 
     const bottomScroll = container.querySelector('.leads-table-scroll-pane .top-scroll-sync__bottom');
-    expect(bottomScroll).toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
+    // Generic CRM: no top scrollbar — the native bottom bar is visible.
+    expect(bottomScroll).not.toHaveClass('top-scroll-sync__bottom--hidden-scrollbar');
+    expect(container.querySelector('.leads-table-scroll-pane .top-scroll-sync__top')).toBeNull();
   });
 
   it('persists dragged column widths for the Leads table layout', async () => {
@@ -2253,5 +2255,91 @@ describe('Leads Web Form column (generic CRM only)', () => {
     await screen.findByText('Form Lead');
 
     expect(screen.queryByRole('button', { name: /Lead Fields/i })).toBeNull();
+  });
+});
+
+describe('Leads extended Freshsales-parity columns', () => {
+  const genericAuth = {
+    tenant: { id: 1, vertical: 'generic', name: 'Globussoft CRM' },
+    user: { id: 1, role: 'ADMIN' },
+  };
+
+  const EXTENDED_LEAD = {
+    id: 201,
+    name: 'Aarav Sharma',
+    email: 'aarav@acme.test',
+    company: 'Acme',
+    phone: '+91 98000 12345',
+    status: 'Lead',
+    title: 'Chief Executive',
+    website: 'acme.test',
+    linkedin: 'linkedin.com/in/aarav',
+    industry: 'Logistics',
+    companySize: '51-200',
+    description: 'Met at expo',
+    stateCode: 'IN-KA',
+    firstTouchSource: 'Web',
+    lastTouchSource: 'Referral',
+    aiScore: 70,
+    source: 'Website',
+    tags: [],
+    assignedToId: null,
+    createdAt: '2026-08-10T09:00:00.000Z',
+    customFields: {},
+  };
+
+  const EXTENDED_KEYS = [
+    'name', 'email', 'status', 'title', 'firstName', 'lastName', 'website',
+    'linkedin', 'industry', 'companySize', 'description', 'stateCode',
+    'firstTouchSource', 'lastTouchSource',
+  ];
+
+  it('renders the extended headers + data-backed cells when the picker enables them', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve([EXTENDED_LEAD]);
+      }
+      if (typeof url === 'string' && url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: EXTENDED_KEYS,
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'email', label: 'Email' },
+            { key: 'status', label: 'Status' },
+            { key: 'title', label: 'Job Title' },
+            { key: 'firstName', label: 'First Name' },
+            { key: 'lastName', label: 'Last Name' },
+            { key: 'website', label: 'Website URL' },
+            { key: 'linkedin', label: 'LinkedIn' },
+            { key: 'industry', label: 'Service Type' },
+            { key: 'companySize', label: 'No Of Employee' },
+            { key: 'description', label: 'Note' },
+            { key: 'stateCode', label: 'State' },
+            { key: 'firstTouchSource', label: 'First Touch Source' },
+            { key: 'lastTouchSource', label: 'Last Touch Source' },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(genericAuth);
+    await screen.findByText('Aarav Sharma');
+
+    // Headers for every extended column.
+    for (const h of ['Status', 'Job Title', 'First Name', 'Last Name', 'Website URL', 'LinkedIn', 'Service Type', 'No Of Employee', 'Note', 'State', 'First Touch Source', 'Last Touch Source']) {
+      expect(screen.getByText(h)).toBeInTheDocument();
+    }
+
+    // Derived first/last names + scalars render in cells.
+    expect(screen.getByText('Aarav')).toBeInTheDocument();
+    expect(screen.getByText('Sharma')).toBeInTheDocument();
+    expect(screen.getByText('Chief Executive')).toBeInTheDocument();
+    expect(screen.getByText('Logistics')).toBeInTheDocument();
+    expect(screen.getByText('51-200')).toBeInTheDocument();
+    expect(screen.getByText('Met at expo')).toBeInTheDocument();
+    expect(screen.getByText('IN-KA')).toBeInTheDocument();
+    const websiteLink = screen.getByRole('link', { name: 'acme.test' });
+    expect(websiteLink.getAttribute('href')).toBe('https://acme.test');
   });
 });

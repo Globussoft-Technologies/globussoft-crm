@@ -363,7 +363,6 @@ async function hydrateTravelQuoteListRows(req, quotes) {
         .filter(Number.isFinite),
     ),
   ];
-
   const [contacts, assignees] = await Promise.all([
     contactIds.length
       ? prisma.contact.findMany({
@@ -2503,6 +2502,88 @@ router.post(
   },
 );
 
+// POST /api/travel/quotes/:id/create-trip — create and link one trip from a quote.
+router.post(
+  "/quotes/:id/create-trip",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("quotes", "update"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        include: {
+          contact: { select: { id: true, name: true } },
+          lines: { orderBy: { sortOrder: "asc" } },
+        },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
+      }
+
+      const requestedTripName = String(req.body?.tripName || "").trim();
+      if (!requestedTripName) {
+        return res.status(400).json({ error: "Trip name is required", code: "TRIP_NAME_REQUIRED" });
+      }
+      const destinationInfo = deriveQuoteDestination(quote.lines);
+      const destination = requestedTripName || destinationInfo?.caption
+        || `${quote.contact?.name || `Quote #${quote.id}`} trip`;
+      const tripCode = `QUOTE-${quote.id}`;
+      const existingTrip = await prisma.tmcTrip.findFirst({
+        where: { tenantId: req.travelTenant.id, tripCode },
+      });
+      if (existingTrip) return res.status(200).json({ trip: existingTrip, alreadyCreated: true });
+
+      const startDate = quote.tripDate && new Date(quote.tripDate) > new Date()
+        ? new Date(quote.tripDate)
+        : new Date(Date.now() + 86_400_000);
+      const returnDate = new Date(startDate.getTime() + 86_400_000);
+      const trip = await prisma.tmcTrip.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          tripCode,
+          schoolContactId: quote.contactId,
+          destination,
+          departDate: startDate,
+          returnDate,
+          pricePerStudent: quote.totalAmount,
+          status: "confirmed",
+        },
+      });
+      const result = { trip, alreadyCreated: false };
+      if (!result.alreadyCreated) {
+        await writeAudit(
+          "TravelQuote",
+          "TRAVEL_QUOTE_TRIP_CREATED",
+          quote.id,
+          req.user.userId,
+          req.travelTenant.id,
+          { quoteId: quote.id, tripId: result.trip.id },
+        );
+      }
+
+      return res.status(result.alreadyCreated ? 200 : 201).json(result);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] create trip error:", e.message);
+      return res.status(500).json({ error: "Failed to create trip" });
+    }
+  },
+);
+
 // PUT /api/travel/quotes/:id/assignment — hand a quote over to an agent/manager.
 router.put(
   "/quotes/:id/assignment",
@@ -2637,6 +2718,8 @@ router.post(
       const {
         contactId,
         totalAmount,
+        gstTcsPercent,
+        gstTcsAmount,
         currency,
         subBrand,
         status,
@@ -2688,7 +2771,6 @@ router.post(
           .status(403)
           .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
-
       // NOTE: the §4.1 diagnostic-first guard is intentionally DISABLED for
       // quotes — operators build trip quotes/proposals directly (TBO builder,
       // direct WhatsApp/email enquiries) without forcing the contact through a
@@ -2718,6 +2800,8 @@ router.post(
           contactId: contactIdInt,
           status: status || "Draft",
           totalAmount: totalAmount,
+          gstTcsPercent: gstTcsPercent == null ? null : parsePercent(gstTcsPercent, "gstTcsPercent"),
+          gstTcsAmount: gstTcsAmount == null ? null : Number(gstTcsAmount),
           currency: String(currency),
           validUntil: parsedValidUntil,
           tripDate: parsedTripDate,
@@ -2801,6 +2885,8 @@ router.put(
       const {
         contactId,
         totalAmount,
+        gstTcsPercent,
+        gstTcsAmount,
         currency,
         subBrand,
         status,
@@ -2818,9 +2904,19 @@ router.put(
               code: "INVALID_CONTACT_ID",
             });
         }
-        data.contactId = ci;
+        data.contact = { connect: { id: ci } };
       }
       if (totalAmount !== undefined) data.totalAmount = totalAmount;
+      if (gstTcsPercent !== undefined) {
+        data.gstTcsPercent = parsePercent(gstTcsPercent, "gstTcsPercent");
+      }
+      if (gstTcsAmount !== undefined) {
+        const amount = Number(gstTcsAmount);
+        if (!Number.isFinite(amount) || amount < 0) {
+          return res.status(400).json({ error: "gstTcsAmount must be a non-negative number", code: "INVALID_AMOUNT" });
+        }
+        data.gstTcsAmount = amount;
+      }
       if (currency !== undefined) data.currency = String(currency);
       if (status !== undefined) {
         assertValidStatus(status);
@@ -2844,7 +2940,6 @@ router.put(
       if (tripDate !== undefined) {
         data.tripDate = parseTripDate(tripDate);
       }
-
       if (Object.keys(data).length === 0) {
         return res
           .status(400)
@@ -5150,10 +5245,10 @@ router.post(
             const r = await sendEmail({
               to: contact.email,
               subject: `Your travel quote${amt ? ` — ${amt}` : ""}`,
-              text: `Hi ${name},\n\nYour travel quote is ready${amt ? ` (${amt})` : ""}. View it here:\n${shareUrl}\n\nYou can accept it right from that page.\n\nThank you.`,
+              text: `Hi ${name},\n\nYour travel quote is ready${amt ? ` (${amt})` : ""}. The amount shown includes the applicable tax and markup. View it here:\n${shareUrl}\n\nYou can accept it right from that page.\n\nThank you.`,
               html:
                 `<p>Hi ${name},</p>` +
-                `<p>Your travel quote is ready${amt ? ` (${amt})` : ""}.</p>` +
+                `<p>Your travel quote is ready${amt ? ` (${amt} <span style="font-size:12px;color:#7a879f;">which includes the applicable tax and markup.</span>)` : ""}.</p>` +
                 `<p><a href="${shareUrl}" target="_blank" rel="noopener noreferrer">View and accept your quote</a></p>` +
                 `<p>Thank you.</p>`,
             }).catch(() => ({ sent: false }));

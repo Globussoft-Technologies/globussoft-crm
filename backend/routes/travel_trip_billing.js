@@ -36,6 +36,7 @@ const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
+const { createDraftInvoiceForParticipant } = require("../lib/tmcParticipantInvoice");
 const { applyLandingPagePaymentToTrip } = require("../lib/landingPagePayments");
 
 const VALID_ROOM_TYPES = ["single", "twin", "triple", "quad"];
@@ -1191,6 +1192,26 @@ router.put(
           graceDays: graceDays != null ? parseInt(graceDays, 10) : 0,
         },
       });
+
+      // Keep the automation symmetric: if the plan is saved after directly
+      // registered or approved participants already exist, create their Draft
+      // invoices now too.
+      const approvedParticipants = await prisma.tripParticipant.findMany({
+        where: { tripId: trip.id, applicationStatus: { in: ["approved", "pending"] } },
+        select: { id: true },
+      });
+      for (const participant of approvedParticipants) {
+        await materializeTripInstalmentsFromPlan({
+          tripId: trip.id,
+          participantIds: [participant.id],
+          allowMissingPlan: true,
+        });
+        await createDraftInvoiceForParticipant({
+          tenantId: req.travelTenant.id,
+          tripId: trip.id,
+          participantId: participant.id,
+        });
+      }
       res.json(plan);
     } catch (err) {
       if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
@@ -1257,6 +1278,7 @@ router.get(
             db: prisma,
             tripId: trip.id,
             participantId,
+            paymentId: payment.id,
             amountMajor: payment.amount || metadata.amountMajor,
             mode: metadata.paymentMode === "complete" ? "complete" : "installment",
             installmentIndex: Number.isFinite(Number(metadata.installmentIndex)) ? Number(metadata.installmentIndex) : 0,

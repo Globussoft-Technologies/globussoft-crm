@@ -6173,7 +6173,7 @@ async function buildTmcBrochureHtml(
     // the loop below resolves most overflow failures without ever needing this
     // budget, so the extra attempt is cheap insurance for whatever the salvage
     // pass can't fix (a genuinely different defect each time, say).
-    const maxAttempts = 4;
+    const maxAttempts = 2;
     try {
       const { brief, tokenMap } = buildTmcDesignBrief(c, {
         heroUrl, overviewPhotos, extraPhotos, mapUrl, generalQrUrl, paymentQrUrl, tmcLogo, schoolLogo,

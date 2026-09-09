@@ -1,5 +1,6 @@
 const prisma = require("./prisma");
 const { materializeTripInstalmentsFromPlan } = require("./travelTripInstalments");
+const { createDraftInvoiceForParticipant } = require("./tmcParticipantInvoice");
 
 function makeError(message, status, code) {
   const err = new Error(message);
@@ -156,6 +157,7 @@ async function applyLandingPagePaymentToTrip({
   db = prisma,
   tripId,
   participantId,
+  paymentId = null,
   amountMajor,
   mode,
   installmentIndex = null,
@@ -187,6 +189,64 @@ async function applyLandingPagePaymentToTrip({
     participantIds: [numericParticipantId],
   });
 
+  // A participant must always have one customer invoice before payment is
+  // applied. The helper is idempotent and also finds invoices that already
+  // moved from Draft to Partial/Paid.
+  const trip = await db.tmcTrip.findFirst({
+    where: { id: numericTripId },
+    select: { tenantId: true },
+  });
+  const invoice = trip
+    ? await createDraftInvoiceForParticipant({
+        db,
+        tenantId: trip.tenantId,
+        tripId: numericTripId,
+        participantId: numericParticipantId,
+      })
+    : null;
+
+  // Persist the travel-invoice link in metadata. Payment.invoiceId is the
+  // legacy generic-Invoice identifier used throughout payments.js; storing a
+  // TravelInvoice id there makes equal numeric ids resolve to the wrong
+  // customer/invoice. Keep the two id domains explicit.
+  if (paymentId && invoice && db.payment?.update) {
+    try {
+      const current = db.payment.findUnique
+        ? await db.payment.findUnique({ where: { id: Number(paymentId) }, select: { metadata: true } })
+        : null;
+      let metadata = {};
+      try { metadata = JSON.parse(current?.metadata || "{}"); } catch (_) {}
+      await db.payment.update({
+        where: { id: Number(paymentId) },
+        data: {
+          metadata: JSON.stringify({
+            ...metadata,
+            travelInvoiceId: invoice.id,
+            tripId: numericTripId,
+            participantId: numericParticipantId,
+          }),
+        },
+      });
+    } catch (_) { /* payment-link enrichment is best-effort */ }
+  }
+
+  const syncInvoiceStatus = async () => {
+    if (!invoice) return;
+    const paidRows = await db.tripInstalmentPayment.findMany({
+      where: { tripId: numericTripId, participantId: numericParticipantId },
+      select: { paidAmount: true },
+    });
+    const paidTotal = paidRows.reduce((sum, row) => sum + (Number(row.paidAmount) || 0), 0);
+    const invoiceTotal = Number(invoice.totalAmount) || 0;
+    await db.travelInvoice.update({
+      where: { id: invoice.id },
+      data: {
+        status: paidTotal >= invoiceTotal && invoiceTotal > 0 ? "Paid" : paidTotal > 0 ? "Partial" : "Draft",
+        paidAt: paidTotal >= invoiceTotal && invoiceTotal > 0 ? capturedAt : null,
+      },
+    });
+  };
+
   const rows = await db.tripInstalmentPayment.findMany({
     where: { tripId: numericTripId, participantId: numericParticipantId },
     orderBy: { instalmentIndex: "asc" },
@@ -217,6 +277,7 @@ async function applyLandingPagePaymentToTrip({
   // Razorpay webhooks and the browser callback can both deliver the same
   // payment. Treat an already-paid target as an idempotent replay.
   if (targetRows.every((row) => byPaise(row).due <= 0)) {
+    await syncInvoiceStatus();
     return {
       tripId: numericTripId,
       participantId: numericParticipantId,
@@ -265,6 +326,8 @@ async function applyLandingPagePaymentToTrip({
   if (remainingPaise > 0) {
     throw makeError("Payment amount does not match the selected instalment(s)", 409, "AMOUNT_MISMATCH");
   }
+
+  await syncInvoiceStatus();
 
   return {
     tripId: numericTripId,

@@ -4,6 +4,7 @@ const path = require("path");
 const dotenv = require("dotenv");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
+const { clearTokenCache: clearCallifiedTokenCache } = require("../services/callifiedClient");
 
 const CALLIFIED_ENV_FILES = [
   path.resolve(__dirname, "../.env"),
@@ -273,6 +274,12 @@ router.post(
         where: { tenantId: req.user.tenantId, provider },
         data: { isActive: false, token: null },
       });
+      // A Callified JWT is cached per CRM tenant. Invalidate it immediately so
+      // reconnecting a different Callified account cannot reuse the old
+      // account's token until the normal cache TTL expires.
+      if (provider === "callified") {
+        clearCallifiedTokenCache(req.user.tenantId);
+      }
       res.json({ success: true });
     } catch (_err) {
       res.status(500).json({ error: "Failed to disconnect" });
@@ -835,6 +842,10 @@ router.put("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, 
       },
     });
 
+    // Credentials/base URL may have changed while the tenant still has a
+    // cached JWT from the previous Callified account.
+    clearCallifiedTokenCache(req.user.tenantId);
+
     res.json({
       success: true,
       isActive: integration.isActive,
@@ -848,7 +859,6 @@ router.put("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, 
 });
 
 module.exports = router;
-
 
 
 

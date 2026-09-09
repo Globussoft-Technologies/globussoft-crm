@@ -1,0 +1,43 @@
+CREATE TABLE IF NOT EXISTS `TravelTallyLedger` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `tenantId` INTEGER NOT NULL DEFAULT 1,
+  `subBrand` VARCHAR(50) NULL,
+  `sourceType` VARCHAR(40) NOT NULL,
+  `sourceKey` VARCHAR(160) NOT NULL,
+  `ledgerName` VARCHAR(255) NOT NULL,
+  `ledgerCode` VARCHAR(100) NULL,
+  `ledgerCategory` VARCHAR(40) NOT NULL,
+  `ledgerGroup` VARCHAR(100) NOT NULL,
+  `description` TEXT NULL,
+  `gstApplicable` BOOLEAN NOT NULL DEFAULT false,
+  `tcsApplicable` BOOLEAN NOT NULL DEFAULT false,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+  `syncStatus` VARCHAR(30) NOT NULL DEFAULT 'NOT_CONNECTED',
+  `lastSyncedAt` DATETIME(3) NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` DATETIME(3) NOT NULL,
+  UNIQUE INDEX `TravelTallyLedger_tenantId_subBrand_sourceKey_key` (`tenantId`, `subBrand`, `sourceKey`),
+  INDEX `TravelTallyLedger_tenantId_subBrand_idx` (`tenantId`, `subBrand`),
+  INDEX `TravelTallyLedger_tenantId_ledgerCategory_idx` (`tenantId`, `ledgerCategory`),
+  PRIMARY KEY (`id`),
+  CONSTRAINT `TravelTallyLedger_tenantId_fkey` FOREIGN KEY (`tenantId`) REFERENCES `Tenant` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `TravelTallyMapping` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `tenantId` INTEGER NOT NULL DEFAULT 1,
+  `subBrand` VARCHAR(50) NULL,
+  `sourceType` VARCHAR(40) NOT NULL,
+  `sourceKey` VARCHAR(160) NOT NULL,
+  `transactionType` VARCHAR(40) NOT NULL,
+  `tallyLedgerId` INTEGER NOT NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` DATETIME(3) NOT NULL,
+  UNIQUE INDEX `TravelTallyMapping_scope_source_txn_key` (`tenantId`, `subBrand`, `sourceType`, `sourceKey`, `transactionType`),
+  INDEX `TravelTallyMapping_tenantId_subBrand_idx` (`tenantId`, `subBrand`),
+  INDEX `TravelTallyMapping_tallyLedgerId_idx` (`tallyLedgerId`),
+  PRIMARY KEY (`id`),
+  CONSTRAINT `TravelTallyMapping_tenantId_fkey` FOREIGN KEY (`tenantId`) REFERENCES `Tenant` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `TravelTallyMapping_tallyLedgerId_fkey` FOREIGN KEY (`tallyLedgerId`) REFERENCES `TravelTallyLedger` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

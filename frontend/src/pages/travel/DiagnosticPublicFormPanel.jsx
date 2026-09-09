@@ -29,10 +29,6 @@ import {
   Info,
   ShieldCheck,
   Upload,
-  X,
-  Plus,
-  ArrowUp,
-  ArrowDown,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { AuthContext } from "../../App";
@@ -42,12 +38,6 @@ import {
   parseStyling,
   buildTheme,
 } from "../../components/travel/diagnosticFormTheme";
-
-const DEFAULT_IDENTITY_FIELDS = [
-  { id: "name", label: "Name", type: "text", required: true, enabled: true },
-  { id: "email", label: "Email", type: "email", required: true, enabled: true },
-  { id: "phone", label: "Phone", type: "tel", required: false, enabled: true },
-];
 
 export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, questionsJson, notify }) {
   const { tenant } = useContext(AuthContext) || {};
@@ -59,6 +49,35 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
   const [cancellationPolicies, setCancellationPolicies] = useState([]);
   const [form, setForm] = useState(buildDefaultForm());
   const [showPreview, setShowPreview] = useState(true);
+
+  // Measure the panel's REAL rendered width (shrunk by the app sidebar +
+  // chrome, and on a Mac this is often narrower than it looks — a 13"
+  // MacBook's logical width is ~1440px same as a same-size Windows laptop,
+  // but its browser chrome/sidebar take a similar bite, so the room left
+  // for this panel can dip below what a 50/50 two-column split needs)
+  // rather than trusting CSS grid's auto-fit / container-query breakpoints
+  // from the outside. LAYOUT_WIDE_THRESHOLD is set generously above the
+  // width a 50/50 split would need, specifically so the "Public form URL"
+  // row (a code chip + two buttons) and similar rows never get close to
+  // their own min-content width and bleed into the preview column next to
+  // it — which visually looked exactly like an overlap.
+  const LAYOUT_WIDE_THRESHOLD = 1300;
+  // A callback ref (state, not useRef) — the grid div doesn't exist yet
+  // during the initial `loading` render (see the early `if (loading)
+  // return ...` below), so a plain useRef + an empty-deps effect would
+  // observe a still-null node and never attach. Storing the node in state
+  // makes the effect re-run the moment the div actually mounts.
+  const [layoutEl, setLayoutEl] = useState(null);
+  const [isNarrowLayout, setIsNarrowLayout] = useState(true);
+  useEffect(() => {
+    if (!layoutEl || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect?.width ?? 0;
+      setIsNarrowLayout(width < LAYOUT_WIDE_THRESHOLD);
+    });
+    observer.observe(layoutEl);
+    return () => observer.disconnect();
+  }, [layoutEl]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -112,33 +131,6 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
       ...f,
       stylingConfigJson: JSON.stringify({ ...parseStyling(f.stylingConfigJson), ...patch }),
     }));
-  };
-
-  const updateIdentityFields = (fields) => {
-    setForm((f) => {
-      const next = {
-        ...f,
-        stylingConfigJson: JSON.stringify({
-          ...parseStyling(f.stylingConfigJson),
-          identityFields: fields,
-        }),
-      };
-      for (const field of fields) {
-        if (field.id === "name") {
-          next.includeName = field.enabled !== false;
-          next.nameRequired = Boolean(field.required);
-        }
-        if (field.id === "email") {
-          next.includeEmail = field.enabled !== false;
-          next.emailRequired = Boolean(field.required);
-        }
-        if (field.id === "phone") {
-          next.includePhone = field.enabled !== false;
-          next.phoneRequired = Boolean(field.required);
-        }
-      }
-      return next;
-    });
   };
 
   const applyBrandKit = (kit) => {
@@ -230,6 +222,10 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
     () => parsePreviewQuestions(questionsJson),
     [questionsJson],
   );
+  const previewIdentityFields = useMemo(
+    () => parsePreviewIdentityFields(questionsJson),
+    [questionsJson],
+  );
 
   const previewConfig = useMemo(() => ({
     form,
@@ -273,18 +269,47 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
   return (
     <>
       <style>{diagnosticSliderCss}</style>
+      {/* The 2-vs-1-column decision itself is driven by the `layoutRef`
+          ResizeObserver above (isNarrowLayout) — a real measurement of this
+          panel's rendered width, not a CSS breakpoint. That's what actually
+          fixes the "Live preview" overlapping the form fields on a
+          sidebar-narrowed viewport. container-type: inline-size here just
+          lets the @container rules below (spacing/height touch-ups for the
+          stacked state) react to this wrapper's real width too, for
+          consistency with the JS-driven column switch. */}
+      <div className="diagnostic-public-form-container" style={{ width: "100%", containerType: "inline-size" }}>
       <div
+        ref={setLayoutEl}
+        className="diagnostic-public-form-layout"
         style={{
           display: "grid",
-          gridTemplateColumns: showPreview
-            ? "minmax(0, 0.92fr) minmax(640px, 1.08fr)"
-            : "minmax(0, 1fr)",
+          // The preview column scales WITH the real available width
+          // (38cqw — a container-query unit relative to the
+          // `.diagnostic-public-form-container` wrapper's inline size, see
+          // above) instead of a fixed pixel cap. A flat 460px cap looked
+          // cramped on a genuinely wide monitor with room to spare, but a
+          // plain percentage alone risked crowding column 1 again at
+          // narrower widths (e.g. right above the stack threshold, or
+          // right after collapsing the app sidebar shifts real width
+          // around) — clamp() keeps it between a floor that's still usable
+          // and a ceiling so it never balloons absurdly large, while the
+          // cqw middle term means it responds live to the sidebar being
+          // toggled open/closed, not just to the browser window itself.
+          gridTemplateColumns: showPreview && !isNarrowLayout ? "minmax(0, 1fr) clamp(420px, 38cqw, 640px)" : "minmax(0, 1fr)",
           gap: 24,
           alignItems: "flex-start",
           width: "100%",
         }}
       >
-      <div style={{ minWidth: 0, display: "grid", gap: 16 }}>
+      {/* No overflowX:hidden here — setting only one overflow axis to a
+          non-visible value forces the browser to implicitly compute the
+          OTHER axis as "auto" too (CSS Overflow spec), which would turn
+          this div into its own scroll container and break `position:
+          sticky` on the preview + actions bar below (they'd stick within
+          THIS div instead of the real page scroller). minWidth: 0 alone is
+          enough to keep this column from refusing to shrink below its
+          content's width inside the grid track. */}
+      <div style={{ minWidth: 0, maxWidth: "100%", display: "grid", gap: 16 }}>
         <section style={card}>
           <div style={sectionHeader}>
             <h2 style={cardTitle}>
@@ -852,14 +877,45 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
               max={40}
               onChange={(v) => updateStyling({ questionBorderRadius: v })}
             />
+
+            <Field label="Question text position" tooltip="Horizontal position of each question's heading text inside its card.">
+              <select
+                value={styling.questionAlign || "left"}
+                onChange={(e) => updateStyling({ questionAlign: e.target.value })}
+                style={input}
+              >
+                <option value="left">Left</option>
+                <option value="center">Center</option>
+                <option value="right">Right</option>
+              </select>
+            </Field>
+
+            <Field label="Option text position" tooltip="Horizontal position of the marker + label inside each answer option.">
+              <select
+                value={styling.optionAlign || "left"}
+                onChange={(e) => updateStyling({ optionAlign: e.target.value })}
+                style={input}
+              >
+                <option value="left">Left</option>
+                <option value="center">Center</option>
+                <option value="right">Right</option>
+              </select>
+            </Field>
+
+            <SizeSlider
+              label="Question title vertical position (px)"
+              tooltip="Fine-tune the title's distance from the top of its card. Drag right to push it further down; drag left to pull it up closer to the top edge."
+              value={styling.questionTitleOffset}
+              fallback={0}
+              min={-12}
+              max={40}
+              step={1}
+              suffix="px"
+              onChange={(v) => updateStyling({ questionTitleOffset: v })}
+            />
           </div>
         </section>
 
-        <IdentityFieldsEditor
-          styling={styling}
-          form={form}
-          onChange={updateIdentityFields}
-        />
 
         <section style={card}>
           <Field
@@ -876,7 +932,27 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
           </Field>
         </section>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, position: "sticky", bottom: 16 }}>
+        {/* Sticky (desktop only — the @container rule below un-sticks it
+            in the stacked narrow layout, where a floating bar would just
+            cover content while scrolling) so Save is reachable without
+            scrolling to the bottom of this long settings form. */}
+        <div
+          className="diagnostic-public-form-actions"
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            flexWrap: "wrap",
+            position: isNarrowLayout ? "relative" : "sticky",
+            bottom: isNarrowLayout ? "auto" : 16,
+            zIndex: 2,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "var(--surface-color)",
+            border: "1px solid var(--border-color)",
+            boxShadow: isNarrowLayout ? "none" : "0 8px 24px rgba(0,0,0,0.16)",
+          }}
+        >
           <button
             type="button"
             onClick={() => setShowPreview((s) => !s)}
@@ -891,16 +967,27 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
       </div>
 
       {showPreview && (
+        // Sticky, not just a second column that scrolls away with the page
+        // — the whole point of a live preview is seeing it change AS you
+        // edit a field further down the (long) settings form, so it stays
+        // pinned in view rather than needing a scroll-up to check it after
+        // every change. Only sticky in the side-by-side layout; in the
+        // stacked (narrow) layout it sits inline below the form instead,
+        // where sticking it would just cover content while scrolling.
         <aside
           style={{
             ...card,
             width: "100%",
             minWidth: 0,
             padding: 14,
-            position: "sticky",
-            top: 16,
-            height: "calc(100vh - 32px)",
-            maxHeight: "calc(100vh - 32px)",
+            // Sticky relative to <main> (the app's own scroll container —
+            // the global header is a sibling above it, not inside it, so
+            // this offset only needs to clear this page's own top padding,
+            // not the header's height too).
+            position: isNarrowLayout ? "relative" : "sticky",
+            top: isNarrowLayout ? "auto" : 16,
+            height: "auto",
+            maxHeight: isNarrowLayout ? "min(760px, 80vh)" : "calc(100vh - 40px)",
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
@@ -929,7 +1016,7 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
           >
             <div
               style={{
-                width: "min(100%, 820px)",
+                width: "100%",
                 minWidth: 0,
                 maxWidth: "100%",
                 boxSizing: "border-box",
@@ -939,6 +1026,7 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
               <DiagnosticFormRenderer
                 config={previewConfig}
                 questions={previewQuestions}
+                identityFields={previewIdentityFields}
                 submitLabel={form.thankYouMessage || "See my diagnostic result"}
                 mode="preview"
                 preview
@@ -947,6 +1035,7 @@ export default function DiagnosticPublicFormPanel({ subBrand, bankInfo, question
           </div>
         </aside>
       )}
+      </div>
       </div>
     </>
   );
@@ -1324,169 +1413,6 @@ function parseBackgroundSizePercent(value) {
   return Math.min(250, Math.max(25, n));
 }
 
-function IdentityFieldsEditor({ styling, form, onChange }) {
-  const fields = normalizeIdentityEditorFields(
-    Array.isArray(styling.identityFields) && styling.identityFields.length > 0
-      ? styling.identityFields
-      : DEFAULT_IDENTITY_FIELDS,
-    form,
-  );
-
-  const updateFields = (next) => onChange(next);
-
-  const addField = () => {
-    updateFields([
-      ...fields,
-      { id: `field_${Date.now()}`, label: "New field", type: "text", required: false, enabled: true },
-    ]);
-  };
-
-  const removeField = (id) => updateFields(fields.filter((f) => f.id !== id));
-
-  const editField = (id, patch) => {
-    updateFields(fields.map((f) => (f.id === id ? { ...f, ...patch } : f)));
-  };
-
-  const moveField = (id, dir) => {
-    const idx = fields.findIndex((f) => f.id === id);
-    if (idx < 0) return;
-    const nextIdx = idx + dir;
-    if (nextIdx < 0 || nextIdx >= fields.length) return;
-    const next = [...fields];
-    [next[idx], next[nextIdx]] = [next[nextIdx], next[idx]];
-    updateFields(next);
-  };
-
-  return (
-    <section style={card}>
-      <div style={{ ...sectionHeader, marginBottom: 12 }}>
-        <h2 style={cardTitle}>Identity fields</h2>
-        <button type="button" onClick={addField} style={{ ...secondaryBtn, fontSize: 12 }}>
-          <Plus size={13} /> Add field
-        </button>
-      </div>
-      <p style={{ color: "var(--text-secondary)", fontSize: 13, marginTop: -8, marginBottom: 14 }}>
-        Public submitters leave contact details so the submission becomes a lead. Use the arrows to reorder fields.
-      </p>
-      <div style={{ display: "grid", gap: 10 }}>
-        {fields.map((f, idx) => (
-          <div
-            key={f.id}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "64px 1fr 120px 80px 80px 36px",
-              gap: 8,
-              alignItems: "center",
-              padding: 10,
-              border: "1px solid var(--border-color)",
-              borderRadius: 8,
-              background: "rgba(255,255,255,0.03)",
-            }}
-          >
-            <div style={{ display: "flex", gap: 4 }}>
-              <button
-                type="button"
-                onClick={() => moveField(f.id, -1)}
-                disabled={idx === 0}
-                style={{
-                  ...secondaryBtn,
-                  padding: "4px 6px",
-                  opacity: idx === 0 ? 0.4 : 1,
-                  cursor: idx === 0 ? "not-allowed" : "pointer",
-                }}
-                title="Move up"
-              >
-                <ArrowUp size={14} />
-              </button>
-              <button
-                type="button"
-                onClick={() => moveField(f.id, 1)}
-                disabled={idx === fields.length - 1}
-                style={{
-                  ...secondaryBtn,
-                  padding: "4px 6px",
-                  opacity: idx === fields.length - 1 ? 0.4 : 1,
-                  cursor: idx === fields.length - 1 ? "not-allowed" : "pointer",
-                }}
-                title="Move down"
-              >
-                <ArrowDown size={14} />
-              </button>
-            </div>
-            <input
-              type="text"
-              value={f.label}
-              onChange={(e) => editField(f.id, { label: e.target.value })}
-              style={input}
-              placeholder="Field label"
-            />
-            <select
-              value={f.type || "text"}
-              onChange={(e) => editField(f.id, { type: e.target.value })}
-              style={input}
-            >
-              <option value="text">Text</option>
-              <option value="email">Email</option>
-              <option value="tel">Phone</option>
-            </select>
-            <label style={{ ...inlineLabel, fontSize: 12 }}>
-              <input
-                type="checkbox"
-                checked={f.required}
-                onChange={(e) => editField(f.id, { required: e.target.checked })}
-              />
-              Required
-            </label>
-            <label style={{ ...inlineLabel, fontSize: 12 }}>
-              <input
-                type="checkbox"
-                checked={f.enabled !== false}
-                onChange={(e) => editField(f.id, { enabled: e.target.checked })}
-              />
-              Show
-            </label>
-            <button
-              type="button"
-              onClick={() => removeField(f.id)}
-              style={{ ...secondaryBtn, padding: "6px 8px", color: "var(--danger-color)" }}
-              title="Remove field"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function normalizeIdentityEditorFields(fields, form) {
-  return fields.map((field) => {
-    if (field.id === "name") {
-      return {
-        ...field,
-        enabled: form.includeName !== false,
-        required: form.nameRequired !== false,
-      };
-    }
-    if (field.id === "email") {
-      return {
-        ...field,
-        enabled: form.includeEmail !== false,
-        required: form.emailRequired !== false,
-      };
-    }
-    if (field.id === "phone") {
-      return {
-        ...field,
-        enabled: form.includePhone !== false,
-        required: form.phoneRequired === true,
-      };
-    }
-    return field;
-  });
-}
-
 function buildDefaultForm() {
   return {
     title: "",
@@ -1606,6 +1532,15 @@ function parsePreviewQuestions(raw) {
     }));
   } catch {
     return SAMPLE_QUESTIONS;
+  }
+}
+
+function parsePreviewIdentityFields(raw) {
+  try {
+    const fields = JSON.parse(raw || "{}").identityFields;
+    return Array.isArray(fields) ? fields : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -1744,6 +1679,89 @@ const sliderValue = {
 };
 
 const diagnosticSliderCss = `
+  .diagnostic-public-form-layout,
+  .diagnostic-public-form-layout * {
+    box-sizing: border-box;
+  }
+
+  .diagnostic-public-form-layout {
+    min-width: 0;
+  }
+
+  .diagnostic-public-form-layout input,
+  .diagnostic-public-form-layout textarea,
+  .diagnostic-public-form-layout select,
+  .diagnostic-public-form-layout button {
+    max-width: 100%;
+  }
+
+  /* Container query, not a viewport media query — the app sidebar + top
+     chrome reduce the usable content width, so a wide browser window can
+     still only give this panel ~1100-1200px of real space (less on a Mac's
+     narrower effective width). A viewport-width media query can't see that
+     shrinkage and stays stuck in the 2-column layout, which visually
+     overlaps the "Live preview" panel over the form fields. @container
+     reacts to the actual wrapper width instead. This threshold mirrors the
+     LAYOUT_WIDE_THRESHOLD (1300px) the JS ResizeObserver above uses to
+     decide the actual column count — the JS is the real source of truth,
+     this is a secondary CSS-only touch-up layer for spacing/height. */
+  @container (max-width: 1300px) {
+    .diagnostic-public-form-layout {
+      grid-template-columns: minmax(0, 1fr) !important;
+      gap: 16px !important;
+    }
+
+    .diagnostic-public-form-layout > aside {
+      position: relative !important;
+      top: auto !important;
+      height: min(760px, 78vh) !important;
+      max-height: 760px !important;
+    }
+
+    .diagnostic-public-form-actions {
+      position: relative !important;
+      bottom: auto !important;
+    }
+  }
+
+  @container (max-width: 640px) {
+    .diagnostic-public-form-layout > aside {
+      height: min(680px, 75vh) !important;
+      padding: 10px !important;
+    }
+
+    .diagnostic-public-form-layout > aside > div {
+      padding: 8px !important;
+    }
+  }
+
+  /* Fallback for browsers without container-query support (rare, but a
+     real admin's browser could still be one) — a viewport-width media
+     query is not as accurate as the @container rules above, but a stacked
+     layout below 1700px viewport width is a safe, conservative floor that
+     never overlaps, at the cost of stacking a little earlier than strictly
+     necessary on very wide windows. */
+  @supports not (container-type: inline-size) {
+    @media (max-width: 1700px) {
+      .diagnostic-public-form-layout {
+        grid-template-columns: minmax(0, 1fr) !important;
+        gap: 16px !important;
+      }
+
+      .diagnostic-public-form-layout > aside {
+        position: relative !important;
+        top: auto !important;
+        height: min(760px, 78vh) !important;
+        max-height: 760px !important;
+      }
+
+      .diagnostic-public-form-actions {
+        position: relative !important;
+        bottom: auto !important;
+      }
+    }
+  }
+
   .diagnostic-opacity-slider {
     --slider-track: color-mix(in srgb, var(--border-color) 72%, transparent);
     width: 100%;

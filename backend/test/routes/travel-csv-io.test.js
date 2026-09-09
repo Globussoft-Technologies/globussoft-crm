@@ -407,6 +407,25 @@ describe('POST /api/travel/cost-master/import.csv', () => {
 
 // --- diagnostic-banks import (ADMIN-only) -----------------------------------
 
+describe('GET /api/travel/diagnostic-banks/template.csv', () => {
+  test('returns a readable question-and-band template that can be imported', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostic-banks/template.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .buffer(true)
+      .parse(bufferParser);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.headers['content-disposition']).toMatch(/travel-diagnostic-banks-template\.csv/);
+    const body = res.body.toString('utf8');
+    expect(body).toContain('rowType,subBrand,templateName,version,isActive,questionId');
+    expect(body).toContain('question,tmc,TMC readiness,1,true,trip_type');
+    expect(body).toContain('band,tmc,TMC readiness,1,true');
+    expect(body).not.toContain('questionsJson');
+  });
+});
+
 describe('POST /api/travel/diagnostic-banks/import.csv', () => {
   test('MANAGER role is rejected with 403 — diagnostic banks are ADMIN-only', async () => {
     prisma.user.findUnique.mockResolvedValue({ role: 'MANAGER', subBrandAccess: null });

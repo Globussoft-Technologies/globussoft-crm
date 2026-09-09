@@ -582,7 +582,7 @@ const Layout = () => {
             countdown to show" — a zero-day banner would also be useless. */}
         {daysRemaining > 0 && <TrialBanner daysRemaining={daysRemaining} />}
         <main
-          className="animate-fade-in"
+          className="page-fade-in"
           style={{
             flex: 1,
             minWidth: 0,

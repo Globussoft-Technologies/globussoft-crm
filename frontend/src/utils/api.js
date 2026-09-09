@@ -179,6 +179,8 @@ export function setActiveTenantId(id) {
 // Pages can opt OUT of the auto-toast by passing { silent: true }. Useful for
 // background polls and probe requests where a transient failure shouldn't
 // bother the user.
+let lastAiSetupNoticeAt = 0;
+
 export const fetchApi = async (url, options = {}) => {
   const token = getAuthToken();
   // FormData carries its own multipart boundary in the Content-Type header,
@@ -297,13 +299,21 @@ export const fetchApi = async (url, options = {}) => {
       userMsg = serverMsg || `Request failed (${response.status}).`;
     }
 
+    const isAiSetupRequired = errorCode === 'EMBEDDING_PROVIDER_NOT_CONFIGURED';
+    if (isAiSetupRequired) {
+      userMsg = 'AI setup is needed before new brochures can power trip recommendations. Your existing library is still available. Ask an administrator to add an AI provider in Settings.';
+    }
+
     if (!silent && _globalNotify) {
       // Append the error code in the toast for 5xx so a dev (or a user
       // screenshotting for support) can see it without opening DevTools —
       // it's a stable enum string, safe to show, and short enough to not
       // clutter the toast.
-      const toastMsg = response.status >= 500 ? `${userMsg} (${errorCode})` : userMsg;
-      _globalNotify.error(toastMsg);
+      const shouldShowAiNotice = !isAiSetupRequired || Date.now() - lastAiSetupNoticeAt > 10_000;
+      if (shouldShowAiNotice) {
+        if (isAiSetupRequired) lastAiSetupNoticeAt = Date.now();
+        _globalNotify.error(userMsg);
+      }
     }
     const err = new Error(userMsg);
     err.status = response.status;

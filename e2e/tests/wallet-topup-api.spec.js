@@ -81,7 +81,7 @@
  * boot/auth/cleanup scaffold + wallet-giftcard-coupon-api.spec.js for
  * the cross-tenant probe shape.
  */
-const { test, expect } = require('@playwright/test');
+const { test, expect, request: playwrightRequest } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const API = `${BASE_URL}/api`;
@@ -334,10 +334,22 @@ test.describe('GET /api/wallet/:patientId/balance', () => {
     const patient = await createPatient(request, 'unauth');
     expect(patient).toBeTruthy();
 
-    const res = await request.get(`${API}/wallet/${patient.id}/balance`, {
-      timeout: REQUEST_TIMEOUT,
+    // Login and bearer-auth helpers now refresh the HttpOnly auth cookie.
+    // The shared Playwright request fixture therefore represents an active
+    // browser session even when this individual request omits Authorization.
+    // Use a fresh cookie-free context so this remains a real auth-gate probe.
+    const anonymousRequest = await playwrightRequest.newContext({
+      baseURL: BASE_URL,
+      storageState: { cookies: [], origins: [] },
     });
-    expect([401, 403]).toContain(res.status());
+    try {
+      const res = await anonymousRequest.get(`/api/wallet/${patient.id}/balance`, {
+        timeout: REQUEST_TIMEOUT,
+      });
+      expect([401, 403]).toContain(res.status());
+    } finally {
+      await anonymousRequest.dispose();
+    }
   });
 
   test('5. USER without clinical wellnessRole → 403 WELLNESS_ROLE_FORBIDDEN', async ({ request }) => {

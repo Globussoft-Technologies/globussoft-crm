@@ -169,7 +169,8 @@ test.describe("Travel CSV — export shape", () => {
     expect(r.status()).toBe(200);
     const text = await r.text();
     expect(text.startsWith(UTF8_BOM)).toBe(true);
-    expect(text).toContain("subBrand,version");
+    expect(text).toContain("rowType,subBrand,templateName,version,isActive,questionId");
+    expect(text).toMatch(/(?:^|\r?\n)(?:question|band),/);
   });
 
   test("cost-master export rejects invalid ?category", async ({ request }) => {

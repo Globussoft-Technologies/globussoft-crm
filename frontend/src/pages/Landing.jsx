@@ -129,12 +129,25 @@ export default function Landing() {
   useEffect(() => {
     if (!containerRef.current) return undefined;
     const container = containerRef.current;
+    const documentRoot = document.documentElement;
+    const previousTheme = documentRoot.getAttribute("data-theme");
+
+    // The marketing landing page has a fixed light palette. A persisted dark
+    // preference from a previous authenticated session must not leak into it;
+    // doing so leaves the page's dark text on the app's dark body background.
+    // Restore the preference when navigating to login or back into the CRM.
+    documentRoot.setAttribute("data-theme", "light");
     mountLandingTemplate(container);
     const cleanupInteractions = setupLandingInteractions(container);
 
     return () => {
       cleanupInteractions();
       container.replaceChildren();
+      if (previousTheme === null) {
+        documentRoot.removeAttribute("data-theme");
+      } else {
+        documentRoot.setAttribute("data-theme", previousTheme);
+      }
     };
   }, []);
 

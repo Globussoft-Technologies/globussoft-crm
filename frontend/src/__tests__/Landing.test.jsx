@@ -5,8 +5,9 @@
  *
  * SUT: frontend/src/pages/Landing.jsx
  *
- * Scope — pure static-surface pin. Landing.jsx is presentational only:
- *   - No `useEffect` / no API calls / no state.
+ * Scope — static-surface and lifecycle coverage. Landing.jsx:
+ *   - Uses an effect for its template interactions and public-page theme.
+ *   - Makes no API calls and owns no React state.
  *   - No `useNotify` / `fetchApi` / `useNavigate` consumption.
  *   - Just `<Link>` from react-router-dom + fixed FEATURES / MODULES arrays.
  *
@@ -166,6 +167,26 @@ describe('Landing (public marketing page)', () => {
     renderLanding();
     expect(screen.getByText(/Close more deals\./i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Start Free Trial/i })).toBeInTheDocument();
+  });
+
+  it('forces light theme while mounted and restores the saved theme on exit', () => {
+    const originalTheme = document.documentElement.getAttribute('data-theme');
+
+    try {
+      document.documentElement.setAttribute('data-theme', 'dark');
+
+      const { unmount } = renderLanding();
+      expect(document.documentElement).toHaveAttribute('data-theme', 'light');
+
+      unmount();
+      expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
+    } finally {
+      if (originalTheme === null) {
+        document.documentElement.removeAttribute('data-theme');
+      } else {
+        document.documentElement.setAttribute('data-theme', originalTheme);
+      }
+    }
   });
 
   it('removes global listeners and disconnects observers on unmount', () => {

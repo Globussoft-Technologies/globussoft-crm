@@ -212,31 +212,11 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
     }
   };
 
-  // Generic CRM (leads table) Reset default — Name plus exactly the
-  // requested columns: Phone, Email, Company, Source, Web Form, Created,
-  // Last Updated, No Of Employee, Actions. Anything else (scores, tags,
-  // custom fields, …) stays opt-in via the picker.
-  const LEADS_RESET_DEFAULT_COLUMNS = [
-    "name",
-    "phone",
-    "email",
-    "company",
-    "source",
-    "webForm",
-    "createdAt",
-    "lastUpdated",
-    "companySize",
-    "actions",
-  ];
-
   const handleReset = () => {
-    if (tableKey === "leads") {
-      const byKey = new Set(available.map((c) => c.key));
-      setDraftVisible(LEADS_RESET_DEFAULT_COLUMNS.filter((k) => byKey.has(k)));
-      return;
-    }
-    // Other tables keep the previous behaviour: every builtin column
-    // visible, custom-field columns opt-in.
+    // Reset to "every builtin column visible" — matches the backend's own
+    // no-saved-row default, computed client-side here from `available`
+    // (no separate endpoint needed; this list doesn't include custom-field
+    // keys, matching the backend default).
     setDraftVisible(available.filter((c) => !c.key.startsWith("cf_")).map((c) => c.key));
   };
 
@@ -246,22 +226,13 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
 
   const availableByKey = new Map(available.map((c) => [c.key, c]));
   const searchTerm = search.trim().toLowerCase();
-  const isLockedFn = (column) => column.key === "name" || Boolean(column.lockedVisible);
   const matchesSearch = (column) =>
     !searchTerm || column.label.toLowerCase().includes(searchTerm);
-  const shownKeys = new Set(draftVisible);
-  // Locked columns (identity `name`, always-on `actions`) are always shown —
-  // merge them in so older saved preferences that predate the key still
-  // display them as fixed instead of dropping them into "not shown".
-  for (const c of available) {
-    if (c.lockedVisible) shownKeys.add(c.key);
-  }
-  if (availableByKey.has("name")) shownKeys.add("name");
-  const shown = [...shownKeys]
+  const shown = draftVisible
     .map((key) => availableByKey.get(key))
     .filter(Boolean)
     .filter(matchesSearch);
-  const hidden = filtered.filter((c) => !shownKeys.has(c.key));
+  const hidden = filtered.filter((c) => !draftVisible.includes(c.key));
 
   return (
     <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
@@ -308,14 +279,6 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
             </div>
           </div>
           <div style={{ overflowY: "auto", flex: 1, minHeight: 0, padding: "0.5rem 0" }}>
-            {available.length > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", padding: "0.1rem 0.75rem 0.4rem", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-primary)" }}>
-                Fields visible in table
-                <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-secondary)", background: "var(--surface-hover)", borderRadius: 6, padding: "0.1rem 0.45rem" }}>
-                  {draftVisible.length}/{available.length}
-                </span>
-              </div>
-            )}
             {shown.length > 0 && (
               <>
                 <div style={{ padding: "0.3rem 0.75rem", fontSize: "0.72rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
@@ -327,7 +290,7 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
                   style={{ display: "flex", flexDirection: "column", gap: "0.1rem" }}
                 >
                 {shown.map((c) => {
-                  const isLocked = isLockedFn(c);
+                  const isLocked = c.key === "name";
                   const isDropTarget = dropKey === c.key && draggedKey !== c.key;
                   return (
                     <div

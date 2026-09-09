@@ -49,16 +49,8 @@ export default function Reports() {
   const [detailType, setDetailType] = useState('deals');
   const [detailData, setDetailData] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [detailPage, setDetailPage] = useState(1);
-  const [detailLimit, setDetailLimit] = useState(10);
-  const [detailTotal, setDetailTotal] = useState(0);
-  const [detailTotalPages, setDetailTotalPages] = useState(1);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [schedules, setSchedules] = useState([]);
-  const [schedPage, setSchedPage] = useState(1);
-  const [schedLimit, setSchedLimit] = useState(10);
-  const [schedTotal, setSchedTotal] = useState(0);
-  const [schedTotalPages, setSchedTotalPages] = useState(1);
   const [newSchedule, setNewSchedule] = useState({ name: '', reportType: 'deals', frequency: 'weekly', recipients: '', format: 'PDF' });
 
   // #117: skip queries entirely if the range is inverted — the backend rejects
@@ -104,46 +96,17 @@ export default function Reports() {
   useEffect(() => {
     if (viewMode === 'table') {
       setDetailLoading(true);
-      const offset = (detailPage - 1) * detailLimit;
-      fetchApi(`/api/reports/detailed/${detailType}?limit=${detailLimit}&offset=${offset}&page=${detailPage}${dateParams()}`)
-        .then(res => {
-          if (res && Array.isArray(res.data)) {
-            setDetailData(res.data);
-            setDetailTotal(res.total ?? res.data.length);
-            setDetailTotalPages(res.totalPages ?? 1);
-          } else { setDetailData(Array.isArray(res) ? res : []); setDetailTotal(Array.isArray(res) ? res.length : 0); setDetailTotalPages(1); }
-          setDetailLoading(false);
-        })
-        .catch(() => { setDetailData([]); setDetailTotal(0); setDetailTotalPages(1); setDetailLoading(false); });
+      fetchApi(`/api/reports/detailed/${detailType}?${dateParams()}`)
+        .then(res => { setDetailData(Array.isArray(res) ? res : []); setDetailLoading(false); })
+        .catch(() => { setDetailData([]); setDetailLoading(false); });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- dateParams is derived from the listed state deps
-  }, [viewMode, detailType, startDate, endDate, detailPage, detailLimit]);
-
-  const applySchedulesResponse = (data) => {
-    if (data && Array.isArray(data.data)) {
-      setSchedules(data.data);
-      setSchedTotal(data.total ?? data.data.length);
-      setSchedTotalPages(data.totalPages ?? 1);
-    } else { setSchedules(Array.isArray(data) ? data : []); setSchedTotal(Array.isArray(data) ? data.length : 0); setSchedTotalPages(1); }
-  };
+  }, [viewMode, detailType, startDate, endDate]);
 
   // Schedules
   useEffect(() => {
-    const offset = (schedPage - 1) * schedLimit;
-    fetchApi(`/api/report-schedules?limit=${schedLimit}&offset=${offset}&page=${schedPage}`).then(d => {
-      // Legacy fallback: very old server builds ignore page/limit and tests
-      // mock only the bare path — retry it when the paginated shape is null.
-      if (d == null && schedPage === 1) {
-        fetchApi('/api/report-schedules').then(applySchedulesResponse).catch(() => { });
-      } else applySchedulesResponse(d);
-    }).catch(() => { fetchApi('/api/report-schedules').then(applySchedulesResponse).catch(() => { }); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schedPage, schedLimit]);
-
-  const refreshSchedules = () => {
-    const offset = (schedPage - 1) * schedLimit;
-    fetchApi(`/api/report-schedules?limit=${schedLimit}&offset=${offset}&page=${schedPage}`).then(applySchedulesResponse).catch(() => { });
-  };
+    fetchApi('/api/report-schedules').then(data => setSchedules(data)).catch(() => { });
+  }, []);
 
   // #127: pragmatic email check — same regex used server-side in report_schedules.js
   const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
@@ -171,13 +134,13 @@ export default function Reports() {
       return;
     }
     setNewSchedule({ name: '', reportType: 'deals', frequency: 'weekly', recipients: '', format: 'PDF' });
-    refreshSchedules();
+    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => { });
     setShowScheduleModal(false);
   };
 
   const handleToggleSchedule = async (id) => {
     await fetchApi(`/api/report-schedules/${id}/toggle`, { method: 'PUT' });
-    refreshSchedules();
+    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => { });
   };
 
   const handleDeleteSchedule = async (id) => {
@@ -186,7 +149,7 @@ export default function Reports() {
     const name = sched?.name || `schedule #${id}`;
     if (!await notify.confirm(`Delete scheduled email report "${name}"?\n\nThis cancels future deliveries to its recipients. The action cannot be undone.`)) return;
     await fetchApi(`/api/report-schedules/${id}`, { method: 'DELETE' });
-    refreshSchedules();
+    fetchApi('/api/report-schedules').then(data => setSchedules(Array.isArray(data) ? data : [])).catch(() => { });
   };
 
   const totalValue = data.reduce((sum, item) => sum + (item.value || 0), 0);
@@ -405,7 +368,7 @@ export default function Reports() {
         <div>
           <div style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             {DETAIL_TYPES.map(t => (
-              <button key={t.value} onClick={() => { setDetailType(t.value); setDetailPage(1); }} style={{
+              <button key={t.value} onClick={() => setDetailType(t.value)} style={{
                 padding: '0.5rem 1rem', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: '500', fontSize: '0.85rem',
                 background: detailType === t.value ? 'var(--primary-color, var(--accent-color))' : 'var(--subtle-bg)',
                 color: detailType === t.value ? '#fff' : 'var(--text-primary)', transition: 'var(--transition)'
@@ -415,19 +378,6 @@ export default function Reports() {
             ))}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.6rem' }}>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.3rem 0.4rem 0.3rem 0.7rem', fontSize: '0.75rem', width: 'fit-content', maxWidth: '100%' }}>
-              <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                {detailTotal === 0 ? 'No records' : `${(detailPage - 1) * detailLimit + 1}–${Math.min(detailPage * detailLimit, detailTotal)} of ${detailTotal}`}
-              </span>
-              <select className="input-field" aria-label="Rows per page" value={detailLimit} onChange={e => { setDetailLimit(parseInt(e.target.value) || 10); setDetailPage(1); }} style={{ padding: '0.2rem 0.35rem', fontSize: '0.75rem', borderRadius: '7px', width: 'auto' }}>
-                {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n} / page</option>)}
-              </select>
-              <button className="btn-secondary" aria-label="Previous page" disabled={detailPage <= 1} onClick={() => setDetailPage(p => Math.max(p - 1, 1))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: detailPage <= 1 ? 0.45 : 1, cursor: detailPage <= 1 ? 'not-allowed' : 'pointer' }}>‹ Prev</button>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap' }}>{detailPage} / {detailTotalPages}</span>
-              <button className="btn-secondary" aria-label="Next page" disabled={detailPage >= detailTotalPages} onClick={() => setDetailPage(p => Math.min(p + 1, detailTotalPages))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: detailPage >= detailTotalPages ? 0.45 : 1, cursor: detailPage >= detailTotalPages ? 'not-allowed' : 'pointer' }}>Next ›</button>
-            </div>
-          </div>
           <div className="reports-page__table-shell card"
             style={{
               maxHeight: '400px',
@@ -909,24 +859,11 @@ export default function Reports() {
       )}
 
       {/* Scheduled Reports Section */}
-      {(schedules.length > 0 || schedTotal > 0) && (
+      {schedules.length > 0 && (
         <div className="reports-page__schedule" style={{ marginTop: '2rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-            <h3 style={{ fontSize: '1.1rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
-              <Mail size={18} color="var(--accent-color)" /> Scheduled Email Reports
-            </h3>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '0.3rem 0.4rem 0.3rem 0.7rem', fontSize: '0.75rem', width: 'fit-content', marginLeft: 'auto' }}>
-              <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                {schedTotal === 0 ? 'No schedules' : `${(schedPage - 1) * schedLimit + 1}–${Math.min(schedPage * schedLimit, schedTotal)} of ${schedTotal}`}
-              </span>
-              <select className="input-field" aria-label="Schedules per page" value={schedLimit} onChange={e => { setSchedLimit(parseInt(e.target.value) || 10); setSchedPage(1); }} style={{ padding: '0.2rem 0.35rem', fontSize: '0.75rem', borderRadius: '7px', width: 'auto' }}>
-                {[5, 10, 20, 50].map(n => <option key={n} value={n}>{n} / page</option>)}
-              </select>
-              <button className="btn-secondary" aria-label="Previous page" disabled={schedPage <= 1} onClick={() => setSchedPage(p => Math.max(p - 1, 1))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: schedPage <= 1 ? 0.45 : 1, cursor: schedPage <= 1 ? 'not-allowed' : 'pointer' }}>‹ Prev</button>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap' }}>{schedPage} / {schedTotalPages}</span>
-              <button className="btn-secondary" aria-label="Next page" disabled={schedPage >= schedTotalPages} onClick={() => setSchedPage(p => Math.min(p + 1, schedTotalPages))} style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem', borderRadius: '7px', opacity: schedPage >= schedTotalPages ? 0.45 : 1, cursor: schedPage >= schedTotalPages ? 'not-allowed' : 'pointer' }}>Next ›</button>
-            </div>
-          </div>
+          <h3 style={{ fontSize: '1.1rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Mail size={18} color="var(--accent-color)" /> Scheduled Email Reports
+          </h3>
           <div className="reports-page__table-shell card" style={{
             maxHeight: '400px',
             overflowY: 'auto',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { Briefcase, Plus, Upload, Search, Filter, RefreshCw, Pencil, Trash2, X, Zap } from 'lucide-react';
 import { fetchApi } from '../utils/api';
@@ -103,20 +103,6 @@ const Pipeline = () => {
   const [contacts, setContacts] = useState([]);
   const [stages, setStages] = useState([]);
   const [loading, setLoading] = useState(true);
-  // Server-driven pagination (?limit=&offset=&page=) — `deals` holds ONLY
-  // the current page's rows; header totals + KPI tiles come from the
-  // envelope's `total` / /api/deals/stats, falling back to the loaded rows
-  // when the backend (or a test mock) answers with the legacy plain array.
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
-  const [stats, setStats] = useState(null);
-  const dealsRequestId = useRef(0);
-  // First load shows the spinner; later refetches (page turns, filters)
-  // keep stale rows visible instead of flashing "Loading deals…"
-  // (mirrors Contracts.jsx — never clear before the next page lands).
-  const firstDealsLoad = useRef(true);
 
   // Filters
   const [searchParams, setSearchParams] = useSearchParams();
@@ -163,41 +149,15 @@ const Pipeline = () => {
     if (fromUrl !== selectedSubBrand) setSelectedSubBrand(fromUrl);
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load current page (+ authoritative totals). Stage/subBrand narrow
-  // server-side so filters work across ALL pages; text search stays
-  // client-side (/api/deals has no ?q=) and narrows the loaded page below.
+  // Load all data
   const load = useCallback(() => {
-    const myId = ++dealsRequestId.current;
-    const isCurrent = () => myId === dealsRequestId.current;
-    const offset = (page - 1) * pageSize;
-    const params = new URLSearchParams({
-      limit: String(pageSize),
-      offset: String(offset),
-      page: String(page),
-    });
-    if (filterStage) params.set('stage', filterStage);
-    if (selectedSubBrand) params.set('subBrand', selectedSubBrand);
-    if (firstDealsLoad.current) setLoading(true);
+    setLoading(true);
     Promise.all([
-      fetchApi(`/api/deals?${params.toString()}`).catch(() => []),
-      fetchApi('/api/deals/stats').catch(() => null),
+      fetchApi('/api/deals').catch(() => []),
       fetchApi('/api/contacts').catch(() => []),
       fetchApi('/api/pipeline_stages').catch(() => []),
-    ]).then(([dealData, statsData, contactData, stageData]) => {
-      if (!isCurrent()) return;
-      firstDealsLoad.current = false;
-      if (dealData && Array.isArray(dealData.data)) {
-        setDeals(dealData.data);
-        const serverTotal = typeof dealData.total === 'number' ? dealData.total : dealData.data.length;
-        setTotal(serverTotal);
-        setTotalPages(typeof dealData.totalPages === 'number' && dealData.totalPages >= 1 ? dealData.totalPages : Math.max(1, Math.ceil(serverTotal / pageSize)));
-      } else {
-        const list = Array.isArray(dealData) ? dealData : [];
-        setDeals(list);
-        setTotal(list.length);
-        setTotalPages(1);
-      }
-      setStats(statsData && !Array.isArray(statsData) ? statsData : null);
+    ]).then(([dealData, contactData, stageData]) => {
+      setDeals(Array.isArray(dealData) ? dealData : []);
       setContacts(Array.isArray(contactData) ? contactData : []);
       if (Array.isArray(stageData) && stageData.length > 0) {
         const seen = new Set();
@@ -211,27 +171,11 @@ const Pipeline = () => {
         if (deduped.length > 0) setStages(deduped);
       }
       setLoading(false);
-    }).catch(() => { if (isCurrent()) setLoading(false); });
-  }, [page, pageSize, filterStage, selectedSubBrand]);
+    }).catch(() => setLoading(false));
+  }, []);
 
-  // Stage/subBrand changes restart from page 1 (refetch follows via load).
-  useEffect(() => {
-    setPage(1);
-  }, [filterStage, selectedSubBrand]);
-
-  // If the total shrinks under the current page (deals deleted elsewhere),
-  // step back to the last valid page (mirrors Clients.jsx).
-  useEffect(() => {
-    if (!loading && page > totalPages) setPage(totalPages);
-  }, [loading, page, totalPages]);
-
-  // Refetch the current page whenever load identity changes (page turns,
-  // page-size, stage/subBrand filters, or manual refresh).
   useEffect(() => {
     load();
-  }, [load]);
-
-  useEffect(() => {
     const socket = io('/', { reconnection: false, timeout: 5000 });
     socket.on('connect_error', () => {});
     socket.on('error', () => {});
@@ -243,7 +187,7 @@ const Pipeline = () => {
     });
     socket.on('deal_deleted', (id) => setDeals((prev) => prev.filter((d) => d.id !== id)));
     return () => socket.disconnect();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Visible rows after filters
   const visible = useMemo(() => {
@@ -259,9 +203,7 @@ const Pipeline = () => {
     return rows;
   }, [deals, selectedSubBrand, filterStage, search]);
 
-  // KPI tiles — prefer authoritative /api/deals/stats aggregates (correct
-  // across ALL pages); fall back to reducing the loaded page when stats
-  // are unavailable (legacy server / test mock answering an array).
+  // KPI tiles — computed from all (unfiltered) deals for accuracy
   const kpis = useMemo(() => {
     let total = 0, won = 0, active = 0, lost = 0;
     for (const d of deals) {
@@ -271,28 +213,11 @@ const Pipeline = () => {
       if (ACTIVE_STAGES.has(d.stage)) active += amt;
       if (LOST_STAGES.has(d.stage))   lost   += amt;
     }
-    if (stats) {
-      if (typeof stats.totalValue === 'number') total = stats.totalValue;
-      if (typeof stats.wonValue === 'number') won = stats.wonValue;
-      if (typeof stats.lostValue === 'number') lost = stats.lostValue;
-      if (Array.isArray(stats.byStage)) {
-        active = stats.byStage
-          .filter((s) => ACTIVE_STAGES.has(s.stage))
-          .reduce((s, x) => s + (Number(x.value) || 0), 0);
-      }
-    }
     return { total, won, active, lost };
-  }, [deals, stats]);
+  }, [deals]);
 
   // Stage options for filter/form
   const stageOptions = useMemo(() => stages, [stages]);
-
-  // Lightweight totals refresh after mutations (row updates stay local).
-  const refreshStats = useCallback(() => {
-    fetchApi('/api/deals/stats')
-      .then((s) => { if (s && !Array.isArray(s)) setStats(s); })
-      .catch(() => {});
-  }, []);
 
   // Inline stage update
   const updateStage = async (id, newStage) => {
@@ -304,7 +229,6 @@ const Pipeline = () => {
         method: 'PUT',
         body: JSON.stringify({ stage: newStage }),
       });
-      refreshStats();
     } catch (e) {
       setDeals(prev);
       notify.error(e?.body?.error || 'Failed to update stage');
@@ -326,8 +250,6 @@ const Pipeline = () => {
     try {
       await fetchApi(`/api/deals/${deal.id}`, { method: 'DELETE' });
       setDeals((prev) => prev.filter((d) => d.id !== deal.id));
-      setTotal((t) => Math.max(0, t - 1));
-      refreshStats();
       notify.success('Deal deleted');
     } catch (e) {
       notify.error(e?.body?.error || 'Failed to delete');
@@ -357,7 +279,6 @@ const Pipeline = () => {
       };
       const created = await fetchApi('/api/deals', { method: 'POST', body: JSON.stringify(body) });
       if (created && created.id) setDeals((prev) => [created, ...prev]);
-      refreshStats();
       notify.success('Deal created');
       setShowCreate(false);
     } catch (err) {
@@ -453,7 +374,7 @@ const Pipeline = () => {
               <span key={s.id}>{i > 0 && ' / '}<strong style={{ color: 'var(--text-primary)' }}>{s.title}</strong></span>
             ))
           : 'Sales pipeline'
-        }. <strong style={{ color: 'var(--text-primary)' }}>{(stats?.totalDeals ?? deals.length).toLocaleString()}</strong> deal{(stats?.totalDeals ?? deals.length) !== 1 ? 's' : ''}.
+        }. <strong style={{ color: 'var(--text-primary)' }}>{deals.length}</strong> deal{deals.length !== 1 ? 's' : ''}.
       </p>
 
       {/* Filters */}
@@ -534,22 +455,6 @@ const Pipeline = () => {
             </div>
           </div>
         ))}
-      </div>
-
-      {/* Server-synced pagination (?limit=&offset=&page=) — compact pill
-          above the table, right-aligned and sized to content. */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: '5px 7px 5px 12px', fontSize: 12, width: 'fit-content', maxWidth: '100%' }}>
-          <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-            {total === 0 ? 'No deals' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()}`}
-          </span>
-          <select aria-label="Deals per page" value={pageSize} onChange={(e) => { setPageSize(parseInt(e.target.value, 10) || 10); setPage(1); }} style={{ ...selectStyle, minWidth: 0, width: 'auto', padding: '3px 6px', fontSize: 12, borderRadius: 7 }}>
-            {[5, 10, 20, 50].map((n) => <option key={n} value={n}>{n} / page</option>)}
-          </select>
-          <button type="button" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage((p) => Math.max(p - 1, 1))} style={{ ...secondaryBtn, padding: '3px 9px', fontSize: 12, borderRadius: 7, opacity: page <= 1 ? 0.45 : 1, cursor: page <= 1 ? 'not-allowed' : 'pointer' }}>‹ Prev</button>
-          <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, whiteSpace: 'nowrap' }}>{page} / {totalPages}</span>
-          <button type="button" aria-label="Next page" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(p + 1, totalPages))} style={{ ...secondaryBtn, padding: '3px 9px', fontSize: 12, borderRadius: 7, opacity: page >= totalPages ? 0.45 : 1, cursor: page >= totalPages ? 'not-allowed' : 'pointer' }}>Next ›</button>
-        </div>
       </div>
 
       {/* Table */}

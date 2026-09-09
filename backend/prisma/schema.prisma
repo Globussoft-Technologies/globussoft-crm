@@ -930,7 +930,6 @@ model Contact {
   externalPayloadJson String? @db.LongText
 
   createdAt DateTime  @default(now())
-  updatedAt DateTime  @default(now()) @updatedAt
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
   deletedAt DateTime?

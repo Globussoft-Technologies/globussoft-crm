@@ -73,7 +73,6 @@ prisma.emailMessage = {
   create: vi.fn(),
   findMany: vi.fn(),
   count: vi.fn(),
-  updateMany: vi.fn(),
 };
 prisma.emailTracking = {
   create: vi.fn(),
@@ -122,7 +121,6 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 beforeEach(() => {
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
-  prisma.emailMessage.updateMany.mockReset();
   prisma.emailTracking.create.mockReset();
   prisma.activity.create.mockReset();
   // Default: every create resolves with a stub row.
@@ -411,38 +409,5 @@ describe('GET /inbox — #624 folder filter', () => {
     expect(sentRes.body.length).toBe(1);
     expect(sentRes.body[0].subject).toBe('sent-folder-roundtrip');
     expect(sentRes.body[0].direction).toBe('OUTBOUND');
-  });
-});
-
-describe('POST /inbox/:id/read - persist unread-dot clearing', () => {
-  test('marks own-tenant message read (tenant-scoped updateMany)', async () => {
-    prisma.emailMessage.updateMany.mockResolvedValue({ count: 1 });
-    const app = makeApp();
-    const res = await request(app).post('/api/communications/inbox/42/read');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ id: 42, read: true });
-    expect(prisma.emailMessage.updateMany).toHaveBeenCalledWith({
-      where: { id: 42, tenantId: 1 },
-      data: { read: true },
-    });
-  });
-
-  test('non-numeric id → 400 INVALID_ID (no DB call)', async () => {
-    const app = makeApp();
-    const res = await request(app).post('/api/communications/inbox/abc/read');
-
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_ID');
-    expect(prisma.emailMessage.updateMany).not.toHaveBeenCalled();
-  });
-
-  test('unknown / cross-tenant id → 404 NOT_FOUND', async () => {
-    prisma.emailMessage.updateMany.mockResolvedValue({ count: 0 });
-    const app = makeApp();
-    const res = await request(app).post('/api/communications/inbox/999999/read');
-
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('NOT_FOUND');
   });
 });

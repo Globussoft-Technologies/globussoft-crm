@@ -252,80 +252,80 @@ router.get("/leaderboard", async (req, res) => {
 });
 
 // ─── Detailed Data Tables ───
-// Pagination: ?limit=&page=&offset= — when `page` or `offset` is present the
-// endpoint returns a { data, total, page, limit, offset, totalPages } envelope;
-// otherwise it returns the legacy plain array (keeps existing specs green).
 router.get("/detailed/:type", async (req, res) => {
   try {
     const { type } = req.params;
-    const { startDate, endDate, ownerId, status, limit = '100', page, offset } = req.query;
+    const { startDate, endDate, ownerId, status, limit = '100' } = req.query;
     const _tenantId = req.user.tenantId;
     const dateErr = validateDateRange(startDate, endDate);
     if (dateErr) return res.status(dateErr.status).json(dateErr);
     const baseWhere = buildWhere(req, startDate, endDate);
-    const parsedLimit = Math.min(Math.max(parseInt(limit) || 10, 1), 500);
-    const paginated = page !== undefined || offset !== undefined;
-    const parsedPage = Math.max(parseInt(page) || 1, 1);
-    const skip = offset !== undefined ? Math.max(parseInt(offset) || 0, 0) : (parsedPage - 1) * parsedLimit;
-    const take = parsedLimit;
-
-    // Resolve the per-type where + query fns once so count + page stay in sync.
-    let where = null;
-    let orderBy = { createdAt: 'desc' };
-    let include = undefined;
-    let countModel = null;
-    let findModel = null;
+    const take = Math.min(parseInt(limit), 500);
 
     if (type === 'deals') {
-      where = { ...baseWhere };
+      const where = { ...baseWhere };
       if (ownerId) where.ownerId = parseInt(ownerId);
       if (status) where.stage = status;
-      include = { contact: { select: { name: true, email: true } }, owner: { select: { name: true, email: true } } };
-      countModel = prisma.deal; findModel = prisma.deal;
-    } else if (type === 'contacts') {
-      where = { ...baseWhere };
-      if (status) where.status = status;
-      include = { assignedTo: { select: { name: true, email: true } } };
-      countModel = prisma.contact; findModel = prisma.contact;
-    } else if (type === 'tasks') {
-      where = { ...baseWhere };
-      if (ownerId) where.userId = parseInt(ownerId);
-      if (status) where.status = status;
-      include = { user: { select: { name: true, email: true } }, contact: { select: { name: true } } };
-      countModel = prisma.task; findModel = prisma.task;
-    } else if (type === 'calls') {
-      where = { ...baseWhere };
-      if (ownerId) where.userId = parseInt(ownerId);
-      include = { user: { select: { name: true, email: true } }, contact: { select: { name: true } } };
-      countModel = prisma.callLog; findModel = prisma.callLog;
-    } else if (type === 'invoices') {
-      // #117: filter on issuedDate for invoices (the model has no createdAt).
-      where = buildWhere(req, startDate, endDate, {}, 'issuedDate');
-      if (status) where.status = status;
-      orderBy = { issuedDate: 'desc' };
-      include = { contact: { select: { name: true, email: true } } };
-      countModel = prisma.invoice; findModel = prisma.invoice;
-    } else if (type === 'expenses') {
-      where = { ...baseWhere };
-      if (status) where.status = status;
-      include = { user: { select: { name: true, email: true } } };
-      countModel = prisma.expense; findModel = prisma.expense;
-    } else {
-      return res.status(400).json({ error: 'Unsupported report type' });
+      const data = await prisma.deal.findMany({
+        where, take, orderBy: { createdAt: 'desc' },
+        include: { contact: { select: { name: true, email: true } }, owner: { select: { name: true, email: true } } }
+      });
+      return res.json(data);
     }
 
-    const data = await findModel.findMany({ where, skip: paginated ? skip : 0, take, orderBy, include });
-    if (!paginated) return res.json(data);
-    const total = await countModel.count({ where });
-    const effPage = offset !== undefined ? Math.floor(skip / parsedLimit) + 1 : parsedPage;
-    return res.json({
-      data,
-      total,
-      page: effPage,
-      limit: parsedLimit,
-      offset: skip,
-      totalPages: Math.max(Math.ceil(total / parsedLimit), 1),
-    });
+    if (type === 'contacts') {
+      const where = { ...baseWhere };
+      if (status) where.status = status;
+      const data = await prisma.contact.findMany({
+        where, take, orderBy: { createdAt: 'desc' },
+        include: { assignedTo: { select: { name: true, email: true } } }
+      });
+      return res.json(data);
+    }
+
+    if (type === 'tasks') {
+      const where = { ...baseWhere };
+      if (ownerId) where.userId = parseInt(ownerId);
+      if (status) where.status = status;
+      const data = await prisma.task.findMany({
+        where, take, orderBy: { createdAt: 'desc' },
+        include: { user: { select: { name: true, email: true } }, contact: { select: { name: true } } }
+      });
+      return res.json(data);
+    }
+
+    if (type === 'calls') {
+      const where = { ...baseWhere };
+      if (ownerId) where.userId = parseInt(ownerId);
+      const data = await prisma.callLog.findMany({
+        where, take, orderBy: { createdAt: 'desc' },
+        include: { user: { select: { name: true, email: true } }, contact: { select: { name: true } } }
+      });
+      return res.json(data);
+    }
+
+    if (type === 'invoices') {
+      // #117: filter on issuedDate for invoices (the model has no createdAt).
+      const where = buildWhere(req, startDate, endDate, {}, 'issuedDate');
+      if (status) where.status = status;
+      const data = await prisma.invoice.findMany({
+        where, take, orderBy: { issuedDate: 'desc' },
+        include: { contact: { select: { name: true, email: true } } }
+      });
+      return res.json(data);
+    }
+
+    if (type === 'expenses') {
+      const where = { ...baseWhere };
+      if (status) where.status = status;
+      const data = await prisma.expense.findMany({
+        where, take, orderBy: { createdAt: 'desc' },
+        include: { user: { select: { name: true, email: true } } }
+      });
+      return res.json(data);
+    }
+
+    res.status(400).json({ error: 'Unsupported report type' });
   } catch (err) {
     console.error("[Detailed Report Error]:", err);
     res.status(500).json({ error: "Failed to fetch detailed report data." });

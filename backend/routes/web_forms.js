@@ -131,44 +131,13 @@ const DEFAULT_FILE_FORMATS = [
 
 const CONTACT_FIELDS = new Set([
   "name",
-  "firstName",
-  "lastName",
   "email",
   "phone",
   "company",
   "title",
   "source",
   "status",
-  "aiScore",
-  "assignedToId",
-  "assignedTo",
-  "industry",
-  "companySize",
-  "website",
-  "linkedin",
-  "description",
-  "tags",
-  "stateCode",
-  "billingStateCode",
-  "gst",
-  "birthDate",
-  "anniversary",
-  "firstTouchSource",
-  "lastTouchSource",
-  "subBrand",
-  "treatmentOfInterest",
 ]);
-
-// Add-field picker fallback customs ("custom" rows) mapped to the Contact
-// column holding the same data. Keeps form submissions from being silently
-// dropped when no matching Lead-Field definition exists.
-const LEAD_CUSTOM_TO_CONTACT = {
-  industry: "industry",
-  jobRoles: "title",
-  organization: "company",
-  numberOfEmployees: "companySize",
-  medium: "source",
-};
 
 function slugify(text) {
   return (
@@ -320,8 +289,6 @@ function defaultStyle() {
 
 function defaultSettings() {
   return {
-    formTitle: "",
-
     createAccount: false,
 
     createDeal: false,
@@ -451,8 +418,6 @@ function normalizeSettings(raw) {
   const settings = { ...defaultSettings(), ...(parseJson(raw, {}) || {}) };
 
   return {
-    formTitle: textOr(settings.formTitle),
-
     createAccount: Boolean(settings.createAccount),
 
     createDeal: Boolean(settings.createDeal),
@@ -510,15 +475,10 @@ function buildEmbedCode(form, origin) {
 
   const safeTitle = escapeHtml(form?.name || "Web form");
 
-  const query =
-    form?.id != null && String(form.id) !== ""
-      ? `id=${encodeURIComponent(form.id)}`
-      : `slug=${encodeURIComponent(form?.slug || "")}`;
-
   return [
     "<!-- Globussoft CRM web form -->",
 
-    `<iframe src="${base}/embed/web-form.html?${query}" title="${safeTitle}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
+    `<iframe src="${base}/embed/web-form.html?slug=${encodeURIComponent(form?.slug || "")}" title="${safeTitle}" style="width:100%;border:0;min-height:760px;" loading="lazy"></iframe>`,
   ].join("\n");
 }
 
@@ -734,31 +694,14 @@ async function listWithCounts(tenantId) {
 }
 
 // Public routes -------------------------------------------------------------
-// Public forms resolve by stable numeric id when the ref is all digits,
-// falling back to the legacy slug so previously shared slug links keep working.
-async function findPublicForm(ref) {
-  const raw = String(ref || "").trim();
-
-  if (/^\d+$/.test(raw)) {
-    const byId = await prisma.webForm.findFirst({
-      where: { id: Number(raw), isActive: true },
-    });
-
-    if (byId) return byId;
-  }
-
-  const slug = slugify(raw);
-
-  if (!slug) return null;
-
-  return prisma.webForm.findFirst({
-    where: { slug, isActive: true },
-  });
-}
 
 router.get("/public/:slug", async (req, res) => {
   try {
-    const form = await findPublicForm(req.params.slug);
+    const slug = slugify(req.params.slug);
+
+    const form = await prisma.webForm.findFirst({
+      where: { slug, isActive: true },
+    });
 
     if (!form)
       return res
@@ -779,9 +722,13 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
   let submitStage = "start";
 
   try {
+    const slug = slugify(req.params.slug);
+
     submitStage = "load_form";
 
-    const form = await findPublicForm(req.params.slug);
+    const form = await prisma.webForm.findFirst({
+      where: { slug, isActive: true },
+    });
 
     if (!form)
       return res
@@ -853,25 +800,9 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
       if (
         !CONTACT_FIELDS.has(field.sourceKey) &&
-        field.sourceKind === "lead_custom" &&
-        !LEAD_CUSTOM_TO_CONTACT[field.sourceKey]
+        field.sourceKind === "lead_custom"
       ) {
         customFieldValues[field.sourceKey] = raw;
-      }
-
-      // Web-form fallback customs (the "custom" rows in the Add-field picker
-      // — Industry, Job Roles, Organization, No Of Employee, Medium) carry
-      // real Contact data, so they write straight to Contact columns instead
-      // of being dropped for having no Lead-Field definition. Job title
-      // refers to Job title, No Of Employee refers to Company Size, etc.
-      if (field.sourceKind === "lead_custom" && LEAD_CUSTOM_TO_CONTACT[field.sourceKey]) {
-        const target = LEAD_CUSTOM_TO_CONTACT[field.sourceKey];
-
-        if (target === "source") {
-          if (textOr(raw)) contactData.source = textOr(raw);
-        } else {
-          contactData[target] = textOr(raw) || null;
-        }
       }
 
       if (field.sourceKind === "contact") {
@@ -890,33 +821,12 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
           const score = Number(raw);
 
           if (Number.isFinite(score)) contactData.aiScore = score;
-        } else if (field.sourceKey === "assignedToId" || field.sourceKey === "assignedTo") {
+        } else if (field.sourceKey === "assignedToId") {
           const assignedToId = Number(raw);
 
           if (Number.isInteger(assignedToId) && assignedToId > 0)
             contactData.assignedToId = assignedToId;
-          else if (textOr(raw)) contactData.assignedToId = undefined;
-        } else if (field.sourceKey === "firstName" || field.sourceKey === "lastName") {
-          const part = textOr(raw);
-          if (part) {
-            const base = textOr(contactData.name, "");
-            const baseIsDefault = !base || base === "website-form" || base === "Web form lead";
-            contactData._firstName = textOr(contactData._firstName || (field.sourceKey === "firstName" ? part : ""));
-            contactData._lastName = textOr(contactData._lastName || (field.sourceKey === "lastName" ? part : ""));
-            if (field.sourceKey === "firstName") contactData._firstName = part;
-            if (field.sourceKey === "lastName") contactData._lastName = part;
-            const combined = [contactData._firstName, contactData._lastName].filter(Boolean).join(" ").trim();
-            if (combined && (baseIsDefault || field.sourceKey === "firstName" || field.sourceKey === "lastName")) {
-              contactData.name = combined;
-            }
-          }
-        } else if (field.sourceKey === "tags") {
-          const list = Array.isArray(raw) ? raw : String(raw == null ? "" : raw).split(",");
-          const clean = list.map((t) => textOr(t).slice(0, 60)).filter(Boolean).slice(0, 20);
-          if (clean.length) contactData.tagsJson = JSON.stringify(clean);
-        } else if (field.sourceKey === "description")
-          contactData.description = textOr(raw) || null;
-        else if (field.sourceKey === "industry")
+        } else if (field.sourceKey === "industry")
           contactData.industry = textOr(raw) || null;
         else if (field.sourceKey === "companySize")
           contactData.companySize = textOr(raw) || null;
@@ -953,9 +863,6 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
         payload[`custom:${field.sourceKey}`] = raw == null ? null : raw;
       }
     }
-
-    delete contactData._firstName;
-    delete contactData._lastName;
 
     if (missing.length) {
       return res.status(400).json({
@@ -1381,21 +1288,22 @@ router.put("/:id", verifyToken, async (req, res) => {
     const body = req.body || {};
 
     const data = {};
+    let nextName = existing.name;
 
     if (body.name !== undefined) {
       const name = String(body.name == null ? "" : body.name).trim();
 
       data.name = name;
+      nextName = name;
     }
 
     if (body.slug !== undefined) {
       const slug = await ensureUniqueSlug(body.slug || existing.slug, existing.id);
 
       data.slug = slug;
+    } else if (body.name !== undefined && nextName) {
+      data.slug = await ensureUniqueSlug(nextName, existing.id);
     }
-    // NOTE: slug is intentionally NOT regenerated from name. Public share links
-    // prefer the stable numeric id (see buildPublicUrl), and auto-regenerating
-    // the slug on rename broke every previously shared URL.
 
     if (body.description !== undefined)
       data.description = textOr(body.description);

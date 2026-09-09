@@ -215,36 +215,6 @@ router.get("/inbox", async (req, res) => {
   }
 });
 
-// ── POST /inbox/:id/read — mark a single inbox message as read ───────
-// The Unified Inbox clears the unread dot optimistically when a message is
-// opened; this persists it so the dot stays cleared across reloads.
-// Thread-less rows (threadId null — the common case for inbound + sent
-// mail) can't use POST /api/email-threading/threads/:threadId/mark-read,
-// hence this single-id endpoint. Tenant-scoped via updateMany; 404 when
-// the id isn't in this tenant.
-router.post("/inbox/:id/read", async (req, res) => {
-  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
-  if (!canAccess) {
-    return res.status(403).json({ error: "You don't have permission to access Communications" });
-  }
-  const id = Number.parseInt(req.params.id, 10);
-  if (!Number.isInteger(id) || id < 1) {
-    return res.status(400).json({ error: "id must be a positive integer", code: "INVALID_ID" });
-  }
-  try {
-    const result = await prisma.emailMessage.updateMany({
-      where: { id, tenantId: req.user.tenantId },
-      data: { read: true },
-    });
-    if (result.count === 0) {
-      return res.status(404).json({ error: "Email not found", code: "NOT_FOUND" });
-    }
-    res.json({ id, read: true });
-  } catch (_err) {
-    res.status(500).json({ error: "Failed to mark email as read" });
-  }
-});
-
 // #435: parse a comma-separated "to" string into a deduped list of
 // candidate recipients. Trims, drops empties, lowercase-dedupes (preserves
 // first-seen casing). Pure / no I/O so it's easy to unit-test if needed.

@@ -11,8 +11,8 @@
  *   shape. It does NOT prove every mutating endpoint actually emits an
  *   AuditLog row. Pre-#179 the only audited entity was Deal; #179 wired
  *   writeAudit() through Contact / Patient / Invoice / Estimate / Task /
- *   Notification, and #167 added the SOFT_DELETE row on the four soft-
- *   deletable entities (Contact, Deal, Estimate, Task). This regression
+ *   Notification, and #167 added deletion audit rows. Contact now uses
+ *   HARD_DELETE; Deal, Estimate, and Task remain soft-deletable. This regression
  *   spec pins each emission as a contract — if a future refactor drops
  *   a writeAudit call, the per-push gate goes red within 30s of the bug
  *   landing instead of waiting for an HIPAA / DPDP audit to surface it.
@@ -29,7 +29,7 @@
  *   Contact (routes/contacts.js):
  *     POST   /api/contacts                  → AuditLog 'Contact'  'CREATE'
  *     PUT    /api/contacts/:id              → AuditLog 'Contact'  'UPDATE'
- *     DELETE /api/contacts/:id (soft, #167) → AuditLog 'Contact'  'SOFT_DELETE'
+ *     DELETE /api/contacts/:id              → AuditLog 'Contact'  'HARD_DELETE'
  *
  *   Deal (routes/deals.js):
  *     POST   /api/deals                     → AuditLog 'Deal'     'CREATE'
@@ -98,9 +98,8 @@
  *   - 400 validation-failed POST /api/contacts (missing email) → NO new
  *     audit row for the failed request.
  *   - 404 PUT on bogus contact id → NO new audit row.
- *   - Idempotent DELETE re-call on already-soft-deleted contact → NO
- *     duplicate audit row (the route returns idempotent:true and
- *     skips the writeAudit call entirely).
+ *   - Repeated DELETE on an already-removed contact → 404 and NO duplicate
+ *     audit row.
  *
  * ENDPOINTS USED FOR ASSERTIONS:
  *   GET /api/audit?entity=<Entity>&action=<ACTION>
@@ -266,7 +265,7 @@ function expectAuditShape(row, expected) {
 // fixture-residue check stays green.
 const created = {
   generic: {
-    contacts: [], // ids — cleaned via DELETE (route does soft-delete)
+    contacts: [], // ids — cleaned via DELETE (route hard-deletes)
     deals: [],
     invoices: [], // PATCH-rename only; no public hard-delete
     estimates: [],
@@ -362,7 +361,7 @@ test.describe('Audit coverage — Contact', () => {
     expectAuditShape(row, { entity: 'Contact', action: 'UPDATE', entityId: c.id, userId, tenantId });
   });
 
-  test('DELETE /api/contacts/:id emits AuditLog Contact SOFT_DELETE row (#167)', async ({ request }) => {
+  test('DELETE /api/contacts/:id emits AuditLog Contact HARD_DELETE row', async ({ request }) => {
     const { token, userId, tenantId } = await getGenericAdmin(request);
     const ts = Date.now();
     const create = await post(request, token, '/api/contacts', {
@@ -376,14 +375,14 @@ test.describe('Audit coverage — Contact', () => {
     // Don't push to cleanup; DELETE is the test action
 
     const delRes = await del(request, token, `/api/contacts/${c.id}`);
-    // Routes/contacts.js soft-delete returns 200 + body with softDeleted:true
+    // routes/contacts.js writes audit before permanently deleting the row.
     expect([200, 204]).toContain(delRes.status());
 
-    const row = await findAuditRow(request, token, 'Contact', 'SOFT_DELETE', c.id);
-    expectAuditShape(row, { entity: 'Contact', action: 'SOFT_DELETE', entityId: c.id, userId, tenantId });
+    const row = await findAuditRow(request, token, 'Contact', 'HARD_DELETE', c.id);
+    expectAuditShape(row, { entity: 'Contact', action: 'HARD_DELETE', entityId: c.id, userId, tenantId });
   });
 
-  test('idempotent re-DELETE on already-soft-deleted contact does NOT create duplicate audit row', async ({ request }) => {
+  test('re-DELETE on a removed contact returns 404 and creates no duplicate audit row', async ({ request }) => {
     const { token } = await getGenericAdmin(request);
     const ts = Date.now();
     const create = await post(request, token, '/api/contacts', {
@@ -397,14 +396,14 @@ test.describe('Audit coverage — Contact', () => {
 
     // First DELETE → emits audit
     await del(request, token, `/api/contacts/${c.id}`);
-    const before = await get(request, token, `/api/audit?entity=Contact&action=SOFT_DELETE`);
+    const before = await get(request, token, `/api/audit?entity=Contact&action=HARD_DELETE`);
     const beforeRows = (await before.json()).filter((r) => r.entityId === c.id);
 
-    // Second DELETE → idempotent, no new audit row
+    // Second DELETE → row is absent, no new audit row
     const second = await del(request, token, `/api/contacts/${c.id}`);
-    expect([200, 204]).toContain(second.status());
+    expect(second.status()).toBe(404);
 
-    const after = await get(request, token, `/api/audit?entity=Contact&action=SOFT_DELETE`);
+    const after = await get(request, token, `/api/audit?entity=Contact&action=HARD_DELETE`);
     const afterRows = (await after.json()).filter((r) => r.entityId === c.id);
     expect(afterRows.length).toBe(beforeRows.length);
   });

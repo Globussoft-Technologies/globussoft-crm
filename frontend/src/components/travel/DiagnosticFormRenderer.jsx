@@ -236,7 +236,7 @@ function QuestionBlock({
             const cur = Array.isArray(value) ? value : [];
             const checked = cur.includes(o.value);
             return (
-              <label key={o.value} style={optionRow(theme, checked)}>
+              <label key={o.value} style={optionRow(theme, styling, checked)}>
                 <input
                   type="checkbox"
                   checked={checked}
@@ -258,7 +258,7 @@ function QuestionBlock({
           {opts.map((o) => {
             const checked = value === o.value;
             return (
-              <label key={o.value} style={optionRow(theme, checked)}>
+              <label key={o.value} style={optionRow(theme, styling, checked)}>
                 <input
                   type="radio"
                   name={q.id}
@@ -581,8 +581,9 @@ const optionsGrid = {
   marginTop: 8,
 };
 
-function optionRow(theme, styling, checked, align = "left") {
+function optionRow(theme, styling, checked) {
   const primary = theme.primaryColor || DEFAULT_PRIMARY;
+  const align = styling.optionAlign || "left";
   // The marker (radio/checkbox) stays attached to the label text as one
   // unit — "position" here shifts that whole group within the option box
   // via justify-content, rather than text-align, since text-align alone

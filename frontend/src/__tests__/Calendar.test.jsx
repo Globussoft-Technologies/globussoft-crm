@@ -197,16 +197,18 @@ describe('<Calendar /> — #615 layout regressions', () => {
     expect(topScroll).toBeTruthy();
     expect(bottomScroll).toBeTruthy();
 
-    topScroll.scrollLeft = 140;
-    fireEvent.scroll(topScroll);
-    // Wait for the scroll sync to complete (event propagation + state update)
+    // Re-fire the convergence action while polling. Under the full CI suite,
+    // React can render the grid just before TopScrollSync's effect attaches
+    // its native scroll listeners; a single event in that window is lost.
     await waitFor(() => {
+      topScroll.scrollLeft = 140;
+      fireEvent.scroll(topScroll);
       expect(bottomScroll.scrollLeft).toBe(140);
     });
 
-    bottomScroll.scrollLeft = 260;
-    fireEvent.scroll(bottomScroll);
     await waitFor(() => {
+      bottomScroll.scrollLeft = 260;
+      fireEvent.scroll(bottomScroll);
       expect(topScroll.scrollLeft).toBe(260);
     });
   });

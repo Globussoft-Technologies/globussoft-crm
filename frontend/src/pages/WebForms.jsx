@@ -6487,6 +6487,7 @@ export default function WebForms({ scope = "generic" }) {
 
   const formScope = scope === "travel" ? "travel" : "generic";
   const scopeQuery = formScope === "generic" ? "" : `?scope=${encodeURIComponent(formScope)}`;
+  const isGenericScope = formScope === "generic";
 
 
 
@@ -6653,6 +6654,14 @@ export default function WebForms({ scope = "generic" }) {
 
 
   const [showEmbed, setShowEmbed] = useState(false);
+
+  // Landing-page hero form (generic scope only): which form the public
+  // marketing page embeds + whether this user may change it (server-side
+  // LANDING_FORM_ADMIN_EMAILS allowlist — the per-card control below only
+  // renders for allowlisted logins).
+  const [landingFormId, setLandingFormId] = useState(null);
+  const [canManageLandingForm, setCanManageLandingForm] = useState(false);
+  const [settingLandingFormId, setSettingLandingFormId] = useState(null);
 
 
 
@@ -7223,6 +7232,58 @@ export default function WebForms({ scope = "generic" }) {
     loadData();
 
   }, [loadData]);
+
+  // Landing-page hero form state (generic scope only): current selection is
+  // public (plain fetch — no auth needed), management access is resolved per
+  // caller via the authed /access endpoint.
+  useEffect(() => {
+    if (formScope !== "generic") {
+      setLandingFormId(null);
+      setCanManageLandingForm(false);
+      return;
+    }
+    let cancelled = false;
+    fetchApi("/api/landing-form-config/access", { silent: true })
+      .then((data) => {
+        if (!cancelled) setCanManageLandingForm(Boolean(data && data.canManage));
+      })
+      .catch(() => {
+        if (!cancelled) setCanManageLandingForm(false);
+      });
+    fetch("/api/landing-form-config", { headers: { Accept: "application/json" } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        const id = Number.parseInt(data && data.webFormId, 10);
+        setLandingFormId(Number.isInteger(id) && id > 0 ? id : null);
+      })
+      .catch(() => {
+        if (!cancelled) setLandingFormId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [formScope]);
+
+  const setAsLandingForm = useCallback(async (form) => {
+    const id = Number(form && form.id);
+    if (!Number.isInteger(id) || id <= 0) return;
+    setSettingLandingFormId(id);
+    try {
+      const updated = await fetchApi("/api/landing-form-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ webFormId: id }),
+      });
+      const nextId = Number.parseInt(updated && updated.webFormId, 10);
+      if (Number.isInteger(nextId) && nextId > 0) setLandingFormId(nextId);
+      notify.success(`"${form.name}" now shows on the landing page for everyone`);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to set the landing-page form");
+    } finally {
+      setSettingLandingFormId(null);
+    }
+  }, [notify]);
 
 
 
@@ -10910,6 +10971,56 @@ export default function WebForms({ scope = "generic" }) {
           display: flex;
           gap: 8px;
           flex-wrap: wrap;
+        }
+        /* Card action buttons share one row height with centered content.
+        Text buttons drive the height; icon-only buttons (Leads eye +
+        landing globe) stretch to match and stay square via aspect-ratio —
+        the lone svg would otherwise sit on the text baseline and look
+        shorter than its siblings. */
+        .wf-library-actions {
+          align-items: stretch;
+        }
+        .wf-library-actions > .btn-primary,
+        .wf-library-actions > .btn-secondary {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .wf-library-actions .wf-icon-btn {
+          padding: 0.6rem;
+          aspect-ratio: 1 / 1;
+          min-width: 0;
+        }
+        .wf-library-actions .wf-icon-btn > svg {
+          display: block;
+        }
+        /* Guaranteed hover tooltip for the card action buttons (Leads eye
+        icon + landing-page control). Pure CSS via data-tip so it shows
+        instantly alongside the native title fallback. */
+        .wf-library-actions .wf-tip {
+          position: relative;
+        }
+        .wf-library-actions .wf-tip[data-tip]:hover::after,
+        .wf-library-actions .wf-tip[data-tip]:focus-visible::after {
+          content: attr(data-tip);
+          position: absolute;
+          bottom: calc(100% + 8px);
+          left: 50%;
+          transform: translateX(-50%);
+          max-width: 240px;
+          width: max-content;
+          background: rgba(16, 19, 42, 0.94);
+          color: #fff;
+          font-size: 0.75rem;
+          font-weight: 500;
+          line-height: 1.35;
+          padding: 0.4rem 0.65rem;
+          border-radius: 8px;
+          white-space: normal;
+          text-align: center;
+          pointer-events: none;
+          z-index: 60;
+          box-shadow: 0 10px 24px rgba(16, 19, 42, 0.25);
         }
         .wf-library-empty {
           min-height: 360px;
@@ -17268,6 +17379,16 @@ export default function WebForms({ scope = "generic" }) {
                     <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowEmbed(true); }}>Embed</button>
                     <button type="button" className="btn-secondary" onClick={() => { setSelectedForm(normalizeForm(form, leadFields)); setShowPreview(true); }}>Preview</button>
                     <button type="button" className="btn-secondary wf-danger-action" onClick={() => deleteForm(form)}><Trash2 size={15} style={{ marginRight: 6, verticalAlign: "middle" }} />Delete</button>
+                    {isGenericScope && canManageLandingForm ? (
+                      String(landingFormId) === String(form.id) ? (
+                        <span className="wf-status-pill active wf-tip" data-tip="This form shows on the public landing page for everyone" title="This form shows on the public landing page for everyone">On landing page</span>
+                      ) : (
+                        <label className="wf-landing-checkbox wf-tip" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} data-tip={`Use ${form.name} as the public landing page form`} title={`Use this form in landing page: ${form.name}`}>
+                          <input type="checkbox" checked={String(landingFormId) === String(form.id)} disabled={settingLandingFormId === form.id} onChange={() => setAsLandingForm(form)} aria-label={`Use this form in landing page: ${form.name}`} />
+                          <span>Landing page</span>
+                        </label>
+                      )
+                    ) : null}
                   </div>
                 </article>
               ))}

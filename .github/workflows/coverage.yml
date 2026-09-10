@@ -349,6 +349,7 @@ jobs:
             tests/travel-curriculum-api.spec.js \
             tests/gmail-api.spec.js \
             tests/travel-brochures-models-api.spec.js \
+            tests/landing-form-config-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/callified-campaign-api.spec.js \
             tests/wellness-callified-api.spec.js \

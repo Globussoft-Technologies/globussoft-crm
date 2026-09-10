@@ -306,17 +306,17 @@ function canReassignLead(req, contact) {
 //
 // `verticals: [...]` restricts a field to specific Tenant.vertical values
 // (see the `vertical` column on Tenant — "generic" | "wellness" | "travel").
-// Two fields on Contact are travel-specific per their own schema.prisma
-// comments — `subBrand` ("Travel vertical sub-brand tag... nullable so
-// generic + wellness Contacts ignore it") and `kycStatus` ("Travel CRM —
-// customer-portal DigiLocker / Aadhaar verification... nullable so
+// `kycStatus` is travel-specific per its own schema.prisma comment ("Travel
+// CRM — customer-portal DigiLocker / Aadhaar verification... nullable so
 // non-travel + non-customer Contacts ignore them"). The has-data presence
-// check alone isn't enough to keep these off a generic tenant's picker:
-// `kycStatus` has a schema `@default("unverified")` that Prisma writes to
+// check alone isn't enough to keep it off a generic tenant's picker:
+// it has a schema `@default("unverified")` that Prisma writes to
 // EVERY new Contact regardless of vertical — so has-data is trivially true
-// everywhere, even though no generic tenant ever intentionally sets it —
-// and `subBrand` can leak in from a single stray/seed/imported row even on
-// a tenant that has never used the travel feature. A field with no
+// everywhere, even though no generic tenant ever intentionally sets it.
+// (`subBrand` used to be gated the same way, but the generic web-form
+// Sub-brand field now writes Contact.subBrand on generic tenants, so it is
+// a legitimate generic filter/column — see its FILTERABLE_FIELDS entry.)
+// A field with no
 // `verticals` key is available to every vertical (the common case).
 // SOURCE OF TRUTH: this list is deliberately kept in lockstep with
 // BUILTIN_COLUMNS in table_column_preferences.js ("Customize table") — the
@@ -362,7 +362,11 @@ const FILTERABLE_FIELDS = {
   callifiedLeadStatus: { column: 'callifiedLeadStatus', kind: 'text', label: 'Call Status' },
   tags: { column: 'tagsJson', kind: 'text', label: 'Tags' },
   kycStatus: { column: 'kycStatus', kind: 'text', label: 'KYC Status', verticals: ['travel'] },
-  subBrand: { column: 'subBrand', kind: 'text', label: 'Sub-brand', verticals: ['travel'] },
+  // subBrand is generic+travel: the generic web-form Sub-brand field writes
+  // Contact.subBrand on generic tenants too (routes/web_forms.js), so the
+  // Leads Customize-table column needs a matching filter entry there.
+  // kycStatus stays travel-only — nothing on generic ever writes it.
+  subBrand: { column: 'subBrand', kind: 'text', label: 'Sub-brand', verticals: ['generic', 'travel'] },
   aiScore: {
     column: 'aiScore',
     kind: 'range',
@@ -1178,9 +1182,9 @@ router.get('/', async (req, res) => {
 router.get('/filter-fields', async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    // Vertical gate — see the comment above FILTERABLE_FIELDS. Travel-only
-    // columns (subBrand, kycStatus) never reach a generic/wellness tenant's
-    // picker, regardless of what stray or schema-default data exists.
+    // Vertical gate — see the comment above FILTERABLE_FIELDS. The
+    // travel-only kycStatus column never reaches a generic/wellness
+    // tenant's picker, regardless of what schema-default data exists.
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
     const vertical = tenant?.vertical || 'generic';
     const staticFields = Object.entries(FILTERABLE_FIELDS)
@@ -1312,7 +1316,7 @@ router.get('/filter-values/:field', async (req, res) => {
     if (!fieldDef) return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
     // Vertical gate — mirrors /filter-fields' eligibility check (see the
     // big comment above FILTERABLE_FIELDS). A vertical-restricted field
-    // (subBrand, kycStatus) is rejected here too, not just hidden from the
+    // (kycStatus) is rejected here too, not just hidden from the
     // picker — otherwise a stale client-side filter chip, or someone
     // hitting this endpoint directly, could still pull values for a
     // feature this tenant's vertical doesn't have.

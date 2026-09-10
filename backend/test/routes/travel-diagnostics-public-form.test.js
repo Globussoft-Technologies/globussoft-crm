@@ -104,6 +104,7 @@ const sampleQuestions = JSON.stringify({
       id: "q1",
       text: "How many trips per year?",
       type: "single-choice",
+      required: true,
       options: [
         { value: "first", label: "First time", weight: 1 },
         { value: "few", label: "2-4", weight: 3 },
@@ -113,6 +114,7 @@ const sampleQuestions = JSON.stringify({
       id: "q2",
       text: "Interests?",
       type: "multi-select",
+      maxSelections: 2,
       options: [
         { value: "beach", label: "Beach", weight: 2 },
         { value: "mountain", label: "Mountain", weight: 3 },
@@ -363,6 +365,8 @@ describe("GET /api/travel/diagnostics/public/form/:tenantSlug/:subBrand", () => 
     expect(res.status).toBe(200);
     expect(res.body.subBrand).toBe("travelstall");
     expect(res.body.questions).toHaveLength(2);
+    expect(res.body.questions[0].required).toBe(true);
+    expect(res.body.questions[1].maxSelections).toBe(2);
     expect(res.body.form.isPublished).toBe(true);
   });
 

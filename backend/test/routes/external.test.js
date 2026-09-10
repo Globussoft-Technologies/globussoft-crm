@@ -266,6 +266,15 @@ prisma.tenant.findUnique = vi.fn();
 prisma.tenantSetting = prisma.tenantSetting || {};
 prisma.tenantSetting.findUnique = vi.fn();
 
+const hardDeleteContactMock = vi.fn().mockResolvedValue(1);
+const contactHardDeletePath = requireCJS.resolve("../../lib/contactHardDelete.js");
+Module._cache[contactHardDeletePath] = {
+  id: contactHardDeletePath,
+  filename: contactHardDeletePath,
+  loaded: true,
+  exports: { hardDeleteContact: hardDeleteContactMock },
+};
+
 import express from "express";
 import request from "supertest";
 
@@ -301,6 +310,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ callifiedAutoCampaignId: null, embedAllowlistJson: null });
   prisma.tenantSetting.findUnique.mockReset();
+  hardDeleteContactMock.mockReset().mockResolvedValue(1);
 
   classifyLeadMock.mockReset().mockResolvedValue({
     isJunk: false,
@@ -743,7 +753,7 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     expect(notifyAdminsOfBlockedLeadOriginMock).not.toHaveBeenCalled();
   });
 
-  test("soft-deleted same email is restored so re-registered external lead is visible", async () => {
+  test("soft-deleted same email is purged so re-registered external lead is fresh", async () => {
     classifyLeadMock.mockResolvedValueOnce({
       isJunk: false,
       score: 74,
@@ -762,8 +772,9 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
       deletedAt: new Date("2026-08-01T10:00:00Z"),
       createdAt: new Date(),
     };
-    const restoredContact = {
+    const freshContact = {
       ...deletedContact,
+      id: 990,
       name: "External Restored Lead",
       source: "website-form",
       firstTouchSource: "website-form",
@@ -771,7 +782,7 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
       deletedAt: null,
     };
     prisma.contact.findFirst.mockResolvedValueOnce(deletedContact);
-    prisma.contact.update.mockResolvedValueOnce(restoredContact);
+    prisma.contact.create.mockResolvedValueOnce(freshContact);
 
     const app = makeApp();
     const res = await request(app).post("/api/v1/external/leads").send({
@@ -781,23 +792,15 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
       source: "website-form",
     });
 
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 889, _deduped: true, deletedAt: null });
-    expect(prisma.contact.create).not.toHaveBeenCalled();
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 889 },
-      data: expect.objectContaining({
-        name: "External Restored Lead",
-        email: "restore-ext@example.com",
-        status: "Lead",
-        source: "website-form",
-        firstTouchSource: "website-form",
-        deletedAt: null,
-      }),
-    });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 990, deletedAt: null });
+    expect(res.body._deduped).not.toBe(true);
+    expect(hardDeleteContactMock).toHaveBeenCalledWith(expect.anything(), 889);
+    expect(prisma.contact.create).toHaveBeenCalled();
+    expect(prisma.contact.update).not.toHaveBeenCalled();
     expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
       tenantId: 7,
-      contact: restoredContact,
+      contact: freshContact,
     }));
 
   });

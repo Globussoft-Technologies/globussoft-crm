@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { createPortal } from 'react-dom';
 import { AuthContext } from '../App';
-import { LayoutGrid, Pencil, Plus, Shield, Trash2, Users, X, UserPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, GripVertical, LayoutGrid, Link2, Mail, Pencil, Phone, Plus, RefreshCw, Shield, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { usePermissions, invalidatePermissionCache } from '../hooks/usePermissions';
@@ -464,6 +464,7 @@ export default function RolesAdmin() {
   const isTravel = tenantVertical === 'travel';
   const { activeSubBrand } = useActiveSubBrand();
   const activeSubBrandLabel = activeSubBrand ? subBrandShortLabel(activeSubBrand) : null;
+  const showTmcShareableLink = isTravel && (!activeSubBrand || activeSubBrand === 'tmc');
 
   const [roles, setRoles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -481,6 +482,11 @@ export default function RolesAdmin() {
   const [usersRole, setUsersRole] = useState(null);
   const [editRole, setEditRole] = useState(null);
   const [widgetsRole, setWidgetsRole] = useState(null);
+  const [activeTab, setActiveTab] = useState('roles');
+
+  useEffect(() => {
+    if (!showTmcShareableLink) setActiveTab('roles');
+  }, [showTmcShareableLink]);
 
   const visibleRoles = useMemo(() => {
     if (!isTravel || !activeSubBrand) return roles;
@@ -632,7 +638,37 @@ export default function RolesAdmin() {
         )}
       </div>
 
-      {error && !isLoading && (
+      {showTmcShareableLink && (
+        <div
+          role="tablist"
+          aria-label="Roles settings"
+          style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)' }}
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'roles'}
+            onClick={() => setActiveTab('roles')}
+            className="btn-secondary"
+            style={{ borderRadius: '8px 8px 0 0', borderBottom: activeTab === 'roles' ? '2px solid var(--primary-color, var(--accent-color))' : undefined }}
+          >
+            Roles &amp; permissions
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'shareable'}
+            onClick={() => setActiveTab('shareable')}
+            className="btn-secondary"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', borderRadius: '8px 8px 0 0', borderBottom: activeTab === 'shareable' ? '2px solid var(--primary-color, var(--accent-color))' : undefined }}
+          >
+            <UserPlus size={15} /> Teacher onboarding
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'roles' ? <>
+        {error && !isLoading && (
         <div
           role="alert"
           style={{
@@ -858,7 +894,10 @@ export default function RolesAdmin() {
               ))}
           </tbody>
         </table>
-      </div>
+        </div>
+      </> : (
+        <TmcTeacherShareableLinkPanel />
+      )}
 
       {createOpen && (
         <CreateRoleModal
@@ -914,6 +953,329 @@ export default function RolesAdmin() {
       )}
     </div>
   );
+}
+
+function TmcTeacherShareableLinkPanel() {
+  const notify = useNotify();
+  const [teachers, setTeachers] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedTeacherId, setSelectedTeacherId] = useState(null);
+  const [teacherDetails, setTeacherDetails] = useState(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState(null);
+  const [selectedTripId, setSelectedTripId] = useState(null);
+  const [copiedRegistrationLink, setCopiedRegistrationLink] = useState(false);
+  const [copiedParentLinkId, setCopiedParentLinkId] = useState(null);
+  const link = typeof window === 'undefined'
+    ? '/tmc/register/teacher'
+    : `${window.location.origin}/tmc/register/teacher`;
+
+  const loadTeachers = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetchApi('/api/portal/tmc/staff/teachers', { silent: true });
+      const nextTeachers = Array.isArray(response?.teachers) ? response.teachers : [];
+      setTeachers(nextTeachers);
+      if (selectedTeacherId && !nextTeachers.some((teacher) => String(teacher.id) === String(selectedTeacherId))) {
+        setSelectedTeacherId(null);
+        setTeacherDetails(null);
+        setSelectedTripId(null);
+      }
+    } catch (err) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedTeacherId]);
+
+  const loadTeacherDetails = useCallback(async (teacherId) => {
+    setDetailsLoading(true);
+    setDetailsError(null);
+    try {
+      const response = await fetchApi(`/api/portal/tmc/staff/teachers/${teacherId}/overview`, { silent: true });
+      setTeacherDetails(response || null);
+      setSelectedTripId(null);
+    } catch (err) {
+      setTeacherDetails(null);
+      setDetailsError(err);
+    } finally {
+      setDetailsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTeachers();
+  }, [loadTeachers]);
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedRegistrationLink(true);
+      window.setTimeout(() => setCopiedRegistrationLink(false), 1800);
+      notify.success?.('Teacher registration link copied');
+    } catch {
+      notify.error?.('Copy was not available. Select and copy the link manually.');
+    }
+  };
+
+  const selectTeacher = (teacher) => {
+    setSelectedTeacherId(teacher.id);
+    loadTeacherDetails(teacher.id);
+  };
+
+  const copyParentLink = async (trip) => {
+    if (!trip.parentPortalLink) return;
+    try {
+      await navigator.clipboard.writeText(trip.parentPortalLink);
+      setCopiedParentLinkId(trip.id);
+      window.setTimeout(() => setCopiedParentLinkId(null), 1800);
+      notify.success?.('Parent portal link copied');
+    } catch {
+      notify.error?.('Copy was not available. Select and copy the link manually.');
+    }
+  };
+
+  const selectedTeacher = teacherDetails?.teacher || teachers.find((teacher) => String(teacher.id) === String(selectedTeacherId));
+  const assignedTrips = Array.isArray(teacherDetails?.trips) ? teacherDetails.trips : [];
+  const selectedTrip = assignedTrips.find((trip) => String(trip.id) === String(selectedTripId)) || assignedTrips[0] || null;
+  const participantCount = assignedTrips.reduce((total, trip) => total + Number(trip.participantCount || 0), 0);
+  const parentCount = assignedTrips.reduce((total, trip) => total + Number(trip.parentCount || 0), 0);
+
+  return (
+    <div style={{ display: 'grid', gap: '1rem', alignItems: 'start' }}>
+      <section style={{ minWidth: 0, border: '1px solid var(--border-color)', borderRadius: 12, background: 'var(--bg-color)', padding: '1.25rem' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+          <Copy size={20} style={{ marginTop: 3, color: 'var(--primary-color, var(--accent-color))' }} />
+          <div>
+            <h2 style={{ margin: 0, fontSize: '1.1rem' }}>TMC teacher registration link</h2>
+            <p style={{ margin: '0.45rem 0 0', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              This permanent link is shared by all TMC teachers. They can create their profile and then sign in to the Teacher Portal.
+            </p>
+          </div>
+        </div>
+        <div style={{ marginTop: '1rem', display: 'grid', gap: '0.6rem' }}>
+          <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }} htmlFor="tmc-teacher-registration-link">Share this link</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <input id="tmc-teacher-registration-link" value={link} readOnly onFocus={(event) => event.target.select()} style={{ flex: '1 1 320px', minWidth: 0, width: 'auto', boxSizing: 'border-box', padding: '0.7rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
+            <button type="button" className="btn-secondary" onClick={copyLink} style={{ display: 'inline-flex', flex: '0 0 auto', alignItems: 'center', gap: '0.4rem' }}><Copy size={15} /> {copiedRegistrationLink ? 'Copied' : 'Copy link'}</button>
+          </div>
+        </div>
+      </section>
+
+      <section data-testid="tmc-teacher-list" style={{ minWidth: 0, border: '1px solid var(--border-color)', borderRadius: 12, background: 'var(--bg-color)', padding: '1.25rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '1rem' }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Registered TMC teachers</h2>
+            <p style={{ margin: '0.45rem 0 0', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              Teachers who have completed their profile registration.
+            </p>
+          </div>
+          <span style={{ flex: '0 0 auto', padding: '0.25rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg-3)', color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 700 }}>
+            {teachers.length}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+          <button type="button" className="btn-secondary" onClick={loadTeachers} disabled={isLoading} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+            <RefreshCw size={14} /> {isLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+
+        {isLoading ? (
+          <div style={{ padding: '1.5rem 0', color: 'var(--text-secondary)', textAlign: 'center' }}>Loading teacher profiles…</div>
+        ) : error ? (
+          <div role="alert" style={{ padding: '0.85rem', borderRadius: 8, background: 'rgba(239,68,68,0.08)', color: 'var(--text-primary)', fontSize: '0.85rem' }}>
+            Could not load teacher profiles. Please try again.
+          </div>
+        ) : teachers.length === 0 ? (
+          <div style={{ padding: '1.5rem 0', color: 'var(--text-secondary)', textAlign: 'center' }}>No teachers have created a profile yet.</div>
+        ) : (
+          <div role="list" style={{ display: 'grid', borderTop: '1px solid var(--border-color)' }}>
+            {teachers.map((teacher) => (
+              <div key={teacher.id} role="listitem" style={{ borderBottom: '1px solid var(--border-color)' }}>
+                <button
+                  type="button"
+                  onClick={() => selectTeacher(teacher)}
+                  aria-pressed={String(selectedTeacherId) === String(teacher.id)}
+                  style={{ width: '100%', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '1rem', alignItems: 'center', padding: '0.85rem 0.25rem', border: 0, background: String(selectedTeacherId) === String(teacher.id) ? 'rgba(79,70,229,0.06)' : 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', borderRadius: 8 }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', minWidth: 0 }}>
+                    <span style={{ display: 'inline-grid', placeItems: 'center', width: 34, height: 34, flex: '0 0 auto', borderRadius: '50%', background: 'var(--subtle-bg-3)', color: 'var(--primary-color, var(--accent-color))', fontWeight: 800, fontSize: '0.75rem' }}>{tmcInitials(teacher.name)}</span>
+                    <span style={{ minWidth: 0 }}>
+                      <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{teacher.name || 'Unnamed teacher'}</strong>
+                      <span style={{ display: 'block', marginTop: '0.2rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{teacher.email || 'No email provided'}</span>
+                      <span style={{ display: 'block', marginTop: '0.12rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{teacher.phone ? `· ${teacher.phone}` : 'Phone not provided'}</span>
+                    </span>
+                  </span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}>{String(selectedTeacherId) === String(teacher.id) ? 'Selected' : 'View details'} <ChevronRight size={15} /></span>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {selectedTeacherId && (
+        <TmcTeacherWorkspace
+          loading={detailsLoading}
+          error={detailsError}
+          teacher={selectedTeacher}
+          trips={assignedTrips}
+          selectedTrip={selectedTrip}
+          onSelectTrip={setSelectedTripId}
+          onRefresh={() => loadTeacherDetails(selectedTeacherId)}
+          onCopyParentLink={copyParentLink}
+          copiedParentLinkId={copiedParentLinkId}
+          participantCount={participantCount}
+          parentCount={parentCount}
+        />
+      )}
+    </div>
+  );
+}
+
+function TmcTeacherWorkspace({ loading, error, teacher, trips, selectedTrip, onSelectTrip, onRefresh, onCopyParentLink, copiedParentLinkId, participantCount, parentCount }) {
+  if (loading) return <section data-testid="tmc-teacher-details" style={tmcWorkspaceCard}><div style={tmcEmptyState}>Loading teacher workspace...</div></section>;
+  if (error) return <section data-testid="tmc-teacher-details" style={tmcWorkspaceCard}><div role="alert" style={{ ...tmcEmptyState, color: '#b91c1c' }}>Could not load this teacher&apos;s assignments. Please try again.</div></section>;
+
+  return (
+    <section data-testid="tmc-teacher-details" style={tmcWorkspaceCard}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0, fontSize: '1.15rem' }}>{teacher?.name || 'Teacher details'}</h2>
+            <span style={tmcPill}>Registered teacher</span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.7rem', marginTop: '0.45rem', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+            {teacher?.email && <span style={tmcInlineMeta}><Mail size={14} /> {teacher.email}</span>}
+            {teacher?.phone && <span style={tmcInlineMeta}><Phone size={14} /> {teacher.phone}</span>}
+          </div>
+        </div>
+        <button type="button" className="btn-secondary" onClick={onRefresh} disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}><RefreshCw size={14} /> Refresh details</button>
+      </div>
+
+        <div style={tmcStatsGrid}>
+        <div style={tmcStatCard}><span>Assigned trips</span><strong>{trips.length}</strong></div>
+        <div style={tmcStatCard}><span>Participants</span><strong>{participantCount}</strong></div>
+        <div style={tmcStatCard}><span>Portal registrations</span><strong>{parentCount}</strong></div>
+      </div>
+
+      <section style={{ marginTop: '1.25rem' }}>
+        <div style={tmcSectionHeading}>
+          <div><h3 style={tmcHeading}>Assigned trips</h3><p style={tmcHint}>Select a trip to review the parents registering for it.</p></div>
+          <span style={tmcCountPill}>{trips.length}</span>
+        </div>
+        {trips.length === 0 ? (
+          <div style={tmcEmptyState}>No trips have been assigned to this teacher yet.</div>
+        ) : (
+          <div role="list" style={{ display: 'grid', gap: '0.7rem' }}>
+            {trips.map((trip) => {
+              const isSelected = String(selectedTrip?.id) === String(trip.id);
+              return (
+                <div key={trip.id} role="listitem" style={{ border: `1px solid ${isSelected ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`, borderRadius: 10, padding: '0.9rem', background: isSelected ? 'rgba(79,70,229,0.045)' : 'var(--bg-color)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.8rem', flexWrap: 'wrap' }}>
+                    <button type="button" onClick={() => onSelectTrip(trip.id)} aria-label={`View participants for ${trip.destination || trip.tripCode || 'trip'}`} style={{ display: 'grid', gap: '0.25rem', minWidth: 0, flex: '1 1 260px', padding: 0, border: 0, background: 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 800 }}>{trip.destination || 'Unnamed trip'} <ChevronRight size={15} color="var(--primary-color, var(--accent-color))" /></span>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>{trip.tripCode || 'Trip code unavailable'} · {tmcFormatDateRange(trip.departDate, trip.returnDate)}</span>
+                    </button>
+                    <span style={tmcTripStatus}>{tmcFormatStatus(trip.status)}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.8rem' }}>
+                    <Link2 size={14} color="var(--text-secondary)" />
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.76rem', fontWeight: 700 }}>Parent portal link</span>
+                    <input aria-label={`Parent portal link for ${trip.destination || trip.tripCode}`} readOnly value={trip.parentPortalLink || 'Link unavailable'} onFocus={(event) => event.target.select()} style={{ flex: '1 1 260px', minWidth: 0, width: 'auto', boxSizing: 'border-box', padding: '0.5rem 0.6rem', border: '1px solid var(--border-color)', borderRadius: 7, background: 'var(--input-bg)', color: 'var(--text-secondary)', fontSize: '0.75rem' }} />
+                    {trip.parentPortalLink && <button type="button" className="btn-secondary" onClick={() => onCopyParentLink(trip)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.5rem 0.65rem' }}><Copy size={14} /> {copiedParentLinkId === trip.id ? 'Copied' : 'Copy'}</button>}
+                    {trip.parentPortalLink && <a href={trip.parentPortalLink} target="_blank" rel="noreferrer" className="btn-secondary" aria-label={`Open parent portal link for ${trip.destination || trip.tripCode}`} style={{ display: 'inline-flex', alignItems: 'center', padding: '0.5rem 0.65rem' }}><ExternalLink size={14} /></a>}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.7rem', marginTop: '0.7rem', color: 'var(--text-secondary)', fontSize: '0.76rem' }}>
+                    <span style={tmcInlineMeta}><Users size={14} /> {trip.participantCount || 0} participant{trip.participantCount === 1 ? '' : 's'}</span>
+                    <span style={tmcInlineMeta}><Users size={14} /> {trip.parentCount || 0} portal registration{trip.parentCount === 1 ? '' : 's'}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {selectedTrip && <TmcParentRegistrationSection trip={selectedTrip} />}
+    </section>
+  );
+}
+
+function TmcParentRegistrationSection({ trip }) {
+  const participants = Array.isArray(trip.participants) ? trip.participants : [];
+  const parentRegistrations = Array.isArray(trip.parentRegistrations) ? trip.parentRegistrations : [];
+  return (
+    <section data-testid="tmc-parent-registrations" style={{ marginTop: '1.35rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border-color)' }}>
+      <div style={tmcSectionHeading}>
+        <div><h3 style={tmcHeading}>Participants for {trip.destination || 'this trip'}</h3><p style={tmcHint}>Everyone who completed registration is shown once as a participant, with their parent contact details.</p></div>
+        <span style={tmcCountPill}>{participants.length}</span>
+      </div>
+      {participants.length === 0 && parentRegistrations.length === 0 ? (
+        <div style={tmcEmptyState}>No participants have registered for this trip yet.</div>
+      ) : (
+        <div style={{ display: 'grid', gap: '1rem' }}>
+          {parentRegistrations.length > 0 && <div><div style={tmcSubheading}><Users size={15} /> Portal registrations <span style={tmcSmallCount}>{parentRegistrations.length}</span></div><div style={{ display: 'grid', gap: '0.55rem' }}>{parentRegistrations.map((row) => <div key={row.id} style={tmcParentRow}><div style={tmcParentIdentity}><span style={tmcAvatar}>{tmcInitials(row.name)}</span><span style={{ minWidth: 0 }}><strong style={tmcEllipsis}>{row.name || 'Unnamed parent'}</strong><span style={tmcSecondaryEllipsis}>{row.email || 'No email provided'}</span></span></div><span style={tmcSecondaryText}>{row.phone || 'Phone not provided'}</span><span style={tmcRegisteredLabel}>Registered {tmcFormatDate(row.createdAt)}</span></div>)}</div></div>}
+          {participants.length > 0 && <div><div style={tmcSubheading}><Users size={15} /> Participants <span style={tmcSmallCount}>{participants.length}</span></div><div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: 9 }}><table style={{ width: '100%', minWidth: 650, borderCollapse: 'collapse', fontSize: '0.8rem' }}><thead><tr>{['Student', 'Parent', 'Contact', 'Status', 'Added'].map((label) => <th key={label} style={tmcTableHeader}>{label}</th>)}</tr></thead><tbody>{participants.map((row) => <tr key={`participant-${row.id}`}><td style={tmcTableCell}><strong>{row.fullName || 'Student name pending'}</strong>{tmcStudentMeta(row) && <span style={tmcSecondaryEllipsis}>{tmcStudentMeta(row)}</span>}</td><td style={tmcTableCell}><span style={{ display: 'block' }}>{row.parentName || 'Parent name pending'}</span>{tmcParentRelation(row) && <span style={tmcSecondaryText}>{tmcParentRelation(row)}</span>}</td><td style={tmcTableCell}><span style={{ display: 'block' }}>{row.parentEmail || 'No email'}</span><span style={tmcSecondaryText}>{row.parentPhone || 'No phone'}</span></td><td style={tmcTableCell}><span style={tmcSuccessPill}>{tmcFormatStatus(row.applicationStatus || 'registered')}</span></td><td style={tmcTableCell}>{tmcFormatDate(row.createdAt)}</td></tr>)}</tbody></table></div></div>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const tmcWorkspaceCard = { minWidth: 0, border: '1px solid var(--border-color)', borderRadius: 12, background: 'var(--bg-color)', padding: '1.25rem' };
+const tmcEmptyState = { padding: '1.35rem', borderRadius: 9, background: 'var(--subtle-bg-3)', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.85rem' };
+const tmcPill = { display: 'inline-flex', alignItems: 'center', padding: '0.25rem 0.55rem', borderRadius: 999, background: 'rgba(16,185,129,0.1)', color: '#047857', fontSize: '0.7rem', fontWeight: 800 };
+const tmcCountPill = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 28, padding: '0.25rem 0.5rem', borderRadius: 999, background: 'var(--subtle-bg-3)', color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 800 };
+const tmcStatsGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 170px), 1fr))', gap: '0.7rem' };
+const tmcStatCard = { display: 'grid', gap: '0.25rem', padding: '0.8rem', border: '1px solid var(--border-color)', borderRadius: 9, background: 'var(--subtle-bg-3)' };
+const tmcSectionHeading = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.8rem' };
+const tmcHeading = { margin: 0, fontSize: '1rem' };
+const tmcHint = { margin: '0.35rem 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: 1.45 };
+const tmcInlineMeta = { display: 'inline-flex', alignItems: 'center', gap: '0.3rem' };
+const tmcTripStatus = { display: 'inline-flex', alignItems: 'center', padding: '0.25rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg-3)', color: 'var(--text-secondary)', fontSize: '0.7rem', fontWeight: 800, textTransform: 'capitalize' };
+const tmcSubheading = { display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.55rem', color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: 800 };
+const tmcSmallCount = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 22, padding: '0.15rem 0.4rem', borderRadius: 999, background: 'var(--subtle-bg-3)', color: 'var(--text-secondary)', fontSize: '0.68rem' };
+const tmcParentRow = { display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(120px, 0.8fr) auto', gap: '0.8rem', alignItems: 'center', padding: '0.7rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 9 };
+const tmcParentIdentity = { display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 };
+const tmcAvatar = { display: 'inline-grid', placeItems: 'center', width: 30, height: 30, flex: '0 0 auto', borderRadius: '50%', background: 'var(--subtle-bg-3)', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.68rem', fontWeight: 800 };
+const tmcEllipsis = { display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+const tmcSecondaryEllipsis = { display: 'block', marginTop: '0.18rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.75rem' };
+const tmcSecondaryText = { color: 'var(--text-secondary)', fontSize: '0.75rem' };
+const tmcRegisteredLabel = { color: 'var(--text-secondary)', fontSize: '0.72rem', whiteSpace: 'nowrap' };
+const tmcTableHeader = { padding: '0.65rem 0.75rem', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)', fontSize: '0.7rem', fontWeight: 800, textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.03em' };
+const tmcTableCell = { padding: '0.7rem 0.75rem', borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)', verticalAlign: 'top' };
+const tmcSuccessPill = { display: 'inline-flex', padding: '0.25rem 0.5rem', borderRadius: 999, background: 'rgba(16,185,129,0.12)', color: '#047857', fontSize: '0.68rem', fontWeight: 800, textTransform: 'capitalize' };
+
+function tmcInitials(name) {
+  return String(name || 'T').trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'T';
+}
+
+function tmcFormatDate(value) {
+  if (!value) return 'Date unavailable';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Date unavailable' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function tmcFormatDateRange(start, end) {
+  if (!start && !end) return 'Dates to be confirmed';
+  return `${tmcFormatDate(start)} – ${tmcFormatDate(end)}`;
+}
+
+function tmcFormatStatus(value) {
+  return String(value || 'Pending').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function tmcStudentMeta(row) {
+  const source = row?.pendingRegistration || row || {};
+  return [source.studentClass, source.studentSchool].filter(Boolean).join(' · ');
+}
+
+function tmcParentRelation(row) {
+  return row?.parentRelation || row?.pendingRegistration?.parentRelation || '';
 }
 
 // ───────────────────────── Create role modal ─────────────────────────

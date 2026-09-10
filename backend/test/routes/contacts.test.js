@@ -6,8 +6,8 @@
  * ───────────────────────────────────────
  *   routes/contacts.js is 1070 LOC and is one of the busiest central CRM
  *   surfaces — every Contacts page, the dashboard "Total Contacts" KPI, the
- *   #588 USER-scoped list, the #592 merge flow, the #167 soft-delete +
- *   restore lifecycle, and the dedup-preflight (PRD §4.5) all live here.
+ *   #588 USER-scoped list, the #592 merge flow, the hard-delete lifecycle,
+ *   and the dedup-preflight (PRD §4.5) all live here.
  *   The sister file backend/test/routes/contacts-source-filter.test.js
  *   already pins ONE slice (the #904 slice 8 ?source=<prefix> filter); this
  *   file pins the load-bearing main-route surface that has had NO direct
@@ -39,12 +39,12 @@
  *   10. unknown id → 404 (existing-row check before validation/update)
  *   11. happy update → 200 + writeAudit invoked on changed fields
  *
- *   DELETE /api/contacts/:id (ADMIN-gated, soft-delete via #167):
- *   12. ADMIN delete → 200 with softDeleted:true; second DELETE on
- *       already-deleted row returns idempotent:true (#167 idempotency)
+ *   DELETE /api/contacts/:id (ADMIN-gated, hard-delete):
+ *   12. ADMIN delete permanently removes the contact and owned details;
+ *       legacy tombstones are also purged
  *
  *   DELETE /api/contacts/bulk-delete (ADMIN-gated):
- *   13. bulk delete soft-removes the selected tenant rows and returns count
+ *   13. bulk delete permanently removes selected tenant rows and returns count
  *
  *   Auth gate (CLAUDE.md standing rule):
  *   14. no token → 401 (we exercise this via the REAL verifyToken — the
@@ -170,6 +170,24 @@ Module._cache[fieldFilterPath] = {
   exports: {
     filterReadFields: async (rows) => rows,
     filterWriteFields: async (body) => body,
+  },
+};
+
+// Contact deletion is tested at the route contract level here. The helper has
+// its own unit tests; keeping it mocked prevents these route tests from
+// depending on every Contact child model being installed in the test DB.
+const hardDeleteContactMock = vi.fn().mockResolvedValue(1);
+const hardDeleteContactsMock = vi.fn().mockResolvedValue(0);
+const deleteContactDependentsMock = vi.fn().mockResolvedValue(undefined);
+const contactHardDeletePath = requireCJS.resolve('../../lib/contactHardDelete.js');
+Module._cache[contactHardDeletePath] = {
+  id: contactHardDeletePath,
+  filename: contactHardDeletePath,
+  loaded: true,
+  exports: {
+    hardDeleteContact: hardDeleteContactMock,
+    hardDeleteContacts: hardDeleteContactsMock,
+    deleteContactDependents: deleteContactDependentsMock,
   },
 };
 
@@ -311,6 +329,9 @@ beforeEach(() => {
   notifyAdminsOfNewLeadMock.mockReset().mockResolvedValue([]);
   findDuplicateMock.mockReset().mockResolvedValue(null);
   autoDialEnqueueMock.mockReset();
+  hardDeleteContactMock.mockReset().mockResolvedValue(1);
+  hardDeleteContactsMock.mockReset().mockResolvedValue(0);
+  deleteContactDependentsMock.mockReset().mockResolvedValue(undefined);
   authState.useReal = false;
 });
 
@@ -881,23 +902,25 @@ describe('POST /api/contacts — create', () => {
     expect(data.status).toBe('Lead');
   });
 
-  test('soft-deleted same email is restored as a visible Lead instead of creating a duplicate', async () => {
+  test('legacy soft-deleted same email is purged before creating a fresh Lead', async () => {
     const deletedContact = {
       ...SAMPLE_CONTACT,
       id: 7777,
       email: 'restore@example.com',
       deletedAt: new Date('2026-08-01T10:00:00Z'),
     };
-    const restored = {
-      ...deletedContact,
+    const created = {
+      ...SAMPLE_CONTACT,
+      id: 8888,
       name: 'Restored Lead',
+      email: 'restore@example.com',
       phone: '+919811000777',
       status: 'Lead',
       deletedAt: null,
     };
     findDuplicateMock.mockResolvedValueOnce(null);
     prisma.contact.findUnique.mockResolvedValueOnce(deletedContact);
-    prisma.contact.update.mockResolvedValueOnce(restored);
+    prisma.contact.create.mockResolvedValueOnce(created);
 
     const res = await request(makeApp())
       .post('/api/contacts')
@@ -907,22 +930,15 @@ describe('POST /api/contacts — create', () => {
         phone: '+919811000777',
       });
 
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 7777, restored: true, deletedAt: null });
-    expect(prisma.contact.create).not.toHaveBeenCalled();
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 7777 },
-      data: expect.objectContaining({
-        email: 'restore@example.com',
-        status: 'Lead',
-        deletedAt: null,
-        tenantId: TENANT_ID,
-      }),
-    });
-    expect(writeAuditMock.mock.calls[0][1]).toBe('RESTORE');
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 8888, email: 'restore@example.com' });
+    expect(hardDeleteContactMock).toHaveBeenCalledWith(expect.anything(), 7777);
+    expect(prisma.contact.create).toHaveBeenCalled();
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(writeAuditMock.mock.calls[0][1]).toBe('CREATE');
     expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
       tenantId: TENANT_ID,
-      contact: restored,
+      contact: created,
     }));
   });
   test('missing required email → 400 EMAIL_REQUIRED (#160); prisma NOT called', async () => {
@@ -1078,17 +1094,9 @@ describe('PUT /api/contacts/:id — update', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-describe('DELETE /api/contacts/:id — soft-delete (ADMIN-gated, #167)', () => {
-  test('ADMIN delete → 200 with softDeleted:true; second DELETE on already-deleted row returns idempotent:true', async () => {
-    // First DELETE: row is live, gets soft-deleted.
+describe('DELETE /api/contacts/:id — hard-delete (ADMIN-gated)', () => {
+  test('ADMIN delete → permanently removes the contact, including a legacy tombstone', async () => {
     prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
-    prisma.contact.update.mockResolvedValueOnce({
-      ...SAMPLE_CONTACT,
-      deletedAt: new Date('2026-01-01T00:00:00Z'),
-    });
-    // The #167 handler also writes an auditLog row directly (best-effort).
-    prisma.auditLog = prisma.auditLog || {};
-    prisma.auditLog.create = vi.fn().mockResolvedValue({});
 
     const res1 = await request(makeApp())
       .delete('/api/contacts/9001');
@@ -1096,13 +1104,21 @@ describe('DELETE /api/contacts/:id — soft-delete (ADMIN-gated, #167)', () => {
     expect(res1.status).toBe(200);
     expect(res1.body).toMatchObject({
       id: SAMPLE_CONTACT.id,
-      softDeleted: true,
+      deleted: true,
+      hardDeleted: true,
     });
-    expect(prisma.contact.update).toHaveBeenCalledOnce();
-    expect(prisma.contact.update.mock.calls[0][0].data.deletedAt).toBeInstanceOf(Date);
+    expect(hardDeleteContactMock).toHaveBeenCalledWith(expect.anything(), SAMPLE_CONTACT.id);
+    expect(writeAuditMock).toHaveBeenCalledWith(
+      'Contact',
+      'HARD_DELETE',
+      SAMPLE_CONTACT.id,
+      USER_ID,
+      TENANT_ID,
+      { contactId: SAMPLE_CONTACT.id },
+    );
 
-    // Second DELETE: row is already soft-deleted → idempotent envelope, NO update.
-    prisma.contact.update.mockClear();
+    // A legacy soft-deleted row is also permanently removed rather than
+    // returning the old idempotent soft-delete envelope.
     prisma.contact.findFirst.mockResolvedValueOnce({
       ...SAMPLE_CONTACT,
       deletedAt: new Date('2026-01-01T00:00:00Z'),
@@ -1111,13 +1127,8 @@ describe('DELETE /api/contacts/:id — soft-delete (ADMIN-gated, #167)', () => {
       .delete('/api/contacts/9001');
 
     expect(res2.status).toBe(200);
-    expect(res2.body).toMatchObject({
-      id: SAMPLE_CONTACT.id,
-      idempotent: true,
-      softDeleted: true,
-    });
-    // No second update — the first was a no-op skip.
-    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(res2.body).toMatchObject({ id: SAMPLE_CONTACT.id, deleted: true, hardDeleted: true });
+    expect(hardDeleteContactMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1351,8 +1362,9 @@ describe('PUT /api/contacts/bulk-assign-campaign', () => {
 });
 
 describe('DELETE /api/contacts/bulk-delete', () => {
-  test('soft-deletes tenant-scoped contacts in one bulk update and returns the deleted count', async () => {
-    prisma.contact.updateMany.mockResolvedValueOnce({ count: 2 });
+  test('hard-deletes only tenant-scoped contacts and returns the deleted count', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([{ id: 9001 }, { id: 9002 }]);
+    hardDeleteContactsMock.mockResolvedValueOnce(2);
 
     const res = await request(makeApp())
       .delete('/api/contacts/bulk-delete')
@@ -1360,10 +1372,11 @@ describe('DELETE /api/contacts/bulk-delete', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ deleted: 2 });
-    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [9001, 9002] }, tenantId: TENANT_ID, deletedAt: null },
-      data: { deletedAt: expect.any(Date) },
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: { id: { in: [9001, 9002] }, tenantId: TENANT_ID },
+      select: { id: true },
     });
+    expect(hardDeleteContactsMock).toHaveBeenCalledWith(expect.anything(), [9001, 9002]);
   });
 });
 

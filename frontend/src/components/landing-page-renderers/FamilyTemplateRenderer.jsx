@@ -12,7 +12,7 @@ import { safeUrl } from '../../utils/landingPageUtils';
  * Maps semantic content sections to React components.
  */
 
-function NavSection({ config = {}, theme = {} }) {
+function NavSection({ config = {}, theme = {}, registrationUrl = '' }) {
   const { title, items = [] } = config;
 
   return (
@@ -57,12 +57,17 @@ function NavSection({ config = {}, theme = {} }) {
             ))}
           </div>
         )}
+        {registrationUrl && (
+          <a href={registrationUrl} style={{ display: 'inline-block', marginTop: '12px', padding: '8px 16px', borderRadius: '4px', background: theme.accentColor || '#d4af37', color: '#fff', fontWeight: 600 }}>
+            Register for this trip
+          </a>
+        )}
       </div>
     </nav>
   );
 }
 
-function HeroSection({ config = {}, theme = {} }) {
+function HeroSection({ config = {}, theme = {}, registrationUrl = '' }) {
   const { title, description, image, cta } = config;
 
   return (
@@ -106,7 +111,7 @@ function HeroSection({ config = {}, theme = {} }) {
       )}
       {cta && (
         <a
-          href={cta.url || '#'}
+          href={registrationUrl || cta.url || '#'}
           style={{
             display: 'inline-block',
             padding: '12px 32px',
@@ -502,6 +507,7 @@ function FooterSection({ config = {}, theme = {} }) {
 export default function FamilyTemplateRenderer({ landingPage = {} }) {
   const content = landingPage.content || {};
   const slug = landingPage.slug || '';
+  const registrationUrl = landingPage.tmcParentRegistrationUrl || '';
 
   // Use or default theme
   const theme = {
@@ -538,8 +544,8 @@ export default function FamilyTemplateRenderer({ landingPage = {} }) {
         a:hover { text-decoration: underline; }
       `}</style>
 
-      {content.nav && <NavSection config={content.nav} theme={theme} />}
-      {content.hero && <HeroSection config={content.hero} theme={theme} />}
+      {content.nav && <NavSection config={content.nav} theme={theme} registrationUrl={registrationUrl} />}
+      {content.hero && <HeroSection config={content.hero} theme={theme} registrationUrl={registrationUrl} />}
       {content.marquee && <ContentSection config={content.marquee} theme={theme} />}
       {content.preview && <ContentSection config={content.preview} theme={theme} />}
       {content.programme && <TimelineSection config={content.programme} theme={theme} />}

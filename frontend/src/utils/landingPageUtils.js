@@ -179,8 +179,10 @@ export function isTravelLandingPage(landingPage) {
  * Resolve the public share path for a landing page.
  *
  * Draft pages keep the editor preview path. Published generic landing sites
- * stay under /landing-sites/:slug. Published travel pages use /trips for the
- * single featured page and /trips/:id for every other published travel page.
+ * stay under /landing-sites/:slug. Published travel trip pages use the
+ * canonical /trips/:id path everywhere, including the featured trip. The
+ * featured /trips route remains available as a public entry point, but it is
+ * not used as an individual trip's share URL.
  */
 export function getLandingPageSharePath(landingPage) {
   const slug = landingPage?.slug ? String(landingPage.slug) : '';
@@ -193,15 +195,11 @@ export function getLandingPageSharePath(landingPage) {
     return slug ? `/landing-sites/${slug}` : '/landing-sites/';
   }
 
-  if (isTravelLandingPage(landingPage) && landingPage?.isFeatured) {
+  if (isTravelLandingPage(landingPage)) {
     const content = typeof landingPage.content === 'string' ? landingPage.content : JSON.stringify(landingPage.content || '');
     if (!landingPage?.tripId && ( /pre-trip marketing page/i.test(String(landingPage.title || '')) || content.includes('marketing-heading') || content.includes('Before the trip is confirmed'))) return '/explore';
-    return '/trips';
-  }
-
-  if (isTravelLandingPage(landingPage)) {
     const identifier = getLandingPageIdentifier(landingPage);
-    return identifier ? `/trips/${identifier}` : '/trips/';
+    return identifier ? `/trips/${identifier}` : '/trips';
   }
 
   return slug ? `/p/${slug}` : '/p/';

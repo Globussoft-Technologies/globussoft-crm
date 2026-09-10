@@ -321,9 +321,9 @@ const Contacts = () => {
     } catch { setDupes([]); }
   };
 
-  // #592 — Merge is destructive (irreversible from the UI; the soft-deleted
-  // siblings can only be restored via the ADMIN restore endpoint). Confirm
-  // before firing.
+  // #592 — Merge is destructive and irreversible from the UI; duplicate
+  // records are permanently removed after their details are folded
+  // into the primary. Confirm before firing.
   const handleMerge = async (primaryId, secondaryIds) => {
     const ok = await notify.confirm({
       title: 'Merge duplicate contacts?',

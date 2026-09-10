@@ -14,8 +14,8 @@
  *       leadQualityReasonsJson, flagsJson, weightsVersion)
  *     - returns {diagnosticId, reportSlug, tenantSlug, engineState, message}
  *
- *   GET /api/travel/diagnostics/:id/readiness-report.pdf
- *     - public, token-gated by id
+ *   GET /api/travel/diagnostics/public/readiness-report/:slug.pdf
+ *     - public, gated by a persisted random report token
  *     - composes Job A prompt (T6) → llmRouter (stubbed) → T7 guard →
  *       T8's pdfRenderer.renderTmcReadinessReport()
  *     - returns application/pdf attachment with no-store cache
@@ -141,6 +141,12 @@ function tenantRow() {
   return { id: 1, slug: 'tmc-india', name: 'TMC India', vertical: 'travel' };
 }
 
+const REPORT_TOKEN = '0123456789abcdef';
+
+function reportPdfPath(id = 555, token = REPORT_TOKEN) {
+  return `/api/travel/diagnostics/public/readiness-report/${id}-${token}.pdf`;
+}
+
 function catalogueRow(overrides = {}) {
   return {
     id: 1,
@@ -206,6 +212,7 @@ beforeEach(() => {
     flagsJson: '[]',
     weightsVersion: 'v1',
     answersJson: JSON.stringify(validAnswers()),
+    reportSlugToken: REPORT_TOKEN,
   });
   prisma.travelDiagnostic.count.mockReset().mockResolvedValue(0);
   prisma.travelDiagnostic.update.mockReset();
@@ -353,10 +360,17 @@ describe('POST /api/travel/diagnostics/public/submit-tmc', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────
-// GET /api/travel/diagnostics/:id/readiness-report.pdf
+// GET /api/travel/diagnostics/public/readiness-report/:slug.pdf
 // ────────────────────────────────────────────────────────────────────
 
-describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
+describe('GET /api/travel/diagnostics/public/readiness-report/:slug.pdf', () => {
+  test('numeric-id PDF route is not public', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/555/readiness-report.pdf');
+    expect(res.status).toBe(401);
+    expect(prisma.travelDiagnostic.findFirst).not.toHaveBeenCalled();
+  });
+
   function persistedDiag(overrides = {}) {
     return {
       id: 555,
@@ -371,6 +385,7 @@ describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
       leadQuality: 'clean',
       flagsJson: '[]',
       answersJson: JSON.stringify(validAnswers()),
+      reportSlugToken: REPORT_TOKEN,
       weightsVersion: 'v1',
       ...overrides,
     };
@@ -380,7 +395,7 @@ describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
     prisma.travelDiagnostic.findFirst.mockResolvedValue(persistedDiag());
 
     const res = await request(makeApp())
-      .get('/api/travel/diagnostics/555/readiness-report.pdf');
+      .get(reportPdfPath());
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/application\/pdf/);
@@ -389,22 +404,35 @@ describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
     expect(res.body.length).toBeGreaterThan(500); // any meaningful PDF is well over 500 bytes
     // PDF files start with "%PDF-".
     expect(res.body.slice(0, 5).toString()).toBe('%PDF-');
+    expect(prisma.travelDiagnostic.findFirst).toHaveBeenCalledWith({
+      where: { id: 555, reportSlugToken: REPORT_TOKEN },
+    });
   });
 
-  test('non-numeric id → 400 INVALID_ID', async () => {
+  test('malformed slug → 404 DIAGNOSTIC_NOT_FOUND without a DB read', async () => {
     const res = await request(makeApp())
-      .get('/api/travel/diagnostics/not-a-number/readiness-report.pdf');
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+      .get('/api/travel/diagnostics/public/readiness-report/not-a-token.pdf');
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'DIAGNOSTIC_NOT_FOUND' });
     expect(prisma.travelDiagnostic.findFirst).not.toHaveBeenCalled();
   });
 
   test('diagnostic not found → 404 DIAGNOSTIC_NOT_FOUND', async () => {
     prisma.travelDiagnostic.findFirst.mockResolvedValue(null);
     const res = await request(makeApp())
-      .get('/api/travel/diagnostics/99999/readiness-report.pdf');
+      .get(reportPdfPath(99999));
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'DIAGNOSTIC_NOT_FOUND' });
+  });
+
+  test('mismatched report token → 404 and never resolves by numeric id alone', async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get(reportPdfPath(555, 'ffffffffffffffff'));
+    expect(res.status).toBe(404);
+    expect(prisma.travelDiagnostic.findFirst).toHaveBeenCalledWith({
+      where: { id: 555, reportSlugToken: 'ffffffffffffffff' },
+    });
   });
 
   test('Layer 3 fallback path: stub llmRouter prose fails Layer 1, guard falls through, renderer ships green', async () => {
@@ -414,7 +442,7 @@ describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
     prisma.travelDiagnostic.findFirst.mockResolvedValue(persistedDiag());
 
     const res = await request(makeApp())
-      .get('/api/travel/diagnostics/555/readiness-report.pdf');
+      .get(reportPdfPath());
     expect(res.status).toBe(200);
     expect(res.headers['x-tmc-report-guard-layer']).toBe('3');
     expect(res.headers['x-tmc-report-guard-accepted']).toBe('false');
@@ -428,7 +456,7 @@ describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
     pdfRenderer.renderTmcReadinessReport = vi.fn().mockResolvedValue(Buffer.from('%PDF-1.4 stub'));
     try {
       const res = await request(makeApp())
-        .get('/api/travel/diagnostics/555/readiness-report.pdf');
+        .get(reportPdfPath());
       expect(res.status).toBe(200);
       const callArgs = pdfRenderer.renderTmcReadinessReport.mock.calls[0][0];
       // §3.5.5 standing-facts numerical contract — PRD §11.4 international stays at 305.
@@ -451,7 +479,7 @@ describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
     pdfRenderer.renderTmcReadinessReport = vi.fn().mockResolvedValue(Buffer.from('%PDF-1.4 stub'));
     try {
       const res = await request(makeApp())
-        .get('/api/travel/diagnostics/555/readiness-report.pdf');
+        .get(reportPdfPath());
       expect(res.status).toBe(200);
       const callArgs = pdfRenderer.renderTmcReadinessReport.mock.calls[0][0];
       expect(callArgs.runwayDisplay).toBe('minimum 4 to 6 months');
@@ -469,7 +497,7 @@ describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
         answersJson: JSON.stringify(cbseAnswers),
       }));
       let res = await request(makeApp())
-        .get('/api/travel/diagnostics/555/readiness-report.pdf');
+        .get(reportPdfPath());
       expect(res.status).toBe(200);
       let callArgs = pdfRenderer.renderTmcReadinessReport.mock.calls[0][0];
       expect(callArgs.boardHook).toContain('NEP 2020');
@@ -482,7 +510,7 @@ describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
         answersJson: JSON.stringify(ibAnswers),
       }));
       res = await request(makeApp())
-        .get('/api/travel/diagnostics/555/readiness-report.pdf');
+        .get(reportPdfPath());
       expect(res.status).toBe(200);
       callArgs = pdfRenderer.renderTmcReadinessReport.mock.calls[0][0];
       expect(callArgs.boardHook).toContain('CAS');
@@ -495,7 +523,7 @@ describe('GET /api/travel/diagnostics/:id/readiness-report.pdf', () => {
   test('PDF buffer is a valid PDF (smoke test — real renderer ships a parseable PDF)', async () => {
     prisma.travelDiagnostic.findFirst.mockResolvedValue(persistedDiag());
     const res = await request(makeApp())
-      .get('/api/travel/diagnostics/555/readiness-report.pdf');
+      .get(reportPdfPath());
     expect(res.status).toBe(200);
     expect(res.body.length).toBeGreaterThan(500);
     expect(res.body.slice(0, 5).toString()).toBe('%PDF-');

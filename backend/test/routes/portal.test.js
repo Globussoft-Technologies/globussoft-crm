@@ -116,7 +116,14 @@ prisma.pendingTripRegistration = {
 prisma.tripInstalmentPayment = {
   findMany: vi.fn().mockResolvedValue([]),
   findFirst: vi.fn().mockResolvedValue(null),
+  createMany: vi.fn().mockResolvedValue({ count: 0 }),
   update: vi.fn().mockResolvedValue({}),
+};
+prisma.tripPaymentPlan = {
+  findUnique: vi.fn().mockResolvedValue(null),
+};
+prisma.tmcTrip = {
+  findFirst: vi.fn().mockResolvedValue(null),
 };
 prisma.payment = {
   findMany: vi.fn().mockResolvedValue([]),
@@ -185,7 +192,10 @@ beforeEach(() => {
   prisma.pendingTripRegistration.findUnique.mockReset().mockResolvedValue(null);
   prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
   prisma.tripInstalmentPayment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripInstalmentPayment.createMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.tripInstalmentPayment.update.mockReset().mockResolvedValue({});
+  prisma.tripPaymentPlan.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tmcTrip.findFirst.mockReset().mockResolvedValue(null);
   prisma.payment.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.update.mockReset().mockResolvedValue({});
   prisma.paymentGatewayConfig.findFirst.mockReset().mockResolvedValue(null);
@@ -245,6 +255,8 @@ describe('POST /login — body validation + auth', () => {
       // `avatarUrl: contact.avatarUrl || null`). This mock contact has no
       // avatarUrl set, so the route returns null.
       avatarUrl: null,
+      portalRole: 'CUSTOMER',
+      subBrand: null,
     });
     // Token claim shape — tenantId MUST come from contact row, NOT request body
     const decoded = jwt.verify(res.body.token, JWT_SECRET);
@@ -264,6 +276,34 @@ describe('POST /login — body validation + auth', () => {
       .send({ email: 'alice@example.com', password: 'wrong-password' });
     expect(res.status).toBe(401);
     expect(res.body.error).toBe('Invalid credentials');
+  });
+
+  test('TMC teacher login scopes lookup to the teacher persona', async () => {
+    const pwHash = await bcrypt.hash('correct-password', 10);
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 101, tenantId: 7, email: 'teacher@example.com',
+      name: 'TMC Teacher', subBrand: 'tmc', portalRole: 'TEACHER',
+      portalPasswordHash: pwHash,
+    });
+    const res = await request(makeApp())
+      .post('/api/portal/login')
+      .send({ email: 'teacher@example.com', password: 'correct-password', portalRole: 'TEACHER' });
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { email: 'teacher@example.com', portalRole: 'TEACHER', subBrand: 'tmc', deletedAt: null },
+    });
+  });
+
+  test('missing portal schema → 503 with an actionable error code', async () => {
+    const error = new Error('The column Contact.portalRole does not exist');
+    error.code = 'P2022';
+    error.meta = { column: 'Contact.portalRole' };
+    prisma.contact.findFirst.mockRejectedValue(error);
+    const res = await request(makeApp())
+      .post('/api/portal/login')
+      .send({ email: 'teacher@example.com', password: 'correct-password', portalRole: 'TEACHER' });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('PORTAL_SCHEMA_UPDATE_REQUIRED');
   });
 });
 
@@ -698,6 +738,78 @@ describe('GET /travel/itineraries — parent payment ledger parity', () => {
     expect(prisma.tripInstalmentPayment.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tripId: { in: [trip.id] }, participantId: { in: [701] } },
     }));
+  });
+
+  test('reconciles a paid landing registration using its converted draft token', async () => {
+    seedOwnedParticipant();
+    prisma.pendingTripRegistration.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ draftToken: 'draft-701', convertedToParticipantId: 701 }]);
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({ convertedToParticipantId: 701 });
+    prisma.payment.findMany.mockResolvedValue([{
+      id: 9003,
+      tenantId: 3,
+      contactId: null,
+      amount: 5000,
+      gateway: 'razorpay',
+      status: 'SUCCESS',
+      metadata: JSON.stringify({
+        kind: 'landing-page-registration',
+        tripId: trip.id,
+        draftToken: 'draft-701',
+        installmentIndex: 0,
+      }),
+    }]);
+    prisma.tripPaymentPlan.findUnique.mockResolvedValue({
+      tripId: trip.id,
+      instalmentsJson: JSON.stringify([{ amount: 5000, dueDate: '2026-08-31' }]),
+    });
+    prisma.tripInstalmentPayment.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 801,
+        tripId: trip.id,
+        participantId: 701,
+        instalmentIndex: 0,
+        amount: 5000,
+        paidAmount: 0,
+        status: 'pending',
+      }])
+      .mockResolvedValueOnce([{
+        id: 801,
+        tripId: trip.id,
+        participantId: 701,
+        instalmentIndex: 0,
+        amount: 5000,
+        paidAmount: 5000,
+        status: 'paid',
+        dueDate: new Date('2026-08-31'),
+        paymentLinkUrl: null,
+      }]);
+    prisma.tripInstalmentPayment.update.mockResolvedValue({
+      id: 801,
+      tripId: trip.id,
+      participantId: 701,
+      instalmentIndex: 0,
+      amount: 5000,
+      paidAmount: 5000,
+      status: 'paid',
+    });
+
+    const res = await request(makeApp())
+      .get('/api/portal/travel/bookings')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 3 }));
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      tripId: trip.id,
+      advancePaidAmount: 5000,
+      instalments: [{ paidAmount: 5000, status: 'paid' }],
+    });
+    expect(prisma.tripInstalmentPayment.update).toHaveBeenCalledWith({
+      where: { id: 801 },
+      data: expect.objectContaining({ paidAmount: 5000, status: 'paid' }),
+    });
   });
 
   test('treats a paid ledger status as paid even when a legacy row has zero paidAmount', async () => {

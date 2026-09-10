@@ -211,6 +211,7 @@ model Tenant {
   travelSeasonCalendars               TravelSeasonCalendar[]
   travelMarkupRules                   TravelMarkupRule[]
   tmcTrips                            TmcTrip[]
+  tmcParentTrips                      TmcParentTrip[]
   webCheckins                         WebCheckin[]
   webCheckinAutomationRuns            WebCheckinAutomationRun[]
   travelTripReviews                   TravelTripReview[]
@@ -761,6 +762,10 @@ model Contact {
   // Contact entered through a travel-vertical funnel. Drives analytics
   // (per-sub-brand lead counts) + UI badge.
   subBrand              String?
+  // Travel customer-portal persona. CUSTOMER is the existing customer
+  // experience; TMC teachers use the teacher portal. Nullable/compatible
+  // with legacy contacts, which are treated as CUSTOMER at the route layer.
+  portalRole            String?   @default("CUSTOMER") // CUSTOMER | TEACHER | PARENT
   aiScore               Int       @default(0) // 1-100 predictive close probability
   /// Last time leadScoringEngine wrote aiScore for this contact. Used as
   /// the recompute-window key so the cron only re-scores contacts whose
@@ -986,6 +991,9 @@ model Contact {
   // customer's display name without a separate contact-list request.
   travelQuotes              TravelQuote[]
   passportIdentities        PassportIdentity[]
+  assignedTmcTrips          TmcTrip[] @relation("TmcTripTeacher")
+  tmcParentTrips            TmcParentTrip[] @relation("TmcParentTripParent")
+  tmcTeacherParentTrips     TmcParentTrip[] @relation("TmcParentTripTeacher")
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
@@ -1007,6 +1015,7 @@ model Contact {
   @@index([tenantId, status, slaBreached])
   @@index([tenantId, name])
   @@index([tenantId, phone])
+  @@index([portalRole])
 }
 
 // ── Lead Custom Fields (generic vertical only, admin-configurable) ──
@@ -7437,6 +7446,11 @@ model TmcTrip {
   pricePerStudent      Decimal?                  @db.Decimal(15, 2)
   status               String                    @default("confirmed") // confirmed | in-trip | completed | cancelled
   driveFolderId        String?
+  // TMC teacher portal assignment. This is intentionally a single teacher
+  // for the first slice; it can be promoted to a join model if co-teachers
+  // become a requirement.
+  teacherContactId     Int?
+  teacher             Contact?                  @relation("TmcTripTeacher", fields: [teacherContactId], references: [id], onDelete: SetNull)
   participants         TripParticipant[]
   visaApplications     VisaApplication[]
   visaLetterGenerations VisaLetterGeneration[]
@@ -7448,6 +7462,7 @@ model TmcTrip {
   microsite            TripMicrosite?
   landingPage          LandingPage?
   pendingRegistrations PendingTripRegistration[]
+  parentPortalLinks   TmcParentTrip[]
   tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                  @default(now())
   updatedAt            DateTime                  @updatedAt
@@ -7455,6 +7470,28 @@ model TmcTrip {
   @@unique([tenantId, tripCode])
   @@index([tenantId, status])
   @@index([tenantId, departDate])
+  @@index([tenantId, teacherContactId])
+}
+
+// Links a TMC parent portal account to the teacher and trip that issued the
+// registration link. This keeps the shared customer registration form generic
+// while preserving TMC attribution for both portals.
+model TmcParentTrip {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int      @default(1)
+  parentContactId Int
+  teacherContactId Int
+  tripId          Int
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent          Contact  @relation("TmcParentTripParent", fields: [parentContactId], references: [id], onDelete: Cascade)
+  teacher         Contact  @relation("TmcParentTripTeacher", fields: [teacherContactId], references: [id], onDelete: Cascade)
+  trip            TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, parentContactId, tripId])
+  @@index([tenantId, teacherContactId])
+  @@index([tenantId, tripId])
 }
 
 model TripParticipant {

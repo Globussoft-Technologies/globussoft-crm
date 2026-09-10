@@ -527,6 +527,7 @@ function FooterSection({ config = {}, theme = {} }) {
 export default function WanderluxRenderer({ landingPage = {} }) {
   const config = landingPage.content || {};
   const slug = landingPage.slug || '';
+  const tmcParentRegistrationUrl = landingPage.tmcParentRegistrationUrl || '';
 
   // Extract theme from config or use defaults
   const theme = config.theme || {
@@ -566,7 +567,7 @@ export default function WanderluxRenderer({ landingPage = {} }) {
         a:hover { text-decoration: underline; }
       `}</style>
 
-      {config.hero && <HeroSection config={config.hero} theme={theme} slug={slug} />}
+      {config.hero && <HeroSection config={{ ...config.hero, ctaLink: tmcParentRegistrationUrl || config.hero.ctaLink }} theme={theme} slug={slug} />}
       {config.intro && <IntroSection config={config.intro} theme={theme} />}
       {config.cities && <CitiesSection config={config.cities} theme={theme} />}
       {config.highlights && <HighlightsSection config={config.highlights} theme={theme} />}

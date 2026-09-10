@@ -223,6 +223,7 @@ function OverviewTab({ trip, onJump, notify }) {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <TeacherAssignment trip={trip} notify={notify} />
       {/* Hero band — destination + dates + readiness gauge */}
       <div style={{
         background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
@@ -339,6 +340,68 @@ function OverviewTab({ trip, onJump, notify }) {
           status pill (driven by microsite presence) for back-compat. */}
       <LandingPageCard trip={trip} notify={notify} />
     </div>
+  );
+}
+
+function TeacherAssignment({ trip, notify }) {
+  const [teachers, setTeachers] = useState([]);
+  const [teacherId, setTeacherId] = useState(trip.teacherContactId ? String(trip.teacherContactId) : "");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetchApi("/api/portal/tmc/staff/teachers", { silent: true })
+      .then((result) => {
+        if (active) setTeachers(Array.isArray(result?.teachers) ? result.teachers : []);
+      })
+      .catch(() => {
+        if (active) setTeachers([]);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    setTeacherId(trip.teacherContactId ? String(trip.teacherContactId) : "");
+  }, [trip.teacherContactId]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ teacherContactId: teacherId ? Number(teacherId) : null }),
+      });
+      notify.success(teacherId ? "Teacher assigned to this trip" : "Teacher assignment removed");
+    } catch (error) {
+      notify.error(error?.body?.error || "Could not update the teacher assignment");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 10, padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Teacher portal access</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
+            Assign the teacher who finalized this trip. They will see it in their Teacher Portal.
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <select value={teacherId} onChange={(event) => setTeacherId(event.target.value)} disabled={loading || saving} aria-label="Assign TMC teacher" style={{ minWidth: 220, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--input-bg)", color: "var(--text-primary)" }}>
+            <option value="">No teacher assigned</option>
+            {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name || teacher.email}</option>)}
+          </select>
+          <button type="button" className="btn-secondary" onClick={save} disabled={loading || saving}>{saving ? "Saving…" : "Save"}</button>
+        </div>
+      </div>
+      {!loading && teachers.length === 0 && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>No TMC teachers have registered yet. Generate the teacher link from Roles &amp; permissions first.</div>}
+    </section>
   );
 }
 

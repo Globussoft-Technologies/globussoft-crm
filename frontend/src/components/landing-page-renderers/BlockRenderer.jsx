@@ -35,7 +35,7 @@ import {
  * @param {number} pageId - Landing page ID for API submissions
  * @param {Function} renderBlockFn - Recursive render function for nested blocks
  */
-function renderBlock(block, slug, pageId, renderBlockFn, submitEndpoint = '') {
+function renderBlock(block, slug, pageId, renderBlockFn, submitEndpoint = '', tmcParentRegistrationUrl = '') {
   if (!block || !block.type) return null;
 
   const { type, props = {} } = block;
@@ -69,7 +69,7 @@ function renderBlock(block, slug, pageId, renderBlockFn, submitEndpoint = '') {
 
     // Travel destination blocks
     case 'destinationHero':
-      return <DestinationHeroBlock key={block.id || Math.random()} props={props} slug={slug} />;
+      return <DestinationHeroBlock key={block.id || Math.random()} props={props} slug={slug} tmcParentRegistrationUrl={tmcParentRegistrationUrl} />;
     case 'cityCards':
       return <CityCardsBlock key={block.id || Math.random()} props={props} />;
     case 'highlightsGrid':
@@ -196,6 +196,7 @@ export default function BlockRenderer({ landingPage = {} }) {
   const publicSubmit = !!landingPage.publicSubmit;
   const pageId = publicSubmit ? null : (landingPage.id || null);
   const submitEndpoint = publicSubmit && slug ? `/api/pages/${slug}/submit` : '';
+  const tmcParentRegistrationUrl = landingPage.tmcParentRegistrationUrl || '';
 
   // Track analytics (page view)
   React.useEffect(() => {
@@ -204,7 +205,7 @@ export default function BlockRenderer({ landingPage = {} }) {
     }
   }, [slug]);
 
-  const renderBlockWithContext = (block) => renderBlock(block, slug, pageId, renderBlockWithContext, submitEndpoint);
+  const renderBlockWithContext = (block) => renderBlock(block, slug, pageId, renderBlockWithContext, submitEndpoint, tmcParentRegistrationUrl);
 
   return (
     <main className="landing-page block-renderer">

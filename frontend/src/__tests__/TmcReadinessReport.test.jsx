@@ -17,7 +17,7 @@
  *   - §3.5.2 runway: geo_preference="international" → "minimum 4 to 6 months"
  *   - §3.5.3 + §11.4 peer-proof block: literal "305", "14,018", "12,055",
  *     "1,658" — NEVER inflated, NEVER blended into all-time totals
- *   - PDF download button uses /api/travel/diagnostics/:id/readiness-report.pdf
+ *   - PDF download button retains the unguessable report slug
  *   - Booking CTA copy is CALM (no "urgent" / "limited time" / "act now"
  *     per §11.3); button label is the verbatim "Book a 30-minute consultation"
  *   - Theme-aware: primary CTA uses var(--primary-color, var(--accent-color))
@@ -205,15 +205,13 @@ describe('TmcReadinessReport — public 10-section report (PRD §3.5, T10)', () 
     expect(peerSection.textContent).not.toMatch(/more than 300/i);
   });
 
-  it('PDF download button uses T8 public endpoint /api/travel/diagnostics/:id/readiness-report.pdf', async () => {
+  it('PDF download button uses the token-gated T8 public endpoint', async () => {
     renderPage();
     await waitFor(() => screen.getByText(/Student experiential readiness profile/i));
     const pdfLink = screen.getByTestId('pdf-download-link');
     expect(pdfLink).toBeInTheDocument();
-    // Slug "42-abcdef..." → id 42. Page extracts id from slug per T8's
-    // buildReportSlug shape and hits the right endpoint.
     expect(pdfLink.getAttribute('href')).toBe(
-      '/api/travel/diagnostics/42/readiness-report.pdf',
+      '/api/travel/diagnostics/public/readiness-report/42-abcdef0123456789.pdf',
     );
   });
 

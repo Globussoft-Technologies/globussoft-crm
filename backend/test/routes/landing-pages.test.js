@@ -135,6 +135,15 @@ import crypto from 'crypto';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
+const Module = requireCJS('node:module');
+const hardDeleteContactMock = vi.fn().mockResolvedValue(1);
+const contactHardDeletePath = requireCJS.resolve('../../lib/contactHardDelete.js');
+Module._cache[contactHardDeletePath] = {
+  id: contactHardDeletePath,
+  filename: contactHardDeletePath,
+  loaded: true,
+  exports: { hardDeleteContact: hardDeleteContactMock },
+};
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const KEY_SECRET = 'test_key_secret_123';
 const landingPageGeneratorLLM = requireCJS('../../services/landingPageGeneratorLLM');
@@ -263,6 +272,7 @@ beforeEach(() => {
   prisma.tripMicrosite.findUnique.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.tmcTrip.findFirst.mockReset();
+  hardDeleteContactMock.mockReset().mockResolvedValue(1);
   generateLandingPageContentSpy.mockReset();
   fetchStrategySpy.mockReset();
   isAvailableSpy.mockReset().mockReturnValue(false);
@@ -393,6 +403,7 @@ describe('POST /api/landing-pages/generate-from-destination', () => {
         destination: 'Andaman',
         durationDays: 7,
         audience: 'School students',
+        tripType: 'day_trip',
         subBrand: 'tmc',
         themeId: 'coastal-sand',
         themeOverrides: {
@@ -420,6 +431,7 @@ describe('POST /api/landing-pages/generate-from-destination', () => {
     expect(persistedContent.theme.id).toBe('coastal-sand');
     expect(persistedContent.theme.brandColor).toBe('#1D4ED8');
     expect(persistedContent.theme.accentColor).toBe('#F97316');
+    expect(persistedContent.register.tripType).toBe('day_trip');
     expect(res.body.page.id).toBe(321);
   });
 });
@@ -1559,11 +1571,12 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
     expect(upsertArgs.where.email_tenantId.email).toMatch(/^lp-live-page-\d+@anonymous\.local$/);
   });
 
-  test('re-registration after contact deletion restores the soft-deleted contact', async () => {
+  test('re-registration after contact deletion purges the tombstone before upsert', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
       content: '[]', tenantId: 1,
     });
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 9988, deletedAt: new Date() });
     prisma.contact.upsert.mockResolvedValue({ id: 999, email: 'returning@example.com', tenantId: 1 });
     prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
 
@@ -1574,12 +1587,12 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     const upsertArgs = prisma.contact.upsert.mock.calls[0][0];
-    // The update branch must clear deletedAt so a previously-deleted contact
-    // becomes visible again and the newly-created deal shows up in leads lists.
+    expect(hardDeleteContactMock).toHaveBeenCalledWith(expect.anything(), 9988);
+    // A fresh upsert no longer restores the old tombstone.
     expect(upsertArgs.update).toMatchObject({
       source: 'inbound:webform',
-      deletedAt: null,
     });
+    expect(upsertArgs.update).not.toHaveProperty('deletedAt');
     expect(prisma.deal.create).toHaveBeenCalled();
   });
 });
@@ -2956,11 +2969,12 @@ describe('POST /api/landing-pages/:id/submit (authenticated endpoint, ID-based)'
     expect(upsertArgs.where.email_tenantId.email).toMatch(/^lp-live-page-\d+@anonymous\.local$/);
   });
 
-  test('re-registration after contact deletion restores soft-deleted contact', async () => {
+  test('re-registration after contact deletion purges the tombstone before upsert', async () => {
     prisma.landingPage.findUnique.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
       content: '[]', tenantId: 1,
     });
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 9988, deletedAt: new Date() });
     prisma.contact.upsert.mockResolvedValue({ id: 999, email: 'returning@example.com', tenantId: 1 });
     prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
 
@@ -2972,11 +2986,12 @@ describe('POST /api/landing-pages/:id/submit (authenticated endpoint, ID-based)'
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     const upsertArgs = prisma.contact.upsert.mock.calls[0][0];
-    // The update branch must clear deletedAt
+    expect(hardDeleteContactMock).toHaveBeenCalledWith(expect.anything(), 9988);
+    // The update branch no longer restores a soft-deleted row.
     expect(upsertArgs.update).toMatchObject({
       source: 'inbound:webform',
-      deletedAt: null,
     });
+    expect(upsertArgs.update).not.toHaveProperty('deletedAt');
   });
 
   test('CAPTCHA verification gated on TURNSTILE_SECRET_KEY env var', async () => {

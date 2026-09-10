@@ -440,7 +440,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
     expect(slugInput.value).toBe("invalid-slug-");
   });
 
-  it('PUBLISHED travel page renders the "Open live" link to /trips/<id> when not featured; DRAFT does not', async () => {
+  it('PUBLISHED travel page renders the canonical "Open live" /trips/<id> link; DRAFT does not', async () => {
     // The builder distinguishes two related surfaces (PR-E preview wiring):
     //   - The "Preview" BUTTON (always visible) mints a 5-min preview
     //     token and opens /api/landing-pages/:id/preview in a new tab.
@@ -466,11 +466,11 @@ describe("<LandingPageBuilder /> — page surface", () => {
 
     const openLive = screen.getByRole("link", { name: /Open live/i });
     expect(openLive).toBeInTheDocument();
-    // Non-featured travel pages get their canonical /trips/<id> share URL.
+    // All published travel pages get their canonical /trips/<id> share URL.
     expect(openLive.getAttribute("href")).toMatch(/\/trips\/43$/);
   });
 
-  it('featured travel pages keep the "Open live" link at /trips', async () => {
+  it('featured travel pages also use the canonical /trips/<id> link', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === "/api/landing-pages/43" && (!opts || !opts.method || opts.method === "GET")) {
         return Promise.resolve({ ...samplePagePublished, isFeatured: true, featuredAt: "2026-06-22T10:00:00.000Z" });
@@ -483,7 +483,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
     );
 
     const openLive = screen.getByRole("link", { name: /Open live/i });
-    expect(openLive.getAttribute("href")).toMatch(/\/trips$/);
+    expect(openLive.getAttribute("href")).toMatch(/\/trips\/43$/);
   });
 
   it("renders both desktop + mobile preview-mode toggle buttons", async () => {

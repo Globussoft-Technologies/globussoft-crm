@@ -438,6 +438,10 @@ function mapBlocksToWanderluxConfig(blocks, input) {
   const days = Number.isFinite(Number(inp.durationDays))
     ? Math.max(1, Math.min(60, Math.trunc(Number(inp.durationDays))))
     : 7;
+  const normalizedTripType = String(inp.tripType || 'international').toLowerCase().trim().replace(/[- ]/g, '_');
+  const tripType = ['domestic', 'international', 'day_trip'].includes(normalizedTripType)
+    ? normalizedTripType
+    : 'international';
   const subBrand = String(inp.subBrand || 'travelstall').toLowerCase();
   const suggestedTitle = String(inp.suggestedTitle || '').trim();
   const metaDescription = String(inp.metaDescription || '').trim();
@@ -720,7 +724,7 @@ function mapBlocksToWanderluxConfig(blocks, input) {
       // redirect to the trip microsite for phone OTP verification instead
       // of falling back to the generic lead-capture path.
       mode: 'registration-draft',
-      tripType: String(input.tripType || 'international').toLowerCase() === 'domestic' ? 'domestic' : 'international',
+      tripType,
       // capacity: 50 (was 0) — the reference's "Registration Closed" gate
       // fires when `registered >= capacity`. With capacity=0 + registered=0
       // every fresh draft rendered as already-full despite the countdown

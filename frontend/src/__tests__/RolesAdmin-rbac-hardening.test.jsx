@@ -659,3 +659,58 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
     expect(screen.queryByText(/traveler/i)).toBeNull();
   });
 });
+
+describe('TMC teacher registration roster', () => {
+  it('shows teachers who completed the shared registration profile', async () => {
+    renderPage([], {
+      '/api/portal/tmc/staff/teachers': {
+        teachers: [
+          { id: 7, name: 'Asha Rao', email: 'asha@example.com', phone: '+91 90000 00000' },
+          { id: 8, name: 'Vikram Shah', email: 'vikram@example.com', phone: null },
+        ],
+      },
+    });
+
+    fireEvent.click(await screen.findByRole('tab', { name: /Teacher onboarding/i }));
+
+    expect(await screen.findByText('Registered TMC teachers')).toBeInTheDocument();
+    expect(await screen.findByText('Asha Rao')).toBeInTheDocument();
+    expect(screen.getByText('asha@example.com')).toBeInTheDocument();
+    expect(screen.getByText('Vikram Shah')).toBeInTheDocument();
+    expect(screen.getByText('Phone not provided')).toBeInTheDocument();
+  });
+
+  it('opens a teacher workspace with assigned trips, parent link, and participants', async () => {
+    renderPage([], {
+      '/api/portal/tmc/staff/teachers': {
+        teachers: [{ id: 7, name: 'Asha Rao', email: 'asha@example.com', phone: '+91 90000 00000' }],
+      },
+      '/api/portal/tmc/staff/teachers/7/overview': {
+        teacher: { id: 7, name: 'Asha Rao', email: 'asha@example.com', phone: '+91 90000 00000' },
+        trips: [{
+          id: 41,
+          tripCode: 'DAR-2026',
+          destination: 'Darjeeling',
+          departDate: '2026-11-06T00:00:00.000Z',
+          returnDate: '2026-11-12T00:00:00.000Z',
+          status: 'confirmed',
+          parentPortalLink: 'https://example.com/tmc/register/parent?token=abc',
+          participantCount: 1,
+          parentCount: 1,
+          parentRegistrations: [{ id: 91, name: 'Arijit Singh', email: 'arijit@example.com', phone: '+91 90000 00001', createdAt: '2026-09-10T00:00:00.000Z' }],
+          participants: [{ id: 601, fullName: 'Manish Singh', parentName: 'Arijit Singh', parentEmail: 'arijit@example.com', parentPhone: '+91 90000 00001', applicationStatus: 'pending', createdAt: '2026-09-10T00:00:00.000Z' }],
+        }],
+      },
+    });
+
+    fireEvent.click(await screen.findByRole('tab', { name: /Teacher onboarding/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Asha Rao.*View details/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Assigned trips', level: 3 })).toBeInTheDocument();
+    expect(await screen.findByText('Participants for Darjeeling')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('https://example.com/tmc/register/parent?token=abc')).toBeInTheDocument();
+    expect(await screen.findAllByText('Arijit Singh')).not.toHaveLength(0);
+    expect(screen.getByText('Manish Singh')).toBeInTheDocument();
+    expect(screen.getByText('Manish Singh')).toBeInTheDocument();
+  });
+});

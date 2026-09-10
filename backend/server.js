@@ -752,6 +752,7 @@ const webFormsRoutes = require("./routes/web_forms");
 const signaturesRoutes = require("./routes/signatures");
 const knowledgeBaseRoutes = require("./routes/knowledge_base");
 const portalRoutes = require("./routes/portal");
+const tmcPortalRoutes = require("./routes/tmc_portal");
 const currenciesRoutes = require("./routes/currencies");
 const fieldPermissionsRoutes = require("./routes/field_permissions");
 const emailSchedulingRoutes = require("./routes/email_scheduling");
@@ -1017,6 +1018,10 @@ app.use("/api", (req, res, next) => {
     "/portal/contracts",
     "/portal/travel",
     "/portal/kyc",
+    // TMC teacher/parent portal endpoints use their own Contact portal JWT
+    // middleware. They must bypass the staff-token guard above so that the
+    // route-level TMC auth can validate the portal token instead.
+    "/portal/tmc",
     "/signatures/sign",
     "/surveys/respond",
     "/surveys/public",
@@ -1339,6 +1344,10 @@ app.use("/api/forms", webFormsRoutes);
 app.use("/api/signatures", signaturesRoutes);
 app.use("/api/knowledge-base", knowledgeBaseRoutes);
 app.use("/api/portal", portalRoutes);
+// Dedicated TMC teacher/parent portal APIs. These are intentionally mounted
+// beside (not inside) the existing customer-portal handlers so the other
+// travel sub-brands keep their current portal contract unchanged.
+app.use("/api/portal/tmc", tmcPortalRoutes);
 app.use("/api/currencies", currenciesRoutes);
 app.use("/api/field-permissions", fieldPermissionsRoutes);
 app.use("/api/email-scheduling", emailSchedulingRoutes);

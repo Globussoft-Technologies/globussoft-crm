@@ -401,11 +401,31 @@ export default function CustomerRegister() {
           }
           return;
         }
-        // Store the portal session (same keys the portal page reads) and land
-        // the new customer directly in the Travel Customer Portal.
-        if (pdata?.token) localStorage.setItem("portalToken", pdata.token);
-        if (pdata?.contact) localStorage.setItem("portalContact", JSON.stringify(pdata.contact));
-        window.location.assign("/travel/portal");
+        // TMC accounts use their own portal session key. Do not leave the
+        // shared customer-portal token behind, otherwise a later visit to
+        // /travel/portal can reopen the customer UI for a teacher account.
+        const isTmcPortal = pdata?.portalRoute === "/tmc/teacher-portal" || pdata?.portalRoute === "/tmc/parent-portal";
+        if (isTmcPortal) {
+          localStorage.removeItem("portalToken");
+          localStorage.removeItem("portalContact");
+        } else {
+          if (pdata?.token) localStorage.setItem("portalToken", pdata.token);
+          if (pdata?.contact) localStorage.setItem("portalContact", JSON.stringify(pdata.contact));
+        }
+        if (pdata?.token && pdata.portalRoute === "/tmc/teacher-portal") {
+          localStorage.setItem("tmcTeacherPortalToken", pdata.token);
+        }
+        if (pdata?.token && pdata.portalRoute === "/tmc/parent-portal") {
+          localStorage.setItem("tmcParentPortalToken", pdata.token);
+        }
+        // TMC teacher/parent registration uses the same shared form but the
+        // dedicated registration entry returns a persona-specific portal
+        // route. Existing travel customers continue to land on the original
+        // customer portal.
+        const portalTarget = isTmcPortal
+          ? pdata.portalRoute
+          : safeNext(nextParam) || pdata.portalRoute || "/travel/portal";
+        window.location.assign(portalTarget);
         return;
       }
 

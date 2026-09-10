@@ -3983,6 +3983,11 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
     };
 
     const payload = {
+      // The authenticated teacher portal and the existing report page both
+      // need the original school/contact answers to render the report in a
+      // useful way. This is the same diagnostic submission the endpoint just
+      // resolved; no new scoring or data source is introduced here.
+      answers,
       diagnostic: {
         id: diag.id,
         engineState: diag.engineState || null,

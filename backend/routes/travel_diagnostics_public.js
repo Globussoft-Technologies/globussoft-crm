@@ -284,6 +284,9 @@ router.get("/diagnostics/public/form/:tenantSlug/:subBrand", async (req, res) =>
         id: q.id,
         text: q.text,
         type: q.type,
+        required: q.required === true,
+        minSelections: Number.isInteger(q.minSelections) ? q.minSelections : undefined,
+        maxSelections: Number.isInteger(q.maxSelections) ? q.maxSelections : undefined,
         options: (q.options || []).map((o) => ({ value: o.value, label: o.label })),
       }));
     } catch {

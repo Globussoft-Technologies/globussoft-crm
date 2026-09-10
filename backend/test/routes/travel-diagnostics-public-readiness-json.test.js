@@ -205,6 +205,10 @@ describe('GET /api/travel/diagnostics/public/readiness-report/:slug', () => {
       guardLayer: expect.any(Number),
       guardAccepted: expect.any(Boolean),
     });
+    expect(res.body.answers).toMatchObject({
+      school_profile: expect.any(Object),
+      contact: expect.any(Object),
+    });
   });
 
   test('unknown slug → 404 DIAGNOSTIC_NOT_FOUND', async () => {

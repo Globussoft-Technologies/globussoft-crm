@@ -364,6 +364,28 @@ describe('<Login /> — page surface', () => {
     expect(global.fetch.mock.calls.some(([u]) => u === '/api/portal/login')).toBe(true);
   });
 
+  it('routes a TMC teacher to the dedicated teacher portal', async () => {
+    localStorage.clear();
+    global.fetch.mockImplementation((url) => {
+      if (url === '/api/auth/login') return fetchResponse({ error: 'Invalid credentials' }, 401);
+      if (url === '/api/portal/login') {
+        return fetchResponse({
+          token: 'teacher-portal-jwt',
+          contact: { id: 77, name: 'Demo Teacher', email: 'teacher@example.com', portalRole: 'TEACHER', subBrand: 'tmc' },
+        });
+      }
+      return fetchResponse({}, 404);
+    });
+    renderLogin();
+
+    fillCredentials('teacher@example.com');
+    fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/tmc/teacher-portal'));
+    expect(localStorage.getItem('tmcTeacherPortalToken')).toBe('teacher-portal-jwt');
+    expect(localStorage.getItem('portalToken')).toBeNull();
+  });
+
   it('shows the error when BOTH staff and portal login fail', async () => {
     localStorage.clear();
     global.fetch.mockImplementation((url) => {

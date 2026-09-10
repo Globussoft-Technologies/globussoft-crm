@@ -25,6 +25,11 @@ const visaLetterStore = require("../lib/visaLetterStore");
 const { buildForm: buildReviewForm, validateSubmission: validateReviewSubmission } = require("../lib/travelReviewQuestions");
 const { buildExternalReviewCta } = require("../lib/travelReviewExternal");
 const travelPortalNotifications = require("../lib/travelPortalNotificationService");
+const {
+  getTmcRegistrationContext,
+  clearTmcRegistrationContext,
+} = require("../lib/tmcRegistrationContext");
+const { hardDeleteContact } = require("../lib/contactHardDelete");
 const { getTenantRazorpayClient } = require("../lib/tenantPaymentGateway");
 const {
   TRIP_PAYMENT_KINDS,
@@ -90,9 +95,25 @@ const verifyPortalToken = (req, res, next) => {
 // ─── PUBLIC ENDPOINTS ───────────────────────────────────────────────────────
 
 // POST /api/portal/login — { email, password }
+// Prisma is generated from the latest schema, while a deployment can still be
+// running against an older database. Keep that failure explicit so the UI does
+// not look like the account was created when the Contact query actually failed.
+function isPortalSchemaUpdateError(err) {
+  if (err?.code !== "P2021" && err?.code !== "P2022") return false;
+  const target = String(err?.meta?.column || err?.meta?.table || err?.message || "");
+  return /portalRole|teacherContactId|TmcParentTrip/i.test(target);
+}
+
+function sendPortalSchemaUpdateError(res) {
+  return res.status(503).json({
+    error: "Portal registration is temporarily unavailable. The portal database update must be applied first.",
+    code: "PORTAL_SCHEMA_UPDATE_REQUIRED",
+  });
+}
+
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, portalRole } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "email and password are required" });
     }
@@ -103,7 +124,15 @@ router.post("/login", async (req, res) => {
     // the first match by id (deterministic) and 401s when there's no portal
     // user with this email.
     const normalizedEmail = email.trim().toLowerCase();
-    const contact = await prisma.contact.findFirst({ where: { email: normalizedEmail } });
+    const requestedPortalRole = String(portalRole || "").trim().toUpperCase();
+    const portalWhere = { email: normalizedEmail, deletedAt: null };
+    // TMC portals must not accidentally authenticate a same-email Contact
+    // belonging to the legacy customer portal or another tenant record.
+    if (requestedPortalRole === "TEACHER" || requestedPortalRole === "PARENT") {
+      portalWhere.portalRole = requestedPortalRole;
+      portalWhere.subBrand = "tmc";
+    }
+    const contact = await prisma.contact.findFirst({ where: portalWhere });
     if (!contact || !contact.portalPasswordHash) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
@@ -125,10 +154,13 @@ router.post("/login", async (req, res) => {
         email: contact.email,
         company: contact.company,
         avatarUrl: contact.avatarUrl || null,
+        portalRole: contact.portalRole || "CUSTOMER",
+        subBrand: contact.subBrand || null,
       },
     });
   } catch (err) {
     console.error("[Portal][login]", err);
+    if (isPortalSchemaUpdateError(err)) return sendPortalSchemaUpdateError(res);
     res.status(500).json({ error: "Login failed" });
   }
 });
@@ -178,16 +210,44 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "Portal sign-up is only available for travel organizations" });
     }
 
+    // TMC has dedicated teacher/parent portals but continues to reuse this
+    // shared registration form. The entry route stores a signed context in
+    // an HttpOnly cookie; the form itself remains sub-brand agnostic.
+    const tmcContext = getTmcRegistrationContext(req);
+    if (tmcContext?.tenantId && tmcContext.tenantId !== tenantId) {
+      return res.status(400).json({ error: "Registration organization does not match this link", code: "REGISTRATION_TENANT_MISMATCH" });
+    }
+    if (tmcContext?.registrationType === "PARENT") {
+      const teacher = await prisma.contact.findFirst({
+        where: { id: tmcContext.teacherContactId, tenantId, subBrand: "tmc", portalRole: "TEACHER", deletedAt: null },
+        select: { id: true },
+      });
+      const trip = await prisma.tmcTrip.findFirst({
+        where: { id: tmcContext.tripId, tenantId, teacherContactId: tmcContext.teacherContactId },
+        select: { id: true },
+      });
+      if (!teacher || !trip) {
+        return res.status(400).json({ error: "This parent registration link is no longer valid", code: "REGISTRATION_LINK_REVOKED" });
+      }
+    }
+
     const em = email.trim().toLowerCase();
     const nm = (typeof name === "string" && name.trim()) ? name.trim() : em.split("@")[0];
     const hash = await bcrypt.hash(password, 10);
 
     // Link onto an existing Contact (e.g. an advisor-created lead) if one
     // exists for this email+tenant; otherwise create a fresh portal Contact.
-    const existing = await prisma.contact.findFirst({
+    let existing = await prisma.contact.findFirst({
       where: { email: em, tenantId },
-      select: { id: true, portalPasswordHash: true, name: true },
+      select: { id: true, portalPasswordHash: true, name: true, portalRole: true, subBrand: true, deletedAt: true },
     });
+    if (existing?.deletedAt) {
+      // The row is a legacy soft-delete tombstone. Remove the old account and
+      // all contact-owned records before creating a fresh portal account for
+      // this email.
+      await hardDeleteContact(prisma, existing.id);
+      existing = null;
+    }
     if (existing && existing.portalPasswordHash) {
       return res.status(409).json({ error: "This email is already registered. Please sign in." });
     }
@@ -195,13 +255,19 @@ router.post("/register", async (req, res) => {
     const contact = existing
       ? await prisma.contact.update({
           where: { id: existing.id },
-          data: { portalPasswordHash: hash, name: existing.name || nm, emailVerifiedAt },
+          data: {
+            portalPasswordHash: hash,
+            name: existing.name || nm,
+            emailVerifiedAt,
+            ...(tmcContext ? { portalRole: tmcContext.registrationType, subBrand: "tmc" } : {}),
+          },
         })
       : await prisma.contact.create({
           data: {
             name: nm,
             email: em,
-            subBrand: "travelstall",
+            subBrand: tmcContext ? "tmc" : "travelstall",
+            portalRole: tmcContext?.registrationType || "CUSTOMER",
             status: "Lead",
             tenantId,
             portalPasswordHash: hash,
@@ -209,23 +275,57 @@ router.post("/register", async (req, res) => {
           },
         });
 
+    // Preserve the TMC link attribution separately from the shared Contact
+    // registration. This lets a parent account remain a normal Contact while
+    // the teacher portal can still see which teacher/trip produced it.
+    if (tmcContext?.registrationType === "PARENT") {
+      await prisma.tmcParentTrip.upsert({
+        where: {
+          tenantId_parentContactId_tripId: {
+            tenantId,
+            parentContactId: contact.id,
+            tripId: tmcContext.tripId,
+          },
+        },
+        create: {
+          tenantId,
+          parentContactId: contact.id,
+          teacherContactId: tmcContext.teacherContactId,
+          tripId: tmcContext.tripId,
+        },
+        update: {
+          teacherContactId: tmcContext.teacherContactId,
+        },
+      });
+    }
+
     const token = jwt.sign(
       { contactId: contact.id, tenantId: contact.tenantId, type: "PORTAL" },
       JWT_SECRET,
       { expiresIn: PORTAL_TOKEN_TTL }
     );
+    const portalRoute = tmcContext?.registrationType === "TEACHER"
+      ? "/tmc/teacher-portal"
+      : tmcContext?.registrationType === "PARENT"
+        ? "/tmc/parent-portal"
+        : "/travel/portal";
+    if (tmcContext) clearTmcRegistrationContext(res);
     return res.status(201).json({
       token,
+      portalRoute,
       contact: {
         id: contact.id,
         name: contact.name,
         email: contact.email,
         company: contact.company || null,
         avatarUrl: contact.avatarUrl || null,
+        portalRole: contact.portalRole || tmcContext?.registrationType || "CUSTOMER",
+        subBrand: contact.subBrand || (tmcContext ? "tmc" : "travelstall"),
       },
     });
   } catch (err) {
     console.error("[Portal][register]", err);
+    if (isPortalSchemaUpdateError(err)) return sendPortalSchemaUpdateError(res);
     res.status(500).json({ error: "Registration failed" });
   }
 });
@@ -540,6 +640,28 @@ router.get(["/travel/bookings", "/travel/itineraries"], verifyPortalToken, requi
       : [];
     const ownedParticipantIds = new Set(participantIds.map(Number));
     const ownedTripIdSet = new Set(ownedTripIds.map(Number));
+    // Landing-page payments are often created before the form is converted
+    // into a TripParticipant. In that case the payment metadata has only the
+    // draft token, while the participant row already has the parent's email.
+    // Resolve that token before applying the ownership gate; otherwise a
+    // successful registration payment is silently skipped and the parent sees
+    // the same instalment as payable again.
+    const landingDraftTokens = [...new Set(paymentRows
+      .map((payment) => parseMetadata(payment))
+      .filter((metadata) => metadata.kind === "landing-page-registration" && metadata.draftToken)
+      .map((metadata) => String(metadata.draftToken)))];
+    const landingParticipantByDraftToken = new Map();
+    if (landingDraftTokens.length && prisma.pendingTripRegistration?.findMany) {
+      const landingDrafts = await prisma.pendingTripRegistration.findMany({
+        where: { tenantId: req.portal.tenantId, draftToken: { in: landingDraftTokens } },
+        select: { draftToken: true, convertedToParticipantId: true },
+      });
+      landingDrafts.forEach((draft) => {
+        if (draft.convertedToParticipantId) {
+          landingParticipantByDraftToken.set(String(draft.draftToken), Number(draft.convertedToParticipantId));
+        }
+      });
+    }
     const needsGatewayRefresh = paymentRows.some((payment) =>
       String(payment.gateway || "").toLowerCase() === "razorpay" &&
       !isSuccessfulPayment(payment) &&
@@ -558,7 +680,9 @@ router.get(["/travel/bookings", "/travel/itineraries"], verifyPortalToken, requi
     for (const payment of paymentRows) {
       const metadata = parseMetadata(payment);
       if (!TRIP_PAYMENT_KINDS.has(String(metadata.kind || ""))) continue;
-      const participantId = Number(metadata.participantId);
+      const participantId = Number(metadata.participantId) ||
+        landingParticipantByDraftToken.get(String(metadata.draftToken || "")) ||
+        Number.NaN;
       const tripId = Number(metadata.tripId);
       const participantOwned = Number.isInteger(participantId) && ownedParticipantIds.has(participantId);
       const tripOwned = Number.isInteger(tripId) && ownedTripIdSet.has(tripId);

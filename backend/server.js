@@ -1134,18 +1134,6 @@ app.use("/api", (req, res, next) => {
   ) {
     req.headers.authorization = `Bearer ${req.query.token}`;
   }
-  // TMC public readiness PDF — `/travel/diagnostics/:id/readiness-report.pdf`
-  // is designed public per PRD §5.1 DD-5.2 (the school clicks the report-
-  // download URL surfaced after public submit-tmc).  Can't be a prefix
-  // entry in openPaths because the `:id` segment is dynamic; suffix match
-  // on the route shape lets it through without auth.  Tightly scoped to
-  // GET + the exact suffix so other /travel/diagnostics/:id sub-routes
-  // stay auth-gated.
-  if (
-    req.method === "GET" &&
-    /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)
-  )
-    return next();
   // D1 — landing-page preview is opened in a NEW TAB via window.open()
   // (no fetch → no Authorization header), authorised by a short-lived
   // single-purpose `?previewToken=<jwt>` query param. The route handler

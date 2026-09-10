@@ -278,6 +278,7 @@ jobs:
             tests/landing-pages-investment-sync-api.spec.js \
             tests/portal-api.spec.js \
             tests/portal-kyc-api.spec.js \
+            tests/tmc-portal-api.spec.js \
             tests/tenant-switch-disabled-api.spec.js \
             tests/voice-transcription-api.spec.js \
             tests/channels-credentials-api.spec.js \

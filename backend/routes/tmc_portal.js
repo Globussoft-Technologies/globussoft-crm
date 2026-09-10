@@ -385,16 +385,23 @@ router.get("/teacher/diagnostics", verifyPortalToken, requireTmcTenant, requireT
       },
     });
     res.json({
-      diagnostics: diagnostics.map((diagnostic) => ({
-        id: diagnostic.id,
-        engineState: diagnostic.engineState,
-        createdAt: diagnostic.createdAt,
-        reportUrl: diagnostic.reportSlugToken
-          ? `/diagnostic-form/${encodeURIComponent(req.tmcTenant.slug)}/tmc/report/${diagnostic.id}-${diagnostic.reportSlugToken}`
-          : `/p/tmc/report/${diagnostic.id}-teacher`,
-        reportPdfUrl: `/api/travel/diagnostics/${diagnostic.id}/readiness-report.pdf`,
-        hasCurriculumRecommendations: Boolean(diagnostic.curriculumFitJson),
-      })),
+      diagnostics: diagnostics.map((diagnostic) => {
+        const reportSlug = diagnostic.reportSlugToken
+          ? `${diagnostic.id}-${diagnostic.reportSlugToken}`
+          : null;
+        return {
+          id: diagnostic.id,
+          engineState: diagnostic.engineState,
+          createdAt: diagnostic.createdAt,
+          reportUrl: reportSlug
+            ? `/diagnostic-form/${encodeURIComponent(req.tmcTenant.slug)}/tmc/report/${reportSlug}`
+            : null,
+          reportPdfUrl: reportSlug
+            ? `/api/travel/diagnostics/public/readiness-report/${reportSlug}.pdf`
+            : null,
+          hasCurriculumRecommendations: Boolean(diagnostic.curriculumFitJson),
+        };
+      }),
     });
   } catch (err) {
     console.error("[tmc-portal][teacher/diagnostics]", err);
@@ -597,12 +604,16 @@ router.get("/parent/trips", verifyPortalToken, requireTmcTenant, requireParent, 
       ...row,
       landingUrl: buildPublishedTripUrl(row.trip?.landingPage),
     }));
-    const teacherContactIds = [...new Set(parentLinks.map((row) => row.teacher?.id).filter(Boolean))];
-    const assignedTrips = teacherContactIds.length
+    // A parent link grants access to exactly one trip. Do not widen that
+    // grant to every trip owned by the same teacher: teachers routinely lead
+    // multiple school groups whose dates and landing pages are private to
+    // those groups.
+    const linkedTripIds = [...new Set(parentLinks.map((row) => row.tripId).filter(Boolean))];
+    const assignedTrips = linkedTripIds.length
       ? await prisma.tmcTrip.findMany({
           where: {
             tenantId: Number(req.portal.tenantId),
-            teacherContactId: { in: teacherContactIds },
+            id: { in: linkedTripIds },
             status: { not: "cancelled" },
           },
           orderBy: [{ departDate: "asc" }, { id: "asc" }],

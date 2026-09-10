@@ -3085,7 +3085,8 @@ router.post("/diagnostics/public/submit", async (req, res) => {
 // generic weighted-sum diagnostic for RFU / Travel Stall / Visa Sure):
 //
 //   POST /api/travel/diagnostics/public/submit-tmc        (no auth)
-//   GET  /api/travel/diagnostics/:id/readiness-report.pdf (no auth  token-gated by id)
+//   GET  /api/travel/diagnostics/public/readiness-report/:slug.pdf
+//        (no auth; token-gated by a persisted random slug)
 //
 // The submit endpoint runs the T2 deterministic engine + T3 lead-quality
 // classifier inline, persists every column on TravelDiagnostic that the
@@ -3295,13 +3296,10 @@ function stripDestinationWords(text, blocklist) {
   return s.replace(/\s{2,}/g, " ").trim();
 }
 
-// Slugify a string for tokenized URLs.  Used to build TravelDiagnostic
-// row-id  public reportSlug.  The slug is the diagnostic id padded
-// with a random suffix so the URL isn't trivially guessable for casual
-// access (matches the existing report-pdf-url pattern).
-function buildReportSlug(diagnosticId) {
-  const rand = crypto.randomBytes(8).toString("hex");
-  return `${diagnosticId}-${rand}`;
+// Build a public report slug from the diagnostic id and a persisted random
+// token. Both halves are required when resolving a public report.
+function buildReportSlug(diagnosticId, token = crypto.randomBytes(8).toString("hex")) {
+  return `${diagnosticId}-${token}`;
 }
 
 // Extract the diagnostic id from a reportSlug (everything before the
@@ -3312,6 +3310,18 @@ function parseDiagnosticIdFromSlug(slug) {
   if (!m) return null;
   const n = parseInt(m[1], 10);
   return Number.isFinite(n) ? n : null;
+}
+
+// Public report links must carry the complete stored 64-bit random token.
+// Parsing only the numeric prefix turns the token into decoration and makes
+// reports enumerable by incrementing the diagnostic id.
+function parseSecureReportSlug(slug) {
+  if (typeof slug !== "string") return null;
+  const match = slug.match(/^(\d+)-([0-9a-f]{16})$/i);
+  if (!match) return null;
+  const id = parseInt(match[1], 10);
+  if (!Number.isFinite(id)) return null;
+  return { id, token: match[2].toLowerCase() };
 }
 
 // POST /api/travel/diagnostics/public/submit-tmc
@@ -3546,6 +3556,7 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       (engineOutput.primary && engineOutput.primary.id) || null;
     const alternativeTripId =
       (engineOutput.alternative && engineOutput.alternative.id) || null;
+    const reportSlugToken = crypto.randomBytes(8).toString("hex");
     const diag = await prisma.travelDiagnostic.create({
       data: {
         tenantId: tenant.id,
@@ -3571,6 +3582,7 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         leadQualityReasonsJson: JSON.stringify(leadQualityResult.reasons || []),
         flagsJson: JSON.stringify(combinedFlags),
         weightsVersion: weightsVersion,
+        reportSlugToken,
         // C7  persist curriculum-fit snapshot so the brief / PDF
         // doesn't drift as advisors edit mappings post-submit.
         curriculumFitJson: JSON.stringify(
@@ -3599,7 +3611,7 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       console.warn("[travel-diag-tmc] notification failed (non-fatal):", notifyErr.message);
     }
 
-    const reportSlug = buildReportSlug(diag.id);
+    const reportSlug = buildReportSlug(diag.id, reportSlugToken);
     res.status(201).json({
       diagnosticId: diag.id,
       reportSlug,
@@ -3621,34 +3633,11 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
   }
 });
 
-// GET /api/travel/diagnostics/:id/readiness-report.pdf
-//
-// Public, token-gated by id (matches DD-5.2  the URL is what the T9 page
-// surfaces to the school via the `reportSlug` from the submit response).
-// Returns application/pdf attachment.  Cache-Control: no-store.
-//
-// Pipeline: lookup  build Job A prompt (T6)  llmRouter (stub or real)
-//  guardReportOutput (T7)  renderTmcReadinessReport.
-router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({
-        error: "id must be a number",
-        code: "INVALID_ID",
-      });
-    }
-
-    const diag = await prisma.travelDiagnostic.findFirst({
-      where: { id },
-    });
-    if (!diag) {
-      return res.status(404).json({
-        error: "Readiness diagnostic not found",
-        code: "DIAGNOSTIC_NOT_FOUND",
-      });
-    }
-
+// Shared renderer for both the authenticated staff endpoint and the public,
+// random-slug endpoint. Authorization and row resolution happen before this
+// function is called so rendering can never widen access by numeric id.
+async function renderReadinessReportPdf(diag, res) {
+    const id = diag.id;
     let answers = {};
     try {
       answers = JSON.parse(diag.answersJson || "{}");
@@ -3785,10 +3774,69 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.setHeader("X-Tmc-Report-Guard-Layer", String(guarded.layer));
     res.setHeader("X-Tmc-Report-Guard-Accepted", String(guarded.accepted));
-    res.status(200).send(pdfBuffer);
+    return res.status(200).send(pdfBuffer);
+}
+
+// Staff access remains available by numeric id, but is explicitly protected
+// and tenant-scoped at the route itself (defence in depth beyond server.js's
+// global staff-token middleware).
+router.get(
+  "/diagnostics/:id/readiness-report.pdf",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({
+        error: "id must be a number",
+        code: "INVALID_ID",
+      });
+    }
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id, tenantId: req.travelTenant.id },
+    });
+    if (!diag) {
+      return res.status(404).json({
+        error: "Readiness diagnostic not found",
+        code: "DIAGNOSTIC_NOT_FOUND",
+      });
+    }
+    return await renderReadinessReportPdf(diag, res);
   } catch (e) {
     console.error("[travel-diag-tmc] readiness-report.pdf error:", e.message);
-    res.status(500).json({
+    return res.status(500).json({
+      error: "Failed to render readiness report",
+      code: "REPORT_RENDER_FAILED",
+    });
+  }
+});
+
+// Anonymous school/portal access requires the full persisted random slug.
+// Numeric ids, malformed suffixes, and mismatched tokens all return the same
+// 404 envelope so callers cannot use the route to enumerate diagnostics.
+router.get("/diagnostics/public/readiness-report/:slug.pdf", async (req, res) => {
+  try {
+    const parsed = parseSecureReportSlug(req.params.slug);
+    if (!parsed) {
+      return res.status(404).json({
+        error: "Readiness diagnostic not found",
+        code: "DIAGNOSTIC_NOT_FOUND",
+      });
+    }
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id: parsed.id, reportSlugToken: parsed.token },
+    });
+    if (!diag) {
+      return res.status(404).json({
+        error: "Readiness diagnostic not found",
+        code: "DIAGNOSTIC_NOT_FOUND",
+      });
+    }
+    return await renderReadinessReportPdf(diag, res);
+  } catch (e) {
+    console.error("[travel-diag-tmc] public readiness-report.pdf error:", e.message);
+    return res.status(500).json({
       error: "Failed to render readiness report",
       code: "REPORT_RENDER_FAILED",
     });
@@ -3806,11 +3854,8 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
 //
 // Slug resolution: the slug is the public `reportSlug` token built by
 // `buildReportSlug(diagnosticId)` at submit-tmc time (id + 16-hex-byte
-// suffix) and surfaced in the submit response.  `parseDiagnosticIdFromSlug`
-// extracts the leading numeric id.  We additionally validate that the
-// suffix matches the stored slug's suffix-bytes-shape to ensure the slug
-// isn't trivially guessable by anyone who knows the diagnostic id
-// (DD-5.2  token-gated public access).
+// suffix) and surfaced in the submit response. The complete token is matched
+// against `reportSlugToken`; the numeric id alone never authorizes access.
 //
 // Tenant isolation: slugs are global-unique by construction (id is
 // unique); the response intentionally omits tenant identity (no
@@ -3829,8 +3874,8 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
 router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
   try {
     const slug = req.params.slug;
-    const id = parseDiagnosticIdFromSlug(slug);
-    if (!id) {
+    const parsed = parseSecureReportSlug(slug);
+    if (!parsed) {
       return res.status(404).json({
         error: "Readiness diagnostic not found",
         code: "DIAGNOSTIC_NOT_FOUND",
@@ -3838,7 +3883,7 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
     }
 
     const diag = await prisma.travelDiagnostic.findFirst({
-      where: { id },
+      where: { id: parsed.id, reportSlugToken: parsed.token },
     });
     if (!diag) {
       return res.status(404).json({

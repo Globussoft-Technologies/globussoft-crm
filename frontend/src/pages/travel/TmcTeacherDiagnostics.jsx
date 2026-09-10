@@ -87,7 +87,7 @@ function reportFromResult(result, tenantSlug) {
     reportUrl: reportUrl(tenantSlug, result.reportSlug),
     reportPdfUrl:
       result.reportPdfUrl ||
-      `/api/travel/diagnostics/${result.diagnosticId}/readiness-report.pdf`,
+      `/api/travel/diagnostics/public/readiness-report/${encodeURIComponent(result.reportSlug)}.pdf`,
   };
 }
 
@@ -332,7 +332,7 @@ export default function TmcTeacherDiagnostics({
           <p style={styles.muted}>Open the report to review the diagnostic recommendations, or download the PDF.</p>
           <div style={styles.inlineActions}>
             <a href={latest.reportUrl} style={styles.primaryLink}><ExternalLink size={15} /> View report</a>
-            <a href={latest.reportPdfUrl} target="_blank" rel="noreferrer" style={styles.secondaryLink}><Download size={15} /> Download PDF</a>
+            {latest.reportPdfUrl && <a href={latest.reportPdfUrl} target="_blank" rel="noreferrer" style={styles.secondaryLink}><Download size={15} /> Download PDF</a>}
           </div>
         </section>
       )}
@@ -353,8 +353,8 @@ export default function TmcTeacherDiagnostics({
                   <div style={styles.muted}>{formatDate(report.createdAt)}{report.engineState ? ` · ${formatLabel(report.engineState)}` : ""}</div>
                 </div>
                 <div style={styles.inlineActions}>
-                  <a href={report.reportUrl} style={styles.textLink}>View</a>
-                  <a href={report.reportPdfUrl} target="_blank" rel="noreferrer" style={styles.textLink}>PDF</a>
+                  {report.reportUrl && <a href={report.reportUrl} style={styles.textLink}>View</a>}
+                  {report.reportPdfUrl && <a href={report.reportPdfUrl} target="_blank" rel="noreferrer" style={styles.textLink}>PDF</a>}
                 </div>
               </div>
             ))}

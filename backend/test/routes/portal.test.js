@@ -122,6 +122,9 @@ prisma.tripInstalmentPayment = {
 prisma.tripPaymentPlan = {
   findUnique: vi.fn().mockResolvedValue(null),
 };
+prisma.tmcTrip = {
+  findFirst: vi.fn().mockResolvedValue(null),
+};
 prisma.payment = {
   findMany: vi.fn().mockResolvedValue([]),
   update: vi.fn().mockResolvedValue({}),
@@ -192,6 +195,7 @@ beforeEach(() => {
   prisma.tripInstalmentPayment.createMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.tripInstalmentPayment.update.mockReset().mockResolvedValue({});
   prisma.tripPaymentPlan.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tmcTrip.findFirst.mockReset().mockResolvedValue(null);
   prisma.payment.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.update.mockReset().mockResolvedValue({});
   prisma.paymentGatewayConfig.findFirst.mockReset().mockResolvedValue(null);

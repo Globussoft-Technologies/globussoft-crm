@@ -24,8 +24,8 @@
  *     numbers literal in JSON / board hook branches (CBSE / IB) / runway
  *     display (international = 180d / "minimum 4 to 6 months") /
  *     catalogue pricing exclusion / engineScoresJson NOT leaked /
- *     tenant identity NOT in envelope / cache header / numeric-id-only
- *     slug malformed.
+ *     tenant identity NOT in envelope / cache header / malformed or
+ *     mismatched random report tokens.
  *   - The endpoint composes the same data shape the renderer consumes
  *     in T8, minus pricing fields per DD-5.4 (the report is a "what
  *     becomes possible" surface, not a quote — pricing lives in the
@@ -149,15 +149,14 @@ function persistedDiag(overrides = {}) {
     flagsJson: '[]',
     answersJson: JSON.stringify(validAnswers()),
     weightsVersion: 'v1',
+    reportSlugToken: 'abcd1234ef567890',
     createdAt: new Date('2026-06-08T10:00:00Z'),
     ...overrides,
   };
 }
 
 function buildSlugFor(id) {
-  // Mirrors buildReportSlug's shape: `<id>-<16 hex chars>`.  Tests don't
-  // need crypto entropy — they just need the slug to PARSE back to the
-  // expected id via parseDiagnosticIdFromSlug.
+  // Mirrors the persisted buildReportSlug shape: `<id>-<16 hex chars>`.
   return `${id}-abcd1234ef567890`;
 }
 
@@ -209,6 +208,9 @@ describe('GET /api/travel/diagnostics/public/readiness-report/:slug', () => {
       school_profile: expect.any(Object),
       contact: expect.any(Object),
     });
+    expect(prisma.travelDiagnostic.findFirst).toHaveBeenCalledWith({
+      where: { id: 555, reportSlugToken: 'abcd1234ef567890' },
+    });
   });
 
   test('unknown slug → 404 DIAGNOSTIC_NOT_FOUND', async () => {
@@ -228,6 +230,17 @@ describe('GET /api/travel/diagnostics/public/readiness-report/:slug', () => {
     expect(prisma.travelDiagnostic.findFirst).not.toHaveBeenCalled();
   });
 
+  test('mismatched random token → 404 instead of resolving by numeric id', async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/travel/diagnostics/public/readiness-report/555-ffffffffffffffff');
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'DIAGNOSTIC_NOT_FOUND' });
+    expect(prisma.travelDiagnostic.findFirst).toHaveBeenCalledWith({
+      where: { id: 555, reportSlugToken: 'ffffffffffffffff' },
+    });
+  });
+
   test('slug from any travel diagnostic resolves the readiness report envelope', async () => {
     prisma.travelDiagnostic.findFirst.mockResolvedValue(persistedDiag({ subBrand: 'rfu' }));
     const res = await request(makeApp())
@@ -245,7 +258,7 @@ describe('GET /api/travel/diagnostics/public/readiness-report/:slug', () => {
       runwayDisplay: expect.any(Object),
     });
     expect(prisma.travelDiagnostic.findFirst).toHaveBeenCalledWith({
-      where: { id: 777 },
+      where: { id: 777, reportSlugToken: 'abcd1234ef567890' },
     });
   });
   test('Layer 3 fallback: stub LLM prose fails Layer 1, guard falls through, endpoint returns 200', async () => {

@@ -80,6 +80,24 @@ const BUILTIN_RULE_COLUMNS = [
   { key: "phone", label: "Phone" },
   { key: "aiScore", label: "Lead Score" },
 ];
+// Auto-campaign rules run before a Contact is inserted. Only expose table
+// columns whose values exist at that point; campaign/call metrics/timestamps
+// are circular or post-create projections and could never match reliably.
+const AUTO_CAMPAIGN_RULE_COLUMN_KEYS = new Set([
+  ...BUILTIN_RULE_COLUMNS.map((column) => column.key),
+  "webForm",
+  "firstName",
+  "lastName",
+  "website",
+  "linkedin",
+  "description",
+  "stateCode",
+  "firstTouchSource",
+  "lastTouchSource",
+  "treatmentOfInterest",
+  "gst",
+  "billingStateCode",
+]);
 // #600  wellness vertical replaces the generic CRM source taxonomy with one
 // that matches Patient-intake channels. WhatsApp is the dominant inbound
 // channel for clinics; LinkedIn / Cold Call don't apply.
@@ -4924,13 +4942,25 @@ const Leads = () => {
                         </div>
 
                         {autoCampaignRules.map((rule) => {
-                          const columnOptions = [
-                            ...BUILTIN_RULE_COLUMNS,
-                            ...customFieldDefs.map((f) => ({
-                              key: `cf_${f.fieldKey}`,
-                              label: f.label,
-                            })),
-                          ];
+                          // Reuse labels from the generic Leads catalog, but
+                          // only for fields available before Contact creation.
+                          // Custom fields are valid create-time inputs too.
+                          const catalogOptions = leadColumnCatalog
+                            .filter(
+                              (col) =>
+                                AUTO_CAMPAIGN_RULE_COLUMN_KEYS.has(col.key) ||
+                                col.key.startsWith("cf_"),
+                            )
+                            .map((col) => ({ key: col.key, label: col.label }));
+                          const columnOptions = catalogOptions.length
+                            ? catalogOptions
+                            : [
+                              ...BUILTIN_RULE_COLUMNS,
+                              ...customFieldDefs.map((f) => ({
+                                key: `cf_${f.fieldKey}`,
+                                label: f.label,
+                              })),
+                            ];
                           const ruleIsSaved = savedAutoCampaignRuleIds.has(
                             rule.id,
                           );

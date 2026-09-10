@@ -4924,13 +4924,23 @@ const Leads = () => {
                         </div>
 
                         {autoCampaignRules.map((rule) => {
-                          const columnOptions = [
-                            ...BUILTIN_RULE_COLUMNS,
-                            ...customFieldDefs.map((f) => ({
-                              key: `cf_${f.fieldKey}`,
-                              label: f.label,
-                            })),
-                          ];
+                          // Reuse the complete generic Leads table catalog so
+                          // this menu does not drift from the columns users
+                          // can actually see. The API catalog includes custom
+                          // fields; retain the local fallback for the brief
+                          // initial loading state and older API responses.
+                          const catalogOptions = leadColumnCatalog
+                            .filter((col) => col.key !== "actions")
+                            .map((col) => ({ key: col.key, label: col.label }));
+                          const columnOptions = catalogOptions.length
+                            ? catalogOptions
+                            : [
+                              ...BUILTIN_RULE_COLUMNS,
+                              ...customFieldDefs.map((f) => ({
+                                key: `cf_${f.fieldKey}`,
+                                label: f.label,
+                              })),
+                            ];
                           const ruleIsSaved = savedAutoCampaignRuleIds.has(
                             rule.id,
                           );

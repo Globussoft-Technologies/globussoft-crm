@@ -34,6 +34,14 @@ function ruleMatches(rule, leadData, customFields) {
     actualValue = customFields && customFields[fieldKey];
   } else {
     actualValue = leadData && leadData[column];
+    // Some generic Leads-table columns are projections rather than Contact
+    // columns. Keep them usable in rules for inbound forms and legacy data.
+    if (column === 'webForm' && actualValue == null)
+      actualValue = leadData && leadData.source;
+    if (column === 'campaign' && actualValue == null)
+      actualValue = leadData && leadData.callifiedCampaignId;
+    if (column === 'callStatus' && actualValue == null)
+      actualValue = leadData && leadData.callifiedLeadStatus;
   }
 
   const normalisedActual = normaliseMatchValue(actualValue);

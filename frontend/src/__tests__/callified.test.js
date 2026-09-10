@@ -29,7 +29,26 @@ vi.mock('../utils/api', () => ({
 }));
 
 import { fetchApi } from '../utils/api';
-import { launchCallifiedSSO } from '../utils/callified';
+import { crmRecordingUrl, launchCallifiedSSO } from '../utils/callified';
+
+describe('utils/callified — crmRecordingUrl', () => {
+  it('routes Oracle Object Storage recording URLs through the CRM proxy', () => {
+    const source = 'https://objectstorage.ap-mumbai-1.oraclecloud.com/n/example/b/bucket/o/recordings/acme/call.wav';
+
+    expect(crmRecordingUrl(source)).toBe('/api/callified/recordings/acme/call.wav');
+  });
+
+  it('preserves absolute URLs that are not supported Oracle recording objects', () => {
+    const source = 'https://cdn.example.com/o/recordings/acme/call.wav';
+
+    expect(crmRecordingUrl(source)).toBe(source);
+  });
+
+  it('continues to proxy relative Callified recording paths', () => {
+    expect(crmRecordingUrl('/api/recordings/acme/call.wav'))
+      .toBe('/api/callified/recordings/acme/call.wav');
+  });
+});
 
 describe('utils/callified — launchCallifiedSSO', () => {
   let openSpy;

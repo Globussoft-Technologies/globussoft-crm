@@ -19,13 +19,19 @@ const landingFormConfig = require("../lib/landingFormConfig");
 const router = express.Router();
 
 async function loadPublicForm() {
-  const tenantId = landingFormConfig.resolvePublicLeadTenantId();
-  if (!tenantId) {
-    const err = new Error("Public lead tenant is not configured (PUBLIC_LEAD_TENANT_ID)");
+  const legacyTenantId = landingFormConfig.resolvePublicLeadTenantId();
+  const tenantSlug = legacyTenantId ? null : landingFormConfig.resolvePublicLeadTenantSlug();
+  if (!tenantSlug && !legacyTenantId) {
+    const err = new Error("Public lead tenant is not configured (PUBLIC_LEAD_TENANT_SLUG)");
     err.statusCode = 503;
     err.code = "LANDING_FORM_NOT_CONFIGURED";
     throw err;
   }
+  const tenant = tenantSlug
+    ? await prisma.tenant.findFirst({ where: { slug: tenantSlug, vertical: "generic", isActive: true }, select: { id: true } })
+    : { id: legacyTenantId };
+  if (!tenant) throw Object.assign(new Error("Public lead tenant is unavailable"), { statusCode: 503, code: "LANDING_FORM_NOT_CONFIGURED" });
+  const tenantId = tenant.id;
   const webFormId = await landingFormConfig.resolveLandingWebFormId(prisma, tenantId);
   if (!webFormId) {
     const err = new Error("No active web form available for the landing page");
@@ -85,10 +91,13 @@ router.put("/", verifyToken, async (req, res) => {
     if (!Number.isInteger(webFormId) || webFormId <= 0) {
       return res.status(400).json({ error: "webFormId must be a positive integer", code: "INVALID_WEB_FORM_ID" });
     }
-    const tenantId = landingFormConfig.resolvePublicLeadTenantId();
+    const legacyTenantId = landingFormConfig.resolvePublicLeadTenantId();
+    const tenantSlug = legacyTenantId ? null : landingFormConfig.resolvePublicLeadTenantSlug();
+    const tenantRow = tenantSlug && await prisma.tenant.findFirst({ where: { slug: tenantSlug, vertical: "generic", isActive: true }, select: { id: true } });
+    const tenantId = tenantRow?.id || (!tenantSlug && legacyTenantId);
     if (!tenantId) {
       return res.status(503).json({
-        error: "Public lead tenant is not configured (PUBLIC_LEAD_TENANT_ID)",
+        error: "Public lead tenant is not configured (PUBLIC_LEAD_TENANT_SLUG)",
         code: "LANDING_FORM_NOT_CONFIGURED",
       });
     }

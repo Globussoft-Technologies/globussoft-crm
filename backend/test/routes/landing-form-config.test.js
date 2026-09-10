@@ -103,6 +103,7 @@ describe('GET /api/landing-form-config (public)', () => {
 
   test('missing PUBLIC_LEAD_TENANT_ID → 503 LANDING_FORM_NOT_CONFIGURED', async () => {
     delete process.env.PUBLIC_LEAD_TENANT_ID;
+    delete process.env.PUBLIC_LEAD_TENANT_SLUG;
 
     const res = await request(makeApp(OTHER_USER_ID)).get('/api/landing-form-config');
 

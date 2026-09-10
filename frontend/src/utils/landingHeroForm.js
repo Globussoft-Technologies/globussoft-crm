@@ -11,16 +11,16 @@ export function heroFormEmbedSrc(formId) {
   return `/embed/web-form.html?id=${formId}`;
 }
 
-// Injects the hero web-form iframe into a CLOSED shadow root under
-// #hero-form-mount. DevTools Elements then shows only
-// `#shadow-root (closed)` — the form link never sits in the page markup.
+// Injects the hero web-form iframe into a closed shadow root under
+// #hero-form-mount so the iframe is absent from ordinary Elements queries.
+// Backend authorization remains the actual security boundary.
 // Returns the iframe element (kept in a ref for the postMessage resize
 // handshake) or null. NEVER falls back to light DOM: a failed injection
 // renders nothing rather than leaking the link.
 export function injectHeroForm(mount, formId) {
   if (!mount || !Number.isInteger(formId) || formId <= 0) return null;
   mount.replaceChildren();
-  let root = null;
+  let root;
   try {
     root = mount.attachShadow({ mode: "closed" });
   } catch {

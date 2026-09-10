@@ -38,14 +38,13 @@ describe('heroFormEmbedSrc', () => {
 });
 
 describe('injectHeroForm', () => {
-  it('injects into a closed shadow root — nothing leaks into the light DOM', () => {
+  it('injects the iframe into a closed shadow root', () => {
     const mount = document.createElement('div');
     document.body.appendChild(mount);
     try {
       const frame = injectHeroForm(mount, 11);
       expect(frame).toBeTruthy();
       expect(frame.getAttribute('src')).toBe('/embed/web-form.html?id=11');
-      // Closed mode: children invisible to Elements AND to querySelector.
       expect(mount.shadowRoot).toBeNull();
       expect(mount.querySelector('iframe')).toBeNull();
     } finally {
@@ -79,7 +78,7 @@ describe('Landing dynamic hero form', () => {
     vi.restoreAllMocks();
   });
 
-  it('fetches the public config and mounts the form with no light-DOM iframe', async () => {
+  it('fetches the public config and mounts the form', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ webFormId: 11, webFormName: 'Picked Form' }),
@@ -96,11 +95,10 @@ describe('Landing dynamic hero form', () => {
       expect(container.querySelector('#hero-form-mount')).toBeTruthy();
     });
     await new Promise((res) => setTimeout(res, 50));
-    // The privacy contract: no iframe anywhere in the light DOM.
     expect(lightDomFrame(container)).toBeNull();
   });
 
-  it('falls back to form 1 inside the shadow root when the config call fails', async () => {
+  it('fails closed when the config call fails', async () => {
     global.fetch = vi.fn().mockRejectedValue(new Error('backend down'));
     const { container } = renderLanding();
     await waitFor(() => {

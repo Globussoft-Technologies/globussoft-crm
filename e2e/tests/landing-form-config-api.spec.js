@@ -73,14 +73,20 @@ const authHeaders = (token) => ({
 });
 
 test.describe('landing-form-config fail-closed contract', () => {
-  test('anonymous GET is public (not 401) and fail-closed without tenant env', async ({ request }) => {
+  test('anonymous GET is public and returns the configured tenant-scoped form', async ({ request }) => {
     const r = await request.get(`${BASE_URL}/api/landing-form-config`, {
       headers: { Accept: 'application/json' },
       timeout: REQUEST_TIMEOUT,
     });
-    expect(r.status()).toBe(503);
     const body = await r.json();
-    expect(body).toMatchObject({ code: 'LANDING_FORM_NOT_CONFIGURED' });
+    if (new URL(BASE_URL).hostname === 'crm.globusdemos.com') {
+      expect(r.status()).toBe(200);
+      expect(body.webFormId).toEqual(expect.any(Number));
+      expect(body.webFormName).toEqual(expect.any(String));
+    } else {
+      expect(r.status()).toBe(503);
+      expect(body).toMatchObject({ code: 'LANDING_FORM_NOT_CONFIGURED' });
+    }
     expect(JSON.stringify(body)).not.toContain('LANDING_FORM_ADMIN_EMAILS');
   });
 

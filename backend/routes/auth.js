@@ -197,22 +197,14 @@ router.post("/public/lead-inquiry", registerLimiter, async (req, res) => {
       return res.status(400).json({ error: "Enter a valid email address" });
     }
 
-    const configuredTenantIdRaw = String(process.env.PUBLIC_LEAD_TENANT_ID || "").trim();
-    if (!configuredTenantIdRaw) {
-      return res.status(503).json({ error: "Lead capture is not configured" });
-    }
-
-    const configuredTenantId = Number(configuredTenantIdRaw);
-    if (
-      (!Number.isInteger(configuredTenantId) || configuredTenantId < 1)
-    ) {
-      console.error("[auth/public/lead-inquiry] PUBLIC_LEAD_TENANT_ID must be a positive integer");
+    const configuredTenantSlug = String(process.env.PUBLIC_LEAD_TENANT_SLUG || "").trim().toLowerCase();
+    if (!configuredTenantSlug) {
       return res.status(503).json({ error: "Lead capture is not configured" });
     }
 
     const tenant = await prisma.tenant.findFirst({
       where: {
-        id: configuredTenantId,
+        slug: configuredTenantSlug,
         vertical: "generic",
         isActive: true,
       },

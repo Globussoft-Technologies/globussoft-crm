@@ -118,9 +118,9 @@ describe('resolveLandingWebFormId', () => {
     await expect(lib.resolveLandingWebFormId(prisma, 1)).resolves.toBe(3);
   });
 
-  test('no setting + no slug → latest active generic form', async () => {
+  test('no setting + no landing slug → fail closed', async () => {
     const prisma = mockPrisma({ latest: { id: 5 } });
-    await expect(lib.resolveLandingWebFormId(prisma, 1)).resolves.toBe(5);
+    await expect(lib.resolveLandingWebFormId(prisma, 1)).resolves.toBeNull();
   });
 
   test('nothing selectable → null', async () => {

@@ -33,10 +33,16 @@ function isLandingFormAdminEmail(email) {
   return module.exports.getLandingFormAdminEmails().has(normalized);
 }
 
-// PUBLIC_LEAD_TENANT_ID as an int, or null when unset/invalid.
+// Resolve the public tenant from a deployment-local stable slug.
+function resolvePublicLeadTenantSlug() {
+  const slug = String(process.env.PUBLIC_LEAD_TENANT_SLUG || "").trim().toLowerCase();
+  return slug || null;
+}
+
+// Legacy helper retained for callers that still validate the old variable;
+// public landing-form resolution uses the slug above.
 function resolvePublicLeadTenantId() {
   const raw = String(process.env.PUBLIC_LEAD_TENANT_ID || "").trim();
-  if (!raw) return null;
   const id = Number.parseInt(raw, 10);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
@@ -70,9 +76,8 @@ async function readLandingFormSetting(prisma, tenantId) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-// Resolve the effective landing-page form id for a tenant:
-// stored setting (validated) → `globus-crm-landing` slug → most recent
-// active generic form → null (caller falls back / 503s).
+// Resolve the effective landing-page form id for a tenant. Missing or invalid
+// configuration fails closed; never select an arbitrary newest form.
 async function resolveLandingWebFormId(prisma, tenantId) {
   const storedId = await module.exports.readLandingFormSetting(prisma, tenantId);
   if (storedId) {
@@ -87,12 +92,7 @@ async function resolveLandingWebFormId(prisma, tenantId) {
     select: { id: true, tenantId: true, isActive: true, scope: true },
   });
   if (module.exports.isSelectableLandingForm(bySlug, tenantId)) return bySlug.id;
-  const latest = await prisma.webForm.findFirst({
-    where: { tenantId, scope: "generic", isActive: true },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    select: { id: true },
-  });
-  return latest ? latest.id : null;
+  return null;
 }
 
 module.exports = {
@@ -100,6 +100,7 @@ module.exports = {
   LANDING_FORM_FALLBACK_SLUG,
   getLandingFormAdminEmails,
   isLandingFormAdminEmail,
+  resolvePublicLeadTenantSlug,
   resolvePublicLeadTenantId,
   isSelectableLandingForm,
   readLandingFormSetting,

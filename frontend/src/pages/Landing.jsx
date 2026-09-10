@@ -2,10 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { injectHeroForm } from "../utils/landingHeroForm";
 import landingMarkup from "./landingMarkup.html?raw";
 
-// Fallback hero form when the config endpoint is unreachable — injected
-// into the closed shadow root like any other selection, so first paint
-// never shows a hole and never leaks a link either.
-const LANDING_FORM_FALLBACK_ID = 1;
+// No hardcoded form fallback: an unavailable configuration fails closed.
 
 function mountLandingTemplate(container) {
   const documentFragment = new DOMParser().parseFromString(
@@ -137,8 +134,8 @@ export default function Landing() {
   // (TenantSetting under PUBLIC_LEAD_TENANT_ID, changed from the Web Forms
   // page by the LANDING_FORM_ADMIN_EMAILS allowlist). State-driven so the
   // rendered iframe can never disagree with the fetched config. The frame
-  // itself lives in a closed shadow root (see injectHeroForm) — the link
-  // never appears in the page markup.
+  // The closed root keeps the iframe out of ordinary Elements inspection;
+  // backend validation remains the security boundary.
   const [heroFormId, setHeroFormId] = useState(null);
 
   useEffect(() => {
@@ -150,11 +147,11 @@ export default function Landing() {
       .then((data) => {
         if (cancelled) return;
         const id = Number.parseInt(data && data.webFormId, 10);
-        setHeroFormId(Number.isInteger(id) && id > 0 ? id : LANDING_FORM_FALLBACK_ID);
+        setHeroFormId(Number.isInteger(id) && id > 0 ? id : null);
       })
       .catch(() => {
         // Offline/backend-down: fall back to the static form in the markup.
-        if (!cancelled) setHeroFormId(LANDING_FORM_FALLBACK_ID);
+        if (!cancelled) setHeroFormId(null);
       });
     return () => {
       cancelled = true;

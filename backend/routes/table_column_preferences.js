@@ -91,6 +91,7 @@ const BUILTIN_COLUMNS = {
     { key: "linkedin", label: "LinkedIn" }, // Contact.linkedin
     { key: "industry", label: "Service Type" }, // Contact.industry
     { key: "companySize", label: "No Of Employee" }, // Contact.companySize — same data as the web-form No Of Employee field
+    { key: "subBrand", label: "Sub-brand" }, // Contact.subBrand — the web-form Sub-brand field writes here even on generic tenants
     { key: "description", label: "Note" }, // Contact.description (conversation-summary narrative)
     { key: "stateCode", label: "State" }, // Contact.stateCode (ISO 3166-2, e.g. IN-KA)
     { key: "lastUpdated", label: "Last Updated" }, // Contact.updatedAt

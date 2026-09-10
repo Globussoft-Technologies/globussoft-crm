@@ -161,6 +161,7 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "aiScore",
   "source",
   "webForm",
+  "subBrand",
   "tags",
   "assignedTo",
   "createdAt",
@@ -1233,14 +1234,20 @@ const Leads = () => {
   // Seeding the existing filter state (rather than adding a parallel filter
   // path) means the dropdowns visibly reflect what's applied and the user can
   // widen or clear it from the normal controls.
-  const [drillParams] = useSearchParams();
+  const [drillParams, setDrillParams] = useSearchParams();
   useEffect(() => {
     const callStatus = drillParams.get("callStatus");
     const source = drillParams.get("source");
     const assignee = drillParams.get("assignee");
+    const webForm = drillParams.get("webForm");
     if (callStatus) setLeadStatusFilter(normalizeCallStatus(callStatus));
     if (source) setSourceFilter(source);
     if (assignee) setAssigneeFilter(assignee);
+    if (webForm) {
+      setAdvancedFilters((prev) =>
+        prev.some((f) => f?.field === "webForm") ? prev : [...prev, { field: "webForm", operator: "contains", values: [webForm] }],
+      );
+    }
     // Read once per URL — re-running on every render would fight the user's
     // own changes to the dropdowns.
   }, [drillParams]);
@@ -2844,6 +2851,17 @@ const Leads = () => {
     setSearchTerm("");
     setAdvancedFilters([]);
     setLeadsPage(0);
+    // Drop drill-down params (e.g. ?webForm= from the Web Forms eye icon)
+    // so the web-form filter does not re-seed on the next render or refresh
+    // and the list reloads unfiltered.
+    setDrillParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        ["callStatus", "source", "assignee", "webForm"].forEach((key) => next.delete(key));
+        return next;
+      },
+      { replace: true },
+    );
   };
   const hasActiveLeadFilters = Boolean(
     searchTerm.trim() ||
@@ -2950,6 +2968,11 @@ const Leads = () => {
         key === "source" ||
         // Web Form is generic-CRM only (wellness/travel never see it).
         (key === "webForm" && isGeneric) ||
+        // Sub-brand is generic+travel — the web-form Sub-brand field
+        // writes Contact.subBrand on generic tenants too. (Travel keeps
+        // its fixed-extra Sub-brand column; this branch is generic-only
+        // so travel never renders it twice.)
+        (key === "subBrand" && isGeneric) ||
         key === "tags" ||
         key === "assignedTo" ||
         key === "createdAt" ||
@@ -2984,6 +3007,7 @@ const Leads = () => {
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
       if (key === "webForm") return { key, label: "Web Form" };
+      if (key === "subBrand") return { key, label: "Sub-brand" };
       if (key === "tags") return { key, label: "Tags" };
       if (key === "assignedTo") return { key, label: "Assigned To" };
       if (key === "createdAt") return { key, label: "Created" };
@@ -4290,6 +4314,18 @@ const Leads = () => {
             </span>
           </td>
         );
+      }
+      case "subBrand": {
+        // Web-form Sub-brand — free-text Contact scalar, inline-editable
+        // like the other web-form parity columns (industry, stateCode…).
+        return renderBuiltInLeadCell({
+          lead,
+          field: "subBrand",
+          label: "Sub-brand",
+          value: lead.subBrand,
+          extraStyle: { color: "var(--text-secondary)" },
+          renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+        });
       }
       case "tags":
         return (

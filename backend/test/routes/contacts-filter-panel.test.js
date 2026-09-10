@@ -129,6 +129,7 @@ describe("GET /api/contacts/filter-fields", () => {
       "callifiedCampaignId",
       "callifiedLeadStatus",
       "tags",
+      "subBrand",
       "aiScore",
       "createdAt",
       "assignedToId",
@@ -246,20 +247,23 @@ describe("GET /api/contacts/filter-fields", () => {
     expect(res.body).toHaveProperty("fields");
   });
 
-  describe("vertical gate (subBrand / kycStatus are travel-only)", () => {
+  describe("vertical gate (kycStatus is travel-only; subBrand is generic+travel)", () => {
     // REGRESSION — the live bug report: a generic tenant (NovaCrest) had a
     // single stray/seed Contact row with subBrand:"tmc", and EVERY row
     // carries kycStatus:"unverified" from the schema's own @default, so
     // both leaked "travel feature" fields into a generic org's picker.
-    // Gating on Tenant.vertical is what keeps them out.
+    // Gating on Tenant.vertical is what keeps kycStatus out. subBrand has
+    // since become a legitimate generic field — the generic web-form
+    // Sub-brand field writes Contact.subBrand on generic tenants — so
+    // generic DOES see subBrand now (only kycStatus stays gated).
 
-    test("generic tenant never sees subBrand or kycStatus", async () => {
+    test("generic tenant sees subBrand but never kycStatus", async () => {
       prisma.tenant.findUnique.mockResolvedValue({ vertical: "generic" });
 
       const res = await request(makeApp()).get("/api/contacts/filter-fields");
 
       const fieldKeys = res.body.fields.map((f) => f.field);
-      expect(fieldKeys).not.toContain("subBrand");
+      expect(fieldKeys).toContain("subBrand");
       expect(fieldKeys).not.toContain("kycStatus");
     });
 
@@ -283,13 +287,14 @@ describe("GET /api/contacts/filter-fields", () => {
       expect(fieldKeys).toContain("kycStatus");
     });
 
-    test("a tenant row with no vertical falls back to generic (no travel fields)", async () => {
+    test("a tenant row with no vertical falls back to generic (subBrand yes, kycStatus no)", async () => {
       prisma.tenant.findUnique.mockResolvedValue(null);
 
       const res = await request(makeApp()).get("/api/contacts/filter-fields");
 
       expect(res.status).toBe(200);
-      expect(res.body.fields.map((f) => f.field)).not.toContain("subBrand");
+      expect(res.body.fields.map((f) => f.field)).toContain("subBrand");
+      expect(res.body.fields.map((f) => f.field)).not.toContain("kycStatus");
     });
   });
 });

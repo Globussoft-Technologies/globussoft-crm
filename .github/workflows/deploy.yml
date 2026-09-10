@@ -332,6 +332,7 @@ jobs:
           #   - deals_documents.spec.js      (10 tests: routes/deals_documents.js  upload + list + #585 binary-PDF generate-quote contract)
           #   - knowledge-base-api.spec.js   (15 tests: routes/knowledge_base.js public + authed CRUD  orphan-wave 2026-05-17)
           #   - landing-pages-api.spec.js    (41 tests: routes/landing_pages.js admin CRUD + duplicate + analytics  G-1 orphan-wave 2026-05-17)
+          #   - landing-form-config-api.spec.js (4 tests: routes/landing_form_config.js public resolve + allowlist PUT fail-closed contract)
           #   - portal-api.spec.js           (16 tests: routes/portal.js public + auth gates + #238 verify-otp  orphan-wave 2026-05-17)
           #   - tenant-switch-disabled-api.spec.js (5 tests: #555 lock-per-session policy contract  orphan-wave 2026-05-17)
           #   - voice-transcription-api.spec.js (19 tests: routes/voice_transcription.js coverage push  orphan-wave 2026-05-17)
@@ -546,6 +547,7 @@ jobs:
             tests/travel-curriculum-api.spec.js \
             tests/gmail-api.spec.js \
             tests/travel-brochures-models-api.spec.js \
+            tests/landing-form-config-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/callified-campaign-api.spec.js \
             tests/wellness-callified-api.spec.js \

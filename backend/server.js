@@ -1091,6 +1091,11 @@ app.use("/api", (req, res, next) => {
   // by the route-level verifyToken+verifyRole middleware below.
   if (req.method === "GET" && req.path === "/subscriptions/plans")
     return next();
+  // Public marketing landing page resolves its hero web form anonymously.
+  // Exact-path + GET-only: /access and PUT stay behind the global
+  // verifyToken guard + the route's own allowlist check.
+  if (req.method === "GET" && req.path === "/landing-form-config")
+    return next();
   // Billing/self-serve subscription endpoints must stay reachable even when
   // the current subscription is expired, otherwise the admin cannot renew.
   // Route handlers below still enforce auth + ADMIN role, so this only
@@ -1329,6 +1334,7 @@ app.use("/api/dashboards", dashboardsRoutes);
 app.use("/api/custom-reports", customReportsRoutes);
 app.use("/api/booking-pages", bookingPagesRoutes);
 app.use("/api/forms", webFormsRoutes);
+app.use("/api/landing-form-config", require("./routes/landing_form_config"));
 app.use("/api/signatures", signaturesRoutes);
 app.use("/api/knowledge-base", knowledgeBaseRoutes);
 app.use("/api/portal", portalRoutes);

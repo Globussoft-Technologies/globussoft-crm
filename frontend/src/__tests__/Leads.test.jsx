@@ -1834,6 +1834,64 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fireEvent.click(within(listbox).getByRole('option', { name: /RFU Umrah follow-up/i }));
   });
 
+  it('offers only create-time fields in auto-campaign assignment rules', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/table-column-prefs/leads') {
+        return Promise.resolve({
+          visible: ['name', 'source'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'source', label: 'Source' },
+            { key: 'webForm', label: 'Web Form' },
+            { key: 'firstName', label: 'First Name' },
+            { key: 'assignedTo', label: 'Assigned To' },
+            { key: 'createdAt', label: 'Created' },
+            { key: 'campaign', label: 'Callified Campaign' },
+            { key: 'callStatus', label: 'Call Status' },
+            { key: 'callifiedAi', label: 'Callified AI call' },
+            { key: 'callifiedScore', label: 'Callified Score' },
+            { key: 'cf_tier', label: 'Customer Tier' },
+            { key: 'actions', label: 'Actions' },
+          ],
+        });
+      }
+      if (url === '/api/callified/auto-campaign-rules' && !opts) {
+        return Promise.resolve({
+          enabled: true,
+          rules: [{ id: 'rule-1', enabled: true, column: 'source', value: 'website-form', campaignId: 101 }],
+        });
+      }
+      return callifiedFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Auto-assign Callified Campaigns rules/i }));
+
+    const panelHeading = await screen.findByText('Auto-assign Callified Campaigns rules');
+    const panel = panelHeading.closest('.card');
+    expect(panel).toBeTruthy();
+    const columnSelect = within(panel).getAllByRole('combobox')[0];
+    const optionLabels = Array.from(columnSelect.options).map((option) => option.textContent);
+
+    expect(optionLabels).toEqual(expect.arrayContaining([
+      'Name',
+      'Source',
+      'Web Form',
+      'First Name',
+      'Customer Tier',
+    ]));
+    expect(optionLabels).not.toEqual(expect.arrayContaining([
+      'Assigned To',
+      'Created',
+      'Callified Campaign',
+      'Call Status',
+      'Callified AI call',
+      'Callified Score',
+      'Actions',
+    ]));
+  });
+
   it('changing a lead campaign fires PUT /api/contacts/:id and refreshes campaign counts', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());

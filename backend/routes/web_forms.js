@@ -1058,13 +1058,16 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     // Auto-assign new Leads to a matching Callified campaign based on the
     // tenant's rule configuration when no campaign was supplied explicitly.
     // Mirrors the logic in contacts.js and external.js.
-    // Public forms are also consumed by hand-written/legacy pages.  Treat the
-    // status value case-insensitively here so a hidden `lead` field cannot
-    // bypass campaign assignment (the Contact status is still normalised to
-    // the form value below for backwards compatibility).
+    // Public forms are also consumed by hand-written/legacy pages. Treat the
+    // status value case-insensitively at this boundary so a hidden `lead`
+    // field cannot bypass campaign assignment; persistence stays canonical.
     if (formScope === "generic" && String(contactData.status || "").toLowerCase() === "lead" && contactData.callifiedCampaignId == null) {
       try {
-        const matchedCampaignId = await evaluateAutoCampaignRules(form.tenantId, contactData, customFieldValues);
+        const matchedCampaignId = await evaluateAutoCampaignRules(
+          form.tenantId,
+          { ...contactData, webForm: form.name },
+          customFieldValues,
+        );
         if (matchedCampaignId) {
           contactData.callifiedCampaignId = matchedCampaignId;
         }

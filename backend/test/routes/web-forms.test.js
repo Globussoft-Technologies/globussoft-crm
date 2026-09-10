@@ -764,6 +764,48 @@ describe('POST /api/forms/public/:slug/submit', () => {
     }));
   });
 
+  test('normalises legacy lowercase Lead status and matches the submitting web form name', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-status', sourceKind: 'contact', sourceKey: 'status', fieldType: 'text', label: 'Status', required: false, hidden: true, defaultValue: 'lead', width: 'full', options: [] },
+      ]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ submitButtonLabel: 'Send', successMessage: 'Thanks!' }),
+    });
+
+    prisma.tenantSetting.findUnique.mockImplementation((/** @type {{ where?: { tenantId_key?: { key: string } } }} */ params) => {
+      if (params.where?.tenantId_key?.key === 'feature.callified.auto_campaign_rules') {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: 'webForm', value: 'Contact Us', campaignId: 88 }],
+          }),
+        };
+      }
+      return null;
+    });
+
+    const res = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit')
+      .field('name', 'Legacy Form Lead');
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'Lead',
+        callifiedCampaignId: 88,
+      }),
+    }));
+  });
+
   test('backfills Callified campaign on existing contact when rule matches', async () => {
     prisma.webForm.findFirst.mockResolvedValue({
       id: 1,
@@ -795,8 +837,8 @@ describe('POST /api/forms/public/:slug/submit', () => {
       return null;
     });
 
-    prisma.contact.findFirst.mockResolvedValueOnce({ id: 2003, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com', callifiedCampaignId: null });
-    prisma.contact.update.mockResolvedValueOnce({ id: 2003, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com', callifiedCampaignId: 77 });
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 2003, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com', status: 'Lead', callifiedCampaignId: null });
+    prisma.contact.update.mockResolvedValueOnce({ id: 2003, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com', status: 'Lead', callifiedCampaignId: 77 });
 
     const res = await request(makeApp())
       .post('/api/forms/public/contact-us/submit')
@@ -809,6 +851,54 @@ describe('POST /api/forms/public/:slug/submit', () => {
       where: { id: 2003 },
       data: { callifiedCampaignId: 77 },
     });
+  });
+
+  test('does not backfill a Callified campaign onto an existing non-Lead contact', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+      ]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ submitButtonLabel: 'Send', successMessage: 'Thanks!' }),
+    });
+
+    prisma.tenantSetting.findUnique.mockImplementation((/** @type {{ where?: { tenantId_key?: { key: string } } }} */ params) => {
+      if (params.where?.tenantId_key?.key === 'feature.callified.auto_campaign_rules') {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: 'source', value: 'website-form', campaignId: 77 }],
+          }),
+        };
+      }
+      return null;
+    });
+
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      id: 2004,
+      tenantId: TENANT_ID,
+      name: 'Existing Customer',
+      email: 'customer@example.com',
+      status: 'Customer',
+      callifiedCampaignId: null,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit')
+      .field('name', 'Existing Customer')
+      .field('email', 'customer@example.com');
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 
   test('maps picker fallback customs to Contact columns instead of dropping them', async () => {

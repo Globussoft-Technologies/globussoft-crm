@@ -3,10 +3,10 @@
  * Landing-page hero form config — fail-closed contract.
  *
  * routes/landing_form_config.js (backed by lib/landingFormConfig.js +
- * TenantSetting `landing.form.webFormId` under PUBLIC_LEAD_TENANT_ID).
+ * TenantSetting `landing.form.webFormId` under PUBLIC_LEAD_TENANT_SLUG).
  *
  * The per-push api_tests gate boots the backend with NEITHER
- * PUBLIC_LEAD_TENANT_ID NOR LANDING_FORM_ADMIN_EMAILS set, so every
+ * PUBLIC_LEAD_TENANT_SLUG NOR LANDING_FORM_ADMIN_EMAILS set, so every
  * assertion below pins the fail-closed behaviour deterministically:
  *
  *   GET  /api/landing-form-config         (public, no token) → 503

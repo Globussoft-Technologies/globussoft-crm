@@ -8,7 +8,7 @@ const requireCJS = createRequire(import.meta.url);
 
 const lib = requireCJS('../../lib/landingFormConfig');
 
-const ENV_KEYS = ['LANDING_FORM_ADMIN_EMAILS', 'PUBLIC_LEAD_TENANT_ID'];
+const ENV_KEYS = ['LANDING_FORM_ADMIN_EMAILS', 'PUBLIC_LEAD_TENANT_SLUG'];
 
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
@@ -43,19 +43,17 @@ describe('getLandingFormAdminEmails / isLandingFormAdminEmail', () => {
   });
 });
 
-describe('resolvePublicLeadTenantId', () => {
-  test('unset / garbage → null', () => {
-    delete process.env.PUBLIC_LEAD_TENANT_ID;
-    expect(lib.resolvePublicLeadTenantId()).toBeNull();
-    process.env.PUBLIC_LEAD_TENANT_ID = 'abc';
-    expect(lib.resolvePublicLeadTenantId()).toBeNull();
-    process.env.PUBLIC_LEAD_TENANT_ID = '0';
-    expect(lib.resolvePublicLeadTenantId()).toBeNull();
+describe('resolvePublicLeadTenantSlug', () => {
+  test('unset / whitespace → null', () => {
+    delete process.env.PUBLIC_LEAD_TENANT_SLUG;
+    expect(lib.resolvePublicLeadTenantSlug()).toBeNull();
+    process.env.PUBLIC_LEAD_TENANT_SLUG = '   ';
+    expect(lib.resolvePublicLeadTenantSlug()).toBeNull();
   });
 
-  test('valid int string → int', () => {
-    process.env.PUBLIC_LEAD_TENANT_ID = '7';
-    expect(lib.resolvePublicLeadTenantId()).toBe(7);
+  test('normalizes a configured slug', () => {
+    process.env.PUBLIC_LEAD_TENANT_SLUG = ' Default-Org ';
+    expect(lib.resolvePublicLeadTenantSlug()).toBe('default-org');
   });
 });
 
@@ -109,13 +107,16 @@ describe('resolveLandingWebFormId', () => {
     await expect(lib.resolveLandingWebFormId(prisma, 1)).resolves.toBe(9);
   });
 
-  test('stored form from another tenant falls back to slug', async () => {
+  test('stored form from another tenant falls back to tenant-specific slug', async () => {
     const prisma = mockPrisma({
       setting: JSON.stringify({ webFormId: 9 }),
       stored: { id: 9, tenantId: 2, isActive: true, scope: 'generic' },
       bySlug: { id: 3, tenantId: 1, isActive: true, scope: 'generic' },
     });
     await expect(lib.resolveLandingWebFormId(prisma, 1)).resolves.toBe(3);
+    expect(prisma.webForm.findFirst).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ slug: 'globus-crm-landing-1', tenantId: 1 }),
+    }));
   });
 
   test('no setting + no landing slug → fail closed', async () => {

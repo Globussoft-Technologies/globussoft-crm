@@ -131,7 +131,7 @@ export default function Landing() {
   const heroFrameRef = useRef(null);
   const mountedFormRef = useRef(null);
   // Dynamic hero form id, resolved from the backend on every page load
-  // (TenantSetting under PUBLIC_LEAD_TENANT_ID, changed from the Web Forms
+  // (TenantSetting under PUBLIC_LEAD_TENANT_SLUG, changed from the Web Forms
   // page by the LANDING_FORM_ADMIN_EMAILS allowlist). State-driven so the
   // rendered iframe can never disagree with the fetched config. The frame
   // The closed root keeps the iframe out of ordinary Elements inspection;

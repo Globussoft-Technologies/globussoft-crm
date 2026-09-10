@@ -7,7 +7,7 @@
  *   - GET / is public and never leaks the admin allowlist.
  *   - PUT requires a logged-in user whose DB email is on
  *     LANDING_FORM_ADMIN_EMAILS (client-supplied email is never trusted).
- *   - Only active generic-scope forms of the PUBLIC_LEAD_TENANT_ID tenant
+ *   - Only active generic-scope forms of the PUBLIC_LEAD_TENANT_SLUG tenant
  *     are selectable.
  */
 
@@ -33,10 +33,12 @@ const authMw = requireCJS('../../middleware/auth');
 authMw.verifyToken = (_req, _res, next) => next();
 
 prisma.user = prisma.user || {};
+prisma.tenant = prisma.tenant || {};
 prisma.webForm = prisma.webForm || {};
 prisma.tenantSetting = prisma.tenantSetting || {};
 
 prisma.user.findUnique = vi.fn();
+prisma.tenant.findFirst = vi.fn();
 prisma.webForm.findFirst = vi.fn();
 prisma.tenantSetting.findUnique = vi.fn();
 prisma.tenantSetting.upsert = vi.fn();
@@ -63,13 +65,14 @@ function makeApp(userId) {
   return app;
 }
 
-const ENV_KEYS = ['LANDING_FORM_ADMIN_EMAILS', 'PUBLIC_LEAD_TENANT_ID'];
+const ENV_KEYS = ['LANDING_FORM_ADMIN_EMAILS', 'PUBLIC_LEAD_TENANT_SLUG'];
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
 beforeEach(() => {
-  process.env.PUBLIC_LEAD_TENANT_ID = String(TENANT_ID);
+  process.env.PUBLIC_LEAD_TENANT_SLUG = 'default-org';
   process.env.LANDING_FORM_ADMIN_EMAILS = 'owner@example.com';
   prisma.user.findUnique.mockReset();
+  prisma.tenant.findFirst.mockReset().mockResolvedValue({ id: TENANT_ID });
   prisma.webForm.findFirst.mockReset();
   prisma.tenantSetting.findUnique.mockReset();
   prisma.tenantSetting.upsert.mockReset().mockResolvedValue({ id: 1 });
@@ -101,8 +104,7 @@ describe('GET /api/landing-form-config (public)', () => {
     expect(JSON.stringify(res.body)).not.toContain('owner@example.com');
   });
 
-  test('missing PUBLIC_LEAD_TENANT_ID → 503 LANDING_FORM_NOT_CONFIGURED', async () => {
-    delete process.env.PUBLIC_LEAD_TENANT_ID;
+  test('missing PUBLIC_LEAD_TENANT_SLUG → 503 LANDING_FORM_NOT_CONFIGURED', async () => {
     delete process.env.PUBLIC_LEAD_TENANT_SLUG;
 
     const res = await request(makeApp(OTHER_USER_ID)).get('/api/landing-form-config');

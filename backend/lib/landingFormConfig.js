@@ -4,8 +4,8 @@
 // Previously the form was hardcoded (`/embed/web-form.html?id=1` in
 // landingMarkup.html), so changing it meant a code edit + redeploy, and
 // there was no access control on who could change it. Now the selection
-// lives in TenantSetting (`landing.form.webFormId`) under the
-// PUBLIC_LEAD_TENANT_ID tenant, and only logged-in users whose email is
+// lives in TenantSetting (`landing.form.webFormId`) under the tenant resolved
+// from PUBLIC_LEAD_TENANT_SLUG, and only logged-in users whose email is
 // listed in LANDING_FORM_ADMIN_EMAILS may change it (checked server-side
 // against the DB email — never trust a client-supplied address).
 //
@@ -37,14 +37,6 @@ function isLandingFormAdminEmail(email) {
 function resolvePublicLeadTenantSlug() {
   const slug = String(process.env.PUBLIC_LEAD_TENANT_SLUG || "").trim().toLowerCase();
   return slug || null;
-}
-
-// Legacy helper retained for callers that still validate the old variable;
-// public landing-form resolution uses the slug above.
-function resolvePublicLeadTenantId() {
-  const raw = String(process.env.PUBLIC_LEAD_TENANT_ID || "").trim();
-  const id = Number.parseInt(raw, 10);
-  return Number.isInteger(id) && id > 0 ? id : null;
 }
 
 // Validate that a WebForm row may back the public landing page: same tenant,
@@ -88,7 +80,11 @@ async function resolveLandingWebFormId(prisma, tenantId) {
     if (module.exports.isSelectableLandingForm(stored, tenantId)) return stored.id;
   }
   const bySlug = await prisma.webForm.findFirst({
-    where: { tenantId, scope: "generic", slug: LANDING_FORM_FALLBACK_SLUG },
+    where: {
+      tenantId,
+      scope: "generic",
+      slug: `${LANDING_FORM_FALLBACK_SLUG}-${tenantId}`,
+    },
     select: { id: true, tenantId: true, isActive: true, scope: true },
   });
   if (module.exports.isSelectableLandingForm(bySlug, tenantId)) return bySlug.id;
@@ -101,7 +97,6 @@ module.exports = {
   getLandingFormAdminEmails,
   isLandingFormAdminEmail,
   resolvePublicLeadTenantSlug,
-  resolvePublicLeadTenantId,
   isSelectableLandingForm,
   readLandingFormSetting,
   resolveLandingWebFormId,

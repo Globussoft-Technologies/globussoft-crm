@@ -23,10 +23,13 @@ const { sanitizeJsonForStringColumn } = require("./sanitizeJson");
 const { READINESS_LEVELS, readinessLevelFromScore } = require("./travelDiagnosticScoring");
 const { getRecommendationTopK, DEFAULT_TOP_K } = require("./diagnosticRecommendationSettings");
 
-// Brochures commonly produce many chunks, so a small nearest-neighbour pool
-// can be dominated by a handful of PDFs. Retrieve broadly, then select the
-// distinct brochures that best match the submitted answers.
-const RAG_TOP_K = 500;
+// Brochures commonly produce multiple chunks, so retrieve more chunks than
+// the number of recommendations requested. Keep the query bounded: this path
+// runs during public-form submission and a fixed 500-point search needlessly
+// amplified latency and Qdrant load.
+const RAG_MIN_RETRIEVAL = 30;
+const RAG_RETRIEVAL_PER_RECOMMENDATION = 8;
+const RAG_MAX_RETRIEVAL = 120;
 // Historical default (bumped 5 -> 10 on 2026-08-24), now the fallback used
 // when no admin-configured value exists — see diagnosticRecommendationSettings.js.
 const MAX_RAG_RECOMMENDATIONS = DEFAULT_TOP_K; // how many trips are actually shown/rendered
@@ -56,10 +59,11 @@ function consolidateChunks(chunks) {
     byFile.get(fileId).chunks.push(c);
   }
   const result = [];
-  for (const [, { meta, chunks: cs }] of byFile) {
+  for (const [fileId, { meta, chunks: cs }] of byFile) {
     const sorted = cs.sort((a, b) => b.score - a.score);
     const top = sorted[0];
     result.push({
+      driveFileId: fileId,
       fileName: meta.fileName,
       folderPath: meta.folderPath,
       category: categoryFromFolderPath(meta.folderPath),
@@ -101,6 +105,7 @@ function attachBrochureMetadata(recommendations, brochures) {
     const match = byLink.get(String(recommendation.driveLink || '').trim())
       || byName.get(brochureKey(recommendation.name));
     if (!match) continue;
+    recommendation.driveFileId = recommendation.driveFileId || match.driveFileId || '';
     recommendation.driveLink = recommendation.driveLink || match.driveLink || '';
     recommendation.folderPath = match.folderPath || recommendation.folderPath || '';
     recommendation.category = match.category || recommendation.category || 'Other';
@@ -109,14 +114,28 @@ function attachBrochureMetadata(recommendations, brochures) {
 }
 
 function brochureRecommendationKey(item) {
+  const stableId = String(item?.brochureId || item?.driveFileId || '').trim();
+  if (stableId) return `id:${stableId}`;
+  const link = String(item?.driveLink || item?.brochurePdfUrl || '').trim();
+  if (link) {
+    const driveId = link.match(/\/d\/([^/?#]+)/i)?.[1]
+      || link.match(/[?&]id=([^&#]+)/i)?.[1];
+    return driveId ? `drive:${driveId}` : `link:${link.toLowerCase()}`;
+  }
   const title = String(item?.name || item?.fileName || '')
     .replace(/\.pdf$/i, '')
-    .replace(/\b\d+\s*(?:day|days)\b/gi, ' ')
-    .replace(/\b(?:tour|trip|educational|option|package)\b/gi, ' ')
     .replace(/[^a-z0-9]+/gi, ' ')
     .trim()
     .toLowerCase();
-  return title || String(item?.driveLink || '').trim().toLowerCase();
+  return title ? `title:${title}` : '';
+}
+
+function getRagRetrievalLimit(topK) {
+  const requested = Math.max(1, Number(topK) || MAX_RAG_RECOMMENDATIONS);
+  return Math.min(
+    RAG_MAX_RETRIEVAL,
+    Math.max(RAG_MIN_RETRIEVAL, requested * RAG_RETRIEVAL_PER_RECOMMENDATION),
+  );
 }
 
 function fallbackSummary(brochure) {
@@ -147,6 +166,7 @@ function fillRecommendationTarget(recommendations, brochures, topK) {
   for (const recommendation of recommendations || []) add(recommendation);
   for (const brochure of brochures || []) {
     add({
+      driveFileId: brochure.driveFileId || '',
       name: String(brochure.fileName || '').replace(/\.pdf$/i, '').trim(),
       driveLink: brochure.driveLink || '',
       folderPath: brochure.folderPath || '',
@@ -199,7 +219,7 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     tenantId,
     subBrand,
     providerId: embedConfig.providerId,
-    limit: RAG_TOP_K,
+    limit: getRagRetrievalLimit(topK),
   });
   if (!chunks.length) {
     console.log("[travelRag] no matching chunks found");
@@ -481,8 +501,11 @@ module.exports = {
   parseRagResponse,
   attachBrochureMetadata,
   fillRecommendationTarget,
+  consolidateChunks,
+  getRagRetrievalLimit,
   RAG_SUB_BRAND,
   RAG_TASK,
-  RAG_TOP_K,
+  RAG_MIN_RETRIEVAL,
+  RAG_MAX_RETRIEVAL,
   MAX_RAG_RECOMMENDATIONS,
 };

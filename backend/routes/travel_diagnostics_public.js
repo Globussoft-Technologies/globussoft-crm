@@ -811,7 +811,33 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
         })
       : null;
 
-    // Resolve the customer-facing 1-4 readiness level for the report.
+    const cancellationPolicy = await resolveCancellationPolicyForForm({
+      tenantId: diag.tenantId,
+      subBrand: diag.subBrand,
+    });
+
+    // Previously-submitted "chosen interests" (2026-08-27), if any — lets a
+    // refreshed report page show the prior selection instead of a blank
+    // checklist. Never throws (see diagnosticChosenInterests.js).
+    const chosenInterests = await diagnosticChosenInterests.getChosenInterests({
+      tenantId: diag.tenantId,
+      diagnosticId: diag.id,
+    });
+    const recommendationLimit = await getRecommendationTopK({
+      tenantId: diag.tenantId,
+      subBrand: diag.subBrand,
+    });
+    // Public report reads must be side-effect free. RAG and PDF generation run
+    // once during submission; a visitor refreshing a public URL must never
+    // invoke a paid model, write another PDF, or mutate persisted diagnostics.
+    const recommendations = buildUnifiedRecommendations({
+      curriculumFit: parseJsonOrNull(diag.curriculumFitJson),
+      ragRecommendations: ragResult?.recommendations?.recommendedTrips,
+      limit: recommendationLimit,
+    });
+
+    // Resolve readiness only after the final persisted RAG payload has been
+    // selected, keeping the envelope, recommendations and saved PDF aligned.
     let readinessLevel = null;
     let readinessName = null;
     const ragRecs = ragResult?.recommendations || {};
@@ -829,66 +855,6 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
       if (derived) {
         readinessLevel = derived.level;
         readinessName = derived.name;
-      }
-    }
-
-    const cancellationPolicy = await resolveCancellationPolicyForForm({
-      tenantId: diag.tenantId,
-      subBrand: diag.subBrand,
-    });
-
-    // Previously-submitted "chosen interests" (2026-08-27), if any — lets a
-    // refreshed report page show the prior selection instead of a blank
-    // checklist. Never throws (see diagnosticChosenInterests.js).
-    const chosenInterests = await diagnosticChosenInterests.getChosenInterests({
-      tenantId: diag.tenantId,
-      diagnosticId: diag.id,
-    });
-    const recommendationLimit = await getRecommendationTopK({
-      tenantId: diag.tenantId,
-      subBrand: diag.subBrand,
-    });
-    let recommendationsRefreshed = false;
-    // Refresh reports created before the configured count became a target.
-    // This lets existing public and embed links benefit without a resubmission.
-    if (!ragResult || needsRecommendationRefresh(ragResult.recommendations?.recommendedTrips, recommendationLimit)) {
-      try {
-        const refreshedResult = await travelRag.runRagForDiagnostic({
-          tenantId: diag.tenantId,
-          diagnosticId: diag.id,
-          subBrand: diag.subBrand,
-          answers,
-        });
-        if (refreshedResult) {
-          ragResult = refreshedResult;
-          recommendationsRefreshed = true;
-        }
-      } catch (e) {
-        console.warn("[diag-public-report] RAG refresh failed:", e.message);
-      }
-    }
-    const recommendations = buildUnifiedRecommendations({
-      curriculumFit: parseJsonOrNull(diag.curriculumFitJson),
-      ragRecommendations: ragResult?.recommendations?.recommendedTrips,
-      limit: recommendationLimit,
-    });
-    if (recommendationsRefreshed) {
-      try {
-        let snapshotBank = null;
-        try {
-          const snapshot = JSON.parse(diag.questionsJson || "{}");
-          snapshotBank = snapshot.questionsJson ? { version: snapshot.bankVersion, questionsJson: snapshot.questionsJson } : null;
-        } catch {
-          snapshotBank = null;
-        }
-        const refreshedPdfUrl = await generateDiagnosticPdfBestEffort(diag, snapshotBank, {
-          ragResult,
-          cancellationPolicy,
-          recommendations,
-        });
-        if (refreshedPdfUrl) diag.reportPdfUrl = refreshedPdfUrl;
-      } catch (e) {
-        console.warn("[diag-public-report] PDF refresh failed:", e.message);
       }
     }
 
@@ -1071,12 +1037,22 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
     // A zero or negative score is an explicit non-match, never a customer
     // recommendation. Score-less Travel Knowledge results remain eligible.
     if (hasFitScore && Number.isFinite(fitScore) && fitScore <= 0) return;
+    const stableId = String(item.brochureId || item.driveFileId || '').trim();
+    const link = String(item.driveLink || item.brochurePdfUrl || '').trim();
+    const driveId = link.match(/\/d\/([^/?#]+)/i)?.[1]
+      || link.match(/[?&]id=([^&#]+)/i)?.[1];
     const titleKey = String(item.name || item.destination || '')
       .replace(/\.pdf$/i, '')
-      .replace(/\b\d+\s*(?:day|days)\b/gi, ' ')
-      .replace(/\b(?:tour|trip|educational|option|package)\b/gi, ' ')
       .replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
-    const key = titleKey || String(item.driveLink || item.brochurePdfUrl || '').trim().toLowerCase();
+    const key = stableId
+      ? `id:${stableId}`
+      : driveId
+        ? `drive:${driveId}`
+        : link
+          ? `link:${link.toLowerCase()}`
+          : titleKey
+            ? `title:${titleKey}`
+            : '';
     if (!key || seen.has(key) || out.length >= max) return;
     seen.add(key);
     out.push(item);
@@ -1084,6 +1060,7 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
   for (const match of curriculumFit?.recommendations || []) {
     add({
       name: match.destination,
+      brochureId: match.brochureId || '',
       driveLink: match.brochurePdfUrl || '',
       category: match.category || 'Other',
       // The outcomes belong in the highlights below. Repeating them here as
@@ -1097,6 +1074,8 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
   for (const trip of ragRecommendations || []) {
     add({
       name: trip.name,
+      brochureId: trip.brochureId || '',
+      driveFileId: trip.driveFileId || '',
       driveLink: trip.driveLink || '',
       category: trip.category || 'Other',
       summary: trip.summary && trip.summary !== legacyFallback
@@ -1107,22 +1086,6 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
     });
   }
   return out;
-}
-
-function needsRecommendationRefresh(recommendations, limit) {
-  const trips = Array.isArray(recommendations) ? recommendations : [];
-  if (trips.length < limit) return true;
-  const titles = new Set();
-  for (const trip of trips) {
-    const title = String(trip?.name || '')
-      .replace(/\.pdf$/i, '')
-      .replace(/\b\d+\s*(?:day|days)\b/gi, ' ')
-      .replace(/\b(?:tour|trip|educational|option|package)\b/gi, ' ')
-      .replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
-    if (title && titles.has(title)) return true;
-    if (title) titles.add(title);
-  }
-  return false;
 }
 
 async function buildPublicCurriculumFitFallback({ tenantId, answers, questions }) {

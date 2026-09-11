@@ -109,16 +109,61 @@ describe('travelRag — fillRecommendationTarget', () => {
     expect(result[1].summary).toBe('An immersive international learning experience that combines cultural discovery with hands-on exploration.');
   });
 
-  test('treats superficial itinerary title variants as one recommendation', () => {
+  test('keeps distinct products when their stable Drive links differ', () => {
     const result = travelRag.fillRecommendationTarget(
       [{ name: 'Delhi, Agra & Jaipur-5days', driveLink: 'https://drive.example/delhi-a', summary: '', learnings: [] }],
       [
         { fileName: 'Delhi, Agra & Jaipur Tour.pdf', driveLink: 'https://drive.example/delhi-b', category: 'Domestic' },
         { fileName: 'Hampi Tour.pdf', driveLink: 'https://drive.example/hampi', category: 'Domestic' },
       ],
+      3,
+    );
+
+    expect(result.map((item) => item.name)).toEqual([
+      'Delhi, Agra & Jaipur-5days',
+      'Delhi, Agra & Jaipur Tour',
+      'Hampi Tour',
+    ]);
+  });
+
+  test('preserves duration variants when no stable brochure identity is available', () => {
+    const result = travelRag.fillRecommendationTarget(
+      [{ name: 'Goa Tour 4 Days', summary: '', learnings: [] }],
+      [{ fileName: 'Goa Tour 7 Days.pdf', category: 'Domestic' }],
       2,
     );
 
-    expect(result.map((item) => item.name)).toEqual(['Delhi, Agra & Jaipur-5days', 'Hampi Tour']);
+    expect(result.map((item) => item.name)).toEqual(['Goa Tour 4 Days', 'Goa Tour 7 Days']);
+  });
+});
+
+describe('travelRag — bounded Qdrant retrieval', () => {
+  test('scales with recommendation count without requesting hundreds of points', () => {
+    expect(travelRag.getRagRetrievalLimit(1)).toBe(30);
+    expect(travelRag.getRagRetrievalLimit(10)).toBe(80);
+    expect(travelRag.getRagRetrievalLimit(100)).toBe(120);
+  });
+});
+
+describe('travelRag — brochure identity metadata', () => {
+  test('keeps the stable Drive file id while consolidating brochure chunks', () => {
+    const result = travelRag.consolidateChunks([
+      {
+        id: 'point-1',
+        score: 0.9,
+        payload: {
+          driveFileId: 'drive-file-123',
+          fileName: 'Goa Tour 4 Days.pdf',
+          driveViewLink: 'https://drive.google.com/file/d/drive-file-123/view',
+          folderPath: 'TMC/Domestic',
+          text: 'Best matching excerpt',
+        },
+      },
+    ]);
+
+    expect(result[0]).toMatchObject({
+      driveFileId: 'drive-file-123',
+      fileName: 'Goa Tour 4 Days.pdf',
+    });
   });
 });

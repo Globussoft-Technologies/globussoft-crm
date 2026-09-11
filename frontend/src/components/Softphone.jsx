@@ -273,6 +273,25 @@ export default function Softphone() {
         </div>
       )}
 
+      <button
+        type="button"
+        aria-label={isOpen ? 'Close softphone dialer' : 'Open softphone dialer'}
+        aria-expanded={isOpen}
+        onClick={() => {
+          if (dragMovedRef.current) {
+            dragMovedRef.current = false;
+            return;
+          }
+          togglePhone();
+        }}
+        onPointerDown={handleFabPointerDown}
+        onPointerMove={handleFabPointerMove}
+        onPointerUp={handleFabPointerUp}
+        style={{ width: 56, height: 56, border: 'none', borderRadius: '50%', background: 'var(--primary-color, var(--accent-color, #3b82f6))', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 8px 24px rgba(0,0,0,0.25)' }}
+      >
+        {isOpen ? <PhoneOff size={24} /> : <Phone size={24} />}
+      </button>
+
     </div>
   );
 }

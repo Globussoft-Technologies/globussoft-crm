@@ -1,950 +1,134 @@
-import React, { useState, useEffect, useContext, useCallback, useMemo, useRef } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
-import { Briefcase, Plus, Upload, Search, Filter, RefreshCw, Pencil, Trash2, X, Zap } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Briefcase, ChevronDown, Filter, GripVertical, List, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { formatMoney, currencySymbol } from '../utils/money';
-import { io } from 'socket.io-client';
+import { formatMoney } from '../utils/money';
 import DealModal from '../components/DealModal';
-import { AuthContext } from '../App';
-import TopScrollSync from '../components/TopScrollSync';
+import { DealModal as ContactDealModal } from '../components/contact/ActionModals';
 
-// Slugify a PipelineStage.name → stage column id.
-export const slugifyStageName = (name) =>
-  String(name || '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9-]/g, '');
-
-// Virtualization threshold (kept for test compatibility)
 export const VIRTUALIZATION_THRESHOLD = 100;
+export const slugifyStageName = (name) => String(name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
-// Travel-vertical sub-brands
-const TRAVEL_SUB_BRANDS = [
-  { value: '', label: 'All sub-brands' },
-  { value: 'tmc', label: 'TMC (School trips)' },
-  { value: 'rfu', label: 'RFU (Umrah)' },
-  { value: 'travelstall', label: 'Travel Stall' },
-  { value: 'visasure', label: 'Visa Sure' },
-];
+const STAGE_COLORS = ['#2563eb', '#0891b2', '#7c3aed', '#d97706', '#0f766e', '#059669', '#dc2626'];
 
-// Stage → colour (used for inline badge)
-const STAGE_COLORS = {
-  new: { bg: 'rgba(59,130,246,0.12)', color: '#3b82f6' },
-  lead: { bg: 'rgba(59,130,246,0.12)', color: '#3b82f6' },
-  'new-lead': { bg: 'rgba(59,130,246,0.12)', color: '#3b82f6' },
-  contacted: { bg: 'rgba(234,179,8,0.14)', color: '#a16207' },
-  'diagnostic-complete': { bg: 'rgba(99,102,241,0.12)', color: '#6366f1' },
-  qualifying: { bg: 'rgba(168,85,247,0.12)', color: '#9333ea' },
-  proposal: { bg: 'rgba(234,179,8,0.14)', color: '#a16207' },
-  'proposal-sent': { bg: 'rgba(234,179,8,0.14)', color: '#a16207' },
-  quoted: { bg: 'rgba(249,115,22,0.12)', color: '#ea580c' },
-  negotiation: { bg: 'rgba(249,115,22,0.12)', color: '#ea580c' },
-  negotiating: { bg: 'rgba(249,115,22,0.12)', color: '#ea580c' },
-  won: { bg: 'rgba(34,197,94,0.14)', color: '#16a34a' },
-  'closed-won': { bg: 'rgba(34,197,94,0.14)', color: '#16a34a' },
-  lost: { bg: 'rgba(239,68,68,0.12)', color: '#dc2626' },
-  dormant: { bg: 'rgba(107,114,128,0.12)', color: '#6b7280' },
-};
 
-const WON_STAGES = new Set(['won', 'closed-won']);
-const LOST_STAGES = new Set(['lost']);
-const ACTIVE_STAGES = new Set(['contacted', 'proposal', 'proposal-sent', 'qualifying', 'quoted', 'negotiation', 'negotiating', 'diagnostic-complete']);
-
-function stageStyle(stageId) {
-  return STAGE_COLORS[stageId] || { bg: 'rgba(107,114,128,0.1)', color: '#6b7280' };
+function dateLabel(value) {
+  if (!value) return 'No close date';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'No close date' : date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function personName(person) { return person ? (person.name || [person.firstName, person.lastName].filter(Boolean).join(' ') || person.email || '') : ''; }
+function dealContact(deal) { return deal.contactName || personName(deal.contact) || deal.company || 'No contact linked'; }
+function ownerName(deal) { return deal.ownerName || personName(deal.owner) || 'Unassigned'; }
+function stageIdForDeal(deal, stages) {
+  const raw = slugifyStageName(deal?.stage);
+  if (stages.some((stage) => stage.id === raw)) return raw;
+  const aliases = {
+    lead: ['new-lead', 'new'],
+    proposal: ['proposal-sent', 'proposal'],
+    won: ['closed-won', 'won'],
+    lost: ['closed-lost', 'lost'],
+  };
+  return (aliases[raw] || []).find((id) => stages.some((stage) => stage.id === id)) || raw;
 }
 
-function fmt(dateStr) {
-  if (!dateStr) return '—';
-  const d = new Date(dateStr);
-  if (isNaN(d)) return '—';
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+function StageBadge({ stage, title }) {
+  return <span style={{ color: stage.color, background: `${stage.color}18`, border: `1px solid ${stage.color}35`, borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700 }}>{title}</span>;
 }
 
-function exportCsv(rows, stages) {
-  const stageMap = Object.fromEntries(stages.map((s) => [s.id, s.title]));
-  const headers = ['ID', 'Title', 'Company', 'Contact', 'Amount', 'Currency', 'Stage', 'Probability', 'Expected close', 'Created'];
-  const lines = [
-    headers.join(','),
-    ...rows.map((d) => [
-      d.id,
-      `"${(d.title || '').replace(/"/g, '""')}"`,
-      `"${(d.company || '').replace(/"/g, '""')}"`,
-      `"${(d.contactName || '').replace(/"/g, '""')}"`,
-      d.amount || '',
-      d.currency || '',
-      stageMap[d.stage] || d.stage || '',
-      d.probability != null ? d.probability : '',
-      d.expectedCloseDate ? fmt(d.expectedCloseDate) : '',
-      fmt(d.createdAt),
-    ].join(',')),
-  ];
-  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `pipeline-${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+function DealCard({ deal, stage, onOpen, onDragStart, onDelete, onScore, cardFields }) {
+  return <article draggable onDragStart={(event) => onDragStart(event, deal)} onClick={() => onOpen(deal)} style={{ background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderLeft: `3px solid ${stage.color}`, borderRadius: 9, padding: 14, cursor: 'grab', alignSelf: 'start', boxShadow: '0 2px 8px rgba(15,23,42,.04)' }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><GripVertical size={15} style={{ color: 'var(--text-secondary)', marginTop: 2, flexShrink: 0 }} aria-hidden="true" /><div style={{ minWidth: 0, flex: 1 }}><h3 style={{ margin: 0, fontSize: 13, lineHeight: 1.35, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>{deal.title || 'Untitled deal'}</h3>{cardFields.contact && <p style={{ margin: '5px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>{dealContact(deal)}</p>}</div><button type="button" onClick={(event) => { event.stopPropagation(); onScore(deal); }} aria-label={`Generate deal score for ${deal.title}`} title="Generate deal score" style={iconButton}><Sparkles size={14} /></button><button type="button" onClick={(event) => { event.stopPropagation(); onDelete(deal); }} aria-label={`Delete deal ${deal.title}`} style={iconButton}><Trash2 size={14} /></button></div>
+    {(cardFields.amount || cardFields.probability) && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 14, alignItems: 'center' }}>{cardFields.amount && <strong style={{ fontSize: 13, color: 'var(--text-primary)' }}>{formatMoney(deal.amount || 0, { currency: deal.currency })}</strong>}{cardFields.probability && <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{Number(deal.probability ?? 0)}%</span>}</div>}
+    {(cardFields.owner || cardFields.expectedClose) && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 11, paddingTop: 10, borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)' }}>{cardFields.owner && <span>{ownerName(deal)}</span>}{cardFields.expectedClose && <span>{dateLabel(deal.expectedClose)}</span>}</div>}
+  </article>;
 }
 
-const EMPTY_FORM = {
-  title: '', company: '', contactName: '', amount: '', probability: '50', stage: '',
-};
-
-const Pipeline = () => {
+export default function Pipeline() {
   const notify = useNotify();
-  const { user } = useContext(AuthContext) || {};
-  const isTravelTenant = user?.tenant?.vertical === 'travel';
+  const [deals, setDeals] = useState([]); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]);
+  const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [view, setView] = useState('kanban'); const [search, setSearch] = useState('');
+  const [stageFilter, setStageFilter] = useState(''); const [ownerFilter, setOwnerFilter] = useState(''); const [pipelineId, setPipelineId] = useState(''); const [showFilters, setShowFilters] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false); const [showCardCustomizer, setShowCardCustomizer] = useState(false); const [cardFields, setCardFields] = useState(() => { try { return JSON.parse(localStorage.getItem('deals-card-fields')) || { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } catch { return { contact: true, amount: true, probability: true, owner: true, expectedClose: true }; } });
+  const [showCreate, setShowCreate] = useState(false); const [createDealDefaults, setCreateDealDefaults] = useState({}); const [selectedDeal, setSelectedDeal] = useState(null); const [dragged, setDragged] = useState(null);
 
-  const [deals, setDeals] = useState([]);
-  const [contacts, setContacts] = useState([]);
-  const [stages, setStages] = useState([]);
-  const [loading, setLoading] = useState(true);
-  // Server-driven pagination (?limit=&offset=&page=) — `deals` holds ONLY
-  // the current page's rows; header totals + KPI tiles come from the
-  // envelope's `total` / /api/deals/stats, falling back to the loaded rows
-  // when the backend (or a test mock) answers with the legacy plain array.
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
-  const [stats, setStats] = useState(null);
-  const dealsRequestId = useRef(0);
-  // First load shows the spinner; later refetches (page turns, filters)
-  // keep stale rows visible instead of flashing "Loading deals…"
-  // (mirrors Contracts.jsx — never clear before the next page lands).
-  const firstDealsLoad = useRef(true);
-
-  // Filters
-  const [searchParams, setSearchParams] = useSearchParams();
-  const _validSubBrands = TRAVEL_SUB_BRANDS.map((sb) => sb.value).filter(Boolean);
-  const parseSubBrandParam = (raw) => {
-    if (!raw) return '';
-    const first = raw.split(',').map((s) => s.trim()).find((s) => _validSubBrands.includes(s));
-    return first || '';
-  };
-  const [selectedSubBrand, setSelectedSubBrand] = useState(() =>
-    parseSubBrandParam(searchParams.get('subBrand')),
-  );
-  const [filterStage, setFilterStage] = useState('');
-  const [search, setSearch] = useState('');
-
-  // Inline stage update
-  const [updatingId, setUpdatingId] = useState(null);
-
-  // Delete
-  const [deletingId, setDeletingId] = useState(null);
-
-  // Modals
-  const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
-  const [selectedDeal, setSelectedDeal] = useState(null);
-  const [aiScoreModal, setAiScoreModal] = useState(null);
-
-  // Sub-brand ↔ URL sync
-  useEffect(() => {
-    const current = searchParams.get('subBrand') || '';
-    if (!selectedSubBrand) {
-      if (current) { searchParams.delete('subBrand'); setSearchParams(searchParams, { replace: true }); }
-      return;
-    }
-    if (current !== selectedSubBrand) {
-      searchParams.set('subBrand', selectedSubBrand);
-      setSearchParams(searchParams, { replace: true });
-    }
-  }, [selectedSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const fromUrl = parseSubBrandParam(searchParams.get('subBrand'));
-    if (fromUrl !== selectedSubBrand) setSelectedSubBrand(fromUrl);
-  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Load current page (+ authoritative totals). Stage/subBrand narrow
-  // server-side so filters work across ALL pages; text search stays
-  // client-side (/api/deals has no ?q=) and narrows the loaded page below.
-  const load = useCallback(() => {
-    const myId = ++dealsRequestId.current;
-    const isCurrent = () => myId === dealsRequestId.current;
-    const offset = (page - 1) * pageSize;
-    const params = new URLSearchParams({
-      limit: String(pageSize),
-      offset: String(offset),
-      page: String(page),
-    });
-    if (filterStage) params.set('stage', filterStage);
-    if (selectedSubBrand) params.set('subBrand', selectedSubBrand);
-    if (firstDealsLoad.current) setLoading(true);
-    Promise.all([
-      fetchApi(`/api/deals?${params.toString()}`).catch(() => []),
-      fetchApi('/api/deals/stats').catch(() => null),
-      fetchApi('/api/contacts').catch(() => []),
-      fetchApi('/api/pipeline_stages').catch(() => []),
-    ]).then(([dealData, statsData, contactData, stageData]) => {
-      if (!isCurrent()) return;
-      firstDealsLoad.current = false;
-      if (dealData && Array.isArray(dealData.data)) {
-        setDeals(dealData.data);
-        const serverTotal = typeof dealData.total === 'number' ? dealData.total : dealData.data.length;
-        setTotal(serverTotal);
-        setTotalPages(typeof dealData.totalPages === 'number' && dealData.totalPages >= 1 ? dealData.totalPages : Math.max(1, Math.ceil(serverTotal / pageSize)));
-      } else {
-        const list = Array.isArray(dealData) ? dealData : [];
-        setDeals(list);
-        setTotal(list.length);
-        setTotalPages(1);
-      }
-      setStats(statsData && !Array.isArray(statsData) ? statsData : null);
-      setContacts(Array.isArray(contactData) ? contactData : []);
-      if (Array.isArray(stageData) && stageData.length > 0) {
-        const seen = new Set();
-        const deduped = [];
-        for (const s of stageData) {
-          const id = slugifyStageName(s.name);
-          if (!id || seen.has(id)) continue;
-          seen.add(id);
-          deduped.push({ id, title: s.name, color: s.color, dbId: s.id });
-        }
-        if (deduped.length > 0) setStages(deduped);
-      }
-      setLoading(false);
-    }).catch(() => { if (isCurrent()) setLoading(false); });
-  }, [page, pageSize, filterStage, selectedSubBrand]);
-
-  // Stage/subBrand changes restart from page 1 (refetch follows via load).
-  useEffect(() => {
-    setPage(1);
-  }, [filterStage, selectedSubBrand]);
-
-  // If the total shrinks under the current page (deals deleted elsewhere),
-  // step back to the last valid page (mirrors Clients.jsx).
-  useEffect(() => {
-    if (!loading && page > totalPages) setPage(totalPages);
-  }, [loading, page, totalPages]);
-
-  // Refetch the current page whenever load identity changes (page turns,
-  // page-size, stage/subBrand filters, or manual refresh).
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  useEffect(() => {
-    const socket = io('/', { reconnection: false, timeout: 5000 });
-    socket.on('connect_error', () => {});
-    socket.on('error', () => {});
-    socket.on('deal_updated', (updated) => {
-      setDeals((prev) => {
-        const exists = prev.find((d) => d.id === updated.id);
-        return exists ? prev.map((d) => d.id === updated.id ? updated : d) : [updated, ...prev];
-      });
-    });
-    socket.on('deal_deleted', (id) => setDeals((prev) => prev.filter((d) => d.id !== id)));
-    return () => socket.disconnect();
-  }, []);
-
-  // Visible rows after filters
-  const visible = useMemo(() => {
-    let rows = deals;
-    if (selectedSubBrand) rows = rows.filter((d) => d.subBrand === selectedSubBrand);
-    if (filterStage)      rows = rows.filter((d) => d.stage === filterStage);
-    const q = search.trim().toLowerCase();
-    if (q) rows = rows.filter((d) =>
-      (d.title || '').toLowerCase().includes(q) ||
-      (d.company || '').toLowerCase().includes(q) ||
-      (d.contactName || '').toLowerCase().includes(q),
-    );
-    return rows;
-  }, [deals, selectedSubBrand, filterStage, search]);
-
-  // KPI tiles — prefer authoritative /api/deals/stats aggregates (correct
-  // across ALL pages); fall back to reducing the loaded page when stats
-  // are unavailable (legacy server / test mock answering an array).
-  const kpis = useMemo(() => {
-    let total = 0, won = 0, active = 0, lost = 0;
-    for (const d of deals) {
-      const amt = Number(d.amount) || 0;
-      total += amt;
-      if (WON_STAGES.has(d.stage))    won    += amt;
-      if (ACTIVE_STAGES.has(d.stage)) active += amt;
-      if (LOST_STAGES.has(d.stage))   lost   += amt;
-    }
-    if (stats) {
-      if (typeof stats.totalValue === 'number') total = stats.totalValue;
-      if (typeof stats.wonValue === 'number') won = stats.wonValue;
-      if (typeof stats.lostValue === 'number') lost = stats.lostValue;
-      if (Array.isArray(stats.byStage)) {
-        active = stats.byStage
-          .filter((s) => ACTIVE_STAGES.has(s.stage))
-          .reduce((s, x) => s + (Number(x.value) || 0), 0);
-      }
-    }
-    return { total, won, active, lost };
-  }, [deals, stats]);
-
-  // Stage options for filter/form
-  const stageOptions = useMemo(() => stages, [stages]);
-
-  // Lightweight totals refresh after mutations (row updates stay local).
-  const refreshStats = useCallback(() => {
-    fetchApi('/api/deals/stats')
-      .then((s) => { if (s && !Array.isArray(s)) setStats(s); })
-      .catch(() => {});
-  }, []);
-
-  // Inline stage update
-  const updateStage = async (id, newStage) => {
-    setUpdatingId(id);
-    const prev = deals;
-    setDeals((d) => d.map((x) => x.id === id ? { ...x, stage: newStage } : x));
+  const load = useCallback(async () => {
+    setLoading(true); setError('');
     try {
-      await fetchApi(`/api/deals/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ stage: newStage }),
-      });
-      refreshStats();
-    } catch (e) {
-      setDeals(prev);
-      notify.error(e?.body?.error || 'Failed to update stage');
-    } finally {
-      setUpdatingId(null);
-    }
-  };
+      const query = new URLSearchParams({ limit: '500', page: '1' }); if (pipelineId) query.set('pipelineId', pipelineId);
+      const [dealData, stageData, pipelineData] = await Promise.all([fetchApi(`/api/deals?${query.toString()}`), fetchApi('/api/pipeline_stages'), fetchApi('/api/pipelines?fields=summary')]);
+      const list = Array.isArray(dealData) ? dealData : (dealData?.data || []); setDeals(list);
+      setStages((Array.isArray(stageData) ? stageData : []).map((stage, index) => ({ id: slugifyStageName(stage.name), title: stage.name, dbId: stage.id, color: stage.color || STAGE_COLORS[index % STAGE_COLORS.length], position: stage.position ?? index })).filter((stage) => stage.id));
+      setPipelines(Array.isArray(pipelineData) ? pipelineData : []);
+    } catch (err) { setError(err?.body?.error || 'Unable to load deals'); } finally { setLoading(false); }
+  }, [pipelineId]);
+  useEffect(() => { load(); }, [load]);
 
-  // Delete
-  const remove = async (deal) => {
-    const ok = await notify.confirm({
+  const ownerOptions = useMemo(() => { const map = new Map(); deals.forEach((deal) => { if (deal.ownerId || ownerName(deal) !== 'Unassigned') map.set(String(deal.ownerId || ownerName(deal)), ownerName(deal)); }); return [...map.entries()]; }, [deals]);
+  const visibleDeals = useMemo(() => { const query = search.trim().toLowerCase(); return deals.filter((deal) => { const matchesText = !query || [deal.title, deal.company, deal.contactName, dealContact(deal), ownerName(deal)].some((value) => String(value || '').toLowerCase().includes(query)); return matchesText && (!stageFilter || stageIdForDeal(deal, stages) === stageFilter) && (!ownerFilter || String(deal.ownerId || ownerName(deal)) === ownerFilter); }); }, [deals, search, stageFilter, ownerFilter, stages]);
+  const stageRows = useMemo(() => stages.map((stage) => { const rows = visibleDeals.filter((deal) => stageIdForDeal(deal, stages) === stage.id); const value = rows.reduce((sum, deal) => sum + (Number(deal.amount) || 0), 0); return { ...stage, rows, value }; }), [stages, visibleDeals]);
+
+  const openDeal = async (deal) => { setSelectedDeal(deal); try { setSelectedDeal(await fetchApi(`/api/deals/${deal.id}`)); } catch (_) { /* keep board row */ } };
+  const moveDeal = async (deal, targetStage) => {
+    if (!deal || !targetStage || deal.stage === targetStage) return;
+    const lostReason = targetStage === 'lost' ? window.prompt('Reason for losing this deal:') : '';
+    if (targetStage === 'lost' && !lostReason) return;
+    const previous = deals; setDeals((rows) => rows.map((row) => row.id === deal.id ? { ...row, stage: targetStage, probability: targetStage === 'won' ? 100 : targetStage === 'lost' ? 0 : row.probability } : row));
+    try { await fetchApi(`/api/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify({ stage: targetStage, ...(lostReason ? { lostReason } : {}) }) }); notify.success('Deal stage updated'); } catch (err) { setDeals(previous); notify.error(err?.body?.error || 'Unable to move deal'); }
+  };
+  
+  const deleteDeal = async (deal) => {
+    if (!await notify.confirm({
       title: 'Delete deal',
       message: `Delete "${deal.title}"? This cannot be undone.`,
       confirmText: 'Delete',
       destructive: true,
-    });
-    if (!ok) return;
-    setDeletingId(deal.id);
+    })) return;
+    try { await fetchApi(`/api/deals/${deal.id}`, { method: 'DELETE' }); setDeals((rows) => rows.filter((row) => row.id !== deal.id)); notify.success('Deal deleted'); } catch (err) { notify.error(err?.body?.error || 'Unable to delete deal'); }
+  };
+  const generateDealScore = async (deal) => {
     try {
-      await fetchApi(`/api/deals/${deal.id}`, { method: 'DELETE' });
-      setDeals((prev) => prev.filter((d) => d.id !== deal.id));
-      setTotal((t) => Math.max(0, t - 1));
-      refreshStats();
-      notify.success('Deal deleted');
-    } catch (e) {
-      notify.error(e?.body?.error || 'Failed to delete');
-    } finally {
-      setDeletingId(null);
-    }
+      const result = await fetchApi(`/api/ai_scoring/score/${deal.id}`);
+      setDeals((rows) => rows.map((row) => row.id === deal.id ? { ...row, probability: result.probability } : row));
+      notify.success('Deal score updated');
+    } catch (err) { notify.error(err?.body?.error || 'Unable to generate deal score'); }
   };
 
-  // Create
-  const openCreate = () => {
-    setForm({ ...EMPTY_FORM, stage: stageOptions[0]?.id || 'lead' });
-    setShowCreate(true);
-  };
+  return <div style={{ padding: '24px 28px', maxWidth: 1500, margin: '0 auto' }}>
+    <style>{'.deals-kanban-list { scrollbar-width: thin; scrollbar-color: #94a3b8 #e2e8f0; } .deals-kanban-list::-webkit-scrollbar { width: 10px; } .deals-kanban-list::-webkit-scrollbar-track { background: #e2e8f0; border-radius: 6px; } .deals-kanban-list::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 6px; border: 2px solid #e2e8f0; }'}</style>
+    <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 22 }}><div><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Briefcase size={21} color="var(--accent-color)" /><h1 style={heading}>Deals and Pipelines</h1></div><p style={subtitle}>Track and manage your deals across different stages</p></div><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><button type="button" style={secondaryButton} onClick={load}><RefreshCw size={14} /> Refresh</button><button type="button" style={primaryButton} onClick={() => { setCreateDealDefaults({ pipelineId: pipelineId || undefined, stage: stages[0]?.id || undefined }); setShowCreate(true); }}><Plus size={15} /> Add deal</button></div></header>
+    <section style={toolbar}><div style={{ display: 'flex', gap: 5, background: 'var(--subtle-bg)', padding: 4, borderRadius: 9 }}><button type="button" style={view === 'kanban' ? activeToggle : toggle} onClick={() => setView('kanban')}><Briefcase size={14} /> Kanban</button><button type="button" style={view === 'list' ? activeToggle : toggle} onClick={() => setView('list')}><List size={14} /> List</button></div><label style={control}><span>Pipeline</span><select value={pipelineId} onChange={(event) => setPipelineId(event.target.value)}><option value="">All pipelines</option>{pipelines.map((pipeline) => <option key={pipeline.id} value={pipeline.id}>{pipeline.name}</option>)}</select><ChevronDown size={13} /></label><button type="button" style={secondaryButton} onClick={() => setShowFilters((value) => !value)}><SlidersHorizontal size={14} /> More filters</button><div style={{ marginLeft: 'auto', position: 'relative' }}><Search size={15} style={{ position: 'absolute', left: 10, top: 10, color: 'var(--text-secondary)' }} /><input aria-label="Search deals" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search deals..." style={{ ...input, paddingLeft: 32, width: 210 }} /></div><div style={{ position: 'relative' }}><button type="button" title="Deal settings" aria-label="Deal settings" style={iconButton} onClick={() => setSettingsOpen((value) => !value)}><Settings size={16} /></button>{settingsOpen && <div role="menu" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 50, width: 220, padding: 6, border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--surface-color)', boxShadow: '0 12px 30px rgba(15,23,42,.15)' }}><button type="button" role="menuitem" style={settingsItem} onClick={() => { setSettingsOpen(false); setShowCardCustomizer(true); }}>Customize deal cards</button><button type="button" role="menuitem" style={settingsItem} onClick={() => { setSettingsOpen(false); window.location.href = '/pipelines'; }}>Set your default pipeline</button><button type="button" role="menuitem" style={settingsItem} onClick={() => { window.location.href = pipelineId ? '/pipelines?edit=' + pipelineId : '/pipelines'; }}>Edit pipeline</button><button type="button" role="menuitem" style={settingsItem} onClick={() => { window.location.href = '/pipelines'; }}>Create pipeline</button></div>}</div></section>
+    {showFilters && <section style={{ ...toolbar, marginTop: -12, borderTop: 0 }}><Filter size={15} color="var(--text-secondary)" /><label style={control}><span>Stage</span><select value={stageFilter} onChange={(event) => setStageFilter(event.target.value)}><option value="">All stages</option>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.title}</option>)}</select></label><label style={control}><span>Owner</span><select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}><option value="">All owners</option>{ownerOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label></section>}
+    {error && <div role="alert" style={alert}>{error}<button type="button" onClick={load} style={linkButton}>Try again</button></div>}
+    {loading ? <div style={empty}>Loading deals...</div> : stageRows.length === 0 ? <div style={empty}>No pipeline stages configured.</div> : view === 'kanban' ? <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(stageRows.length, 1)}, minmax(0, 1fr))`, gap: 8, height: 'calc(100vh - 430px)', minHeight: 360, overflow: 'hidden', paddingBottom: 12 }}>{stageRows.map((stage) => <section key={stage.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (dragged) moveDeal(dragged, stage.id); setDragged(null); }} style={{ minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: 8 }}><div style={{ borderTop: `3px solid ${stage.color}`, padding: '8px 4px 10px' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}><div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}><h2 style={{ ...columnTitle, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{stage.title}</h2><span style={countBadge}>{stage.rows.length}</span></div><StageBadge stage={stage} title={formatMoney(stage.value, { maximumFractionDigits: 0 })} /></div><div style={columnMeta}>Weighted value {formatMoney(stage.rows.reduce((sum, deal) => sum + (Number(deal.amount) || 0) * (Number(deal.probability ?? 0) / 100), 0), { maximumFractionDigits: 0 })}</div></div><button type="button" onClick={() => { setCreateDealDefaults({ pipelineId: pipelineId || undefined, stage: stage.id }); setShowCreate(true); }} style={addDealButton}><Plus size={14} /> Add deal</button><div className="deals-kanban-list" style={{ display: 'grid', gap: 8, marginTop: 8, flex: 1, minHeight: 0, overflowY: 'scroll', alignContent: 'start', gridAutoRows: 'max-content', paddingRight: 4 }}>{stage.rows.map((deal) => <DealCard key={deal.id} deal={deal} stage={stage} cardFields={cardFields} onOpen={openDeal} onDragStart={(event, row) => { setDragged(row); event.dataTransfer.effectAllowed = 'move'; }} onDelete={deleteDeal} onScore={generateDealScore} />)}{stage.rows.length === 0 && <div style={dropHint}>Drop deals here</div>}</div></section>)}</div> : <div style={{ border: '1px solid var(--border-color)', borderRadius: 10, overflow: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}><thead><tr>{['Deal', 'Contact', 'Stage', 'Owner', 'Amount', 'Probability', 'Expected close'].map((headingText) => <th key={headingText} style={th}>{headingText}</th>)}</tr></thead><tbody>{visibleDeals.map((deal) => { const stage = stageRows.find((row) => row.id === stageIdForDeal(deal, stages)) || { id: deal.stage, title: deal.stage, color: '#64748b' }; return <tr key={deal.id} onClick={() => openDeal(deal)} style={{ cursor: 'pointer' }}><td style={td}><strong>{deal.title}</strong></td><td style={td}>{dealContact(deal)}</td><td style={td}><StageBadge stage={stage} title={stage.title} /></td><td style={td}>{ownerName(deal)}</td><td style={td}>{formatMoney(deal.amount || 0, { currency: deal.currency })}</td><td style={td}>{deal.probability ?? 0}%</td><td style={td}>{dateLabel(deal.expectedClose)}</td></tr>; })}</tbody></table>{visibleDeals.length === 0 && <div style={empty}>No deals match your filters.</div>}</div>}
+    <div style={{ marginTop: 12, color: 'var(--text-secondary)', fontSize: 12 }}>Showing {visibleDeals.length} of {deals.length} deals</div>
+    {showCardCustomizer && <div role="presentation" style={overlay} onMouseDown={(event) => { if (event.target === event.currentTarget) setShowCardCustomizer(false); }}><div role="dialog" aria-modal="true" style={{ ...formCard, width: 'min(420px, calc(100vw - 32px))' }}><div style={formHeader}><h2 style={{ margin: 0, fontSize: 18 }}>Customize deal cards</h2><button type="button" aria-label="Close" onClick={() => setShowCardCustomizer(false)} style={iconButton}><X size={18} /></button></div>{[['contact', 'Contact'], ['amount', 'Deal value'], ['probability', 'Probability'], ['owner', 'Owner'], ['expectedClose', 'Expected close date']].map(([key, label]) => <label key={key} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, color: 'var(--text-primary)' }}><input type="checkbox" checked={cardFields[key]} onChange={(event) => setCardFields((current) => ({ ...current, [key]: event.target.checked }))} />{label}</label>)}<button type="button" style={primaryButton} onClick={() => { localStorage.setItem('deals-card-fields', JSON.stringify(cardFields)); setShowCardCustomizer(false); }}>Save</button></div></div>}
+    {selectedDeal && <DealModal deal={selectedDeal} onClose={() => setSelectedDeal(null)} />}
+    {showCreate && <ContactDealModal deal={createDealDefaults} onClose={() => setShowCreate(false)} onDone={load} />}
 
-  const submitCreate = async (e) => {
-    e.preventDefault();
-    if (!form.title.trim()) { notify.error('Title is required'); return; }
-    setSaving(true);
-    try {
-      const body = {
-        title: form.title.trim(),
-        company: form.company.trim() || undefined,
-        contactName: form.contactName.trim() || undefined,
-        amount: form.amount ? parseFloat(form.amount) : 0,
-        probability: form.probability ? parseInt(form.probability, 10) : 50,
-        stage: form.stage || stageOptions[0]?.id || 'lead',
-      };
-      const created = await fetchApi('/api/deals', { method: 'POST', body: JSON.stringify(body) });
-      if (created && created.id) setDeals((prev) => [created, ...prev]);
-      refreshStats();
-      notify.success('Deal created');
-      setShowCreate(false);
-    } catch (err) {
-      notify.error(err?.body?.error || err?.message || 'Failed to create deal');
-    } finally {
-      setSaving(false);
-    }
-  };
+  </div>;
+}
 
-  // AI score
-  const fetchAiScore = async (e, dealId) => {
-    e.stopPropagation();
-    try {
-      const data = await fetchApi(`/api/ai_scoring/score/${dealId}`);
-      setAiScoreModal(data);
-    } catch {
-      notify.error('Failed to connect to AI Predictor.');
-    }
-  };
-
-  // Stage select component
-  function StageSelect({ deal }) {
-    const s = stageStyle(deal.stage);
-    return (
-      <select
-        value={deal.stage || ''}
-        disabled={updatingId === deal.id}
-        onChange={(ev) => updateStage(deal.id, ev.target.value)}
-        aria-label="Change stage"
-        onClick={(ev) => ev.stopPropagation()}
-        style={{
-          background: s.bg,
-          color: s.color,
-          border: `1px solid ${s.color}33`,
-          borderRadius: 20,
-          padding: '4px 22px 4px 10px',
-          fontSize: 12,
-          fontWeight: 600,
-          cursor: updatingId === deal.id ? 'wait' : 'pointer',
-          opacity: updatingId === deal.id ? 0.6 : 1,
-          minWidth: 110,
-          colorScheme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
-        }}
-      >
-        {stageOptions.map((st) => (
-          <option key={st.id} value={st.id} style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>
-            {st.title}
-          </option>
-        ))}
-      </select>
-    );
-  }
-
-  return (
-    <div style={{ padding: '24px 28px', maxWidth: 1320, margin: '0 auto' }}>
-
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8,
-            background: 'var(--subtle-bg)', border: '1px solid var(--border-color)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Briefcase size={16} style={{ color: 'var(--accent-color)' }} />
-          </div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>
-            Sales Pipeline
-          </h1>
-          <span style={{
-            fontSize: 12, color: 'var(--success-color)', marginLeft: 4,
-            padding: '2px 10px', borderRadius: 12,
-            border: '1px solid var(--success-color)',
-            background: 'rgba(16,185,129,0.08)',
-            fontWeight: 600,
-          }}>
-            Live Sync Active
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button type="button" onClick={() => exportCsv(visible, stageOptions)} style={secondaryBtn} title="Export to CSV">
-            <Upload size={14} /> Export
-          </button>
-          <button type="button" onClick={openCreate} style={primaryBtn}>
-            <Plus size={14} /> Add Deal
-          </button>
-        </div>
-      </div>
-
-      <p style={{ margin: '0 0 20px 0', fontSize: 13.5, color: 'var(--text-secondary)' }}>
-        {stageOptions.length > 0
-          ? stageOptions.map((s, i) => (
-              <span key={s.id}>{i > 0 && ' / '}<strong style={{ color: 'var(--text-primary)' }}>{s.title}</strong></span>
-            ))
-          : 'Sales pipeline'
-        }. <strong style={{ color: 'var(--text-primary)' }}>{(stats?.totalDeals ?? deals.length).toLocaleString()}</strong> deal{(stats?.totalDeals ?? deals.length) !== 1 ? 's' : ''}.
-      </p>
-
-      {/* Filters */}
-      <div style={{
-        display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center',
-        background: 'var(--surface-color)',
-        border: '1px solid var(--border-color)',
-        borderRadius: 12, padding: '14px 16px',
-        marginBottom: 18,
-      }}>
-        <Filter size={14} aria-hidden style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
-
-        {/* Sub-brand filter — travel tenants only */}
-        {isTravelTenant && (
-          <select
-            value={selectedSubBrand}
-            onChange={(e) => setSelectedSubBrand(e.target.value)}
-            aria-label="Filter by sub-brand"
-            style={selectStyle}
-          >
-            {TRAVEL_SUB_BRANDS.map((sb) => (
-              <option key={sb.value || 'all'} value={sb.value}>{sb.label}</option>
-            ))}
-          </select>
-        )}
-
-        {/* Stage filter */}
-        <select
-          value={filterStage}
-          onChange={(e) => setFilterStage(e.target.value)}
-          aria-label="Filter by stage"
-          style={selectStyle}
-        >
-          <option value="">All stages</option>
-          {stageOptions.map((s) => (
-            <option key={s.id} value={s.id}>{s.title}</option>
-          ))}
-        </select>
-
-        {/* Search */}
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-          <Search size={13} aria-hidden style={{ position: 'absolute', left: 9, color: 'var(--text-secondary)', pointerEvents: 'none' }} />
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search title, company, contact…"
-            aria-label="Search deals"
-            style={{ ...selectStyle, paddingLeft: 30, minWidth: 220 }}
-          />
-        </div>
-
-        <button type="button" onClick={load} style={secondaryBtn} title="Refresh" aria-label="Refresh deals">
-          <RefreshCw size={13} />
-        </button>
-      </div>
-
-      {/* KPI tiles */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
-        gap: 12, marginBottom: 20,
-      }}>
-        {[
-          { label: 'Total pipeline value', val: kpis.total, color: 'var(--text-primary)' },
-          { label: 'Won',                  val: kpis.won,    color: 'var(--success-color, #16a34a)' },
-          { label: 'In negotiation',       val: kpis.active, color: 'var(--warning-color, #a16207)' },
-          { label: 'Lost',                 val: kpis.lost,   color: 'var(--danger-color, #dc2626)' },
-        ].map((tile) => (
-          <div key={tile.label} style={{
-            background: 'var(--surface-color)',
-            border: '1px solid var(--border-color)',
-            borderRadius: 12, padding: '14px 16px',
-          }}>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>{tile.label}</div>
-            <div style={{ fontSize: 21, fontWeight: 700, color: tile.color }}>
-              {formatMoney(tile.val)}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Server-synced pagination (?limit=&offset=&page=) — compact pill
-          above the table, right-aligned and sized to content. */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'var(--subtle-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: '5px 7px 5px 12px', fontSize: 12, width: 'fit-content', maxWidth: '100%' }}>
-          <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-            {total === 0 ? 'No deals' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()}`}
-          </span>
-          <select aria-label="Deals per page" value={pageSize} onChange={(e) => { setPageSize(parseInt(e.target.value, 10) || 10); setPage(1); }} style={{ ...selectStyle, minWidth: 0, width: 'auto', padding: '3px 6px', fontSize: 12, borderRadius: 7 }}>
-            {[5, 10, 20, 50].map((n) => <option key={n} value={n}>{n} / page</option>)}
-          </select>
-          <button type="button" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage((p) => Math.max(p - 1, 1))} style={{ ...secondaryBtn, padding: '3px 9px', fontSize: 12, borderRadius: 7, opacity: page <= 1 ? 0.45 : 1, cursor: page <= 1 ? 'not-allowed' : 'pointer' }}>‹ Prev</button>
-          <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, whiteSpace: 'nowrap' }}>{page} / {totalPages}</span>
-          <button type="button" aria-label="Next page" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(p + 1, totalPages))} style={{ ...secondaryBtn, padding: '3px 9px', fontSize: 12, borderRadius: 7, opacity: page >= totalPages ? 0.45 : 1, cursor: page >= totalPages ? 'not-allowed' : 'pointer' }}>Next ›</button>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div style={{
-        background: 'var(--surface-color)',
-        border: '1px solid var(--border-color)',
-        borderRadius: 12, overflow: 'hidden',
-      }}>
-        {loading ? (
-          <div style={emptyStyle}>Loading deals…</div>
-        ) : visible.length === 0 ? (
-          <div style={emptyStyle}>
-            {deals.length === 0
-              ? 'No deals yet. Click "+ Add Deal" to create the first one.'
-              : 'No deals match the current filters.'}
-          </div>
-        ) : (
-          <TopScrollSync>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
-              <thead>
-                <tr>
-                  {['Deal title', 'Contact', 'Company', 'Amount', 'Expected close', 'Stage', 'Prob.', 'Actions'].map((h) => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((deal) => {
-                  const sc = stageStyle(deal.stage);
-                  return (
-                    <tr
-                      key={deal.id}
-                      style={{ borderTop: '1px solid var(--border-color)', cursor: 'pointer' }}
-                      onClick={() => setSelectedDeal(deal)}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--subtle-bg)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                    >
-                      {/* Title */}
-                      <td style={tdStyle}>
-                        <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>
-                          {deal.title}
-                        </span>
-                        {deal.subBrand && (
-                          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
-                            {deal.subBrand}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Contact */}
-                      <td style={tdStyle}>
-                        <span style={{ color: 'var(--text-secondary)', fontSize: 13.5 }}>
-                          {deal.contactName || '—'}
-                        </span>
-                      </td>
-
-                      {/* Company */}
-                      <td style={tdStyle}>
-                        {deal.company ? (
-                          <span style={{
-                            display: 'inline-block',
-                            padding: '3px 9px', borderRadius: 6,
-                            fontSize: 12, fontWeight: 600,
-                            background: 'var(--subtle-bg-3)',
-                            color: 'var(--text-secondary)',
-                          }}>
-                            {deal.company}
-                          </span>
-                        ) : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
-                      </td>
-
-                      {/* Amount */}
-                      <td style={{ ...tdStyle, fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: 'var(--text-primary)' }}>
-                        {deal.amount != null && deal.amount !== ''
-                          ? formatMoney(deal.amount, { currency: deal.currency })
-                          : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
-                      </td>
-
-                      {/* Expected close */}
-                      <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
-                        {fmt(deal.expectedCloseDate)}
-                      </td>
-
-                      {/* Stage — inline editable */}
-                      <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
-                        <StageSelect deal={deal} />
-                      </td>
-
-                      {/* Probability */}
-                      <td style={tdStyle}>
-                        <span style={{
-                          display: 'inline-block',
-                          padding: '3px 8px', borderRadius: 4,
-                          fontSize: 12, fontWeight: 700,
-                          background: `${sc.color}20`,
-                          color: sc.color,
-                        }}>
-                          {deal.probability != null ? `${deal.probability}%` : '—'}
-                        </span>
-                      </td>
-
-                      {/* Actions */}
-                      <td style={{ ...tdStyle, textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
-                        <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                          <button
-                            type="button"
-                            onClick={(e) => fetchAiScore(e, deal.id)}
-                            title="AI Predictive Score"
-                            aria-label={`Generate deal score for ${deal.title}`}
-                            style={{ ...iconBtnStyle, color: '#a855f7' }}
-                          >
-                            <Zap size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSelectedDeal(deal)}
-                            title="View / Edit deal"
-                            aria-label={`Edit deal ${deal.title}`}
-                            style={iconBtnStyle}
-                          >
-                            <Pencil size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => remove(deal)}
-                            disabled={deletingId === deal.id}
-                            title="Delete deal"
-                            aria-label={`Delete deal ${deal.title}`}
-                            style={{
-                              ...iconBtnStyle,
-                              color: 'var(--danger-color, #dc2626)',
-                              opacity: deletingId === deal.id ? 0.4 : 1,
-                              cursor: deletingId === deal.id ? 'wait' : 'pointer',
-                            }}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </TopScrollSync>
-        )}
-      </div>
-
-      {/* ── Create deal drawer ── */}
-      {showCreate && (
-        <div
-          onClick={(e) => { if (e.target === e.currentTarget) setShowCreate(false); }}
-          style={overlayStyle}
-        >
-          <form
-            onSubmit={submitCreate}
-            className="card"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Add new deal"
-            style={drawerStyle}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Add New Deal</h2>
-              <button type="button" onClick={() => setShowCreate(false)} style={closeBtn} aria-label="Close"><X size={16} /></button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <label style={labelStyle}>
-                Deal Title *
-                <input
-                  required type="text" value={form.title}
-                  onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  style={inputStyle} placeholder="e.g. Acme Corp Annual Renewal"
-                />
-              </label>
-
-              <div style={{ display: 'flex', gap: 10 }}>
-                <label style={{ ...labelStyle, flex: 1 }}>
-                  Contact name
-                  <input
-                    type="text" list="contacts-list" value={form.contactName}
-                    onChange={(e) => setForm({ ...form, contactName: e.target.value })}
-                    style={inputStyle} placeholder="Contact person"
-                  />
-                  <datalist id="contacts-list">
-                    {contacts.map((c) => <option key={c.id} value={c.name}>{c.company}</option>)}
-                  </datalist>
-                </label>
-                <label style={{ ...labelStyle, flex: 1 }}>
-                  Company
-                  <input
-                    type="text" list="companies-list" value={form.company}
-                    onChange={(e) => setForm({ ...form, company: e.target.value })}
-                    style={inputStyle} placeholder="Company name"
-                  />
-                  <datalist id="companies-list">
-                    {[...new Set(contacts.map((c) => c.company))].filter(Boolean).map((comp, i) => (
-                      <option key={i} value={comp} />
-                    ))}
-                  </datalist>
-                </label>
-              </div>
-
-              <div style={{ display: 'flex', gap: 10 }}>
-                <label style={{ ...labelStyle, flex: 1 }}>
-                  Amount ({currencySymbol()})
-                  <input
-                    type="number" min="0" step="any" value={form.amount}
-                    onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                    style={inputStyle} placeholder="0"
-                  />
-                </label>
-                <label style={{ ...labelStyle, width: 100 }}>
-                  Probability (%)
-                  <input
-                    type="number" min="0" max="100" value={form.probability}
-                    onChange={(e) => setForm({ ...form, probability: e.target.value })}
-                    style={inputStyle} placeholder="50"
-                  />
-                </label>
-              </div>
-
-              <label style={labelStyle}>
-                Stage
-                <select
-                  value={form.stage}
-                  onChange={(e) => setForm({ ...form, stage: e.target.value })}
-                  style={inputStyle}
-                >
-                  {stageOptions.map((s) => (
-                    <option key={s.id} value={s.id}>{s.title}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
-              <button type="button" onClick={() => setShowCreate(false)} style={secondaryBtn}>Cancel</button>
-              <button type="submit" disabled={saving} style={primaryBtn}>
-                {saving ? 'Saving…' : 'Save Deal'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* ── AI Score modal ── */}
-      {aiScoreModal && (
-        <div style={{ ...overlayStyle, backdropFilter: 'blur(10px)' }}>
-          <div className="card" style={{
-            padding: '2.5rem', width: 460,
-            border: '1px solid #a855f7',
-            boxShadow: '0 10px 40px rgba(168,85,247,0.2)',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Zap size={24} color="#a855f7" /> Deal Predictive Score
-              </h3>
-              <button onClick={() => setAiScoreModal(null)} aria-label="Close" style={closeBtn}><X size={24} /></button>
-            </div>
-            <div style={{ padding: '1.5rem', background: 'rgba(168,85,247,0.05)', borderRadius: 12, border: '1px solid rgba(168,85,247,0.2)', marginBottom: '1.5rem' }}>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Deal Analysis</p>
-              <h4 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1rem' }}>{aiScoreModal.title}</h4>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Win Probability Score:</span>
-                <span style={{ fontSize: '2rem', fontWeight: 'bold', color: aiScoreModal.probability > 70 ? 'var(--success-color)' : aiScoreModal.probability > 40 ? 'var(--warning-color)' : 'var(--danger-color)' }}>
-                  {aiScoreModal.probability}%
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Confidence Level:</span>
-                <span style={{ padding: '0.25rem 0.75rem', borderRadius: 12, backgroundColor: 'var(--subtle-bg-3)', fontSize: '0.875rem' }}>{aiScoreModal.confidence}</span>
-              </div>
-            </div>
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h5 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem' }}>Predictive Variables</h5>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div style={{ padding: '1rem', background: 'var(--subtle-bg)', borderRadius: 8 }}>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Stage Weighting</p>
-                  <p style={{ fontWeight: 500 }}>+{aiScoreModal.predictiveVariables?.stageWeight}</p>
-                </div>
-                <div style={{ padding: '1rem', background: 'var(--subtle-bg)', borderRadius: 8 }}>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Budget Bonus</p>
-                  <p style={{ fontWeight: 500 }}>+{aiScoreModal.predictiveVariables?.budgetBonus}</p>
-                </div>
-              </div>
-            </div>
-            <button className="btn-primary" style={{ width: '100%' }} onClick={() => setAiScoreModal(null)}>Dismiss Analysis</button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Deal detail modal ── */}
-      {selectedDeal && (
-        <DealModal deal={selectedDeal} onClose={() => setSelectedDeal(null)} />
-      )}
-    </div>
-  );
-};
-
-export default Pipeline;
-
-// ── Styles ──────────────────────────────────────────────────────────────────
-
-const selectStyle = {
-  padding: '7px 10px', borderRadius: 8,
-  border: '1px solid var(--border-color)',
-  background: 'var(--surface-color)',
-  color: 'var(--text-primary)',
-  fontSize: 13, minWidth: 130,
-};
-
-const primaryBtn = {
-  display: 'inline-flex', alignItems: 'center', gap: 6,
-  padding: '8px 14px', borderRadius: 8,
-  fontSize: 13, fontWeight: 600, cursor: 'pointer',
-  background: 'var(--primary-color, var(--accent-color))',
-  color: 'var(--accent-text, #fff)',
-  border: '1px solid var(--primary-color, var(--accent-color))',
-  whiteSpace: 'nowrap',
-};
-
-const secondaryBtn = {
-  display: 'inline-flex', alignItems: 'center', gap: 6,
-  padding: '8px 14px', borderRadius: 8,
-  fontSize: 13, fontWeight: 500, cursor: 'pointer',
-  background: 'var(--surface-color)',
-  color: 'var(--text-primary)',
-  border: '1px solid var(--border-color)',
-  whiteSpace: 'nowrap',
-};
-
-const thStyle = {
-  textAlign: 'left', padding: '12px 14px',
-  fontSize: 11.5, letterSpacing: '0.04em',
-  fontWeight: 600, textTransform: 'uppercase',
-  color: 'var(--text-secondary)',
-  borderBottom: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg)',
-  whiteSpace: 'nowrap',
-};
-
-const tdStyle = {
-  padding: '12px 14px',
-  fontSize: 13.5,
-  color: 'var(--text-primary)',
-  verticalAlign: 'middle',
-};
-
-const emptyStyle = {
-  padding: 48, textAlign: 'center',
-  fontSize: 14, color: 'var(--text-secondary)',
-};
-
-const iconBtnStyle = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  width: 30, height: 30, borderRadius: 7,
-  border: '1px solid transparent',
-  background: 'transparent',
-  color: 'var(--text-secondary)',
-  cursor: 'pointer',
-};
-
-const overlayStyle = {
-  position: 'fixed', inset: 0,
-  background: 'rgba(0,0,0,0.6)',
-  backdropFilter: 'blur(4px)',
-  WebkitBackdropFilter: 'blur(4px)',
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  zIndex: 1000, padding: '1rem',
-};
-
-const drawerStyle = {
-  background: 'var(--bg-color, var(--surface-color))',
-  color: 'var(--text-primary)',
-  width: '100%', maxWidth: 500,
-  maxHeight: '90vh', overflowY: 'auto',
-  padding: '1.5rem',
-};
-
-const closeBtn = {
-  background: 'transparent', border: 'none',
-  color: 'var(--text-secondary)', cursor: 'pointer', padding: 4,
-  display: 'flex', alignItems: 'center',
-};
-
-const labelStyle = {
-  display: 'flex', flexDirection: 'column', gap: 5,
-  fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500,
-};
-
-const inputStyle = {
-  padding: '8px 10px', borderRadius: 7,
-  border: '1px solid var(--border-color)',
-  background: 'var(--input-bg, var(--surface-color))',
-  color: 'var(--text-primary)', fontSize: 14,
-};
+const heading = { margin: 0, fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' };
+const subtitle = { margin: '5px 0 0 31px', color: 'var(--text-secondary)', fontSize: 13 };
+const toolbar = { display: 'flex', gap: 9, alignItems: 'center', flexWrap: 'wrap', padding: 10, marginBottom: 18, border: '1px solid var(--border-color)', borderRadius: 10, background: 'var(--surface-color)' };
+const primaryButton = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 14px', border: 0, borderRadius: 8, background: 'var(--primary-color, var(--accent-color))', color: 'var(--accent-text, #fff)', fontWeight: 700, fontSize: 13, cursor: 'pointer' };
+const secondaryButton = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--surface-color)', color: 'var(--text-primary)', fontWeight: 600, fontSize: 12, cursor: 'pointer' };
+const toggle = { ...secondaryButton, border: 0, padding: '7px 10px', background: 'transparent' };
+const activeToggle = { ...toggle, background: 'var(--primary-color, var(--accent-color))', color: '#fff' };
+const settingsItem = { display: 'block', width: '100%', padding: '9px 10px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', textAlign: 'left', fontSize: 12, cursor: 'pointer' };
+const formCard = { width: 'min(420px, calc(100vw - 32px))', padding: 22, borderRadius: 12, background: 'var(--surface-color)', border: '1px solid var(--border-color)', boxShadow: '0 20px 60px rgba(0,0,0,.25)', display: 'grid', gap: 14 };
+const formHeader = { display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
+const overlay = { position: 'fixed', inset: 0, zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: 'var(--overlay-bg, rgba(15,23,42,.45))' };
+const iconButton = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, padding: 0, border: '1px solid var(--border-color)', borderRadius: 7, background: 'var(--surface-color)', color: 'var(--text-secondary)', cursor: 'pointer' };
+const input = { width: '100%', boxSizing: 'border-box', padding: '9px 10px', border: '1px solid var(--border-color)', borderRadius: 7, background: 'var(--surface-color)', color: 'var(--text-primary)', fontSize: 13 };
+const control = { display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 12 };
+const alert = { padding: 12, marginBottom: 16, borderRadius: 8, background: 'rgba(239,68,68,.1)', color: 'var(--danger-color, #b91c1c)', fontSize: 13 };
+const linkButton = { marginLeft: 10, padding: 0, border: 0, background: 'transparent', color: 'inherit', textDecoration: 'underline', cursor: 'pointer' };
+const empty = { padding: 52, textAlign: 'center', color: 'var(--text-secondary)', border: '1px dashed var(--border-color)', borderRadius: 10 };
+const columnTitle = { margin: 0, fontSize: 14, color: 'var(--text-primary)' };
+const countBadge = { minWidth: 20, padding: '2px 6px', borderRadius: 999, background: 'var(--surface-color)', color: 'var(--text-secondary)', fontSize: 11, textAlign: 'center' };
+const columnMeta = { marginTop: 8, fontSize: 11, color: 'var(--text-secondary)' };
+const addDealButton = { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '8px 0', border: '1px dashed var(--border-color)', borderRadius: 7, background: 'transparent', color: 'var(--accent-color)', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
+const dropHint = { padding: '30px 8px', border: '1px dashed var(--border-color)', borderRadius: 8, textAlign: 'center', color: 'var(--text-secondary)', fontSize: 12 };
+const th = { padding: '12px 14px', textAlign: 'left', fontSize: 11, color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)', background: 'var(--subtle-bg)' };
+const td = { padding: '13px 14px', borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)', fontSize: 13 };

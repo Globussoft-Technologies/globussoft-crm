@@ -2571,7 +2571,7 @@ function renderGenericNav({
           copy through the catalog. */}
       <Link to="/whatsapp" icon={MessageSquare} label="WhatsApp" />
       <Link to="/contacts" icon={Users} label="Contacts" />
-      <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
+          <Link to="/pipeline" icon={Briefcase} label="Deals and Pipeline" />
       <GenericLeadsNavGroup Link={Link} counts={counts} isMobileViewport={isMobileViewport} />
       <Link to="/clients" icon={Building2} label="Clients" />
       <Link

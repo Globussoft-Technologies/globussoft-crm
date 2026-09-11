@@ -723,6 +723,11 @@ router.post(
       const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, {
         ragResult,
         cancellationPolicy,
+        recommendations: buildUnifiedRecommendations({
+          curriculumFit,
+          ragRecommendations: ragResult?.recommendations?.recommendedTrips,
+          limit: await getRecommendationTopK({ tenantId: tenant.id, subBrand }),
+        }),
       }).catch((e) => {
         console.warn("[diag-public-form] PDF failed (non-fatal):", e.message);
         return null;
@@ -843,11 +848,49 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
       tenantId: diag.tenantId,
       subBrand: diag.subBrand,
     });
+    let recommendationsRefreshed = false;
+    // Refresh reports created before the configured count became a target.
+    // This lets existing public and embed links benefit without a resubmission.
+    if (!ragResult || needsRecommendationRefresh(ragResult.recommendations?.recommendedTrips, recommendationLimit)) {
+      try {
+        const refreshedResult = await travelRag.runRagForDiagnostic({
+          tenantId: diag.tenantId,
+          diagnosticId: diag.id,
+          subBrand: diag.subBrand,
+          answers,
+        });
+        if (refreshedResult) {
+          ragResult = refreshedResult;
+          recommendationsRefreshed = true;
+        }
+      } catch (e) {
+        console.warn("[diag-public-report] RAG refresh failed:", e.message);
+      }
+    }
     const recommendations = buildUnifiedRecommendations({
       curriculumFit: parseJsonOrNull(diag.curriculumFitJson),
       ragRecommendations: ragResult?.recommendations?.recommendedTrips,
       limit: recommendationLimit,
     });
+    if (recommendationsRefreshed) {
+      try {
+        let snapshotBank = null;
+        try {
+          const snapshot = JSON.parse(diag.questionsJson || "{}");
+          snapshotBank = snapshot.questionsJson ? { version: snapshot.bankVersion, questionsJson: snapshot.questionsJson } : null;
+        } catch {
+          snapshotBank = null;
+        }
+        const refreshedPdfUrl = await generateDiagnosticPdfBestEffort(diag, snapshotBank, {
+          ragResult,
+          cancellationPolicy,
+          recommendations,
+        });
+        if (refreshedPdfUrl) diag.reportPdfUrl = refreshedPdfUrl;
+      } catch (e) {
+        console.warn("[diag-public-report] PDF refresh failed:", e.message);
+      }
+    }
 
     res.json({
       diagnosticId: diag.id,
@@ -1008,14 +1051,32 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
   const max = Math.max(1, Number(limit) || 10);
   const seen = new Set();
   const out = [];
+  const legacyFallback = 'Selected as a close match for the learning goals and travel preferences you shared.';
+  const fallbackSummary = (category) => {
+    const normalizedCategory = String(category || '').trim().toLowerCase();
+    if (normalizedCategory.includes('campus')) {
+      return 'An activity-led programme designed to build confidence, collaboration, and practical skills together.';
+    }
+    if (normalizedCategory.includes('international')) {
+      return 'An immersive international learning experience that combines cultural discovery with hands-on exploration.';
+    }
+    if (normalizedCategory.includes('day')) {
+      return 'A focused day experience that turns classroom learning into an engaging, memorable outing.';
+    }
+    return 'A well-rounded educational journey selected for its place-based learning and shared discovery opportunities.';
+  };
   const add = (item) => {
     const hasFitScore = item.fitScore !== null && item.fitScore !== undefined && item.fitScore !== '';
     const fitScore = Number(item.fitScore);
     // A zero or negative score is an explicit non-match, never a customer
     // recommendation. Score-less Travel Knowledge results remain eligible.
     if (hasFitScore && Number.isFinite(fitScore) && fitScore <= 0) return;
-    const key = String(item.driveLink || item.brochurePdfUrl || item.name || item.destination || '')
-      .replace(/\.pdf$/i, '').replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+    const titleKey = String(item.name || item.destination || '')
+      .replace(/\.pdf$/i, '')
+      .replace(/\b\d+\s*(?:day|days)\b/gi, ' ')
+      .replace(/\b(?:tour|trip|educational|option|package)\b/gi, ' ')
+      .replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+    const key = titleKey || String(item.driveLink || item.brochurePdfUrl || '').trim().toLowerCase();
     if (!key || seen.has(key) || out.length >= max) return;
     seen.add(key);
     out.push(item);
@@ -1025,9 +1086,12 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
       name: match.destination,
       driveLink: match.brochurePdfUrl || '',
       category: match.category || 'Other',
-      summary: (match.reasons || []).map((reason) => reason.rationale || reason.learningOutcome || reason.subject).filter(Boolean).slice(0, 2).join(' '),
+      // The outcomes belong in the highlights below. Repeating them here as
+      // a paragraph made curriculum recommendations read like copied text.
+      summary: '',
       learnings: (match.reasons || []).map((reason) => reason.learningOutcome).filter(Boolean).slice(0, 4),
       fitScore: match.fitScore ?? null,
+      source: 'curriculum',
     });
   }
   for (const trip of ragRecommendations || []) {
@@ -1035,12 +1099,30 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
       name: trip.name,
       driveLink: trip.driveLink || '',
       category: trip.category || 'Other',
-      summary: trip.summary || '',
+      summary: trip.summary && trip.summary !== legacyFallback
+        ? trip.summary
+        : fallbackSummary(trip.category),
       learnings: Array.isArray(trip.learnings) ? trip.learnings : [],
       fitScore: null,
     });
   }
   return out;
+}
+
+function needsRecommendationRefresh(recommendations, limit) {
+  const trips = Array.isArray(recommendations) ? recommendations : [];
+  if (trips.length < limit) return true;
+  const titles = new Set();
+  for (const trip of trips) {
+    const title = String(trip?.name || '')
+      .replace(/\.pdf$/i, '')
+      .replace(/\b\d+\s*(?:day|days)\b/gi, ' ')
+      .replace(/\b(?:tour|trip|educational|option|package)\b/gi, ' ')
+      .replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+    if (title && titles.has(title)) return true;
+    if (title) titles.add(title);
+  }
+  return false;
 }
 
 async function buildPublicCurriculumFitFallback({ tenantId, answers, questions }) {

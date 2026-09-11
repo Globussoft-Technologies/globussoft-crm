@@ -1,4 +1,4 @@
-import { describe, test, expect, vi } from 'vitest';
+import { describe, test, expect } from 'vitest';
 
 const travelRag = require('../../lib/travelRag.js');
 
@@ -49,6 +49,14 @@ describe('travelRag — parseRagResponse', () => {
     expect(out.recommendedTrips).toEqual([]);
   });
 
+  test('recovers an LLM response with an unescaped line break inside a JSON string', () => {
+    const text = `{"readinessScore": 7, "summary": "A useful\nlearning profile", "recommendedTrips": [{"name": "Hampi Tour", "summary": "History and\nheritage", "learnings": []}]}`;
+    const out = travelRag.parseRagResponse(text);
+
+    expect(out.summary).toBe('A useful\nlearning profile');
+    expect(out.recommendedTrips[0].summary).toBe('History and\nheritage');
+  });
+
   test('returns null for non-JSON text', () => {
     expect(travelRag.parseRagResponse('plain text')).toBeNull();
   });
@@ -81,5 +89,36 @@ describe('travelRag — parseRagResponse', () => {
     });
     expect(travelRag.parseRagResponse(text, 3).recommendedTrips).toHaveLength(3);
     expect(travelRag.parseRagResponse(text, 15).recommendedTrips).toHaveLength(15);
+  });
+});
+
+describe('travelRag — fillRecommendationTarget', () => {
+  test('keeps AI-ranked results first and fills the configured count with distinct semantic brochures', () => {
+    const result = travelRag.fillRecommendationTarget(
+      [{ name: 'Japan', driveLink: 'https://drive.example/japan', summary: 'AI-ranked match', learnings: [] }],
+      [
+        { fileName: 'Japan.pdf', driveLink: 'https://drive.example/japan', text: 'Duplicate result that should not appear.', category: 'International' },
+        { fileName: 'Europe Tour.pdf', driveLink: 'https://drive.example/europe', text: 'Students explore history, culture, and geography through guided visits.', category: 'International' },
+        { fileName: 'Vietnam.pdf', driveLink: 'https://drive.example/vietnam', text: 'A hands-on programme covering local heritage and environmental learning.', category: 'International' },
+      ],
+      3,
+    );
+
+    expect(result).toHaveLength(3);
+    expect(result.map((item) => item.name)).toEqual(['Japan', 'Europe Tour', 'Vietnam']);
+    expect(result[1].summary).toBe('An immersive international learning experience that combines cultural discovery with hands-on exploration.');
+  });
+
+  test('treats superficial itinerary title variants as one recommendation', () => {
+    const result = travelRag.fillRecommendationTarget(
+      [{ name: 'Delhi, Agra & Jaipur-5days', driveLink: 'https://drive.example/delhi-a', summary: '', learnings: [] }],
+      [
+        { fileName: 'Delhi, Agra & Jaipur Tour.pdf', driveLink: 'https://drive.example/delhi-b', category: 'Domestic' },
+        { fileName: 'Hampi Tour.pdf', driveLink: 'https://drive.example/hampi', category: 'Domestic' },
+      ],
+      2,
+    );
+
+    expect(result.map((item) => item.name)).toEqual(['Delhi, Agra & Jaipur-5days', 'Hampi Tour']);
   });
 });

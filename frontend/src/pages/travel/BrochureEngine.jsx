@@ -1056,13 +1056,29 @@ const TMC_LOGO_DEFAULT = { x: 0.3, y: 0.12, scale: 1 };
 const SCHOOL_LOGO_DEFAULT = { x: 0.7, y: 0.12, scale: 1 };
 
 function LogoSlider({ label, value, min, max, step, onChange, format }) {
+  const percentage = Math.max(0, Math.min(100, ((Number(value) - Number(min)) / (Number(max) - Number(min))) * 100));
+  const displayValue = format ? format(value) : value;
   return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 3 }}>
-        <span>{label}</span>
-        <span>{format ? format(value) : value}</span>
+    <div style={{ marginBottom: 13, padding: '8px 10px 9px', border: '1px solid var(--border-color)', borderRadius: 9, background: 'var(--card-bg, #fff)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 7 }}>
+        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{label}</span>
+        <span style={{ minWidth: 42, textAlign: 'center', padding: '2px 7px', borderRadius: 999, background: 'color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, transparent)', color: 'var(--primary-color, var(--accent-color))', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{displayValue}</span>
       </div>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ width: '100%', cursor: 'pointer' }} />
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={label}
+        aria-valuetext={String(displayValue)}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{
+          width: '100%', height: 8, margin: 0, cursor: 'pointer', accentColor: 'var(--primary-color, var(--accent-color))',
+          background: `linear-gradient(90deg, var(--primary-color, var(--accent-color)) 0 ${percentage}%, var(--border-color) ${percentage}% 100%)`,
+          borderRadius: 999, outline: 'none',
+        }}
+      />
     </div>
   );
 }

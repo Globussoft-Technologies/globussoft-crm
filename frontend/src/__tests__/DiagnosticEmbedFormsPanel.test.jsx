@@ -23,7 +23,7 @@ vi.mock('../utils/api', () => ({
 }));
 
 import { AuthContext } from '../App';
-import DiagnosticEmbedFormsPanel from '../pages/travel/DiagnosticEmbedFormsPanel';
+import DiagnosticEmbedFormsPanel, { getEmbedPreviewQuestions } from '../pages/travel/DiagnosticEmbedFormsPanel';
 
 const notifyObj = {
   error: vi.fn(),
@@ -201,6 +201,17 @@ describe('DiagnosticEmbedFormsPanel — preview parity with the real widget (202
     expect(screen.getByText('Email')).toBeInTheDocument();
     expect(screen.getByText('Phone')).toBeInTheDocument();
     expect(screen.getByText('See my result')).toBeInTheDocument();
+  });
+
+  it('keeps every active template question available to the preview', () => {
+    const questions = Array.from({ length: 14 }, (_, index) => ({
+      id: `q${index + 1}`,
+      text: `Template question ${index + 1}`,
+      type: 'single-choice',
+      options: [{ value: 'yes', label: 'Yes' }],
+    }));
+
+    expect(getEmbedPreviewQuestions({ questionsJson: JSON.stringify({ questions }) })).toEqual(questions);
   });
 
   it('the Result preview shows the "Recommendations heading" text, not just the sample cards', async () => {

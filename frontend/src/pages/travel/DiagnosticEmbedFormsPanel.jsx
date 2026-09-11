@@ -81,6 +81,15 @@ const FONT_OPTIONS = [
   { value: "'Courier New', monospace", label: 'Courier New' },
 ];
 
+export function getEmbedPreviewQuestions(bank) {
+  try {
+    const questions = JSON.parse(bank?.questionsJson || '{}')?.questions;
+    return Array.isArray(questions) ? questions : [];
+  } catch {
+    return [];
+  }
+}
+
 // Same relative-luminance contrast pick as frontend/public/embed/
 // diagnostic.html's pickReadableText() — keep these two in sync.
 function pickReadableText(hex) {
@@ -158,8 +167,7 @@ export default function DiagnosticEmbedFormsPanel({ subBrand, notify }) {
     }
   };
 
-  let previewQuestions = [];
-  try { previewQuestions = JSON.parse(currentBank?.questionsJson || '{}')?.questions || []; } catch { previewQuestions = []; }
+  const previewQuestions = getEmbedPreviewQuestions(currentBank);
 
   const togglePreviewAnswer = (question, value) => {
     setPreviewAnswers((prev) => {
@@ -500,6 +508,11 @@ function EmbedPreview({
 }) {
   const width = previewDevice === 'mobile' ? 380 : previewDevice === 'tablet' ? 680 : Math.max(360, Math.min(1100, Number(config.maxWidth) || 860));
   const selectedText = config.selectedText || pickReadableText(config.primary);
+  const completedQuestions = questions.filter((question) => {
+    const answer = previewAnswers[question.id];
+    return question.type === 'multi-select' ? Array.isArray(answer) && answer.length > 0 : Boolean(answer);
+  }).length;
+  const progressPercent = questions.length ? Math.round((completedQuestions / questions.length) * 100) : 0;
 
   return (
     <div style={{ marginTop: 24 }}>
@@ -546,11 +559,11 @@ function EmbedPreview({
 
         {previewScreen === 'questions' && hasBank && config.progress !== false && (
           <div style={{ height: 6, background: 'rgba(0,0,0,0.08)', borderRadius: 999, marginBottom: 20, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: '12%', borderRadius: 999, background: config.primary }} />
+            <div role="progressbar" aria-label="Diagnostic completion" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent} aria-valuetext={`${completedQuestions} of ${questions.length} questions completed`} style={{ height: '100%', width: `${progressPercent}%`, borderRadius: 999, background: config.primary, transition: 'width 180ms ease' }} />
           </div>
         )}
 
-        {previewScreen === 'questions' && hasBank && questions.slice(0, 6).map((question, index) => (
+        {previewScreen === 'questions' && hasBank && questions.map((question, index) => (
           <PreviewQuestion
             key={question.id || index}
             index={index}

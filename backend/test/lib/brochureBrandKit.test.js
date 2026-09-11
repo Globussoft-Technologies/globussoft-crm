@@ -65,6 +65,23 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
     }
   });
 
+  it('rewrites a historical app-owned AWS Brand Kit logo to the active OCI base', () => {
+    const originalActive = s3Service.S3_BASE_URL;
+    const originalAws = s3Service.AWS_S3_BASE_URL;
+    s3Service.S3_BASE_URL = 'https://objectstorage.example.com/n/ns/b/media/o';
+    s3Service.AWS_S3_BASE_URL = 'https://legacy-bucket.s3.example.com';
+    try {
+      const oldUrl = 'https://legacy-bucket.s3.example.com/brand-kits/7/1700000000000-tmc.png';
+      const { kit } = sanitizeBrandKit({ logoUrl: oldUrl, name: 'TMC' });
+      expect(kit.logoUrl).toBe(
+        'https://objectstorage.example.com/n/ns/b/media/o/brand-kits/7/1700000000000-tmc.png',
+      );
+    } finally {
+      s3Service.S3_BASE_URL = originalActive;
+      s3Service.AWS_S3_BASE_URL = originalAws;
+    }
+  });
+
   it('inlines a local /uploads/brand-kits/ URL and emits a data: URI logo', () => {
     const originalRead = fs.readFileSync;
     const pngBytes = Buffer.from(PNG_1x1.replace(/^data:image\/png;base64,/, ''), 'base64');

@@ -637,7 +637,7 @@ export default function CurriculumAdmin() {
   };
 
   return (
-    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
+    <div style={{ padding: 'clamp(12px, 3vw, 24px)', width: "100%", maxWidth: 1480, minWidth: 0, margin: '0 auto', boxSizing: 'border-box', overflowX: 'hidden' }}>
       {/* Inline style block for the fit-score badge classes. Keeps the
           theme-friendly color values in one place + avoids spraying
           hex codes through inline styles (per Itineraries.jsx pattern). */}
@@ -675,7 +675,7 @@ export default function CurriculumAdmin() {
           marginBottom: 16,
         }}
       >
-        <div>
+        <div style={{ minWidth: 0, flex: '1 1 420px' }}>
           <h1
             style={{
               display: 'flex',
@@ -861,10 +861,10 @@ export default function CurriculumAdmin() {
             ref={listRef}
             data-testid="curriculum-admin-table-scroll"
             onScroll={handleListScroll}
-            style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden' }}
+            style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' }}
           >
           <TopScrollSync disabled>
-          <table data-testid="curriculum-mapping-table" style={{ width: '100%', minWidth: '1480px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+          <table data-testid="curriculum-mapping-table" style={{ width: '100%', minWidth: '1120px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
                 <th style={{ ...th, width: '8%' }}>{sortHeader('Year', 'academicYear')}</th>
@@ -888,7 +888,7 @@ export default function CurriculumAdmin() {
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>{m.grade}</td>
                   <td style={td}>{m.subject}</td>
                   <td style={td}>{m.learningOutcomeCode || <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>}</td>
-                  <td style={td} title={m.learningOutcome || ''}>
+                  <td style={{ ...td, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.45 }} title={m.learningOutcome || ''}>
                     {m.learningOutcome
                       ? truncate(m.learningOutcome, 80)
                       : <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>}

@@ -221,15 +221,22 @@ function readPngDimensions(bytes) {
   return null;
 }
 
-function isOwnS3ImageUrl(input) {
-  // Only accept URLs inside this app's brand-kits prefix. The upload endpoint
-  // already validated MIME type / magic bytes, so the key prefix is enough.
-  return (
-    s3Service.S3_BASE_URL &&
-    typeof input === 'string' &&
-    input.startsWith(s3Service.S3_BASE_URL) &&
-    /\/brand-kits\//i.test(input)
-  );
+function normalizeOwnBrandKitUrl(input) {
+  if (typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  const bases = [s3Service.S3_BASE_URL, s3Service.AWS_S3_BASE_URL]
+    .filter((base) => typeof base === 'string' && base)
+    .map((base) => base.replace(/\/$/, ''));
+  for (const base of bases) {
+    if (!trimmed.startsWith(base + '/')) continue;
+    const key = trimmed.slice(base.length + 1).split('?')[0];
+    if (!/^brand-kits\/\d+\//i.test(key)) return null;
+    // Historical rows can still carry the retired AWS base after the OCI
+    // cutover. Preserve the verified object key and use the active store base.
+    const activeBase = String(s3Service.S3_BASE_URL || base).replace(/\/$/, '');
+    return `${activeBase}/${key}`;
+  }
+  return null;
 }
 
 /**
@@ -284,8 +291,9 @@ function sanitizeLogo(input) {
 
   // S3-hosted image uploaded by this tenant. We trust our own bucket and only
   // validate the URL shape; SSRF is avoided because the bucket/domain is fixed.
-  if (isOwnS3ImageUrl(trimmed)) {
-    return { url: trimmed, treatment: null };
+  const ownedCloudUrl = normalizeOwnBrandKitUrl(trimmed);
+  if (ownedCloudUrl) {
+    return { url: ownedCloudUrl, treatment: null };
   }
 
   const m = /^data:[^;,]*;base64,([A-Za-z0-9+/=\s]+)$/.exec(trimmed);

@@ -70,7 +70,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     if (!reasoning) body.temperature = req.temperature ?? 0.3;
     body[reasoning ? 'max_completion_tokens' : 'max_tokens'] = req.maxTokens ?? 4096;
 
-    const json = (await this.requestWithRetry(body)) as WireResponse;
+    const json = (await this.requestWithRetry(body, 5, req.timeoutMs)) as WireResponse;
     const choice = json.choices?.[0];
     if (!choice) throw new ProviderError(`${this.id} returned no choices`);
 
@@ -102,7 +102,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
    * makes provider rate limits (e.g. Gemini free tier's 5 req/min) non-fatal —
    * the loop waits and retries instead of failing the whole run.
    */
-  private async requestWithRetry(body: unknown, maxAttempts = 5): Promise<unknown> {
+  private async requestWithRetry(body: unknown, maxAttempts = 5, timeoutMs?: number): Promise<unknown> {
     let lastErr = '';
     let lastStatus = 0;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -113,6 +113,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
           Authorization: `Bearer ${this.apiKey}`,
         },
         body: JSON.stringify(body),
+        ...(timeoutMs && timeoutMs > 0
+          ? { signal: AbortSignal.timeout(timeoutMs) }
+          : {}),
       });
 
       if (res.ok) return res.json();

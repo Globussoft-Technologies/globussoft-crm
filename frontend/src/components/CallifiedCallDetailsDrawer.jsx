@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { FileText, X, Loader, Phone, Clock, Smile, Calendar, AlertCircle, RefreshCw, User, Play } from "lucide-react";
+import { FileText, X, Loader, Phone, Clock, Smile, Calendar, AlertCircle, RefreshCw, User, Play, Download } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { crmRecordingUrl } from "../utils/callified";
 
@@ -91,6 +91,9 @@ function RecordingPlayer({ url, durationSeconds }) {
         <audio controls autoPlay src={objectUrl} style={{ flex: 1, height: 32 }}>
           Your browser does not support the audio element.
         </audio>
+        <a href={objectUrl} download="callified-recording.wav" title="Download recording" aria-label="Download recording" style={{ color: "var(--accent-color)", display: "inline-flex" }}>
+          <Download size={17} />
+        </a>
       </div>
     );
   }

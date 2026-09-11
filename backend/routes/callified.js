@@ -456,11 +456,9 @@ router.get("/recordings/*", verifyToken, async (req, res) => {
     // slash. Rebuild the path Callified gave us in `recording_url`.
     const recordingPath = `/api/recordings/${req.params[0] || ""}`;
 
-    const upstream = await callifiedClient.fetchRecording(
-      req.user.tenantId,
-      recordingPath,
-      { range: req.headers.range },
-    );
+    const upstream = req.query.source
+      ? await callifiedClient.fetchObjectStorageRecording(req.query.source, { range: req.headers.range })
+      : await callifiedClient.fetchRecording(req.user.tenantId, recordingPath, { range: req.headers.range });
 
     if (!upstream.ok && upstream.status !== 206) {
       return res.status(upstream.status === 404 ? 404 : 502).json({

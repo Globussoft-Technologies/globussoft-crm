@@ -35,31 +35,45 @@ export default function DiagnosticFormRenderer({
   submitting = false,
   submitError = "",
   submitLabel = "See my diagnostic result",
+  secondaryAction = null,
   mode = "live", // "live" | "preview"
   preview = false,
+  embedded = false,
+  themeOverride = {},
+  stylingOverride = {},
 }) {
-  const theme = buildTheme(config);
-  const styling = parseStyling(config?.form?.stylingConfigJson);
+  const theme = { ...buildTheme(config), ...themeOverride };
+  const styling = {
+    ...parseStyling(config?.form?.stylingConfigJson),
+    ...stylingOverride,
+  };
   const form = config?.form || {};
   const identityFields = Array.isArray(configuredIdentityFields)
     ? configuredIdentityFields.filter((field) => field?.enabled !== false)
     : getIdentityFields(form, styling);
 
-  const showLogo = Boolean(theme.logoUrl);
+  const showLogo = Boolean(theme.logoUrl) && !embedded;
   const showHeader = Boolean(form.headerHtml || form.title || form.subtitle);
 
   return (
-    <Shell theme={theme} styling={styling} preview={preview}>
+    <Shell
+      theme={theme}
+      styling={styling}
+      preview={preview}
+      embedded={embedded}
+    >
       <DiagnosticSubmitOverlay
         active={submitting && mode !== "preview"}
         primaryColor={theme.primaryColor || DEFAULT_PRIMARY}
       />
-      <div style={card(theme, styling)}>
+      <div style={card(theme, styling, embedded)}>
         {showLogo && renderLogo(theme, styling)}
         {showHeader && (
           <header style={headerWrap(styling)}>
             {form.title && <h1 style={title(theme, styling)}>{form.title}</h1>}
-            {form.subtitle && <p style={subtitle(theme, styling)}>{form.subtitle}</p>}
+            {form.subtitle && (
+              <p style={subtitle(theme, styling)}>{form.subtitle}</p>
+            )}
             {form.headerHtml && (
               <div
                 style={headerHtml(styling)}
@@ -74,8 +88,14 @@ export default function DiagnosticFormRenderer({
             key={q.id}
             question={q}
             value={answers[q.id]}
-            onChange={mode === "preview" ? undefined : (v) => onAnswerChange?.(q.id, v)}
-            onToggleMulti={mode === "preview" ? undefined : (v, max) => onToggleMulti?.(q.id, v, max)}
+            onChange={
+              mode === "preview" ? undefined : (v) => onAnswerChange?.(q.id, v)
+            }
+            onToggleMulti={
+              mode === "preview"
+                ? undefined
+                : (v, max) => onToggleMulti?.(q.id, v, max)
+            }
             theme={theme}
             styling={styling}
             mode={mode}
@@ -99,24 +119,31 @@ export default function DiagnosticFormRenderer({
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={mode === "preview" ? undefined : onSubmit}
-          disabled={submitting || mode === "preview"}
-          style={primaryBtn(theme, styling, submitting || mode === "preview")}
-        >
-          {submitting ? (
-            <>
-              <Loader2 size={16} aria-hidden style={{ animation: "spin 1s linear infinite" }} />
-              Analyzing your curriculum needs
-            </>
-          ) : (
-            <>
-              <Send size={16} aria-hidden />
-              {submitLabel}
-            </>
-          )}
-        </button>
+        <div style={actionRow}>
+          <button
+            type="button"
+            onClick={mode === "preview" ? undefined : onSubmit}
+            disabled={submitting || mode === "preview"}
+            style={primaryBtn(theme, styling, submitting || mode === "preview")}
+          >
+            {submitting ? (
+              <>
+                <Loader2
+                  size={16}
+                  aria-hidden
+                  style={{ animation: "spin 1s linear infinite" }}
+                />
+                Analyzing your curriculum needs
+              </>
+            ) : (
+              <>
+                <Send size={16} aria-hidden />
+                {submitLabel}
+              </>
+            )}
+          </button>
+          {secondaryAction}
+        </div>
 
         {form.footerHtml && (
           <footer
@@ -164,7 +191,15 @@ export function DiagnosticFormError({ config, error, onBack }) {
   );
 }
 
-function QuestionBlock({ question, value, onChange, onToggleMulti, theme, styling, mode }) {
+function QuestionBlock({
+  question,
+  value,
+  onChange,
+  onToggleMulti,
+  theme,
+  styling,
+  mode,
+}) {
   const q = question;
   const opts = Array.isArray(q.options) ? q.options : [];
   const cardStyle = questionCard(styling, theme);
@@ -187,7 +222,11 @@ function QuestionBlock({ question, value, onChange, onToggleMulti, theme, stylin
         {q.text}
         {q.required ? " (required)" : ""}
       </legend>
-      <div style={questionTitle(theme, styling)} aria-hidden="true" data-testid="question-title">
+      <div
+        style={questionTitle(theme, styling)}
+        aria-hidden="true"
+        data-testid="question-title"
+      >
         {q.text}
         {q.required && <span aria-hidden="true"> *</span>}
       </div>
@@ -197,15 +236,16 @@ function QuestionBlock({ question, value, onChange, onToggleMulti, theme, stylin
             const cur = Array.isArray(value) ? value : [];
             const checked = cur.includes(o.value);
             return (
-              <label
-                key={o.value}
-                style={optionRow(theme, checked, styling.optionAlign)}
-              >
+              <label key={o.value} style={optionRow(theme, styling, checked)}>
                 <input
                   type="checkbox"
                   checked={checked}
                   readOnly={mode === "preview"}
-                  onChange={mode === "preview" ? undefined : () => onToggleMulti(o.value, q.max)}
+                  onChange={
+                    mode === "preview"
+                      ? undefined
+                      : () => onToggleMulti(o.value, q.max ?? q.maxSelections)
+                  }
                   style={{ marginRight: 10 }}
                 />
                 {o.label}
@@ -218,16 +258,15 @@ function QuestionBlock({ question, value, onChange, onToggleMulti, theme, stylin
           {opts.map((o) => {
             const checked = value === o.value;
             return (
-              <label
-                key={o.value}
-                style={optionRow(theme, checked, styling.optionAlign)}
-              >
+              <label key={o.value} style={optionRow(theme, styling, checked)}>
                 <input
                   type="radio"
                   name={q.id}
                   checked={checked}
                   readOnly={mode === "preview"}
-                  onChange={mode === "preview" ? undefined : () => onChange(o.value)}
+                  onChange={
+                    mode === "preview" ? undefined : () => onChange(o.value)
+                  }
                   style={{ marginRight: 10 }}
                 />
                 {o.label}
@@ -252,7 +291,11 @@ function IdentityFields({ fields, identity, onChange, theme, styling }) {
           <input
             type={f.type || "text"}
             value={identity[f.id] || ""}
-            onChange={onChange ? (e) => onChange({ ...identity, [f.id]: e.target.value }) : undefined}
+            onChange={
+              onChange
+                ? (e) => onChange({ ...identity, [f.id]: e.target.value })
+                : undefined
+            }
             readOnly={!onChange}
             style={input(theme, styling)}
             required={f.required}
@@ -296,29 +339,33 @@ function normalizeLogoSize(value) {
   return Math.min(240, Math.max(24, n));
 }
 
-function Shell({ theme, styling, children, preview }) {
+function Shell({ theme, styling, children, preview, embedded = false }) {
   const normalizedBgUrl = normalizeImageUrl(styling.bgImageUrl);
-  const bgImage = normalizedBgUrl ? { backgroundImage: `url("${normalizedBgUrl}")` } : {};
+  const bgImage = normalizedBgUrl
+    ? { backgroundImage: `url("${normalizedBgUrl}")` }
+    : {};
   const overlayOpacity = styling.bgOverlayOpacity ?? 0;
   const overlayColor = styling.bgOverlayColor || "#000000";
 
   return (
     <div
       style={{
-        minHeight: preview ? 420 : "100vh",
-        background: theme.bgColor || DEFAULT_BG,
+        minHeight: embedded ? "auto" : preview ? 420 : "100vh",
+        background: embedded ? "transparent" : theme.bgColor || DEFAULT_BG,
         color: theme.textColor || DEFAULT_TEXT,
-        fontFamily: theme.fontFamily || "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-        padding: "24px 16px",
+        fontFamily:
+          theme.fontFamily ||
+          "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+        padding: embedded ? 0 : "24px 16px",
         boxSizing: "border-box",
         backgroundSize: normalizeBackgroundSize(styling.bgImageSize),
         backgroundPosition: styling.bgImagePosition || "center",
         backgroundRepeat: styling.bgImageRepeat || "no-repeat",
-        ...bgImage,
+        ...(embedded ? {} : bgImage),
         position: "relative",
       }}
     >
-      {styling.bgImageUrl && overlayOpacity > 0 && (
+      {!embedded && styling.bgImageUrl && overlayOpacity > 0 && (
         <div
           style={{
             position: preview ? "absolute" : "fixed",
@@ -335,15 +382,30 @@ function Shell({ theme, styling, children, preview }) {
   );
 }
 
-function card(theme, styling) {
+function card(theme, styling, embedded = false) {
+  if (embedded) {
+    return {
+      maxWidth: "960px",
+      margin: "0 auto",
+      background: "transparent",
+      border: 0,
+      borderRadius: 0,
+      padding: 0,
+      boxShadow: "none",
+    };
+  }
   const formOpacity = clamp01(styling.formBgOpacity ?? 1);
-  const cardBg = withOpacity(styling.formBgColor || DEFAULT_CARD_BG, formOpacity);
+  const cardBg = withOpacity(
+    styling.formBgColor || DEFAULT_CARD_BG,
+    formOpacity,
+  );
   return {
     maxWidth: styling.formMaxWidth ? `${styling.formMaxWidth}px` : "760px",
     margin: "0 auto",
     background: cardBg,
     backdropFilter: formOpacity < 1 ? "blur(18px) saturate(1.2)" : undefined,
-    WebkitBackdropFilter: formOpacity < 1 ? "blur(18px) saturate(1.2)" : undefined,
+    WebkitBackdropFilter:
+      formOpacity < 1 ? "blur(18px) saturate(1.2)" : undefined,
     borderRadius: styling.formBorderRadius ?? 16,
     padding: styling.formPadding ? `${styling.formPadding}px` : "28px",
     boxShadow:
@@ -416,12 +478,18 @@ function headerHtml(styling) {
 }
 
 function footerHtml(styling) {
-  return { marginTop: 24, fontSize: 13, opacity: 0.8, textAlign: styling.footerAlign || "left" };
+  return {
+    marginTop: 24,
+    fontSize: 13,
+    opacity: 0.8,
+    textAlign: styling.footerAlign || "left",
+  };
 }
 
 function questionCard(styling, theme) {
   const style = styling.questionCardStyle || "bordered";
-  const fillColor = styling.questionFillColor || theme.primaryColor || DEFAULT_PRIMARY;
+  const fillColor =
+    styling.questionFillColor || theme.primaryColor || DEFAULT_PRIMARY;
   const fillOpacity = clamp01(styling.questionFillOpacity ?? 0.06);
   const borderOpacity = clamp01(styling.questionBorderOpacity ?? 0.2);
   return {
@@ -430,10 +498,14 @@ function questionCard(styling, theme) {
         ? "none"
         : `1px solid ${withOpacity(styling.questionBorderColor || theme.primaryColor || DEFAULT_PRIMARY, borderOpacity)}`,
     borderRadius: styling.questionBorderRadius ?? 12,
-    padding: "26px 22px 24px",
-    margin: "0 0 20px",
-    background: style === "filled" ? withOpacity(fillColor, fillOpacity) : "#fff",
-    boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
+    padding: styling.questionPadding || "22px 20px 20px",
+    margin: styling.questionCardMargin || "0 0 20px",
+    background:
+      style === "filled"
+        ? withOpacity(fillColor, fillOpacity)
+        : styling.questionBackground || "#fff",
+    boxShadow:
+      styling.questionCardShadow || "0 2px 10px rgba(23, 43, 58, 0.045)",
   };
 }
 
@@ -457,7 +529,10 @@ function normalizeImageUrl(value) {
   if (!raw) return "";
   try {
     const url = new URL(raw);
-    if (url.hostname === "unsplash.com" && url.pathname.startsWith("/photos/")) {
+    if (
+      url.hostname === "unsplash.com" &&
+      url.pathname.startsWith("/photos/")
+    ) {
       const photoId = url.pathname.split("/").filter(Boolean).pop();
       if (photoId) return `https://source.unsplash.com/${photoId}/1800x1200`;
     }
@@ -506,22 +581,31 @@ const optionsGrid = {
   marginTop: 8,
 };
 
-function optionRow(theme, checked, align = "left") {
+function optionRow(theme, styling, checked) {
   const primary = theme.primaryColor || DEFAULT_PRIMARY;
+  const align = styling.optionAlign || "left";
   // The marker (radio/checkbox) stays attached to the label text as one
   // unit — "position" here shifts that whole group within the option box
   // via justify-content, rather than text-align, since text-align alone
   // would leave the marker pinned on the left while just the words shifted,
   // which reads as broken rather than "centered"/"right-aligned".
-  const justify = align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start";
+  const justify =
+    align === "center"
+      ? "center"
+      : align === "right"
+        ? "flex-end"
+        : "flex-start";
   return {
     display: "flex",
     alignItems: "center",
     justifyContent: justify,
     padding: "14px 16px",
     borderRadius: 8,
-    border: `1px solid ${checked ? primary : "#dadfe8"}`,
-    background: checked ? `${primary}10` : "#fff",
+    border: `1px solid ${checked ? primary : styling.questionOptionBorderColor || "var(--tmc-form-border, #d0dce1)"}`,
+    background: checked
+      ? styling.questionOptionSelectedBackground ||
+        "var(--tmc-selected-bg, rgba(49, 92, 120, 0.08))"
+      : styling.questionOptionBackground || "var(--tmc-form-surface, #fff)",
     cursor: "pointer",
     fontSize: 15,
     transition: "border-color 0.15s, background 0.15s",
@@ -535,6 +619,14 @@ const identityGrid = {
   gap: 14,
   marginTop: 8,
   marginBottom: 18,
+};
+
+const actionRow = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 4,
 };
 
 function fieldLabel(theme) {
@@ -551,12 +643,15 @@ function fieldLabel(theme) {
 function input(theme, styling) {
   return {
     padding: "10px 12px",
-    borderRadius: styling.formBorderRadius ? `${Math.min(styling.formBorderRadius, 12)}px` : 8,
-    border: "1px solid #dadfe8",
+    borderRadius: styling.formBorderRadius
+      ? `${Math.min(styling.formBorderRadius, 12)}px`
+      : 8,
+    border: `1px solid ${styling.inputBorderColor || "var(--tmc-form-border, #d0dce1)"}`,
     fontSize: 14,
     fontFamily: "inherit",
-    background: "#fff",
+    background: styling.inputBackground || "var(--tmc-form-surface, #fff)",
     color: theme.textColor || DEFAULT_TEXT,
+    accentColor: theme.primaryColor || DEFAULT_PRIMARY,
   };
 }
 
@@ -565,14 +660,14 @@ function primaryBtn(theme, styling, disabled) {
   const radius =
     shape === "pill"
       ? 999
-      : styling.buttonBorderRadius ?? (shape === "square" ? 0 : 8);
+      : (styling.buttonBorderRadius ?? (shape === "square" ? 0 : 8));
   return {
     display: "inline-flex",
     alignItems: "center",
     gap: 8,
     padding: "12px 24px",
     background: theme.primaryColor || DEFAULT_PRIMARY,
-    color: "#fff",
+    color: styling.buttonTextColor || "var(--tmc-form-primary-contrast, #fff)",
     border: "none",
     borderRadius: radius,
     fontSize: 15,

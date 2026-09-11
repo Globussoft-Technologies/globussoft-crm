@@ -24,6 +24,7 @@ import {
   type LogoPlacement,
   type DesignHtmlFn,
 } from '@agentic-os/tools';
+import { buildUsageRecord } from '@agentic-os/providers';
 import { runAgent, type EngineDeps } from '../agent/agent-loop.js';
 import type { RunStore } from '../run/events.js';
 
@@ -140,6 +141,29 @@ function hasBrochureBody(content: unknown): boolean {
       c.sections?.length ||
       c.heroQuery)
   );
+}
+
+/**
+ * The CRM's TMC flow sends a complete structured TripInput object. Its facts can
+ * be normalized into BrochureContent deterministically, so spending a first LLM
+ * call asking the same model to copy JSON into another JSON shape only adds
+ * latency and a new place to drop facts. Unstructured legacy goals retain the
+ * original composer path.
+ */
+function isStructuredTmcGoal(goal: string): boolean {
+  try {
+    const parsed = JSON.parse(goal) as Record<string, unknown>;
+    return !!(
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof parsed.tripTitle === 'string' &&
+      Array.isArray(parsed.days) &&
+      Array.isArray(parsed.inclusions) &&
+      Array.isArray(parsed.exclusions)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -280,14 +304,38 @@ export class Orchestrator {
     });
 
     try {
-      const coordinatorOutput = await runAgent(this.deps, {
-        runId,
-        agent: coordinator,
-        task: args.goal,
-        depth: 0,
-        budget,
-        invokeAgent,
-      });
+      // Structured TMC requests already contain every required brochure fact.
+      // Normalize them locally and reserve the selected model for the one task
+      // where it adds value: visual composition. This changes the normal path
+      // from two large generations to one, while the fidelity backstop remains
+      // authoritative for itinerary, logistics and commercial details.
+      const deterministicTmcContent =
+        fin?.render === 'brochure_json' &&
+        pack.key === 'travel' &&
+        isStructuredTmcGoal(args.goal)
+          ? ensureTmcFidelity(buildFallbackBrochureContent(args.goal), args.goal)
+          : null;
+      let coordinatorOutput = '';
+      if (deterministicTmcContent) {
+        emit(store, runId, 'agent.started', coordinator.key, {
+          name: coordinator.name,
+          tier: coordinator.tier,
+          task: 'Normalize structured brochure brief',
+        });
+        emit(store, runId, 'agent.message', coordinator.key, {
+          text: 'Structured trip brief normalized; composing the print design.',
+          final: true,
+        });
+      } else {
+        coordinatorOutput = await runAgent(this.deps, {
+          runId,
+          agent: coordinator,
+          task: args.goal,
+          depth: 0,
+          budget,
+          invokeAgent,
+        });
+      }
 
       // Post-run finalization: render an agent's HTML output into a downloadable
       // artifact (e.g. the brochure PDF) and make THAT the deliverable.
@@ -315,7 +363,16 @@ export class Orchestrator {
         //       or it drifted / returned the wrong shape), run the composer OURSELVES
         //       with the full source material — guaranteeing a clean JSON pass;
         //   (3) still nothing usable → build a faithful fallback from the brief.
-        let content = parseBrochureContent(lastOutputByAgent[fin.fromAgentKey] ?? '');
+        // Travel's coordinator IS its final composer. The coordinator result is
+        // therefore already the brochure JSON, but it was never written to
+        // lastOutputByAgent (that map only captures delegated children). Reading
+        // only the map made every travel run falsely look empty and triggered a
+        // second identical 8k-token compose. Prefer a delegated result when one
+        // exists; otherwise use the coordinator's own output when it owns final.
+        const initialComposerOutput =
+          lastOutputByAgent[fin.fromAgentKey] ??
+          (fin.fromAgentKey === coordinator.key ? coordinatorOutput : '');
+        let content = deterministicTmcContent ?? parseBrochureContent(initialComposerOutput);
         if (!hasBrochureBody(content) && !budget.capped) {
           const task = composerThreadedTask(
             'Compose the FINAL brochure JSON now from the material below. Output ONLY the JSON object — no commentary, no code fences.',
@@ -441,14 +498,41 @@ export class Orchestrator {
                   // it just gives it enough space to write a properly paginated
                   // document instead of being pressured into cramming content
                   // tighter than the print-preflight can accept.
-                  const ladder = [12000, 8000];
+                  // One concise ceiling is intentional: structured TMC runs have
+                  // a five-minute wall-clock budget, and a 24k HTML allowance can
+                  // let reasoning models consume the whole run before Chromium
+                  // gets a chance to preflight or render. 12k is ample for a
+                  // carefully paginated 6-10 page HTML document. The provider
+                  // adapter still clamps it lower for models with smaller caps.
+                  const ladder = [12000];
                   let lastErr: unknown;
                   for (const maxTokens of ladder) {
                     try {
                       const resp = await this.deps.router.chat('reasoning', {
                         messages: [{ role: 'user', content: brief }],
                         maxTokens,
+                        // Leave enough of the five-minute run for deterministic
+                        // fallback layout, print preflight and Chromium PDF export
+                        // even if a selected model is unusually slow or wedged.
+                        timeoutMs: 150_000,
                       });
+                      const usage = buildUsageRecord({
+                        provider: resp.provider,
+                        model: resp.model,
+                        inputTokens: resp.usage.inputTokens,
+                        outputTokens: resp.usage.outputTokens,
+                        markup: this.deps.config.billing.markup,
+                      });
+                      await store.recordUsage(runId, fin.fromAgentKey, usage);
+                      emit(store, runId, 'usage', fin.fromAgentKey, { ...usage });
+                      budget.count += 1;
+                      budget.spentUsd += usage.billedUsd;
+                      const runCap = this.deps.config.security.maxRunBudgetUsd;
+                      if (runCap > 0 && budget.spentUsd > runCap) {
+                        throw new Error(
+                          `Run exceeded MAX_RUN_BUDGET_USD ($${runCap}); spent $${budget.spentUsd.toFixed(4)}.`,
+                        );
+                      }
                       const text = resp.message.content;
                       // A design cut off at the token ceiling arrives as valid-looking
                       // HTML with no closing tags, so the only symptom downstream was

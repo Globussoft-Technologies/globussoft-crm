@@ -7,8 +7,8 @@
  * Post-merge behavior: publishing a trip now keeps it published but does
  * NOT change the featured /trips page. The travel cards expose explicit
  * Feature / Unfeature actions so operators can choose which published
- * trip should point to /trips, while every other published trip keeps its
- * own /trips/<id> share URL.
+ * trip should point to /trips, while every trip keeps its own canonical
+ * /trips/<id> share URL.
  *
  * Scope:
  *   1. The currently-featured row renders a "★ Featured" badge.
@@ -218,7 +218,7 @@ describe('<LandingPages /> — Featured badge + publish-swap UX', () => {
     expect(japanCard).toBeTruthy();
     expect(umrahCard).toBeTruthy();
 
-    expect(japanCard.querySelector('input[readonly]')?.value).toMatch(/\/trips$/);
+    expect(japanCard.querySelector('input[readonly]')?.value).toMatch(/\/trips\/100$/);
     expect(japanCard.querySelector('button[title="Copy public URL"]')).toBeTruthy();
     expect(umrahCard.querySelector('input[readonly]')?.value).toMatch(/\/trips\/101$/);
     expect(umrahCard.querySelector('button[title="Copy public URL"]')).toBeTruthy();

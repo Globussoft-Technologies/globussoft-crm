@@ -1,5 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { injectHeroForm } from "../utils/landingHeroForm";
 import landingMarkup from "./landingMarkup.html?raw";
+
+// No hardcoded form fallback: an unavailable configuration fails closed.
 
 function mountLandingTemplate(container) {
   const documentFragment = new DOMParser().parseFromString(
@@ -19,13 +22,13 @@ function mountLandingTemplate(container) {
   bodyNodes.forEach((node) => container.appendChild(node.cloneNode(true)));
 }
 
-function setupLandingInteractions(container) {
+function setupLandingInteractions(container, getHeroFrame) {
   const header = container.querySelector("#site-header");
-  const heroFormFrame = container.querySelector(".hero-form-card iframe");
   const observers = [];
   const animationFrames = new Set();
 
   const handleMessage = (event) => {
+    const heroFormFrame = typeof getHeroFrame === "function" ? getHeroFrame() : null;
     if (
       !heroFormFrame ||
       event.source !== heroFormFrame.contentWindow ||
@@ -83,7 +86,7 @@ function setupLandingInteractions(container) {
 
         const frameId = window.requestAnimationFrame(tick);
         animationFrames.add(frameId);
-        counterObserver.unobserve(element);
+        counterObserver.unobserve(entry.target);
       });
     }, { threshold: 0.5 });
     container.querySelectorAll(".stat .num").forEach((element) => counterObserver.observe(element));
@@ -125,6 +128,35 @@ function setupLandingInteractions(container) {
 
 export default function Landing() {
   const containerRef = useRef(null);
+  const heroFrameRef = useRef(null);
+  const mountedFormRef = useRef(null);
+  // Dynamic hero form id, resolved from the backend on every page load
+  // (TenantSetting under PUBLIC_LEAD_TENANT_SLUG, changed from the Web Forms
+  // page by the LANDING_FORM_ADMIN_EMAILS allowlist). State-driven so the
+  // rendered iframe can never disagree with the fetched config. The frame
+  // The closed root keeps the iframe out of ordinary Elements inspection;
+  // backend validation remains the security boundary.
+  const [heroFormId, setHeroFormId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Plain fetch on purpose — this page is public and must never bounce
+    // visitors to /login on a 401 the way fetchApi does.
+    fetch("/api/landing-form-config", { headers: { Accept: "application/json" } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        const id = Number.parseInt(data && data.webFormId, 10);
+        setHeroFormId(Number.isInteger(id) && id > 0 ? id : null);
+      })
+      .catch(() => {
+        // Offline/backend-down: fall back to the static form in the markup.
+        if (!cancelled) setHeroFormId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return undefined;
@@ -138,10 +170,12 @@ export default function Landing() {
     // Restore the preference when navigating to login or back into the CRM.
     documentRoot.setAttribute("data-theme", "light");
     mountLandingTemplate(container);
-    const cleanupInteractions = setupLandingInteractions(container);
+    const cleanupInteractions = setupLandingInteractions(container, () => heroFrameRef.current);
 
     return () => {
       cleanupInteractions();
+      heroFrameRef.current = null;
+      mountedFormRef.current = null;
       container.replaceChildren();
       if (previousTheme === null) {
         documentRoot.removeAttribute("data-theme");
@@ -150,6 +184,18 @@ export default function Landing() {
       }
     };
   }, []);
+
+  // Inject the resolved form into the closed shadow root. Runs when the
+  // config arrives (usually after the template mounts) and on every change
+  // — e.g. the admin picks another form while this tab stays open.
+  useEffect(() => {
+    if (!heroFormId || mountedFormRef.current === heroFormId || !containerRef.current) return;
+    const frame = injectHeroForm(containerRef.current.querySelector("#hero-form-mount"), heroFormId);
+    if (frame) {
+      heroFrameRef.current = frame;
+      mountedFormRef.current = heroFormId;
+    }
+  }, [heroFormId]);
 
   return <div ref={containerRef} style={{ minHeight: "100vh" }} />;
 }

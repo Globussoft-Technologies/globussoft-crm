@@ -50,6 +50,7 @@ const PUBLIC_LIGHT_THEME_ROUTES = new Set([
   "/signup",
   "/reset-password",
   "/customer/register",
+  "/tmc/register",
   "/get-started",
   "/super-admin/login",
 ]);
@@ -130,6 +131,15 @@ const SuperAdminRevenue = lazy(
 );
 const TravelCustomerPortal = lazy(
   () => import("./pages/travel/TravelCustomerPortal"),
+);
+const TmcRegistrationEntry = lazy(
+  () => import("./pages/travel/TmcRegistrationEntry"),
+);
+const TmcTeacherPortal = lazy(
+  () => import("./pages/travel/TmcTeacherPortal"),
+);
+const TmcParentPortal = lazy(
+  () => import("./pages/travel/TmcParentPortal"),
 );
 const PublicTripMicrosite = lazy(
   () => import("./pages/travel/PublicTripMicrosite"),
@@ -827,7 +837,7 @@ function landingWithHandoff(fallback) {
 function hasMarketingHandoff() {
   try {
     const p = new URLSearchParams(window.location.search);
-    return !!(p.get("tenantSlug") && p.get("next"));
+    return !!(p.get("tenantSlug") && p.get("next")) || p.get("tmcRole") === "TEACHER";
   } catch (_e) {
     return false;
   }
@@ -1516,6 +1526,25 @@ export default function App() {
                           <Navigate to={landingWithHandoff("/home")} replace />
                         )
                       }
+                    />
+                    {/* TMC-only registration entry points. These validate the
+                      signed teacher/parent context and then hand off to the
+                      unchanged shared customer registration form. */}
+                    <Route
+                      path="/tmc/register/teacher"
+                      element={<TmcRegistrationEntry />}
+                    />
+                    <Route
+                      path="/tmc/register/parent"
+                      element={<TmcRegistrationEntry />}
+                    />
+                    <Route
+                      path="/tmc/teacher-portal/*"
+                      element={<TmcTeacherPortal />}
+                    />
+                    <Route
+                      path="/tmc/parent-portal/*"
+                      element={<TmcParentPortal />}
                     />
                     <Route path="/sso/return" element={<SsoReturn />} />
                     <Route path="/reset-password" element={<ResetPassword />} />

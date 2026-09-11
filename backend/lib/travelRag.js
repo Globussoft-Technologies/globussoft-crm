@@ -23,7 +23,13 @@ const { sanitizeJsonForStringColumn } = require("./sanitizeJson");
 const { READINESS_LEVELS, readinessLevelFromScore } = require("./travelDiagnosticScoring");
 const { getRecommendationTopK, DEFAULT_TOP_K } = require("./diagnosticRecommendationSettings");
 
-const RAG_TOP_K = 30; // Qdrant retrieval depth — preserves a strong pool for up to the configured shortlist size
+// Brochures commonly produce multiple chunks, so retrieve more chunks than
+// the number of recommendations requested. Keep the query bounded: this path
+// runs during public-form submission and a fixed 500-point search needlessly
+// amplified latency and Qdrant load.
+const RAG_MIN_RETRIEVAL = 30;
+const RAG_RETRIEVAL_PER_RECOMMENDATION = 8;
+const RAG_MAX_RETRIEVAL = 120;
 // Historical default (bumped 5 -> 10 on 2026-08-24), now the fallback used
 // when no admin-configured value exists — see diagnosticRecommendationSettings.js.
 const MAX_RAG_RECOMMENDATIONS = DEFAULT_TOP_K; // how many trips are actually shown/rendered
@@ -53,10 +59,11 @@ function consolidateChunks(chunks) {
     byFile.get(fileId).chunks.push(c);
   }
   const result = [];
-  for (const [, { meta, chunks: cs }] of byFile) {
+  for (const [fileId, { meta, chunks: cs }] of byFile) {
     const sorted = cs.sort((a, b) => b.score - a.score);
     const top = sorted[0];
     result.push({
+      driveFileId: fileId,
       fileName: meta.fileName,
       folderPath: meta.folderPath,
       category: categoryFromFolderPath(meta.folderPath),
@@ -98,11 +105,77 @@ function attachBrochureMetadata(recommendations, brochures) {
     const match = byLink.get(String(recommendation.driveLink || '').trim())
       || byName.get(brochureKey(recommendation.name));
     if (!match) continue;
+    recommendation.driveFileId = recommendation.driveFileId || match.driveFileId || '';
     recommendation.driveLink = recommendation.driveLink || match.driveLink || '';
     recommendation.folderPath = match.folderPath || recommendation.folderPath || '';
     recommendation.category = match.category || recommendation.category || 'Other';
   }
   return recommendations;
+}
+
+function brochureRecommendationKey(item) {
+  const stableId = String(item?.brochureId || item?.driveFileId || '').trim();
+  if (stableId) return `id:${stableId}`;
+  const link = String(item?.driveLink || item?.brochurePdfUrl || '').trim();
+  if (link) {
+    const driveId = link.match(/\/d\/([^/?#]+)/i)?.[1]
+      || link.match(/[?&]id=([^&#]+)/i)?.[1];
+    return driveId ? `drive:${driveId}` : `link:${link.toLowerCase()}`;
+  }
+  const title = String(item?.name || item?.fileName || '')
+    .replace(/\.pdf$/i, '')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim()
+    .toLowerCase();
+  return title ? `title:${title}` : '';
+}
+
+function getRagRetrievalLimit(topK) {
+  const requested = Math.max(1, Number(topK) || MAX_RAG_RECOMMENDATIONS);
+  return Math.min(
+    RAG_MAX_RETRIEVAL,
+    Math.max(RAG_MIN_RETRIEVAL, requested * RAG_RETRIEVAL_PER_RECOMMENDATION),
+  );
+}
+
+function fallbackSummary(brochure) {
+  const category = String(brochure?.category || '').trim().toLowerCase();
+  if (category.includes('campus')) {
+    return 'An activity-led programme designed to build confidence, collaboration, and practical skills together.';
+  }
+  if (category.includes('international')) {
+    return 'An immersive international learning experience that combines cultural discovery with hands-on exploration.';
+  }
+  if (category.includes('day')) {
+    return 'A focused day experience that turns classroom learning into an engaging, memorable outing.';
+  }
+  return 'A well-rounded educational journey selected for its place-based learning and shared discovery opportunities.';
+}
+
+// Keep the AI-ranked results first, then complete the configured customer
+// target from the next best answer-aware semantic brochure matches.
+function fillRecommendationTarget(recommendations, brochures, topK) {
+  const out = [];
+  const seen = new Set();
+  const add = (item) => {
+    const key = brochureRecommendationKey(item);
+    if (!key || seen.has(key) || out.length >= topK) return;
+    seen.add(key);
+    out.push(item);
+  };
+  for (const recommendation of recommendations || []) add(recommendation);
+  for (const brochure of brochures || []) {
+    add({
+      driveFileId: brochure.driveFileId || '',
+      name: String(brochure.fileName || '').replace(/\.pdf$/i, '').trim(),
+      driveLink: brochure.driveLink || '',
+      folderPath: brochure.folderPath || '',
+      category: brochure.category || 'Other',
+      summary: fallbackSummary(brochure),
+      learnings: [],
+    });
+  }
+  return out;
 }
 
 /**
@@ -146,7 +219,7 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     tenantId,
     subBrand,
     providerId: embedConfig.providerId,
-    limit: RAG_TOP_K,
+    limit: getRagRetrievalLimit(topK),
   });
   if (!chunks.length) {
     console.log("[travelRag] no matching chunks found");
@@ -154,11 +227,12 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
   }
 
   const context = consolidateChunks(chunks);
+  const recommendationCandidates = context.slice(0, Math.max(topK * 3, 30));
   const llmPayload = {
     subBrand,
     queryText,
     recommendationLimit: topK,
-    brochures: context.map((c) => ({
+    brochures: recommendationCandidates.map((c) => ({
       fileName: c.fileName,
       folderPath: c.folderPath,
       category: c.category,
@@ -185,14 +259,19 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     return null;
   }
 
-  attachBrochureMetadata(parsed.recommendedTrips, context);
+  attachBrochureMetadata(parsed.recommendedTrips, recommendationCandidates);
+  parsed.recommendedTrips = fillRecommendationTarget(
+    parsed.recommendedTrips,
+    recommendationCandidates,
+    topK,
+  );
 
   // Ensure at least `topK` recommendations (admin-configurable, defaults to
   // 10 — see diagnosticRecommendationSettings.js) by padding with the
   // next-best retrieved brochure entries when the LLM returns fewer. Never
   // exceed the retrieved set.
-  // `topK` is a display ceiling, not a quota. Returning fewer, stronger
-  // matches is preferable to filling the shortlist with merely retrieved PDFs.
+  // The shortlist is completed only from the ranked semantic retrieval set;
+  // it is never filled from unrelated catalogue entries.
 
   const recommendationsJson = sanitizeJsonForStringColumn(JSON.stringify(parsed));
   const topChunkIdsJson = sanitizeJsonForStringColumn(
@@ -244,6 +323,39 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
   };
 }
 
+function escapeControlCharactersInJsonStrings(value) {
+  let repaired = '';
+  let inString = false;
+  let escaping = false;
+
+  for (const char of String(value || '')) {
+    if (escaping) {
+      repaired += char;
+      escaping = false;
+      continue;
+    }
+    if (char === '\\') {
+      repaired += char;
+      escaping = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      repaired += char;
+      continue;
+    }
+    if (inString && char.charCodeAt(0) < 0x20) {
+      if (char === '\n') repaired += '\\n';
+      else if (char === '\r') repaired += '\\r';
+      else if (char === '\t') repaired += '\\t';
+      else repaired += `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      continue;
+    }
+    repaired += char;
+  }
+  return repaired;
+}
+
 function parseRagResponse(text, topK = DEFAULT_TOP_K) {
   if (!text) return null;
   const raw = text.trim();
@@ -257,12 +369,20 @@ function parseRagResponse(text, topK = DEFAULT_TOP_K) {
     console.warn("[travelRag] parseRagResponse: no JSON object found in response:", raw.slice(0, 500));
     return null;
   }
+  const candidate = jsonCandidate.slice(start, end + 1);
   try {
-    const parsed = JSON.parse(jsonCandidate.slice(start, end + 1));
+    const parsed = JSON.parse(candidate);
     return validateAndNormalise(parsed, topK);
   } catch (e) {
-    console.warn("[travelRag] parseRagResponse: JSON.parse failed:", e.message, "candidate:", jsonCandidate.slice(start, end + 1).slice(0, 500));
-    return null;
+    try {
+      const repaired = escapeControlCharactersInJsonStrings(candidate);
+      const parsed = JSON.parse(repaired);
+      console.warn('[travelRag] recovered LLM JSON containing unescaped control characters');
+      return validateAndNormalise(parsed, topK);
+    } catch {
+      console.warn("[travelRag] parseRagResponse: JSON.parse failed:", e.message, "candidate:", candidate.slice(0, 500));
+      return null;
+    }
   }
 }
 
@@ -380,8 +500,12 @@ module.exports = {
   buildQueryText,
   parseRagResponse,
   attachBrochureMetadata,
+  fillRecommendationTarget,
+  consolidateChunks,
+  getRagRetrievalLimit,
   RAG_SUB_BRAND,
   RAG_TASK,
-  RAG_TOP_K,
+  RAG_MIN_RETRIEVAL,
+  RAG_MAX_RETRIEVAL,
   MAX_RAG_RECOMMENDATIONS,
 };

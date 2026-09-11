@@ -35,6 +35,8 @@
 
     .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 
+    .grid.grid-scroll{max-height:500px;overflow-y:auto;overflow-x:hidden;padding-right:8px;scrollbar-gutter:stable}
+
     .half{grid-column:span 1}
 
     .full{grid-column:1/-1}
@@ -277,7 +279,7 @@
 
         var footerLink = '<a href="/" target="_top" rel="noopener noreferrer" aria-label="Go to GlobusCRM home page">Powered By GlobusCRM</a>';
 
-        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div><div id="msg"></div><form id="gbs-form"><div class="grid">' + fields.map(fieldHtml).join('') + '</div>' + optIn + '<div class="actions"><button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form><div class="note">' + footerLink + '</div></div>';
+        root.innerHTML = '<div class="panel">' + logo + '<div class="form-header">' + titleHtml + (desc ? '<p class="desc">' + desc + '</p>' : '') + '</div><div id="msg"></div><form id="gbs-form"><div class="grid' + (fields.length > 5 ? ' grid-scroll' : '') + '">' + fields.map(fieldHtml).join('') + '</div>' + optIn + '<div class="actions"><button class="primary" id="submit-btn" type="submit">' + button + '</button></div></form><div class="note">' + footerLink + '</div></div>';
 
         scheduleSize();
 

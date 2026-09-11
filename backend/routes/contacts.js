@@ -15,6 +15,11 @@ const callifiedClient = require("../services/callifiedClient");
 const { CALL_STATUS, normalizeLeadStatus } = require("../lib/callifiedLeadStatus");
 const { sanitizeText } = require("../lib/sanitizeJson");
 const { normalizePhoneValue } = require("../lib/phoneFormatting");
+const {
+  deleteContactDependents,
+  hardDeleteContact,
+  hardDeleteContacts,
+} = require("../lib/contactHardDelete");
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
 // FieldPermissions UI had zero effect on read/write payloads. Default
@@ -26,9 +31,9 @@ const CONTACT_TAG_MAX_LENGTH = 80;
 // eslint-disable-next-line no-control-regex
 const CONTACT_TAG_CONTROL_RE = /[\x00-\x1F\x7F]/;
 
-// #167: soft-delete helper. Aggregations / reports / merge / internal joins
-// (e.g. activities, deals, sequenceEnrollments) are NOT yet filtered by
-// deletedAt — that is a follow-up audit (see #167 follow-up note in TODOS).
+// Keep the deletedAt filter for backwards compatibility with old tombstone
+// rows. New deletes are hard deletes, so this only hides rows created before
+// the hard-delete policy was introduced.
 function applyDeletedAtFilter(where, includeDeleted) {
   if (includeDeleted) return where;
   where.deletedAt = null;
@@ -301,17 +306,17 @@ function canReassignLead(req, contact) {
 //
 // `verticals: [...]` restricts a field to specific Tenant.vertical values
 // (see the `vertical` column on Tenant — "generic" | "wellness" | "travel").
-// Two fields on Contact are travel-specific per their own schema.prisma
-// comments — `subBrand` ("Travel vertical sub-brand tag... nullable so
-// generic + wellness Contacts ignore it") and `kycStatus` ("Travel CRM —
-// customer-portal DigiLocker / Aadhaar verification... nullable so
+// `kycStatus` is travel-specific per its own schema.prisma comment ("Travel
+// CRM — customer-portal DigiLocker / Aadhaar verification... nullable so
 // non-travel + non-customer Contacts ignore them"). The has-data presence
-// check alone isn't enough to keep these off a generic tenant's picker:
-// `kycStatus` has a schema `@default("unverified")` that Prisma writes to
+// check alone isn't enough to keep it off a generic tenant's picker:
+// it has a schema `@default("unverified")` that Prisma writes to
 // EVERY new Contact regardless of vertical — so has-data is trivially true
-// everywhere, even though no generic tenant ever intentionally sets it —
-// and `subBrand` can leak in from a single stray/seed/imported row even on
-// a tenant that has never used the travel feature. A field with no
+// everywhere, even though no generic tenant ever intentionally sets it.
+// (`subBrand` used to be gated the same way, but the generic web-form
+// Sub-brand field now writes Contact.subBrand on generic tenants, so it is
+// a legitimate generic filter/column — see its FILTERABLE_FIELDS entry.)
+// A field with no
 // `verticals` key is available to every vertical (the common case).
 // SOURCE OF TRUTH: this list is deliberately kept in lockstep with
 // BUILTIN_COLUMNS in table_column_preferences.js ("Customize table") — the
@@ -357,7 +362,11 @@ const FILTERABLE_FIELDS = {
   callifiedLeadStatus: { column: 'callifiedLeadStatus', kind: 'text', label: 'Call Status' },
   tags: { column: 'tagsJson', kind: 'text', label: 'Tags' },
   kycStatus: { column: 'kycStatus', kind: 'text', label: 'KYC Status', verticals: ['travel'] },
-  subBrand: { column: 'subBrand', kind: 'text', label: 'Sub-brand', verticals: ['travel'] },
+  // subBrand is generic+travel: the generic web-form Sub-brand field writes
+  // Contact.subBrand on generic tenants too (routes/web_forms.js), so the
+  // Leads Customize-table column needs a matching filter entry there.
+  // kycStatus stays travel-only — nothing on generic ever writes it.
+  subBrand: { column: 'subBrand', kind: 'text', label: 'Sub-brand', verticals: ['generic', 'travel'] },
   aiScore: {
     column: 'aiScore',
     kind: 'range',
@@ -1173,9 +1182,9 @@ router.get('/', async (req, res) => {
 router.get('/filter-fields', async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    // Vertical gate — see the comment above FILTERABLE_FIELDS. Travel-only
-    // columns (subBrand, kycStatus) never reach a generic/wellness tenant's
-    // picker, regardless of what stray or schema-default data exists.
+    // Vertical gate — see the comment above FILTERABLE_FIELDS. The
+    // travel-only kycStatus column never reaches a generic/wellness
+    // tenant's picker, regardless of what schema-default data exists.
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
     const vertical = tenant?.vertical || 'generic';
     const staticFields = Object.entries(FILTERABLE_FIELDS)
@@ -1307,7 +1316,7 @@ router.get('/filter-values/:field', async (req, res) => {
     if (!fieldDef) return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
     // Vertical gate — mirrors /filter-fields' eligibility check (see the
     // big comment above FILTERABLE_FIELDS). A vertical-restricted field
-    // (subBrand, kycStatus) is rejected here too, not just hidden from the
+    // (kycStatus) is rejected here too, not just hidden from the
     // picker — otherwise a stale client-side filter chip, or someone
     // hitting this endpoint directly, could still pull values for a
     // feature this tenant's vertical doesn't have.
@@ -1676,25 +1685,24 @@ router.post('/', async (req, res) => {
       }
     }
 
-    let restoredSoftDeletedContact = false;
     let contact = null;
     if (normalised.email) {
       const deletedContact = await prisma.contact.findUnique({
         where: { email_tenantId: { email: normalised.email, tenantId: req.user.tenantId } },
       });
       if (deletedContact?.deletedAt) {
-        contact = await prisma.contact.update({
-          where: { id: deletedContact.id },
-          data: { ...normalised, tenantId: req.user.tenantId, status: normalised.status || "Lead", deletedAt: null },
-        });
-        restoredSoftDeletedContact = true;
+        // A previous soft-delete row is only a legacy tombstone. Permanently
+        // remove it before creating the new contact so the email can be
+        // registered as a fresh account and no old portal/lead details leak
+        // into the new record.
+        await hardDeleteContact(prisma, deletedContact.id);
       }
     }
     if (!contact) {
       contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
     }
     // Generic-vertical-only Lead custom fields — best-effort, after the
-    // primary create/restore already succeeded (see writeLeadCustomFieldValues).
+    // primary create already succeeded (see writeLeadCustomFieldValues).
     await writeLeadCustomFieldValues(contact.id, req.user.tenantId, customFields);
     try {
       const { emitEvent } = require('../lib/eventBus');
@@ -1719,8 +1727,9 @@ router.post('/', async (req, res) => {
       } catch (_e) { /* webhook delivery is fire-and-forget */ }
       await notifyAdminsOfNewLead({ tenantId: req.user.tenantId, contact, io: req.io });
     }
-    // #179: audit row for new/restored contact.
-    await writeAudit('Contact', restoredSoftDeletedContact ? 'RESTORE' : 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
+    // #179: audit row for the new contact. A legacy tombstone, if present,
+    // was permanently removed above and is intentionally not restored.
+    await writeAudit('Contact', 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
 
     // Auto-dial newly-created Leads that have a Callified campaign + phone,
     // but only when the tenant has enabled auto-dial for new leads.
@@ -1744,13 +1753,7 @@ router.post('/', async (req, res) => {
       }
     }
 
-    res
-      .status(restoredSoftDeletedContact ? 200 : 201)
-      .json(
-        restoredSoftDeletedContact
-          ? { ...serializeContactTags(contact), restored: true }
-          : serializeContactTags(contact),
-      );
+    res.status(201).json(serializeContactTags(contact));
   } catch (err) {
     // #178: duplicate email should be 409 Conflict, not 500.
     // #165: validation-class Prisma errors (string-too-long, FK miss, …) are
@@ -1858,7 +1861,7 @@ router.put('/bulk-assign-campaign', verifyRole(['ADMIN']), async (req, res) => {
   }
 });
 
-// Bulk soft-delete multiple contacts (must stay before /:id routes).
+// Bulk hard-delete multiple contacts (must stay before /:id routes).
 router.delete('/bulk-delete', verifyRole(['ADMIN']), async (req, res) => {
   try {
     const { contactIds } = req.body;
@@ -1871,10 +1874,15 @@ router.delete('/bulk-delete', verifyRole(['ADMIN']), async (req, res) => {
       return res.status(400).json({ error: 'No valid contact IDs provided', code: 'INVALID_CONTACT_IDS' });
     }
 
-    const { count } = await prisma.contact.updateMany({
-      where: { id: { in: ids }, tenantId: req.user.tenantId, deletedAt: null },
-      data: { deletedAt: new Date() },
+    const contacts = await prisma.contact.findMany({
+      where: { id: { in: ids }, tenantId: req.user.tenantId },
+      select: { id: true },
     });
+    const targetContactIds = contacts.map(({ id }) => id);
+    const count = await hardDeleteContacts(prisma, targetContactIds);
+    for (const id of targetContactIds) {
+      await writeAudit('Contact', 'HARD_DELETE', id, req.user.userId, req.user.tenantId, { contactId: id });
+    }
 
     res.json({ deleted: count });
   } catch (_err) {
@@ -2470,14 +2478,14 @@ router.get('/duplicates/find', async (req, res) => {
   }
 });
 
-// #592 — Merge contacts (transactional, soft-delete, full FK fold).
+// #592 — Merge contacts (transactional, hard-delete, full FK fold).
 //
 //   Body: { primaryId: number, secondaryIds: number[] }
 //
 // Reassigns every contactId-bearing FK from each secondary onto the primary,
-// then soft-deletes the secondary (deletedAt = now()). Soft-delete preserves
-// audit trail + restore path; the existing GET /:id 404s soft-deleted rows
-// unless ?includeDeleted=true is passed.
+// then permanently deletes the secondary and any remaining contact-owned
+// details. The merge audit row and primary Note preserve the operational
+// history without retaining duplicate Contact accounts.
 //
 // FK relations folded onto the primary (every model with a contactId column
 // in schema.prisma — sweep verified 2026-05-08):
@@ -2516,8 +2524,8 @@ router.post('/merge', async (req, res) => {
     if (!primary) return res.status(404).json({ error: 'Primary contact not found' });
 
     // Resolve every secondary up-front + tenant-scope guard. A secondary that
-    // belongs to another tenant or that is already soft-deleted is skipped
-    // (not error) — keeps the operation idempotent on retry.
+    // belongs to another tenant or is a legacy soft-deleted tombstone is
+    // skipped (not error), keeping the operation safe to retry.
     const sids = secondaryIds.map(Number).filter((n) => Number.isFinite(n) && n !== pid);
     const secondaries = await prisma.contact.findMany({
       where: { id: { in: sids }, tenantId, deletedAt: null },
@@ -2605,12 +2613,14 @@ router.post('/merge', async (req, res) => {
         });
       }
 
-      // Soft-delete the secondaries. Contact.deletedAt exists (#167); this
-      // preserves the audit trail and lets ADMIN restore via the existing
-      // POST /:id/restore endpoint.
-      await tx.contact.updateMany({
+      // Permanently remove any contact-owned records that were not part of
+      // the FK fold above (including legacy portal/travel rows), then delete
+      // the duplicate Contact accounts themselves.
+      for (const secondaryId of validSecIds) {
+        await deleteContactDependents(tx, secondaryId);
+      }
+      await tx.contact.deleteMany({
         where: { id: { in: validSecIds }, tenantId },
-        data: { deletedAt: new Date() }
       });
     });
 
@@ -2620,7 +2630,7 @@ router.post('/merge', async (req, res) => {
       mergedIds: validSecIds,
       count: validSecIds.length,
       folded,
-      strategy: 'soft-delete',
+      strategy: 'hard-delete',
     });
 
     res.json({
@@ -2629,7 +2639,7 @@ router.post('/merge', async (req, res) => {
       primaryId: primary.id,
       mergedIds: validSecIds,
       folded,
-      strategy: 'soft-delete',
+      strategy: 'hard-delete',
     });
   } catch (err) {
     console.error('[Contacts] Merge error:', err);
@@ -2796,86 +2806,46 @@ router.delete('/attachments/:attachId', async (req, res) => {
   } catch (_err) { res.status(500).json({ error: 'Failed to delete attachment' }); }
 });
 
-// #167: soft-delete — flips deletedAt instead of hard-removing the row.
-// Audit row is written first. Idempotent: a second DELETE returns 200 with
-// {idempotent: true, softDeleted: true}. Cascade behavior on relations is
-// unchanged because we no longer call prisma.contact.delete here.
+// Permanently delete a contact and its contact-owned records. Legacy rows
+// with deletedAt set are handled by this same path, so an old soft-deleted
+// account cannot block a future registration using the same email.
 router.delete('/:id', verifyRole(['ADMIN']), async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
-    if (existing.deletedAt) {
-      return res.json({ ...serializeContactTags(existing), idempotent: true, softDeleted: true });
-    }
-    try {
-      await prisma.auditLog.create({
-        data: { action: 'SOFT_DELETE', entity: 'Contact', entityId: existing.id, userId: req.user?.userId || null, tenantId: req.user.tenantId, details: JSON.stringify({ name: existing.name, email: existing.email }) }
-      });
-    } catch (_) { /* audit failures must not block the soft-delete */ }
-    const contact = await prisma.contact.update({
-      where: { id: existing.id },
-      data: { deletedAt: new Date() }
-    });
-    // [GP-CRM integration] CRM has no contact.deleted event (soft-delete only).
-    // Signal the deletion via contact.updated with a non-null deletedAt so a
-    // partner (e.g. GlobusPhone) evicts its caller-ID cache for this number.
-    // Fire-and-forget — never block the soft-delete response.
+    await writeAudit('Contact', 'HARD_DELETE', existing.id, req.user?.userId || null, req.user.tenantId, { contactId: existing.id });
+    await hardDeleteContact(prisma, existing.id);
+
+    // [GP-CRM integration] Keep the existing partner event contract so
+    // external caller-ID caches can evict the deleted contact. The row is
+    // already gone; deletedAt is only an explicit deletion marker in the
+    // outbound event payload.
     try {
       const { deliverWebhooks } = require('../lib/webhookDelivery');
       await deliverWebhooks("contact.updated", {
-        id: contact.id,
-        name: contact.name,
-        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
-        email: contact.email,
-        status: contact.status,
-        assignedToId: contact.assignedToId,
-        deletedAt: contact.deletedAt,
+        id: existing.id,
+        name: existing.name,
+        phone: existing.phone ? normalizePhoneValue(existing.phone) : existing.phone,
+        email: existing.email,
+        status: existing.status,
+        assignedToId: existing.assignedToId,
+        deletedAt: new Date(),
         tenantId: req.user.tenantId,
       }, req.user.tenantId);
     } catch (_e) { /* webhook delivery is fire-and-forget */ }
-    res.json({ ...serializeContactTags(contact), softDeleted: true });
+    res.json({ id: existing.id, deleted: true, hardDeleted: true });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to delete contact' });
   }
 });
 
-// #167: restore a soft-deleted contact. ADMIN only. Idempotent on already-live rows.
-router.post('/:id/restore', verifyRole(['ADMIN']), async (req, res) => {
-  try {
-    const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
-    if (!existing) return res.status(404).json({ error: 'Contact not found' });
-    if (!existing.deletedAt) {
-      return res.json({ ...serializeContactTags(existing), idempotent: true, restored: false });
-    }
-    try {
-      await prisma.auditLog.create({
-        data: { action: 'RESTORE', entity: 'Contact', entityId: existing.id, userId: req.user?.userId || null, tenantId: req.user.tenantId, details: JSON.stringify({ name: existing.name }) }
-      });
-    } catch (_) { /* non-critical */ }
-    const contact = await prisma.contact.update({
-      where: { id: existing.id },
-      data: { deletedAt: null }
-    });
-    // [GP-CRM integration] Signal restoration via contact.updated with
-    // deletedAt: null so a partner (e.g. GlobusPhone) re-populates caller ID
-    // for this number. Fire-and-forget.
-    try {
-      const { deliverWebhooks } = require('../lib/webhookDelivery');
-      await deliverWebhooks("contact.updated", {
-        id: contact.id,
-        name: contact.name,
-        phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
-        email: contact.email,
-        status: contact.status,
-        assignedToId: contact.assignedToId,
-        deletedAt: contact.deletedAt,
-        tenantId: req.user.tenantId,
-      }, req.user.tenantId);
-    } catch (_e) { /* webhook delivery is fire-and-forget */ }
-    res.json({ ...serializeContactTags(contact), restored: true });
-  } catch (_err) {
-    res.status(500).json({ error: 'Failed to restore contact' });
-  }
+// Hard-delete policy: restoration is no longer available. A deleted contact
+// must be registered/created again as a fresh account.
+router.post('/:id/restore', verifyRole(['ADMIN']), async (_req, res) => {
+  res.status(410).json({
+    error: 'Deleted contacts cannot be restored. Create a new contact instead.',
+    code: 'CONTACT_RESTORE_UNAVAILABLE',
+  });
 });
 
 

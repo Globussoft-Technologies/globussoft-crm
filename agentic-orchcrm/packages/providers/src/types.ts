@@ -55,6 +55,8 @@ export interface ChatRequest {
   tools?: LLMToolDef[];
   temperature?: number;
   maxTokens?: number;
+  /** Optional wall-clock limit for this provider request. */
+  timeoutMs?: number;
   /** Optional schema-constrained output (additive; ignored by providers/models that lack it). */
   responseFormat?: ResponseFormat;
 }

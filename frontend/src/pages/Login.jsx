@@ -317,10 +317,21 @@ const Login = () => {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.token) return false;
-      // Persist under the keys TravelCustomerPortal reads, then hand off.
-      localStorage.setItem("portalToken", data.token);
-      localStorage.setItem("portalContact", JSON.stringify(data.contact || {}));
-      navigate("/travel/portal");
+      const contact = data.contact || {};
+      const isTmcTeacher = contact.subBrand === "tmc" && contact.portalRole === "TEACHER";
+      const isTmcParent = contact.subBrand === "tmc" && contact.portalRole === "PARENT";
+      if (isTmcTeacher || isTmcParent) {
+        // TMC personas have dedicated portals. Do not persist this session
+        // under the shared customer-portal keys or it will open the wrong UI.
+        localStorage.removeItem("portalToken");
+        localStorage.removeItem("portalContact");
+        localStorage.setItem(isTmcTeacher ? "tmcTeacherPortalToken" : "tmcParentPortalToken", data.token);
+        navigate(isTmcTeacher ? "/tmc/teacher-portal" : "/tmc/parent-portal");
+      } else {
+        localStorage.setItem("portalToken", data.token);
+        localStorage.setItem("portalContact", JSON.stringify(contact));
+        navigate("/travel/portal");
+      }
       return true;
     } catch {
       return false;

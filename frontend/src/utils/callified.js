@@ -51,7 +51,20 @@ export async function launchCallifiedSSO() {
 export function crmRecordingUrl(recordingUrl) {
   const raw = String(recordingUrl || '').trim();
   if (!raw) return '';
-  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw);
+      const marker = '/o/recordings/';
+      const markerIndex = url.pathname.indexOf(marker);
+      if (url.hostname.endsWith('.oraclecloud.com') && markerIndex >= 0) {
+        const recordingKey = url.pathname.slice(markerIndex + marker.length);
+        if (recordingKey) return `/api/callified/recordings/${recordingKey}`;
+      }
+    } catch {
+      // Preserve other absolute URLs when parsing fails.
+    }
+    return raw;
+  }
   const path = raw.replace(/^\/?api\/recordings\/?/, '');
   if (!path) return '';
   return `/api/callified/recordings/${path}`;

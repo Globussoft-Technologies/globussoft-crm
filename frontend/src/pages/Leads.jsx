@@ -80,6 +80,24 @@ const BUILTIN_RULE_COLUMNS = [
   { key: "phone", label: "Phone" },
   { key: "aiScore", label: "Lead Score" },
 ];
+// Auto-campaign rules run before a Contact is inserted. Only expose table
+// columns whose values exist at that point; campaign/call metrics/timestamps
+// are circular or post-create projections and could never match reliably.
+const AUTO_CAMPAIGN_RULE_COLUMN_KEYS = new Set([
+  ...BUILTIN_RULE_COLUMNS.map((column) => column.key),
+  "webForm",
+  "firstName",
+  "lastName",
+  "website",
+  "linkedin",
+  "description",
+  "stateCode",
+  "firstTouchSource",
+  "lastTouchSource",
+  "treatmentOfInterest",
+  "gst",
+  "billingStateCode",
+]);
 // #600  wellness vertical replaces the generic CRM source taxonomy with one
 // that matches Patient-intake channels. WhatsApp is the dominant inbound
 // channel for clinics; LinkedIn / Cold Call don't apply.
@@ -143,6 +161,7 @@ const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "aiScore",
   "source",
   "webForm",
+  "subBrand",
   "tags",
   "assignedTo",
   "createdAt",
@@ -1215,14 +1234,20 @@ const Leads = () => {
   // Seeding the existing filter state (rather than adding a parallel filter
   // path) means the dropdowns visibly reflect what's applied and the user can
   // widen or clear it from the normal controls.
-  const [drillParams] = useSearchParams();
+  const [drillParams, setDrillParams] = useSearchParams();
   useEffect(() => {
     const callStatus = drillParams.get("callStatus");
     const source = drillParams.get("source");
     const assignee = drillParams.get("assignee");
+    const webForm = drillParams.get("webForm");
     if (callStatus) setLeadStatusFilter(normalizeCallStatus(callStatus));
     if (source) setSourceFilter(source);
     if (assignee) setAssigneeFilter(assignee);
+    if (webForm) {
+      setAdvancedFilters((prev) =>
+        prev.some((f) => f?.field === "webForm") ? prev : [...prev, { field: "webForm", operator: "contains", values: [webForm] }],
+      );
+    }
     // Read once per URL — re-running on every render would fight the user's
     // own changes to the dropdowns.
   }, [drillParams]);
@@ -2826,6 +2851,17 @@ const Leads = () => {
     setSearchTerm("");
     setAdvancedFilters([]);
     setLeadsPage(0);
+    // Drop drill-down params (e.g. ?webForm= from the Web Forms eye icon)
+    // so the web-form filter does not re-seed on the next render or refresh
+    // and the list reloads unfiltered.
+    setDrillParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        ["callStatus", "source", "assignee", "webForm"].forEach((key) => next.delete(key));
+        return next;
+      },
+      { replace: true },
+    );
   };
   const hasActiveLeadFilters = Boolean(
     searchTerm.trim() ||
@@ -2932,6 +2968,11 @@ const Leads = () => {
         key === "source" ||
         // Web Form is generic-CRM only (wellness/travel never see it).
         (key === "webForm" && isGeneric) ||
+        // Sub-brand is generic+travel — the web-form Sub-brand field
+        // writes Contact.subBrand on generic tenants too. (Travel keeps
+        // its fixed-extra Sub-brand column; this branch is generic-only
+        // so travel never renders it twice.)
+        (key === "subBrand" && isGeneric) ||
         key === "tags" ||
         key === "assignedTo" ||
         key === "createdAt" ||
@@ -2966,6 +3007,7 @@ const Leads = () => {
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
       if (key === "webForm") return { key, label: "Web Form" };
+      if (key === "subBrand") return { key, label: "Sub-brand" };
       if (key === "tags") return { key, label: "Tags" };
       if (key === "assignedTo") return { key, label: "Assigned To" };
       if (key === "createdAt") return { key, label: "Created" };
@@ -4273,6 +4315,18 @@ const Leads = () => {
           </td>
         );
       }
+      case "subBrand": {
+        // Web-form Sub-brand — free-text Contact scalar, inline-editable
+        // like the other web-form parity columns (industry, stateCode…).
+        return renderBuiltInLeadCell({
+          lead,
+          field: "subBrand",
+          label: "Sub-brand",
+          value: lead.subBrand,
+          extraStyle: { color: "var(--text-secondary)" },
+          renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+        });
+      }
       case "tags":
         return (
           <td
@@ -4924,13 +4978,25 @@ const Leads = () => {
                         </div>
 
                         {autoCampaignRules.map((rule) => {
-                          const columnOptions = [
-                            ...BUILTIN_RULE_COLUMNS,
-                            ...customFieldDefs.map((f) => ({
-                              key: `cf_${f.fieldKey}`,
-                              label: f.label,
-                            })),
-                          ];
+                          // Reuse labels from the generic Leads catalog, but
+                          // only for fields available before Contact creation.
+                          // Custom fields are valid create-time inputs too.
+                          const catalogOptions = leadColumnCatalog
+                            .filter(
+                              (col) =>
+                                AUTO_CAMPAIGN_RULE_COLUMN_KEYS.has(col.key) ||
+                                col.key.startsWith("cf_"),
+                            )
+                            .map((col) => ({ key: col.key, label: col.label }));
+                          const columnOptions = catalogOptions.length
+                            ? catalogOptions
+                            : [
+                              ...BUILTIN_RULE_COLUMNS,
+                              ...customFieldDefs.map((f) => ({
+                                key: `cf_${f.fieldKey}`,
+                                label: f.label,
+                              })),
+                            ];
                           const ruleIsSaved = savedAutoCampaignRuleIds.has(
                             rule.id,
                           );

@@ -82,6 +82,15 @@ function render(landingPage, options = {}) {
     config = landingPage.content;
   }
 
+  const tmcParentRegistrationUrl = options.tmcParentRegistrationUrl || landingPage?.tmcParentRegistrationUrl || "";
+  if (config && tmcParentRegistrationUrl) {
+    config.meta = Object.assign({}, config.meta || {}, { tmcParentRegistrationUrl });
+    config.nav = Object.assign({}, config.nav || {}, { ctaHref: tmcParentRegistrationUrl });
+    if (config.countdown && typeof config.countdown === 'object') {
+      config.countdown = Object.assign({}, config.countdown, { ctaHref: tmcParentRegistrationUrl });
+    }
+  }
+
   // Fill the submission endpoints for PUBLISHED renders (the public
   // /p/:slug surface). The bridge persists `register.endpoint` and
   // `brochure.endpoint` as null because the slug isn't always stable at

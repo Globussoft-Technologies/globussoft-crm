@@ -34,10 +34,9 @@
 //   generated, please try again in a moment" fallback per slice contract.
 //
 // PDF DOWNLOAD:
-//   Button calls `GET /api/travel/diagnostics/:id/readiness-report.pdf`
-//   (T8 shipped, public, returns application/pdf). The id is extracted
-//   from the slug — slug shape is `${diagnosticId}-${8-byte-hex}` per
-//   T8's buildReportSlug helper.
+//   Button calls the token-gated public PDF endpoint with the complete report
+//   slug (`${diagnosticId}-${8-byte-hex}`). The random portion must never be
+//   discarded because it is the report's public access credential.
 //
 // BOOKING CTA (DD-5.4):
 //   Wired to `import.meta.env.VITE_TMC_BOOKING_URL` (Calendly / Google Meet
@@ -275,8 +274,9 @@ export default function TmcReadinessReport() {
   const assuranceFramingText = narrative.assurance_framing ||
     "Four concerns matter to any school owner approving a trip — risk reduction, reputation protection, governance confidence, parent acceptance. Each is addressed below from facts the team operates on, not adjectives.";
 
-  // PDF download URL — public endpoint T8 shipped.
-  const pdfUrl = `/api/travel/diagnostics/${diagnosticId}/readiness-report.pdf`;
+  // The complete random report slug is the bearer capability. Never reduce
+  // this URL to the enumerable numeric diagnostic id.
+  const pdfUrl = `/api/travel/diagnostics/public/readiness-report/${encodeURIComponent(slug)}.pdf`;
 
   // DD-5.4 booking URL — Vite env var; mailto fallback when absent.
   const bookingUrl = (typeof import.meta !== "undefined" && import.meta.env &&

@@ -714,6 +714,124 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(attendeesInput.value).toContain('anita@example.com');
   });
 
+  it('attendee chips de-duplicate case-insensitively and can be removed', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineWithContacts());
+    render(<CalendarSync />);
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+
+    const attendeesInput = screen.getByPlaceholderText(/email@example.com, another@example.com/i);
+    fireEvent.change(attendeesInput, { target: { value: 'ANITA@example.com' } });
+    fireEvent.change(screen.getAllByRole('combobox')[1], {
+      target: { value: 'anita@example.com' },
+    });
+
+    expect(attendeesInput.value).toBe('ANITA@example.com');
+    expect(screen.getAllByText('ANITA@example.com')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: /Remove ANITA@example.com/i }));
+    expect(attendeesInput.value).toBe('');
+    expect(screen.queryByRole('button', { name: /Remove ANITA@example.com/i })).toBeNull();
+  });
+
+  it('edit attendees can be added from contacts, removed, and persisted in the PUT payload', async () => {
+    let putBody;
+    const baseMock = makeGoogleOnlineWithContacts();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/calendar/events/g-evt-1' && opts?.method === 'PUT') {
+        putBody = JSON.parse(opts.body);
+        return Promise.resolve({ id: 'g-evt-1' });
+      }
+      return baseMock(url, opts);
+    });
+    render(<CalendarSync />);
+
+    fireEvent.click(await screen.findByText(/Quarterly client review/i));
+    fireEvent.click(await screen.findByRole('button', { name: /Edit/i }));
+    await screen.findByRole('heading', { name: /Edit Event/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove rishu@acme.com/i }));
+    fireEvent.change(screen.getByLabelText(/Add attendee from contacts/i), {
+      target: { value: 'anita@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+
+    await waitFor(() => expect(putBody).toBeTruthy());
+    expect(putBody.attendees).toEqual(['arjun@globussoft.com', 'anita@example.com']);
+  });
+
+  it('uses only the most specific active meeting reminder window', async () => {
+    const reminderEvents = [
+      { id: 'g-reminder-24h', title: 'Tomorrow planning call', minutesUntilStart: 23 * 60 },
+      { id: 'g-reminder-30m', title: 'Near-term client call', minutesUntilStart: 20 },
+      { id: 'g-reminder-10m', title: 'Imminent client call', minutesUntilStart: 5 },
+    ].map(({ minutesUntilStart, ...event }) => ({
+      ...event,
+      startTime: new Date(Date.now() + minutesUntilStart * 60 * 1000).toISOString(),
+      endTime: new Date(Date.now() + (minutesUntilStart + 30) * 60 * 1000).toISOString(),
+      attendees: '[]',
+    }));
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock(reminderEvents));
+    render(<CalendarSync />);
+
+    const alertsCard = await screen.findByRole('button', { name: /Pending alerts/i });
+    expect(alertsCard).toHaveTextContent('3');
+    fireEvent.click(alertsCard);
+
+    expect(await screen.findByText(/^Meeting: Tomorrow planning call \(24 hours\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Meeting: Near-term client call \(30 minutes\)/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^Meeting: Imminent client call \(10 minutes\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Meeting: Imminent client call \(30 minutes\)/i)).toBeNull();
+    expect(screen.queryByText(/^Meeting: Imminent client call \(24 hours\)/i)).toBeNull();
+  });
+
+  it('marks a reminder seen only when its alert is opened', async () => {
+    const reminderEvent = {
+      id: 'g-reminder-click',
+      title: 'Reminder details meeting',
+      startTime: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+      endTime: new Date(Date.now() + 50 * 60 * 1000).toISOString(),
+      attendees: '[]',
+    };
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock([reminderEvent]));
+    render(<CalendarSync />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Pending alerts/i }));
+    const alertRow = (await screen.findByText(/^Meeting: Reminder details meeting \(30 minutes\)/i))
+      .closest('[role="button"]');
+    expect(within(alertRow).getByText(/^New$/i)).toBeInTheDocument();
+
+    fireEvent.click(alertRow);
+    expect(await screen.findByRole('heading', { name: /Reminder details meeting/i })).toBeInTheDocument();
+    expect(within(alertRow).queryByText(/^New$/i)).toBeNull();
+  });
+
+  it('labels an in-progress meeting and disables editing it', async () => {
+    const liveEvent = {
+      id: 'g-live-1',
+      title: 'Live customer meeting',
+      startTime: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      endTime: new Date(Date.now() + 50 * 60 * 1000).toISOString(),
+      attendees: '[]',
+    };
+    fetchApiMock.mockImplementation(makeGoogleOnlineMock([liveEvent]));
+    render(<CalendarSync />);
+
+    await screen.findByText(/^Live customer meeting$/i);
+    expect(screen.getByText(/^In progress$/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/^Live customer meeting$/i));
+
+    const editButton = await screen.findByRole('button', { name: /Edit/i });
+    expect(editButton).toBeDisabled();
+    expect(editButton).toHaveAttribute('title', 'In-progress meetings cannot be edited');
+    fireEvent.click(editButton);
+    expect(screen.queryByRole('heading', { name: /Edit Event/i })).toBeNull();
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/calendar/events/g-live-1',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+  });
+
   it('createMeet: checking "Add a Google Meet link" sends createMeet:true in the POST', async () => {
     fetchApiMock.mockImplementation(makeGoogleOnlineWithContacts());
     const { container } = render(<CalendarSync />);

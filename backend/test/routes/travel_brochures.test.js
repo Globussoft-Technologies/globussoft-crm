@@ -5,7 +5,8 @@
  * Pins the POST /api/travel/brochures/runs contract:
  *   - tripInput is validated server-side; missing required fields return 400
  *     with the missing keys.
- *   - goal is JSON.stringify(tripInput) passed to the engine.
+ *   - binary logo data is kept out of the model goal and passed through the
+ *     renderer-only brand channel.
  *   - styleKey defaults to 'tmc-school' for the travel sector.
  *   - the start-run response carries brand-kit soft warnings.
  */
@@ -158,8 +159,15 @@ describe('POST /api/travel/brochures/runs', () => {
     const call = brochureEngine.startRun.mock.lastCall[0];
     expect(call.sectorKey).toBe('travel');
     expect(call.styleKey).toBe('tmc-school');
-    expect(call.goal).toBe(JSON.stringify(tripInput));
-    expect(call.brand).toBeUndefined();
+    const modelInput = JSON.parse(call.goal);
+    expect(modelInput).toEqual(expect.objectContaining({
+      schoolName: tripInput.schoolName,
+      tripTitle: tripInput.tripTitle,
+      days: tripInput.days,
+    }));
+    expect(modelInput).not.toHaveProperty('schoolLogoUrl');
+    expect(call.goal).not.toContain('base64,');
+    expect(call.brand.schoolLogoUrl).toBe(tripInput.schoolLogoUrl);
   });
 
   test('defaults styleKey to tmc-school for the travel sector', async () => {
@@ -296,5 +304,37 @@ describe('POST /api/travel/brochures/runs', () => {
     expect(call.brand.socials).toEqual(['instagram', 'youtube']);
     // Explicit body edits override kit values.
     expect(call.brand.name).toBe('Override Name');
+  });
+
+  test('keeps the selected brand kit logo when a saved form contains a stale logo URL', async () => {
+    const kitLogo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
+    prisma.brandKit.findFirst.mockReset().mockResolvedValue({
+      id: 42,
+      tenantId: 1,
+      logoUrl: kitLogo,
+      logoDarkUrl: null,
+      tagline: null,
+      accentColor: null,
+      supportPhone: null,
+      supportEmail: null,
+      socialLinksJson: null,
+    });
+
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/travel/brochures/runs')
+      .set('Authorization', bearer())
+      .send({
+        tripInput: validTripInput(),
+        brand: {
+          tmcBrandKitId: '42',
+          // A previous kit/draft can survive in browser state. It must never
+          // replace the official logo for the kit selected in this run.
+          logoUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(brochureEngine.startRun.mock.lastCall[0].brand.logoUrl).toBe(kitLogo);
   });
 });

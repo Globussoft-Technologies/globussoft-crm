@@ -7,13 +7,14 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { escapeHtml, safeUrl } from '../../utils/landingPageUtils';
 
-export function DestinationHeroBlock({ props = {}, slug = '' }) {
+export function DestinationHeroBlock({ props = {}, slug = '', tmcParentRegistrationUrl = '' }) {
   const destination = props.destination || '';
   const headline = props.headline || '';
   const subhead = props.subhead || '';
   const posterUrl = props.posterUrl ? safeUrl(props.posterUrl, 'image-src') : '';
   const ctaText = props.ctaText || 'Reserve Your Spot';
   const ctaScrollTarget = props.ctaScrollTarget || '';
+  const registrationUrl = tmcParentRegistrationUrl || props.tmcParentRegistrationUrl || '';
   const palette = props.palette || {};
   const bg = palette.bg || '#1f1a17';
   const fg = palette.fg || '#ffffff';
@@ -65,6 +66,7 @@ export function DestinationHeroBlock({ props = {}, slug = '' }) {
       };
 
   const handleCtaClick = (e) => {
+    if (registrationUrl) return;
     if (ctaScrollTarget) {
       e.preventDefault();
       const target = document.getElementById(ctaScrollTarget);
@@ -187,7 +189,7 @@ export function DestinationHeroBlock({ props = {}, slug = '' }) {
 
         <a
           className="t-cta t-hero-cta"
-          href={ctaScrollTarget ? `#${ctaScrollTarget}` : '#'}
+          href={registrationUrl || (ctaScrollTarget ? `#${ctaScrollTarget}` : '#')}
           onClick={handleCtaClick}
           style={{
             display: 'inline-block',

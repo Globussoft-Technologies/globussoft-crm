@@ -39,6 +39,7 @@ const {
 } = require("../lib/csvHelpers");
 const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
 const { normalizePhoneValue } = require("../lib/phoneFormatting");
+const { hardDeleteContact } = require("../lib/contactHardDelete");
 
 const router = express.Router();
 
@@ -314,7 +315,7 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
           status,
           source: source || null,
         };
-        const updateData = { email, deletedAt: null };
+        const updateData = { email };
         if (name) updateData.name = sanitizeCellForExport(name);
         if (phone) updateData.phone = phone;
         if (company) updateData.company = sanitizeCellForExport(company);
@@ -322,10 +323,14 @@ router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
         if (rawStatus) updateData.status = status;
         if (source) updateData.source = source;
 
-        const existing = await prisma.contact.findFirst({
+        let existing = await prisma.contact.findFirst({
           where: { email, tenantId: req.user.tenantId },
-          select: { id: true },
+          select: { id: true, deletedAt: true },
         });
+        if (existing?.deletedAt) {
+          await hardDeleteContact(prisma, existing.id);
+          existing = null;
+        }
         await prisma.contact.upsert({
           where: { email_tenantId: { email, tenantId: req.user.tenantId } },
           update: updateData,

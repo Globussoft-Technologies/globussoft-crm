@@ -278,6 +278,7 @@ jobs:
             tests/landing-pages-investment-sync-api.spec.js \
             tests/portal-api.spec.js \
             tests/portal-kyc-api.spec.js \
+            tests/tmc-portal-api.spec.js \
             tests/tenant-switch-disabled-api.spec.js \
             tests/voice-transcription-api.spec.js \
             tests/channels-credentials-api.spec.js \
@@ -348,6 +349,7 @@ jobs:
             tests/travel-curriculum-api.spec.js \
             tests/gmail-api.spec.js \
             tests/travel-brochures-models-api.spec.js \
+            tests/landing-form-config-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/callified-campaign-api.spec.js \
             tests/wellness-callified-api.spec.js \

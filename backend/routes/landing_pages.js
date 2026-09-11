@@ -39,6 +39,7 @@ const { snapshotSafe, VERSION_SOURCES } = require("../lib/landingPageVersions");
 const { isValidPhoneOrEmpty } = require("../lib/validators");
 
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+const { buildTmcParentRegistrationUrl } = require("../lib/tmcRegistrationContext");
 const visaDocStore = require("../lib/visaDocStore");
 
 
@@ -57,8 +58,18 @@ const landingRegistrationDocUpload = multer({
 });
 
 const prisma = require("../lib/prisma");
+const { hardDeleteContact } = require("../lib/contactHardDelete");
 
 const GENERIC_LANDING_SITE_PREFIX = "generic-site-";
+
+async function purgeLegacyContactTombstone(email, tenantId) {
+  if (!email || !tenantId) return;
+  const existing = await prisma.contact.findFirst({
+    where: { email, tenantId, deletedAt: { not: null } },
+    select: { id: true },
+  });
+  if (existing) await hardDeleteContact(prisma, existing.id);
+}
 
 
 
@@ -1323,7 +1334,26 @@ router.get("/public/featured", async (req, res) => {
 
 
 
-function decoratePublishedPublicPayload(page, parsedContent) {
+async function getTmcParentRegistrationUrl(page, req) {
+  if (!page?.tripId || String(page.subBrand || "").toLowerCase() !== "tmc") return null;
+  const trip = await prisma.tmcTrip.findFirst({
+    where: {
+      id: Number(page.tripId),
+      tenantId: Number(page.tenantId || 1),
+      teacherContactId: { not: null },
+    },
+    select: { teacherContactId: true },
+  });
+  if (!trip?.teacherContactId) return null;
+  return buildTmcParentRegistrationUrl({
+    baseUrl: getFrontendUrlFromRequest(req),
+    tenantId: page.tenantId || 1,
+    teacherContactId: trip.teacherContactId,
+    tripId: page.tripId,
+  });
+}
+
+function decoratePublishedPublicPayload(page, parsedContent, tmcParentRegistrationUrl = null) {
 
   const publicUrl = `/p/${encodeURIComponent(page.slug)}`;
   const submitUrl = `${publicUrl}/submit`;
@@ -1355,6 +1385,7 @@ function decoratePublishedPublicPayload(page, parsedContent) {
     publicUrl,
     submitUrl,
     paymentOrderUrl,
+    tmcParentRegistrationUrl,
   };
 }
 
@@ -1431,6 +1462,10 @@ router.get("/public/featured-full", async (req, res) => {
 
         id: true,
 
+        tenantId: true,
+
+        tripId: true,
+
         slug: true,
 
         title: true,
@@ -1487,7 +1522,7 @@ router.get("/public/featured-full", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(page, parsedContent));
+    return res.json(decoratePublishedPublicPayload(page, parsedContent, await getTmcParentRegistrationUrl(page, req)));
 
   } catch (err) {
 
@@ -1513,6 +1548,10 @@ router.get("/public/by-slug/:slug", async (req, res) => {
       select: {
 
         id: true,
+
+        tenantId: true,
+
+        tripId: true,
 
         slug: true,
 
@@ -1570,7 +1609,7 @@ router.get("/public/by-slug/:slug", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(page, parsedContent));
+    return res.json(decoratePublishedPublicPayload(page, parsedContent, await getTmcParentRegistrationUrl(page, req)));
 
   } catch (err) {
 
@@ -1610,6 +1649,10 @@ router.get("/public/by-id/:id", async (req, res) => {
 
         id: true,
 
+        tenantId: true,
+
+        tripId: true,
+
         slug: true,
 
         title: true,
@@ -1666,7 +1709,7 @@ router.get("/public/by-id/:id", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(page, parsedContent));
+    return res.json(decoratePublishedPublicPayload(page, parsedContent, await getTmcParentRegistrationUrl(page, req)));
 
   } catch (err) {
 
@@ -1706,6 +1749,10 @@ router.get("/public/by-trip/:tripId", async (req, res) => {
       select: {
 
         id: true,
+
+        tenantId: true,
+
+        tripId: true,
 
         slug: true,
 
@@ -1763,7 +1810,7 @@ router.get("/public/by-trip/:tripId", async (req, res) => {
 
     }
 
-    return res.json(decoratePublishedPublicPayload(page, parsedContent));
+    return res.json(decoratePublishedPublicPayload(page, parsedContent, await getTmcParentRegistrationUrl(page, req)));
 
   } catch (err) {
 
@@ -1806,7 +1853,8 @@ router.get("/public/featured-html", async (req, res) => {
 
     if (!page) return res.status(404).json({ error: "No featured page.", code: "NO_FEATURED_PAGE" });
 
-    const html = renderPage(page);
+    const tmcParentRegistrationUrl = await getTmcParentRegistrationUrl(page, req);
+    const html = renderPage({ ...page, tmcParentRegistrationUrl }, { tmcParentRegistrationUrl });
 
     res.set("Content-Type", "text/html");
 
@@ -1923,6 +1971,7 @@ const VALID_SUB_BRANDS = new Set(["tmc", "rfu", "travelstall", "visasure"]);
 //     available for operators who want per-section composition freedom.
 
 const VALID_GENERATE_STYLES = new Set(["premium", "legacy"]);
+const VALID_TRIP_TYPES = new Set(["domestic", "international", "day_trip"]);
 
 router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
@@ -1930,8 +1979,8 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
 
     const { destination, durationDays, audience, tripType, subBrand, themeId, themeOverrides, autoCreate, style } = req.body || {};
     const normalizedTripType = String(tripType || "international").trim().toLowerCase();
-    if (!['domestic', 'international'].includes(normalizedTripType)) {
-      return res.status(400).json({ error: "tripType must be domestic or international", code: "INVALID_TRIP_TYPE" });
+    if (!VALID_TRIP_TYPES.has(normalizedTripType)) {
+      return res.status(400).json({ error: "tripType must be domestic, international, or day_trip", code: "INVALID_TRIP_TYPE" });
     }
 
     // Default to premium so new AI-generated pages get the better
@@ -2623,7 +2672,8 @@ router.post("/generate-with-tee", verifyToken, async (req, res) => {
 
     // ponytail: TEE accepts free-form tripType vocabulary (luxury, family,
     // educational, honeymoon, …) — no whitelist here; only the legacy
-    // /generate-from-destination endpoint restricts to domestic/international.
+    // /generate-from-destination endpoint restricts to domestic,
+    // international, or day_trip.
     const normalizedTripType = String(tripType || "international").trim().toLowerCase();
 
 
@@ -6099,7 +6149,8 @@ publicRouter.get("/:slug", async (req, res) => {
 
 
 
-    const html = renderPage(page);
+    const tmcParentRegistrationUrl = await getTmcParentRegistrationUrl(page, req);
+    const html = renderPage({ ...page, tmcParentRegistrationUrl }, { tmcParentRegistrationUrl });
 
     res.set("Content-Type", "text/html");
 
@@ -7111,12 +7162,13 @@ async function handleRegistrationDraft(req, res, page, formProps) {
     // so the travel leads page channel chips classify them under Web.
 
     const contactSource = "tmc_registration";
+    await purgeLegacyContactTombstone(parentEmail, tenantId);
 
     const contact = await prisma.contact.upsert({
 
       where: { email_tenantId: { email: parentEmail, tenantId } },
 
-      update: { source: contactSource, deletedAt: null },
+      update: { source: contactSource },
 
       create: {
 
@@ -7214,7 +7266,9 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   // approval queue.
 
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
-  const portalRedirect = `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || '')}&name=${encodeURIComponent(resolvedParentName)}&email=${encodeURIComponent(resolvedParentEmail)}&next=${encodeURIComponent('/travel/portal')}`;
+  const tmcParentRegistrationUrl = await getTmcParentRegistrationUrl(page, req);
+  const portalRedirect = tmcParentRegistrationUrl
+    || `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || '')}&name=${encodeURIComponent(resolvedParentName)}&email=${encodeURIComponent(resolvedParentEmail)}&next=${encodeURIComponent('/travel/portal')}`;
   return res.status(201).json({
 
     ok: true,
@@ -7534,6 +7588,7 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
 
 
     // Upsert contact with unique constraint on email + tenantId
+    await purgeLegacyContactTombstone(contactEmail, tenantId);
 
     const contact = await prisma.contact.upsert({
 
@@ -7550,8 +7605,6 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
         company: company || null,
 
         treatmentOfInterest: serviceInterest || null,
-
-        deletedAt: null,
 
       },
 
@@ -7686,7 +7739,8 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
       const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
       response.redirect = {
         type: "customer-registration",
-        url: `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || '')}&name=${encodeURIComponent(contactName)}&email=${encodeURIComponent(contactEmail)}&next=${encodeURIComponent('/travel/portal')}`,
+        url: await getTmcParentRegistrationUrl(page, req)
+          || `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || '')}&name=${encodeURIComponent(contactName)}&email=${encodeURIComponent(contactEmail)}&next=${encodeURIComponent('/travel/portal')}`,
       };
     }
 
@@ -7912,6 +7966,8 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
     // never reached real traffic until that landed.
 
+    await purgeLegacyContactTombstone(contactEmail, tenantId);
+
     const contact = await prisma.contact.upsert({
 
       where: { email_tenantId: { email: contactEmail, tenantId } },
@@ -7920,14 +7976,6 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
         source: contactSource,
 
-        // If this contact was previously soft-deleted, restoring it makes the
-
-        // new deal visible in leads lists. Without this, a visitor who registers,
-
-        // gets deleted, then re-registers with the same email would match the
-
-        // tombstoned row and the lead would stay hidden.
-
         name: contactName,
 
         phone: phone || null,
@@ -7935,8 +7983,6 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
         company: company || null,
 
         treatmentOfInterest: serviceInterest || null,
-
-        deletedAt: null,
 
       },
 
@@ -8062,7 +8108,16 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
 
 
-    res.json({ success: true, message: "Thank you for your submission!" });
+    const response = { success: true, message: "Thank you for your submission!" };
+    if (page.tripId && contactEmail && !isBrochureRequest) {
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+      response.redirect = {
+        type: "customer-registration",
+        url: await getTmcParentRegistrationUrl(page, req)
+          || `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || "")}&name=${encodeURIComponent(contactName)}&email=${encodeURIComponent(contactEmail)}&next=${encodeURIComponent("/travel/portal")}`,
+      };
+    }
+    res.json(response);
 
   } catch (err) {
 

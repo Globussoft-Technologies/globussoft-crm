@@ -55,6 +55,15 @@ import prisma from '../../lib/prisma.js';
 import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
 const { toXlsxBuffer } = requireCJS('../../lib/csvIO');
+const hardDeleteContactMock = vi.fn().mockResolvedValue(1);
+const contactHardDeletePath = requireCJS.resolve('../../lib/contactHardDelete.js');
+const Module = requireCJS('node:module');
+Module._cache[contactHardDeletePath] = {
+  id: contactHardDeletePath,
+  filename: contactHardDeletePath,
+  loaded: true,
+  exports: { hardDeleteContact: hardDeleteContactMock },
+};
 
 // Patch auth middleware BEFORE the router is required. The route's
 // destructured `verifyToken` / `verifyRole` references capture whatever
@@ -156,6 +165,7 @@ beforeEach(() => {
   prisma.booking.findMany.mockReset();
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
+  hardDeleteContactMock.mockReset().mockResolvedValue(1);
 });
 
 // Contacts export
@@ -290,7 +300,6 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
         update: expect.objectContaining({
           email: 'jane@example.com',
           phone: '919560000000',
-          deletedAt: null,
         }),
       }),
     );
@@ -326,7 +335,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.body.errors).toEqual([]);
     expect(prisma.contact.findFirst).toHaveBeenCalledWith({
       where: { email: 'shashankbankar23@gmail.com', tenantId: 1 },
-      select: { id: true },
+      select: { id: true, deletedAt: true },
     });
     expect(prisma.contact.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -335,7 +344,6 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
           name: 'Shashank bankar',
           email: 'shashankbankar23@gmail.com',
           phone: '+919535148570',
-          deletedAt: null,
         }),
       }),
     );

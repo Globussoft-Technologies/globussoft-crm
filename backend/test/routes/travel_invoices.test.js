@@ -77,6 +77,8 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn().mockResolvedValue({ id: 99, tenantId: 1 });
 prisma.contact.findMany = vi.fn().mockResolvedValue([{ id: 99, name: 'Acme School' }]);
+prisma.tmcTrip = prisma.tmcTrip || {};
+prisma.tmcTrip.findFirst = vi.fn().mockResolvedValue({ id: 501 });
 
 import express from 'express';
 import request from 'supertest';
@@ -146,9 +148,101 @@ beforeEach(() => {
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 99, tenantId: 1 });
   prisma.contact.findMany.mockReset().mockResolvedValue([{ id: 99, name: 'Acme School' }]);
+  prisma.tmcTrip.findFirst.mockReset().mockResolvedValue({ id: 501 });
+});
+
+describe('GET /api/travel/invoices (trip filter)', () => {
+  test('filters by tripId while retaining tenant scope', async () => {
+    prisma.travelInvoice.findMany.mockResolvedValue([]);
+    prisma.travelInvoice.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/travel/invoices?tripId=501')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.travelInvoice.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 1, tripId: 501 }),
+      }),
+    );
+    expect(prisma.travelInvoice.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ tenantId: 1, tripId: 501 }),
+    });
+  });
+
+  test('rejects a non-numeric tripId without querying invoices', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/invoices?tripId=not-a-trip')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_TRIP_ID' });
+    expect(prisma.travelInvoice.findMany).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.count).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/travel/invoices', () => {
+  test('creates a trip-linked invoice after a tenant-scoped trip lookup', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue(null);
+    prisma.travelInvoice.create.mockImplementation(async ({ data }) => ({
+      id: 42,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      paidAt: null,
+      ...data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        tripId: 501,
+        totalAmount: '45000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        dueDate: tomorrowIso,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 42, tripId: 501, tenantId: 1 });
+    expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith({
+      where: { id: 501, tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.travelInvoice.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ tenantId: 1, tripId: 501 }),
+      }),
+    );
+  });
+
+  test('rejects a trip from another tenant before invoice creation', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValueOnce(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        tripId: 999,
+        totalAmount: '45000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        dueDate: tomorrowIso,
+      });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ code: 'TRIP_NOT_FOUND' });
+    expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith({
+      where: { id: 999, tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.travelInvoice.create).not.toHaveBeenCalled();
+  });
+
   test('happy path returns 201 with auto-assigned invoiceNum TINV-YYYY-0001', async () => {
     // No prior invoice this year — serial starts at 1.
     prisma.travelInvoice.findFirst.mockResolvedValue(null);
@@ -434,6 +528,63 @@ describe('POST /api/travel/invoices', () => {
 });
 
 describe('PUT /api/travel/invoices/:id (status transition matrix)', () => {
+  test('updates the linked trip after a tenant-scoped lookup', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue({
+      id: 5, tenantId: 1, subBrand: 'tmc', contactId: 99,
+      tripId: null, status: 'Draft', totalAmount: '100.00', currency: 'INR',
+      invoiceNum: `TINV-${CURRENT_YEAR}-0001`, dueDate: tomorrow,
+    });
+    prisma.travelInvoice.update.mockImplementation(async ({ data }) => ({
+      id: 5, tenantId: 1, subBrand: 'tmc', contactId: 99,
+      status: 'Draft', totalAmount: '100.00', currency: 'INR',
+      invoiceNum: `TINV-${CURRENT_YEAR}-0001`, dueDate: tomorrow,
+      ...data,
+    }));
+
+    const res = await request(makeApp())
+      .put('/api/travel/invoices/5')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ tripId: 501 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 5, tripId: 501 });
+    expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith({
+      where: { id: 501, tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.travelInvoice.update).toHaveBeenCalledWith({
+      where: { id: 5 },
+      data: { tripId: 501 },
+    });
+  });
+
+  test('can explicitly clear an existing trip without looking it up', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValue({
+      id: 5, tenantId: 1, subBrand: 'tmc', contactId: 99,
+      tripId: 501, status: 'Draft', totalAmount: '100.00', currency: 'INR',
+      invoiceNum: `TINV-${CURRENT_YEAR}-0001`, dueDate: tomorrow,
+    });
+    prisma.travelInvoice.update.mockImplementation(async ({ data }) => ({
+      id: 5, tenantId: 1, subBrand: 'tmc', contactId: 99,
+      status: 'Draft', totalAmount: '100.00', currency: 'INR',
+      invoiceNum: `TINV-${CURRENT_YEAR}-0001`, dueDate: tomorrow,
+      ...data,
+    }));
+
+    const res = await request(makeApp())
+      .put('/api/travel/invoices/5')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ tripId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.tripId).toBeNull();
+    expect(prisma.tmcTrip.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.update).toHaveBeenCalledWith({
+      where: { id: 5 },
+      data: { tripId: null },
+    });
+  });
+
   test('Draft -> Issued returns 200 with updated status', async () => {
     prisma.travelInvoice.findFirst.mockResolvedValue({
       id: 5, tenantId: 1, subBrand: 'tmc', contactId: 99,

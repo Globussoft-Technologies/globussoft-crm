@@ -102,6 +102,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(byKey.get('linkedin')).toBe('LinkedIn');
     expect(byKey.get('industry')).toBe('Service Type');
     expect(byKey.get('companySize')).toBe('No Of Employee');
+    expect(byKey.get('subBrand')).toBe('Sub-brand');
     expect(byKey.get('description')).toBe('Note');
     expect(byKey.get('stateCode')).toBe('State');
     expect(byKey.get('firstTouchSource')).toBe('First Touch Source');

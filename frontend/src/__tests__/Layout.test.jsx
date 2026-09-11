@@ -126,6 +126,18 @@ describe('Layout', () => {
     expect(screen.getByTestId('outlet')).toBeInTheDocument();
   });
 
+  it('keeps the shell viewport-sized and confines scrolling to the main region', () => {
+    renderTravelLayout();
+
+    const shell = document.querySelector('.app-shell');
+    const appMain = document.querySelector('.app-main');
+    const scrollRegion = appMain?.querySelector('main.page-fade-in');
+
+    expect(shell).toHaveStyle({ position: 'fixed', inset: '0', overflow: 'hidden' });
+    expect(appMain).toHaveStyle({ minHeight: '0', overflow: 'hidden' });
+    expect(scrollRegion).toHaveStyle({ minHeight: '0', overflowY: 'auto' });
+  });
+
   it('renders Softphone for generic tenants', () => {
     renderLayout({ tenant: { vertical: 'generic' } });
     expect(screen.getByTestId('softphone-stub')).toBeInTheDocument();

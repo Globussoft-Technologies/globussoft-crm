@@ -3,16 +3,15 @@
  * Contacts module — backend coverage push.
  *
  * routes/contacts.js was 25.7% covered (486 uncovered / 654 total). It's the
- * busiest CRUD router in the codebase: list/get/create/update + soft-delete +
- * restore + assign + bulk-assign + activities + attachments + CSV import +
+ * busiest CRUD router in the codebase: list/get/create/update + hard-delete +
+ * assign + bulk-assign + activities + attachments + CSV import +
  * duplicate detection + merge. Validation surface is unusually rich:
  *
  *   GET    /api/contacts                  — list + ?status / ?assignedToId /
  *                                           ?unassigned / ?includeDeleted /
  *                                           limit / offset
  *   GET    /api/contacts/by-status        — audienceController grouping
- *   GET    /api/contacts/:id              — single + 400/404 + soft-delete
- *                                           hidden by default
+ *   GET    /api/contacts/:id              — single + 400/404 + hard-delete
  *   POST   /api/contacts                  — create + validation (email/name
  *                                           required, aiScore 0–100, status
  *                                           enum) + dup-email 409
@@ -34,12 +33,12 @@
  *                                           multipart/form-data with 400
  *                                           UNSUPPORTED_CONTENT_TYPE
  *   DELETE /api/contacts/attachments/:attachId — hard-delete attachment
- *   DELETE /api/contacts/:id              — ADMIN soft-delete (#167)
- *   POST   /api/contacts/:id/restore      — ADMIN restore (#167)
+ *   DELETE /api/contacts/:id              — ADMIN hard-delete
+ *   POST   /api/contacts/:id/restore      — retired endpoint returns 410
  *
  * Pattern: dual-token (admin + regular USER) so we can exercise admin-only
  * endpoints AND prove the 403 boundary on the same surface. Every contact is
- * tagged `E2E_CONT_<ts>` in the `name` field; afterAll best-effort soft-deletes
+ * tagged `E2E_CONT_<ts>` in the `name` field; afterAll best-effort deletes
  * each one (the global teardown's RUN_TAG scrub handles hard cleanup).
  *
  * Notes from the route source that drove some test choices:
@@ -55,12 +54,9 @@
  *   • Phone fields: kept clean Indian-style numbers like `+91 98765 12345`
  *     with unique suffixes per test so dedup logic in /duplicates/find is
  *     deterministic.
- *   • #592 — merge now soft-deletes secondaries (deletedAt = now()) inside a
- *     prisma.$transaction, folds 27 contactId-bearing FK relations into the
- *     primary, and emits a writeAudit('Contact','MERGE',…) row. GET /:id
- *     defaults to 404 on soft-deleted rows; ?includeDeleted=true surfaces them.
- *     Pre-#592 the route hard-deleted; the 404-after-merge assertion still
- *     holds because of the default GET filter.
+ *   • #592 — merge hard-deletes secondaries inside a prisma.$transaction
+ *     after folding contactId-bearing relations into the primary, and emits
+ *     a writeAudit('Contact','MERGE',…) row.
  *   • #592 — POST /duplicates/dismiss persists a SHA-256 group-key derived
  *     from the sorted contact-id list. Subsequent /duplicates/find calls
  *     filter out dismissed groups. Idempotent on re-dismiss.
@@ -75,7 +71,7 @@ const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_CONT_${Date.now()}`;
 
 // ── Dual-token auth ────────────────────────────────────────────────
-// admin@globussoft.com (ADMIN, generic tenant) — drives delete + restore
+// admin@globussoft.com (ADMIN, generic tenant) — drives delete + retired restore
 // user@crm.com         (USER,  same tenant)    — drives 403 RBAC checks
 
 let adminToken = null;
@@ -136,8 +132,8 @@ async function del(request, token, path) {
 }
 
 // ── Cleanup tracking ───────────────────────────────────────────────
-// Push every contact id we create. afterAll DELETEs them as admin (soft-delete
-// flips deletedAt). The global-teardown RUN_TAG scrub purges hard.
+// Push every contact id we create. afterAll hard-deletes them as admin;
+// already-removed rows simply return 404.
 const createdContactIds = [];
 
 test.afterAll(async ({ request }) => {
@@ -620,7 +616,7 @@ test.describe('Contacts API — GET /', () => {
     }
   });
 
-  test('soft-deleted contacts hidden by default (#167)', async ({ request }) => {
+  test('hard-deleted contacts are absent from the default list', async ({ request }) => {
     const c = await createContact(request, { label: 'hide-me' });
     const { token } = await getAdmin(request);
     await del(request, token, `/api/contacts/${c.id}`);
@@ -628,12 +624,12 @@ test.describe('Contacts API — GET /', () => {
     expect(list.find((row) => row.id === c.id)).toBeFalsy();
   });
 
-  test('?includeDeleted=true surfaces soft-deleted rows (#167)', async ({ request }) => {
+  test('?includeDeleted=true cannot surface permanently deleted rows', async ({ request }) => {
     const c = await createContact(request, { label: 'show-deleted' });
     const { token } = await getAdmin(request);
     await del(request, token, `/api/contacts/${c.id}`);
     const list = await (await get(request, token, '/api/contacts?includeDeleted=true&limit=500')).json();
-    expect(list.find((row) => row.id === c.id)).toBeTruthy();
+    expect(list.find((row) => row.id === c.id)).toBeFalsy();
   });
 });
 
@@ -682,7 +678,7 @@ test.describe('Contacts API — GET /:id', () => {
     expect(Array.isArray(got.deals)).toBe(true);
   });
 
-  test('soft-deleted contact returns 404 by default (#167)', async ({ request }) => {
+  test('hard-deleted contact returns 404 by default', async ({ request }) => {
     const c = await createContact(request, { label: 'detail-del' });
     const { token } = await getAdmin(request);
     await del(request, token, `/api/contacts/${c.id}`);
@@ -690,14 +686,12 @@ test.describe('Contacts API — GET /:id', () => {
     expect(res.status()).toBe(404);
   });
 
-  test('soft-deleted contact visible with ?includeDeleted=true (#167)', async ({ request }) => {
+  test('hard-deleted contact remains 404 with ?includeDeleted=true', async ({ request }) => {
     const c = await createContact(request, { label: 'detail-incl' });
     const { token } = await getAdmin(request);
     await del(request, token, `/api/contacts/${c.id}`);
     const res = await get(request, token, `/api/contacts/${c.id}?includeDeleted=true`);
-    expect(res.status()).toBe(200);
-    const got = await res.json();
-    expect(got.deletedAt).toBeTruthy();
+    expect(res.status()).toBe(404);
   });
 });
 
@@ -1004,13 +998,11 @@ test.describe('Contacts API — POST /merge', () => {
     expect(res.status()).toBe(404);
   });
 
-  test('200 merges secondary into primary; secondary is soft-deleted afterwards (#592)', async ({ request }) => {
+  test('200 merges secondary into primary; secondary is hard-deleted afterwards (#592)', async ({ request }) => {
     // Primary has no phone; secondary has phone — merge should backfill
     // primary.phone from secondary per the route's "fill in missing fields"
-    // logic. Per #592 the route now soft-deletes secondaries (deletedAt=now)
-    // instead of hard-deleting; GET /:id still 404s soft-deleted rows by
-    // default, so this assertion stays the same shape, but ?includeDeleted=true
-    // surfaces the row.
+    // logic. The secondary is permanently removed after its relationships are
+    // folded onto the primary.
     const primary = await createContact(request, { label: 'merge-primary', phone: null });
     const secondary = await createContact(request, { label: 'merge-secondary', phone: uniquePhone() });
 
@@ -1025,18 +1017,15 @@ test.describe('Contacts API — POST /merge', () => {
     expect(body.merged).toBe(1);
     expect(body.primaryId).toBe(primary.id);
     // #592 — new envelope surfaces strategy + per-relation fold counts.
-    expect(body.strategy).toBe('soft-delete');
+    expect(body.strategy).toBe('hard-delete');
     expect(body.folded).toBeTruthy();
 
-    // Default GET 404s the soft-deleted secondary.
+    // Both normal and includeDeleted lookups 404 a hard-deleted secondary.
     const after = await get(request, token, `/api/contacts/${secondary.id}`);
     expect(after.status()).toBe(404);
 
-    // ?includeDeleted=true surfaces it with deletedAt set — proves soft, not hard.
     const recovered = await get(request, token, `/api/contacts/${secondary.id}?includeDeleted=true`);
-    expect(recovered.status()).toBe(200);
-    const recoveredBody = await recovered.json();
-    expect(recoveredBody.deletedAt).toBeTruthy();
+    expect(recovered.status()).toBe(404);
 
     // Primary should now carry the secondary's phone (filled-in field).
     const primaryAfter = await (await get(request, token, `/api/contacts/${primary.id}`)).json();
@@ -1214,7 +1203,7 @@ test.describe('Contacts API — POST /import-csv', () => {
     expect(Array.isArray(body.errors)).toBe(true);
     expect(body.errors.length).toBeGreaterThanOrEqual(3); // bad-email + bad-status + missing-email
 
-    // Find the imported row so afterAll can soft-delete it.
+    // Find the imported row so afterAll can delete it.
     const list = await (await get(request, token, `/api/contacts?limit=500`)).json();
     const created = list.find((c) => c.email === goodEmail);
     if (created) createdContactIds.push(created.id);
@@ -1375,34 +1364,32 @@ test.describe('Contacts API — Attachments', () => {
   });
 });
 
-// ─── DELETE /api/contacts/:id (admin-only soft-delete) ──────────────
+// ─── DELETE /api/contacts/:id (admin-only hard-delete) ──────────────
 
-test.describe('Contacts API — DELETE /:id (soft-delete, ADMIN-only)', () => {
+test.describe('Contacts API — DELETE /:id (hard-delete, ADMIN-only)', () => {
   test('404 on unknown id', async ({ request }) => {
     const { token } = await getAdmin(request);
     const res = await del(request, token, '/api/contacts/99999999');
     expect(res.status()).toBe(404);
   });
 
-  test('flips deletedAt; row hidden from default list', async ({ request }) => {
-    const c = await createContact(request, { label: 'soft-del-target' });
+  test('permanently removes the row', async ({ request }) => {
+    const c = await createContact(request, { label: 'hard-del-target' });
     const { token } = await getAdmin(request);
     const res = await del(request, token, `/api/contacts/${c.id}`);
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.softDeleted).toBe(true);
-    expect(body.deletedAt).toBeTruthy();
+    expect(body).toMatchObject({ id: c.id, deleted: true, hardDeleted: true });
+    const lookup = await get(request, token, `/api/contacts/${c.id}?includeDeleted=true`);
+    expect(lookup.status()).toBe(404);
   });
 
-  test('idempotent: second DELETE returns idempotent:true with no state change', async ({ request }) => {
+  test('second DELETE returns 404 because the row no longer exists', async ({ request }) => {
     const c = await createContact(request, { label: 'idemp-del' });
     const { token } = await getAdmin(request);
     await del(request, token, `/api/contacts/${c.id}`);
     const second = await del(request, token, `/api/contacts/${c.id}`);
-    expect(second.status()).toBe(200);
-    const body = await second.json();
-    expect(body.idempotent).toBe(true);
-    expect(body.softDeleted).toBe(true);
+    expect(second.status()).toBe(404);
   });
 
   test('403 when non-ADMIN attempts DELETE', async ({ request }) => {
@@ -1414,44 +1401,38 @@ test.describe('Contacts API — DELETE /:id (soft-delete, ADMIN-only)', () => {
   });
 });
 
-// ─── POST /api/contacts/:id/restore (admin-only) ────────────────────
+// ─── POST /api/contacts/:id/restore (retired, admin-only) ───────────
 
 test.describe('Contacts API — POST /:id/restore (ADMIN-only)', () => {
-  test('404 on unknown id', async ({ request }) => {
+  test('410 on unknown id because restoration is unavailable', async ({ request }) => {
     const { token } = await getAdmin(request);
     const res = await post(request, token, '/api/contacts/99999999/restore', {});
-    expect(res.status()).toBe(404);
+    expect(res.status()).toBe(410);
+    expect(await res.json()).toMatchObject({ code: 'CONTACT_RESTORE_UNAVAILABLE' });
   });
 
-  test('clears deletedAt; row visible in default list again', async ({ request }) => {
+  test('410 after deletion because hard-deleted rows cannot be restored', async ({ request }) => {
     const c = await createContact(request, { label: 'restore-target' });
     const { token } = await getAdmin(request);
     await del(request, token, `/api/contacts/${c.id}`);
     const res = await post(request, token, `/api/contacts/${c.id}/restore`, {});
-    expect(res.status()).toBe(200);
-    const body = await res.json();
-    expect(body.restored).toBe(true);
-    expect(body.deletedAt).toBeNull();
-
-    const list = await (await get(request, token, `/api/contacts?limit=500`)).json();
-    expect(list.find((row) => row.id === c.id)).toBeTruthy();
+    expect(res.status()).toBe(410);
+    expect(await res.json()).toMatchObject({ code: 'CONTACT_RESTORE_UNAVAILABLE' });
   });
 
-  test('idempotent: restore on a non-deleted contact returns idempotent:true', async ({ request }) => {
+  test('410 for a live contact because the restore operation is retired', async ({ request }) => {
     const c = await createContact(request, { label: 'restore-noop' });
     const { token } = await getAdmin(request);
     const res = await post(request, token, `/api/contacts/${c.id}/restore`, {});
-    expect(res.status()).toBe(200);
-    const body = await res.json();
-    expect(body.idempotent).toBe(true);
-    expect(body.restored).toBe(false);
+    expect(res.status()).toBe(410);
+    expect(await res.json()).toMatchObject({ code: 'CONTACT_RESTORE_UNAVAILABLE' });
   });
 
   test('403 when non-ADMIN attempts restore', async ({ request }) => {
     const { token: userTok } = await getUser(request);
     if (!userTok) test.skip(true, 'no regular USER token available');
     const c = await createContact(request, { label: 'rbac-restore' });
-    // Soft-delete first (admin) so there's something to restore.
+    // Delete first; authorization must still run before the retired handler.
     const { token: adminTok } = await getAdmin(request);
     await del(request, adminTok, `/api/contacts/${c.id}`);
 

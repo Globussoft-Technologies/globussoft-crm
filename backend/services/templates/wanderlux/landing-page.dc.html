@@ -1283,7 +1283,7 @@ class Component extends DCLogic {
     const s = {}; s[opts.sendingKey] = true; this.setState(s);
     fetch(opts.endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
       .then(r => { if(!r.ok) throw new Error('bad status'); return r.json().catch(() => ({})); })
-      .then((body) => {
+        .then((body) => {
         /* Phase 6 — hybrid registration-draft branch. When the backend
            created a PendingTripRegistration (page is trip-linked +
            register.mode is 'registration-draft' in the stored config),
@@ -1295,6 +1295,10 @@ class Component extends DCLogic {
         const redirect = body && body.redirect;
         if(redirect && redirect.type === 'customer-registration' && redirect.url){
           window.location.assign(redirect.url);
+          return;
+        }
+        if(body && body.successRedirectUrl){
+          window.location.assign(body.successRedirectUrl);
           return;
         }
         const p = {}; p[opts.doneKey] = true; p[opts.sendingKey] = false; this.setState(p);

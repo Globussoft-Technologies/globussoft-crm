@@ -47,7 +47,9 @@ const SUBMIT_URL = "/api/travel/diagnostics/public/submit-tmc";
 //   - "multi"    → array of option values, may have min/max
 //   - "single-mapped" → one option, persists value + `${field}_skill` from mappedSkill
 //   - "group"    → composite (Q11 school_profile, Q12 contact)
-const QUESTIONS = [
+// The authenticated teacher portal reuses this exact question contract.
+// eslint-disable-next-line react-refresh/only-export-components
+export const QUESTIONS = [
   {
     id: "q1",
     field: "primary_outcome",

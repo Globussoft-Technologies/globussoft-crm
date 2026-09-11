@@ -332,7 +332,7 @@ function renderPricingValue(amount, currency) {
   return `<div class="t-tier-amount">${sym}${escapeHtml(String(amount))}</div>`;
 }
 
-function renderComponent(component, slug) {
+function renderComponent(component, slug, options = {}) {
   const { type, props = {} } = component;
 
   switch (type) {
@@ -577,7 +577,7 @@ function renderComponent(component, slug) {
           if (isWellnessConsultation && idx === 1) flex = "0 1 480px";
           const cardStyle = isWellnessHeaderRow ? (idx === 0 ? "padding:0;background:transparent;border:none;border-radius:0;box-shadow:none;justify-content:flex-start;align-items:flex-start;text-align:left;" : "padding:0;background:transparent;border:none;border-radius:0;box-shadow:none;justify-content:flex-end;align-items:flex-start;text-align:right;") : isWellnessDetailsStrip ? "padding:22px 20px;min-height:112px;background:#fffdf7;border:1px solid #e5ded0;border-radius:12px;box-shadow:0 10px 24px rgba(31,47,44,0.06);justify-content:center;align-items:center;text-align:center;overflow-wrap:anywhere;" : isWellnessMetricGrid ? "padding:28px 22px;min-height:132px;background:linear-gradient(180deg,rgba(88,11,7,0.96),rgba(140,22,15,0.92));border:1px solid rgba(255,255,255,0.36);border-radius:18px;box-shadow:0 18px 36px rgba(70,0,0,0.24);justify-content:center;align-items:center;text-align:center;color:#ffffff;" : (isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? "padding:24px;background:#fffdf7;border:1px solid #d8d2c3;border-radius:14px;box-shadow:0 14px 35px rgba(31,47,44,0.07);justify-content:flex-start;" : "padding:0;background:transparent;border:none;border-radius:0;box-shadow:none;";
           const minWidth = col.fullWidth ? "100%" : (isWellnessHeaderRow ? (idx === 0 ? "280px" : "0") : isWellnessHeroRow ? (idx === 1 ? "420px" : "500px") : isWellnessDetailsStrip ? "0" : isWellnessBenefitsRow ? (idx === 0 ? "360px" : "360px") : isWellnessProcessRow ? (idx === 0 ? "360px" : "320px") : isWellnessImpactBand ? (idx === 0 ? "320px" : "220px") : isWellnessCardGrid ? "220px" : isWellnessFormRow ? (columns.length === 1 ? "420px" : (idx === 0 ? "420px" : "420px")) : isWellnessCtaRow ? (idx === 0 ? "320px" : "240px") : isWellnessRegistrationRow ? (idx === 0 ? "540px" : "360px") : isWellnessSection ? "240px" : "260px");
-          const innerHtml = (col.components || []).map((c) => renderComponent(c, slug)).join("\n");
+          const innerHtml = (col.components || []).map((c) => renderComponent(c, slug, options)).join("\n");
           const direction = isWellnessHeaderRow && idx === 1 ? "row" : "column";
           const headerWrap = isWellnessHeaderRow && idx === 1 ? "flex-wrap:nowrap;justify-content:space-between;align-items:flex-start;width:100%;" : (isWellnessFooterRow ? `align-items:${idx === 0 ? "flex-start" : idx === columns.length - 1 ? "flex-end" : "center"};text-align:${idx === 0 ? "left" : idx === columns.length - 1 ? "right" : "center"};` : "");
           return `<div style="flex:${flex};min-width:${minWidth};max-width:100%;box-sizing:border-box;display:flex;flex-direction:${direction};gap:${isWellnessHeaderRow ? "8px" : isWellnessBenefitCards ? "10px" : "16px"};${headerWrap}${cardStyle}">${innerHtml}</div>`;
@@ -627,7 +627,10 @@ function renderComponent(component, slug) {
           </div>`
         : "";
 
-      const ctaAttr = ctaScrollTarget
+      const tmcParentRegistrationUrl = options.tmcParentRegistrationUrl || props.tmcParentRegistrationUrl || "";
+      const ctaAttr = tmcParentRegistrationUrl
+        ? `href="${escapeHtml(safeUrl(tmcParentRegistrationUrl, "link-href"))}"`
+        : ctaScrollTarget
         ? `onclick="document.getElementById('${ctaScrollTarget}')?.scrollIntoView({behavior:'smooth'});return false;" href="#${ctaScrollTarget}"`
         : `href="#"`;
 
@@ -1284,7 +1287,10 @@ function renderPage(landingPage, options = {}) {
   const previewMode = !!options.preview;
   const templates = require("./templates");
   if (templates.isTemplatePage(landingPage)) {
-    return templates.renderTemplate(landingPage, { preview: previewMode });
+    return templates.renderTemplate(landingPage, {
+      preview: previewMode,
+      tmcParentRegistrationUrl: options.tmcParentRegistrationUrl || landingPage.tmcParentRegistrationUrl || "",
+    });
   }
 
   const {
@@ -1316,7 +1322,7 @@ function renderPage(landingPage, options = {}) {
     components = buildWellnessCampaignPage(landingPage, components);
   }
 
-  const bodyHtml = components.map((c) => renderComponent(c, slug)).join("\n");
+  const bodyHtml = components.map((c) => renderComponent(c, slug, options)).join("\n");
   const pageTitle = escapeHtml(metaTitle || title);
   const pageDescription = metaDescription ? `<meta name="description" content="${escapeHtml(metaDescription)}" />` : "";
   const overrides = cssOverrides ? `<style>${cssOverrides}</style>` : "";

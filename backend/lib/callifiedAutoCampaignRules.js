@@ -34,6 +34,15 @@ function ruleMatches(rule, leadData, customFields) {
     actualValue = customFields && customFields[fieldKey];
   } else {
     actualValue = leadData && leadData[column];
+    // First/last name are table projections over Contact.name. Keep those
+    // useful for create-time rules without pretending other post-create
+    // projections (campaign, call status, scores) exist on a new lead.
+    if ((column === 'firstName' || column === 'lastName') && actualValue == null) {
+      const [firstName = '', ...lastNameParts] = String(leadData?.name || '')
+        .trim()
+        .split(/\s+/);
+      actualValue = column === 'firstName' ? firstName : lastNameParts.join(' ');
+    }
   }
 
   const normalisedActual = normaliseMatchValue(actualValue);

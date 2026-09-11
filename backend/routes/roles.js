@@ -70,6 +70,7 @@ const {
   getCriticalPermissions,
   intersectCritical,
 } = require("../lib/rbacLockoutGuard");
+
 const {
   ensureInitialSnapshot,
   snapshotRolePermissions,

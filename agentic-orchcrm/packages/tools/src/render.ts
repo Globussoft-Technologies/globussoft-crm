@@ -473,6 +473,106 @@ export async function shrinkOverflowingPages(
       const blocking = recheck.issues;
       if (!blocking.length) return await page.content();
     }
+
+    // Large overflows (the observed 187mm case is more than half a page) cannot
+    // be fixed legibly by further shrinking. Restore full-size typography and
+    // split the overflowing content container across cloned A4 page shells. The
+    // page's surrounding header/footer/background are cloned with it, while
+    // content blocks move in source order until every physical page fits.
+    const splitOk = (await page.evaluate(
+      `(function(pageNums){
+        ${LAYOUT_FIND_PAGES_JS}
+        function isOverflowing(el){
+          if (!el) return false;
+          var r = el.getBoundingClientRect();
+          if (el.scrollHeight > el.clientHeight + 5 || el.scrollWidth > el.clientWidth + 5) return true;
+          return Array.prototype.slice.call(el.querySelectorAll('*')).some(function(ch){
+            var cr = ch.getBoundingClientRect();
+            return cr.bottom > r.bottom + 5 || cr.right > r.right + 5 || cr.left < r.left - 5;
+          });
+        }
+        function depthFrom(root, el){
+          var d = 0;
+          while (el && el !== root) { d++; el = el.parentElement; }
+          return d;
+        }
+        function splitContainer(pageEl){
+          var pr = pageEl.getBoundingClientRect();
+          var candidates = Array.prototype.slice.call(pageEl.querySelectorAll('*')).filter(function(el){
+            if (!el.children || el.children.length < 2) return false;
+            var tag = String(el.tagName || '').toLowerCase();
+            if (tag === 'style' || tag === 'script' || tag === 'svg') return false;
+            var maxBottom = 0;
+            Array.prototype.slice.call(el.children).forEach(function(ch){
+              maxBottom = Math.max(maxBottom, ch.getBoundingClientRect().bottom);
+            });
+            return maxBottom > pr.bottom + 5 || el.scrollHeight > el.clientHeight + 5;
+          });
+          candidates.sort(function(a,b){
+            var da = depthFrom(pageEl, a), db = depthFrom(pageEl, b);
+            if (da !== db) return da - db;
+            return b.children.length - a.children.length;
+          });
+          return candidates[0] || null;
+        }
+        function pathTo(root, node){
+          var path = [];
+          while (node && node !== root) {
+            var parent = node.parentElement;
+            if (!parent) return null;
+            path.unshift(Array.prototype.indexOf.call(parent.children, node));
+            node = parent;
+          }
+          return node === root ? path : null;
+        }
+        function atPath(root, path){
+          var node = root;
+          for (var i = 0; i < path.length; i++) {
+            node = node && node.children[path[i]];
+          }
+          return node || null;
+        }
+
+        var initialPages = findPages();
+        var queue = pageNums.map(function(n){ return initialPages[n - 1]; }).filter(Boolean);
+        queue.forEach(function(pg){
+          Array.prototype.slice.call(pg.querySelectorAll('[data-shrink-wrap]')).forEach(function(w){ w.style.zoom = '1'; });
+        });
+        var guard = 0;
+        while (queue.length && guard++ < 40) {
+          var sourcePage = queue.shift();
+          if (!sourcePage || !isOverflowing(sourcePage)) continue;
+          var sourceContainer = splitContainer(sourcePage);
+          if (!sourceContainer) return false;
+          var path = pathTo(sourcePage, sourceContainer);
+          if (!path) return false;
+          var continuation = sourcePage.cloneNode(true);
+          var continuationContainer = atPath(continuation, path);
+          if (!continuationContainer) return false;
+          while (continuationContainer.firstChild) continuationContainer.removeChild(continuationContainer.firstChild);
+          sourcePage.parentNode.insertBefore(continuation, sourcePage.nextSibling);
+          var moved = 0;
+          while (isOverflowing(sourcePage) && sourceContainer.children.length > 1) {
+            continuationContainer.insertBefore(sourceContainer.lastElementChild, continuationContainer.firstChild);
+            moved++;
+          }
+          if (!moved) {
+            continuation.parentNode.removeChild(continuation);
+            return false;
+          }
+          if (isOverflowing(sourcePage)) queue.unshift(sourcePage);
+          if (isOverflowing(continuation)) queue.push(continuation);
+          if (findPages().length > 20) return false;
+        }
+        return queue.length === 0;
+      })(${pageNumsJson})`,
+    )) as boolean;
+    if (splitOk) {
+      const recheck = (await page.evaluate(
+        `${LAYOUT_PROBE_JS}(${JSON.stringify({ protectedLogoUrls: opts.protectedLogoUrls ?? [] })})`,
+      )) as { issues: string[]; pageCount: number };
+      if (!recheck.issues.length && recheck.pageCount <= 20) return await page.content();
+    }
     return null;
   } catch {
     return null;

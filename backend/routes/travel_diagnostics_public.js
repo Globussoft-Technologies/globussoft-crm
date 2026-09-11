@@ -284,6 +284,9 @@ router.get("/diagnostics/public/form/:tenantSlug/:subBrand", async (req, res) =>
         id: q.id,
         text: q.text,
         type: q.type,
+        required: q.required === true,
+        minSelections: Number.isInteger(q.minSelections) ? q.minSelections : undefined,
+        maxSelections: Number.isInteger(q.maxSelections) ? q.maxSelections : undefined,
         options: (q.options || []).map((o) => ({ value: o.value, label: o.label })),
       }));
     } catch {
@@ -720,6 +723,11 @@ router.post(
       const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, {
         ragResult,
         cancellationPolicy,
+        recommendations: buildUnifiedRecommendations({
+          curriculumFit,
+          ragRecommendations: ragResult?.recommendations?.recommendedTrips,
+          limit: await getRecommendationTopK({ tenantId: tenant.id, subBrand }),
+        }),
       }).catch((e) => {
         console.warn("[diag-public-form] PDF failed (non-fatal):", e.message);
         return null;
@@ -803,7 +811,33 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
         })
       : null;
 
-    // Resolve the customer-facing 1-4 readiness level for the report.
+    const cancellationPolicy = await resolveCancellationPolicyForForm({
+      tenantId: diag.tenantId,
+      subBrand: diag.subBrand,
+    });
+
+    // Previously-submitted "chosen interests" (2026-08-27), if any — lets a
+    // refreshed report page show the prior selection instead of a blank
+    // checklist. Never throws (see diagnosticChosenInterests.js).
+    const chosenInterests = await diagnosticChosenInterests.getChosenInterests({
+      tenantId: diag.tenantId,
+      diagnosticId: diag.id,
+    });
+    const recommendationLimit = await getRecommendationTopK({
+      tenantId: diag.tenantId,
+      subBrand: diag.subBrand,
+    });
+    // Public report reads must be side-effect free. RAG and PDF generation run
+    // once during submission; a visitor refreshing a public URL must never
+    // invoke a paid model, write another PDF, or mutate persisted diagnostics.
+    const recommendations = buildUnifiedRecommendations({
+      curriculumFit: parseJsonOrNull(diag.curriculumFitJson),
+      ragRecommendations: ragResult?.recommendations?.recommendedTrips,
+      limit: recommendationLimit,
+    });
+
+    // Resolve readiness only after the final persisted RAG payload has been
+    // selected, keeping the envelope, recommendations and saved PDF aligned.
     let readinessLevel = null;
     let readinessName = null;
     const ragRecs = ragResult?.recommendations || {};
@@ -823,28 +857,6 @@ router.get("/diagnostics/public/report/:slug", async (req, res) => {
         readinessName = derived.name;
       }
     }
-
-    const cancellationPolicy = await resolveCancellationPolicyForForm({
-      tenantId: diag.tenantId,
-      subBrand: diag.subBrand,
-    });
-
-    // Previously-submitted "chosen interests" (2026-08-27), if any — lets a
-    // refreshed report page show the prior selection instead of a blank
-    // checklist. Never throws (see diagnosticChosenInterests.js).
-    const chosenInterests = await diagnosticChosenInterests.getChosenInterests({
-      tenantId: diag.tenantId,
-      diagnosticId: diag.id,
-    });
-    const recommendationLimit = await getRecommendationTopK({
-      tenantId: diag.tenantId,
-      subBrand: diag.subBrand,
-    });
-    const recommendations = buildUnifiedRecommendations({
-      curriculumFit: parseJsonOrNull(diag.curriculumFitJson),
-      ragRecommendations: ragResult?.recommendations?.recommendedTrips,
-      limit: recommendationLimit,
-    });
 
     res.json({
       diagnosticId: diag.id,
@@ -1005,14 +1017,42 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
   const max = Math.max(1, Number(limit) || 10);
   const seen = new Set();
   const out = [];
+  const legacyFallback = 'Selected as a close match for the learning goals and travel preferences you shared.';
+  const fallbackSummary = (category) => {
+    const normalizedCategory = String(category || '').trim().toLowerCase();
+    if (normalizedCategory.includes('campus')) {
+      return 'An activity-led programme designed to build confidence, collaboration, and practical skills together.';
+    }
+    if (normalizedCategory.includes('international')) {
+      return 'An immersive international learning experience that combines cultural discovery with hands-on exploration.';
+    }
+    if (normalizedCategory.includes('day')) {
+      return 'A focused day experience that turns classroom learning into an engaging, memorable outing.';
+    }
+    return 'A well-rounded educational journey selected for its place-based learning and shared discovery opportunities.';
+  };
   const add = (item) => {
     const hasFitScore = item.fitScore !== null && item.fitScore !== undefined && item.fitScore !== '';
     const fitScore = Number(item.fitScore);
     // A zero or negative score is an explicit non-match, never a customer
     // recommendation. Score-less Travel Knowledge results remain eligible.
     if (hasFitScore && Number.isFinite(fitScore) && fitScore <= 0) return;
-    const key = String(item.driveLink || item.brochurePdfUrl || item.name || item.destination || '')
-      .replace(/\.pdf$/i, '').replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+    const stableId = String(item.brochureId || item.driveFileId || '').trim();
+    const link = String(item.driveLink || item.brochurePdfUrl || '').trim();
+    const driveId = link.match(/\/d\/([^/?#]+)/i)?.[1]
+      || link.match(/[?&]id=([^&#]+)/i)?.[1];
+    const titleKey = String(item.name || item.destination || '')
+      .replace(/\.pdf$/i, '')
+      .replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+    const key = stableId
+      ? `id:${stableId}`
+      : driveId
+        ? `drive:${driveId}`
+        : link
+          ? `link:${link.toLowerCase()}`
+          : titleKey
+            ? `title:${titleKey}`
+            : '';
     if (!key || seen.has(key) || out.length >= max) return;
     seen.add(key);
     out.push(item);
@@ -1020,19 +1060,27 @@ function buildUnifiedRecommendations({ curriculumFit, ragRecommendations, limit 
   for (const match of curriculumFit?.recommendations || []) {
     add({
       name: match.destination,
+      brochureId: match.brochureId || '',
       driveLink: match.brochurePdfUrl || '',
       category: match.category || 'Other',
-      summary: (match.reasons || []).map((reason) => reason.rationale || reason.learningOutcome || reason.subject).filter(Boolean).slice(0, 2).join(' '),
+      // The outcomes belong in the highlights below. Repeating them here as
+      // a paragraph made curriculum recommendations read like copied text.
+      summary: '',
       learnings: (match.reasons || []).map((reason) => reason.learningOutcome).filter(Boolean).slice(0, 4),
       fitScore: match.fitScore ?? null,
+      source: 'curriculum',
     });
   }
   for (const trip of ragRecommendations || []) {
     add({
       name: trip.name,
+      brochureId: trip.brochureId || '',
+      driveFileId: trip.driveFileId || '',
       driveLink: trip.driveLink || '',
       category: trip.category || 'Other',
-      summary: trip.summary || '',
+      summary: trip.summary && trip.summary !== legacyFallback
+        ? trip.summary
+        : fallbackSummary(trip.category),
       learnings: Array.isArray(trip.learnings) ? trip.learnings : [],
       fitScore: null,
     });

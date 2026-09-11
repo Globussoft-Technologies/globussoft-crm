@@ -46,7 +46,10 @@ const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
-const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
+const {
+  requireTravelTenant,
+  getSubBrandAccessSet,
+} = require("../middleware/travelGuards");
 const digilockerClient = require("../services/digilockerClient");
 const googleDriveClient = require("../services/googleDriveClient");
 const visaDocStore = require("../lib/visaDocStore");
@@ -55,36 +58,52 @@ const listProjection = require("../lib/listProjection");
 const { toE164 } = require("../utils/deduplication");
 const { sendEmail } = require("../lib/emailSender");
 const { mintPaymentPortalToken } = require("../lib/travelPaymentPortalToken");
-const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
-const { createDraftInvoiceForParticipant } = require("../lib/tmcParticipantInvoice");
+const {
+  materializeTripInstalmentsFromPlan,
+} = require("../lib/travelTripInstalments");
+const {
+  createDraftInvoiceForParticipant,
+} = require("../lib/tmcParticipantInvoice");
+const travelPortalNotifications = require("../lib/travelPortalNotificationService");
 const {
   parseSpreadsheetBuffer,
   parseParticipantImportRow,
 } = require("../lib/travelTmcImport");
 
-
 function paymentPortalBaseUrl() {
-  return process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "http://localhost:5173";
+  return (
+    process.env.FRONTEND_URL ||
+    process.env.PUBLIC_BASE_URL ||
+    "http://localhost:5173"
+  );
 }
 
 function escapeHtml(value) {
-  return String(value || "").replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[char]));
+  return String(value || "").replace(
+    /[&<>"']/g,
+    (char) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[char],
+  );
 }
 
 function localDateKey(value = new Date()) {
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return null;
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
-  const parentEmail = String(participant?.parentEmail || "").trim().toLowerCase();
+  const parentEmail = String(participant?.parentEmail || "")
+    .trim()
+    .toLowerCase();
   if (!parentEmail) return;
   setImmediate(async () => {
     try {
@@ -96,7 +115,8 @@ function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
       });
       const paymentUrl = `${paymentPortalBaseUrl()}/pay/${token}`;
       const subject = `Registration approved for ${trip.tripCode || "your trip"}`;
-      const greeting = participant.parentName || participant.fullName || "there";
+      const greeting =
+        participant.parentName || participant.fullName || "there";
       const paymentLinkText = "Click here to proceed for payment";
       const text = [
         `Hello ${greeting},`,
@@ -122,7 +142,10 @@ function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
         html,
       });
     } catch (e) {
-      console.error("[travel-trips] approval payment portal email error:", e.message);
+      console.error(
+        "[travel-trips] approval payment portal email error:",
+        e.message,
+      );
     }
   });
 }
@@ -138,7 +161,12 @@ async function requireTmcAccess(req, res, next) {
   try {
     const allowed = await getSubBrandAccessSet(req.user.userId);
     if (allowed && !allowed.has("tmc")) {
-      return res.status(403).json({ error: "TMC sub-brand access required", code: "SUB_BRAND_DENIED" });
+      return res
+        .status(403)
+        .json({
+          error: "TMC sub-brand access required",
+          code: "SUB_BRAND_DENIED",
+        });
     }
     next();
   } catch (e) {
@@ -161,237 +189,327 @@ async function requireTmcAccess(req, res, next) {
 // per-trip child counts. The projection lookup is centralized in
 // backend/lib/listProjection.js so future routes adopt the same shape
 // via a single require() instead of cargo-culting the literal `select`.
-router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    // Quote Builder trips are operationally owned by the quote and should
-    // not appear in the standalone TMC Trips register.
-    const where = {
-      tenantId: req.travelTenant.id,
-      NOT: { tripCode: { startsWith: "QUOTE-" } },
-    };
-    const searchRaw = req.query.search ?? req.query.q;
-    const search = typeof searchRaw === "string" ? searchRaw.trim() : "";
-    if (req.query.status) {
-      if (!VALID_TRIP_STATUSES.includes(String(req.query.status))) {
-        return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
-      }
-      where.status = String(req.query.status);
-    }
-    if (req.query.schoolContactId) {
-      const sid = parseInt(req.query.schoolContactId, 10);
-      if (Number.isFinite(sid)) where.schoolContactId = sid;
-    }
-    if (search) {
-      where.OR = [
-        { tripCode: { contains: search } },
-        { destination: { contains: search } },
-      ];
-    }
-
-    const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
-    const skip = parseInt(req.query.offset, 10) || 0;
-
-    const isSummary = req.query.fields === "summary";
-    const findManyArgs = {
-      where,
-      // New trips should surface first by default, so sort by creation
-      // time newest-first and break ties on the autoincrement id.
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take,
-      skip,
-    };
-    if (isSummary) {
-      // Slim path: SQL-level field drop via Prisma `select` — keeps the
-      // route handler the only enforcement layer required. The `_count`
-      // include is skipped (picker callers don't need per-trip child
-      // counts).
-      findManyArgs.select = listProjection("TmcTrip", false);
-    } else {
-      findManyArgs.include = {
-        _count: { select: { participants: true, documentRequirements: true } },
-        paymentPlan: { select: { instalmentsJson: true } },
+router.get(
+  "/trips",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      // Quote Builder trips are operationally owned by the quote and should
+      // not appear in the standalone TMC Trips register.
+      const where = {
+        tenantId: req.travelTenant.id,
+        NOT: { tripCode: { startsWith: "QUOTE-" } },
       };
-    }
-    const [trips, total] = await Promise.all([
-      prisma.tmcTrip.findMany(findManyArgs),
-      prisma.tmcTrip.count({ where }),
-    ]);
-
-    const schoolIds = [...new Set((trips || [])
-      .map((trip) => Number(trip.schoolContactId))
-      .filter((id) => Number.isFinite(id)))];
-    let schoolNameById = new Map();
-    if (schoolIds.length > 0) {
-      const contacts = await prisma.contact.findMany({
-        where: {
-          tenantId: req.travelTenant.id,
-          id: { in: schoolIds },
-        },
-        select: { id: true, name: true },
-      });
-      schoolNameById = new Map(contacts.map((contact) => [contact.id, contact.name]));
-    }
-
-    const decoratedTrips = trips.map((trip) => {
-      let perStudentAmount = 0;
-      try {
-        const installments = JSON.parse(trip.paymentPlan?.instalmentsJson || "[]");
-        if (Array.isArray(installments)) {
-          perStudentAmount = installments.reduce((sum, installment) => sum + (Number(installment.amount) || 0), 0);
+      const searchRaw = req.query.search ?? req.query.q;
+      const search = typeof searchRaw === "string" ? searchRaw.trim() : "";
+      if (req.query.status) {
+        if (!VALID_TRIP_STATUSES.includes(String(req.query.status))) {
+          return res
+            .status(400)
+            .json({ error: "invalid status", code: "INVALID_STATUS" });
         }
-      } catch (_err) {
-        perStudentAmount = 0;
+        where.status = String(req.query.status);
       }
-      return {
-        ...trip,
-        perStudentAmount,
-        schoolName: schoolNameById.get(Number(trip.schoolContactId)) || null,
-      };
-    });
+      if (req.query.schoolContactId) {
+        const sid = parseInt(req.query.schoolContactId, 10);
+        if (Number.isFinite(sid)) where.schoolContactId = sid;
+      }
+      if (search) {
+        where.OR = [
+          { tripCode: { contains: search } },
+          { destination: { contains: search } },
+        ];
+      }
 
-    res.json({ trips: decoratedTrips, total, limit: take, offset: skip });
-  } catch (e) {
-    console.error("[travel-trips] list error:", e.message);
-    res.status(500).json({ error: "Failed to list trips" });
-  }
-});
+      const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+      const skip = parseInt(req.query.offset, 10) || 0;
+
+      const isSummary = req.query.fields === "summary";
+      const findManyArgs = {
+        where,
+        // New trips should surface first by default, so sort by creation
+        // time newest-first and break ties on the autoincrement id.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take,
+        skip,
+      };
+      if (isSummary) {
+        // Slim path: SQL-level field drop via Prisma `select` — keeps the
+        // route handler the only enforcement layer required. The `_count`
+        // include is skipped (picker callers don't need per-trip child
+        // counts).
+        findManyArgs.select = listProjection("TmcTrip", false);
+      } else {
+        findManyArgs.include = {
+          _count: {
+            select: { participants: true, documentRequirements: true },
+          },
+          paymentPlan: { select: { instalmentsJson: true } },
+        };
+      }
+      const [trips, total] = await Promise.all([
+        prisma.tmcTrip.findMany(findManyArgs),
+        prisma.tmcTrip.count({ where }),
+      ]);
+
+      const schoolIds = [
+        ...new Set(
+          (trips || [])
+            .map((trip) => Number(trip.schoolContactId))
+            .filter((id) => Number.isFinite(id)),
+        ),
+      ];
+      let schoolNameById = new Map();
+      if (schoolIds.length > 0) {
+        const contacts = await prisma.contact.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            id: { in: schoolIds },
+          },
+          select: { id: true, name: true },
+        });
+        schoolNameById = new Map(
+          contacts.map((contact) => [contact.id, contact.name]),
+        );
+      }
+
+      const decoratedTrips = trips.map((trip) => {
+        let perStudentAmount = 0;
+        try {
+          const installments = JSON.parse(
+            trip.paymentPlan?.instalmentsJson || "[]",
+          );
+          if (Array.isArray(installments)) {
+            perStudentAmount = installments.reduce(
+              (sum, installment) => sum + (Number(installment.amount) || 0),
+              0,
+            );
+          }
+        } catch (_err) {
+          perStudentAmount = 0;
+        }
+        return {
+          ...trip,
+          perStudentAmount,
+          schoolName: schoolNameById.get(Number(trip.schoolContactId)) || null,
+        };
+      });
+
+      res.json({ trips: decoratedTrips, total, limit: take, offset: skip });
+    } catch (e) {
+      console.error("[travel-trips] list error:", e.message);
+      res.status(500).json({ error: "Failed to list trips" });
+    }
+  },
+);
 
 // POST /api/travel/trips
-router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const {
-      tripCode, schoolContactId, schoolName, destination, departDate, returnDate,
-      legalEntity, pricePerStudent, status, micrositeUrl, driveFolderId, tripType,
-    } = req.body || {};
+router.post(
+  "/trips",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const {
+        tripCode,
+        schoolContactId,
+        schoolName,
+        destination,
+        departDate,
+        returnDate,
+        legalEntity,
+        pricePerStudent,
+        status,
+        micrositeUrl,
+        driveFolderId,
+        tripType,
+      } = req.body || {};
 
-    // Either schoolContactId (existing FK — back-compat for any caller that
-    // already resolved the contact) OR schoolName (free-text — what the
-    // operator types in the New Trip modal). When schoolName is supplied we
-    // find-or-create a Contact in this tenant tagged with subBrand="tmc" so
-    // it shows up correctly in TMC analytics + lead lists.
-    if (!tripCode || (!schoolContactId && !schoolName) || !destination || !departDate || !returnDate) {
-      return res.status(400).json({
-        error: "tripCode, school (schoolContactId or schoolName), destination, departDate, returnDate required",
-        code: "MISSING_FIELDS",
-      });
-    }
-    let sid = null;
-    if (schoolContactId) {
-      const parsed = parseInt(schoolContactId, 10);
-      if (!Number.isFinite(parsed)) {
-        return res.status(400).json({ error: "schoolContactId must be a number", code: "INVALID_CONTACT_ID" });
+      // Either schoolContactId (existing FK — back-compat for any caller that
+      // already resolved the contact) OR schoolName (free-text — what the
+      // operator types in the New Trip modal). When schoolName is supplied we
+      // find-or-create a Contact in this tenant tagged with subBrand="tmc" so
+      // it shows up correctly in TMC analytics + lead lists.
+      if (
+        !tripCode ||
+        (!schoolContactId && !schoolName) ||
+        !destination ||
+        !departDate ||
+        !returnDate
+      ) {
+        return res.status(400).json({
+          error:
+            "tripCode, school (schoolContactId or schoolName), destination, departDate, returnDate required",
+          code: "MISSING_FIELDS",
+        });
       }
-      sid = parsed;
-    } else {
-      // Free-text path: find an existing tenant Contact with this exact name
-      // (case-insensitive, trimmed) or create one. Case-insensitivity avoids
-      // "DPS North" + "dps north" + "DPS  North" producing 3 sibling Contacts
-      // for the same school.
-      const trimmedName = String(schoolName).trim();
-      if (!trimmedName) {
-        return res.status(400).json({ error: "schoolName must not be blank", code: "INVALID_SCHOOL_NAME" });
-      }
-      if (trimmedName.length > 200) {
-        return res.status(400).json({ error: "schoolName too long (max 200 chars)", code: "INVALID_SCHOOL_NAME" });
-      }
-      const existing = await prisma.contact.findFirst({
-        where: {
-          tenantId: req.travelTenant.id,
-          name: { equals: trimmedName },
-        },
-        select: { id: true },
-      });
-      if (existing) {
-        sid = existing.id;
+      let sid = null;
+      if (schoolContactId) {
+        const parsed = parseInt(schoolContactId, 10);
+        if (!Number.isFinite(parsed)) {
+          return res
+            .status(400)
+            .json({
+              error: "schoolContactId must be a number",
+              code: "INVALID_CONTACT_ID",
+            });
+        }
+        sid = parsed;
       } else {
-        const newContact = await prisma.contact.create({
-          data: {
+        // Free-text path: find an existing tenant Contact with this exact name
+        // (case-insensitive, trimmed) or create one. Case-insensitivity avoids
+        // "DPS North" + "dps north" + "DPS  North" producing 3 sibling Contacts
+        // for the same school.
+        const trimmedName = String(schoolName).trim();
+        if (!trimmedName) {
+          return res
+            .status(400)
+            .json({
+              error: "schoolName must not be blank",
+              code: "INVALID_SCHOOL_NAME",
+            });
+        }
+        if (trimmedName.length > 200) {
+          return res
+            .status(400)
+            .json({
+              error: "schoolName too long (max 200 chars)",
+              code: "INVALID_SCHOOL_NAME",
+            });
+        }
+        const existing = await prisma.contact.findFirst({
+          where: {
             tenantId: req.travelTenant.id,
-            name: trimmedName,
-            subBrand: "tmc",
-            source: "tmc-trip-create",
-            status: "Customer", // school is already booked into a confirmed trip
+            name: { equals: trimmedName },
           },
           select: { id: true },
         });
-        sid = newContact.id;
+        if (existing) {
+          sid = existing.id;
+        } else {
+          const newContact = await prisma.contact.create({
+            data: {
+              tenantId: req.travelTenant.id,
+              name: trimmedName,
+              subBrand: "tmc",
+              source: "tmc-trip-create",
+              status: "Customer", // school is already booked into a confirmed trip
+            },
+            select: { id: true },
+          });
+          sid = newContact.id;
+        }
       }
-    }
-    if (status && !VALID_TRIP_STATUSES.includes(status)) {
-      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
-    }
-    const normalizedTripType = String(tripType || "international").trim().toLowerCase();
-    if (!["domestic", "international", "day_trip"].includes(normalizedTripType)) {
-      return res.status(400).json({ error: "tripType must be domestic, international, or day_trip", code: "INVALID_TRIP_TYPE" });
-    }
-    const depart = new Date(departDate);
-    const ret = new Date(returnDate);
-    if (!Number.isFinite(depart.getTime()) || !Number.isFinite(ret.getTime())) {
-      return res.status(400).json({ error: "invalid date", code: "INVALID_DATE" });
-    }
-    const todayKey = localDateKey();
-    const departKey = localDateKey(depart);
-    const retKey = localDateKey(ret);
-    if (!todayKey || !departKey || !retKey) {
-      return res.status(400).json({ error: "invalid date", code: "INVALID_DATE" });
-    }
-    if (departKey < todayKey || retKey < todayKey) {
-      return res.status(400).json({
-        error: "departDate and returnDate must be today or in the future",
-        code: "DATE_IN_PAST",
-      });
-    }
-    if (ret < depart) {
-      return res.status(400).json({ error: "returnDate must be on or after departDate", code: "INVERTED_DATES" });
-    }
-
-    // PRD §4.8 — Drive folder auto-create on confirmed-trip trigger.
-    // If the operator explicitly supplied driveFolderId in the body,
-    // HONOUR it (manual override). Otherwise, when the new row's
-    // status is "confirmed", call the stub Drive client to mint a
-    // folder. Best-effort: a stub failure logs but never blocks trip
-    // creation — the trip's primary contract is its own row, not the
-    // optional Drive linkage. Pending Q1 (Workspace admin creds).
-    const finalStatus = status || "confirmed";
-    let resolvedDriveFolderId = driveFolderId || null;
-    if (!resolvedDriveFolderId && finalStatus === "confirmed") {
-      try {
-        const folder = await googleDriveClient.createTripFolder({
-          tripCode: String(tripCode),
-          destination: String(destination),
-          departDate: depart,
+      if (status && !VALID_TRIP_STATUSES.includes(status)) {
+        return res
+          .status(400)
+          .json({ error: "invalid status", code: "INVALID_STATUS" });
+      }
+      const normalizedTripType = String(tripType || "international")
+        .trim()
+        .toLowerCase();
+      if (
+        !["domestic", "international", "day_trip"].includes(normalizedTripType)
+      ) {
+        return res
+          .status(400)
+          .json({
+            error: "tripType must be domestic, international, or day_trip",
+            code: "INVALID_TRIP_TYPE",
+          });
+      }
+      const depart = new Date(departDate);
+      const ret = new Date(returnDate);
+      if (
+        !Number.isFinite(depart.getTime()) ||
+        !Number.isFinite(ret.getTime())
+      ) {
+        return res
+          .status(400)
+          .json({ error: "invalid date", code: "INVALID_DATE" });
+      }
+      const todayKey = localDateKey();
+      const departKey = localDateKey(depart);
+      const retKey = localDateKey(ret);
+      if (!todayKey || !departKey || !retKey) {
+        return res
+          .status(400)
+          .json({ error: "invalid date", code: "INVALID_DATE" });
+      }
+      if (departKey < todayKey || retKey < todayKey) {
+        return res.status(400).json({
+          error: "departDate and returnDate must be today or in the future",
+          code: "DATE_IN_PAST",
         });
-        resolvedDriveFolderId = folder.folderId;
-      } catch (driveErr) {
-        console.warn(`[travel-trips] drive auto-create failed for tripCode=${tripCode}: ${driveErr.message} — persisting NULL`);
       }
-    }
+      if (ret < depart) {
+        return res
+          .status(400)
+          .json({
+            error: "returnDate must be on or after departDate",
+            code: "INVERTED_DATES",
+          });
+      }
 
-    const created = await prisma.tmcTrip.create({
-      data: {
-        tenantId: req.travelTenant.id,
-        tripCode: String(tripCode),
-        schoolContactId: sid,
-        destination: String(destination),
-        tripType: normalizedTripType,
-        departDate: depart,
-        returnDate: ret,
-        legalEntity: legalEntity || "tmc_nexus",
-        pricePerStudent: pricePerStudent != null ? Number(pricePerStudent) : null,
-        status: finalStatus,
-        micrositeUrl: micrositeUrl || null,
-        driveFolderId: resolvedDriveFolderId,
-      },
-    });
-    res.status(201).json(created);
-  } catch (e) {
-    if (e.code === "P2002") {
-      return res.status(409).json({ error: "tripCode already in use", code: "DUPLICATE_TRIP_CODE" });
+      // PRD §4.8 — Drive folder auto-create on confirmed-trip trigger.
+      // If the operator explicitly supplied driveFolderId in the body,
+      // HONOUR it (manual override). Otherwise, when the new row's
+      // status is "confirmed", call the stub Drive client to mint a
+      // folder. Best-effort: a stub failure logs but never blocks trip
+      // creation — the trip's primary contract is its own row, not the
+      // optional Drive linkage. Pending Q1 (Workspace admin creds).
+      const finalStatus = status || "confirmed";
+      let resolvedDriveFolderId = driveFolderId || null;
+      if (!resolvedDriveFolderId && finalStatus === "confirmed") {
+        try {
+          const folder = await googleDriveClient.createTripFolder({
+            tripCode: String(tripCode),
+            destination: String(destination),
+            departDate: depart,
+          });
+          resolvedDriveFolderId = folder.folderId;
+        } catch (driveErr) {
+          console.warn(
+            `[travel-trips] drive auto-create failed for tripCode=${tripCode}: ${driveErr.message} — persisting NULL`,
+          );
+        }
+      }
+
+      const created = await prisma.tmcTrip.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          tripCode: String(tripCode),
+          schoolContactId: sid,
+          destination: String(destination),
+          tripType: normalizedTripType,
+          departDate: depart,
+          returnDate: ret,
+          legalEntity: legalEntity || "tmc_nexus",
+          pricePerStudent:
+            pricePerStudent != null ? Number(pricePerStudent) : null,
+          status: finalStatus,
+          micrositeUrl: micrositeUrl || null,
+          driveFolderId: resolvedDriveFolderId,
+        },
+      });
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.code === "P2002") {
+        return res
+          .status(409)
+          .json({
+            error: "tripCode already in use",
+            code: "DUPLICATE_TRIP_CODE",
+          });
+      }
+      console.error("[travel-trips] create error:", e.message);
+      res.status(500).json({ error: "Failed to create trip" });
     }
-    console.error("[travel-trips] create error:", e.message);
-    res.status(500).json({ error: "Failed to create trip" });
-  }
-});
+  },
+);
 
 // ─── Tenant-wide monthly rollup ───────────────────────────────────────
 
@@ -447,151 +565,173 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
 //
 // Route ordering: declared BEFORE GET /trips/:id so Express doesn't try
 // to parse "by-month" as a numeric :id (which would 400 INVALID_ID).
-router.get("/trips/by-month", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
-    const skip = parseInt(req.query.offset, 10) || 0;
-    const statusFilter = req.query.status ? String(req.query.status) : null;
-    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+router.get(
+  "/trips/by-month",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const statusFilter = req.query.status ? String(req.query.status) : null;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "month:asc";
 
-    if (statusFilter && !VALID_TRIP_STATUSES.includes(statusFilter)) {
-      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
-    }
+      if (statusFilter && !VALID_TRIP_STATUSES.includes(statusFilter)) {
+        return res
+          .status(400)
+          .json({ error: "invalid status", code: "INVALID_STATUS" });
+      }
 
-    // YYYY-MM validation — same regex slice 16 / 29 / 21 use.
-    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-    const fromRaw = req.query.from ? String(req.query.from) : null;
-    const toRaw = req.query.to ? String(req.query.to) : null;
-    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
-      return res.status(400).json({
-        error: "from must be in YYYY-MM format",
-        code: "INVALID_MONTH_FORMAT",
+      // YYYY-MM validation — same regex slice 16 / 29 / 21 use.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "count:asc",
+        "count:desc",
+        "completedCount:asc",
+        "completedCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+
+      const where = { tenantId: req.travelTenant.id };
+      if (statusFilter) where.status = statusFilter;
+
+      // No DB-level pagination — aggregation runs in-process so we can
+      // bucket by UTC YYYY-MM.
+      const trips = await prisma.tmcTrip.findMany({
+        where,
+        select: {
+          id: true,
+          status: true,
+          createdAt: true,
+        },
       });
-    }
-    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
-      return res.status(400).json({
-        error: "to must be in YYYY-MM format",
-        code: "INVALID_MONTH_FORMAT",
-      });
-    }
 
-    const VALID_ORDER_BY = new Set([
-      "month:asc",
-      "month:desc",
-      "count:asc",
-      "count:desc",
-      "completedCount:asc",
-      "completedCount:desc",
-    ]);
-    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts }.
+      // Rows with null/invalid createdAt go into "unknown" so counts stay
+      // accurate.
+      const byMonth = new Map();
+      for (const t of trips) {
+        let monthKey = "unknown";
+        if (t.createdAt) {
+          const dt =
+            t.createdAt instanceof Date ? t.createdAt : new Date(t.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
 
-    const where = { tenantId: req.travelTenant.id };
-    if (statusFilter) where.status = statusFilter;
+        let row = byMonth.get(monthKey);
+        if (!row) {
+          row = {
+            month: monthKey,
+            count: 0,
+            confirmedCount: 0,
+            inTripCount: 0,
+            completedCount: 0,
+            cancelledCount: 0,
+          };
+          byMonth.set(monthKey, row);
+        }
 
-    // No DB-level pagination — aggregation runs in-process so we can
-    // bucket by UTC YYYY-MM.
-    const trips = await prisma.tmcTrip.findMany({
-      where,
-      select: {
-        id: true,
-        status: true,
-        createdAt: true,
-      },
-    });
-
-    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts }.
-    // Rows with null/invalid createdAt go into "unknown" so counts stay
-    // accurate.
-    const byMonth = new Map();
-    for (const t of trips) {
-      let monthKey = "unknown";
-      if (t.createdAt) {
-        const dt = t.createdAt instanceof Date
-          ? t.createdAt
-          : new Date(t.createdAt);
-        if (!Number.isNaN(dt.getTime())) {
-          const yyyy = dt.getUTCFullYear();
-          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
-          monthKey = `${yyyy}-${mm}`;
+        row.count += 1;
+        switch (t.status) {
+          case "confirmed":
+            row.confirmedCount += 1;
+            break;
+          case "in-trip":
+            row.inTripCount += 1;
+            break;
+          case "completed":
+            row.completedCount += 1;
+            break;
+          case "cancelled":
+            row.cancelledCount += 1;
+            break;
+          default:
+            break;
         }
       }
 
-      let row = byMonth.get(monthKey);
-      if (!row) {
-        row = {
-          month: monthKey,
-          count: 0,
-          confirmedCount: 0,
-          inTripCount: 0,
-          completedCount: 0,
-          cancelledCount: 0,
-        };
-        byMonth.set(monthKey, row);
+      let months = [...byMonth.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set (they have no comparable month token); when no
+      // bounds are set, "unknown" stays so the count surface remains
+      // complete.
+      if (fromRaw !== null) {
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month <= toRaw,
+        );
       }
 
-      row.count += 1;
-      switch (t.status) {
-        case "confirmed": row.confirmedCount += 1; break;
-        case "in-trip": row.inTripCount += 1; break;
-        case "completed": row.completedCount += 1; break;
-        case "cancelled": row.cancelledCount += 1; break;
-        default: break;
-      }
+      // Sort. "month" sorts lexicographically on YYYY-MM which is also
+      // chronological. "unknown" sorts last in asc / first in desc by
+      // virtue of being lexicographically > "9999-12".
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandCount = months.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
+      const grandCompletedCount = months.reduce(
+        (acc, r) => acc + (Number(r.completedCount) || 0),
+        0,
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandCount,
+        grandCompletedCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      console.error("[travel-trips] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
     }
-
-    let months = [...byMonth.values()];
-
-    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
-    // either bound is set (they have no comparable month token); when no
-    // bounds are set, "unknown" stays so the count surface remains
-    // complete.
-    if (fromRaw !== null) {
-      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
-    }
-    if (toRaw !== null) {
-      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
-    }
-
-    // Sort. "month" sorts lexicographically on YYYY-MM which is also
-    // chronological. "unknown" sorts last in asc / first in desc by
-    // virtue of being lexicographically > "9999-12".
-    const [field, dir] = orderBy.split(":");
-    const mult = dir === "asc" ? 1 : -1;
-    months.sort((a, b) => {
-      if (field === "month") {
-        if (a.month < b.month) return -1 * mult;
-        if (a.month > b.month) return 1 * mult;
-        return 0;
-      }
-      return ((a[field] || 0) - (b[field] || 0)) * mult;
-    });
-
-    const totalMonths = months.length;
-    const grandCount = months.reduce(
-      (acc, r) => acc + (Number(r.count) || 0),
-      0,
-    );
-    const grandCompletedCount = months.reduce(
-      (acc, r) => acc + (Number(r.completedCount) || 0),
-      0,
-    );
-
-    // Pagination applied AFTER aggregation + sort + filter.
-    const paged = months.slice(skip, skip + take);
-
-    res.json({
-      months: paged,
-      totalMonths,
-      grandCount,
-      grandCompletedCount,
-      limit: take,
-      offset: skip,
-    });
-  } catch (e) {
-    console.error("[travel-trips] by-month error:", e.message);
-    res.status(500).json({ error: "Failed to compute monthly rollup" });
-  }
-});
+  },
+);
 
 // ─── Tenant-wide quarterly rollup ─────────────────────────────────────
 
@@ -648,152 +788,176 @@ router.get("/trips/by-month", verifyToken, requireTravelTenant, requireTmcAccess
 //
 // Route ordering: declared BEFORE GET /trips/:id so Express doesn't try
 // to parse "by-quarter" as a numeric :id (which would 400 INVALID_ID).
-router.get("/trips/by-quarter", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
-    const skip = parseInt(req.query.offset, 10) || 0;
-    const statusFilter = req.query.status ? String(req.query.status) : null;
-    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+router.get(
+  "/trips/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const statusFilter = req.query.status ? String(req.query.status) : null;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "quarter:asc";
 
-    if (statusFilter && !VALID_TRIP_STATUSES.includes(statusFilter)) {
-      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
-    }
+      if (statusFilter && !VALID_TRIP_STATUSES.includes(statusFilter)) {
+        return res
+          .status(400)
+          .json({ error: "invalid status", code: "INVALID_STATUS" });
+      }
 
-    // YYYY-Qn validation — n ∈ {1,2,3,4}.
-    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
-    const fromRaw = req.query.from ? String(req.query.from) : null;
-    const toRaw = req.query.to ? String(req.query.to) : null;
-    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
-      return res.status(400).json({
-        error: "from must be in YYYY-Qn format",
-        code: "INVALID_QUARTER_FORMAT",
+      // YYYY-Qn validation — n ∈ {1,2,3,4}.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "count:asc",
+        "count:desc",
+        "completedCount:asc",
+        "completedCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw)
+        ? orderByRaw
+        : "quarter:asc";
+
+      const where = { tenantId: req.travelTenant.id };
+      if (statusFilter) where.status = statusFilter;
+
+      // No DB-level pagination — aggregation runs in-process so we can
+      // bucket by UTC YYYY-Qn.
+      const trips = await prisma.tmcTrip.findMany({
+        where,
+        select: {
+          id: true,
+          status: true,
+          createdAt: true,
+        },
       });
-    }
-    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
-      return res.status(400).json({
-        error: "to must be in YYYY-Qn format",
-        code: "INVALID_QUARTER_FORMAT",
-      });
-    }
 
-    const VALID_ORDER_BY = new Set([
-      "quarter:asc",
-      "quarter:desc",
-      "count:asc",
-      "count:desc",
-      "completedCount:asc",
-      "completedCount:desc",
-    ]);
-    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
+      // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts }.
+      // Rows with null/invalid createdAt go into "unknown" so counts stay
+      // accurate.
+      const byQuarter = new Map();
+      for (const t of trips) {
+        let quarterKey = "unknown";
+        if (t.createdAt) {
+          const dt =
+            t.createdAt instanceof Date ? t.createdAt : new Date(t.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const q = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${q}`;
+          }
+        }
 
-    const where = { tenantId: req.travelTenant.id };
-    if (statusFilter) where.status = statusFilter;
+        let row = byQuarter.get(quarterKey);
+        if (!row) {
+          row = {
+            quarter: quarterKey,
+            count: 0,
+            confirmedCount: 0,
+            inTripCount: 0,
+            completedCount: 0,
+            cancelledCount: 0,
+          };
+          byQuarter.set(quarterKey, row);
+        }
 
-    // No DB-level pagination — aggregation runs in-process so we can
-    // bucket by UTC YYYY-Qn.
-    const trips = await prisma.tmcTrip.findMany({
-      where,
-      select: {
-        id: true,
-        status: true,
-        createdAt: true,
-      },
-    });
-
-    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts }.
-    // Rows with null/invalid createdAt go into "unknown" so counts stay
-    // accurate.
-    const byQuarter = new Map();
-    for (const t of trips) {
-      let quarterKey = "unknown";
-      if (t.createdAt) {
-        const dt = t.createdAt instanceof Date
-          ? t.createdAt
-          : new Date(t.createdAt);
-        if (!Number.isNaN(dt.getTime())) {
-          const yyyy = dt.getUTCFullYear();
-          const q = Math.floor(dt.getUTCMonth() / 3) + 1;
-          quarterKey = `${yyyy}-Q${q}`;
+        row.count += 1;
+        switch (t.status) {
+          case "confirmed":
+            row.confirmedCount += 1;
+            break;
+          case "in-trip":
+            row.inTripCount += 1;
+            break;
+          case "completed":
+            row.completedCount += 1;
+            break;
+          case "cancelled":
+            row.cancelledCount += 1;
+            break;
+          default:
+            break;
         }
       }
 
-      let row = byQuarter.get(quarterKey);
-      if (!row) {
-        row = {
-          quarter: quarterKey,
-          count: 0,
-          confirmedCount: 0,
-          inTripCount: 0,
-          completedCount: 0,
-          cancelledCount: 0,
-        };
-        byQuarter.set(quarterKey, row);
+      let quarters = [...byQuarter.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set (they have no comparable quarter token); when
+      // no bounds are set, "unknown" stays so the count surface remains
+      // complete. YYYY-Qn sorts lexicographically AND chronologically
+      // (Q1 < Q2 < Q3 < Q4 within the same year).
+      if (fromRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter <= toRaw,
+        );
       }
 
-      row.count += 1;
-      switch (t.status) {
-        case "confirmed": row.confirmedCount += 1; break;
-        case "in-trip": row.inTripCount += 1; break;
-        case "completed": row.completedCount += 1; break;
-        case "cancelled": row.cancelledCount += 1; break;
-        default: break;
-      }
+      // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+      // chronological. "unknown" sorts last in asc / first in desc by
+      // virtue of being lexicographically > "9999-Q4".
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalQuarters = quarters.length;
+      const grandCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
+      const grandCompletedCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.completedCount) || 0),
+        0,
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        quarters: paged,
+        totalQuarters,
+        grandCount,
+        grandCompletedCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      console.error("[travel-trips] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
     }
-
-    let quarters = [...byQuarter.values()];
-
-    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
-    // either bound is set (they have no comparable quarter token); when
-    // no bounds are set, "unknown" stays so the count surface remains
-    // complete. YYYY-Qn sorts lexicographically AND chronologically
-    // (Q1 < Q2 < Q3 < Q4 within the same year).
-    if (fromRaw !== null) {
-      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
-    }
-    if (toRaw !== null) {
-      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
-    }
-
-    // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
-    // chronological. "unknown" sorts last in asc / first in desc by
-    // virtue of being lexicographically > "9999-Q4".
-    const [field, dir] = orderBy.split(":");
-    const mult = dir === "asc" ? 1 : -1;
-    quarters.sort((a, b) => {
-      if (field === "quarter") {
-        if (a.quarter < b.quarter) return -1 * mult;
-        if (a.quarter > b.quarter) return 1 * mult;
-        return 0;
-      }
-      return ((a[field] || 0) - (b[field] || 0)) * mult;
-    });
-
-    const totalQuarters = quarters.length;
-    const grandCount = quarters.reduce(
-      (acc, r) => acc + (Number(r.count) || 0),
-      0,
-    );
-    const grandCompletedCount = quarters.reduce(
-      (acc, r) => acc + (Number(r.completedCount) || 0),
-      0,
-    );
-
-    // Pagination applied AFTER aggregation + sort + filter.
-    const paged = quarters.slice(skip, skip + take);
-
-    res.json({
-      quarters: paged,
-      totalQuarters,
-      grandCount,
-      grandCompletedCount,
-      limit: take,
-      offset: skip,
-    });
-  } catch (e) {
-    console.error("[travel-trips] by-quarter error:", e.message);
-    res.status(500).json({ error: "Failed to compute quarterly rollup" });
-  }
-});
+  },
+);
 
 // ─── Tenant-wide yearly rollup ────────────────────────────────────────
 
@@ -849,196 +1013,225 @@ router.get("/trips/by-quarter", verifyToken, requireTravelTenant, requireTmcAcce
 //
 // Route ordering: declared BEFORE GET /trips/:id so Express doesn't try
 // to parse "by-year" as a numeric :id (which would 400 INVALID_ID).
-router.get("/trips/by-year", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
-    const skip = parseInt(req.query.offset, 10) || 0;
-    const statusFilter = req.query.status ? String(req.query.status) : null;
-    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+router.get(
+  "/trips/by-year",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const statusFilter = req.query.status ? String(req.query.status) : null;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "year:asc";
 
-    if (statusFilter && !VALID_TRIP_STATUSES.includes(statusFilter)) {
-      return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
-    }
+      if (statusFilter && !VALID_TRIP_STATUSES.includes(statusFilter)) {
+        return res
+          .status(400)
+          .json({ error: "invalid status", code: "INVALID_STATUS" });
+      }
 
-    // YYYY validation — 4-digit calendar year.
-    const YEAR_RE = /^\d{4}$/;
-    const fromRaw = req.query.from ? String(req.query.from) : null;
-    const toRaw = req.query.to ? String(req.query.to) : null;
-    if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
-      return res.status(400).json({
-        error: "from must be in YYYY format",
-        code: "INVALID_YEAR_FORMAT",
+      // YYYY validation — 4-digit calendar year.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "count:asc",
+        "count:desc",
+        "completedCount:asc",
+        "completedCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+
+      const where = { tenantId: req.travelTenant.id };
+      if (statusFilter) where.status = statusFilter;
+
+      // No DB-level pagination — aggregation runs in-process so we can
+      // bucket by UTC YYYY.
+      const trips = await prisma.tmcTrip.findMany({
+        where,
+        select: {
+          id: true,
+          status: true,
+          createdAt: true,
+        },
       });
-    }
-    if (toRaw !== null && !YEAR_RE.test(toRaw)) {
-      return res.status(400).json({
-        error: "to must be in YYYY format",
-        code: "INVALID_YEAR_FORMAT",
-      });
-    }
 
-    const VALID_ORDER_BY = new Set([
-      "year:asc",
-      "year:desc",
-      "count:asc",
-      "count:desc",
-      "completedCount:asc",
-      "completedCount:desc",
-    ]);
-    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
+      // Aggregate per-UTC-year. Map "YYYY" → { ...row counts }.
+      // Rows with null/invalid createdAt go into "unknown" so counts stay
+      // accurate.
+      const byYear = new Map();
+      for (const t of trips) {
+        let yearKey = "unknown";
+        if (t.createdAt) {
+          const dt =
+            t.createdAt instanceof Date ? t.createdAt : new Date(t.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
 
-    const where = { tenantId: req.travelTenant.id };
-    if (statusFilter) where.status = statusFilter;
+        let row = byYear.get(yearKey);
+        if (!row) {
+          row = {
+            year: yearKey,
+            count: 0,
+            confirmedCount: 0,
+            inTripCount: 0,
+            completedCount: 0,
+            cancelledCount: 0,
+          };
+          byYear.set(yearKey, row);
+        }
 
-    // No DB-level pagination — aggregation runs in-process so we can
-    // bucket by UTC YYYY.
-    const trips = await prisma.tmcTrip.findMany({
-      where,
-      select: {
-        id: true,
-        status: true,
-        createdAt: true,
-      },
-    });
-
-    // Aggregate per-UTC-year. Map "YYYY" → { ...row counts }.
-    // Rows with null/invalid createdAt go into "unknown" so counts stay
-    // accurate.
-    const byYear = new Map();
-    for (const t of trips) {
-      let yearKey = "unknown";
-      if (t.createdAt) {
-        const dt = t.createdAt instanceof Date
-          ? t.createdAt
-          : new Date(t.createdAt);
-        if (!Number.isNaN(dt.getTime())) {
-          yearKey = String(dt.getUTCFullYear());
+        row.count += 1;
+        switch (t.status) {
+          case "confirmed":
+            row.confirmedCount += 1;
+            break;
+          case "in-trip":
+            row.inTripCount += 1;
+            break;
+          case "completed":
+            row.completedCount += 1;
+            break;
+          case "cancelled":
+            row.cancelledCount += 1;
+            break;
+          default:
+            break;
         }
       }
 
-      let row = byYear.get(yearKey);
-      if (!row) {
-        row = {
-          year: yearKey,
-          count: 0,
-          confirmedCount: 0,
-          inTripCount: 0,
-          completedCount: 0,
-          cancelledCount: 0,
-        };
-        byYear.set(yearKey, row);
+      let years = [...byYear.values()];
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set (they have no comparable year token); when
+      // no bounds are set, "unknown" stays so the count surface remains
+      // complete. YYYY sorts lexicographically AND chronologically.
+      if (fromRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+      }
+      if (toRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
       }
 
-      row.count += 1;
-      switch (t.status) {
-        case "confirmed": row.confirmedCount += 1; break;
-        case "in-trip": row.inTripCount += 1; break;
-        case "completed": row.completedCount += 1; break;
-        case "cancelled": row.cancelledCount += 1; break;
-        default: break;
-      }
+      // Sort. "year" sorts lexicographically on YYYY which is also
+      // chronological. "unknown" sorts last in asc / first in desc by
+      // virtue of being lexicographically > "9999".
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalYears = years.length;
+      const grandCount = years.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
+      const grandCompletedCount = years.reduce(
+        (acc, r) => acc + (Number(r.completedCount) || 0),
+        0,
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        years: paged,
+        totalYears,
+        grandCount,
+        grandCompletedCount,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      console.error("[travel-trips] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute yearly rollup" });
     }
-
-    let years = [...byYear.values()];
-
-    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
-    // either bound is set (they have no comparable year token); when
-    // no bounds are set, "unknown" stays so the count surface remains
-    // complete. YYYY sorts lexicographically AND chronologically.
-    if (fromRaw !== null) {
-      years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
-    }
-    if (toRaw !== null) {
-      years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
-    }
-
-    // Sort. "year" sorts lexicographically on YYYY which is also
-    // chronological. "unknown" sorts last in asc / first in desc by
-    // virtue of being lexicographically > "9999".
-    const [field, dir] = orderBy.split(":");
-    const mult = dir === "asc" ? 1 : -1;
-    years.sort((a, b) => {
-      if (field === "year") {
-        if (a.year < b.year) return -1 * mult;
-        if (a.year > b.year) return 1 * mult;
-        return 0;
-      }
-      return ((a[field] || 0) - (b[field] || 0)) * mult;
-    });
-
-    const totalYears = years.length;
-    const grandCount = years.reduce(
-      (acc, r) => acc + (Number(r.count) || 0),
-      0,
-    );
-    const grandCompletedCount = years.reduce(
-      (acc, r) => acc + (Number(r.completedCount) || 0),
-      0,
-    );
-
-    // Pagination applied AFTER aggregation + sort + filter.
-    const paged = years.slice(skip, skip + take);
-
-    res.json({
-      years: paged,
-      totalYears,
-      grandCount,
-      grandCompletedCount,
-      limit: take,
-      offset: skip,
-    });
-  } catch (e) {
-    console.error("[travel-trips] by-year error:", e.message);
-    res.status(500).json({ error: "Failed to compute yearly rollup" });
-  }
-});
+  },
+);
 
 // GET /api/travel/trips/:id
-router.get("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const trip = await prisma.tmcTrip.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-      include: {
-        // PII payload reduction (same rationale as the #920 FR-3.5
-        // ?fields=summary projection on GET /:id/participants): a bare
-        // include ships passportNumber / passportExtractionJson (MRZ,
-        // DOB) / aadhaar / medical columns to every role with trip
-        // access, bypassing the ADMIN+MANAGER gate the passport routes
-        // enforce. The detail page only needs identity + parent contact
-        // + the three passport status timestamps for its badges.
-        participants: {
-          orderBy: { id: "asc" },
-          select: {
-            id: true,
-            fullName: true,
-            parentName: true,
-            parentPhone: true,
-            passportExtractedAt: true,
-            passportVerifiedAt: true,
-            passportRejectedAt: true,
-            applicationStatus: true,
-            reviewedAt: true,
-            reviewedById: true,
-            reviewNotes: true,
-            consentCapturedAt: true,
+router.get(
+  "/trips/:id",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const trip = await prisma.tmcTrip.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        include: {
+          // PII payload reduction (same rationale as the #920 FR-3.5
+          // ?fields=summary projection on GET /:id/participants): a bare
+          // include ships passportNumber / passportExtractionJson (MRZ,
+          // DOB) / aadhaar / medical columns to every role with trip
+          // access, bypassing the ADMIN+MANAGER gate the passport routes
+          // enforce. The detail page only needs identity + parent contact
+          // + the three passport status timestamps for its badges.
+          participants: {
+            orderBy: { id: "asc" },
+            select: {
+              id: true,
+              fullName: true,
+              parentName: true,
+              parentPhone: true,
+              passportExtractedAt: true,
+              passportVerifiedAt: true,
+              passportRejectedAt: true,
+              applicationStatus: true,
+              reviewedAt: true,
+              reviewedById: true,
+              reviewNotes: true,
+              consentCapturedAt: true,
+            },
           },
+          documentRequirements: { orderBy: { id: "asc" } },
+          paymentPlan: true,
+          microsite: true,
         },
-        documentRequirements: { orderBy: { id: "asc" } },
-        paymentPlan: true,
-        microsite: true,
-      },
-    });
-    if (!trip) return res.status(404).json({ error: "Trip not found", code: "NOT_FOUND" });
-    res.json(trip);
-  } catch (e) {
-    console.error("[travel-trips] get error:", e.message);
-    res.status(500).json({ error: "Failed to get trip" });
-  }
-});
+      });
+      if (!trip)
+        return res
+          .status(404)
+          .json({ error: "Trip not found", code: "NOT_FOUND" });
+      res.json(trip);
+    } catch (e) {
+      console.error("[travel-trips] get error:", e.message);
+      res.status(500).json({ error: "Failed to get trip" });
+    }
+  },
+);
 
 // GET /api/travel/trips/:id/ops-dashboard — PRD §4.9 operational rollup.
 //
@@ -1080,7 +1273,9 @@ router.get(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
       // Header fetch is sequential because the parallel children only
@@ -1098,7 +1293,10 @@ router.get(
           pricePerStudent: true,
         },
       });
-      if (!trip) return res.status(404).json({ error: "Trip not found", code: "NOT_FOUND" });
+      if (!trip)
+        return res
+          .status(404)
+          .json({ error: "Trip not found", code: "NOT_FOUND" });
 
       // Parallel-fetch the 4 child collections. TMC trips have tens of
       // participants, not thousands — no pagination needed; aggregate
@@ -1106,7 +1304,11 @@ router.get(
       const [participants, payments, docs, roomings] = await Promise.all([
         prisma.tripParticipant.findMany({
           where: { tripId: trip.id },
-          select: { id: true, consentCapturedAt: true, applicationStatus: true },
+          select: {
+            id: true,
+            consentCapturedAt: true,
+            applicationStatus: true,
+          },
         }),
         prisma.tripInstalmentPayment.findMany({
           where: { tripId: trip.id },
@@ -1124,7 +1326,9 @@ router.get(
 
       // Participants
       const participantsCount = participants.length;
-      const capturedConsent = participants.filter((p) => p.consentCapturedAt != null).length;
+      const capturedConsent = participants.filter(
+        (p) => p.consentCapturedAt != null,
+      ).length;
       // Application-status breakdown — additive over consentCapturedAt so
       // Overview KPI can show "X registered · Y approved · Z pending".
       // Legacy rows (pre-applicationStatus) default to "pending" via schema
@@ -1135,11 +1339,19 @@ router.get(
       let pendingReviewCount = 0;
       for (const p of participants) {
         switch (p.applicationStatus) {
-          case "approved": approvedCount++; break;
-          case "rejected": rejectedCount++; break;
-          case "waitlisted": waitlistedCount++; break;
+          case "approved":
+            approvedCount++;
+            break;
+          case "rejected":
+            rejectedCount++;
+            break;
+          case "waitlisted":
+            waitlistedCount++;
+            break;
           case "pending":
-          default: pendingReviewCount++; break;
+          default:
+            pendingReviewCount++;
+            break;
         }
       }
 
@@ -1155,11 +1367,19 @@ router.get(
         expectedTotalRupees += Number(p.amount) || 0;
         receivedRupees += Number(p.paidAmount) || 0;
         switch (p.status) {
-          case "paid": paidCount++; break;
-          case "partial": partialCount++; break;
-          case "overdue": overdueCount++; break;
+          case "paid":
+            paidCount++;
+            break;
+          case "partial":
+            partialCount++;
+            break;
+          case "overdue":
+            overdueCount++;
+            break;
           case "pending":
-          default: pendingCount++; break;
+          default:
+            pendingCount++;
+            break;
         }
       }
       // Round to 2 dp to avoid IEEE-754 trailing noise in JSON.
@@ -1194,7 +1414,10 @@ router.get(
       if (participantsCount > 0 && participantsRoomed > participantsCount) {
         participantsRoomed = participantsCount;
       }
-      const participantsUnroomed = Math.max(0, participantsCount - participantsRoomed);
+      const participantsUnroomed = Math.max(
+        0,
+        participantsCount - participantsRoomed,
+      );
 
       // Departure-readiness score. Each component is a 0-1 fraction;
       // weighted average; final * 100 rounded to integer. Score is
@@ -1208,12 +1431,17 @@ router.get(
       let score = null;
       if (participantsCount > 0 && expectedTotalRupees > 0) {
         const consentFrac = clampFrac(capturedConsent / participantsCount);
-        const docsFrac = requirementCount > 0
-          ? clampFrac(submittedCount / requirementCount)
-          : 0; // No docs required → 0% (nothing to submit)
+        const docsFrac =
+          requirementCount > 0
+            ? clampFrac(submittedCount / requirementCount)
+            : 0; // No docs required → 0% (nothing to submit)
         const paymentFrac = clampFrac(receivedRupees / expectedTotalRupees);
         const roomingFrac = clampFrac(participantsRoomed / participantsCount);
-        const weighted = (consentFrac * 0.3) + (docsFrac * 0.3) + (paymentFrac * 0.3) + (roomingFrac * 0.1);
+        const weighted =
+          consentFrac * 0.3 +
+          docsFrac * 0.3 +
+          paymentFrac * 0.3 +
+          roomingFrac * 0.1;
         consentPct = Math.round(consentFrac * 100);
         docsPct = Math.round(docsFrac * 100);
         paymentPct = Math.round(paymentFrac * 100);
@@ -1230,7 +1458,8 @@ router.get(
           returnDate: trip.returnDate,
           status: trip.status,
           legalEntity: trip.legalEntity,
-          pricePerStudent: trip.pricePerStudent != null ? Number(trip.pricePerStudent) : null,
+          pricePerStudent:
+            trip.pricePerStudent != null ? Number(trip.pricePerStudent) : null,
         },
         participants: {
           count: participantsCount,
@@ -1289,184 +1518,309 @@ function clampFrac(x) {
 }
 
 // PATCH /api/travel/trips/:id
-router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const existing = await prisma.tmcTrip.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-      select: {
-        id: true,
-        status: true,
-        driveFolderId: true,
-        tripCode: true,
-        destination: true,
-        departDate: true,
-      },
-    });
-    if (!existing) return res.status(404).json({ error: "Trip not found", code: "NOT_FOUND" });
-
-    const data = {};
-    const {
-      destination, departDate, returnDate, legalEntity,
-      pricePerStudent, status, micrositeUrl, driveFolderId, tripType,
-    } = req.body || {};
-
-    if (destination !== undefined) data.destination = String(destination);
-    if (departDate !== undefined) {
-      const d = new Date(departDate);
-      if (!Number.isFinite(d.getTime())) return res.status(400).json({ error: "invalid departDate", code: "INVALID_DATE" });
-      data.departDate = d;
-    }
-    if (returnDate !== undefined) {
-      const d = new Date(returnDate);
-      if (!Number.isFinite(d.getTime())) return res.status(400).json({ error: "invalid returnDate", code: "INVALID_DATE" });
-      data.returnDate = d;
-    }
-    if (legalEntity !== undefined) data.legalEntity = String(legalEntity);
-    if (pricePerStudent !== undefined) data.pricePerStudent = pricePerStudent != null ? Number(pricePerStudent) : null;
-    if (tripType !== undefined) {
-      const normalizedTripType = String(tripType).trim().toLowerCase();
-      if (!["domestic", "international", "day_trip"].includes(normalizedTripType)) {
-        return res.status(400).json({ error: "tripType must be domestic, international, or day_trip", code: "INVALID_TRIP_TYPE" });
+router.patch(
+  "/trips/:id",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
-      data.tripType = normalizedTripType;
-    }
-    if (status !== undefined) {
-      if (!VALID_TRIP_STATUSES.includes(status)) {
-        return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+      const existing = await prisma.tmcTrip.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: {
+          id: true,
+          status: true,
+          teacherContactId: true,
+          driveFolderId: true,
+          tripCode: true,
+          destination: true,
+          departDate: true,
+        },
+      });
+      if (!existing)
+        return res
+          .status(404)
+          .json({ error: "Trip not found", code: "NOT_FOUND" });
+
+      const data = {};
+      const {
+        destination,
+        departDate,
+        returnDate,
+        legalEntity,
+        pricePerStudent,
+        status,
+        micrositeUrl,
+        driveFolderId,
+        tripType,
+        teacherContactId,
+      } = req.body || {};
+
+      if (destination !== undefined) data.destination = String(destination);
+      if (departDate !== undefined) {
+        const d = new Date(departDate);
+        if (!Number.isFinite(d.getTime()))
+          return res
+            .status(400)
+            .json({ error: "invalid departDate", code: "INVALID_DATE" });
+        data.departDate = d;
       }
-      data.status = status;
-    }
-    if (micrositeUrl !== undefined) data.micrositeUrl = micrositeUrl || null;
-    if (driveFolderId !== undefined) data.driveFolderId = driveFolderId || null;
-
-    if (Object.keys(data).length === 0) {
-      return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
-    }
-
-    // Cross-field check: if both dates being amended, verify ordering.
-    if (data.departDate && data.returnDate && data.returnDate < data.departDate) {
-      return res.status(400).json({ error: "returnDate must be on or after departDate", code: "INVERTED_DATES" });
-    }
-
-    // PRD §4.8 — Drive folder auto-create on confirmed-trip trigger.
-    // Fire when the operator flips status from non-confirmed to
-    // "confirmed" AND the existing row has no driveFolderId AND the
-    // body did not explicitly supply one (operator override always
-    // wins). Trip that already has a folder keeps it (no re-create
-    // on status churn). Best-effort: a stub failure logs but does
-    // NOT block the PATCH. Pending Q1 (Workspace admin creds).
-    const flippingToConfirmed =
-      data.status === "confirmed" && existing.status !== "confirmed";
-
-    // PRD_TRAVEL_SUPPLIER_MASTER G042 — credit-limit hard-block.
-    // When the trip flips to "confirmed" AND req.body carries a supplierId
-    // + a totalAmount (the booking value being projected against the
-    // supplier's outstanding A/P), call the credit-check helper. If the
-    // projected total exceeds the supplier's configured creditLimit,
-    // return 409 CREDIT_LIMIT_EXCEEDED. ADMIN may override via
-    // req.body.overrideCreditLimit=true (operator escalation path —
-    // logged at write time so the override is auditable).
-    if (flippingToConfirmed) {
-      const { supplierId: sIdRaw, totalAmount, overrideCreditLimit } = req.body || {};
-      const sId = sIdRaw != null ? parseInt(sIdRaw, 10) : null;
-      const addAmount = totalAmount != null ? Number(totalAmount) : 0;
-      if (Number.isFinite(sId) && Number.isFinite(addAmount) && addAmount > 0) {
-        // Look up the caller's role from the DB (verifyToken populates
-        // req.user with {userId, tenantId, role}). ADMIN can override.
-        const isAdmin = req.user && req.user.role === "ADMIN";
-        const overrideRequested = overrideCreditLimit === true || overrideCreditLimit === "true";
-        if (!(overrideRequested && isAdmin)) {
-          const { checkCreditLimit } = require("../lib/supplierCreditCheck");
-          const check = await checkCreditLimit({
-            prisma,
-            tenantId: req.travelTenant.id,
-            supplierId: sId,
-            addAmount,
-          });
-          if (!check.allowed) {
-            return res.status(409).json({
-              error: "Booking would exceed supplier credit limit",
-              code: "CREDIT_LIMIT_EXCEEDED",
-              supplierId: sId,
-              current: check.current,
-              limit: check.limit,
-              projected: check.projected,
+      if (returnDate !== undefined) {
+        const d = new Date(returnDate);
+        if (!Number.isFinite(d.getTime()))
+          return res
+            .status(400)
+            .json({ error: "invalid returnDate", code: "INVALID_DATE" });
+        data.returnDate = d;
+      }
+      if (legalEntity !== undefined) data.legalEntity = String(legalEntity);
+      if (pricePerStudent !== undefined)
+        data.pricePerStudent =
+          pricePerStudent != null ? Number(pricePerStudent) : null;
+      if (tripType !== undefined) {
+        const normalizedTripType = String(tripType).trim().toLowerCase();
+        if (
+          !["domestic", "international", "day_trip"].includes(
+            normalizedTripType,
+          )
+        ) {
+          return res
+            .status(400)
+            .json({
+              error: "tripType must be domestic, international, or day_trip",
+              code: "INVALID_TRIP_TYPE",
             });
-          }
         }
+        data.tripType = normalizedTripType;
       }
-    }
-    if (
-      flippingToConfirmed &&
-      !existing.driveFolderId &&
-      driveFolderId === undefined
-    ) {
-      try {
-        const folder = await googleDriveClient.createTripFolder({
-          tripCode: existing.tripCode,
-          destination: data.destination ?? existing.destination,
-          departDate: data.departDate ?? existing.departDate,
-        });
-        data.driveFolderId = folder.folderId;
-      } catch (driveErr) {
-        console.warn(`[travel-trips] drive auto-create failed for tripCode=${existing.tripCode}: ${driveErr.message} — leaving driveFolderId unchanged`);
+      if (status !== undefined) {
+        if (!VALID_TRIP_STATUSES.includes(status)) {
+          return res
+            .status(400)
+            .json({ error: "invalid status", code: "INVALID_STATUS" });
+        }
+        data.status = status;
       }
-    }
-
-    const updated = await prisma.tmcTrip.update({ where: { id }, data });
-
-    // PRD_TRAVEL_SUPPLIER_MASTER FR-3.2.a (G037) — auto-create draft PO on
-    // booking-confirm. TmcTrip does NOT carry a supplierId column today;
-    // the booking-confirm flow accepts an OPTIONAL `supplierId` body field
-    // that, when present AND the trip flips to confirmed, fires the auto-PO.
-    // Best-effort: any failure (missing supplier, sub-brand mismatch, PO
-    // sequence collision) logs but does NOT block the PATCH — the trip's
-    // status flip is the load-bearing op. Without supplierId, trip-confirm
-    // just doesn't spawn a PO (operator can still manually create one via
-    // POST /api/travel/purchase-orders).
-    const { supplierId: autoPoSupplierId } = req.body || {};
-    if (flippingToConfirmed && autoPoSupplierId) {
-      const sid = parseInt(autoPoSupplierId, 10);
-      if (Number.isFinite(sid)) {
-        try {
-          const supplier = await prisma.travelSupplier.findFirst({
-            where: { id: sid, tenantId: req.travelTenant.id },
+      if (micrositeUrl !== undefined) data.micrositeUrl = micrositeUrl || null;
+      if (driveFolderId !== undefined)
+        data.driveFolderId = driveFolderId || null;
+      if (teacherContactId !== undefined) {
+        if (teacherContactId === null || teacherContactId === "") {
+          data.teacherContactId = null;
+        } else {
+          const teacherId = Number(teacherContactId);
+          if (!Number.isInteger(teacherId) || teacherId <= 0) {
+            return res
+              .status(400)
+              .json({
+                error: "teacherContactId must be a positive integer",
+                code: "INVALID_TEACHER_ID",
+              });
+          }
+          const teacher = await prisma.contact.findFirst({
+            where: {
+              id: teacherId,
+              tenantId: req.travelTenant.id,
+              subBrand: "tmc",
+              portalRole: "TEACHER",
+              deletedAt: null,
+            },
             select: { id: true },
           });
-          if (supplier) {
-            const poRoute = require("./travel_purchase_orders");
-            const poNumber = await poRoute.nextPoNumber(req.travelTenant.id);
-            await prisma.travelPurchaseOrder.create({
-              data: {
-                tenantId: req.travelTenant.id,
-                supplierId: sid,
-                poNumber,
-                status: "draft",
-                currency: "INR",
-                createdBy: req.user.userId,
-                notes: `Auto-generated for trip ${existing.tripCode} on confirmation`,
-              },
-            });
+          if (!teacher) {
+            return res
+              .status(400)
+              .json({
+                error: "teacherContactId must belong to an active TMC teacher",
+                code: "INVALID_TMC_TEACHER",
+              });
           }
-        } catch (poErr) {
-          console.warn(`[travel-trips] auto-PO failed for tripCode=${existing.tripCode}: ${poErr.message}`);
+          data.teacherContactId = teacher.id;
         }
       }
-    }
 
-    res.json(updated);
-  } catch (e) {
-    if (e.code === "P2002") {
-      return res.status(409).json({ error: "tripCode already in use", code: "DUPLICATE_TRIP_CODE" });
+      if (Object.keys(data).length === 0) {
+        return res
+          .status(400)
+          .json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+
+      // Cross-field check: if both dates being amended, verify ordering.
+      if (
+        data.departDate &&
+        data.returnDate &&
+        data.returnDate < data.departDate
+      ) {
+        return res
+          .status(400)
+          .json({
+            error: "returnDate must be on or after departDate",
+            code: "INVERTED_DATES",
+          });
+      }
+
+      // PRD §4.8 — Drive folder auto-create on confirmed-trip trigger.
+      // Fire when the operator flips status from non-confirmed to
+      // "confirmed" AND the existing row has no driveFolderId AND the
+      // body did not explicitly supply one (operator override always
+      // wins). Trip that already has a folder keeps it (no re-create
+      // on status churn). Best-effort: a stub failure logs but does
+      // NOT block the PATCH. Pending Q1 (Workspace admin creds).
+      const flippingToConfirmed =
+        data.status === "confirmed" && existing.status !== "confirmed";
+
+      // PRD_TRAVEL_SUPPLIER_MASTER G042 — credit-limit hard-block.
+      // When the trip flips to "confirmed" AND req.body carries a supplierId
+      // + a totalAmount (the booking value being projected against the
+      // supplier's outstanding A/P), call the credit-check helper. If the
+      // projected total exceeds the supplier's configured creditLimit,
+      // return 409 CREDIT_LIMIT_EXCEEDED. ADMIN may override via
+      // req.body.overrideCreditLimit=true (operator escalation path —
+      // logged at write time so the override is auditable).
+      if (flippingToConfirmed) {
+        const {
+          supplierId: sIdRaw,
+          totalAmount,
+          overrideCreditLimit,
+        } = req.body || {};
+        const sId = sIdRaw != null ? parseInt(sIdRaw, 10) : null;
+        const addAmount = totalAmount != null ? Number(totalAmount) : 0;
+        if (
+          Number.isFinite(sId) &&
+          Number.isFinite(addAmount) &&
+          addAmount > 0
+        ) {
+          // Look up the caller's role from the DB (verifyToken populates
+          // req.user with {userId, tenantId, role}). ADMIN can override.
+          const isAdmin = req.user && req.user.role === "ADMIN";
+          const overrideRequested =
+            overrideCreditLimit === true || overrideCreditLimit === "true";
+          if (!(overrideRequested && isAdmin)) {
+            const { checkCreditLimit } = require("../lib/supplierCreditCheck");
+            const check = await checkCreditLimit({
+              prisma,
+              tenantId: req.travelTenant.id,
+              supplierId: sId,
+              addAmount,
+            });
+            if (!check.allowed) {
+              return res.status(409).json({
+                error: "Booking would exceed supplier credit limit",
+                code: "CREDIT_LIMIT_EXCEEDED",
+                supplierId: sId,
+                current: check.current,
+                limit: check.limit,
+                projected: check.projected,
+              });
+            }
+          }
+        }
+      }
+      if (
+        flippingToConfirmed &&
+        !existing.driveFolderId &&
+        driveFolderId === undefined
+      ) {
+        try {
+          const folder = await googleDriveClient.createTripFolder({
+            tripCode: existing.tripCode,
+            destination: data.destination ?? existing.destination,
+            departDate: data.departDate ?? existing.departDate,
+          });
+          data.driveFolderId = folder.folderId;
+        } catch (driveErr) {
+          console.warn(
+            `[travel-trips] drive auto-create failed for tripCode=${existing.tripCode}: ${driveErr.message} — leaving driveFolderId unchanged`,
+          );
+        }
+      }
+
+      const updated = await prisma.tmcTrip.update({ where: { id }, data });
+
+      // Notify only when ownership changes to a teacher. Re-saving the same
+      // assignment must not create repeated notifications for that teacher.
+      if (
+        data.teacherContactId &&
+        data.teacherContactId !== existing.teacherContactId
+      ) {
+        travelPortalNotifications
+          .safeNotifyTravelCustomer({
+            contactId: data.teacherContactId,
+            tenantId: req.travelTenant.id,
+            title: "New trip assigned to you",
+            message: `${existing.destination || existing.tripCode} has been assigned to you. Open Trips to view the details and landing page.`,
+            type: "system",
+            link: "trips",
+          })
+          .catch((notificationError) => {
+            console.warn(
+              `[travel-trips] teacher assignment notification failed for tripCode=${existing.tripCode}: ${notificationError.message}`,
+            );
+          });
+      }
+
+      // PRD_TRAVEL_SUPPLIER_MASTER FR-3.2.a (G037) — auto-create draft PO on
+      // booking-confirm. TmcTrip does NOT carry a supplierId column today;
+      // the booking-confirm flow accepts an OPTIONAL `supplierId` body field
+      // that, when present AND the trip flips to confirmed, fires the auto-PO.
+      // Best-effort: any failure (missing supplier, sub-brand mismatch, PO
+      // sequence collision) logs but does NOT block the PATCH — the trip's
+      // status flip is the load-bearing op. Without supplierId, trip-confirm
+      // just doesn't spawn a PO (operator can still manually create one via
+      // POST /api/travel/purchase-orders).
+      const { supplierId: autoPoSupplierId } = req.body || {};
+      if (flippingToConfirmed && autoPoSupplierId) {
+        const sid = parseInt(autoPoSupplierId, 10);
+        if (Number.isFinite(sid)) {
+          try {
+            const supplier = await prisma.travelSupplier.findFirst({
+              where: { id: sid, tenantId: req.travelTenant.id },
+              select: { id: true },
+            });
+            if (supplier) {
+              const poRoute = require("./travel_purchase_orders");
+              const poNumber = await poRoute.nextPoNumber(req.travelTenant.id);
+              await prisma.travelPurchaseOrder.create({
+                data: {
+                  tenantId: req.travelTenant.id,
+                  supplierId: sid,
+                  poNumber,
+                  status: "draft",
+                  currency: "INR",
+                  createdBy: req.user.userId,
+                  notes: `Auto-generated for trip ${existing.tripCode} on confirmation`,
+                },
+              });
+            }
+          } catch (poErr) {
+            console.warn(
+              `[travel-trips] auto-PO failed for tripCode=${existing.tripCode}: ${poErr.message}`,
+            );
+          }
+        }
+      }
+
+      res.json(updated);
+    } catch (e) {
+      if (e.code === "P2002") {
+        return res
+          .status(409)
+          .json({
+            error: "tripCode already in use",
+            code: "DUPLICATE_TRIP_CODE",
+          });
+      }
+      console.error("[travel-trips] patch error:", e.message);
+      res.status(500).json({ error: "Failed to update trip" });
     }
-    console.error("[travel-trips] patch error:", e.message);
-    res.status(500).json({ error: "Failed to update trip" });
-  }
-});
+  },
+);
 
 // DELETE /api/travel/trips/:id — ADMIN only, cascades through children.
 router.delete(
@@ -1479,12 +1833,17 @@ router.delete(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const existing = await prisma.tmcTrip.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
-      if (!existing) return res.status(404).json({ error: "Trip not found", code: "NOT_FOUND" });
+      if (!existing)
+        return res
+          .status(404)
+          .json({ error: "Trip not found", code: "NOT_FOUND" });
       await prisma.tmcTrip.delete({ where: { id } });
       res.json({ deleted: true, id });
     } catch (e) {
@@ -1517,7 +1876,10 @@ router.delete(
 async function loadTripWithLandingPage(req) {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) {
-    const err = new Error("id must be a number"); err.status = 400; err.code = "INVALID_ID"; throw err;
+    const err = new Error("id must be a number");
+    err.status = 400;
+    err.code = "INVALID_ID";
+    throw err;
   }
   const trip = await prisma.tmcTrip.findFirst({
     where: { id, tenantId: req.travelTenant.id },
@@ -1532,7 +1894,10 @@ async function loadTripWithLandingPage(req) {
     },
   });
   if (!trip) {
-    const err = new Error("Trip not found"); err.status = 404; err.code = "NOT_FOUND"; throw err;
+    const err = new Error("Trip not found");
+    err.status = 404;
+    err.code = "NOT_FOUND";
+    throw err;
   }
   return trip;
 }
@@ -1565,7 +1930,7 @@ function defaultWanderluxConfig(trip) {
       thankYouMessage: "Thank you — we'll redirect you to verify your phone.",
       steps: [
         { id: "student", title: "Student Information" },
-        { id: "parent",  title: "Parent Information" },
+        { id: "parent", title: "Parent Information" },
         { id: "passport", title: "Passport Information" },
       ],
     },
@@ -1573,77 +1938,109 @@ function defaultWanderluxConfig(trip) {
 }
 
 // GET /api/travel/trips/:id/landing-page
-router.get("/trips/:id/landing-page", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const trip = await loadTripWithLandingPage(req);
-    if (!trip.landingPage) {
-      return res.status(404).json({ error: "No landing page linked to this trip", code: "NOT_LINKED" });
+router.get(
+  "/trips/:id/landing-page",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTripWithLandingPage(req);
+      if (!trip.landingPage) {
+        return res
+          .status(404)
+          .json({
+            error: "No landing page linked to this trip",
+            code: "NOT_LINKED",
+          });
+      }
+      res.json(trip.landingPage);
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] get landing-page error:", e.message);
+      res.status(500).json({ error: "Failed to fetch trip landing page" });
     }
-    res.json(trip.landingPage);
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-trips] get landing-page error:", e.message);
-    res.status(500).json({ error: "Failed to fetch trip landing page" });
-  }
-});
+  },
+);
 
 // POST /api/travel/trips/:id/landing-page
 // Idempotent: if a page is already linked, returns it (200). Otherwise
 // lazy-creates a fresh DRAFT Wanderlux page (201). Honors slug
 // collisions with a 5-attempt retry, matching the AI-generate pattern
 // in routes/landing_pages.js.
-router.post("/trips/:id/landing-page", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const trip = await loadTripWithLandingPage(req);
-    if (trip.landingPage) {
-      // Already linked — return existing. Idempotent.
-      return res.json(trip.landingPage);
-    }
-
-    const baseSlug = `trip-${trip.tripCode}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 50);
-    const baseData = {
-      title: `${trip.destination} Trip — ${trip.tripCode}`,
-      templateType: "wanderlux-v1",
-      content: JSON.stringify(defaultWanderluxConfig(trip)),
-      status: "DRAFT",
-      destination: trip.destination,
-      subBrand: "tmc",
-      generatedByAi: false,
-      tenantId: req.travelTenant.id,
-      userId: req.user.userId,
-      tripId: trip.id,
-    };
-
-    let created = null;
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const trySlug = attempt === 0
-        ? baseSlug
-        : `${baseSlug.slice(0, 44)}-${Math.random().toString(36).slice(2, 6)}`;
-      try {
-        created = await prisma.landingPage.create({ data: { ...baseData, slug: trySlug } });
-        break;
-      } catch (e) {
-        // P2002 can fire on either @@unique([tenantId, slug]) OR on
-        // tripId @unique. The latter means a concurrent POST raced us
-        // to attach a page — re-read and return that page.
-        if (e.code !== "P2002") throw e;
-        if (Array.isArray(e.meta?.target) && e.meta.target.includes("tripId")) {
-          const racePage = await prisma.landingPage.findUnique({ where: { tripId: trip.id } });
-          if (racePage) return res.json(racePage);
-        }
-        // Otherwise slug collision — try again with a fresh suffix.
+router.post(
+  "/trips/:id/landing-page",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTripWithLandingPage(req);
+      if (trip.landingPage) {
+        // Already linked — return existing. Idempotent.
+        return res.json(trip.landingPage);
       }
+
+      const baseSlug = `trip-${trip.tripCode}`
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .slice(0, 50);
+      const baseData = {
+        title: `${trip.destination} Trip — ${trip.tripCode}`,
+        templateType: "wanderlux-v1",
+        content: JSON.stringify(defaultWanderluxConfig(trip)),
+        status: "DRAFT",
+        destination: trip.destination,
+        subBrand: "tmc",
+        generatedByAi: false,
+        tenantId: req.travelTenant.id,
+        userId: req.user.userId,
+        tripId: trip.id,
+      };
+
+      let created = null;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const trySlug =
+          attempt === 0
+            ? baseSlug
+            : `${baseSlug.slice(0, 44)}-${Math.random().toString(36).slice(2, 6)}`;
+        try {
+          created = await prisma.landingPage.create({
+            data: { ...baseData, slug: trySlug },
+          });
+          break;
+        } catch (e) {
+          // P2002 can fire on either @@unique([tenantId, slug]) OR on
+          // tripId @unique. The latter means a concurrent POST raced us
+          // to attach a page — re-read and return that page.
+          if (e.code !== "P2002") throw e;
+          if (
+            Array.isArray(e.meta?.target) &&
+            e.meta.target.includes("tripId")
+          ) {
+            const racePage = await prisma.landingPage.findUnique({
+              where: { tripId: trip.id },
+            });
+            if (racePage) return res.json(racePage);
+          }
+          // Otherwise slug collision — try again with a fresh suffix.
+        }
+      }
+      if (!created) {
+        return res
+          .status(500)
+          .json({ error: "Failed to allocate a unique slug after 5 attempts" });
+      }
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] create landing-page error:", e.message);
+      res.status(500).json({ error: "Failed to create trip landing page" });
     }
-    if (!created) {
-      return res.status(500).json({ error: "Failed to allocate a unique slug after 5 attempts" });
-    }
-    res.status(201).json(created);
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-trips] create landing-page error:", e.message);
-    res.status(500).json({ error: "Failed to create trip landing page" });
-  }
-});
+  },
+);
 
 // DELETE /api/travel/trips/:id/landing-page
 // Unlinks (sets tripId=null on the LandingPage). The page survives as
@@ -1660,7 +2057,12 @@ router.delete(
     try {
       const trip = await loadTripWithLandingPage(req);
       if (!trip.landingPage) {
-        return res.status(404).json({ error: "No landing page linked to this trip", code: "NOT_LINKED" });
+        return res
+          .status(404)
+          .json({
+            error: "No landing page linked to this trip",
+            code: "NOT_LINKED",
+          });
       }
       const unlinked = await prisma.landingPage.update({
         where: { id: trip.landingPage.id },
@@ -1668,7 +2070,8 @@ router.delete(
       });
       res.json({ unlinked: true, id: unlinked.id });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-trips] unlink landing-page error:", e.message);
       res.status(500).json({ error: "Failed to unlink trip landing page" });
     }
@@ -1680,14 +2083,20 @@ router.delete(
 async function loadTrip(req) {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) {
-    const err = new Error("id must be a number"); err.status = 400; err.code = "INVALID_ID"; throw err;
+    const err = new Error("id must be a number");
+    err.status = 400;
+    err.code = "INVALID_ID";
+    throw err;
   }
   const trip = await prisma.tmcTrip.findFirst({
     where: { id, tenantId: req.travelTenant.id },
     select: { id: true },
   });
   if (!trip) {
-    const err = new Error("Trip not found"); err.status = 404; err.code = "NOT_FOUND"; throw err;
+    const err = new Error("Trip not found");
+    err.status = 404;
+    err.code = "NOT_FOUND";
+    throw err;
   }
   return trip;
 }
@@ -1710,19 +2119,28 @@ router.post(
     try {
       const trip = await loadTrip(req);
       if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
-        return res.status(400).json({ error: "file field required (multipart)", code: "FILE_REQUIRED" });
+        return res
+          .status(400)
+          .json({
+            error: "file field required (multipart)",
+            code: "FILE_REQUIRED",
+          });
       }
 
       let parsed;
       try {
         parsed = parseSpreadsheetBuffer(req.file.buffer, req.file);
       } catch (parseErr) {
-        return res.status(400).json({ error: parseErr.message, code: "INVALID_FILE" });
+        return res
+          .status(400)
+          .json({ error: parseErr.message, code: "INVALID_FILE" });
       }
 
       const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
       if (rows.length === 0) {
-        return res.status(400).json({ error: "file is empty", code: "EMPTY_FILE" });
+        return res
+          .status(400)
+          .json({ error: "file is empty", code: "EMPTY_FILE" });
       }
       if (rows.length > PARTICIPANT_IMPORT_MAX_ROWS) {
         return res.status(413).json({
@@ -1742,12 +2160,20 @@ router.post(
         const rowNumber = raw.__row || i + 2;
         const parsedRow = parseParticipantImportRow(raw, rowNumber);
         if (parsedRow.errors.length > 0) {
-          errors.push(...parsedRow.errors.map((err) => ({ row: err.rowNumber || rowNumber, reason: err.reason })));
+          errors.push(
+            ...parsedRow.errors.map((err) => ({
+              row: err.rowNumber || rowNumber,
+              reason: err.reason,
+            })),
+          );
           skipped += 1;
           continue;
         }
         if (seen.has(parsedRow.naturalKey)) {
-          errors.push({ row: rowNumber, reason: `duplicate of row ${seen.get(parsedRow.naturalKey)} (same natural key)` });
+          errors.push({
+            row: rowNumber,
+            reason: `duplicate of row ${seen.get(parsedRow.naturalKey)} (same natural key)`,
+          });
           skipped += 1;
           continue;
         }
@@ -1798,7 +2224,8 @@ router.post(
         total: rows.length,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-trips] participant import error:", e.message);
       res.status(500).json({ error: "Failed to import participants" });
     }
@@ -1818,162 +2245,222 @@ router.post(
 // PII column at the Prisma layer, so the route handler is the only
 // enforcement boundary needed. Detail endpoint (PATCH /participants/:pid
 // reads the full row through `findFirst` separately, audited per-row.
-router.get("/trips/:id/participants", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const trip = await loadTrip(req);
-    const isSummary = req.query.fields === "summary";
-    const findManyArgs = {
-      where: { tripId: trip.id },
-      orderBy: { id: "asc" },
-    };
-    if (isSummary) {
-      findManyArgs.select = listProjection("TripParticipant", false);
+router.get(
+  "/trips/:id/participants",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const isSummary = req.query.fields === "summary";
+      const findManyArgs = {
+        where: { tripId: trip.id },
+        orderBy: { id: "asc" },
+      };
+      if (isSummary) {
+        findManyArgs.select = listProjection("TripParticipant", false);
+      }
+      const rows = await prisma.tripParticipant.findMany(findManyArgs);
+      res.json({ participants: rows });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] participants list error:", e.message);
+      res.status(500).json({ error: "Failed to list participants" });
     }
-    const rows = await prisma.tripParticipant.findMany(findManyArgs);
-    res.json({ participants: rows });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-trips] participants list error:", e.message);
-    res.status(500).json({ error: "Failed to list participants" });
-  }
-});
+  },
+);
 
-router.post("/trips/:id/participants", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const trip = await loadTrip(req);
-    const {
-      fullName, passportNumber, passportExpiry, passportDocId,
-      aadhaarLast4, aadhaarTokenId, parentName, parentPhone, parentEmail,
-      medicalNotes, consentCapturedAt,
-    } = req.body || {};
-    if (!fullName) {
-      return res.status(400).json({ error: "fullName required", code: "MISSING_FIELDS" });
-    }
-    // Aadhaar Act §29 safety — refuse if caller submits a raw 12-digit
-    // Aadhaar number. Only `aadhaarLast4` (display) + `aadhaarTokenId`
-    // (DigiLocker token) are allowed in storage.
-    if (aadhaarLast4 && !/^\d{4}$/.test(String(aadhaarLast4))) {
-      return res.status(400).json({
-        error: "aadhaarLast4 must be exactly 4 digits (don't submit full Aadhaar number)",
-        code: "INVALID_AADHAAR_LAST4",
-      });
-    }
-    // Bare 10-digit Indian mobiles get +91 auto-prepended (Travel Stall is
-    // Indian-only). E.164 (`+919876543210`) and 12-digit `91XXXXXXXXXX` are
-    // also accepted. Returns null on garbage like `abcde` → 400.
-    let normalizedPhone = null;
-    if (parentPhone) {
-      normalizedPhone = toE164(parentPhone);
-      if (!normalizedPhone) {
+router.post(
+  "/trips/:id/participants",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const {
+        fullName,
+        passportNumber,
+        passportExpiry,
+        passportDocId,
+        aadhaarLast4,
+        aadhaarTokenId,
+        parentName,
+        parentPhone,
+        parentEmail,
+        medicalNotes,
+        consentCapturedAt,
+      } = req.body || {};
+      if (!fullName) {
+        return res
+          .status(400)
+          .json({ error: "fullName required", code: "MISSING_FIELDS" });
+      }
+      // Aadhaar Act §29 safety — refuse if caller submits a raw 12-digit
+      // Aadhaar number. Only `aadhaarLast4` (display) + `aadhaarTokenId`
+      // (DigiLocker token) are allowed in storage.
+      if (aadhaarLast4 && !/^\d{4}$/.test(String(aadhaarLast4))) {
         return res.status(400).json({
-          error: "parentPhone must be a 10-digit Indian mobile (6-9 prefix) or E.164 international number",
-          code: "INVALID_PHONE",
+          error:
+            "aadhaarLast4 must be exactly 4 digits (don't submit full Aadhaar number)",
+          code: "INVALID_AADHAAR_LAST4",
         });
       }
-    }
-
-    const result = await prisma.$transaction(async (tx) => {
-      const participant = await tx.tripParticipant.create({
-        data: {
-          tripId: trip.id,
-          fullName: String(fullName),
-          passportNumber: passportNumber || null,
-          passportExpiry: passportExpiry ? new Date(passportExpiry) : null,
-          passportDocId: passportDocId ? parseInt(passportDocId, 10) : null,
-          aadhaarLast4: aadhaarLast4 || null,
-          aadhaarTokenId: aadhaarTokenId || null,
-          parentName: parentName || null,
-          parentPhone: normalizedPhone,
-          parentEmail: parentEmail || null,
-          medicalNotes: medicalNotes || null,
-          consentCapturedAt: consentCapturedAt ? new Date(consentCapturedAt) : null,
-        },
-      });
-      await materializeTripInstalmentsFromPlan({
-        db: tx,
-        tripId: trip.id,
-        participantIds: [participant.id],
-        allowMissingPlan: true,
-      });
-      const invoice = await createDraftInvoiceForParticipant({
-        db: tx,
-        tenantId: req.travelTenant.id,
-        tripId: trip.id,
-        participantId: participant.id,
-      });
-      return { participant, invoice };
-    });
-    // Preserve the established participant response at the top level. The
-    // generated invoice is additive so existing callers reading `id`,
-    // `fullName`, etc. do not break.
-    res.status(201).json({ ...result.participant, invoice: result.invoice });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-trips] participant create error:", e.message);
-    res.status(500).json({ error: "Failed to create participant" });
-  }
-});
-
-router.patch("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const trip = await loadTrip(req);
-    const pid = parseInt(req.params.pid, 10);
-    if (!Number.isFinite(pid)) {
-      return res.status(400).json({ error: "pid must be a number", code: "INVALID_PARTICIPANT_ID" });
-    }
-    const existing = await prisma.tripParticipant.findFirst({
-      where: { id: pid, tripId: trip.id },
-    });
-    if (!existing) return res.status(404).json({ error: "Participant not found", code: "PARTICIPANT_NOT_FOUND" });
-
-    const data = {};
-    const allowed = [
-      "fullName", "passportNumber", "passportExpiry", "passportDocId",
-      "aadhaarLast4", "aadhaarTokenId", "parentName", "parentPhone", "parentEmail",
-      "medicalNotes", "consentCapturedAt",
-    ];
-    for (const k of allowed) {
-      if (req.body && Object.prototype.hasOwnProperty.call(req.body, k)) {
-        const v = req.body[k];
-        if (k === "aadhaarLast4" && v && !/^\d{4}$/.test(String(v))) {
+      // Bare 10-digit Indian mobiles get +91 auto-prepended (Travel Stall is
+      // Indian-only). E.164 (`+919876543210`) and 12-digit `91XXXXXXXXXX` are
+      // also accepted. Returns null on garbage like `abcde` → 400.
+      let normalizedPhone = null;
+      if (parentPhone) {
+        normalizedPhone = toE164(parentPhone);
+        if (!normalizedPhone) {
           return res.status(400).json({
-            error: "aadhaarLast4 must be exactly 4 digits",
-            code: "INVALID_AADHAAR_LAST4",
+            error:
+              "parentPhone must be a 10-digit Indian mobile (6-9 prefix) or E.164 international number",
+            code: "INVALID_PHONE",
           });
         }
-        if (k === "passportExpiry" || k === "consentCapturedAt") {
-          data[k] = v ? new Date(v) : null;
-        } else if (k === "passportDocId") {
-          data[k] = v ? parseInt(v, 10) : null;
-        } else if (k === "parentPhone") {
-          if (!v) {
-            data[k] = null;
-          } else {
-            const normalized = toE164(v);
-            if (!normalized) {
-              return res.status(400).json({
-                error: "parentPhone must be a 10-digit Indian mobile (6-9 prefix) or E.164 international number",
-                code: "INVALID_PHONE",
-              });
-            }
-            data[k] = normalized;
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        const participant = await tx.tripParticipant.create({
+          data: {
+            tripId: trip.id,
+            fullName: String(fullName),
+            passportNumber: passportNumber || null,
+            passportExpiry: passportExpiry ? new Date(passportExpiry) : null,
+            passportDocId: passportDocId ? parseInt(passportDocId, 10) : null,
+            aadhaarLast4: aadhaarLast4 || null,
+            aadhaarTokenId: aadhaarTokenId || null,
+            parentName: parentName || null,
+            parentPhone: normalizedPhone,
+            parentEmail: parentEmail || null,
+            medicalNotes: medicalNotes || null,
+            consentCapturedAt: consentCapturedAt
+              ? new Date(consentCapturedAt)
+              : null,
+          },
+        });
+        await materializeTripInstalmentsFromPlan({
+          db: tx,
+          tripId: trip.id,
+          participantIds: [participant.id],
+          allowMissingPlan: true,
+        });
+        const invoice = await createDraftInvoiceForParticipant({
+          db: tx,
+          tenantId: req.travelTenant.id,
+          tripId: trip.id,
+          participantId: participant.id,
+        });
+        return { participant, invoice };
+      });
+      // Preserve the established participant response at the top level. The
+      // generated invoice is additive so existing callers reading `id`,
+      // `fullName`, etc. do not break.
+      res.status(201).json({ ...result.participant, invoice: result.invoice });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] participant create error:", e.message);
+      res.status(500).json({ error: "Failed to create participant" });
+    }
+  },
+);
+
+router.patch(
+  "/trips/:id/participants/:pid",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const pid = parseInt(req.params.pid, 10);
+      if (!Number.isFinite(pid)) {
+        return res
+          .status(400)
+          .json({
+            error: "pid must be a number",
+            code: "INVALID_PARTICIPANT_ID",
+          });
+      }
+      const existing = await prisma.tripParticipant.findFirst({
+        where: { id: pid, tripId: trip.id },
+      });
+      if (!existing)
+        return res
+          .status(404)
+          .json({
+            error: "Participant not found",
+            code: "PARTICIPANT_NOT_FOUND",
+          });
+
+      const data = {};
+      const allowed = [
+        "fullName",
+        "passportNumber",
+        "passportExpiry",
+        "passportDocId",
+        "aadhaarLast4",
+        "aadhaarTokenId",
+        "parentName",
+        "parentPhone",
+        "parentEmail",
+        "medicalNotes",
+        "consentCapturedAt",
+      ];
+      for (const k of allowed) {
+        if (req.body && Object.prototype.hasOwnProperty.call(req.body, k)) {
+          const v = req.body[k];
+          if (k === "aadhaarLast4" && v && !/^\d{4}$/.test(String(v))) {
+            return res.status(400).json({
+              error: "aadhaarLast4 must be exactly 4 digits",
+              code: "INVALID_AADHAAR_LAST4",
+            });
           }
-        } else {
-          data[k] = v ?? null;
+          if (k === "passportExpiry" || k === "consentCapturedAt") {
+            data[k] = v ? new Date(v) : null;
+          } else if (k === "passportDocId") {
+            data[k] = v ? parseInt(v, 10) : null;
+          } else if (k === "parentPhone") {
+            if (!v) {
+              data[k] = null;
+            } else {
+              const normalized = toE164(v);
+              if (!normalized) {
+                return res.status(400).json({
+                  error:
+                    "parentPhone must be a 10-digit Indian mobile (6-9 prefix) or E.164 international number",
+                  code: "INVALID_PHONE",
+                });
+              }
+              data[k] = normalized;
+            }
+          } else {
+            data[k] = v ?? null;
+          }
         }
       }
+      if (Object.keys(data).length === 0) {
+        return res
+          .status(400)
+          .json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+      const updated = await prisma.tripParticipant.update({
+        where: { id: pid },
+        data,
+      });
+      res.json(updated);
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] participant patch error:", e.message);
+      res.status(500).json({ error: "Failed to update participant" });
     }
-    if (Object.keys(data).length === 0) {
-      return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
-    }
-    const updated = await prisma.tripParticipant.update({ where: { id: pid }, data });
-    res.json(updated);
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-trips] participant patch error:", e.message);
-    res.status(500).json({ error: "Failed to update participant" });
-  }
-});
+  },
+);
 
 // POST /api/travel/trips/:id/participants/:pid/approve
 // POST /api/travel/trips/:id/participants/:pid/reject
@@ -1996,17 +2483,29 @@ async function decideApplication(req, res, nextStatus) {
     const trip = await loadTrip(req);
     const pid = parseInt(req.params.pid, 10);
     if (!Number.isFinite(pid)) {
-      return res.status(400).json({ error: "pid must be a number", code: "INVALID_PARTICIPANT_ID" });
+      return res
+        .status(400)
+        .json({
+          error: "pid must be a number",
+          code: "INVALID_PARTICIPANT_ID",
+        });
     }
     const existing = await prisma.tripParticipant.findFirst({
       where: { id: pid, tripId: trip.id },
       select: { id: true, applicationStatus: true },
     });
-    if (!existing) return res.status(404).json({ error: "Participant not found", code: "PARTICIPANT_NOT_FOUND" });
+    if (!existing)
+      return res
+        .status(404)
+        .json({
+          error: "Participant not found",
+          code: "PARTICIPANT_NOT_FOUND",
+        });
 
-    const reviewNotes = typeof req.body?.reviewNotes === "string"
-      ? req.body.reviewNotes.slice(0, 2000)
-      : null;
+    const reviewNotes =
+      typeof req.body?.reviewNotes === "string"
+        ? req.body.reviewNotes.slice(0, 2000)
+        : null;
     if (nextStatus === "rejected" && !reviewNotes?.trim()) {
       return res.status(400).json({
         error: "A rejection reason is required",
@@ -2042,7 +2541,10 @@ async function decideApplication(req, res, nextStatus) {
       return row;
     });
     res.json(updated);
-    if (nextStatus === "approved" && existing.applicationStatus !== "approved") {
+    if (
+      nextStatus === "approved" &&
+      existing.applicationStatus !== "approved"
+    ) {
       sendApprovalPaymentPortalEmail({
         tenantId: req.travelTenant.id,
         trip,
@@ -2050,7 +2552,8 @@ async function decideApplication(req, res, nextStatus) {
       });
     }
   } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    if (e.status)
+      return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-trips] participant decide error:", e.message);
     res.status(500).json({ error: "Failed to update application status" });
   }
@@ -2072,25 +2575,43 @@ router.post(
   (req, res) => decideApplication(req, res, "rejected"),
 );
 
-router.delete("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const trip = await loadTrip(req);
-    const pid = parseInt(req.params.pid, 10);
-    if (!Number.isFinite(pid)) {
-      return res.status(400).json({ error: "pid must be a number", code: "INVALID_PARTICIPANT_ID" });
+router.delete(
+  "/trips/:id/participants/:pid",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const pid = parseInt(req.params.pid, 10);
+      if (!Number.isFinite(pid)) {
+        return res
+          .status(400)
+          .json({
+            error: "pid must be a number",
+            code: "INVALID_PARTICIPANT_ID",
+          });
+      }
+      const existing = await prisma.tripParticipant.findFirst({
+        where: { id: pid, tripId: trip.id },
+      });
+      if (!existing)
+        return res
+          .status(404)
+          .json({
+            error: "Participant not found",
+            code: "PARTICIPANT_NOT_FOUND",
+          });
+      await prisma.tripParticipant.delete({ where: { id: pid } });
+      res.json({ deleted: true, id: pid });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] participant delete error:", e.message);
+      res.status(500).json({ error: "Failed to delete participant" });
     }
-    const existing = await prisma.tripParticipant.findFirst({
-      where: { id: pid, tripId: trip.id },
-    });
-    if (!existing) return res.status(404).json({ error: "Participant not found", code: "PARTICIPANT_NOT_FOUND" });
-    await prisma.tripParticipant.delete({ where: { id: pid } });
-    res.json({ deleted: true, id: pid });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-trips] participant delete error:", e.message);
-    res.status(500).json({ error: "Failed to delete participant" });
-  }
-});
+  },
+);
 
 // GET /trips/:id/registrations
 router.get(
@@ -2102,11 +2623,21 @@ router.get(
     try {
       const trip = await loadTrip(req);
       const where = { tripId: trip.id, tenantId: req.travelTenant.id };
-      const status = typeof req.query.status === "string" ? req.query.status : null;
-      const VALID_STATUSES = ["DRAFT", "OTP_VERIFIED", "APPROVED", "REJECTED", "CONVERTED"];
+      const status =
+        typeof req.query.status === "string" ? req.query.status : null;
+      const VALID_STATUSES = [
+        "DRAFT",
+        "OTP_VERIFIED",
+        "APPROVED",
+        "REJECTED",
+        "CONVERTED",
+      ];
       if (status) {
         // Allow comma-separated multi-select: ?status=DRAFT,OTP_VERIFIED
-        const list = status.split(",").map((s) => s.trim()).filter(Boolean);
+        const list = status
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
         for (const s of list) {
           if (!VALID_STATUSES.includes(s)) {
             return res.status(400).json({
@@ -2124,26 +2655,48 @@ router.get(
         // draftTokenExpiresAt (microsite-only signal). Operators don't
         // need either; the CRM acts on the draft id directly.
         select: {
-          id: true, tenantId: true, tripId: true, landingPageId: true,
-          studentName: true, studentDob: true, studentSchool: true,
-          studentClass: true, studentGender: true,
-          parentName: true, parentEmail: true, parentPhone: true, parentRelation: true,
-          passportNumber: true, passportExpiry: true,
-          passportNationality: true, passportPlaceOfIssue: true,
+          id: true,
+          tenantId: true,
+          tripId: true,
+          landingPageId: true,
+          studentName: true,
+          studentDob: true,
+          studentSchool: true,
+          studentClass: true,
+          studentGender: true,
+          parentName: true,
+          parentEmail: true,
+          parentPhone: true,
+          parentRelation: true,
+          passportNumber: true,
+          passportExpiry: true,
+          passportNationality: true,
+          passportPlaceOfIssue: true,
           extrasJson: true,
-          status: true, otpVerified: true, otpVerifiedAt: true, otpPhone: true,
+          status: true,
+          otpVerified: true,
+          otpVerifiedAt: true,
+          otpPhone: true,
           convertedToParticipantId: true,
-          approvedAt: true, approvedById: true,
-          rejectedAt: true, rejectedById: true,
+          approvedAt: true,
+          approvedById: true,
+          rejectedAt: true,
+          rejectedById: true,
           reviewNotes: true,
-          audience: true, subBrand: true,
-          createdAt: true, updatedAt: true,
+          audience: true,
+          subBrand: true,
+          createdAt: true,
+          updatedAt: true,
         },
       });
       res.json(registrations);
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-      console.error("[travel-trips] list pending-registrations error:", e.message);
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error(
+        "[travel-trips] list pending-registrations error:",
+        e.message,
+      );
       res.status(500).json({ error: "Failed to list pending registrations" });
     }
   },
@@ -2166,12 +2719,29 @@ router.get(
     try {
       const { draft } = await loadPendingRegistration(req);
       const { docType } = req.params;
-      if (!["passport", "aadhaar", "parentConsent", "medicalConsent", "consentLetter"].includes(docType)) {
-        return res.status(400).json({ error: "Invalid registration document type", code: "INVALID_DOC_TYPE" });
+      if (
+        ![
+          "passport",
+          "aadhaar",
+          "parentConsent",
+          "medicalConsent",
+          "consentLetter",
+        ].includes(docType)
+      ) {
+        return res
+          .status(400)
+          .json({
+            error: "Invalid registration document type",
+            code: "INVALID_DOC_TYPE",
+          });
       }
       let extras = {};
       if (draft.extrasJson) {
-        try { extras = JSON.parse(draft.extrasJson) || {}; } catch { extras = {}; }
+        try {
+          extras = JSON.parse(draft.extrasJson) || {};
+        } catch {
+          extras = {};
+        }
       }
       const descriptor = extras?.documents?.[docType];
       if (!descriptor || !descriptor.url) {
@@ -2188,12 +2758,22 @@ router.get(
       };
       const url = await visaDocStore.resolveViewUrl(item);
       if (!url) {
-        return res.status(500).json({ error: "Could not generate a view URL for this document" });
+        return res
+          .status(500)
+          .json({ error: "Could not generate a view URL for this document" });
       }
-      res.json({ url, docType, expiresInSeconds: visaDocStore.DEFAULT_VIEW_TTL_SEC });
+      res.json({
+        url,
+        docType,
+        expiresInSeconds: visaDocStore.DEFAULT_VIEW_TTL_SEC,
+      });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-      console.error("[travel-trips] registration doc view-url error:", e.message);
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error(
+        "[travel-trips] registration doc view-url error:",
+        e.message,
+      );
       res.status(500).json({ error: "Failed to generate document URL" });
     }
   },
@@ -2203,14 +2783,18 @@ async function loadPendingRegistration(req) {
   const trip = await loadTrip(req);
   const rid = parseInt(req.params.rid, 10);
   if (!Number.isFinite(rid)) {
-    const err = new Error("rid must be a number"); err.status = 400; err.code = "INVALID_REGISTRATION_ID";
+    const err = new Error("rid must be a number");
+    err.status = 400;
+    err.code = "INVALID_REGISTRATION_ID";
     throw err;
   }
   const draft = await prisma.pendingTripRegistration.findFirst({
     where: { id: rid, tripId: trip.id, tenantId: req.travelTenant.id },
   });
   if (!draft) {
-    const err = new Error("Pending registration not found"); err.status = 404; err.code = "REGISTRATION_NOT_FOUND";
+    const err = new Error("Pending registration not found");
+    err.status = 404;
+    err.code = "REGISTRATION_NOT_FOUND";
     throw err;
   }
   return { trip, draft };
@@ -2236,9 +2820,10 @@ router.post(
           currentStatus: draft.status,
         });
       }
-      const reviewNotes = typeof req.body?.reviewNotes === "string"
-        ? req.body.reviewNotes.slice(0, 2000)
-        : null;
+      const reviewNotes =
+        typeof req.body?.reviewNotes === "string"
+          ? req.body.reviewNotes.slice(0, 2000)
+          : null;
       const reviewerId = req.user?.userId ?? null;
       const reviewerIdSafe = Number.isFinite(reviewerId) ? reviewerId : null;
 
@@ -2246,67 +2831,75 @@ router.post(
       // carry them into the TripParticipant and trigger OCR after conversion.
       let draftExtras = {};
       if (draft.extrasJson) {
-        try { draftExtras = JSON.parse(draft.extrasJson) || {}; } catch { draftExtras = {}; }
+        try {
+          draftExtras = JSON.parse(draft.extrasJson) || {};
+        } catch {
+          draftExtras = {};
+        }
       }
-      const draftDocs = (draftExtras.documents && typeof draftExtras.documents === "object")
-        ? draftExtras.documents : {};
+      const draftDocs =
+        draftExtras.documents && typeof draftExtras.documents === "object"
+          ? draftExtras.documents
+          : {};
 
       // Atomic conversion. One transaction so we never end up with a
       // half-converted draft (participant created but draft not
       // pointed at it, or vice versa). Approve writes
       // applicationStatus="approved" directly so the operator doesn't
       // have to re-approve in the Participants tab.
-            const { participant, updatedDraft } = await prisma.$transaction(async (tx) => {
-        const createdParticipant = await tx.tripParticipant.create({
-          data: {
+      const { participant, updatedDraft } = await prisma.$transaction(
+        async (tx) => {
+          const createdParticipant = await tx.tripParticipant.create({
+            data: {
+              tripId: trip.id,
+              fullName: draft.studentName,
+              parentName: draft.parentName,
+              parentEmail: draft.parentEmail,
+              parentPhone: draft.parentPhone,
+              passportNumber: draft.passportNumber,
+              passportExpiry: draft.passportExpiry,
+              consentCapturedAt: draft.otpVerifiedAt,
+              applicationStatus: "approved",
+              reviewedAt: new Date(),
+              reviewedById: reviewerIdSafe,
+              reviewNotes,
+              // NOTE: aadhaarDocKey / aadhaarDocStorage are intentionally omitted
+              // here until `prisma generate` + `prisma db push` are run after the
+              // schema change. The aadhaar scan descriptor remains accessible via
+              // PendingTripRegistration.extrasJson.documents.aadhaar (draft is kept
+              // and linked via convertedToParticipantId). Add them back once the
+              // columns exist in the live DB.
+            },
+          });
+
+          const draftUpdate = await tx.pendingTripRegistration.update({
+            where: { id: draft.id },
+            data: {
+              status: "CONVERTED",
+              convertedToParticipantId: createdParticipant.id,
+              approvedAt: new Date(),
+              approvedById: reviewerIdSafe,
+              reviewNotes: reviewNotes ?? draft.reviewNotes,
+            },
+          });
+
+          await materializeTripInstalmentsFromPlan({
+            db: tx,
             tripId: trip.id,
-            fullName: draft.studentName,
-            parentName: draft.parentName,
-            parentEmail: draft.parentEmail,
-            parentPhone: draft.parentPhone,
-            passportNumber: draft.passportNumber,
-            passportExpiry: draft.passportExpiry,
-            consentCapturedAt: draft.otpVerifiedAt,
-            applicationStatus: "approved",
-            reviewedAt: new Date(),
-            reviewedById: reviewerIdSafe,
-            reviewNotes,
-            // NOTE: aadhaarDocKey / aadhaarDocStorage are intentionally omitted
-            // here until `prisma generate` + `prisma db push` are run after the
-            // schema change. The aadhaar scan descriptor remains accessible via
-            // PendingTripRegistration.extrasJson.documents.aadhaar (draft is kept
-            // and linked via convertedToParticipantId). Add them back once the
-            // columns exist in the live DB.
-          },
-        });
+            participantIds: [createdParticipant.id],
+            allowMissingPlan: true,
+          });
 
-        const draftUpdate = await tx.pendingTripRegistration.update({
-          where: { id: draft.id },
-          data: {
-            status: "CONVERTED",
-            convertedToParticipantId: createdParticipant.id,
-            approvedAt: new Date(),
-            approvedById: reviewerIdSafe,
-            reviewNotes: reviewNotes ?? draft.reviewNotes,
-          },
-        });
+          await createDraftInvoiceForParticipant({
+            db: tx,
+            tenantId: req.travelTenant.id,
+            tripId: trip.id,
+            participantId: createdParticipant.id,
+          });
 
-        await materializeTripInstalmentsFromPlan({
-          db: tx,
-          tripId: trip.id,
-          participantIds: [createdParticipant.id],
-          allowMissingPlan: true,
-        });
-
-        await createDraftInvoiceForParticipant({
-          db: tx,
-          tenantId: req.travelTenant.id,
-          tripId: trip.id,
-          participantId: createdParticipant.id,
-        });
-
-        return { participant: createdParticipant, updatedDraft: draftUpdate };
-      });
+          return { participant: createdParticipant, updatedDraft: draftUpdate };
+        },
+      );
       res.json({ approved: true, participant, registration: updatedDraft });
       sendApprovalPaymentPortalEmail({
         tenantId: req.travelTenant.id,
@@ -2323,22 +2916,39 @@ router.post(
           try {
             const passportDescriptor = draftDocs.passport;
             const buffer = await visaDocStore.readDocBuffer(passportDescriptor);
-            const extMap = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", pdf: "application/pdf" };
-            const ext = (passportDescriptor.key || "").split(".").pop().toLowerCase();
+            const extMap = {
+              jpg: "image/jpeg",
+              jpeg: "image/jpeg",
+              png: "image/png",
+              pdf: "application/pdf",
+            };
+            const ext = (passportDescriptor.key || "")
+              .split(".")
+              .pop()
+              .toLowerCase();
             const mimeType = extMap[ext] || "image/jpeg";
             // Use travelTenant.id — trip is loaded with select:{id:true} so trip.tenantId is undefined.
             const tenantId = req.travelTenant?.id;
             let envelope;
             if (buffer) {
               try {
-                envelope = await passportOcrClient.extractPassport({ tenantId, fileBuffer: buffer, mimeType });
+                envelope = await passportOcrClient.extractPassport({
+                  tenantId,
+                  fileBuffer: buffer,
+                  mimeType,
+                });
               } catch (_ocrErr) {
                 // OCR disabled or failed — still queue the participant for manual operator review.
                 envelope = {
                   extraction: {
-                    passportNumber: null, surname: null, givenNames: null,
-                    dateOfBirth: null, sex: null, nationality: null,
-                    dateOfExpiry: null, mrz: null,
+                    passportNumber: null,
+                    surname: null,
+                    givenNames: null,
+                    dateOfBirth: null,
+                    sex: null,
+                    nationality: null,
+                    dateOfExpiry: null,
+                    mrz: null,
                   },
                   confidence: 0,
                   provider: "manual",
@@ -2350,9 +2960,14 @@ router.post(
               // File not readable (moved/deleted) — queue with empty envelope so operator is notified.
               envelope = {
                 extraction: {
-                  passportNumber: null, surname: null, givenNames: null,
-                  dateOfBirth: null, sex: null, nationality: null,
-                  dateOfExpiry: null, mrz: null,
+                  passportNumber: null,
+                  surname: null,
+                  givenNames: null,
+                  dateOfBirth: null,
+                  sex: null,
+                  nationality: null,
+                  dateOfExpiry: null,
+                  mrz: null,
                 },
                 confidence: 0,
                 provider: "manual",
@@ -2363,18 +2978,28 @@ router.post(
             await prisma.tripParticipant.update({
               where: { id: participant.id },
               data: {
-                passportExtractionJson: JSON.stringify({ ...envelope, extractedAt: new Date().toISOString() }),
+                passportExtractionJson: JSON.stringify({
+                  ...envelope,
+                  extractedAt: new Date().toISOString(),
+                }),
                 passportExtractedAt: new Date(),
               },
             });
           } catch (e) {
-            console.error("[travel-trips] post-conversion passport queue error:", e.message);
+            console.error(
+              "[travel-trips] post-conversion passport queue error:",
+              e.message,
+            );
           }
         });
       }
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-      console.error("[travel-trips] approve pending-registration error:", e.message);
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error(
+        "[travel-trips] approve pending-registration error:",
+        e.message,
+      );
       res.status(500).json({ error: "Failed to approve registration" });
     }
   },
@@ -2390,14 +3015,16 @@ router.post(
       const { draft } = await loadPendingRegistration(req);
       if (draft.status === "CONVERTED") {
         return res.status(409).json({
-          error: "cannot reject a draft that was already converted to a participant",
+          error:
+            "cannot reject a draft that was already converted to a participant",
           code: "INVALID_STATE",
           currentStatus: draft.status,
         });
       }
-      const reviewNotes = typeof req.body?.reviewNotes === "string"
-        ? req.body.reviewNotes.slice(0, 2000)
-        : null;
+      const reviewNotes =
+        typeof req.body?.reviewNotes === "string"
+          ? req.body.reviewNotes.slice(0, 2000)
+          : null;
       if (!reviewNotes?.trim()) {
         return res.status(400).json({
           error: "A rejection reason is required",
@@ -2417,8 +3044,12 @@ router.post(
       });
       res.json({ rejected: true, registration: updated });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-      console.error("[travel-trips] reject pending-registration error:", e.message);
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error(
+        "[travel-trips] reject pending-registration error:",
+        e.message,
+      );
       res.status(500).json({ error: "Failed to reject registration" });
     }
   },
@@ -2442,24 +3073,36 @@ async function loadTripAndParticipant(req) {
   const tripId = parseInt(req.params.tripId, 10);
   const participantId = parseInt(req.params.participantId, 10);
   if (!Number.isFinite(tripId)) {
-    const err = new Error("tripId must be a number"); err.status = 400; err.code = "INVALID_ID"; throw err;
+    const err = new Error("tripId must be a number");
+    err.status = 400;
+    err.code = "INVALID_ID";
+    throw err;
   }
   if (!Number.isFinite(participantId)) {
-    const err = new Error("participantId must be a number"); err.status = 400; err.code = "INVALID_PARTICIPANT_ID"; throw err;
+    const err = new Error("participantId must be a number");
+    err.status = 400;
+    err.code = "INVALID_PARTICIPANT_ID";
+    throw err;
   }
   const trip = await prisma.tmcTrip.findFirst({
     where: { id: tripId, tenantId: req.travelTenant.id },
     select: { id: true },
   });
   if (!trip) {
-    const err = new Error("Trip not found"); err.status = 404; err.code = "NOT_FOUND"; throw err;
+    const err = new Error("Trip not found");
+    err.status = 404;
+    err.code = "NOT_FOUND";
+    throw err;
   }
   const participant = await prisma.tripParticipant.findFirst({
     where: { id: participantId, tripId: trip.id },
     select: { id: true, tripId: true },
   });
   if (!participant) {
-    const err = new Error("Participant not found"); err.status = 404; err.code = "PARTICIPANT_NOT_FOUND"; throw err;
+    const err = new Error("Participant not found");
+    err.status = 404;
+    err.code = "PARTICIPANT_NOT_FOUND";
+    throw err;
   }
   return { trip, participant };
 }
@@ -2475,7 +3118,9 @@ router.post(
       const { participant } = await loadTripAndParticipant(req);
       const { redirectUri } = req.body || {};
       if (!redirectUri || typeof redirectUri !== "string") {
-        return res.status(400).json({ error: "redirectUri required", code: "MISSING_FIELDS" });
+        return res
+          .status(400)
+          .json({ error: "redirectUri required", code: "MISSING_FIELDS" });
       }
       const { state, oauthUrl } = await digilockerClient.initiateSession({
         participantId: participant.id,
@@ -2491,9 +3136,12 @@ router.post(
         },
         select: { id: true, state: true },
       });
-      res.status(200).json({ state: session.state, oauthUrl, sessionId: session.id });
+      res
+        .status(200)
+        .json({ state: session.state, oauthUrl, sessionId: session.id });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-trips] digilocker initiate error:", e.message);
       res.status(500).json({ error: "Failed to initiate DigiLocker session" });
     }
@@ -2511,24 +3159,46 @@ router.post(
       const { participant } = await loadTripAndParticipant(req);
       const { state, code } = req.body || {};
       if (!state || typeof state !== "string") {
-        return res.status(400).json({ error: "state required", code: "MISSING_FIELDS" });
+        return res
+          .status(400)
+          .json({ error: "state required", code: "MISSING_FIELDS" });
       }
       // Scope by tenant + participant so a state leaked from one tenant
       // can't be used to write Aadhaar onto another tenant's participant.
       const session = await prisma.digilockerSession.findFirst({
-        where: { state, tenantId: req.travelTenant.id, participantId: participant.id },
+        where: {
+          state,
+          tenantId: req.travelTenant.id,
+          participantId: participant.id,
+        },
       });
       if (!session) {
-        return res.status(404).json({ error: "DigiLocker session not found", code: "SESSION_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({
+            error: "DigiLocker session not found",
+            code: "SESSION_NOT_FOUND",
+          });
       }
       if (session.status === "verified") {
         // Replay protection — the state has already been consumed.
-        return res.status(409).json({ error: "DigiLocker session already verified", code: "INVALID_STATE" });
+        return res
+          .status(409)
+          .json({
+            error: "DigiLocker session already verified",
+            code: "INVALID_STATE",
+          });
       }
       if (session.status === "expired" || session.status === "failed") {
-        return res.status(410).json({ error: `DigiLocker session ${session.status}`, code: "SESSION_GONE" });
+        return res
+          .status(410)
+          .json({
+            error: `DigiLocker session ${session.status}`,
+            code: "SESSION_GONE",
+          });
       }
-      const { aadhaarLast4, aadhaarTokenId } = await digilockerClient.exchangeCallback({ state, code });
+      const { aadhaarLast4, aadhaarTokenId } =
+        await digilockerClient.exchangeCallback({ state, code });
 
       await prisma.$transaction([
         prisma.digilockerSession.update({
@@ -2550,73 +3220,101 @@ router.post(
       // token stays server-side per the route header convention.
       res.status(200).json({ verified: true, aadhaarLast4 });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-trips] digilocker callback error:", e.message);
-      res.status(500).json({ error: "Failed to complete DigiLocker verification" });
+      res
+        .status(500)
+        .json({ error: "Failed to complete DigiLocker verification" });
     }
   },
 );
 
 // ─── Document requirements ────────────────────────────────────────────
 
-router.get("/trips/:id/documents", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const trip = await loadTrip(req);
-    const rows = await prisma.tripDocumentRequirement.findMany({
-      where: { tripId: trip.id },
-      orderBy: { id: "asc" },
-    });
-    res.json({ documents: rows });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-trips] docs list error:", e.message);
-    res.status(500).json({ error: "Failed to list documents" });
-  }
-});
-
-router.post("/trips/:id/documents", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const trip = await loadTrip(req);
-    const { docType, required } = req.body || {};
-    if (!docType) {
-      return res.status(400).json({ error: "docType required", code: "MISSING_FIELDS" });
+router.get(
+  "/trips/:id/documents",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const rows = await prisma.tripDocumentRequirement.findMany({
+        where: { tripId: trip.id },
+        orderBy: { id: "asc" },
+      });
+      res.json({ documents: rows });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] docs list error:", e.message);
+      res.status(500).json({ error: "Failed to list documents" });
     }
-    const created = await prisma.tripDocumentRequirement.create({
-      data: {
-        tripId: trip.id,
-        docType: String(docType),
-        required: required !== false,
-      },
-    });
-    res.status(201).json(created);
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-trips] doc create error:", e.message);
-    res.status(500).json({ error: "Failed to create document requirement" });
-  }
-});
+  },
+);
 
-router.delete("/trips/:id/documents/:docId", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
-  try {
-    const trip = await loadTrip(req);
-    const docId = parseInt(req.params.docId, 10);
-    if (!Number.isFinite(docId)) {
-      return res.status(400).json({ error: "docId must be a number", code: "INVALID_DOC_ID" });
+router.post(
+  "/trips/:id/documents",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const { docType, required } = req.body || {};
+      if (!docType) {
+        return res
+          .status(400)
+          .json({ error: "docType required", code: "MISSING_FIELDS" });
+      }
+      const created = await prisma.tripDocumentRequirement.create({
+        data: {
+          tripId: trip.id,
+          docType: String(docType),
+          required: required !== false,
+        },
+      });
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] doc create error:", e.message);
+      res.status(500).json({ error: "Failed to create document requirement" });
     }
-    const existing = await prisma.tripDocumentRequirement.findFirst({
-      where: { id: docId, tripId: trip.id },
-    });
-    if (!existing) return res.status(404).json({ error: "Document req not found", code: "DOC_NOT_FOUND" });
-    await prisma.tripDocumentRequirement.delete({ where: { id: docId } });
-    res.json({ deleted: true, id: docId });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-trips] doc delete error:", e.message);
-    res.status(500).json({ error: "Failed to delete document requirement" });
-  }
-});
+  },
+);
+
+router.delete(
+  "/trips/:id/documents/:docId",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const docId = parseInt(req.params.docId, 10);
+      if (!Number.isFinite(docId)) {
+        return res
+          .status(400)
+          .json({ error: "docId must be a number", code: "INVALID_DOC_ID" });
+      }
+      const existing = await prisma.tripDocumentRequirement.findFirst({
+        where: { id: docId, tripId: trip.id },
+      });
+      if (!existing)
+        return res
+          .status(404)
+          .json({ error: "Document req not found", code: "DOC_NOT_FOUND" });
+      await prisma.tripDocumentRequirement.delete({ where: { id: docId } });
+      res.json({ deleted: true, id: docId });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] doc delete error:", e.message);
+      res.status(500).json({ error: "Failed to delete document requirement" });
+    }
+  },
+);
 
 module.exports = router;
-
-
-

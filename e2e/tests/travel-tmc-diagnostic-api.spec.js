@@ -11,7 +11,7 @@
  *   POST   /api/travel-tmc-catalogue/:id/promote-to-active        (T5 — ADMIN-only)
  *   POST   /api/travel/diagnostics/public/submit-tmc              (T8 — public)
  *   GET    /api/travel/diagnostics/:id                            (T8 — auth read)
- *   GET    /api/travel/diagnostics/:id/readiness-report.pdf       (T8 — public PDF)
+ *   GET    /api/travel/diagnostics/public/readiness-report/:slug.pdf (T8 — token-gated public PDF)
  *
  * Cases (≥12 per slice contract):
  *   1.  Catalogue seed verified — the 5 starter trips are present + active
@@ -471,6 +471,7 @@ test.describe('TMC diagnostic — lead quality', () => {
 
 test.describe('TMC diagnostic — readiness PDF', () => {
   let pdfDiagnosticId = null;
+  let pdfReportSlug = null;
 
   test.beforeAll(async ({ request }) => {
     // Submit one fresh diagnostic so PDF tests own their input row
@@ -482,13 +483,14 @@ test.describe('TMC diagnostic — readiness PDF', () => {
     if (sres.status() < 400) {
       const j = await sres.json();
       pdfDiagnosticId = j.diagnosticId;
+      pdfReportSlug = j.reportSlug;
       created.diagnosticIds.push(pdfDiagnosticId);
     }
   });
 
-  test('8) GET /diagnostics/:id/readiness-report.pdf → 200 + application/pdf + body', async ({ request }) => {
-    if (!pdfDiagnosticId) test.skip(true, 'submit-tmc beforeAll failed; cannot fetch PDF');
-    const res = await getPublic(request, `/api/travel/diagnostics/${pdfDiagnosticId}/readiness-report.pdf`);
+  test('8) GET /diagnostics/public/readiness-report/:slug.pdf → 200 + application/pdf + body', async ({ request }) => {
+    if (!pdfReportSlug) test.skip(true, 'submit-tmc beforeAll failed; cannot fetch PDF');
+    const res = await getPublic(request, `/api/travel/diagnostics/public/readiness-report/${pdfReportSlug}.pdf`);
     expect(res.status(), `readiness-report.pdf: ${await res.text().catch(() => '<binary>')}`).toBe(200);
     const ct = res.headers()['content-type'] || '';
     expect(ct.toLowerCase()).toContain('application/pdf');
@@ -499,8 +501,8 @@ test.describe('TMC diagnostic — readiness PDF', () => {
   });
 
   test('9) PDF body starts with %PDF- magic bytes', async ({ request }) => {
-    if (!pdfDiagnosticId) test.skip(true, 'no pdf diagnostic id');
-    const res = await getPublic(request, `/api/travel/diagnostics/${pdfDiagnosticId}/readiness-report.pdf`);
+    if (!pdfReportSlug) test.skip(true, 'no PDF report slug');
+    const res = await getPublic(request, `/api/travel/diagnostics/public/readiness-report/${pdfReportSlug}.pdf`);
     expect(res.status()).toBe(200);
     const body = await res.body();
     // PDF spec: every PDF begins with "%PDF-" header.
@@ -508,6 +510,15 @@ test.describe('TMC diagnostic — readiness PDF', () => {
     // And ends with %%EOF (allowing for trailing whitespace).
     const tail = body.slice(-32).toString('utf8');
     expect(tail.includes('%%EOF')).toBe(true);
+  });
+
+  test('9b) a guessed token for a real diagnostic id does not expose its PDF', async ({ request }) => {
+    if (!pdfDiagnosticId) test.skip(true, 'no PDF diagnostic id');
+    const res = await getPublic(
+      request,
+      `/api/travel/diagnostics/public/readiness-report/${pdfDiagnosticId}-ffffffffffffffff.pdf`,
+    );
+    expect(res.status()).toBe(404);
   });
 });
 

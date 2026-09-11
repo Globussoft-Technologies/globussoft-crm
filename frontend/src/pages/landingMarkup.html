@@ -1560,10 +1560,12 @@
                 </div>
 
                 <div class="hero-form-card reveal" id="hero-form">
-                    <!-- <h3>Try Globus CRM</h3>
-                    <p>Tell us a little about your team and we'll get you set up.</p> -->
-                    <iframe src="/embed/web-form.html?id=22"
-                        title="Globus CRM" style="width:100%;height:820px;min-height:820px;border:0;display:block;" loading="lazy"></iframe>
+                    <!-- Hero web form is injected at runtime into a CLOSED
+                    shadow root by Landing.jsx (dynamic id from
+                    /api/landing-form-config). Deliberately no static iframe
+                    here: the form link must not sit in the page markup where
+                    any visitor can read it from DevTools Elements. -->
+                    <div id="hero-form-mount"></div>
                 </div>
             </div>
 

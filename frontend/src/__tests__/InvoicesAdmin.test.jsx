@@ -136,6 +136,7 @@ function makeInvoice(overrides = {}) {
     invoiceNum: 'TINV-2026-0001',
     contactId: 42,
     quoteId: null,
+    tripId: null,
     totalAmount: 50000,
     currency: 'INR',
     status: 'Issued',
@@ -184,6 +185,7 @@ function installFetchMock({
   // sees the raw "#42" placeholder while create-modal tests can opt-in a
   // matching contact when they need to submit the form.
   contacts = [{ id: 7, name: 'Seven', email: 'seven@example.com' }],
+  trips = [{ id: 501, tripCode: 'TMC-0501', destination: 'Goa' }],
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -212,6 +214,21 @@ function installFetchMock({
       const id = Number(url.split('/').pop());
       const contact = contacts.find((c) => c.id === id);
       return Promise.resolve(contact || { id, name: null, email: null });
+    }
+    if (url.startsWith('/api/travel/trips?') && method === 'GET') {
+      const parsed = new URL(url, 'http://local.test');
+      const search = (parsed.searchParams.get('search') || '').toLowerCase();
+      const offset = Number(parsed.searchParams.get('offset') || 0);
+      const limit = Number(parsed.searchParams.get('limit') || 200);
+      const matching = search
+        ? trips.filter((trip) => `${trip.tripCode || ''} ${trip.destination || ''}`.toLowerCase().includes(search))
+        : trips;
+      return Promise.resolve({
+        trips: matching.slice(offset, offset + limit),
+        total: matching.length,
+        limit,
+        offset,
+      });
     }
     if (url.startsWith('/api/travel/invoices') && method === 'GET') {
       if (list instanceof Error) return Promise.reject(list);
@@ -505,6 +522,20 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
 });
 
 describe('<InvoicesAdmin /> â€” row rendering', () => {
+  it('renders a linked trip code as a link to the trip detail page', async () => {
+    installFetchMock({
+      list: {
+        invoices: [makeInvoice({ tripId: 501 })],
+        total: 1,
+      },
+    });
+    renderPage();
+
+    const tripLink = await screen.findByRole('link', { name: 'TMC-0501' });
+    expect(tripLink).toHaveAttribute('href', '/travel/trips/501');
+    expect(tripLink).toHaveAttribute('title', 'Goa');
+  });
+
   it('money formatting: INR totalAmount renders via formatMoney with row currency', async () => {
     renderPage();
     // formatMoney(50000, { currency: 'INR' }) under en-IN â†’ "₹50,000".
@@ -619,6 +650,121 @@ describe('<InvoicesAdmin /> â€” row rendering', () => {
 });
 
 describe('<InvoicesAdmin /> â€” new-invoice modal', () => {
+  it('includes the selected tripId in the create payload', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
+
+    fireEvent.change(await screen.findByLabelText(/^Customer$/i), { target: { value: '7' } });
+    fireEvent.change(screen.getByLabelText(/^Trip$/i), { target: { value: '501' } });
+    fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '12500.50' } });
+    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-12-31' } });
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/travel/invoices' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body)).toMatchObject({ contactId: 7, tripId: 501 });
+    });
+  });
+
+  it('preselects an existing trip while editing and sends null when it is cleared', async () => {
+    installFetchMock({
+      list: {
+        invoices: [makeInvoice({ status: 'Draft', tripId: 501 })],
+        total: 1,
+      },
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Edit invoice TINV-2026-0001/i }));
+
+    const tripSelect = await screen.findByLabelText(/^Trip$/i);
+    expect(tripSelect).toHaveValue('501');
+    fireEvent.change(tripSelect, { target: { value: '' } });
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Save Changes$/ }));
+
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/travel/invoices/101' && opts?.method === 'PUT',
+      );
+      expect(put).toBeTruthy();
+      expect(JSON.parse(put[1].body).tripId).toBeNull();
+    });
+  });
+
+  it('server-searches trips beyond the first page and submits the selected older trip', async () => {
+    const trips = Array.from({ length: 200 }, (_, index) => ({
+      id: index + 1,
+      tripCode: `TMC-${String(index + 1).padStart(4, '0')}`,
+      destination: `Recent destination ${index + 1}`,
+    }));
+    trips.push({ id: 999, tripCode: 'LEGACY-TRIP', destination: 'Older Goa departure' });
+    installFetchMock({ trips });
+
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
+    expect(screen.queryByRole('option', { name: /LEGACY-TRIP/i })).not.toBeInTheDocument();
+
+    fireEvent.change(await screen.findByLabelText(/Search trips/i), {
+      target: { value: 'legacy' },
+    });
+
+    await waitFor(() => {
+      const searchCall = fetchApiMock.mock.calls.find(([url]) => {
+        if (!url.startsWith('/api/travel/trips?')) return false;
+        return new URL(url, 'http://local.test').searchParams.get('search') === 'legacy';
+      });
+      expect(searchCall).toBeTruthy();
+    });
+    expect(await screen.findByRole('option', { name: /LEGACY-TRIP.*Older Goa/i })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^Trip$/i), { target: { value: '999' } });
+    fireEvent.change(screen.getByLabelText(/^Customer$/i), { target: { value: '7' } });
+    fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '25000' } });
+    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-12-31' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/travel/invoices' && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body).tripId).toBe(999);
+    });
+  });
+
+  it('loads the next trip page without discarding the first page', async () => {
+    const trips = Array.from({ length: 201 }, (_, index) => ({
+      id: index + 1,
+      tripCode: `TMC-${String(index + 1).padStart(4, '0')}`,
+      destination: index === 200 ? 'Oldest destination' : `Destination ${index + 1}`,
+    }));
+    installFetchMock({ trips });
+
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
+    const loadMore = await screen.findByRole('button', { name: /Load more trips/i });
+    expect(screen.getByRole('option', { name: /TMC-0001/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /TMC-0201/i })).not.toBeInTheDocument();
+
+    fireEvent.click(loadMore);
+
+    expect(await screen.findByRole('option', { name: /TMC-0201.*Oldest destination/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /TMC-0001/i })).toBeInTheDocument();
+    const pageCall = fetchApiMock.mock.calls.find(([url]) => {
+      if (!url.startsWith('/api/travel/trips?')) return false;
+      return new URL(url, 'http://local.test').searchParams.get('offset') === '200';
+    });
+    expect(pageCall).toBeTruthy();
+  });
+
   it('clicking "New Invoice" opens the form and submitting POSTs the payload', async () => {
     renderPage();
     await screen.findByText('TINV-2026-0001');

@@ -32,6 +32,7 @@ const {
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
 const { normalizeMetaLeadPayload } = require("../lib/inboundLeadVerification");
+const { hardDeleteContact } = require("../lib/contactHardDelete");
 
 const router = express.Router();
 
@@ -524,10 +525,14 @@ router.post("/leads", async (req, res) => {
     }
     if (contact) {
       if (contact.deletedAt) {
-        const restoreData = { ...contactData, ...contactFieldUpdates, externalPayloadJson, deletedAt: null };
-        if (!email) delete restoreData.email;
-        contact = await prisma.contact.update({ where: { id: contact.id }, data: restoreData });
-      } else {
+        // Legacy soft-delete rows are tombstones, not reusable accounts.
+        // Remove the old contact and its owned details, then let the normal
+        // create path issue a fresh record for this email/external ID.
+        await hardDeleteContact(prisma, contact.id);
+        contact = null;
+        deduped = false;
+      }
+      if (contact) {
         const dedupeUpdates = { externalPayloadJson };
         for (const [key, value] of Object.entries(contactFieldUpdates)) {
           if (contact[key] == null || contact[key] === "") {
@@ -544,7 +549,8 @@ router.post("/leads", async (req, res) => {
           contact = await prisma.contact.update({ where: { id: contact.id }, data: dedupeUpdates });
         }
       }
-    } else {
+    }
+    if (!contact) {
       contact = await prisma.contact.create({ data: { ...contactData, ...contactFieldUpdates, externalPayloadJson } });
     }
     if (Object.keys(storageCustomFields).length) {

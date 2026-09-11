@@ -1049,6 +1049,188 @@ export function ensureTmcFidelity(content: BrochureContent, goal: string): Broch
 
   const tmcPatch: Record<string, unknown> = {};
   const patch: Record<string, unknown> = {};
+  const text = (value: unknown): string => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const present = (value: unknown): boolean => !!text(value) && !/^(?:unknown|not specified|n\/a|na|null|none)$/i.test(text(value));
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.map(text).filter((item) => present(item)) : [];
+  const finiteNumber = (value: unknown): number | undefined => {
+    if (value === '' || value == null) return undefined;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : undefined;
+  };
+
+  // The structured CRM form is the source of truth for the deterministic
+  // renderer. Previously this backstop only restored colours and exclusions;
+  // if the composer dropped days, pricing, hotels or contacts, the emergency
+  // renderer received the same thin model output and produced a 3-4 page shell.
+  // Re-assert all customer-facing structured facts here so both the AI design
+  // brief and the deterministic renderer always receive a complete trip.
+  if (present(trip.tripTitle)) {
+    patch.title = text(trip.tripTitle);
+    tmcPatch.tripTitle = text(trip.tripTitle);
+  }
+  if (present(trip.educationalSubtitle)) {
+    patch.subtitle = text(trip.educationalSubtitle);
+    tmcPatch.educationalSubtitle = text(trip.educationalSubtitle);
+  }
+  if (present(trip.schoolName)) {
+    patch.agencyName = text(trip.schoolName);
+    tmcPatch.schoolName = text(trip.schoolName);
+  }
+  if (present(trip.coBrandingWording)) tmcPatch.coBrandingLine = text(trip.coBrandingWording);
+  if (present(trip.destinationCountry)) tmcPatch.destinationCountry = text(trip.destinationCountry);
+  if (present(trip.tripSummary)) {
+    tmcPatch.tripSummary = text(trip.tripSummary);
+    patch.intro = {
+      ...(content.intro || {}),
+      kicker: content.intro?.kicker || 'Why this journey',
+      heading: text(trip.tripTitle) || content.intro?.heading || 'The journey',
+      body: text(trip.tripSummary),
+    };
+  }
+  if (present(trip.primaryObjective)) tmcPatch.educationalPurpose = text(trip.primaryObjective);
+  const outcomes = strings(trip.learningOutcomes);
+  if (outcomes.length) tmcPatch.learningOutcomes = outcomes;
+  if (present(trip.curriculumConnection)) tmcPatch.curriculumConnection = text(trip.curriculumConnection);
+  if (present(trip.skillsDeveloped)) tmcPatch.skills = text(trip.skillsDeveloped);
+  if (present(trip.targetGrades)) tmcPatch.targetGrades = text(trip.targetGrades);
+  if (present(trip.routeCities)) {
+    tmcPatch.routeCities = text(trip.routeCities);
+    patch.routeLine = text(trip.routeCities);
+    patch.route = { ...(content.route || {}), cities: parseRouteCities(text(trip.routeCities)) };
+  }
+  const from = text(trip.travelDates?.from);
+  const to = text(trip.travelDates?.to);
+  if (from || to) tmcPatch.tripDates = [from, to].filter(Boolean).join(' - ');
+  const durationDays = finiteNumber(trip.durationDays);
+  const durationNights = finiteNumber(trip.durationNights);
+  if (durationDays != null || durationNights != null) {
+    tmcPatch.duration = [
+      durationDays != null ? `${durationDays} day${durationDays === 1 ? '' : 's'}` : '',
+      durationNights != null ? `${durationNights} night${durationNights === 1 ? '' : 's'}` : '',
+    ].filter(Boolean).join(' / ');
+  }
+  const groupParts = [
+    present(trip.expectedStudents) ? `${text(trip.expectedStudents)} students` : '',
+    present(trip.teachers) ? `${text(trip.teachers)} teachers` : '',
+    present(trip.tourManagers) ? `${text(trip.tourManagers)} tour managers` : '',
+  ].filter(Boolean);
+  if (groupParts.length) tmcPatch.group = groupParts.join(', ');
+
+  const exactDays = Array.isArray(trip.days)
+    ? trip.days
+        .map((day: any) => ({
+          dayNumber: finiteNumber(day?.dayNumber),
+          date: text(day?.date),
+          route: text(day?.route),
+          departureTime: text(day?.departureTime),
+          arrivalTime: text(day?.arrivalTime),
+          activities: text(day?.activities),
+          meals: strings(day?.meals),
+          overnightCity: text(day?.overnightCity),
+          learningTakeaway: text(day?.learningTakeaway),
+          travelDuration: text(day?.travelDuration),
+          physicalDemands: text(day?.physicalDemands),
+          optionalActivities: text(day?.optionalActivities),
+          separatePaymentItems: text(day?.separatePaymentItems),
+        }))
+        .filter((day: any) => day.dayNumber != null && day.date && day.route && day.activities && day.overnightCity)
+    : [];
+  if (exactDays.length) {
+    tmcPatch.days = exactDays;
+    patch.itinerary = {
+      ...(content.itinerary || {}),
+      days: exactDays.map((day: any) => ({
+        title: `Day ${day.dayNumber} - ${day.route}`,
+        text: [day.activities, day.meals.length ? `Meals: ${day.meals.join(', ')}` : '', day.learningTakeaway ? `Learning: ${day.learningTakeaway}` : ''].filter(Boolean).join('. '),
+      })),
+    };
+  }
+
+  if (trip.flights && typeof trip.flights === 'object' && present(trip.flights.status)) {
+    const details = ['airline', 'flightNumbers', 'departure', 'arrival', 'baggage']
+      .map((key) => text(trip.flights[key]))
+      .filter(Boolean)
+      .join(' - ');
+    tmcPatch.flights = { status: text(trip.flights.status), details };
+  }
+  const transport = [trip.airportTransfers, trip.intercityTransport, trip.localTransport, trip.railJourneys, trip.longTravelSectors]
+    .map(text).filter((item) => present(item));
+  if (transport.length) tmcPatch.transport = transport.join('. ');
+  const hotels = Array.isArray(trip.hotels)
+    ? trip.hotels
+        .map((hotel: any) => ({ name: text(hotel?.name), city: text(hotel?.city), category: text(hotel?.category), nights: finiteNumber(hotel?.nights) || 0 }))
+        .filter((hotel: any) => hotel.name && hotel.city)
+    : [];
+  if (hotels.length) tmcPatch.hotels = hotels;
+  if (present(trip.roomSharingBasis)) tmcPatch.roomSharing = text(trip.roomSharingBasis);
+  const mealParts = [
+    present(trip.breakfasts) ? `Breakfasts: ${text(trip.breakfasts)}` : '',
+    present(trip.lunches) ? `Lunches: ${text(trip.lunches)}` : '',
+    present(trip.dinners) ? `Dinners: ${text(trip.dinners)}` : '',
+    present(trip.specialMeals) ? text(trip.specialMeals) : '',
+  ].filter(Boolean);
+  if (mealParts.length) tmcPatch.meals = mealParts.join('. ');
+  if (present(trip.dietarySupport)) tmcPatch.dietarySupport = text(trip.dietarySupport);
+
+  const costStatus = trip.costStatus && typeof trip.costStatus === 'object'
+    ? Object.entries(trip.costStatus)
+        .filter(([, status]) => present(status))
+        .map(([item, status]) => ({ item, status: text(status) }))
+    : [];
+  if (costStatus.length) tmcPatch.costStatus = costStatus;
+  const safety = [trip.supervisionEmergency, trip.accessibilityNeeds, trip.curfewRules].map(text).filter((item) => present(item));
+  if (safety.length) tmcPatch.safety = safety;
+  const documents = [trip.passportVisa, trip.consentForms, trip.insuranceDetails, trip.passportCustody].map(text).filter((item) => present(item));
+  if (documents.length) tmcPatch.documents = documents;
+
+  const perPerson = finiteNumber(trip.pricePerPerson);
+  if (perPerson != null) {
+    tmcPatch.price = {
+      currency: text(trip.currency) || 'INR',
+      perPerson,
+      basis: text(trip.occupancyBasis),
+      ...(finiteNumber(trip.singleSupplement) != null ? { singleSupplement: finiteNumber(trip.singleSupplement) } : {}),
+      ...(finiteNumber(trip.studentPrice) != null ? { student: finiteNumber(trip.studentPrice) } : {}),
+      ...(finiteNumber(trip.teacherPrice) != null ? { teacher: finiteNumber(trip.teacherPrice) } : {}),
+      ...(present(trip.taxesIncluded) ? { taxesIncluded: text(trip.taxesIncluded) } : {}),
+      ...(present(trip.taxesExcluded) ? { taxesExcluded: text(trip.taxesExcluded) } : {}),
+      ...(present(trip.priceValidity) ? { validity: text(trip.priceValidity) } : {}),
+      ...(finiteNumber(trip.minPayingGroup) != null ? { minGroup: finiteNumber(trip.minPayingGroup) } : {}),
+    };
+  }
+  const depositAmount = finiteNumber(trip.deposit?.amount);
+  if (depositAmount != null && present(trip.deposit?.dueDate)) tmcPatch.deposit = { amount: depositAmount, dueDate: text(trip.deposit.dueDate) };
+  const instalments = Array.isArray(trip.instalments)
+    ? trip.instalments.map((row: any) => ({ amount: finiteNumber(row?.amount), dueDate: text(row?.dueDate) })).filter((row: any) => row.amount != null && row.dueDate)
+    : [];
+  if (instalments.length) tmcPatch.instalments = instalments;
+  if (present(trip.finalPaymentDate)) tmcPatch.finalPaymentDate = text(trip.finalPaymentDate);
+  if (present(trip.bookingDeadline)) tmcPatch.bookingDeadline = text(trip.bookingDeadline);
+  if (present(trip.cancellationTerms)) tmcPatch.cancellation = text(trip.cancellationTerms);
+  if (present(trip.paymentLink) && trip.paymentLinkApproved === true) {
+    tmcPatch.payment = {
+      link: text(trip.paymentLink), buttonLabel: text(trip.paymentButtonLabel) || 'Make payment',
+      qr: trip.paymentQr === true, approved: true,
+      ...(present(trip.paymentLinkExpiry) ? { expiry: text(trip.paymentLinkExpiry) } : {}),
+      ...(present(trip.paymentInstructions) ? { instructions: text(trip.paymentInstructions) } : {}),
+    };
+  }
+  const contacts = { phone: text(trip.primaryPhone), email: text(trip.email), website: text(trip.website) } as Record<string, string>;
+  for (const key of ['whatsapp', 'youtube', 'facebook', 'instagram']) {
+    if (present(trip[key])) contacts[key] = text(trip[key]);
+  }
+  if (contacts.phone || contacts.email || contacts.website) tmcPatch.contacts = contacts;
+  if (present(trip.callToAction) || contacts.phone || contacts.email || contacts.website) {
+    patch.footer = {
+      ...(content.footer || {}),
+      ...(present(trip.callToAction) ? { cta: text(trip.callToAction) } : {}),
+      contactLines: [contacts.phone, contacts.email, contacts.website].filter(Boolean),
+      ...(present(trip.generalQrUrl) ? { qrData: text(trip.generalQrUrl) } : {}),
+    };
+  }
+  if (present(trip.themeMode)) tmcPatch.themeMode = text(trip.themeMode);
+  if (present(trip.travelSeason)) tmcPatch.travelSeason = text(trip.travelSeason);
 
   // Manual colour palette is a direct, unambiguous operator choice made in
   // the UI — never let the composer's own destination-derived guess silently
@@ -4662,6 +4844,23 @@ async function buildTmcFontFaces(): Promise<string> {
   }
 }
 
+let bundledTmcLogoCache: string | undefined;
+async function bundledTmcLogo(): Promise<string> {
+  if (bundledTmcLogoCache !== undefined) return bundledTmcLogoCache;
+  try {
+    const logoPath = path.resolve(
+      __tmcRenderDir,
+      '..', '..', '..', '..', '..',
+      'frontend', 'public', 'tmc-logo.png',
+    );
+    const bytes = await readFile(logoPath);
+    bundledTmcLogoCache = `data:image/png;base64,${bytes.toString('base64')}`;
+  } catch {
+    bundledTmcLogoCache = '';
+  }
+  return bundledTmcLogoCache;
+}
+
 // The "Theme mode: Auto/Manual" step's 5-colour grid (primary/secondary/
 // accent/background/text) used to be able to override the accent here too —
 // but that's a SECOND, easy-to-forget accent control fighting with the
@@ -5842,6 +6041,15 @@ function buildTmcDesignBrief(
     schoolLogoPlacement?: { x: number; y: number; scale: number };
   },
 ): { brief: string; tokenMap: Record<string, string> } {
+  // Logo bytes are supplied through asset tokens below, never as prompt data.
+  // sourceControl is an internal QA/release structure and is intentionally kept
+  // away from the art director so it cannot leak into parent-facing copy.
+  const {
+    schoolLogoUrl: _schoolLogoUrl,
+    tmcLogoUrl: _tmcLogoUrl,
+    sourceControl: _sourceControl,
+    ...designTmc
+  } = c.tmc || {};
   const blockTwoData = {
     title: c.title,
     subtitle: c.subtitle,
@@ -5849,12 +6057,14 @@ function buildTmcDesignBrief(
     coBrandLine: tmcCoBrandLine(c),
     intro: c.intro,
     highlights: c.highlights,
-    tmc: c.tmc,
+    tmc: designTmc,
     route: c.route,
     inclusions: c.inclusions,
     exclusions: c.exclusions,
     footer: c.footer,
   };
+  const itineraryDayCount = c.tmc?.days?.length || 0;
+  const minimumItineraryPages = Math.max(1, Math.ceil(itineraryDayCount / 2));
 
   // ASSET_TOKENS — real asset URLs (Pexels/Unsplash photos, Geoapify maps,
   // goQR codes) commonly run 100-250+ characters with hashes/query strings.
@@ -5878,7 +6088,9 @@ function buildTmcDesignBrief(
   if (assets.schoolLogo) tokenMap.LOGO_SCHOOL = assets.schoolLogo;
 
   const logoLine = (label: string, token: string, url: string, placement?: { x: number; y: number; scale: number }) => {
-    if (!url) return `- ${label}: (not supplied — omit gracefully)`;
+    // Do not put customer-hostile missing-data wording in the model's context:
+    // smaller models tend to echo source instructions as brochure copy.
+    if (!url) return `- ${label}: no asset is available for this slot; leave this element out.`;
     const base = `- ${label}: use src="${token}" exactly`;
     if (!placement) return `${base} — position/size at your own creative judgement (balanced with the other logo).`;
     return `${base} — the operator has FIXED this logo's placement: horizontal position ${Math.round(placement.x * 100)}% across the cover, vertical position ${Math.round(placement.y * 100)}% down the cover, at ${Math.round(placement.scale * 100)}% of the default size. Honor this position and size exactly; you still choose everything else about how it's framed (panel, spacing, safe zone).`;
@@ -5886,10 +6098,12 @@ function buildTmcDesignBrief(
 
   const brief = `${TMC_BLOCK1_SYSTEM_PROMPT}
 
+MANDATORY TRIP-SPECIFIC PAGE BUDGET: this trip has ${itineraryDayCount} supplied days. Create at least ${minimumItineraryPages} itinerary pages and place no more than TWO Day cards on any page, without exceptions. The overview gets one short introduction, at most four compact learning outcomes, and at most two other modules. Split everything else onto additional A4 page shells.
+
 ---
 
 TRIP BRIEF (Block 2 — the structured data for this specific trip, as JSON):
-${JSON.stringify(blockTwoData, null, 2)}
+${JSON.stringify(blockTwoData)}
 
 REAL ASSETS AVAILABLE FOR THIS BROCHURE — CRITICAL: use each EXACT token below as the entire \`src\` attribute of an <img> tag (e.g. <img src="HERO_PHOTO">). These tokens are placeholders a build step swaps for the real, working image automatically. NEVER write a real http(s) URL yourself for any image, logo, map, or QR code — you have no way to fetch/verify one, and typing one out risks a broken image. Only use the exact tokens listed:
 ${photoLines.join('\n') || '(no photos or map were resolved for this trip)'}
@@ -5909,6 +6123,8 @@ BASE PRODUCTION REQUIREMENTS:
 3. Nothing overlaps — check every element's real position before finalizing.
 4. Curate the supplied photo library freely; use only the images that strengthen the design. Each photo token may be used AT MOST ONCE across the whole document — never place the same image (even cropped or resized) on two different pages; that reads as a mistake, not a callback. Never draw a decorative image frame, panel or placeholder box that ends up with no photo inside it — either put a real supplied photo in every frame you create, or don't create the frame.
 5. Prices, dates, facts, and both logos are exactly as supplied — never invented, never altered.
+5a. When ROUTE_MAP_IMAGE is available, use that exact asset for the route-map page. It is the only approved geographic map: never draw a speculative map, use a world or continent view, or add route pins beyond the approved itinerary.
+5b. Unknown information is omitted completely. Do not expose internal data-completeness status, release workflow, editorial process, or explanations of factual gaps in the customer brochure.
 6. When two cards/panels sit side by side (a stat card next to a text card, an outcomes list next to a duration card, etc.), do not force them to equal height and leave the shorter one's remainder as visible dead space. Either let each card size to its own natural content height (tops aligned, bottom edges free to differ), or deliberately fill the shorter card with more generous type/line-height/padding proportional to ITS OWN content so it reads as intentionally spacious — never an arbitrary blank gap at the bottom of an otherwise-finished card.
 7. Any co-branding lockup that places two logos together (cover masthead, header strips) must size its container tightly around the logos plus real breathing room — never a wide bar with the two logos stranded at opposite edges and a large empty gap between them.
 8. The two identity marks (TMC and school logo) must NEVER touch or overlap each other anywhere — on the cover, on an interior running-mark header, wherever they appear together. Give them an explicit, generous horizontal gap (a real measured margin, not marks butted together relying on rounding to keep them apart) — this is checked geometrically and a design with overlapping marks will be rejected outright, no exceptions.
@@ -5937,6 +6153,14 @@ The only non-creative constraints are production truths: preserve supplied facts
 
 SELF-CHECK BEFORE YOU FINALIZE (silent — do not print this checklist, just apply it): the single most common defect in this brochure is one page's content quietly growing taller than 297mm and getting clipped — every page with more than roughly two dense boxes/cards, a full list of 6+ items, or two stacked paragraphs is worth a second look. For each such page, mentally stack its actual content — box padding, heading height, every line of every list item at ~10.5–11pt with realistic line-height, image heights — against the ~260mm of usable height inside a 210×297mm page with your own margins. If a page reads tight, don't gamble on it fitting: split it into two pages, drop the density (smaller type only down to the 10.5pt floor, tighter but still-safe spacing), or move a card to a lighter neighbouring page. A slightly plainer page that is guaranteed to fit beats a denser one that risks being cut off mid-sentence.
 
+NON-NEGOTIABLE A4 PAGINATION CONTRACT — this is a production constraint, not an aesthetic recipe:
+- Make every printed page a direct body child with an explicit 210mm by 297mm A4 page shell, \`break-after:page\`, \`overflow:hidden\`, and internal safe-area padding. Never let a page's natural height grow beyond 297mm.
+- Plan the page count from the itinerary BEFORE writing HTML. Use one cover and one overview; then use itinerary pages with no more than TWO detailed day cards per page (three only when every card is genuinely short). An eight-day itinerary therefore needs at least four itinerary pages. Add pages freely; a 10–12 page brochure is correct when the supplied facts require it.
+- A detailed day card means its date, route, activity bullets, meals, overnight city and learning takeaway. It must stay together; do not place three or four detailed cards in a single A4 page, and never put all days in one itinerary page.
+- Overview pages: one short introduction, at most six compact learning outcomes, and at most two other content modules. Route-map pages: one map and at most two concise supporting modules. Practical-information pages: distribute long lists across separate pages rather than stacking every logistics category into one page.
+- If a module would not fit, start a fresh A4 page with the same visual system. Do not use a smaller body font than 10.5pt, CSS scale/zoom, negative margins, absolute positioning of normal text, or clipped scrollable areas to make it fit.
+- Before returning HTML, count each page's cards, text blocks, and image heights against its safe area. Splitting is always preferable to risking even 1mm of overflow.
+
 Now design and produce the complete brochure. Return ONLY one complete, self-contained HTML document — starting with <!DOCTYPE html>, ending with </html>. No markdown code fences and no commentary.`;
 
   return { brief, tokenMap };
@@ -5956,6 +6180,7 @@ function guardDesignedHtml(
   fontCss: string,
   logos: { tmcLogo: string; schoolLogo: string; coBrandLine: string },
   tokenMap: Record<string, string> = {},
+  requiredDayNumbers: number[] = [],
 ): string {
   let html = String(raw ?? '').trim();
   // Strip a ```html ... ``` fence if the model wrapped its output despite instructions.
@@ -5964,6 +6189,36 @@ function guardDesignedHtml(
 
   if (html.length < 500 || !/<body[\s>]/i.test(html) || !/<\/html>/i.test(html)) {
     throw new Error('Designed HTML failed sanity check (too short or malformed)');
+  }
+
+  // The brochure is customer-facing. A model must never turn missing source
+  // fields into an operator checklist, a release-gate, or an explanation of
+  // the data it was not given. Those are useful internal diagnostics, but
+  // they are actively harmful in a PDF sent to parents and schools. Reject
+  // the composition so the retry can omit the module; the deterministic
+  // renderer follows the same omission rule.
+  const visibleCopy = html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Keep this list narrowly focused on unmistakable operator/release-note
+  // language.  Ordinary customer-facing headings such as "What is currently
+  // confirmed" are valid brochure copy and must not trigger a fallback.
+  const internalCopy = /\b(?:editorial\s+note\s+(?:on|for)\s+accuracy|approved\s+brief|source\s+(?:data|material)|before\s+release\s+to\s+families|travel\s+planning\s+note|(?:data|details?|information|fields?)\s+(?:was|were|is|are)\s+not\s+(?:supplied|provided|approved|given|available)|not\s+(?:supplied|provided|approved|given|available)\s+(?:in|by|on|for|the)|to\s+be\s+added\s+only\s+when\s+supplied|(?:pending|final)\s+(?:confirmation|approval|release)|internal\s+(?:note|workflow|process)|source\s+control)\b/i;
+  if (internalCopy.test(visibleCopy)) {
+    throw new Error('Designed HTML included internal missing-data or release-note copy; omit unknown modules instead');
+  }
+  // A full day-by-day brief must remain a day-by-day brochure. The previous
+  // AI composition replaced supplied days with generic "stay" summaries,
+  // which hid the actual itinerary parents need to review. We intentionally
+  // validate the visible labels (not a model-specific CSS class) so creative
+  // layout remains free while every approved day remains represented.
+  const missingDays = requiredDayNumbers.filter((day) => !new RegExp(`\\bday\\s*${day}\\b`, 'i').test(visibleCopy));
+  if (missingDays.length) {
+    throw new Error(`Designed HTML omitted itinerary day labels: ${missingDays.map((day) => `Day ${day}`).join(', ')}`);
   }
   // Guard against a raw JS-object-serialization artifact leaking into visible
   // copy — it means the model was handed (or itself produced) an object where
@@ -5979,6 +6234,14 @@ function guardDesignedHtml(
   const visualTokens = ['HERO_PHOTO', 'ROUTE_MAP_IMAGE'].filter((token) => tokenMap[token]);
   for (const token of visualTokens) {
     const asImage = new RegExp(`<img\\b[^>]*\\bsrc=["']${token}["']`, 'i').test(html);
+    // A supplied route-map asset comes from the approved route coordinates.
+    // It is not interchangeable with a decorative world map: omitting it let
+    // a model place Goa on a Europe/Africa map with invented connecting lines.
+    // Retry (and ultimately use the deterministic page) rather than publish
+    // misleading geographic information.
+    if (token === 'ROUTE_MAP_IMAGE' && !asImage) {
+      throw new Error('Designed HTML omitted the approved ROUTE_MAP_IMAGE; do not invent a geographic route map');
+    }
     // Asset placement is a creative choice. Some otherwise valid model
     // responses omit a supplied photo/map token (especially smaller models),
     // and treating that as fatal caused every retry to fall through to the
@@ -6016,9 +6279,13 @@ function guardDesignedHtml(
   // badge; the deterministic interior header/footer identity marks remain.
   html = html.replace(/<[^>]*class=["'][^"']*cobrand[^"']*["'][^>]*>[\s\S]*?<\/[^>]+>/gi, '');
 
-  const hasBothLogos =
-    (!logos.tmcLogo || html.includes(logos.tmcLogo)) &&
-    (!logos.schoolLogo || html.includes(logos.schoolLogo));
+  // A URL occurring in CSS, an HTML comment, or a hidden image does not mean
+  // the mark is visible. Only a real <img src> satisfies the co-branding
+  // contract. This makes the fixed print-safe lockup a reliable backstop when
+  // the model uses one logo decoratively and silently drops the other.
+  const hasVisibleLogo = (url: string) =>
+    !url || html.includes(`src="${url}"`) || html.includes(`src='${url}'`);
+  const hasBothLogos = hasVisibleLogo(logos.tmcLogo) && hasVisibleLogo(logos.schoolLogo);
   if (!hasBothLogos && (logos.tmcLogo || logos.schoolLogo)) {
     // Safety net: the co-branding requirement can never silently vanish just
     // because the model's layout dropped a logo — append a guaranteed strip.
@@ -6044,6 +6311,14 @@ async function buildTmcBrochureHtml(
 ): Promise<string> {
   const c = content;
   c.__mode = tpl.cover;
+  // The official TMC mark is part of the product, not generated content. If a
+  // selected historical Brand Kit logo was rejected/missing, load the bundled
+  // mark inside the subprocess (rather than bloating BROCHURE_BRIEF with another
+  // base64 image). Both AI and deterministic layouts then share the same logo.
+  if (!c.__brand?.logoUrl) {
+    const fallbackTmcLogo = await bundledTmcLogo();
+    if (fallbackTmcLogo) c.__brand = { ...(c.__brand || {}), logoUrl: fallbackTmcLogo };
+  }
   const accent = tmcAccent(c);
   const brandCyan = TMC_CYAN;
 
@@ -6163,17 +6438,15 @@ async function buildTmcBrochureHtml(
 
   // ---- Hybrid AI-design step (optional) ----
   // Facts and assets are resolved deterministically, but the AI owns the full
-  // art direction and composition. A technically invalid first design gets
-  // one from-scratch retry with the exact print-preflight defects; only two
-  // failed attempts reach the emergency deterministic fallback.
+  // art direction and composition. The first design gets a deterministic
+  // overflow-salvage pass; if it is still invalid, use the reliable template
+  // instead of spending the run budget on another full HTML generation.
   if (designHtml) {
     const tmcLogo = tmcTmcLogo(c);
     const schoolLogo = tmcSchoolLogo(c);
-    // 4 attempts (was 3): the deterministic overflow-salvage pass tried inside
-    // the loop below resolves most overflow failures without ever needing this
-    // budget, so the extra attempt is cheap insurance for whatever the salvage
-    // pass can't fix (a genuinely different defect each time, say).
-    const maxAttempts = 2;
+    // Keep the paid art-direction pass bounded. This leaves time for preflight
+    // and PDF export even on slower reasoning models.
+    const maxAttempts = 1;
     try {
       const { brief, tokenMap } = buildTmcDesignBrief(c, {
         heroUrl, overviewPhotos, extraPhotos, mapUrl, generalQrUrl, paymentQrUrl, tmcLogo, schoolLogo,
@@ -6190,6 +6463,9 @@ async function buildTmcBrochureHtml(
             fontCss,
             { tmcLogo, schoolLogo, coBrandLine: tmcCoBrandLine(c) },
             tokenMap,
+            (c.tmc?.days || [])
+              .map((day) => Number(day.dayNumber))
+              .filter((day) => Number.isInteger(day) && day > 0),
           );
           if (designAudit) {
             const audit = await designAudit(designed, {
@@ -6240,6 +6516,17 @@ async function buildTmcBrochureHtml(
           }
           if (/logo_used_as_hero_artwork|logo_used_as_background/.test(msg)) {
             notes.push('A logo was used as oversized hero art or a background image — logos stay small, identity-mark sized, never stretched into decorative photography.');
+          }
+          if (/internal missing-data or release-note copy/.test(msg)) {
+            notes.push(
+              'This is a parent-facing brochure, not an operations handoff. Remove the entire card, paragraph, heading, or page that explains a missing field, a source/approval process, a release condition, or an editorial caveat. Do not replace it with a softer disclaimer: retain only confirmed customer-facing facts and reflow the remaining layout.',
+            );
+          }
+          if (/omitted itinerary day labels/.test(msg)) {
+            notes.push('Represent every supplied day as a clearly labelled Day N card or section. Do not collapse days into unnamed stays, route summaries, or a generic programme overview.');
+          }
+          if (/omitted the approved ROUTE_MAP_IMAGE/.test(msg)) {
+            notes.push('Use the supplied ROUTE_MAP_IMAGE as an actual <img> on the route page. Never substitute a world map, continent map, decorative linework, or an invented geographic illustration.');
           }
           attemptBrief = `${brief}\n\nREDESIGN REQUIRED AFTER PRINT PREFLIGHT\nThe previous composition was rejected for these production defects: ${msg}\nThis exact failure has already happened on a prior attempt, so a generic re-roll is unlikely to fix it on its own. ${notes.join(' ')} Start the design again from a blank canvas; keep full creative freedom and the same factual content everywhere else, but correct every listed defect this time. Return a complete replacement HTML document only; do not patch or explain the previous attempt.`;
         }

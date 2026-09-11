@@ -3689,6 +3689,7 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   try {
     curriculumFit = diagnostic.curriculumFitJson ? JSON.parse(diagnostic.curriculumFitJson) : null;
   } catch { /* ignore a malformed cache; omit the section */ }
+  const unifiedRecommendations = Array.isArray(opts.recommendations) ? opts.recommendations : null;
 
   function renderCurriculumRecommendationCard(rec, recIdx) {
     const destination = rec.destination || "Destination";
@@ -3751,7 +3752,8 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   if (
     curriculumFit &&
     Array.isArray(curriculumFit.recommendations) &&
-    curriculumFit.recommendations.length
+    curriculumFit.recommendations.length &&
+    !unifiedRecommendations
   ) {
     // Reserve only what the section header itself needs (~90pt), not a
     // guess sized for header+first-card together — over-reserving here
@@ -3839,8 +3841,8 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     doc.y = barY + barH + 10;
   }
 
-  if (ragResult && ragResult.recommendations) {
-    const recs = ragResult.recommendations;
+  if ((ragResult && ragResult.recommendations) || unifiedRecommendations?.length) {
+    const recs = ragResult?.recommendations || {};
     // Fixed safety ceiling (not the live admin-configured topK — see
     // diagnosticRecommendationSettings.js) at render time too, not just at
     // generation time in travelRag.js: a diagnostic scored before that cap
@@ -3848,7 +3850,7 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     // row with more entries than any sane topK, and re-rendering its PDF
     // must not surface them all. A legitimately larger admin-chosen topK
     // (up to MAX_TOP_K) must NOT be re-capped down to a hardcoded 10 here.
-    const trips = (Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : [])
+    const trips = (unifiedRecommendations || (Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : []))
       .slice(0, MAX_RECOMMENDATIONS_SAFETY_CAP);
 
     // Resolve the customer-facing 1-4 readiness level + name. Prefer the
@@ -3880,10 +3882,10 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
       ensureAnswerSpace(readinessLevel ? 150 : 90);
       doc.moveDown(0.6);
       doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
-        .text("CURRICULUM ALIGNMENT RECOMMENDATIONS", pageMargin, doc.y, { characterSpacing: 1.4 });
+        .text(unifiedRecommendations ? "RECOMMENDED TRIPS" : "CURRICULUM ALIGNMENT RECOMMENDATIONS", pageMargin, doc.y, { characterSpacing: 1.4 });
       doc.y += 10;
       doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark)
-        .text("Curriculum alignment recommendations", pageMargin, doc.y);
+        .text(unifiedRecommendations ? "Recommended trips for your school" : "Curriculum alignment recommendations", pageMargin, doc.y);
       doc.y += 8;
 
       if (readinessLevel) {
@@ -3988,14 +3990,16 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
       let lastCategory = null;
       trips.forEach((trip, tIdx) => {
         const category = String(trip.category || 'Other').trim() || 'Other';
+        const measured = measureTripCard(trip, tIdx);
         if (category !== lastCategory) {
-          ensureAnswerSpace(28);
+          // Keep a category heading with its first card. Measuring them as
+          // one block prevents an orphaned heading at the foot of a page.
+          ensureAnswerSpace(16 + measured.cardH + 8);
           doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
             .text(category, pageMargin, doc.y, { characterSpacing: 0.4, lineBreak: false });
           doc.y += 16;
           lastCategory = category;
         }
-        const measured = measureTripCard(trip, tIdx);
         ensureAnswerSpace(measured.cardH + 8);
         const rowTop = doc.y;
         drawTripCard(trip, tIdx, pageMargin, rowTop, contentW, measured.cardH, measured);

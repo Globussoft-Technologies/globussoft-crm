@@ -171,6 +171,27 @@ function mergeContent(defaults, overrides) {
   return out;
 }
 
+function applyTmcParentRegistrationUrl(content, registrationUrl) {
+  if (!registrationUrl || !content || typeof content !== 'object') return content;
+  let next;
+  try {
+    next = JSON.parse(JSON.stringify(content));
+  } catch (_err) {
+    next = { ...content };
+  }
+  const setCta = (section) => {
+    if (next[section] && typeof next[section] === 'object') next[section].ctaHref = registrationUrl;
+  };
+  ['nav', 'hero', 'countdown', 'intro', 'safety', 'finalCta', 'details'].forEach(setCta);
+  ['programme', 'cultural', 'investment', 'highlights'].forEach((section) => {
+    if (next[section]?.cta && typeof next[section].cta === 'object') next[section].cta.ctaHref = registrationUrl;
+    if (next[section]?.banner && typeof next[section].banner === 'object') next[section].banner.ctaHref = registrationUrl;
+  });
+  if (next.floatingCta && typeof next.floatingCta === 'object') next.floatingCta.href = registrationUrl;
+  next._tmcParentRegistrationUrl = registrationUrl;
+  return next;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // SECTION RENDERERS
 // Each takes (content, theme) → htmlString. They DELIBERATELY do not
@@ -701,7 +722,8 @@ function renderRegistration(content /*, theme */) {
             data-tenant-slug="${tenantSlug}"
             data-sub-brand="${subBrand}"
             data-lead-source="${leadSource}"
-            data-page-slug="${slug}">
+            data-page-slug="${slug}"
+            ${content._tmcParentRegistrationUrl ? `data-tmc-parent-url="${escapeHtml(content._tmcParentRegistrationUrl)}"` : ''}>
         <div class="t-form-progress" aria-label="Step 1 of 3">
           <span class="t-form-bar t-form-bar-active" data-step="1"></span>
           <span class="t-form-bar" data-step="2"></span>
@@ -1082,7 +1104,13 @@ function renderInlineScripts() {
       };
       var submitBtn=regForm.querySelector('button[type=submit]');
       if(submitBtn){submitBtn.disabled=true;submitBtn.textContent='Submitting…';}
-      fetch('/api/travel/inbound/leads/web_form',{
+      var submitRequest = regForm.dataset.tmcParentUrl
+        ? fetch('/p/'+(regForm.dataset.pageSlug||'')+'/submit',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(data),
+          })
+        : fetch('/api/travel/inbound/leads/web_form',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(body),
@@ -1092,9 +1120,15 @@ function renderInlineScripts() {
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify(data),
         });
-      }).finally(function(){
+      });
+      submitRequest.then(function(response){return response.json().catch(function(){return {};});}).then(function(result){
+        var redirect = result && result.redirect;
+        if(result && result.successRedirectUrl){window.location.assign(result.successRedirectUrl);return;}
+        if(redirect && redirect.type === 'customer-registration' && redirect.url){window.location.assign(redirect.url);return;}
         regForm.style.display='none';
         if(success)success.style.display='block';
+      }).catch(function(){
+        if(submitBtn){submitBtn.disabled=false;submitBtn.textContent='Submit Registration';}
       });
     });
   }
@@ -1179,7 +1213,8 @@ function renderTemplatePage(landingPage, defaultContent, theme, options = {}) {
   } else if (raw == null || Array.isArray(raw) || typeof raw !== 'object') {
     raw = {};
   }
-  const content = mergeContent(defaultContent, raw);
+  let content = mergeContent(defaultContent, raw);
+  content = applyTmcParentRegistrationUrl(content, options.tmcParentRegistrationUrl);
   content._slug = lp.slug || '';
   content._preview = previewMode;
 

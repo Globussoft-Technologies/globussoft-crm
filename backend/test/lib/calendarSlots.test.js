@@ -33,6 +33,9 @@ describe('parseSlotWindow', () => {
     const w = parseSlotWindow({ date: '2999-01-15', startHour: 9, endHour: 18, durationMins: 60, tzOffsetMins: 0 });
     expect(w.error).toBeUndefined();
     expect(w.durationMins).toBe(60);
+    expect(w.startHour).toBe(9);
+    expect(w.endHour).toBe(18);
+    expect(w.tzOffsetMins).toBe(0);
     expect(new Date(w.windowStartMs).toISOString()).toBe('2999-01-15T09:00:00.000Z');
     expect(new Date(w.windowEndMs).toISOString()).toBe('2999-01-15T18:00:00.000Z');
   });

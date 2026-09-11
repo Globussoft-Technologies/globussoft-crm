@@ -12,8 +12,41 @@ const prisma = require("../lib/prisma");
 const { parseSlotWindow, freeSlots } = require("../lib/calendarSlots");
 const zoomClient = require("../services/zoomClient");
 
-function includesBirthdayText(value) {
-  return /birthday/i.test(String(value || ""));
+function isAllDayCalendarEvent(event) {
+  if (event?.allDay === true || event?.allDay === "true") return true;
+  if (event?.start?.date && event?.end?.date) return true;
+
+  const start = new Date(event?.startTime);
+  const end = new Date(event?.endTime);
+  const dayMs = 24 * 60 * 60 * 1000;
+  return Number.isFinite(start.getTime()) &&
+    Number.isFinite(end.getTime()) &&
+    end > start &&
+    start.getUTCHours() === 0 &&
+    start.getUTCMinutes() === 0 &&
+    start.getUTCSeconds() === 0 &&
+    end.getUTCHours() === 0 &&
+    end.getUTCMinutes() === 0 &&
+    end.getUTCSeconds() === 0 &&
+    (end.getTime() - start.getTime()) % dayMs === 0;
+}
+
+function isBirthdayCalendarEvent(event) {
+  if (!isAllDayCalendarEvent(event)) return false;
+
+  const explicitType = String(
+    event?.crmEventType ||
+    event?.eventType ||
+    event?.extendedProperties?.private?.globusEventType ||
+    "",
+  ).toLowerCase();
+  if (explicitType === "birthday") return true;
+
+  // Backward compatibility for birthdays created before explicit markers were
+  // added. Keep this deliberately strict so "Birthday event planning" and
+  // similar real events continue to block availability.
+  const description = String(event?.description || "").trim();
+  return /^birthday$/i.test(description);
 }
 
 const GOOGLE_CLIENT_ID =
@@ -415,6 +448,7 @@ router.post("/events", verifyToken, async (req, res) => {
       conferencing,
       allDay,
       recurrence,
+      crmEventType,
     } = req.body || {};
     const wantsAllDay = allDay === true || allDay === "true";
     if (wantsAllDay ? (!title || !startDate) : (!title || !startTime || !endTime)) {
@@ -443,9 +477,12 @@ router.post("/events", verifyToken, async (req, res) => {
     // No-op when Zoom creds are absent (zoomClient.createMeeting returns null).
     const wantsZoom =
       createZoom === true || createZoom === "true" || conferencing === "zoom";
-    const isBirthdayLikeEvent =
-      wantsAllDay &&
-      includesBirthdayText(`${String(title || "")} ${String(description || "")}`);
+    const isBirthdayLikeEvent = isBirthdayCalendarEvent({
+      allDay: wantsAllDay,
+      title,
+      description,
+      crmEventType,
+    });
 
     const formatDateKey = (date) => {
       const d = date instanceof Date ? date : new Date(date);
@@ -529,10 +566,12 @@ router.post("/events", verifyToken, async (req, res) => {
         select: {
           title: true,
           description: true,
+          startTime: true,
+          endTime: true,
         },
       });
       const conflictingEvent = overlappingEvents.find(
-        (event) => !includesBirthdayText(`${event?.title || ""} ${event?.description || ""}`),
+        (event) => !isBirthdayCalendarEvent(event),
       );
       if (conflictingEvent) {
         return res
@@ -596,6 +635,9 @@ router.post("/events", verifyToken, async (req, res) => {
       }
       if (isBirthdayLikeEvent) {
         requestBody.transparency = "transparent";
+        requestBody.extendedProperties = {
+          private: { globusEventType: "birthday" },
+        };
       }
     } else {
       requestBody.start = { dateTime: new Date(startTime).toISOString() };
@@ -756,6 +798,7 @@ router.get("/slots", verifyToken, async (req, res) => {
     // the busy set before calculating meeting slots. Real meetings remain
     // blocking.
     let birthdayBusy = [];
+    let nonBirthdayBusy = [];
     try {
       const birthdayEvents = await calendar.events.list({
         calendarId: calId,
@@ -764,23 +807,39 @@ router.get("/slots", verifyToken, async (req, res) => {
         singleEvents: true,
         showDeleted: false,
         maxResults: 2500,
-        fields: "items(summary,description,start,end)",
+        fields: "items(summary,description,eventType,extendedProperties,status,transparency,attendees(self,responseStatus),start,end)",
       });
-      birthdayBusy = (birthdayEvents?.data?.items || [])
+      const listedEvents = birthdayEvents?.data?.items || [];
+      const toInterval = (event) => ({
+        start: new Date(event.start?.dateTime || event.start?.date).getTime(),
+        end: new Date(event.end?.dateTime || event.end?.date).getTime(),
+      });
+      birthdayBusy = listedEvents
+        .filter(isBirthdayCalendarEvent)
+        .map(toInterval)
+        .filter((event) => Number.isFinite(event.start) && Number.isFinite(event.end));
+
+      // FreeBusy may coalesce an all-day birthday and a real meeting into the
+      // same busy range. Keep the real event so subtracting the birthday below
+      // cannot make an occupied slot bookable. Transparent, cancelled, and
+      // self-declined events do not block Google availability.
+      nonBirthdayBusy = listedEvents
         .filter((event) =>
-          includesBirthdayText(`${event?.summary || ""} ${event?.description || ""}`),
+          !isBirthdayCalendarEvent(event) &&
+          event?.status !== "cancelled" &&
+          event?.transparency !== "transparent" &&
+          !(event?.attendees || []).some(
+            (attendee) => attendee?.self && attendee?.responseStatus === "declined",
+          ),
         )
-        .map((event) => ({
-          start: new Date(event.start?.dateTime || event.start?.date).getTime(),
-          end: new Date(event.end?.dateTime || event.end?.date).getTime(),
-        }))
+        .map(toInterval)
         .filter((event) => Number.isFinite(event.start) && Number.isFinite(event.end));
     } catch (birthdayLookupError) {
       // Free/busy is still useful if the supplemental event lookup fails.
       console.warn("[calendar_google] birthday transparency lookup failed:", birthdayLookupError.message);
     }
 
-    const effectiveBusy = busy.flatMap((interval) => {
+    const birthdayAdjustedBusy = busy.flatMap((interval) => {
       let remaining = [interval];
       birthdayBusy.forEach((birthday) => {
         remaining = remaining.flatMap((segment) => {
@@ -800,6 +859,14 @@ router.get("/slots", verifyToken, async (req, res) => {
       return remaining;
     });
 
+    const effectiveBusy = birthdayAdjustedBusy.concat(
+      nonBirthdayBusy.filter((event) =>
+        birthdayBusy.some(
+          (birthday) => event.start < birthday.end && event.end > birthday.start,
+        ),
+      ),
+    );
+
     const slots = freeSlots(
       win.windowStartMs,
       win.windowEndMs,
@@ -813,7 +880,7 @@ router.get("/slots", verifyToken, async (req, res) => {
       date: win.dateStr,
       durationMins: win.durationMins,
       busyCount: effectiveBusy.length,
-      workingHours: { start: 9, end: 18 },
+      workingHours: { start: win.startHour, end: win.endHour },
       timeMin: new Date(win.windowStartMs).toISOString(),
       timeMax: new Date(win.windowEndMs).toISOString(),
       slots,

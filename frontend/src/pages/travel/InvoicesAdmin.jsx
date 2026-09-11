@@ -75,6 +75,8 @@ const INVOICE_STATUSES = [
 ];
 const INVOICE_SORT_KEYS = ["invoiceNum", "contact", "status", "totalAmount", "currency", "dueDate", "subBrand", "paidAt"];
 const LAST_LIST_URL_KEY = "travel.invoices.lastListUrl";
+const TRIP_PAGE_SIZE = 200;
+const TRIP_SEARCH_DEBOUNCE_MS = 300;
 
 // SUB_BRAND_BG now imported from ../../utils/travelSubBrand (rule-of-3
 // promotion 2026-05-24 tick #99 — this file was the third caller that
@@ -230,12 +232,18 @@ export default function InvoicesAdmin() {
   // Slim summary shape (id/name/email) + 500-row cap covers the tenant book;
   // the form is ADMIN/MANAGER-only (canWrite), who see the full tenant.
   const [customers, setCustomers] = useState([]);
-  // TMC trips available for associating an invoice with its travel.
+  // TMC trips available for associating an invoice with its travel. Options
+  // are server-searched and paged; the cache separately retains labels for
+  // invoice rows and for a selected trip that is outside the current result.
   const [trips, setTrips] = useState([]);
+  const [tripsById, setTripsById] = useState({});
+  const [tripSearch, setTripSearch] = useState("");
+  const [tripTotal, setTripTotal] = useState(0);
+  const [tripLoading, setTripLoading] = useState(false);
+  const tripRequestId = useRef(0);
   // #829 — distinguish 403 from genuine empty so the empty-state copy
   // honestly says "Access restricted" instead of "No invoices match."
   const [permissionDenied, setPermissionDenied] = useState(false);
-  const tripsById = Object.fromEntries(trips.map((trip) => [trip.id, trip]));
 
   const [subBrand, setSubBrand] = useState(searchParams.get("subBrand") || activeSubBrand || "");
   const [status, setStatus] = useState(searchParams.get("status") || "");
@@ -446,13 +454,75 @@ export default function InvoicesAdmin() {
       .catch(() => setCustomers([]));
   }, []);
 
-  // Load the lightweight trip list once for the invoice form and table labels.
-  // The backend scopes this to the current tenant and excludes quote-only trips.
+  // Load the lightweight trip picker a page at a time. Searching is performed
+  // by the backend so trips older than the first page remain discoverable.
+  // The request id prevents a slow prior query from replacing newer results.
   useEffect(() => {
-    fetchApi("/api/travel/trips?fields=summary&limit=200", { silent: true })
-      .then((data) => setTrips(Array.isArray(data) ? data : data?.trips || []))
-      .catch(() => setTrips([]));
-  }, []);
+    const requestId = ++tripRequestId.current;
+    const timer = setTimeout(() => {
+      setTripLoading(true);
+      const qs = new URLSearchParams({
+        fields: "summary",
+        limit: String(TRIP_PAGE_SIZE),
+        offset: "0",
+      });
+      const query = tripSearch.trim();
+      if (query) qs.set("search", query);
+      fetchApi(`/api/travel/trips?${qs.toString()}`, { silent: true })
+        .then((data) => {
+          if (requestId !== tripRequestId.current) return;
+          const rows = Array.isArray(data) ? data : data?.trips || [];
+          setTrips(rows);
+          setTripTotal(Number.isFinite(data?.total) ? data.total : rows.length);
+          setTripsById((current) => {
+            const next = { ...current };
+            rows.forEach((trip) => { next[trip.id] = trip; });
+            return next;
+          });
+        })
+        .catch(() => {
+          if (requestId !== tripRequestId.current) return;
+          setTrips([]);
+          setTripTotal(0);
+        })
+        .finally(() => {
+          if (requestId === tripRequestId.current) setTripLoading(false);
+        });
+    }, tripSearch.trim() ? TRIP_SEARCH_DEBOUNCE_MS : 0);
+    return () => clearTimeout(timer);
+  }, [tripSearch]);
+
+  const loadMoreTrips = () => {
+    if (tripLoading || trips.length >= tripTotal) return;
+    const requestId = ++tripRequestId.current;
+    setTripLoading(true);
+    const qs = new URLSearchParams({
+      fields: "summary",
+      limit: String(TRIP_PAGE_SIZE),
+      offset: String(trips.length),
+    });
+    const query = tripSearch.trim();
+    if (query) qs.set("search", query);
+    fetchApi(`/api/travel/trips?${qs.toString()}`, { silent: true })
+      .then((data) => {
+        if (requestId !== tripRequestId.current) return;
+        const rows = Array.isArray(data) ? data : data?.trips || [];
+        setTrips((current) => {
+          const seen = new Set(current.map((trip) => String(trip.id)));
+          return [...current, ...rows.filter((trip) => !seen.has(String(trip.id)))];
+        });
+        setTripTotal(Number.isFinite(data?.total) ? data.total : trips.length + rows.length);
+        setTripsById((current) => {
+          const next = { ...current };
+          rows.forEach((trip) => { next[trip.id] = trip; });
+          return next;
+        });
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (requestId === tripRequestId.current) setTripLoading(false);
+      });
+  };
 
   // #1051 — fetch contact display names for the IDs we haven't seen yet so the
   // CONTACT column can render names instead of raw IDs. /api/contacts has no
@@ -1248,22 +1318,46 @@ export default function InvoicesAdmin() {
               </option>
             ))}
           </select>
-          <select
-            value={form.tripId}
-            onChange={(e) => setForm({ ...form, tripId: e.target.value })}
-            style={inputStyle}
-            aria-label="Trip"
-          >
-            <option value="">No trip linked</option>
-            {form.tripId && !tripsById[Number(form.tripId)] && (
-              <option value={form.tripId}>Trip #{form.tripId}</option>
+          <div style={{ display: "grid", gap: 6 }}>
+            <input
+              type="search"
+              value={tripSearch}
+              onChange={(e) => setTripSearch(e.target.value)}
+              placeholder="Search trip code or destination"
+              aria-label="Search trips"
+              style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+            />
+            <select
+              value={form.tripId}
+              onChange={(e) => setForm({ ...form, tripId: e.target.value })}
+              style={{ ...inputStyle, width: "100%" }}
+              aria-label="Trip"
+            >
+              <option value="">No trip linked</option>
+              {form.tripId && !trips.some((trip) => String(trip.id) === String(form.tripId)) && (
+                <option value={form.tripId}>
+                  {tripsById[form.tripId]?.tripCode || `Trip #${form.tripId}`}
+                  {tripsById[form.tripId]?.destination ? ` · ${tripsById[form.tripId].destination}` : ""}
+                </option>
+              )}
+              {trips.map((trip) => (
+                <option key={trip.id} value={String(trip.id)}>
+                  {trip.tripCode || `Trip #${trip.id}`} · {trip.destination || "Destination not set"}
+                </option>
+              ))}
+            </select>
+            {tripLoading && (
+              <small style={{ color: "var(--text-secondary)" }}>Loading trips…</small>
             )}
-            {trips.map((trip) => (
-              <option key={trip.id} value={String(trip.id)}>
-                {trip.tripCode || `Trip #${trip.id}`} · {trip.destination || "Destination not set"}
-              </option>
-            ))}
-          </select>
+            {!tripLoading && trips.length < tripTotal && (
+              <button type="button" onClick={loadMoreTrips} style={{ ...secondaryBtn, justifyContent: "center" }}>
+                Load more trips
+              </button>
+            )}
+            {!tripLoading && tripSearch.trim() && trips.length === 0 && (
+              <small style={{ color: "var(--text-secondary)" }}>No matching trips</small>
+            )}
+          </div>
           <input
             placeholder="Total amount *"
             required

@@ -357,8 +357,13 @@ const Layout = () => {
     <div
       className="app-shell"
       style={{
+        // Anchor the application to all four viewport edges instead of
+        // relying on viewport units. Some desktop Chrome/display-scaling
+        // combinations can report a reduced vh while still painting a taller
+        // document, which leaves body background visible below the footer.
+        position: "fixed",
+        inset: 0,
         display: "flex",
-        height: "100vh",
         overflow: "hidden",
         background: "var(--bg-color)",
       }}
@@ -373,6 +378,7 @@ const Layout = () => {
         style={{
           flex: 1,
           minWidth: 0,
+          minHeight: 0,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -586,6 +592,7 @@ const Layout = () => {
           style={{
             flex: 1,
             minWidth: 0,
+            minHeight: 0,
             overflowX: "hidden",
             overflowY: popupScrollLocked ? "hidden" : "auto",
             padding: "0",

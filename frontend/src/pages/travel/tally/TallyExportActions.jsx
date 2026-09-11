@@ -128,6 +128,7 @@ export default function TallyExportActions({
   const voucherAmountSummary = summarizeVoucherAmounts(voucherRows);
   const [selectedVoucherType, setSelectedVoucherType] = useState("all");
   const [connectorStatus, setConnectorStatus] = useState(null);
+  const [hasCheckedConnectorStatus, setHasCheckedConnectorStatus] = useState(false);
   const [connectorCredentials, setConnectorCredentials] = useState(null);
   const [generatingCredentials, setGeneratingCredentials] = useState(false);
   const [pushing, setPushing] = useState(false);
@@ -143,6 +144,8 @@ export default function TallyExportActions({
       setConnectorStatus(status);
     } catch (_) {
       if (!silent) setConnectorStatus(null);
+    } finally {
+      setHasCheckedConnectorStatus(true);
     }
   };
 
@@ -179,7 +182,7 @@ export default function TallyExportActions({
   };
 
   const pushDirectlyToTally = async () => {
-    if (!hasVoucherRows || exportWarnings.length || !connectorStatus?.online) return;
+    if (!hasVoucherRows || exportWarnings.length || !hasCheckedConnectorStatus) return;
     const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows });
     const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows });
     const pushToTally = (allowDuplicate = false) => fetchApi("/api/travel/tally/connector/push", { method: "POST", body: JSON.stringify({ mastersXml, vouchersXml, allowDuplicate }) });
@@ -187,6 +190,11 @@ export default function TallyExportActions({
       downloadFile(`${buildBaseFileName(master)}-masters.xml`, mastersXml, "application/xml;charset=utf-8");
       downloadFile(`${buildBaseFileName(master)}-vouchers.xml`, vouchersXml, "application/xml;charset=utf-8");
     };
+    if (!connectorStatus?.online) {
+      downloadFallback();
+      notify.info("The Tally connector is offline. XML files were downloaded for manual import into Tally.");
+      return;
+    }
     setPushing(true);
     try {
       const result = await pushToTally();
@@ -441,12 +449,12 @@ export default function TallyExportActions({
           <button
             type="button"
             onClick={pushDirectlyToTally}
-            disabled={!hasVoucherRows || exportWarnings.length > 0 || !connectorStatus?.online || pushing}
-            title={!connectorStatus?.online ? "Start the local Tally connector first" : exportWarnings.length ? "Resolve export warnings before pushing" : "Send masters and vouchers directly to local Tally"}
+            disabled={!hasVoucherRows || exportWarnings.length > 0 || !hasCheckedConnectorStatus || pushing}
+            title={!hasCheckedConnectorStatus ? "Checking the local Tally connector" : !connectorStatus?.online ? "Connector offline: download XML files for manual import into Tally" : exportWarnings.length ? "Resolve export warnings before pushing" : "Send masters and vouchers directly to local Tally"}
             style={{
               ...button,
-              background: hasVoucherRows && !exportWarnings.length && connectorStatus?.online && !pushing ? "#ea580c" : "#64748b",
-              cursor: hasVoucherRows && !exportWarnings.length && connectorStatus?.online && !pushing ? "pointer" : "not-allowed",
+              background: hasVoucherRows && !exportWarnings.length && hasCheckedConnectorStatus && !pushing ? "#ea580c" : "#64748b",
+              cursor: hasVoucherRows && !exportWarnings.length && hasCheckedConnectorStatus && !pushing ? "pointer" : "not-allowed",
             }}
           >
             <UploadCloud size={15} /> {pushing ? "Pushing to Tally…" : "Push directly to Tally"}

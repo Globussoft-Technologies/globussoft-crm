@@ -123,15 +123,22 @@ export default function TallyExportPreviewPage() {
   };
   const pushTripDirectly = async () => {
     const exportData = buildTripExport();
-    if (!exportData || !connectorStatus?.online || summary?.unpaidSales > 0) return;
+    if (!exportData || summary?.unpaidSales > 0) return;
     const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows: exportData.voucherRows });
     const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows: exportData.voucherRows, educationalMode });
     const pushToTally = (allowDuplicate = false) => fetchApi("/api/travel/tally/connector/push", { method: "POST", body: JSON.stringify({ mastersXml, vouchersXml, allowDuplicate }) });
-    const downloadFallback = () => {
+    const downloadFallback = (notice = { title: "Push failed", message: "The push failed, so Masters and Voucher XML files were downloaded automatically." }) => {
       downloadXmlFile(`${exportData.fileName}-masters.xml`, mastersXml);
       downloadXmlFile(`${exportData.fileName}${educationalMode ? "-educational" : ""}-vouchers.xml`, vouchersXml);
-      setPushNotice({ title: "Push failed", message: "The push failed, so Masters and Voucher XML files were downloaded automatically." });
+      setPushNotice(notice);
     };
+    if (!connectorStatus?.online) {
+      downloadFallback({
+        title: "Connector offline",
+        message: "Masters and Voucher XML files were downloaded for manual import into Tally.",
+      });
+      return;
+    }
     const showSuccess = (result) => {
       const tally = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
       notify.success(`Trip pushed to Tally. Created ${tally?.created || 0}, altered ${tally?.altered || 0}.`);
@@ -207,7 +214,7 @@ export default function TallyExportPreviewPage() {
       {selectedPreview?.kind === "voucher" ? <TallyVoucherPreview row={selectedPreview.row} companyName={master.companyName} /> : selectedPreview ? <TallyLedgerPreview ledger={selectedPreview.ledger} rows={previewRows} /> : <p style={muted}>No voucher or ledger data available for preview.</p>}
     </section>
     <section style={card}><h2 style={sectionTitle}>All trip records</h2><RecordTable title="Customer invoices & receipts" rows={customers} columns={["name", "reference", "invoiceTotal", "amount"]} labels={["Party", "Reference", "Invoice", "Received"]} /><RecordTable title="Expenses" rows={payables} columns={["name", "reference", "amount", "status"]} labels={["Supplier", "Reference", "Amount", "Status"]} /></section>
-    <div style={bottomPush}><div style={connectorButtons}><PermissionGate module="tally" action="export"><button type="button" onClick={pushTripDirectly} disabled={!connectorStatus?.online || pushing || summary.unpaidSales > 0} title={summary.unpaidSales > 0 ? "Direct push is blocked while the trip has an outstanding amount" : connectorStatus?.online ? "Send masters and vouchers directly to local Tally" : "Start the local Tally connector first"} style={{ ...downloadButton, background: connectorStatus?.online && !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", borderColor: connectorStatus?.online && !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", cursor: connectorStatus?.online && !pushing && summary.unpaidSales <= 0 ? "pointer" : "not-allowed" }}><UploadCloud size={16} /> {pushing ? "Pushing…" : "Push directly to Tally"}</button></PermissionGate></div><label style={educationalToggle}><input type="checkbox" checked={educationalMode} onChange={(event) => { const enabled = event.target.checked; setEducationalMode(enabled); try { window.localStorage.setItem("travel-tally-educational-mode", String(enabled)); } catch (_) { /* optional preference */ } }} /> Tally is running in Educational Mode <small>(uses the first day of each month)</small></label></div>
+    <div style={bottomPush}><div style={connectorButtons}><PermissionGate module="tally" action="export"><button type="button" onClick={pushTripDirectly} disabled={pushing || summary.unpaidSales > 0} title={summary.unpaidSales > 0 ? "Direct push is blocked while the trip has an outstanding amount" : connectorStatus?.online ? "Send masters and vouchers directly to local Tally" : "Connector offline: download XML files for manual import into Tally"} style={{ ...downloadButton, background: !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", borderColor: !pushing && summary.unpaidSales <= 0 ? "#ea580c" : "#64748b", cursor: !pushing && summary.unpaidSales <= 0 ? "pointer" : "not-allowed" }}><UploadCloud size={16} /> {pushing ? "Pushing…" : "Push directly to Tally"}</button></PermissionGate></div><label style={educationalToggle}><input type="checkbox" checked={educationalMode} onChange={(event) => { const enabled = event.target.checked; setEducationalMode(enabled); try { window.localStorage.setItem("travel-tally-educational-mode", String(enabled)); } catch (_) { /* optional preference */ } }} /> Tally is running in Educational Mode <small>(uses the first day of each month)</small></label></div>
   </main>;
 }
 

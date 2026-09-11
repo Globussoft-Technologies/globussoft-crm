@@ -91,6 +91,7 @@ function buildBirthdayCalendarPayload(name, birthDate) {
     startDate,
     endDate,
     allDay: true,
+    crmEventType: "birthday",
     transparency: "transparent",
     recurrence: ["RRULE:FREQ=YEARLY"],
   };

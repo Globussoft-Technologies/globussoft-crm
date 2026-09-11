@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import TallyExportActions from "./TallyExportActions";
 import { fetchApi } from "../../../utils/api";
 
-const { success, error } = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const { success, error, info } = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
 
 vi.mock("../../../components/PermissionGate", () => ({ default: ({ children }) => children }));
-vi.mock("../../../utils/notify", () => ({ useNotify: () => ({ success, error }) }));
+vi.mock("../../../utils/notify", () => ({ useNotify: () => ({ success, error, info }) }));
 vi.mock("../../../utils/api", () => ({ fetchApi: vi.fn() }));
 
 const props = {
@@ -39,11 +39,21 @@ describe("TallyExportActions direct connector", () => {
     URL.revokeObjectURL = vi.fn();
   });
 
-  it("keeps direct push disabled while the local connector is offline", async () => {
+  it("downloads Masters and Voucher XML when push is attempted while the connector is offline", async () => {
     fetchApi.mockResolvedValue({ configured: true, online: false });
     render(<TallyExportActions {...props} />);
     await screen.findByText("Configured, but currently offline");
-    expect(screen.getByRole("button", { name: /Push directly to Tally/i })).toBeDisabled();
+    const push = screen.getByRole("button", { name: /Push directly to Tally/i });
+    expect(push).toBeEnabled();
+
+    fireEvent.click(push);
+
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(2));
+    expect(fetchApi).not.toHaveBeenCalledWith(
+      "/api/travel/tally/connector/push",
+      expect.anything(),
+    );
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("downloaded for manual import"));
     expect(screen.getByRole("button", { name: /Download CSV/i })).toBeEnabled();
   });
 

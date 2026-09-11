@@ -25,6 +25,7 @@ try {
  * @param {object} bank - Question bank snapshot (or bank-like object with questionsJson)
  * @param {object} [opts]
  * @param {object} [opts.ragResult] - Optional pre-computed RAG result
+ * @param {object[]} [opts.recommendations] - Unified customer-facing shortlist
  * @returns {Promise<string|null>} - PDF URL or null on failure
  */
 async function generateDiagnosticPdfBestEffort(diag, bank, opts = {}) {
@@ -60,6 +61,7 @@ async function generateDiagnosticPdfBestEffort(diag, bank, opts = {}) {
     const pdfBuf = await pdfRenderer.renderTravelDiagnosticPdf(diag, contact, bank, {
       logoBuffer,
       ragResult,
+      recommendations: opts?.recommendations || null,
       cancellationPolicy: opts?.cancellationPolicy || null,
     });
     const rand = crypto.randomBytes(16).toString("hex");

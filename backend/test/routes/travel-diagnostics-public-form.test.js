@@ -38,6 +38,7 @@ prisma.travelDiagnostic = {
   ...(prisma.travelDiagnostic || {}),
   create: vi.fn(),
   findFirst: vi.fn(),
+  update: vi.fn(),
 };
 prisma.travelCurriculumMapping = {
   ...(prisma.travelCurriculumMapping || {}),
@@ -260,15 +261,16 @@ function formRow(overrides = {}) {
 }
 
 beforeEach(() => {
-  travelRag.runRagForDiagnostic.mockClear();
-  travelRag.getRagResultForDiagnostic.mockClear();
-  pdfModule.generateDiagnosticPdfBestEffort.mockClear();
+  travelRag.runRagForDiagnostic.mockReset().mockResolvedValue(null);
+  travelRag.getRagResultForDiagnostic.mockReset().mockResolvedValue(null);
+  pdfModule.generateDiagnosticPdfBestEffort.mockReset().mockResolvedValue("/api/uploads/diagnostics/diag-1-abc.pdf");
   prisma.travelDiagnosticPublicForm.findMany.mockReset().mockResolvedValue([formRow()]);
   prisma.travelDiagnosticPublicForm.findUnique.mockReset().mockResolvedValue(null);
   prisma.travelDiagnosticPublicForm.create.mockReset().mockImplementation((args) => ({ id: 100, ...args.data }));
   prisma.travelDiagnosticPublicForm.update.mockReset().mockImplementation((args) => ({ id: args.where.id, ...args.data }));
   prisma.travelDiagnosticQuestionBank.findFirst.mockReset().mockResolvedValue(bankRow());
   prisma.travelDiagnostic.create.mockReset().mockImplementation((args) => ({ id: 555, ...args.data, createdAt: new Date() }));
+  prisma.travelDiagnostic.update.mockReset().mockResolvedValue({});
   prisma.travelCurriculumMapping.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnostic.findFirst.mockReset().mockResolvedValue({
     id: 555,
@@ -647,6 +649,68 @@ describe("GET /api/travel/diagnostics/public/report/:slug", () => {
     expect(res.status).toBe(200);
     expect(res.body.diagnosticId).toBe(555);
     expect(res.body.classificationLabel).toBe("Regular");
+  });
+
+  test("is side-effect free even when persisted recommendations are below the configured target", async () => {
+    travelRag.getRagResultForDiagnostic.mockResolvedValue({
+      recommendations: {
+        readinessLevel: 3,
+        readinessName: "Experience-Ready",
+        recommendedTrips: [{ name: "Goa Tour 4 Days", driveLink: "https://drive.example/goa-4" }],
+      },
+    });
+
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/report/555-abc123abc123abcd",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.readinessLevel).toBe(3);
+    expect(res.body.recommendations).toHaveLength(1);
+    expect(travelRag.runRagForDiagnostic).not.toHaveBeenCalled();
+    expect(pdfModule.generateDiagnosticPdfBestEffort).not.toHaveBeenCalled();
+    expect(prisma.travelDiagnostic.update).not.toHaveBeenCalled();
+  });
+
+  test("deduplicates by brochure link while preserving distinct duration products", async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue({
+      id: 555,
+      tenantId: 1,
+      subBrand: "travelstall",
+      score: 4,
+      classification: "level_2",
+      classificationLabel: "Regular",
+      recommendedTier: "primary",
+      reportPdfUrl: "/api/uploads/diagnostics/diag-555-abc.pdf",
+      answersJson: "{}",
+      curriculumFitJson: JSON.stringify({
+        recommendations: [{
+          destination: "Goa Tour 4 Days",
+          brochurePdfUrl: "https://drive.example/goa-4",
+          fitScore: 90,
+        }],
+      }),
+      reportSlugToken: "abc123abc123abcd",
+      createdAt: new Date(),
+    });
+    travelRag.getRagResultForDiagnostic.mockResolvedValue({
+      recommendations: {
+        recommendedTrips: [
+          { name: "Goa Educational Package", driveLink: "https://drive.example/goa-4" },
+          { name: "Goa Tour 7 Days", driveLink: "https://drive.example/goa-7" },
+        ],
+      },
+    });
+
+    const res = await request(makeApp()).get(
+      "/api/travel/diagnostics/public/report/555-abc123abc123abcd",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.recommendations.map((item) => item.name)).toEqual([
+      "Goa Tour 4 Days",
+      "Goa Tour 7 Days",
+    ]);
   });
 
   test("rejects malformed slug", async () => {

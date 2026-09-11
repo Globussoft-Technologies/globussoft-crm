@@ -160,11 +160,11 @@
     .gbs-result-score-value { font-size: 2.1rem; font-weight: 800; }
     .gbs-result-summary { color: #475569; line-height: 1.55; margin: 0 0 18px; }
     .gbs-result-subheading { margin: 22px 0 12px; font-size: 1.05rem; }
-    .gbs-result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-    .gbs-result-card { padding: 16px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; }
-    .gbs-result-card strong { display: block; margin-bottom: 4px; }
-    .gbs-result-card p { margin: 6px 0 0; font-size: 0.85rem; color: #64748b; line-height: 1.45; }
-    .gbs-result-fit { display: inline-block; font-size: 0.75rem; font-weight: 700; opacity: 0.75; }
+    .gbs-result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+    .gbs-result-card { display: flex; flex-direction: column; min-width: 0; min-height: 100%; padding: 18px; border: 1px solid #dce5f1; border-radius: 12px; background: #f8fafc; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03); }
+    .gbs-result-card strong { display: block; margin-bottom: 5px; font-size: 0.96rem; line-height: 1.35; color: #0f172a; }
+    .gbs-result-card p { margin: 9px 0 0; font-size: 0.84rem; color: #53647d; line-height: 1.5; }
+    .gbs-result-fit { display: inline-flex; width: fit-content; margin-top: 5px; padding: 3px 7px; border-radius: 999px; font-size: 0.72rem; font-weight: 700; color: #334155; background: #e8eef7; }
 
     /* Trips grouped by category ("Day trips", "International", …) — only
        RAG-matched recommendations carry a category; curriculum-fit
@@ -184,10 +184,14 @@
        — checking one and hitting "Submit chosen interests" tells the
        advisor which trips this submitter actually wants, same feature the
        CRM-hosted report page and customer portal already have. */
-    .gbs-interest-check { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
-    .gbs-interest-checkbox { margin-top: 3px; flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; }
-    .gbs-interest-label { display: block; margin-top: 8px; font-size: 0.78rem; font-weight: 700; color: #475569; }
-    .gbs-result-brochure { display: inline-flex; margin: 12px 0 0 24px; font-size: 0.82rem; font-weight: 700; text-decoration: none; }
+    .gbs-interest-check { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: flex-start; gap: 10px; cursor: pointer; }
+    .gbs-interest-checkbox { margin-top: 3px; width: 16px; height: 16px; cursor: pointer; }
+    .gbs-result-card-content { min-width: 0; }
+    .gbs-interest-label { display: block; margin-top: 12px; font-size: 0.76rem; font-weight: 700; color: #475569; }
+    .gbs-result-highlights { margin: 11px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+    .gbs-result-highlights li { display: flex; gap: 7px; font-size: 0.78rem; line-height: 1.4; color: #53647d; }
+    .gbs-result-highlights li::before { content: ""; width: 5px; height: 5px; flex: 0 0 5px; margin-top: 5px; border-radius: 50%; background: var(--gbs-primary, #4f46e5); }
+    .gbs-result-brochure { display: inline-flex; width: fit-content; margin: 14px 0 0 28px; font-size: 0.82rem; font-weight: 700; text-decoration: none; }
     .gbs-interests-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 22px; }
     .gbs-interests-submit {
       color: #fff;
@@ -384,6 +388,13 @@
           }
         }, STAGE_MS);
         resize();
+        window.scrollTo({
+          top: Math.max(0, (document.documentElement.scrollHeight - window.innerHeight) / 2),
+          behavior: "smooth",
+        });
+        try {
+          parent.postMessage({ source: "gbs-diagnostic-embed", type: "scroll_to_loading", position: 0.5 }, "*");
+        } catch (e) { /* standalone page or unavailable parent — non-fatal */ }
       }
 
       function stopLoading() {
@@ -456,8 +467,23 @@
               row.style.background = checked ? selectedBg : "";
               row.style.color = checked ? selectedText : "";
             });
+            updateProgress();
           });
         });
+      }
+
+      function updateProgress() {
+        var progress = root.querySelector(".progress-fill");
+        var questions = Array.isArray(data && data.questions) ? data.questions : [];
+        if (!progress || !questions.length) return;
+
+        var completed = questions.filter(function (question) {
+          return root.querySelectorAll('[name="' + CSS.escape(String(question.id)) + '"]:checked').length > 0;
+        }).length;
+        var percent = Math.round((completed / questions.length) * 100);
+        progress.style.width = percent + "%";
+        progress.setAttribute("aria-valuenow", String(percent));
+        progress.setAttribute("aria-valuetext", completed + " of " + questions.length + " questions completed");
       }
 
       function configuredIdentityFields(form, bankFields) {
@@ -517,7 +543,7 @@
         }
 
         var progressBar = config.progress !== false
-          ? '<div class="progress-track"><div class="progress-fill" style="width:12%;background:' + esc(config.primary) + '"></div></div>'
+          ? '<div class="progress-track"><div class="progress-fill" role="progressbar" aria-label="Diagnostic completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0 of ' + questions.length + ' questions completed" style="width:0%;background:' + esc(config.primary) + '"></div></div>'
           : "";
 
         // hideTitle/hideSubtitle: an admin who deliberately wants NO
@@ -545,6 +571,7 @@
           (config.poweredBy !== false ? '<div class="powered-by">Powered by Globussoft Travel CRM</div>' : "");
 
         syncSelectedStyles();
+        updateProgress();
         document.getElementById("gbs-diagnostic-form").addEventListener("submit", submit);
         resize();
         try { parent.postMessage({ source: "gbs-diagnostic-embed", type: "form_loaded" }, "*"); } catch (e) { /* non-fatal */ }
@@ -593,9 +620,14 @@
         var checked = item.name && interestsSelected[item.name];
         var fitScore = Number(rec.fitScore) > 0 ? Number(rec.fitScore) + "% fit" : "";
         var blurb = rec.summary || (Array.isArray(rec.reasons) && rec.reasons[0] && (rec.reasons[0].rationale || rec.reasons[0].learningOutcome)) || "";
-        var body = "<strong>" + esc(item.name || "Recommendation") + "</strong>" +
+        var highlights = Array.isArray(rec.learnings) ? rec.learnings.filter(Boolean).slice(0, 2) : [];
+        var detail = blurb || (highlights.length ? "" : "A thoughtfully selected option for the learning goals and travel preferences you shared.");
+        var highlightsHtml = highlights.length
+          ? '<ul class="gbs-result-highlights">' + highlights.map(function (learning) { return "<li>" + esc(learning) + "</li>"; }).join("") + "</ul>"
+          : "";
+        var body = '<span class="gbs-result-card-content"><strong>' + esc(item.name || "Recommendation") + "</strong>" +
           (fitScore ? '<span class="gbs-result-fit"> ' + esc(fitScore) + "</span>" : "") +
-          (blurb ? "<p>" + esc(blurb) + "</p>" : "");
+          (detail ? "<p>" + esc(detail) + "</p>" : "") + highlightsHtml + "</span>";
         var brochure = item.driveLink
           ? '<a class="gbs-result-brochure" href="' + esc(item.driveLink) + '" target="_blank" rel="noopener noreferrer">View brochure</a>'
           : "";

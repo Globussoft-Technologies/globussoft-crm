@@ -130,6 +130,21 @@ function validateTripInput(tripInput) {
   return { valid: missing.length === 0, missing };
 }
 
+/**
+ * Build the copy of TripInput that is safe and useful for the language model.
+ *
+ * The school logo is commonly a base64 data URI. Sending those image bytes as
+ * prompt text adds thousands of input tokens even though the model cannot make
+ * use of them. The renderer receives the same validated image separately via
+ * the trusted BrandKit, so removing it here is lossless and materially reduces
+ * both model latency and prompt cost.
+ */
+function tripInputForModel(tripInput) {
+  const modelInput = { ...tripInput };
+  delete modelInput.schoolLogoUrl;
+  return modelInput;
+}
+
 async function mergeExistingBrandKit(bodyBrand, existingBrandKitId, tenantId) {
   const id = Number(existingBrandKitId);
   if (!Number.isFinite(id) || id <= 0) return { mergedBrand: bodyBrand, existingBrandKitId: null };
@@ -165,9 +180,15 @@ async function mergeExistingBrandKit(bodyBrand, existingBrandKitId, tenantId) {
   }
   if (socials.length) base.socials = socials;
 
-  // Kit values form the base; explicit body overrides win so placement / QR / cover
-  // logos / interior band remain under operator control.
+  // Kit values form the base; explicit body overrides win for trip-specific
+  // presentation choices (placement / QR / cover logos / interior band). The
+  // selected kit's own logo is deliberately authoritative, however. A stale
+  // draft may carry an empty or old `brand.logoUrl`; letting it overwrite the
+  // selected kit meant the preview showed the TMC mark while the generated PDF
+  // only received the school logo. Selecting a Brand Kit must mean its official
+  // mark is the mark that is rendered.
   const mergedBrand = { ...base, ...(bodyBrand && typeof bodyBrand === "object" ? bodyBrand : {}) };
+  if (base.logoUrl) mergedBrand.logoUrl = base.logoUrl;
 
   return { mergedBrand, existingBrandKitId: id };
 }
@@ -262,7 +283,7 @@ router.post(
             missing,
           });
         }
-        goal = JSON.stringify(tripInput);
+        goal = JSON.stringify(tripInputForModel(tripInput));
       } else {
         goal = typeof req.body.goal === "string" ? req.body.goal.trim() : "";
       }
@@ -289,7 +310,14 @@ router.post(
       // clamped placement). Invalid input is dropped → undefined, never rejected.
       // The sanitizer returns soft warnings separately so we can show them in the
       // start-run response without leaking them into the engine payload.
-      const { kit: brand, warnings } = sanitizeBrandKit(mergedBrand);
+      // The logo bytes deliberately do not travel inside `goal`; preserve the
+      // validated school logo on the renderer-only brand channel instead. This
+      // also keeps direct API callers working when they supplied the required
+      // school logo in tripInput but did not duplicate it in `brand`.
+      const brandInput = tripInput?.schoolLogoUrl && !mergedBrand?.schoolLogoUrl
+        ? { ...(mergedBrand || {}), schoolLogoUrl: tripInput.schoolLogoUrl }
+        : mergedBrand;
+      const { kit: brand, warnings } = sanitizeBrandKit(brandInput);
       // Switchable models: an optional per-tier model id map, OR a strategy
       // preset ('recommended' | 'cheapest' | 'smartest'). The engine applies
       // `models` first and falls back to `strategy`; both are validated there

@@ -203,7 +203,7 @@ EDITORIAL NORMALIZATION — BrochureContent must be presentation-ready, not a du
 - Convert long cancellation schedules, inclusions, cost status and logistics into well-labelled structured rows or concise bullets. Never output an unedited wall of source text.
 - Detect obvious previous-trip leakage or internal/operator wording and exclude it from visible brochure copy. Put unresolved contradictions in \`tmc.sourceControl.contradictions\` rather than presenting them as facts.
 
-OUTPUT BUDGET: Keep the JSON concise and presentation-ready. Prefer short summaries and bullets over repeating source text; target no more than 6,000 output tokens unless the supplied itinerary genuinely requires more detail.
+OUTPUT BUDGET: Keep the JSON concise and presentation-ready, but never drop supplied itinerary or commercial facts to save space. Prefer short summaries and bullets over repeating source text; target 8,000-12,000 output tokens for a rich trip and use additional room when the supplied itinerary genuinely requires it.
 
 Reply with ONLY the JSON object.`;
 
@@ -227,7 +227,14 @@ export const travelPack: SectorPack = {
       description: 'Composes structured TMC school-trip brochure content as JSON.',
       tier: 'reasoning',
       tools: [],
-      maxOutputTokens: 8000,
+      // Rich school trips routinely carry 7-12 itinerary days plus pricing,
+      // logistics and curriculum content. The former 8k ceiling was reached
+      // exactly on real runs and pressured the model to truncate or compress
+      // required fields. 16k stays just below gpt-4o-mini's documented 16,384
+      // maximum while giving larger GPT models enough room for complete JSON.
+      // Providers with a lower limit are handled by the adapter's token-cap
+      // self-heal instead of failing the run.
+      maxOutputTokens: 16000,
       responseSchema: BROCHURE_CONTENT_SCHEMA,
       systemPrompt: `${TMC_SYSTEM_PROMPT}\n\n${TMC_ENGINE_INSTRUCTION}`,
     },

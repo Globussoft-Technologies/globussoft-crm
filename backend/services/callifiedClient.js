@@ -1074,6 +1074,25 @@ async function fetchRecording(tenantId, recordingPath, opts = {}) {
   });
 }
 
+async function fetchObjectStorageRecording(recordingUrl, opts = {}) {
+  let url;
+  try {
+    url = new URL(String(recordingUrl || ''));
+  } catch {
+    const err = new Error('Invalid recording URL');
+    err.status = 400;
+    err.code = 'INVALID_RECORDING_URL';
+    throw err;
+  }
+  if (url.protocol !== 'https:' || url.hostname !== 'objectstorage.ap-mumbai-1.oraclecloud.com' || !url.pathname.includes('/b/callified-live-media/o/recordings/')) {
+    const err = new Error('Unsupported recording URL');
+    err.status = 400;
+    err.code = 'INVALID_RECORDING_URL';
+    throw err;
+  }
+  return fetch(url, { redirect: 'manual', headers: opts.range ? { Range: opts.range } : {} });
+}
+
 /**
  * Fetch all transcripts for a Callified lead.
  */
@@ -1850,6 +1869,7 @@ module.exports = {
   browserCall,
   resolveAgentSocketUrl,
   fetchRecording,
+  fetchObjectStorageRecording,
   getLeadTranscripts,
   getTranscriptReview,
   getCallDetails,

@@ -119,6 +119,8 @@ prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
 prisma.contact.findUnique = vi.fn();
 prisma.contact.update = vi.fn();
+prisma.activity = prisma.activity || {};
+prisma.activity.create = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 prisma.tenant = prisma.tenant || {};
@@ -168,6 +170,7 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.update.mockReset();
+  prisma.activity.create.mockReset().mockResolvedValue({});
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'wellness' });
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
@@ -261,5 +264,25 @@ describe('PATCH /api/contacts/:id — revert a converted lead', () => {
     const stageCall = deliverWebhooksMock.mock.calls.find((c) => c[0] === 'lead.stage_changed');
     expect(stageCall[1].previousStatus).toBe('Prospect');
     expect(stageCall[1].status).toBe('Lead');
+  });
+
+  test('case 7: every lifecycle transition is recorded in Activities', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.contact.update.mockResolvedValueOnce({ ...prospect, status: 'Customer' });
+
+    const res = await request(makeApp())
+      .patch(`/api/contacts/${CONTACT_ID}`)
+      .send({ status: 'Customer' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.activity.create).toHaveBeenCalledWith({
+      data: {
+        type: 'Lead Status updated',
+        description: 'Updated from Prospect to Customer',
+        contactId: CONTACT_ID,
+        userId: USER_ID,
+        tenantId: TENANT_ID,
+      },
+    });
   });
 });

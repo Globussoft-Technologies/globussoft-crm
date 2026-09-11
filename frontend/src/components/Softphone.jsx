@@ -13,6 +13,9 @@ export default function Softphone() {
   const [demoMode, setDemoMode] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [fabPosition, setFabPosition] = useState(null);
+  const dragRef = useRef(null);
+  const dragMovedRef = useRef(false);
 
   const demoRefs = useRef({ stream: null, transcriptInterval: null, dialingTimeout: null });
 
@@ -156,6 +159,32 @@ export default function Softphone() {
     setDemoMode(false);
   };
 
+  const handleFabPointerDown = (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    dragRef.current = { startX: event.clientX, startY: event.clientY, left: rect.left, top: rect.top };
+    dragMovedRef.current = false;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const handleFabPointerMove = (event) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+    dragMovedRef.current = true;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const left = Math.max(8, Math.min(window.innerWidth - rect.width - 8, drag.left + dx));
+    const top = Math.max(8, Math.min(window.innerHeight - rect.height - 8, drag.top + dy));
+    setFabPosition({ left, top });
+  };
+
+  const handleFabPointerUp = (event) => {
+    dragRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  };
+
   const isActive = status !== 'IDLE' && status !== 'COMPLETED' && status !== 'FAILED';
 
   const statusLine = () => {
@@ -173,7 +202,7 @@ export default function Softphone() {
   };
 
   return (
-    <div style={{ position: 'fixed', bottom: '2rem', right: '2rem', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '1rem' }}>
+    <div style={{ position: 'fixed', ...(fabPosition || { bottom: '2rem', right: '2rem' }), zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '1rem' }}>
 
       {isOpen && (
         <div className="card" style={{ width: '320px', padding: '1.5rem', background: 'rgba(15, 23, 42, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid var(--accent-color)', boxShadow: '0 25px 50px rgba(0,0,0,0.8), 0 0 30px rgba(59, 130, 246, 0.2)', borderRadius: '16px', animation: 'fadeIn 0.2s ease-out' }}>
@@ -243,10 +272,6 @@ export default function Softphone() {
           </form>
         </div>
       )}
-
-      <button onClick={togglePhone} aria-label={isOpen ? 'Close softphone dialer' : 'Open softphone dialer'} aria-expanded={isOpen} style={{ width: '64px', height: '64px', borderRadius: '50%', background: isOpen ? '#ef4444' : 'var(--accent-color)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', cursor: 'pointer', boxShadow: '0 10px 25px rgba(0,0,0,0.5)', transition: 'all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)', transform: isOpen ? 'rotate(135deg) scale(0.9)' : 'rotate(0deg) scale(1)' }}>
-        <Phone size={28} />
-      </button>
 
     </div>
   );

@@ -452,13 +452,22 @@ router.post(
  */
 router.get("/recordings/*", verifyToken, async (req, res) => {
   try {
-    // Express puts the wildcard remainder in params[0], without the leading
-    // slash. Rebuild the path Callified gave us in `recording_url`.
-    const recordingPath = `/api/recordings/${req.params[0] || ""}`;
-
-    const upstream = req.query.source
-      ? await callifiedClient.fetchObjectStorageRecording(req.query.source, { range: req.headers.range })
+    const recordingKey = req.params[0] || "";
+    const recordingPath = `/api/recordings/${recordingKey}`;
+    const stored = await prisma.callLog.findFirst({
+      where: { tenantId: req.user.tenantId, provider: "callified", recordingUrl: { contains: recordingKey } },
+      orderBy: { createdAt: "desc" },
+      select: { recordingUrl: true },
+    });
+    const upstream = stored?.recordingUrl && /^https:\/\/objectstorage\.ap-mumbai-1\.oraclecloud\.com\//i.test(stored.recordingUrl)
+      ? await callifiedClient.fetchObjectStorageRecording(stored.recordingUrl, { range: req.headers.range })
       : await callifiedClient.fetchRecording(req.user.tenantId, recordingPath, { range: req.headers.range });
+
+    const maxBytes = 50 * 1024 * 1024;
+    const contentLength = Number(upstream.headers.get("content-length"));
+    if (contentLength > maxBytes) {
+      return res.status(413).json({ error: "Recording exceeds the maximum supported size", code: "RECORDING_TOO_LARGE" });
+    }
 
     if (!upstream.ok && upstream.status !== 206) {
       return res.status(upstream.status === 404 ? 404 : 502).json({

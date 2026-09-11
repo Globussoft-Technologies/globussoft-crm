@@ -58,7 +58,7 @@ export function crmRecordingUrl(recordingUrl) {
       const markerIndex = url.pathname.indexOf(marker);
       if (url.hostname.endsWith('.oraclecloud.com') && markerIndex >= 0) {
         const recordingKey = url.pathname.slice(markerIndex + marker.length);
-        if (recordingKey) return `/api/callified/recordings/${recordingKey}?source=${encodeURIComponent(raw)}`;
+        if (recordingKey) return `/api/callified/recordings/${recordingKey}`;
       }
     } catch {
       // Preserve other absolute URLs when parsing fails.

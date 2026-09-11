@@ -1084,13 +1084,13 @@ async function fetchObjectStorageRecording(recordingUrl, opts = {}) {
     err.code = 'INVALID_RECORDING_URL';
     throw err;
   }
-  if (url.protocol !== 'https:' || !url.hostname.endsWith('.oraclecloud.com') || !url.pathname.includes('/o/recordings/')) {
+  if (url.protocol !== 'https:' || url.hostname !== 'objectstorage.ap-mumbai-1.oraclecloud.com' || !url.pathname.includes('/b/callified-live-media/o/recordings/')) {
     const err = new Error('Unsupported recording URL');
     err.status = 400;
     err.code = 'INVALID_RECORDING_URL';
     throw err;
   }
-  return fetch(url, { headers: opts.range ? { Range: opts.range } : {} });
+  return fetch(url, { redirect: 'manual', headers: opts.range ? { Range: opts.range } : {} });
 }
 
 /**

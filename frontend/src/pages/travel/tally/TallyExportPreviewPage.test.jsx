@@ -60,7 +60,7 @@ describe("TallyExportPreviewPage connector and fallback exports", () => {
     URL.revokeObjectURL = vi.fn();
   });
 
-  it("keeps manual XML downloads available while the connector is offline", async () => {
+  it("downloads Masters and Voucher XML when push is attempted while the connector is offline", async () => {
     fetchApi.mockImplementation(async (url) => {
       if (url.endsWith("/connector/status")) return { configured: true, online: false };
       return apiResponse(url);
@@ -68,16 +68,22 @@ describe("TallyExportPreviewPage connector and fallback exports", () => {
 
     render(<TallyExportPreviewPage />);
 
-    const masters = await screen.findByRole("button", { name: /Download Masters XML/i });
-    const vouchers = screen.getByRole("button", { name: /Download Voucher XML/i });
-    expect(masters).toBeEnabled();
-    expect(vouchers).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Push directly to Tally/i })).toBeDisabled();
+    await screen.findByRole("button", { name: /Push directly to Tally/i });
+    expect(screen.queryByRole("button", { name: /Download Masters XML/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Download Voucher XML/i })).not.toBeInTheDocument();
+    const push = screen.getByRole("button", { name: /Push directly to Tally/i });
+    expect(push).toBeEnabled();
 
-    fireEvent.click(masters);
-    expect(vouchers).toBeEnabled();
-    fireEvent.click(vouchers);
-    expect(URL.createObjectURL).toHaveBeenCalledTimes(2);
+    fireEvent.click(push);
+
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(2));
+    expect(fetchApi).not.toHaveBeenCalledWith(
+      "/api/travel/tally/connector/push",
+      expect.anything(),
+    );
+    expect(screen.getByRole("alertdialog", { name: /Connector offline/i })).toHaveTextContent(
+      "downloaded for manual import into Tally",
+    );
   });
 
   it("refreshes connector status without navigating away", async () => {

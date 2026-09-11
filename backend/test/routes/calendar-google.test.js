@@ -695,7 +695,12 @@ describe('POST /api/calendar/google/events', () => {
       data: { id: 'gcal-birthday-safe', summary: 'Team meeting' },
     });
     prisma.calendarEvent.findMany.mockResolvedValue([
-      { title: 'Family birthday', description: 'Birthday' },
+      {
+        title: 'Family birthday',
+        description: 'Birthday',
+        startTime: new Date('2026-01-01T00:00:00.000Z'),
+        endTime: new Date('2026-01-02T00:00:00.000Z'),
+      },
     ]);
     const app = makeApp();
     const res = await request(app)
@@ -739,6 +744,36 @@ describe('POST /api/calendar/google/events', () => {
     expect(prisma.calendarEvent.findFirst).not.toHaveBeenCalled();
     const insertArgs = calendarState.events.insert.mock.calls[0][0];
     expect(insertArgs.requestBody.transparency).toBe('transparent');
+    expect(insertArgs.requestBody.extendedProperties.private.globusEventType).toBe('birthday');
+  });
+
+  test('a timed birthday-planning meeting still trips the overlap conflict check', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
+      calendarId: 'primary',
+    });
+    prisma.calendarEvent.findMany.mockResolvedValue([
+      {
+        title: 'Birthday event planning',
+        description: 'Discuss venue and catering',
+        startTime: new Date(futureIso(3600_000)),
+        endTime: new Date(futureIso(7200_000)),
+      },
+    ]);
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/calendar/google/events')
+      .send({
+        title: 'Team meeting',
+        startTime: futureIso(3600_000),
+        endTime: futureIso(7200_000),
+      });
+
+    expect(res.status).toBe(409);
+    expect(calendarState.events.insert).not.toHaveBeenCalled();
   });
 
   test('happy path — creates Google event + upserts CalendarEvent row, returns 201', async () => {
@@ -945,6 +980,141 @@ describe('GET /api/calendar/google/slots', () => {
     expect(fbArgs.requestBody.items).toEqual([{ id: 'primary' }]);
     expect(fbArgs.requestBody.timeMin).toBe('2999-01-15T09:00:00.000Z');
     expect(fbArgs.requestBody.timeMax).toBe('2999-01-15T18:00:00.000Z');
+  });
+
+  test('keeps a real meeting busy when it overlaps an all-day birthday', async () => {
+    connect();
+    calendarState.freebusy.query.mockResolvedValue({
+      data: {
+        calendars: {
+          primary: {
+            busy: [{ start: '2999-01-15T09:00:00Z', end: '2999-01-15T18:00:00Z' }],
+          },
+        },
+      },
+    });
+    calendarState.events.list.mockResolvedValue({
+      data: {
+        items: [
+          {
+            summary: 'Ada birthday',
+            description: 'Birthday',
+            start: { date: '2999-01-15' },
+            end: { date: '2999-01-16' },
+          },
+          {
+            summary: 'Birthday event planning',
+            description: 'Discuss venue and catering',
+            start: { dateTime: '2999-01-15T10:00:00Z' },
+            end: { dateTime: '2999-01-15T11:00:00Z' },
+          },
+        ],
+      },
+    });
+
+    const app = makeApp();
+    const res = await request(app).get(
+      '/api/calendar/google/slots?date=2999-01-15&durationMins=60&startHour=9&endHour=12&tzOffsetMins=0'
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.workingHours).toEqual({ start: 9, end: 12 });
+    expect(res.body.slots.map((slot) => slot.start)).toEqual([
+      '2999-01-15T09:00:00.000Z',
+      '2999-01-15T11:00:00.000Z',
+    ]);
+  });
+
+  test('an all-day birthday alone remains transparent to availability', async () => {
+    connect();
+    calendarState.freebusy.query.mockResolvedValue({
+      data: {
+        calendars: {
+          primary: {
+            busy: [{ start: '2999-01-15T09:00:00Z', end: '2999-01-15T12:00:00Z' }],
+          },
+        },
+      },
+    });
+    calendarState.events.list.mockResolvedValue({
+      data: {
+        items: [
+          {
+            summary: 'Ada birthday',
+            description: 'Birthday',
+            start: { date: '2999-01-15' },
+            end: { date: '2999-01-16' },
+          },
+        ],
+      },
+    });
+
+    const app = makeApp();
+    const res = await request(app).get(
+      '/api/calendar/google/slots?date=2999-01-15&durationMins=60&startHour=9&endHour=12&tzOffsetMins=0'
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.slots.map((slot) => slot.start)).toEqual([
+      '2999-01-15T09:00:00.000Z',
+      '2999-01-15T10:00:00.000Z',
+      '2999-01-15T11:00:00.000Z',
+    ]);
+  });
+
+  test('does not turn transparent, cancelled, or self-declined events into busy time', async () => {
+    connect();
+    calendarState.freebusy.query.mockResolvedValue({
+      data: {
+        calendars: {
+          primary: {
+            busy: [{ start: '2999-01-15T09:00:00Z', end: '2999-01-15T12:00:00Z' }],
+          },
+        },
+      },
+    });
+    calendarState.events.list.mockResolvedValue({
+      data: {
+        items: [
+          {
+            summary: 'Ada birthday',
+            description: 'Birthday',
+            start: { date: '2999-01-15' },
+            end: { date: '2999-01-16' },
+          },
+          {
+            summary: 'Optional focus time',
+            transparency: 'transparent',
+            start: { dateTime: '2999-01-15T09:00:00Z' },
+            end: { dateTime: '2999-01-15T10:00:00Z' },
+          },
+          {
+            summary: 'Cancelled meeting',
+            status: 'cancelled',
+            start: { dateTime: '2999-01-15T10:00:00Z' },
+            end: { dateTime: '2999-01-15T11:00:00Z' },
+          },
+          {
+            summary: 'Declined meeting',
+            attendees: [{ self: true, responseStatus: 'declined' }],
+            start: { dateTime: '2999-01-15T11:00:00Z' },
+            end: { dateTime: '2999-01-15T12:00:00Z' },
+          },
+        ],
+      },
+    });
+
+    const app = makeApp();
+    const res = await request(app).get(
+      '/api/calendar/google/slots?date=2999-01-15&durationMins=60&startHour=9&endHour=12&tzOffsetMins=0'
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.slots.map((slot) => slot.start)).toEqual([
+      '2999-01-15T09:00:00.000Z',
+      '2999-01-15T10:00:00.000Z',
+      '2999-01-15T11:00:00.000Z',
+    ]);
   });
 
   test('past slots are filtered out (a day in the past yields zero slots)', async () => {

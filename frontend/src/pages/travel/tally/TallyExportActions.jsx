@@ -127,8 +127,8 @@ export default function TallyExportActions({
   const voucherSummary = summarizeVoucherTypes(voucherRows);
   const voucherAmountSummary = summarizeVoucherAmounts(voucherRows);
   const [selectedVoucherType, setSelectedVoucherType] = useState("all");
-  const [mastersDownloaded, setMastersDownloaded] = useState(false);
   const [connectorStatus, setConnectorStatus] = useState(null);
+  const [hasCheckedConnectorStatus, setHasCheckedConnectorStatus] = useState(false);
   const [connectorCredentials, setConnectorCredentials] = useState(null);
   const [generatingCredentials, setGeneratingCredentials] = useState(false);
   const [pushing, setPushing] = useState(false);
@@ -144,6 +144,8 @@ export default function TallyExportActions({
       setConnectorStatus(status);
     } catch (_) {
       if (!silent) setConnectorStatus(null);
+    } finally {
+      setHasCheckedConnectorStatus(true);
     }
   };
 
@@ -180,19 +182,47 @@ export default function TallyExportActions({
   };
 
   const pushDirectlyToTally = async () => {
-    if (!hasVoucherRows || exportWarnings.length || !connectorStatus?.online) return;
+    if (!hasVoucherRows || exportWarnings.length || !hasCheckedConnectorStatus) return;
+    const mastersXml = buildTallyMastersXml({ companyName: master.companyName, voucherRows });
+    const vouchersXml = buildTallyXml({ companyName: master.companyName, voucherRows });
+    const pushToTally = (allowDuplicate = false) => fetchApi("/api/travel/tally/connector/push", { method: "POST", body: JSON.stringify({ mastersXml, vouchersXml, allowDuplicate }) });
+    const downloadFallback = () => {
+      downloadFile(`${buildBaseFileName(master)}-masters.xml`, mastersXml, "application/xml;charset=utf-8");
+      downloadFile(`${buildBaseFileName(master)}-vouchers.xml`, vouchersXml, "application/xml;charset=utf-8");
+    };
+    if (!connectorStatus?.online) {
+      downloadFallback();
+      notify.info("The Tally connector is offline. XML files were downloaded for manual import into Tally.");
+      return;
+    }
     setPushing(true);
     try {
-      const result = await fetchApi("/api/travel/tally/connector/push", {
-        method: "POST",
-        body: JSON.stringify({
-          mastersXml: buildTallyMastersXml({ companyName: master.companyName, voucherRows }),
-          vouchersXml: buildTallyXml({ companyName: master.companyName, voucherRows }),
-        }),
-      });
+      const result = await pushToTally();
       const voucherResult = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
       notify.success(`Pushed to Tally successfully. Created ${voucherResult?.created || 0}, altered ${voucherResult?.altered || 0}.`);
       await loadConnectorStatus();
+    } catch (error) {
+      if (error.code === "TALLY_DUPLICATE_PUSH") {
+        const confirmed = await notify.confirm({ title: "Possible duplicate", message: "This export was already pushed to Tally. Continuing may create duplicate records. Do you want to continue?", confirmText: "Continue push", cancelText: "Cancel", destructive: true });
+        if (!confirmed) {
+          notify.info("Push cancelled. No duplicate was created.");
+          return;
+        }
+        try {
+          const result = await pushToTally(true);
+          const voucherResult = result.results?.find((entry) => entry.stage === "vouchers")?.tally;
+          notify.success(`Pushed to Tally successfully. Created ${voucherResult?.created || 0}, altered ${voucherResult?.altered || 0}.`);
+          return;
+        } catch (_) {
+          downloadFallback();
+          notify.error("The confirmed push failed. XML files were downloaded automatically.");
+          return;
+        }
+      }
+      // Keep the export usable even when the local connector/Tally returns an
+      // error or the request throws before a response is available.
+      downloadFallback();
+      notify.error(`Tally push failed. XML files were downloaded automatically${error?.message ? `: ${error.message}` : "."}`);
     } finally {
       setPushing(false);
     }
@@ -208,51 +238,6 @@ export default function TallyExportActions({
     );
   };
 
-  const exportXml = () => {
-    if (!hasVoucherRows) return;
-
-    downloadFile(
-      `${buildBaseFileName(master)}.xml`,
-      buildTallyXml({
-        companyName: master.companyName,
-        voucherRows,
-      }),
-      "application/xml;charset=utf-8",
-    );
-  };
-  const exportEducationalXml = () => {
-    if (!hasVoucherRows || !mastersDownloaded) return;
-    downloadFile(
-      `${buildBaseFileName(master)}-educational.xml`,
-      buildTallyXml({
-        companyName: master.companyName,
-        voucherRows,
-        educationalMode: true,
-      }),
-      "application/xml;charset=utf-8",
-    );
-  };
-  const exportAlterReceiptsXml = () => {
-    if (!hasVoucherRows || !mastersDownloaded) return;
-    downloadFile(
-      `${buildBaseFileName(master)}-alter-receipts.xml`,
-      buildTallyXml({
-        companyName: master.companyName,
-        voucherRows,
-        alterExistingReceipts: true,
-      }),
-      "application/xml;charset=utf-8",
-    );
-  };
-  const exportMastersXml = () => {
-    if (!hasVoucherRows) return;
-    downloadFile(
-      `${buildBaseFileName(master)}-masters.xml`,
-      buildTallyMastersXml({ companyName: master.companyName, voucherRows }),
-      "application/xml;charset=utf-8",
-    );
-    setMastersDownloaded(true);
-  };
   return (
     <>
       <div style={validationPanel}>
@@ -460,19 +445,16 @@ export default function TallyExportActions({
           flexWrap: "wrap",
         }}
       >
-        <span style={{ width: "100%", textAlign: "right", color: "var(--text-secondary)", fontSize: 12 }}>
-          Import order: 1. Masters XML through Tally Masters, 2. Voucher XML through Tally Transactions.
-        </span>
         <PermissionGate module="tally" action="export">
           <button
             type="button"
             onClick={pushDirectlyToTally}
-            disabled={!hasVoucherRows || exportWarnings.length > 0 || !connectorStatus?.online || pushing}
-            title={!connectorStatus?.online ? "Start the local Tally connector first" : exportWarnings.length ? "Resolve export warnings before pushing" : "Send masters and vouchers directly to local Tally"}
+            disabled={!hasVoucherRows || exportWarnings.length > 0 || !hasCheckedConnectorStatus || pushing}
+            title={!hasCheckedConnectorStatus ? "Checking the local Tally connector" : !connectorStatus?.online ? "Connector offline: download XML files for manual import into Tally" : exportWarnings.length ? "Resolve export warnings before pushing" : "Send masters and vouchers directly to local Tally"}
             style={{
               ...button,
-              background: hasVoucherRows && !exportWarnings.length && connectorStatus?.online && !pushing ? "#ea580c" : "#64748b",
-              cursor: hasVoucherRows && !exportWarnings.length && connectorStatus?.online && !pushing ? "pointer" : "not-allowed",
+              background: hasVoucherRows && !exportWarnings.length && hasCheckedConnectorStatus && !pushing ? "#ea580c" : "#64748b",
+              cursor: hasVoucherRows && !exportWarnings.length && hasCheckedConnectorStatus && !pushing ? "pointer" : "not-allowed",
             }}
           >
             <UploadCloud size={15} /> {pushing ? "Pushing to Tally…" : "Push directly to Tally"}
@@ -489,57 +471,6 @@ export default function TallyExportActions({
           }}
         >
           <Download size={15} /> Download CSV
-        </button>
-        <button
-          type="button"
-          onClick={exportMastersXml}
-          disabled={!hasVoucherRows}
-          style={{
-            ...button,
-            background: hasVoucherRows ? "#0369a1" : "#64748b",
-            cursor: hasVoucherRows ? "pointer" : "not-allowed",
-          }}
-        >
-          <Download size={15} /> Download Masters XML
-        </button>
-        <button
-          type="button"
-          onClick={exportXml}
-          disabled={!hasVoucherRows || !mastersDownloaded}
-          title={mastersDownloaded ? "Download voucher transactions" : "Download the Masters XML first"}
-          style={{
-            ...button,
-            background: hasVoucherRows && mastersDownloaded ? "#7c3aed" : "#64748b",
-            cursor: hasVoucherRows && mastersDownloaded ? "pointer" : "not-allowed",
-          }}
-        >
-          <Download size={15} /> Download Voucher XML
-        </button>
-        <button
-          type="button"
-          onClick={exportEducationalXml}
-          disabled={!hasVoucherRows || !mastersDownloaded}
-          title="For unlicensed Tally Educational Mode; dates are moved to the first day of each month"
-          style={{
-            ...button,
-            background: hasVoucherRows && mastersDownloaded ? "#b45309" : "#64748b",
-            cursor: hasVoucherRows && mastersDownloaded ? "pointer" : "not-allowed",
-          }}
-        >
-          <Download size={15} /> Educational Voucher XML
-        </button>
-        <button
-          type="button"
-          onClick={exportAlterReceiptsXml}
-          disabled={!hasVoucherRows || !mastersDownloaded}
-          title="Alter existing paid Sales and Receipt vouchers using their existing voucher numbers"
-          style={{
-            ...button,
-            background: hasVoucherRows && mastersDownloaded ? "#be123c" : "#64748b",
-            cursor: hasVoucherRows && mastersDownloaded ? "pointer" : "not-allowed",
-          }}
-        >
-          <Download size={15} /> Alter Existing Paid Vouchers XML
         </button>
         <button
           type="button"

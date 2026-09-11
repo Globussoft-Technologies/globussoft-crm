@@ -350,6 +350,33 @@ describe('updateCalendarEvent — lookup + authorization', () => {
     expect(res.body.error).toMatch(/Unauthorized/i);
     expect(prisma.calendarEvent.update).not.toHaveBeenCalled();
   });
+
+  test('409 locks an in-progress meeting before provider or database updates', async () => {
+    const now = Date.now();
+    prisma.calendarEvent.findUnique.mockResolvedValueOnce({
+      id: 42,
+      userId: 7,
+      tenantId: 1,
+      provider: 'google',
+      externalId: 'ext-google-live',
+      title: 'Live customer meeting',
+      startTime: new Date(now - 10 * 60 * 1000),
+      endTime: new Date(now + 50 * 60 * 1000),
+    });
+    const req = makeReq({
+      params: { id: '42' },
+      body: { title: 'Attempted rename' },
+    });
+    const res = makeRes();
+
+    await controller.updateCalendarEvent(req, res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toMatch(/In-progress meetings cannot be edited/i);
+    expect(prisma.calendarIntegration.findUnique).not.toHaveBeenCalled();
+    expect(calendarState.events.update).not.toHaveBeenCalled();
+    expect(prisma.calendarEvent.update).not.toHaveBeenCalled();
+  });
 });
 
 // ─── updateCalendarEvent — provider happy paths ─────────────────────

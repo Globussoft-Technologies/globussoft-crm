@@ -9,8 +9,8 @@ function clampInt(raw, def, min, max) {
 }
 
 // Parse slot-picker query params into a UTC working window.
-// Returns { error } on bad input, else
-//   { dateStr, durationMins, stepMins, windowStartMs, windowEndMs }.
+// Returns { error } on bad input, else the normalized query values plus the
+// computed UTC window.
 function parseSlotWindow(query) {
   const dateStr = String((query && query.date) || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
@@ -31,6 +31,9 @@ function parseSlotWindow(query) {
     dateStr,
     durationMins,
     stepMins,
+    startHour,
+    endHour,
+    tzOffsetMins,
     windowStartMs: localMidnightUtcMs + startHour * 3_600_000,
     windowEndMs: localMidnightUtcMs + endHour * 3_600_000,
   };

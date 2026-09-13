@@ -4773,6 +4773,7 @@ const Leads = () => {
             </button>
             <button
               type="button"
+              data-tour="leads-create"
               className="btn-primary"
               aria-label="Create a new lead"
               onClick={openCreate}
@@ -6008,6 +6009,7 @@ const Leads = () => {
                 }}
               />
               <input
+                data-tour="leads-search"
                 type="search"
                 className="input-field"
                 placeholder="Search leads..."

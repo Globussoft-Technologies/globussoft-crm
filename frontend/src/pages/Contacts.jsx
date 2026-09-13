@@ -1620,7 +1620,7 @@ const Contacts = () => {
           <button onClick={() => { setShowImportModal(true); setCsvRows([]); setCsvHeaders([]); setImportResult(null); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Download size={15} /> Import CSV/Excel
           </button>
-          <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <button data-tour="contacts-create" onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={18} /> Add Contact
           </button>
         </div>
@@ -1631,6 +1631,7 @@ const Contacts = () => {
           <div style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
             <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
             <input
+              data-tour="contacts-search"
               type="text"
               className="input-field"
               placeholder="Search contacts..."

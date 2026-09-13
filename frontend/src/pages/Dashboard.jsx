@@ -181,7 +181,7 @@ export default function Dashboard() {
 
   return (
     <div style={{ padding: '2rem', width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+      <header data-tour="dashboard-header" style={{ marginBottom: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', background: 'linear-gradient(to right, var(--text-primary), var(--text-secondary))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
             {pageTitle}
@@ -194,7 +194,7 @@ export default function Dashboard() {
         <button className="btn-primary" onClick={() => navigate(ctaPath)}>{ctaLabel}</button>
       </header>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
+      <div data-tour="dashboard-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
         {tiles.map((stat, i) => (
           <Link key={i}
             to={stat.path}
@@ -217,7 +217,7 @@ export default function Dashboard() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1.5rem' }}>
-        <div className="card" style={{ padding: '2rem', minHeight: '350px' }}>
+        <div className="card" data-tour="dashboard-pipeline" style={{ padding: '2rem', minHeight: '350px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
             <h3 style={{ fontSize: '1.25rem', fontWeight: '500' }}>{isUser ? 'My Pipeline' : 'Pipeline Analytics'}</h3>
           </div>

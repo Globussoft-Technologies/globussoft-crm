@@ -15,6 +15,7 @@ import InlineCellEditor from '../components/InlineCellEditor';
 import EditContactModal from '../components/EditContactModal';
 import { AuthContext } from '../App';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
+import ContextualEmptyState from '../components/ContextualEmptyState';
 
 const parseCSV = (text) => {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
@@ -1862,9 +1863,20 @@ const Contacts = () => {
                           color: 'var(--text-secondary)',
                         }}
                       >
-                        {contacts.length === 0
-                          ? 'No contacts yet. Click "Add Contact" or import a CSV.'
-                          : `No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}.`}
+                        {contacts.length === 0 ? (
+                          <ContextualEmptyState
+                            compact
+                            featureKey="contacts"
+                            title="No contacts yet"
+                            description={'Click "Add Contact" or import a CSV to add the people and customers your team works with.'}
+                            actions={[
+                              { label: 'Create contact', onClick: () => setShowModal(true), permission: { module: 'contacts', action: 'write' }, analyticsKey: 'first-contact' },
+                              { label: 'Import contacts', onClick: () => { setShowImportModal(true); setCsvRows([]); setCsvHeaders([]); setImportResult(null); }, permission: { module: 'contacts', action: 'write' } },
+                            ]}
+                          />
+                        ) : (
+                          <ContextualEmptyState compact featureKey="contacts-filter" title="No matching contacts" description={`No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}. Try clearing or changing the filters.`} />
+                        )}
                       </td>
                     </tr>
                   ) : (

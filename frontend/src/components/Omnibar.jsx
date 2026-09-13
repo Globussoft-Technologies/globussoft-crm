@@ -27,6 +27,7 @@ import { AuthContext } from "../App";
 import { useActiveSubBrand } from "../utils/subBrand";
 import {
   filterSidebarPages,
+  GENERIC_SIDEBAR_PAGE_SPECS,
   getGenericSidebarPages,
   mergePagesByPath,
 } from "../utils/sidebarSearch";
@@ -35,6 +36,7 @@ import { SEARCH_DEBOUNCE_MS } from "../utils/timing";
 import { formatMoney } from "../utils/money";
 import { usePermissions } from "../hooks/usePermissions";
 import { useSearchQuery } from "./search/SearchQueryContext";
+import { recordOnboardingEvent } from "../onboarding/analytics";
 
 // Inline top-bar global search.
 //
@@ -324,6 +326,7 @@ export default function Omnibar() {
   const inputRef = useRef(null);
   const containerRef = useRef(null);
   const optionRefs = useRef([]);
+  const lastMissingFeatureRef = useRef(null);
   const navigate = useNavigate();
   const { user, tenant } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
@@ -490,6 +493,21 @@ export default function Omnibar() {
       0,
     );
   }, [resultSet]);
+
+  useEffect(() => {
+    if (tenant?.vertical !== "generic" || query.length < 2 || isLoading || totalResultCount !== 0) return;
+    const visibleKeys = new Set(visiblePagesIndex.map((page) => page.path || page.id));
+    const inaccessibleMatch = GENERIC_SIDEBAR_PAGE_SPECS
+      .map((page) => ({ page, score: scorePageMatch(page, query) }))
+      .filter(({ page, score }) => score >= 0 && !visibleKeys.has(page.path || page.id))
+      .sort((left, right) => left.score - right.score)[0]?.page;
+    if (!inaccessibleMatch) return;
+    const featureKey = `page-${String(inaccessibleMatch.id || inaccessibleMatch.path || inaccessibleMatch.label)
+      .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+    if (lastMissingFeatureRef.current === featureKey) return;
+    lastMissingFeatureRef.current = featureKey;
+    recordOnboardingEvent({ eventType: "FEATURE_NOT_FOUND", featureKey, reason: "not-accessible" });
+  }, [isLoading, query, tenant?.vertical, totalResultCount, visiblePagesIndex]);
 
   const flatResults = useMemo(() => {
     const rows = [];

@@ -56,6 +56,7 @@ import {
 import CallifiedCallDetailsDrawer from "../components/CallifiedCallDetailsDrawer";
 import CallifiedCallStatusDrawer from "../components/CallifiedCallStatusDrawer";
 import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolbar";
+import ContextualEmptyState from "../components/ContextualEmptyState";
 
 const SOURCE_OPTIONS = [
   "Organic",
@@ -7018,7 +7019,13 @@ const Leads = () => {
                           color: "var(--text-secondary)",
                         }}
                       >
-                        No leads found
+                        <ContextualEmptyState
+                          compact
+                          featureKey="leads"
+                          title={leads.length === 0 ? "No leads found" : "No matching leads"}
+                          description={leads.length === 0 ? "Leads are prospective customers your team can qualify and convert. Create the first lead to begin your pipeline." : "No leads match the current search and filters. Try broadening them."}
+                          actions={leads.length === 0 ? [{ label: "Create lead", onClick: openCreate, permission: { module: "leads", action: "write" }, analyticsKey: "first-lead" }] : []}
+                        />
                       </td>
                     </tr>
                   ) : (

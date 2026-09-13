@@ -115,6 +115,7 @@ model Tenant {
   userTourProgress         UserTourProgress[]
   salesTeams               SalesTeam[]
   salesTeamMembers         SalesTeamMember[]
+  onboardingEvents         OnboardingEvent[]
   contacts                 Contact[]
   activities               Activity[]
   deals                    Deal[]
@@ -722,6 +723,7 @@ model User {
   // Notification preferences
   notificationPreference NotificationPreference?
   tourProgressRecords    UserTourProgress[]
+  onboardingEvents       OnboardingEvent[]
 
   // Wave 3 — Staff availability blocks (breaks, leave, etc.)
   blockTimes BlockTime[] @relation("UserBlockTimes")
@@ -754,14 +756,16 @@ model User {
 // composite key is deliberate: progress belongs to one user inside one tenant,
 // and every API write verifies that same pair before upserting.
 model UserTourProgress {
-  id              Int       @id @default(autoincrement())
-  tenantId        Int
-  userId          Int
-  preferencesJson String    @db.Text
-  progressJson    String    @db.LongText
-  progressResetAt DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                         Int       @id @default(autoincrement())
+  tenantId                   Int
+  userId                     Int
+  preferencesJson            String    @db.Text
+  progressJson               String    @db.LongText
+  checklistJson              String?   @db.Text
+  dismissedAnnouncementsJson String?   @db.Text
+  progressResetAt            DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -769,6 +773,29 @@ model UserTourProgress {
   @@unique([tenantId, userId])
   @@index([tenantId])
   @@index([userId])
+}
+
+// Privacy-minimised product-adoption telemetry. Only allowlisted feature,
+// tour, step and reason identifiers are accepted by the API; CRM record
+// values, search queries and request bodies are never stored here.
+model OnboardingEvent {
+  id         Int      @id @default(autoincrement())
+  tenantId   Int
+  userId     Int
+  eventType  String   @db.VarChar(40)
+  featureKey String?  @db.VarChar(100)
+  tourKey    String?  @db.VarChar(100)
+  stepKey    String?  @db.VarChar(100)
+  reason     String?  @db.VarChar(80)
+  sessionId  String?  @db.VarChar(64)
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, eventType, createdAt])
+  @@index([tenantId, tourKey, eventType])
+  @@index([userId, createdAt])
 }
 
 model Contact {

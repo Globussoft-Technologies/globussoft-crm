@@ -8,6 +8,7 @@ import {
 } from 'recharts';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import ContextualEmptyState from '../components/ContextualEmptyState';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 
@@ -261,7 +262,13 @@ export default function CustomReports() {
         <div style={cardStyle}>
           <h3 style={{ margin: '0 0 1rem', fontSize: '1rem', fontWeight: 600 }}>Saved Reports</h3>
           {reports.length === 0 && (
-            <p style={{ opacity: 0.6, fontSize: '0.85rem' }}>No saved reports yet.</p>
+            <ContextualEmptyState
+              compact
+              featureKey="custom-reports"
+              title="No saved reports yet."
+              description="Build a reusable report from CRM fields, filters, groupings, and charts."
+              actions={[{ label: 'Start building', onClick: newReport, analyticsKey: 'first-report' }]}
+            />
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {reports.map(r => (

@@ -31,6 +31,7 @@ import {
   performTourActions,
   waitForTourTarget,
 } from "./tourStepActions";
+import { recordOnboardingEvent } from "../onboarding/analytics";
 
 function canAccess(feature, user, permissionState) {
   const role = String(user?.role || "").toUpperCase();
@@ -282,6 +283,7 @@ export default function ProductTourProvider({ children }) {
   const stepRestorersRef = useRef([]);
   const advanceRef = useRef(null);
   const launcherFocusRef = useRef(null);
+  const analyticsSessionRef = useRef(null);
   const [remoteReady, setRemoteReady] = useState(false);
 
   useEffect(() => {
@@ -411,6 +413,9 @@ export default function ProductTourProvider({ children }) {
     if (tour.welcome) suppressModuleAutoPathRef.current = location.pathname;
     const saved = state.progress[`${tour.id}:${tour.version}`];
     const stepIndex = options.restart ? 0 : Math.min(saved?.currentStep || 0, tour.steps.length - 1);
+    const sessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    analyticsSessionRef.current = sessionId;
+    recordOnboardingEvent({ eventType: "TOUR_STARTED", tourKey: tour.id, stepKey: `step-${stepIndex + 1}`, sessionId });
     setActive({ tour, stepIndex, preparing: needsTourPreparation(tour.steps[stepIndex]) });
     return true;
   }, [availableTours, effectiveEnabled, location.hash, location.pathname, location.search, navigate, state.progress]);
@@ -444,17 +449,28 @@ export default function ProductTourProvider({ children }) {
   }, [location.hash, location.pathname, location.search, navigate]);
 
   const closeTour = useCallback(() => {
-    if (active) record(active.tour, { status: "IN_PROGRESS", currentStep: active.stepIndex });
+    if (active) {
+      record(active.tour, { status: "IN_PROGRESS", currentStep: active.stepIndex });
+      recordOnboardingEvent({ eventType: "TOUR_ABANDONED", tourKey: active.tour.id, stepKey: `step-${active.stepIndex + 1}`, sessionId: analyticsSessionRef.current });
+    }
     setActive(null);
     restoreOriginalScreen();
   }, [active, record, restoreOriginalScreen]);
   const skipTour = useCallback(() => {
-    if (active) record(active.tour, { status: "DISMISSED", currentStep: active.stepIndex, dismissedAt: new Date().toISOString() });
+    if (active) {
+      record(active.tour, { status: "DISMISSED", currentStep: active.stepIndex, dismissedAt: new Date().toISOString() });
+      recordOnboardingEvent({ eventType: "TOUR_SKIPPED", tourKey: active.tour.id, stepKey: `step-${active.stepIndex + 1}`, sessionId: analyticsSessionRef.current });
+      recordOnboardingEvent({ eventType: "TOUR_STEP_SKIPPED", tourKey: active.tour.id, stepKey: `step-${active.stepIndex + 1}`, reason: "user-skipped", sessionId: analyticsSessionRef.current });
+    }
     setActive(null);
     restoreOriginalScreen();
   }, [active, record, restoreOriginalScreen]);
   const skipAllTours = useCallback(() => {
-    if (active) record(active.tour, { status: "DISMISSED", currentStep: active.stepIndex, dismissedAt: new Date().toISOString() });
+    if (active) {
+      record(active.tour, { status: "DISMISSED", currentStep: active.stepIndex, dismissedAt: new Date().toISOString() });
+      recordOnboardingEvent({ eventType: "TOUR_SKIPPED", tourKey: active.tour.id, stepKey: `step-${active.stepIndex + 1}`, reason: "skip-all", sessionId: analyticsSessionRef.current });
+      recordOnboardingEvent({ eventType: "TOUR_STEP_SKIPPED", tourKey: active.tour.id, stepKey: `step-${active.stepIndex + 1}`, reason: "skip-all", sessionId: analyticsSessionRef.current });
+    }
     persist((current) => ({ ...current, preferences: { ...current.preferences, enabled: false, updatedAt: new Date().toISOString() } }));
     setActive(null);
     restoreOriginalScreen();
@@ -496,6 +512,7 @@ export default function ProductTourProvider({ children }) {
     if (!active) return;
     if (active.stepIndex >= active.tour.steps.length - 1) {
       record(active.tour, { status: "COMPLETED", currentStep: active.stepIndex, completedAt: new Date().toISOString() });
+      recordOnboardingEvent({ eventType: "TOUR_COMPLETED", tourKey: active.tour.id, stepKey: `step-${active.stepIndex + 1}`, sessionId: analyticsSessionRef.current });
       setActive(null);
       restoreOriginalScreen();
       return;
@@ -535,6 +552,9 @@ export default function ProductTourProvider({ children }) {
         : null;
       if (!current || controller.signal.aborted) return;
       if (!actionResult.ok || (!target && (step.skipIfMissing || step.requiresRecords))) {
+        const reason = actionResult.ok ? "missing-target" : "action-failed";
+        recordOnboardingEvent({ eventType: "TOUR_STEP_SKIPPED", tourKey: activeTourId, stepKey: `step-${activeStepIndex + 1}`, reason, sessionId: analyticsSessionRef.current });
+        if (!target) recordOnboardingEvent({ eventType: "TOUR_TARGET_MISSING", tourKey: activeTourId, stepKey: `step-${activeStepIndex + 1}`, reason: "not-rendered", sessionId: analyticsSessionRef.current });
         advanceRef.current?.();
         return;
       }

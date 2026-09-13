@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // #475: removed ChevronDown import — the chevron next to the user name
 // implied a dropdown affordance that didn't exist; clicking it just navigated
@@ -29,6 +29,8 @@ import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
 import { setupPush } from "../utils/pushSetup";
 import { useProductTour } from "../tours/useProductTour";
+
+const OnboardingCenter = lazy(() => import("./OnboardingCenter"));
 
 // #555 (HI-06) — Option C: lock to single tenant per session. The chip is
 // read-only; clicking it does NOT dispatch a tenant switch. To switch
@@ -456,6 +458,7 @@ const Layout = () => {
           </div>
           <TenantChip tenant={tenant} />
           <NotificationBell />
+          <Suspense fallback={null}><OnboardingCenter /></Suspense>
           {toursAvailable && toursEnabled && currentFeature && (
             <button
               type="button"

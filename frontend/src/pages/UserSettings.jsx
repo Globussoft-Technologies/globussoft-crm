@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Bell } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import ProductTourSettings from '../components/ProductTourSettings';
 
 // Notification categories ⇄ sidebar paths. A category renders only when at
 // least one of its mapped paths is in /api/pages/me, so the preferences
@@ -158,6 +159,7 @@ export default function UserSettings() {
       </header>
 
       <div style={{ maxWidth: '800px' }}>
+        <ProductTourSettings />
         <div className="card" style={{ padding: 'clamp(1.25rem, 3vw, 2rem)' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Bell size={20} color="var(--accent-color)" /> Notification Preferences

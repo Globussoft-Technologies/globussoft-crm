@@ -145,6 +145,7 @@ import { launchCallifiedSSO } from "../utils/callified";
 import { useNotify } from "../utils/notify";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { usePermissions } from "../hooks/usePermissions";
+import { getGenericAccessByPath } from "../utils/sidebarSearch";
 // Branding refactor (2026-07-08): the sidebar shows exactly ONE logo, driven
 // by the fallback-resolved effective brand for the active sub-brand  never
 // a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
@@ -613,14 +614,22 @@ const Sidebar = ({
     to,
     icon: Icon,
     label,
-    adminOnly,
-    managerOnly,
+    adminOnly: requestedAdminOnly,
+    managerOnly: requestedManagerOnly,
     wellnessRoles,
-    requiredPermission,
+    requiredPermission: requestedPermission,
     count,
     matchPaths = [],
     end = false,
   }) => {
+    const canonicalAccess = !isTravel && !isWellness
+      ? getGenericAccessByPath(to)
+      : null;
+    const adminOnly = canonicalAccess ? Boolean(canonicalAccess.adminOnly) : requestedAdminOnly;
+    const managerOnly = canonicalAccess ? Boolean(canonicalAccess.managerOnly) : requestedManagerOnly;
+    const requiredPermission = canonicalAccess?.requiredPermission || requestedPermission;
+    if (canonicalAccess?.hideForAdmin && isAdmin) return null;
+    if (canonicalAccess?.userOnly && isManager) return null;
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
     // wellnessRoles gates a link to specific wellnessRole values. Managers
@@ -703,6 +712,7 @@ const Sidebar = ({
     return (
       <NavLink
         to={resolvedTo}
+        data-tour-nav={activeTarget}
         end={end}
         className={({ isActive }) => {
           const isPathMatch = matchPaths.some(
@@ -931,6 +941,7 @@ const Sidebar = ({
     return (
       <button
         type="button"
+        data-tour-feature="adsgpt"
         onClick={handleClick}
         disabled={adsLoading}
         className="nav-link"
@@ -992,6 +1003,7 @@ const Sidebar = ({
     return (
       <button
         type="button"
+        data-tour-feature="callified"
         onClick={handleClick}
         disabled={callifiedLoading}
         className="nav-link"
@@ -1050,6 +1062,7 @@ const Sidebar = ({
         role={asideRole}
         aria-modal={asideAriaModal}
         aria-label="Main navigation"
+        data-tour="welcome-sidebar"
         data-search-highlight-scope="global-search"
         className={`glass app-sidebar ${mobileOpen ? "is-open" : ""}${isTravel && isTravelCollapsed ? " travel-sidebar-collapsed" : ""}`}
         style={{
@@ -1394,6 +1407,7 @@ function GenericLeadsNavGroup({ Link, counts = {}, isMobileViewport = false }) {
   return (
     <WellnessNavGroup
       label="Leads"
+      dataTour="leads-group"
       paths={["/leads", "/converted-leads", "/lead-reports", "/lead-routing", "/lead-scoring"]}
       isMobileViewport={isMobileViewport}
       activeGroup={openGroup}
@@ -1414,6 +1428,7 @@ function GenericLeadsNavGroup({ Link, counts = {}, isMobileViewport = false }) {
 
 function WellnessNavGroup({
   label,
+  dataTour,
   paths = [],
   children,
   moduleColor,
@@ -1586,6 +1601,7 @@ function WellnessNavGroup({
           className={`nav-link ${isActive ? "active" : ""}`}
           aria-expanded={isOpen}
           aria-controls={panelId}
+          data-tour={dataTour}
           onClick={() => {
             if (isPinned) {
               setPinned(false);
@@ -2811,7 +2827,14 @@ function renderGenericNav({
             gap: "0.25rem",
           }}
         >
-          <Link to="/settings" icon={Settings} label="Settings" />
+          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" />
+          <Link to="/data-import-export" icon={Database} label="Import / Export" />
+        </div>
+      )}
+
+      {!isAdmin && !isManager && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+          <Link to="/revenue-goals" icon={Target} label="Revenue Goals" />
         </div>
       )}
 
@@ -2909,9 +2932,5 @@ const badgeStyle = {
 };
 
 export default Sidebar;
-
-
-
-
 
 

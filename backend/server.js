@@ -729,6 +729,7 @@ const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
 // #870 — per-user preference surface (theme persistence for cross-device roaming).
 const userPreferencesRoutes = require("./routes/user_preferences");
+const tourProgressRoutes = require("./routes/tour_progress");
 const auth2faRoutes = require("./routes/auth_2fa");
 // #654 — step-up auth for destructive admin flows (5-min stepUpToken bound
 // to (userId, tenantId)). See backend/routes/auth_stepup.js + the
@@ -1316,6 +1317,7 @@ app.use("/api/tenants", tenantsRoutes);
 app.use("/api/tenant-settings", tenantSettingsRoutes);
 // #870 — GET/PUT /api/user/theme; per-user theme preference for cross-device roaming.
 app.use("/api/user", userPreferencesRoutes);
+app.use("/api/tours", tourProgressRoutes);
 app.use("/api/auth/2fa", auth2faRoutes);
 // #654 — POST /api/auth/step-up — mints a 5-min stepUpToken for destructive
 // admin flows. Mounted after /api/auth/2fa so the URL space stays tidy.

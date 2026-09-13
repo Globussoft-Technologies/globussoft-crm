@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useRef,
   Suspense,
+  lazy as reactLazy,
 } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -24,6 +25,7 @@ import ResetPassword from "./pages/ResetPassword";
 import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import RoleGuard from "./components/RoleGuard";
+import GenericAccessGuard from "./components/GenericAccessGuard";
 import { NotifyProvider } from "./utils/notify";
 import { ActiveSubBrandProvider } from "./utils/subBrand";
 import { lazyWithRetry as lazy } from "./utils/lazyWithRetry";
@@ -43,6 +45,10 @@ import {
 import "./theme/wellness.css"; // wellness vertical theme overrides (scoped)
 
 const Landing = lazy(() => import("./pages/Landing"));
+// Keep the tour engine out of the already-tight application entry chunk. Use
+// React.lazy directly rather than the route-oriented lazyWithRetry wrapper:
+// this is an application provider, not a navigable page chunk.
+const ProductTourProvider = reactLazy(() => import("./tours/TourContext"));
 
 const THEME_STORAGE_KEY = "theme";
 const PUBLIC_LIGHT_THEME_ROUTES = new Set([
@@ -201,6 +207,7 @@ const WellnessAttendanceCalendar = lazy(
   () => import("./pages/wellness/AttendanceCalendar"),
 );
 const Marketplace = lazy(() => import("./pages/Marketplace"));
+const MarketplaceLeads = lazy(() => import("./pages/MarketplaceLeads"));
 const CPQ = lazy(() => import("./pages/CPQ"));
 const CustomObjects = lazy(() => import("./pages/CustomObjects"));
 const CustomObjectView = lazy(() => import("./pages/CustomObjectView"));
@@ -1471,7 +1478,9 @@ export default function App() {
           <NotifyProvider>
             <ActiveSubBrandProvider>
               <BrowserRouter>
-                <RouteErrorBoundary>
+                <Suspense fallback={<div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", color: "var(--text-primary)" }}>Loading...</div>}>
+                  <ProductTourProvider>
+                  <RouteErrorBoundary>
                   <Suspense
                     fallback={
                       <div
@@ -1773,7 +1782,7 @@ export default function App() {
                     />
                     <Route
                       path="/*"
-                      element={token ? <Layout /> : <Navigate to="/login" />}
+                      element={token ? <GenericAccessGuard><Layout /></GenericAccessGuard> : <Navigate to="/login" />}
                     >
                       <Route
                         path="dashboard"
@@ -2580,6 +2589,14 @@ export default function App() {
                       <Route path="cpq" element={<CPQ />} />
                       <Route path="marketplace" element={<Marketplace />} />
                       <Route
+                        path="marketplace-leads"
+                        element={
+                          <GenericOnly>
+                            <MarketplaceLeads />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
                         path="channels"
                         element={
                           <GenericOnly>
@@ -2652,12 +2669,9 @@ export default function App() {
                       <Route
                         path="settings"
                         element={
-                          <RoleGuard
-                            allow={["ADMIN"]}
-                            message="Settings requires admin access."
-                          >
+                          <GenericAccessGuard path="/settings" message="Settings requires admin access.">
                             <Settings />
-                          </RoleGuard>
+                          </GenericAccessGuard>
                         }
                       />
                       {/* Manage Subscription Plans  Owner-only catalog editor.
@@ -2694,12 +2708,9 @@ export default function App() {
                       <Route
                         path="data-import-export"
                         element={
-                          <RoleGuard
-                            allow={["ADMIN", "MANAGER"]}
-                            message="Import / Export requires admin or manager access."
-                          >
+                          <GenericAccessGuard path="/data-import-export" message="Import / Export requires admin or manager access.">
                             <DataImportExport />
-                          </RoleGuard>
+                          </GenericAccessGuard>
                         }
                       />
                       <Route path="expenses" element={<Expenses />} />
@@ -3016,12 +3027,9 @@ export default function App() {
                       <Route
                         path="revenue-goals"
                         element={
-                          <RoleGuard
-                            allow={["ADMIN", "MANAGER", "USER"]}
-                            message="Revenue Goals requires staff access."
-                          >
+                          <GenericAccessGuard path="/revenue-goals" message="Revenue Goals requires staff access.">
                             <RevenueGoals />
-                          </RoleGuard>
+                          </GenericAccessGuard>
                         }
                       />
                       <Route path="lead-routing" element={<LeadRouting />} />
@@ -3889,7 +3897,9 @@ export default function App() {
                     </Route>
                     </Routes>
                   </Suspense>
-                </RouteErrorBoundary>
+                  </RouteErrorBoundary>
+                  </ProductTourProvider>
+                </Suspense>
               </BrowserRouter>
             </ActiveSubBrandProvider>
           </NotifyProvider>
@@ -3898,8 +3908,3 @@ export default function App() {
     </ThemeContext.Provider>
   );
 }
-
-
-
-
-

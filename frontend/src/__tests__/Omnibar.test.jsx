@@ -245,6 +245,26 @@ describe('Omnibar (inline top-bar)', () => {
     expect(navigateMock).toHaveBeenCalledWith('/forms');
   });
 
+  it('launches searchable external integrations through their canonical sidebar action', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') return Promise.resolve({ pages: [] });
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+    const launcher = document.createElement('button');
+    launcher.dataset.tourFeature = 'adsgpt';
+    const launch = vi.fn();
+    launcher.addEventListener('click', launch);
+    document.body.appendChild(launcher);
+
+    await renderOmnibarWithAuth({ user: { userId: 1, role: 'MANAGER' }, token: 'tk', tenant: { vertical: 'generic' }, loading: false });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'AdsGPT' } });
+    fireEvent.click(await screen.findByRole('option', { name: /AdsGPT/i }));
+    expect(launch).toHaveBeenCalledOnce();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
   it('matches the wellness invoice page from /api/pages/me', async () => {
     await renderOmnibarAndWaitForPages();
     const input = screen.getByPlaceholderText(PLACEHOLDER);

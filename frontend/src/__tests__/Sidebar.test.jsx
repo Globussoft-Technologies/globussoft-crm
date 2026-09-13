@@ -1434,14 +1434,11 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(link.getAttribute('href')).toBe('/settings');
     });
 
-    it('renders Settings nav for MANAGER under generic (manager-block bottom)', () => {
-      // For MANAGER role, the bottom block `!isAdmin && isManager` renders
-      // a single Settings link with no adminOnly gate (Link without
-      // `adminOnly` so it always shows for MANAGER).
+    it('hides admin Settings from MANAGER and exposes manager-safe destinations', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      const link = screen.getByText('Settings').closest('a');
-      expect(link).toBeTruthy();
-      expect(link.getAttribute('href')).toBe('/settings');
+      expect(screen.queryByText('Settings')).toBeNull();
+      expect(screen.getByText('Revenue Goals').closest('a')).toHaveAttribute('href', '/revenue-goals');
+      expect(screen.getByText('Import / Export').closest('a')).toHaveAttribute('href', '/data-import-export');
     });
 
     it('renders Notification Settings (not Settings) for USER under generic', () => {
@@ -1889,4 +1886,3 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 });
-

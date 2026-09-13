@@ -1,11 +1,42 @@
 import { describe, expect, it } from 'vitest';
 import {
   filterSidebarPages,
+  genericRoleGuardProps,
+  getGenericAccessByPath,
+  getGenericAccessForLocation,
+  getGenericSidebarPages,
   TRAVEL_SIDEBAR_PAGE_SPECS,
 } from '../utils/sidebarSearch';
 
 describe('filterSidebarPages', () => {
-  it('keeps only current travel sidebar pages and rewrites their labels', () => {
+  it('uses one access contract for routes, sidebar search, and tours', () => {
+    expect(getGenericAccessByPath('/settings')).toMatchObject({ adminOnly: true });
+    expect(genericRoleGuardProps('/settings')).toEqual({ allow: ['ADMIN'] });
+    expect(genericRoleGuardProps('/data-import-export')).toEqual({ allow: ['ADMIN', 'MANAGER'] });
+    expect(genericRoleGuardProps('/revenue-goals')).toEqual({});
+    expect(getGenericAccessForLocation('/settings/lead-capture')?.path).toBe('/settings');
+    expect(getGenericAccessForLocation('/settings/roles')?.path).toBe('/settings/roles');
+
+    const regular = getGenericSidebarPages({ isAdmin: false, isManager: false });
+    const manager = getGenericSidebarPages({ isAdmin: false, isManager: true });
+    expect(regular.some((page) => page.path === '/revenue-goals')).toBe(true);
+    expect(regular.some((page) => page.path === '/data-import-export')).toBe(false);
+    expect(manager.some((page) => page.path === '/data-import-export')).toBe(true);
+    expect(manager.some((page) => page.path === '/settings')).toBe(false);
+  });
+
+  it('includes navigable pages and external launchers in the searchable catalogue', () => {
+    const manager = getGenericSidebarPages({ isAdmin: true, isManager: true, permissionsReady: true, hasPermission: () => true });
+    expect(manager).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: '/whatsapp' }),
+      expect.objectContaining({ path: '/lead-reports' }),
+      expect.objectContaining({ path: '/workflows' }),
+      expect.objectContaining({ id: 'adsgpt', actionTarget: '[data-tour-feature="adsgpt"]' }),
+      expect.objectContaining({ id: 'callified', actionTarget: '[data-tour-feature="callified"]' }),
+    ]));
+  });
+
+  it('keeps only travel sidebar-visible pages and rewrites their labels', () => {
     const pages = [
       { path: '/leads', label: 'Travel Leads', description: 'Lead pipeline across all travel sub-brands' },
       { path: '/travel/leads', label: 'All Leads', description: 'Inbound + open leads' },
@@ -164,4 +195,3 @@ describe('filterSidebarPages', () => {
     ]);
   });
 });
-

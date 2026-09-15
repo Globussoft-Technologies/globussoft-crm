@@ -581,8 +581,11 @@ export default function ContactDetail() {
 
   const formatNote = (command, value = null) => {
     noteComposerRef.current?.focus();
-    document.execCommand(command, false, value);
-    setNoteFormatting((current) => ({ ...current, [command]: document.queryCommandState(command) }));
+    if (typeof document.execCommand === 'function') document.execCommand(command, false, value);
+    const isActive = typeof document.queryCommandState === 'function'
+      ? document.queryCommandState(command)
+      : false;
+    setNoteFormatting((current) => ({ ...current, [command]: isActive }));
   };
 
   useEffect(() => {
@@ -590,14 +593,19 @@ export default function ContactDetail() {
     const updateFormatting = () => {
       if (!noteComposerRef.current?.contains(document.activeElement)) return;
       const commands = ['bold', 'italic', 'underline', 'insertUnorderedList', 'insertOrderedList', 'justifyLeft', 'justifyCenter'];
-      setNoteFormatting(Object.fromEntries(commands.map((command) => [command, document.queryCommandState(command)])));
+      const queryCommandState = (command) => (
+        typeof document.queryCommandState === 'function' ? document.queryCommandState(command) : false
+      );
+      setNoteFormatting(Object.fromEntries(commands.map((command) => [command, queryCommandState(command)])));
     };
     document.addEventListener('selectionchange', updateFormatting);
     return () => document.removeEventListener('selectionchange', updateFormatting);
   }, [noteComposerOpen]);
 
   const handleRichNoteSave = async () => {
-    const body = noteComposerRef.current?.innerText.trim() || '';
+    const body = noteComposerRef.current?.innerText?.trim()
+      || noteComposerRef.current?.textContent?.trim()
+      || '';
     if (!body) return;
     setNoteSaving(true);
     try {

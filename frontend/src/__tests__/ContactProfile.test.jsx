@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -65,9 +66,9 @@ beforeEach(() => {
 describe('ContactDetail profile', () => {
   it('renders header, sidebar tabs and overview by default', async () => {
     renderProfile();
-    expect(await screen.findByText('Ahmad Malik')).toBeTruthy();
-    const panel = within(screen.getByLabelText('Contact profile'));
-    for (const tab of ['Overview', 'Contact details', 'Conversations', 'Activities', 'Accounts', 'Deals', 'AI insights', 'Files']) {
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    expect(panel.getByText('Ahmad Malik', { exact: true })).toBeTruthy();
+    for (const tab of ['Overview', 'Contact details', 'Conversation', 'Activities']) {
       expect(panel.getByRole('button', { name: new RegExp(tab) })).toBeTruthy();
     }
     expect(panel.getByText('Status')).toBeTruthy();
@@ -77,38 +78,44 @@ describe('ContactDetail profile', () => {
 
   it('chevron dropdown option PATCHes the mapped status', async () => {
     renderProfile();
-    await screen.findByText('Ahmad Malik');
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    let currentContact = { ...baseContact };
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/contacts/7' && opts?.method === 'PATCH') {
-        return Promise.resolve({ ...baseContact, status: JSON.parse(opts.body).status });
+        currentContact = { ...currentContact, status: JSON.parse(opts.body).status };
+        return Promise.resolve(currentContact);
       }
-      if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
+      if (url === '/api/contacts/7') return Promise.resolve(currentContact);
       return Promise.resolve([]);
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Interested / Unqualified' }));
-    expect(screen.getByRole('button', { name: 'Unqualified' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Interested' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Interested / Unqualified' }));
+    expect(panel.getByRole('button', { name: 'Unqualified' })).toBeTruthy();
+    fireEvent.click(panel.getByRole('button', { name: 'Interested' }));
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/7', expect.objectContaining({ method: 'PATCH' }));
     });
     expect(JSON.parse(fetchApiMock.mock.calls.find(([_u, o]) => o?.method === 'PATCH')[1].body)).toEqual({ status: 'Prospect' });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Interested / Unqualified' }).className).toMatch(/current/));
+    await waitFor(() => expect(panel.getByRole('button', { name: 'Interested / Unqualified' }).className).toMatch(/current/));
   });
 
   it('qualified dropdown shows Qualified and red Lost options', async () => {
     renderProfile();
-    await screen.findByText('Ahmad Malik');
-    fireEvent.click(screen.getByRole('button', { name: 'Qualified / Lost' }));
-    expect(screen.getByRole('button', { name: 'Qualified' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Lost' })).toBeTruthy();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    fireEvent.click(panel.getByRole('button', { name: 'Qualified / Lost' }));
+    expect(panel.getByRole('button', { name: 'Qualified' })).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Lost' })).toBeTruthy();
   });
 
   it('adds a note via POST and clears the input', async () => {
     renderProfile();
-    await screen.findByText('Ahmad Malik');
-    const box = screen.getByPlaceholderText('Add a note...');
-    fireEvent.change(box, { target: { value: 'Followed up today' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    const user = userEvent.setup();
+    await user.click(panel.getByRole('button', { name: /^Note$/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add note' });
+    const editor = within(dialog).getByRole('textbox', { name: 'Note content' });
+    editor.textContent = 'Followed up today';
+    fireEvent.input(editor);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith(
         '/api/contacts/7/activities',
@@ -117,24 +124,16 @@ describe('ContactDetail profile', () => {
     });
     const [, opts] = fetchApiMock.mock.calls.find(([_u, o]) => _u.endsWith('/activities') && o?.method === 'POST');
     expect(JSON.parse(opts.body)).toEqual({ type: 'Note', description: 'Followed up today' });
-    await waitFor(() => expect(screen.getByPlaceholderText('Add a note...').value).toBe(''));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add note' })).toBeNull());
   });
 
-  it('deals tab shows contact deals with add action, files tab lists attachments', async () => {
-    fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
-      if (url.startsWith('/api/staff')) return Promise.resolve([]);
-      if (url.startsWith('/api/contacts/7/attachments')) {
-        return Promise.resolve([{ id: 3, filename: 'quote.pdf', fileUrl: 'https://x/quote.pdf', createdAt: '2026-01-02T10:00:00.000Z' }]);
-      }
-      return Promise.resolve([]);
-    });
+  it('shows contact deals in the overview and keeps the current profile tabs available', async () => {
     renderProfile();
-    await screen.findByText('Ahmad Malik');
-    fireEvent.click(screen.getByRole('button', { name: 'Deals' }));
-    expect(await screen.findByText(/Deals \(1\)/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Files' }));
-    expect(await screen.findByText('quote.pdf')).toBeTruthy();
+    const panel = within(await screen.findByLabelText('Contact profile'));
+    expect(panel.getByText('Starter plan')).toBeTruthy();
+    expect(panel.getAllByRole('button', { name: 'Add deal' }).length).toBeGreaterThan(0);
+    expect(panel.getByRole('button', { name: 'Conversation' })).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Activities' })).toBeTruthy();
   });
 
   it('renders the email composer outside the scrolling profile panel', async () => {

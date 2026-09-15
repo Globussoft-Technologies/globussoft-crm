@@ -601,3 +601,15 @@ describe('WebForms builder page', () => {
 
   });
 });
+
+test.each(['generic', 'wellness', 'travel'])('View All Leads is available only for Generic CRM (%s)', async (vertical) => {
+  installFetchMock();
+  render(<AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, tenant: { vertical } }}><WebForms /></AuthContext.Provider>);
+  await screen.findByText('Brand intake');
+  expect(screen.queryByRole('button', { name: 'View All Leads' }) !== null).toBe(vertical === 'generic');
+  if (vertical === 'generic') {
+    fireEvent.click(screen.getByRole('button', { name: 'View All Leads' }));
+    expect(screen.getByRole('dialog', { name: /Leads .* Brand intake/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Close dialog'));
+  }
+});

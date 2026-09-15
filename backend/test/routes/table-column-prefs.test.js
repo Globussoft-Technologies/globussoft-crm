@@ -81,6 +81,23 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.body.visible).toContain('webForm');
   });
 
+  test('leads catalog exposes Medium right after Web Form, separate from Source', async () => {
+    const res = await request(makeApp()).get('/api/table-column-prefs/leads');
+
+    expect(res.status).toBe(200);
+    const keys = res.body.availableColumns.map((c) => c.key);
+    expect(keys).toContain('medium');
+    expect(res.body.availableColumns.find((c) => c.key === 'medium')).toMatchObject({
+      label: 'Medium',
+    });
+    // Medium sits next to the attribution pair without disturbing the
+    // Source → Web Form adjacency pinned above.
+    expect(keys.indexOf('medium')).toBe(keys.indexOf('webForm') + 1);
+    expect(keys.indexOf('medium')).not.toBe(keys.indexOf('source') + 1);
+    // First-ever load defaults Medium visible (every builtin is visible).
+    expect(res.body.visible).toContain('medium');
+  });
+
   test('contacts catalog is unchanged (no Web Form column there)', async () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/contacts');
 
@@ -102,6 +119,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(byKey.get('linkedin')).toBe('LinkedIn');
     expect(byKey.get('industry')).toBe('Service Type');
     expect(byKey.get('companySize')).toBe('No Of Employee');
+    expect(byKey.get('medium')).toBe('Medium');
     expect(byKey.get('subBrand')).toBe('Sub-brand');
     expect(byKey.get('description')).toBe('Note');
     expect(byKey.get('stateCode')).toBe('State');

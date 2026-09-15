@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet, useNavigate, NavLink, useLocation } from "react-router-dom";
-import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, TrendingUp, Key } from "lucide-react";
+import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, TrendingUp, Key, PanelsTopLeft } from "lucide-react";
 import {
   getSuperAdminToken,
   getSuperAdminUsername,
@@ -19,6 +19,7 @@ const MODULES = [
   { path: "/super-admin/ai-management/plans", label: "AI Subscription Plans", icon: CreditCard },
   { path: "/super-admin/tenant-management", label: "Tenant Management", icon: Building2 },
   { path: "/super-admin/revenue", label: "Revenue Analytics", icon: TrendingUp },
+  { path: "/super-admin/landing-form", label: "Landing Page Form", icon: PanelsTopLeft },
 ];
 
 function getThemeIcon(theme) {

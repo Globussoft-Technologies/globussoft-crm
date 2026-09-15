@@ -139,6 +139,7 @@ const FIELD_LIMITS = {
   billingStateCode: 10,
   firstTouchSource: 191,
   lastTouchSource: 191,
+  medium: 191,
   treatmentOfInterest: 191,
   gst: 15,
 };
@@ -155,19 +156,16 @@ const LEADS_HEADER_MENU_GAP = 6;
 const LEADS_DEFAULT_VISIBLE_COLUMNS = [
   "name",
   "email",
-  "company",
   "phone",
-  "aiScore",
-  "source",
   "webForm",
-  "subBrand",
-  "tags",
-  "assignedTo",
-  "createdAt",
   "campaign",
   "callStatus",
   "callifiedAi",
   "callifiedScore",
+  "source",
+  "company",
+  "aiScore",
+  "assignedTo",
 ];
 const LEADS_COLUMN_DEFAULT_WIDTHS = {
   select: 48,
@@ -177,6 +175,7 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   phone: 150,
   aiScore: 118,
   source: 150,
+  medium: 150,
   webForm: 170,
   tags: 190,
   campaign: 190,
@@ -2930,6 +2929,7 @@ const Leads = () => {
         key === "phone" ||
         key === "aiScore" ||
         key === "source" ||
+        key === "medium" ||
         // Web Form is generic-CRM only (wellness/travel never see it).
         (key === "webForm" && isGeneric) ||
         // Sub-brand is generic+travel — the web-form Sub-brand field
@@ -2970,6 +2970,7 @@ const Leads = () => {
       if (key === "phone") return { key, label: "Phone" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
+      if (key === "medium") return { key, label: "Medium" };
       if (key === "webForm") return { key, label: "Web Form" };
       if (key === "subBrand") return { key, label: "Sub-brand" };
       if (key === "tags") return { key, label: "Tags" };
@@ -3045,6 +3046,8 @@ const Leads = () => {
         return { fieldKey: "phone", label: "Phone", kind: "text" };
       case "source":
         return { fieldKey: "source", label: "Source", kind: "text" };
+      case "medium":
+        return { fieldKey: "medium", label: "Medium", kind: "text" };
       case "webForm":
         // Generic-only column (never rendered for wellness/travel), so the
         // menu — and this filter entry — is unreachable outside generic.
@@ -4255,6 +4258,18 @@ const Leads = () => {
             <span style={sourceBadgeStyle}>{displayValue}</span>
           ),
         });
+      case "medium": {
+        // Web-form Medium — free-text Contact scalar, inline-editable.
+        // Kept separate from Source (Source=Website, Medium=Google).
+        return renderBuiltInLeadCell({
+          lead,
+          field: "medium",
+          label: "Medium",
+          value: lead.medium,
+          extraStyle: { color: "var(--text-secondary)" },
+          renderValue: (displayValue) => (displayValue ? String(displayValue) : ""),
+        });
+      }
       case "webForm": {
         // Read-only: which web form this lead came through (generic only).
         const formName = leadWebFormName(lead);
@@ -4859,10 +4874,14 @@ const Leads = () => {
                     style={{
                       position: "absolute",
                       top: "calc(100% + 4px)",
-                      right: 0,
+                      // Anchor to the toolbar's right edge without allowing
+                      // the popup to be pushed outside the viewport.
+                      left: 0,
                       zIndex: 51,
-                      minWidth: 520,
-                      maxWidth: 560,
+                      width: "min(560px, calc(100vw - 24px))",
+                      minWidth: 0,
+                      maxWidth: "calc(100vw - 24px)",
+                      boxSizing: "border-box",
                       padding: "1rem",
                       boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
                       background: "var(--bg-color)",

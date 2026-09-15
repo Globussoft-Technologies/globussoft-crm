@@ -35,6 +35,7 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
   const loadedOnce = useRef(false);
+  const leadsDefaultColumns = ["name", "email", "phone", "webForm", "campaign", "callStatus", "callifiedAi", "callifiedScore", "source", "company", "aiScore", "assignedTo"];
 
   const load = async () => {
     setLoading(true);
@@ -212,27 +213,9 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
     }
   };
 
-  // Generic CRM (leads table) Reset default — Name plus exactly the
-  // requested columns: Phone, Email, Company, Source, Web Form, Created,
-  // Last Updated, No Of Employee, Actions. Anything else (scores, tags,
-  // custom fields, …) stays opt-in via the picker.
-  const LEADS_RESET_DEFAULT_COLUMNS = [
-    "name",
-    "phone",
-    "email",
-    "company",
-    "source",
-    "webForm",
-    "createdAt",
-    "lastUpdated",
-    "companySize",
-    "actions",
-  ];
-
   const handleReset = () => {
     if (tableKey === "leads") {
-      const byKey = new Set(available.map((c) => c.key));
-      setDraftVisible(LEADS_RESET_DEFAULT_COLUMNS.filter((k) => byKey.has(k)));
+      setDraftVisible(leadsDefaultColumns.filter((key) => available.some((column) => column.key === key)));
       return;
     }
     // Other tables keep the previous behaviour: every builtin column

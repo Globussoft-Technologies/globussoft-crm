@@ -14,6 +14,7 @@
 
 const LANDING_FORM_SETTING_KEY = "landing.form.webFormId";
 const LANDING_FORM_FALLBACK_SLUG = "globus-crm-landing";
+const PUBLIC_CONFIG_KEY = "landing.public.config";
 
 // Parse LANDING_FORM_ADMIN_EMAILS ("a@x.com, b@y.com") into a lowercase set.
 // Empty/unset → empty set → nobody can manage (fail closed).
@@ -37,6 +38,21 @@ function isLandingFormAdminEmail(email) {
 function resolvePublicLeadTenantSlug() {
   const slug = String(process.env.PUBLIC_LEAD_TENANT_SLUG || "").trim().toLowerCase();
   return slug || null;
+}
+
+async function readPublicConfig(prisma) {
+  const row = await prisma.tenantSetting.findFirst({ where: { key: PUBLIC_CONFIG_KEY }, select: { value: true } });
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(String(row.value || ""));
+    return parsed && Number.isInteger(Number(parsed.tenantId)) ? { tenantId: Number(parsed.tenantId), activeWebFormId: Number(parsed.activeWebFormId) || null, emails: Array.isArray(parsed.emails) ? parsed.emails : [] } : null;
+  } catch { return null; }
+}
+
+async function isPublicConfigAdmin(prisma, email) {
+  const config = await module.exports.readPublicConfig(prisma);
+  if (config) return config.emails.map((item) => String(item).trim().toLowerCase()).includes(String(email || "").trim().toLowerCase());
+  return module.exports.isLandingFormAdminEmail(email);
 }
 
 // Validate that a WebForm row may back the public landing page: same tenant,
@@ -79,6 +95,20 @@ async function resolveLandingWebFormId(prisma, tenantId) {
     });
     if (module.exports.isSelectableLandingForm(stored, tenantId)) return stored.id;
   }
+  // New multi-selection records are keyed per form so selecting another
+  // organisation's form never clears an existing selection.
+  const selected = await prisma.tenantSetting.findFirst({
+    where: { tenantId, key: { startsWith: "landing.form.selected." } },
+    orderBy: { updatedAt: "desc" },
+    select: { value: true },
+  });
+  if (selected) {
+    try {
+      const data = JSON.parse(String(selected.value || ""));
+      const id = Number.parseInt(data && data.webFormId, 10);
+      if (Number.isInteger(id) && id > 0) return id;
+    } catch { /* fall through to slug fallback */ }
+  }
   const bySlug = await prisma.webForm.findFirst({
     where: {
       tenantId,
@@ -97,6 +127,9 @@ module.exports = {
   getLandingFormAdminEmails,
   isLandingFormAdminEmail,
   resolvePublicLeadTenantSlug,
+  PUBLIC_CONFIG_KEY,
+  readPublicConfig,
+  isPublicConfigAdmin,
   isSelectableLandingForm,
   readLandingFormSetting,
   resolveLandingWebFormId,

@@ -33,7 +33,7 @@
 
     .field{margin-bottom:16px}
 
-    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
 
     .grid.grid-scroll{max-height:500px;overflow-y:auto;overflow-x:hidden;padding-right:8px;scrollbar-gutter:stable}
 
@@ -41,7 +41,7 @@
 
     .full{grid-column:1/-1}
 
-    label{display:block;font-size:.78rem;color:var(--gbs-label,#34405e);font-weight:700;margin-bottom:7px}
+    label{display:block;font-size:.78rem;color:var(--gbs-label,#34405e);font-weight:700;margin-bottom:4px}
 
     input,select,textarea{width:100%;border:1px solid #d8ddec;border-radius:12px;padding:.82rem .9rem;font:inherit;background:#fff;color:#111827;transition:border-color .2s,box-shadow .2s,transform .2s}
 
@@ -77,7 +77,8 @@
 
     .error,.success{border-radius:16px;padding:18px 18px;margin-bottom:18px;line-height:1.55}
 
-    .error{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+    .error{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;white-space:pre-line}
+    .field-error{display:block;color:#b91c1c;font-size:0.82rem;margin-top:3px;line-height:1.35}
 
     .success{background:linear-gradient(135deg,#ecfdf5,#f0fdf4);color:#065f46;border:1px solid #a7f3d0;text-align:center;font-weight:700}
 
@@ -305,6 +306,20 @@
 
       }
 
+      function showFieldErrors(errors){
+        document.querySelectorAll('.field-error').forEach(function(el){ el.remove(); });
+        Object.keys(errors || {}).forEach(function(key){
+          var nodes = document.querySelectorAll('[name="' + String(key).replace(/"/g, '\\"') + '"]');
+          if (!nodes.length) return;
+          var field = nodes[0].closest('.field');
+          if (!field) return;
+          var message = document.createElement('span');
+          message.className = 'field-error';
+          message.textContent = String(errors[key] || 'Invalid value');
+          field.appendChild(message);
+        });
+      }
+
 
 
       async function submitForm(event){
@@ -323,7 +338,11 @@
 
           var json = await res.json().catch(function(){ return {}; });
 
-          if (!res.ok) throw new Error(json.error || 'Submit failed');
+          if (!res.ok) {
+            var submitError = new Error(json.error || 'Submit failed');
+            submitError.fieldErrors = json.fields || {};
+            throw submitError;
+          }
 
           if (json.redirectUrl || (formData.settings && formData.settings.afterSubmitAction === 'redirect' && formData.settings.redirectUrl)) {
 
@@ -339,9 +358,9 @@
 
         } catch (err) {
 
+          showFieldErrors(err.fieldErrors || {});
           var msg = document.getElementById('msg');
-
-          if (msg) msg.innerHTML = '<div class="error">' + esc(err.message || 'Something went wrong') + '</div>';
+          if (msg) msg.innerHTML = Object.keys(err.fieldErrors || {}).length ? '' : '<div class="error">' + esc(err.message || 'Something went wrong') + '</div>';
 
           scheduleSize();
 

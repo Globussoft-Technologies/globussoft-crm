@@ -50,6 +50,7 @@ export default function Modal({
   size = 'medium', // small | medium | large
   style,
   className,
+  contentStyle,
 }) {
   const dialogRef = useRef(null);
   const lastFocusRef = useRef(null);
@@ -180,6 +181,7 @@ export default function Modal({
             padding: '1.25rem',
             overflowY: 'auto',
             flex: 1,
+            ...contentStyle,
           }}
         >
           {children}

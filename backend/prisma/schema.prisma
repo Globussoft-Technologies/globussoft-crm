@@ -111,6 +111,7 @@ model Tenant {
   updatedAt          DateTime  @updatedAt
 
   users                 User[]
+  salesTeams            SalesTeam[]
   contacts              Contact[]
   activities            Activity[]
   deals                 Deal[]
@@ -654,6 +655,7 @@ model User {
   whatsappThreads    WhatsAppThread[]    @relation("WhatsAppThreadAssignee")
   pushSubscriptions  PushSubscription[]
   landingPages       LandingPage[]
+  teamMemberships     SalesTeamMember[]
 
   // Wellness vertical
   doctorVisits        Visit[]        @relation("DoctorVisits")
@@ -754,6 +756,11 @@ model Contact {
   title                 String?
   status                String    @default("Lead") // Lead, Prospect, Customer, Churned
   source                String?   @default("Organic")
+  // Web-form Medium (e.g. Google, Facebook Ads) — free-text channel detail
+  // kept SEPARATE from `source` (e.g. Website). Nullable so all pre-existing
+  // rows ignore it; written by routes/web_forms.js, surfaced as the Medium
+  // column in the Leads Customize-table picker.
+  medium                String?
   /// JSON-encoded array of free-text tags for lead/contact segmentation.
   /// Route layer exposes this as `tags: string[]`, sanitizes each value, and
   /// stores null when no tags are selected.
@@ -10920,4 +10927,28 @@ model ProductSalesImportRow {
 
   @@index([tenantId, importId])
   @@index([tenantId, productName])
+}
+
+model SalesTeam {
+  id        Int               @id @default(autoincrement())
+  tenantId  Int               @default(1)
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  members   SalesTeamMember[]
+
+  @@index([tenantId])
+}
+
+model SalesTeamMember {
+  id        Int       @id @default(autoincrement())
+  teamId    Int
+  userId    Int
+  team      SalesTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+
+  @@unique([teamId, userId])
+  @@index([userId])
 }

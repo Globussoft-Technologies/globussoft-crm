@@ -29,7 +29,7 @@ vi.mock('../components/contact/ActionModals', () => ({
 }));
 
 import { fetchApi } from '../utils/api';
-import Pipeline, { slugifyStageName, VIRTUALIZATION_THRESHOLD } from '../pages/Pipeline';
+import Pipeline, { KANBAN_COLUMN_MIN_WIDTH, normalizePipelineStages, slugifyStageName, VIRTUALIZATION_THRESHOLD } from '../pages/Pipeline';
 
 const STAGES = [
   { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
@@ -73,10 +73,10 @@ function mockApi({ deals = DEALS, stages = STAGES, pipelines = [] } = {}) {
   });
 }
 
-function renderPipeline() {
+function renderPipeline(initialEntry = '/pipeline') {
   return render(
     <AuthContext.Provider value={{ user: { tenant: { vertical: 'generic' } } }}>
-      <MemoryRouter><Pipeline /></MemoryRouter>
+      <MemoryRouter initialEntries={[initialEntry]}><Pipeline /></MemoryRouter>
     </AuthContext.Provider>,
   );
 }
@@ -109,6 +109,51 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getByText('Initech Deal')).toBeInTheDocument();
     expect(screen.getByText('Alice')).toBeInTheDocument();
     expect(screen.getAllByText('Anita').length).toBeGreaterThan(0);
+  });
+
+  it('keeps a ten-stage board readable with horizontal scrolling and removes duplicate stage columns', async () => {
+    const manyStages = Array.from({ length: 10 }, (_, index) => ({
+      id: index + 1,
+      name: `Stage ${index + 1}`,
+      color: '#3b82f6',
+      position: index,
+    }));
+    manyStages.push({ id: 99, name: ' Stage 1 ', color: '#ef4444', position: 99 });
+    mockApi({ stages: manyStages });
+
+    renderPipeline();
+    const board = await screen.findByLabelText('Deal pipeline board');
+
+    expect(board).toHaveStyle({
+      gridTemplateColumns: `repeat(10, minmax(${KANBAN_COLUMN_MIN_WIDTH}px, 1fr))`,
+      overflowX: 'auto',
+      overflowY: 'hidden',
+    });
+    expect(screen.getAllByRole('heading', { name: 'Stage 1' })).toHaveLength(1);
+  });
+
+  it('selects the default pipeline when the URL does not specify one', async () => {
+    mockApi({ pipelines: [
+      { id: 41, name: 'Default Sales', isDefault: true },
+      { id: 42, name: 'Secondary', isDefault: false },
+    ] });
+
+    renderPipeline();
+
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /pipeline/i })).toHaveValue('41'));
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/deals\?.*pipelineId=41/)));
+  });
+
+  it('preserves an explicitly selected pipeline from the URL', async () => {
+    mockApi({ pipelines: [
+      { id: 41, name: 'Default Sales', isDefault: true },
+      { id: 42, name: 'Secondary', isDefault: false },
+    ] });
+
+    renderPipeline('/pipeline?pipelineId=42');
+
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /pipeline/i })).toHaveValue('42'));
+    expect(fetchApi).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/deals\?.*pipelineId=42/));
   });
 
   it('switches to List view and renders the list columns', async () => {
@@ -228,6 +273,7 @@ describe('Deals and Pipelines page', () => {
     expect(slugifyStageName('New Lead')).toBe('new-lead');
     expect(slugifyStageName('WON')).toBe('won');
     expect(slugifyStageName(null)).toBe('');
+    expect(normalizePipelineStages([{ id: 1, name: 'New Lead' }, { id: 2, name: ' new lead ' }])).toHaveLength(1);
     expect(VIRTUALIZATION_THRESHOLD).toBe(100);
   });
 });
